@@ -9,6 +9,7 @@ from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
 
+# TODO: Add option to run tests with logger (tracked in issue #1).
 @pytest.fixture(scope="package")
 def cfg_train_global() -> DictConfig:
     """A pytest fixture for setting up a default Hydra DictConfig for training.
