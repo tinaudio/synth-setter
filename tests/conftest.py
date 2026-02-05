@@ -8,6 +8,9 @@ from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
+from src.utils.utils import register_resolvers
+
+register_resolvers()
 
 # TODO: Add option to run tests with logger (tracked in issue #1).
 @pytest.fixture(scope="package")
