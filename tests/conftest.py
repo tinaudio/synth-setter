@@ -32,6 +32,8 @@ def cfg_train_global() -> DictConfig:
             cfg.extras.print_config = False
             cfg.extras.enforce_tags = False
             cfg.logger = None
+            if "callbacks" in cfg and cfg.callbacks and "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
 
     return cfg
 
@@ -57,6 +59,8 @@ def cfg_eval_global() -> DictConfig:
             cfg.extras.print_config = False
             cfg.extras.enforce_tags = False
             cfg.logger = None
+            if "callbacks" in cfg and cfg.callbacks and "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
 
     return cfg
 
