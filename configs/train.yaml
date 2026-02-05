@@ -7,7 +7,7 @@ defaults:
   - data: ksin
   - model: ksin_ff
   - callbacks: default
-  - logger: many_loggers # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
+  - logger: wandb
   - trainer: gpu
   - paths: default
   - extras: default
