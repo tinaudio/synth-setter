@@ -34,3 +34,5 @@ pedalboard
 librosa
 loguru
 pyloudnorm
+h5py
+hdf5plugin
