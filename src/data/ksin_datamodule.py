@@ -169,6 +169,7 @@ class KSinDataModule(LightningDataModule):
         batch_size: int = 1024,
         ot: bool = False,
         num_workers: int = 0,
+        pin_memory: bool = False,
     ):
         super().__init__()
 
@@ -185,6 +186,7 @@ class KSinDataModule(LightningDataModule):
 
         # dataloader
         self.batch_size = batch_size
+        self.pin_memory = pin_memory
 
         self.device = None
         self.num_workers = num_workers
@@ -222,6 +224,7 @@ class KSinDataModule(LightningDataModule):
                 shuffle=True,
                 collate_fn=ot_collate_fn if self.ot else regular_collate_fn,
                 num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
             )
             self.val = torch.utils.data.DataLoader(
                 val_ds,
@@ -229,6 +232,7 @@ class KSinDataModule(LightningDataModule):
                 shuffle=False,
                 collate_fn=regular_collate_fn,
                 num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
             )
         else:
             test_ds = KSinDataset(
@@ -247,6 +251,7 @@ class KSinDataModule(LightningDataModule):
                 shuffle=False,
                 collate_fn=regular_collate_fn,
                 num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
             )
 
     def train_dataloader(self):
