@@ -21,3 +21,35 @@ src/data/kosc_datamodule.py                <- Implementation of k-osc task
 configs/experiment/kosc                    <- k-osc experiment configs
 configs/experiment/surge                   <- Surge XT experiment configs
 ```
+
+...existing code...
+
+## Setup
+
+1. Install requirements:
+   ```bash
+   conda env create -f environment.yaml
+   conda activate myenv
+   pip install -r requirements.txt
+   ```
+
+1. 
+
+1. Configure Weights & Biases (optional but recommended):
+   ```bash
+   wandb login
+   ```
+   - Adjust project/team defaults in [configs/logger/wandb.yaml](configs/logger/wandb.yaml).
+   - You can also set `WANDB_ENTITY`, `WANDB_PROJECT`, or run with `logger=wandb`.
+
+## Tests
+
+Run the fast test suite:
+```bash
+pytest -k "not slow"
+```
+Run the full suite:
+```bash
+pytest
+```
+(You can also use [Makefile](Makefile) targets like `make test` or `make test-full`.)
