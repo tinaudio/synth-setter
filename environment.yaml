@@ -7,6 +7,8 @@
 
 name: myenv
 
+# TODO(@ktinubu): consider removing `pytorch` and `defaults` channels and enabling 
+# strict channel priority to avoid build issues.
 channels:
   - pytorch
   - conda-forge

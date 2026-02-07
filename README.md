@@ -28,12 +28,16 @@ configs/experiment/surge                   <- Surge XT experiment configs
 
 1. Install requirements:
    ```bash
+   # [OPTIONAL] create conda environment
+   conda update --name base conda
    conda env create -f environment.yaml
    conda activate myenv
-   pip install -r requirements.txt
+
+   # install requirements
+   python -m pip install --upgrade
+   python -m pip install -r requirements.txt
    ```
 
-1. 
 
 1. Configure Weights & Biases (optional but recommended):
    ```bash
