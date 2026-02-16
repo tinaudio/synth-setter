@@ -96,6 +96,17 @@ RUN git submodule update --init --recursive
 RUN cmake -Bignore/sxt -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
 RUN cmake --build ignore/sxt --config Release --parallel 8
 RUN cmake --install ignore/sxt
+RUN set -eux; \
+  mkdir -p /usr/lib/vst3; \
+  # Check both multiarch vst3 dirs for the installed Surge XT.vst3 and link it to /usr/lib/vst3/Surge XT.vst3
+  if [ -e "/usr/lib/aarch64-linux-gnu/vst3/Surge XT.vst3" ]; then \
+    ln -sfn "/usr/lib/aarch64-linux-gnu/vst3/Surge XT.vst3" "/usr/lib/vst3/Surge XT.vst3"; \
+  elif [ -e "/usr/lib/x86_64-linux-gnu/vst3/Surge XT.vst3" ]; then \
+    ln -sfn "/usr/lib/x86_64-linux-gnu/vst3/Surge XT.vst3" "/usr/lib/vst3/Surge XT.vst3"; \
+  else \
+    echo "ERROR: Surge XT.vst3 not found in multiarch vst3 dirs" >&2; \
+    exit 1; \
+  fi
 
 FROM base AS builder-amd64-prebuilt
 RUN apt-get update && apt-get install -y wget
