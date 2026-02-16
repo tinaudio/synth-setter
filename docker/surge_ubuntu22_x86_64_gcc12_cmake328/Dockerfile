@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG TARGETARCH
 ARG BUILD_MODE
+ARG GIT_PAT
 #TODO: figure out best way to restrict TARGETARCH and BUILD_MODE to valid values, 
 # and error if invalid values are used. 
 # ==========================================
@@ -129,5 +130,19 @@ RUN apt-get install -y ./surge-xt-linux-x64-1.3.4.deb && rm surge-xt-linux-x64-1
 FROM builder-${BUILD_MODE}-install AS final-stage
 # Check that vst3 was installed.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)"  || (echo "ERROR: Surge\ XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
-USER build
-WORKDIR /home/build/plugin
+# Clone the repository using the provided GIT_PAT
+# TODO: use buildx secrets to pass GIT_PAT.
+ARG GIT_PAT
+RUN if [ -z "$GIT_PAT" ]; then echo "ERROR: GIT_PAT build-arg is required and cannot be empty." >&2; exit 1; fi
+RUN git clone https://${GIT_PAT}@github.com/ktinubu/synth-permutations.git /home/build/synth-permutations
+# Set the working directory to the root of the cloned repository
+WORKDIR /home/build/synth-permutations
+RUN git checkout experiment
+RUN apt-get update && apt-get install -y python3 python3-pip
+RUN pip3 install --upgrade pip
+# Install Python dependencies from the cloned repo's requirements.txt
+RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
+
+# TODO: consider using user:build instead of root
+# Use root for now since some scripts require permissions to create/write to files 
+# USER build
