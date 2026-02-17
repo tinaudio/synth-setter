@@ -159,3 +159,6 @@ vst_data/
 audio/
 checkpoints/
 paper.txt
+
+# Devcontainers
+.devcontainer/
