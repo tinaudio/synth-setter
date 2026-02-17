@@ -166,10 +166,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dri \
     libgl1-mesa-glx \
     mesa-utils \
+    openbox \
+    x11-utils \
+    x11-xserver-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# TODO: Turn the following into a test.
 # Run a test to check VST3 plugin loading in headless mode
-RUN scripts/run-vst-headless.sh \
+RUN chmod +x scripts/run-linux-vst-headless.sh
+RUN scripts/run-linux-vst-headless.sh \
   python3 -X faulthandler -c "from src.data.vst import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
 
 # TODO: consider using user:build instead of root
