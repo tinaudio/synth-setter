@@ -6,8 +6,8 @@ ARG GIT_PAT
 ARG SURGE_GIT_REF=f7b97c682ade0b87da85ca5968b63d5c7c98e68d
 # Experiment branch commit SHA
 ARG SYNTH_PERMUTATIONS_GIT_REF=experiment
-#TODO: figure out best way to restrict TARGETARCH and BUILD_MODE to valid values, 
-# and error if invalid values are used. 
+#TODO: figure out best way to restrict TARGETARCH and BUILD_MODE to valid values,
+# and error if invalid values are used.
 # ==========================================
 FROM ubuntu:22.04 AS base
 ENV LANG=C.UTF-8
@@ -34,9 +34,9 @@ RUN groupadd -g 1000 build
 RUN useradd --create-home --uid 1000 --gid 1000 --shell /bin/bash build
 
 # and install it
-RUN apt-get update 
+RUN apt-get update
 RUN apt-get install -y software-properties-common
-RUN apt-get update 
+RUN apt-get update
 RUN apt-get install -y gcc-12 g++-12 git ninja-build flex
 
 FROM base AS builder-amd64-source-cmake
@@ -57,8 +57,8 @@ RUN ./cmake-3.28.1-linux-aarch64.sh --skip-license --prefix=/usr
 
 FROM builder-${TARGETARCH}-source-cmake AS builder-common-source
 # Then install the prerequistes for a juce build
-RUN apt-get install -y git vim 
-RUN apt-get install -y cmake ninja-build 
+RUN apt-get install -y git vim
+RUN apt-get install -y cmake ninja-build
 RUN apt-get install -y \
               devscripts \
               libx11-dev \
@@ -156,7 +156,7 @@ RUN apt-get install -y ./surge-xt-linux-x64-1.3.4.deb && rm surge-xt-linux-x64-1
 # TODO: check to see which of the installs below are actually needed to install the prebuilt package,  remove the ones that aren't needed.
 # TODO: Add linting.
 # TODO: Add `rm -rf /var/lib/apt/lists/*` after apt-get installs to reduce image size.
-# TODO: Clean up build user if it's not needed. 
+# TODO: Clean up build user if it's not needed.
 FROM builder-${BUILD_MODE}-install AS final-stage
 # Check that vst3 was installed.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)"  || (echo "ERROR: Surge\ XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
@@ -198,5 +198,5 @@ RUN scripts/run-linux-vst-headless.sh \
   python3 -X faulthandler -c "from src.data.vst import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
 
 # TODO: consider using user:build instead of root
-# Use root for now since some scripts require permissions to create/write to files 
+# Use root for now since some scripts require permissions to create/write to files
 # USER build
