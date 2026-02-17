@@ -36,7 +36,7 @@ def _prepare_plugin(plugin: VST3Plugin) -> None:
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
-    """Load a VST3 plugin from disk and run preparation warmup.
+    """Load a VST3 plugin from its path and run warmup.
 
     :param plugin_path: Filesystem path to the ``.vst3`` plugin bundle.
     :return: Prepared plugin instance.
@@ -99,7 +99,7 @@ def render_params(
     :param plugin: Prepared VST3 plugin instance.
     :param params: Mapping of parameter names to raw values.
     :param midi_note: MIDI pitch for the rendered note.
-    :param velocity: MIDI note-on velocity.
+    :param velocity: MIDI velocity value.
     :param note_start_and_end: Tuple ``(note_on_time_s, note_off_time_s)``.
     :param signal_duration_seconds: Total audio duration to render.
     :param sample_rate: Render sample rate in Hz.
