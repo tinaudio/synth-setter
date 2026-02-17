@@ -137,7 +137,9 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get install -y ./surge-xt-linux-x64-1.3.4.deb && rm surge-xt-linux-x64-1.3.4.deb
 
 # TODO: Add test stage with python that uses pedalboard to load to plugin.
-
+# TODO: check to see which of the installs below are actually needed to install the prebuilt package,  remove the ones that aren't needed.
+# TODO: Add linting.
+# TODO: Add `rm -rf /var/lib/apt/lists/*` after apt-get installs to reduce image size.
 FROM builder-${BUILD_MODE}-install AS final-stage
 # Check that vst3 was installed.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)"  || (echo "ERROR: Surge\ XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
@@ -153,6 +155,22 @@ RUN apt-get update && apt-get install -y python3 python3-pip
 RUN pip3 install --upgrade pip
 # Install Python dependencies from the cloned repo's requirements.txt
 RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
+
+# TODO: move the following `apt-get install` to after the `ls /usr/lib/vst3/` check.
+# The following packages are required for src/run-linux-vst-headless.sh:
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    xauth \
+    dbus-x11 \
+    xsettingsd \
+    libgl1-mesa-dri \
+    libgl1-mesa-glx \
+    mesa-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Run a test to check VST3 plugin loading in headless mode
+RUN scripts/run-vst-headless.sh \
+  python3 -X faulthandler -c "from src.data.vst import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
 
 # TODO: consider using user:build instead of root
 # Use root for now since some scripts require permissions to create/write to files 
