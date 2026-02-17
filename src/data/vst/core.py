@@ -10,29 +10,39 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 
-def _call_with_interrupt(fn: Callable, sleep_time: float = 2.0):
-    """Calls the function fn on the main thread, while another thread sends a KeyboardInterrupt
-    (SIGINT) to the main thread."""
+def _call_show_editor_for(plugin, warmup_s: float = 0.5) -> None:
+    """Show a plugin editor briefly, then close it via an Event.
 
-    def send_interrupt():
-        # Brief sleep so that fn starts before we send the interrupt
-        time.sleep(sleep_time)
-        _thread.interrupt_main()
+    This helper opens the plugin UI on the main thread and uses a daemon
+    thread to set a close event after ``warmup_s`` seconds.
 
-    # Create and start the thread that sends the interrupt
-    t = threading.Thread(target=send_interrupt)
+    :param plugin: Instantiated VST3 plugin object.
+    :param warmup_s: Number of seconds to keep the editor open.
+    """
+    close_event = threading.Event()
+
+    def closer():
+        time.sleep(warmup_s)
+        close_event.set()
+
+    t = threading.Thread(target=closer, daemon=True)
     t.start()
 
-    try:
-        fn()
-    except KeyboardInterrupt:
-        print("Interrupted main thread.")
-    finally:
-        t.join()
+    # blocks main thread until close_event.set() is called
+    plugin.show_editor(close_event)
+
+    t.join(timeout=1.0)
 
 
-def _prepare_plugin(plugin: VST3Plugin) -> None:
-    _call_with_interrupt(plugin.show_editor, sleep_time=2.0)
+def _prepare_plugin(plugin, warmup_s: float = 0.5) -> None:
+    """Prepare a plugin instance for stable preset loading and rendering.
+
+    Runs the editor warmup helper to trigger plugin-side initialization paths.
+
+    :param plugin: Instantiated VST3 plugin object.
+    :param warmup_s: Number of seconds to keep the editor open before closing.
+    """
+    _call_show_editor_for(plugin, warmup_s=warmup_s)
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
