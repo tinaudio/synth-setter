@@ -6,12 +6,12 @@ ARG GIT_PAT
 # and error if invalid values are used. 
 # ==========================================
 FROM ubuntu:22.04 AS base
-ENV LANG C.UTF-8
+ENV LANG=C.UTF-8
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 
 # Non-interactive configuration of tzdata
-ENV DEBIAN_FRONTEND noninteractive
-ENV DEBCONF_NONINTERACTIVE_SEEN true
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBCONF_NONINTERACTIVE_SEEN=true
 RUN { echo 'tzdata tzdata/Areas select Etc'; echo 'tzdata tzdata/Zones/Etc select UTC'; } | debconf-set-selections
 
 # Create unprivileged user to build toolchains and plugins
@@ -140,11 +140,14 @@ RUN apt-get install -y ./surge-xt-linux-x64-1.3.4.deb && rm surge-xt-linux-x64-1
 # TODO: check to see which of the installs below are actually needed to install the prebuilt package,  remove the ones that aren't needed.
 # TODO: Add linting.
 # TODO: Add `rm -rf /var/lib/apt/lists/*` after apt-get installs to reduce image size.
+# TODO: Clean up build user if it's not needed. 
 FROM builder-${BUILD_MODE}-install AS final-stage
 # Check that vst3 was installed.
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)"  || (echo "ERROR: Surge\ XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
 # Clone the repository using the provided GIT_PAT
 # TODO: use buildx secrets to pass GIT_PAT.
+# TODO: Explicitly fetch hash as opposed to clone+checkout to avoid cached
+# layers with cloned repos that have the full commit history.
 ARG GIT_PAT
 RUN if [ -z "$GIT_PAT" ]; then echo "ERROR: GIT_PAT build-arg is required and cannot be empty." >&2; exit 1; fi
 RUN git clone https://${GIT_PAT}@github.com/ktinubu/synth-permutations.git /home/build/synth-permutations
