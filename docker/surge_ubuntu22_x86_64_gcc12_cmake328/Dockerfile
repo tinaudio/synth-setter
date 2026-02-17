@@ -2,6 +2,10 @@
 ARG TARGETARCH
 ARG BUILD_MODE
 ARG GIT_PAT
+# release-xt/1.3.4 SHA
+ARG SURGE_GIT_REF=f7b97c682ade0b87da85ca5968b63d5c7c98e68d
+# Experiment branch commit SHA
+ARG SYNTH_PERMUTATIONS_GIT_REF=experiment
 #TODO: figure out best way to restrict TARGETARCH and BUILD_MODE to valid values, 
 # and error if invalid values are used. 
 # ==========================================
@@ -13,6 +17,17 @@ SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
 ENV DEBCONF_NONINTERACTIVE_SEEN=true
 RUN { echo 'tzdata tzdata/Areas select Etc'; echo 'tzdata tzdata/Zones/Etc select UTC'; } | debconf-set-selections
+
+ARG TARGETARCH
+ARG BUILD_MODE
+RUN case "${TARGETARCH}" in \
+      amd64|arm64) ;; \
+      *) echo "ERROR: TARGETARCH must be amd64 or arm64 (got '${TARGETARCH}')" >&2; exit 1 ;; \
+    esac && \
+    case "${BUILD_MODE}" in \
+      source|prebuilt) ;; \
+      *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
+    esac
 
 # Create unprivileged user to build toolchains and plugins
 RUN groupadd -g 1000 build
@@ -91,7 +106,8 @@ WORKDIR /home/build/plugin
 # Now clone and build surge from source
 RUN git clone https://github.com/surge-synthesizer/surge.git
 WORKDIR /home/build/plugin/surge
-RUN git checkout release-xt/1.3.4
+ARG SURGE_GIT_REF
+RUN git checkout --detach ${SURGE_GIT_REF}
 RUN git submodule update --init --recursive
 RUN cmake -Bignore/sxt -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
 RUN cmake --build ignore/sxt --config Release --parallel 8
@@ -153,7 +169,8 @@ RUN if [ -z "$GIT_PAT" ]; then echo "ERROR: GIT_PAT build-arg is required and ca
 RUN git clone https://${GIT_PAT}@github.com/ktinubu/synth-permutations.git /home/build/synth-permutations
 # Set the working directory to the root of the cloned repository
 WORKDIR /home/build/synth-permutations
-RUN git checkout experiment
+ARG SYNTH_PERMUTATIONS_GIT_REF
+RUN git checkout ${SYNTH_PERMUTATIONS_GIT_REF}
 RUN apt-get update && apt-get install -y python3 python3-pip
 RUN pip3 install --upgrade pip
 # Install Python dependencies from the cloned repo's requirements.txt
