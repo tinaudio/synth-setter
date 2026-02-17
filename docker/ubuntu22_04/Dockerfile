@@ -6,10 +6,12 @@ ARG GIT_PAT
 ARG SURGE_GIT_REF=f7b97c682ade0b87da85ca5968b63d5c7c98e68d
 # Experiment branch commit SHA
 ARG SYNTH_PERMUTATIONS_GIT_REF=experiment
+ARG BASE_IMAGE=ubuntu:22.04
+
 #TODO: figure out best way to restrict TARGETARCH and BUILD_MODE to valid values,
 # and error if invalid values are used.
 # ==========================================
-FROM ubuntu:22.04 AS base
+FROM ${BASE_IMAGE} AS base
 ENV LANG=C.UTF-8
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 
