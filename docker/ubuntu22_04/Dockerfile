@@ -173,10 +173,27 @@ RUN git clone https://${GIT_PAT}@github.com/ktinubu/synth-permutations.git /home
 WORKDIR /home/build/synth-permutations
 ARG SYNTH_PERMUTATIONS_GIT_REF
 RUN git checkout ${SYNTH_PERMUTATIONS_GIT_REF}
-RUN apt-get update && apt-get install -y python3 python3-pip
-RUN pip3 install --upgrade pip
-# Install Python dependencies from the cloned repo's requirements.txt
-RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
+
+# Install Python and venv support
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+ENV VIRTUAL_ENV=/venv/main
+RUN python3 -m venv $VIRTUAL_ENV
+
+# Make venv Python the default
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Verify Python version and location
+RUN echo "Python location:" && which python \
+    && echo "Python version:" && python --version
+
+RUN python -m pip install --upgrade pip
+RUN pip install -r requirements.txt
 
 # TODO: move the following `apt-get install` to after the `ls /usr/lib/vst3/` check.
 # The following packages are required for src/run-linux-vst-headless.sh:
@@ -197,7 +214,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Run a test to check VST3 plugin loading in headless mode
 RUN chmod +x scripts/run-linux-vst-headless.sh
 RUN scripts/run-linux-vst-headless.sh \
-  python3 -X faulthandler -c "from src.data.vst import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
+  python -X faulthandler -c "from src.data.vst import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
 
 # TODO: consider using user:build instead of root
 # Use root for now since some scripts require permissions to create/write to files
