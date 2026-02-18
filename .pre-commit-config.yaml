@@ -105,16 +105,15 @@ repos:
 
   # md formatting
   - repo: https://github.com/executablebooks/mdformat
-    rev: 0.7.16
+    rev: 1.0.0
     hooks:
       - id: mdformat
         args: ["--number"]
         additional_dependencies:
-          - mdformat-gfm
-          - mdformat-tables
-          - mdformat_frontmatter
-          # - mdformat-toc
-          # - mdformat-black
+          - mdformat-gfm==1.0.0
+          - mdformat_frontmatter==2.0.10
+          # optional: mdformat-tables is redundant if you use mdformat-gfm
+          # - mdformat-tables
 
   # word spelling linter
   - repo: https://github.com/codespell-project/codespell
