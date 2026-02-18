@@ -2,7 +2,7 @@
 
 # Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching
 
-This repository accompanies a submission to ISMIR 2025. A full README explaining how to use this code will be provided before the conference. In the meantime, audio examples are available at the [online supplement](https://benhayes.net/synth-perm/). 
+This repository accompanies a submission to ISMIR 2025. A full README explaining how to use this code will be provided before the conference. In the meantime, audio examples are available at the [online supplement](https://benhayes.net/synth-perm/).
 
 If you would like to explore the source code, you may find the below helpful:
 
@@ -27,33 +27,43 @@ configs/experiment/surge                   <- Surge XT experiment configs
 ## Setup
 
 1. Install requirements:
+
    ```bash
    # [OPTIONAL] create conda environment
    conda update --name base conda
    conda env create -f environment.yaml
    conda activate myenv
 
-   # install requirements
-   python -m pip install --upgrade
+   # install torch stack and app dependencies separately
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements-torch.txt
+   python -m pip install -r requirements-app.txt
+
+   # backward-compatible one-liner
    python -m pip install -r requirements.txt
    ```
 
+2. Configure Weights & Biases (optional but recommended):
 
-1. Configure Weights & Biases (optional but recommended):
    ```bash
    wandb login
    ```
+
    - Adjust project/team defaults in [configs/logger/wandb.yaml](configs/logger/wandb.yaml).
    - You can also set `WANDB_ENTITY`, `WANDB_PROJECT`, or run with `logger=wandb`.
 
 ## Tests
 
 Run the fast test suite:
+
 ```bash
 pytest -k "not slow"
 ```
+
 Run the full suite:
+
 ```bash
 pytest
 ```
+
 (You can also use [Makefile](Makefile) targets like `make test` or `make test-full`.)

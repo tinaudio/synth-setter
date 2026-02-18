@@ -205,8 +205,13 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN echo "Python location:" && which python \
     && echo "Python version:" && python --version
 
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 RUN python -m pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+  --index-url ${TORCH_INDEX_URL} \
+  --extra-index-url https://pypi.org/simple \
+  -r requirements-torch.txt
+RUN pip install --no-cache-dir -r requirements-app.txt
 
 # TODO: move the following `apt-get install` to after the `ls /usr/lib/vst3/` check.
 # The following packages are required for src/run-linux-vst-headless.sh:

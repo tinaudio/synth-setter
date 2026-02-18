@@ -1,0 +1,6 @@
+# --------- torch stack --------- #
+# Install with an explicit index in Docker when targeting CUDA wheels.
+torch>=2.0.0
+torchvision>=0.15.0
+lightning>=2.0.0
+torchmetrics>=0.11.4
