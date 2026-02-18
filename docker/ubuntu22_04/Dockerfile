@@ -187,18 +187,13 @@ WORKDIR /home/build/synth-permutations
 ARG SYNTH_PERMUTATIONS_GIT_REF
 RUN git checkout ${SYNTH_PERMUTATIONS_GIT_REF}
 
-# Install Python and venv support
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-venv \
-    python3-pip \
+    python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment
 ENV VIRTUAL_ENV=/venv/main
-RUN python3 -m venv $VIRTUAL_ENV
-
-# Make venv Python the default
+RUN python3 -m pip install --no-cache-dir --upgrade pip virtualenv \
+ && python3 -m virtualenv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # Verify Python version and location
