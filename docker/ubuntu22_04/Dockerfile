@@ -10,6 +10,7 @@ ARG BASE_IMAGE=ubuntu:22.04
 
 #TODO: figure out best way to restrict TARGETARCH and BUILD_MODE to valid values,
 # and error if invalid values are used.
+# TODO(deduplicate package lists)
 # ==========================================
 FROM ${BASE_IMAGE} AS base
 ENV LANG=C.UTF-8
@@ -36,15 +37,20 @@ RUN groupadd -g 1000 build
 RUN useradd --create-home --uid 1000 --gid 1000 --shell /bin/bash build
 
 # and install it
-RUN apt-get update
-RUN apt-get install -y software-properties-common
-RUN apt-get update
-RUN apt-get install -y gcc-12 g++-12 git ninja-build flex
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  software-properties-common \
+  gcc-12 \
+  g++-12 \
+  git \
+  ninja-build \
+  flex \
+  && rm -rf /var/lib/apt/lists/*
 
 FROM base AS builder-amd64-source-cmake
 RUN mkdir /home/build/cmake-install
 WORKDIR /home/build/cmake-install
-RUN apt-get install -y wget
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+  && rm -rf /var/lib/apt/lists/*
 RUN wget https://github.com/Kitware/CMake/releases/download/v3.28.1/cmake-3.28.1-linux-x86_64.sh
 RUN chmod 755 ./cmake-3.28.1-linux-x86_64.sh
 RUN ./cmake-3.28.1-linux-x86_64.sh --skip-license --prefix=/usr
@@ -52,16 +58,19 @@ RUN ./cmake-3.28.1-linux-x86_64.sh --skip-license --prefix=/usr
 FROM base AS builder-arm64-source-cmake
 RUN mkdir /home/build/cmake-install
 WORKDIR /home/build/cmake-install
-RUN apt-get install -y wget
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+  && rm -rf /var/lib/apt/lists/*
 RUN wget https://github.com/Kitware/CMake/releases/download/v3.28.1/cmake-3.28.1-linux-aarch64.sh
 RUN chmod 755 ./cmake-3.28.1-linux-aarch64.sh
 RUN ./cmake-3.28.1-linux-aarch64.sh --skip-license --prefix=/usr
 
 FROM builder-${TARGETARCH}-source-cmake AS builder-common-source
 # Then install the prerequistes for a juce build
-RUN apt-get install -y git vim
-RUN apt-get install -y cmake ninja-build
-RUN apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        vim \
+        cmake \
+        ninja-build \
               devscripts \
               libx11-dev \
               libxcb-cursor-dev \
@@ -90,9 +99,9 @@ RUN apt-get install -y \
               libxcursor-dev \
               libxcursor1 \
               libxcb-cursor-dev \
-              libxcb-cursor0
-
-RUN apt-get install -y rpm
+              libxcb-cursor0 \
+              rpm \
+              && rm -rf /var/lib/apt/lists/*
 
 # Finally, pick gcc12
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
@@ -125,9 +134,11 @@ RUN set -eux; \
     echo "ERROR: Surge XT.vst3 not found in multiarch vst3 dirs" >&2; \
     exit 1; \
   fi
+RUN rm -rf /home/build/plugin/surge /home/build/cmake-install
 
 FROM base AS builder-amd64-prebuilt
-RUN apt-get update && apt-get install -y wget
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+    && rm -rf /var/lib/apt/lists/*
 RUN wget https://github.com/surge-synthesizer/releases-xt/releases/download/1.3.4/surge-xt-linux-x64-1.3.4.deb
 
 
@@ -137,7 +148,7 @@ RUN echo "ERROR: arm64 prebuilt package is not currently available. Set BUILD_MO
 FROM builder-${TARGETARCH}-prebuilt AS builder-prebuilt-install
 # Add any additional dependencies needed to install the prebuilt package
 # TODO: check to see which of the installs below are actually needed to install the prebuilt package,  remove the ones that aren't needed.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
     cmake \
@@ -151,13 +162,15 @@ RUN apt-get update && apt-get install -y \
     libxinerama-dev \
     libxcursor-dev \
     libasound2-dev \
-    libjack-jackd2-dev
-RUN apt-get install -y ./surge-xt-linux-x64-1.3.4.deb && rm surge-xt-linux-x64-1.3.4.deb
+    libjack-jackd2-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ./surge-xt-linux-x64-1.3.4.deb \
+    && rm surge-xt-linux-x64-1.3.4.deb \
+    && rm -rf /var/lib/apt/lists/*
 
 # TODO: Add test stage with python that uses pedalboard to load to plugin.
 # TODO: check to see which of the installs below are actually needed to install the prebuilt package,  remove the ones that aren't needed.
 # TODO: Add linting.
-# TODO: Add `rm -rf /var/lib/apt/lists/*` after apt-get installs to reduce image size.
 # TODO: Clean up build user if it's not needed.
 FROM builder-${BUILD_MODE}-install AS final-stage
 # Check that vst3 was installed.
@@ -193,7 +206,7 @@ RUN echo "Python location:" && which python \
     && echo "Python version:" && python --version
 
 RUN python -m pip install --upgrade pip
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # TODO: move the following `apt-get install` to after the `ls /usr/lib/vst3/` check.
 # The following packages are required for src/run-linux-vst-headless.sh:
