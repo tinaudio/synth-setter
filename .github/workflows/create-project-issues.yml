@@ -1,0 +1,70 @@
+name: Create GitHub Project and Issues from Branch
+
+on:
+  push:
+    branches:
+      - 'copilot/**'
+  workflow_dispatch:
+    inputs:
+      branch_word:
+        description: 'Word to use for project/issues (defaults to branch-derived word)'
+        required: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  create-project-and-issues:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Extract word from branch name
+        id: extract
+        run: |
+          if [ -n "${{ github.event.inputs.branch_word }}" ]; then
+            WORD="${{ github.event.inputs.branch_word }}"
+          else
+            BRANCH="${{ github.ref_name }}"
+            # Extract the meaningful part after the last /
+            WORD="${BRANCH##*/}"
+          fi
+          echo "word=${WORD}" >> $GITHUB_OUTPUT
+          echo "Extracted word: ${WORD}"
+
+      - name: Create GitHub Project
+        env:
+          GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          WORD="${{ steps.extract.outputs.word }}"
+          echo "Creating GitHub Project: ${WORD}"
+          if ! gh project create --owner "${{ github.repository_owner }}" --title "${WORD}"; then
+            echo "::warning::Project creation failed. It may require a PAT with 'project' scope set as the GH_PROJECT_TOKEN secret."
+          fi
+
+      - name: Create GitHub Issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          WORD="${{ steps.extract.outputs.word }}"
+          REPO="${{ github.repository }}"
+
+          echo "Creating issues for word: ${WORD}"
+
+          gh issue create \
+            --repo "${REPO}" \
+            --title "Setup: ${WORD}" \
+            --body "$(printf '## Overview\nInitial setup tasks for: **%s**.\n\n## Tasks\n- [ ] Define requirements\n- [ ] Set up project structure\n- [ ] Create documentation' "${WORD}")"
+
+          gh issue create \
+            --repo "${REPO}" \
+            --title "Implement: ${WORD}" \
+            --body "$(printf '## Overview\nImplementation tasks for: **%s**.\n\n## Tasks\n- [ ] Core implementation\n- [ ] Write tests\n- [ ] Code review' "${WORD}")"
+
+          gh issue create \
+            --repo "${REPO}" \
+            --title "Review and Deploy: ${WORD}" \
+            --body "$(printf '## Overview\nReview and deployment tasks for: **%s**.\n\n## Tasks\n- [ ] Final review\n- [ ] Testing\n- [ ] Deployment' "${WORD}")"
