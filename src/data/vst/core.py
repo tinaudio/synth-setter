@@ -10,6 +10,13 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 
+# TODO(khaledt): unit tests:
+#   correctness, use goldens to test against, also generate many random
+#   samples and ensure that close_event warmup performs the same/better
+#   than keyboard interrupt for closing the editor, and that the editor
+#   is actually open during the warmup period (e.g. by checking plugin state
+#   or using a mock plugin that tracks calls to show_editor and close_editor).
+#   Consider fuzzing.
 def _call_show_editor_for(plugin, warmup_s: float = 0.5) -> None:
     """Show a plugin editor briefly, then close it via an Event.
 
