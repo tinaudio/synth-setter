@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.6
 ARG TARGETARCH
+ARG TARGETPLATFORM
 ARG BUILD_MODE=source
 
 # release-xt/1.3.4 SHA
@@ -20,9 +21,11 @@ FROM ${BASE_IMAGE} AS arm64-vars
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
 ARG BUILD_MODE
+RUN echo "TARGETARCH=${TARGETARCH:-<unset>}" >&2
+RUN echo "TARGETPLATFORM=${TARGETPLATFORM:-<unset>}" >&2
 WORKDIR /tmp-artifacts
 RUN echo "aarch64" > /tmp-artifacts/cmake-arch-name.txt
-RUN if [ "$BUILD_MODE" = "prebuilt" ] && [ "$TARGETARCH" = "arm64" ]; then \
+RUN if [ "${BUILD_MODE:-}" = "prebuilt" ] && [ "${TARGETARCH:-}" = "arm64" ]; then \
       echo "ERROR: arm64 prebuilt package is not currently available. Set BUILD_MODE=source." >&2; \
       exit 1; \
     fi
@@ -36,10 +39,10 @@ COPY --from=arm64-vars /tmp-artifacts/ /tmp-artifacts/arm64/
 COPY --from=amd64-vars /tmp-artifacts/ /tmp-artifacts/amd64/
 
 # `cp` with Trailing dot copies everything inside the source to dest.
-RUN case "$TARGETARCH" in \
+RUN case "${TARGETARCH:-}" in \
       arm64) cp -av  /tmp-artifacts/arm64/. /artifacts ;; \
       amd64) cp -av /tmp-artifacts/amd64/. /artifacts ;; \
-      *) echo "ERROR: TARGETARCH must be amd64 or arm64 (got '${TARGETARCH}')" >&2; exit 1 ;; \
+      *) echo "ERROR: TARGETARCH must be amd64 or arm64 (got '${TARGETARCH:-<unset>}')" >&2; exit 1 ;; \
     esac
 
 # TODO: add appropriate build labels
@@ -50,8 +53,6 @@ RUN case "$TARGETARCH" in \
 # ==========================================
 FROM ${BASE_IMAGE} AS builder-base
 WORKDIR /home/build/
-RUN pwd
-RUN ls
 ENV LANG=C.UTF-8
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 
@@ -64,15 +65,15 @@ ARG TARGETARCH
 ARG BUILD_MODE
 ARG IMAGE
 # Validate build args
-RUN case "${TARGETARCH}" in \
+RUN case "${TARGETARCH:-}" in \
       amd64|arm64) ;; \
-      *) echo "ERROR: TARGETARCH must be amd64 or arm64 (got '${TARGETARCH}')" >&2; exit 1 ;; \
-    esac && \
-    case "${BUILD_MODE}" in \
+      *) echo "ERROR: TARGETARCH must be amd64 or arm64 (got '${TARGETARCH:-<unset>}')" >&2; exit 1 ;; \
+    esac
+RUN case "${BUILD_MODE}" in \
       source|prebuilt) ;; \
       *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
-    esac  && \
-    case "${IMAGE}" in \
+    esac
+RUN case "${IMAGE}" in \
       "dev-snapshot" | "dev-live" | "prod") ;; \
       *) echo "ERROR: IMAGE must be dev-snapshot, dev-live, or prod (got '${IMAGE}')" >&2; exit 1 ;; \
     esac

@@ -90,12 +90,16 @@ DOCKER_IMAGE      ?= tinaudio/perm
 DOCKER_BASE_IMAGE ?= vastai/base-image:cuda-12.8.1-cudnn-devel-ubuntu22.04-py310
 DOCKER_BUILD_MODE ?= prebuilt
 DOCKER_TARGETPLATFORM ?= linux/amd64
+TARGETARCH ?= amd64
 DOCKER_TORCH_IDX  ?= https://download.pytorch.org/whl/cu128
 DOCKER_BUILD_FLAGS ?=
 APP_PATH          := /home/build/synth-permutations
 CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse --short HEAD))
 USE_CLOUD_BUILDER ?= false
 
+# TODO(ktinubu): Looking into TARGETARCH failing to set set by buildx
+# even when --platform is provided. In the meantime, we set TARGETARCH
+# to amd64 as fallback
 # Format base image and target platform: (ubuntu:22.04 -> ubuntu__22.04)
 DOCKER_BASE_IMAGE_TAG := $(subst /,_,$(subst :,__,$(DOCKER_BASE_IMAGE)))
 TARGET_PLATFORM_TAG := $(subst /,_,$(DOCKER_TARGETPLATFORM))
@@ -110,7 +114,7 @@ endif
 
 docker-build-dev-snapshot: ## Build full production image (requires GIT_REF and GIT_PAT)
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required. Usage: make docker-build GIT_REF=<sha> GIT_PAT=<token>"; exit 1; fi
-	DOCKER_BUILDKIT=1 docker build \
+	DOCKER_BUILDKIT=1 docker buildx build \
 		-f $(DOCKER_FILE) \
 		$(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
@@ -120,6 +124,7 @@ docker-build-dev-snapshot: ## Build full production image (requires GIT_REF and 
 		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
 		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
 		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
+		--build-arg TARGETARCH=$(TARGETARCH) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
 		. \
   		-- 2>&1 | tee data/docker_build_log.txt
@@ -130,7 +135,7 @@ docker-build-dev-snapshot: ## Build full production image (requires GIT_REF and 
 # which commit's dependency manifests were used.
 docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required. Usage: make docker-build GIT_REF=<sha> GIT_PAT=<token>"; exit 1; fi
-	DOCKER_BUILDKIT=1 docker build \
+	DOCKER_BUILDKIT=1 docker buildx build \
 		-f $(DOCKER_FILE) \
 		$(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
@@ -139,6 +144,7 @@ docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
 		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
 		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
 		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(CURRENT_LOCAL_GIT_REF) \
+		--build-arg TARGETARCH=$(TARGETARCH) \
 		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-live-$(CURRENT_LOCAL_GIT_REF) \
 		-t $(DOCKER_IMAGE):dev \
