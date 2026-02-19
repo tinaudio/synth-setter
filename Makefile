@@ -28,3 +28,128 @@ test-full: ## Run all tests
 
 train: ## Train the model
 	python src/train.py
+
+# =====================================================================
+# Docker targets
+# =====================================================================
+#
+# Two build modes:
+#   1. docker-build      — PRODUCTION image. Downloads the repo at a specific
+#                          commit SHA, builds Surge XT from source (or uses a
+#                          prebuilt .deb), installs all Python deps, and bakes
+#                          the source into the image. Result is fully
+#                          self-contained — run it anywhere (CI, cloud, vast.ai).
+#
+#   2. docker-build-dev  — DEV image. Same base as production (Surge + Python
+#                          deps installed), but does NOT bake source code into
+#                          the image. Instead you mount your local working tree
+#                          at runtime with docker-run-dev. Rebuild only when
+#                          dependencies or the Surge version change.
+#
+# Required variables (pass on the command line):
+#   GIT_PAT             GitHub personal access token with repo read access.
+#                       Required because ktinubu/synth-permutations is private.
+#   GIT_REF             (docker-build only) Commit SHA, tag, or branch to bake
+#                       into the production image. Prefer a full commit SHA for
+#                       deterministic builds.
+#
+# Optional overrides:
+#   DOCKER_FILE         Path to Dockerfile          (default: docker/ubuntu22_04/Dockerfile)
+#   DOCKER_IMAGE        Image name                  (default: tinaudio/perm)
+#   DOCKER_BASE_IMAGE   Base Docker image            (default: ubuntu:22.04)
+#                       e.g. nvidia/cuda:12.8.1-devel-ubuntu22.04 for GPU builds
+#   DOCKER_BUILD_MODE   "source" or "prebuilt"       (default: source)
+#   DOCKER_TARGETPLATFORM   "linux/amd64" or "linux/arm64"           (default: linux/amd64)
+#   DOCKER_TORCH_IDX    PyTorch wheel index URL      (default: cu128 wheels)
+#   DOCKER_BUILD_FLAGS  Extra flags passed to        (default: empty)
+#                       docker build, e.g.:
+#                         --builder cloud-tinaudio-tinaudio-builder --push
+#                       passed verbatim to docker build. Use to override or add
+#                       any Dockerfile ARG without editing the Makefile, e.g.:
+#
+# Quick-start examples:
+#   # Production image at a specific commit
+#   make docker-build GIT_REF=abc123 GIT_PAT=ghp_xxxx
+#
+#   # Dev image (build once)
+#   make docker-build-dev GIT_PAT=ghp_xxxx
+#
+#   # Run dev image with local code mounted (repeat as needed)
+#   make docker-run-dev
+#
+#   # Use a remote Docker builder and push the result
+#   make docker-build GIT_REF=abc123 GIT_PAT=ghp_xxxx \
+#     DOCKER_BUILD_FLAGS="--builder cloud-tinaudio-tinaudio-builder --push"
+#
+#   # Override base image (e.g. for GPU builds)
+#   make docker-build GIT_REF=abc123 GIT_PAT=ghp_xxxx \
+#     DOCKER_BASE_IMAGE=nvidia/cuda:12.8.1-devel-ubuntu22.04
+# =====================================================================
+DOCKER_FILE       ?= docker/ubuntu22_04/Dockerfile
+DOCKER_IMAGE      ?= tinaudio/perm
+DOCKER_BASE_IMAGE ?= vastai/base-image:cuda-12.8.1-cudnn-devel-ubuntu22.04-py310
+DOCKER_BUILD_MODE ?= prebuilt
+DOCKER_TARGETPLATFORM ?= linux/amd64
+DOCKER_TORCH_IDX  ?= https://download.pytorch.org/whl/cu128
+DOCKER_BUILD_FLAGS ?=
+APP_PATH          := /home/build/synth-permutations
+CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse --short HEAD))
+USE_CLOUD_BUILDER ?= false
+
+# Format base image and target platform: (ubuntu:22.04 -> ubuntu__22.04)
+DOCKER_BASE_IMAGE_TAG := $(subst /,_,$(subst :,__,$(DOCKER_BASE_IMAGE)))
+TARGET_PLATFORM_TAG := $(subst /,_,$(DOCKER_TARGETPLATFORM))
+ifeq ($(USE_CLOUD_BUILDER),1)
+DOCKER_BUILD_FLAGS += \
+	--builder cloud-tinaudio-tinaudio-builder \
+	--push \
+	--cache-from=type=registry,ref=tinaudio/perm:buildcache-$(TARGET_PLATFORM_TAG) \
+	--cache-to=type=registry,ref=tinaudio/perm:buildcache-$(TARGET_PLATFORM_TAG),mode=max
+endif
+
+
+docker-build-dev-snapshot: ## Build full production image (requires GIT_REF and GIT_PAT)
+	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required. Usage: make docker-build GIT_REF=<sha> GIT_PAT=<token>"; exit 1; fi
+	DOCKER_BUILDKIT=1 docker build \
+		-f $(DOCKER_FILE) \
+		$(DOCKER_BUILD_FLAGS) \
+		--secret id=git_pat,env=GIT_PAT \
+		--platform $(DOCKER_TARGETPLATFORM) \
+		--build-arg IMAGE="dev-snapshot" \
+		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
+		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
+		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
+		. \
+  		-- 2>&1 | tee data/docker_build_log.txt
+
+# Dev image: installs Surge + all Python deps but does NOT copy source code.
+# Your local repo is mounted at runtime via docker-run-dev.
+# The image is tagged with both :dev and :dev-<short-sha> so you can identify
+# which commit's dependency manifests were used.
+docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
+	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required. Usage: make docker-build GIT_REF=<sha> GIT_PAT=<token>"; exit 1; fi
+	DOCKER_BUILDKIT=1 docker build \
+		-f $(DOCKER_FILE) \
+		$(DOCKER_BUILD_FLAGS) \
+		--secret id=git_pat,env=GIT_PAT \
+		--platform $(DOCKER_TARGETPLATFORM) \
+		--build-arg IMAGE="dev-live" \
+		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(CURRENT_LOCAL_GIT_REF) \
+		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
+		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-live-$(CURRENT_LOCAL_GIT_REF) \
+		-t $(DOCKER_IMAGE):dev \
+		. \
+  		-- 2>&1 | tee data/docker_build_log.txt
+
+# Run the dev image with your local working tree mounted.
+# Edits to files on your host are reflected immediately inside the container.
+# Add --gpus all after docker run to enable GPU access.
+docker-run-dev: ## Run dev image with local source mounted
+	docker run --rm -it \
+		-v "$(PWD):$(APP_PATH)" \
+		-w $(APP_PATH) \
+		$(DOCKER_IMAGE):dev
