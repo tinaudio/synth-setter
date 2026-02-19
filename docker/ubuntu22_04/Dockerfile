@@ -8,7 +8,9 @@ ARG SURGE_GIT_REF=f7b97c682ade0b87da85ca5968b63d5c7c98e68d
 # Experiment branch commit SHA
 ARG SYNTH_PERMUTATIONS_GIT_REF=experiment
 ARG BASE_IMAGE=ubuntu:22.04
-# TODO(khaledt): Rename to something more useful and distrinct from BASE_IMAGE
+# TODO(ktinubu): Rename to something more useful and distrinct from BASE_IMAGE
+# TODO(ktinubu): Check for unset TARGETARCH or TARGETPLATFORM. Fallback to amd, linux/amd but add tag to container
+# TODO(ktinubu): Add appropriate image labels.
 ARG IMAGE=dev-snapshot
 
 FROM ${BASE_IMAGE} AS amd64-vars
