@@ -1,3 +1,5 @@
+"""Core functionality for VST plugin manipulation and audio rendering."""
+
 import _thread
 import threading
 import time
@@ -10,16 +12,19 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 
-def _call_with_interrupt(fn: Callable, sleep_time: float = 2.0):
-    """
-    Calls the function fn on the main thread, while another thread
-    sends a KeyboardInterrupt (SIGINT) to the main thread.
-    """
+def _call_with_interrupt(
+    fn: Callable,
+    sleep_time: float = 2.0,
+    sleep_fn=time.sleep,
+    interrupt_fn=_thread.interrupt_main,
+):
+    """Calls the function fn on the main thread, while another thread sends a KeyboardInterrupt
+    (SIGINT) to the main thread."""
 
     def send_interrupt():
         # Brief sleep so that fn starts before we send the interrupt
-        time.sleep(sleep_time)
-        _thread.interrupt_main()
+        sleep_fn(sleep_time)
+        interrupt_fn()
 
     # Create and start the thread that sends the interrupt
     t = threading.Thread(target=send_interrupt)
@@ -34,12 +39,14 @@ def _call_with_interrupt(fn: Callable, sleep_time: float = 2.0):
 
 
 def _prepare_plugin(plugin: VST3Plugin) -> None:
+    """Prepare plugin for usage by showing editor (hacky fix for some VSTs)."""
     _call_with_interrupt(plugin.show_editor, sleep_time=2.0)
 
 
-def load_plugin(plugin_path: str) -> VST3Plugin:
+def load_plugin(plugin_path: str, plugin_factory=VST3Plugin) -> VST3Plugin:
+    """Load a VST3 plugin from a path."""
     logger.info(f"Loading plugin {plugin_path}")
-    p = VST3Plugin(plugin_path)
+    p = plugin_factory(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
     logger.info("Preparing plugin for preset load...")
     _prepare_plugin(p)
@@ -48,18 +55,27 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
 
 
 def load_preset(plugin: VST3Plugin, preset_path: str) -> None:
+    """Load a specific preset file into the plugin."""
     logger.info(f"Loading preset {preset_path}")
     plugin.load_preset(preset_path)
     logger.info(f"Preset {preset_path} loaded")
 
 
 def set_params(plugin: VST3Plugin, params: dict[str, float]) -> None:
+    """Set the plugin parameters from a dictionary of parameter names and values."""
     for k, v in params.items():
         plugin.parameters[k].raw_value = v
 
 
-def write_wav(audio: np.ndarray, path: str, sample_rate: float, channels: int) -> None:
-    with AudioFile(str(path), "w", sample_rate, channels) as f:
+def write_wav(
+    audio: np.ndarray,
+    path: str,
+    sample_rate: float,
+    channels: int,
+    audio_file_factory: Callable = AudioFile,
+) -> None:
+    """Write audio data to a WAV file."""
+    with audio_file_factory(str(path), "w", sample_rate, channels) as f:
         f.write(audio.T)
 
 
@@ -74,6 +90,7 @@ def render_params(
     channels: int,
     preset_path: Optional[str] = None,
 ) -> np.ndarray:
+    """Render audio by setting parameters and sending a MIDI note to the plugin."""
     if preset_path is not None:
         load_preset(plugin, preset_path)
 
@@ -104,6 +121,7 @@ def render_params(
 
 
 def make_midi_events(pitch: int, velocity: int, note_start: float, note_end: float):
+    """Create a tuple of MIDI events (note on/off messages) for pedalboard."""
     events = []
     note_on = mido.Message("note_on", note=pitch, velocity=velocity, time=0)
     events.append((note_on.bytes(), note_start))
