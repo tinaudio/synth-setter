@@ -1,0 +1,244 @@
+name: Data Pipeline
+
+# Validates the dataset generation + upload pipeline.
+#
+# Jobs:
+#
+#   unit-tests (all branches)
+#     Runs pytest tests/test_run_dataset_pipeline.py without Docker, VST
+#     plugins, or R2 credentials. Uses LocalFakeUploader and mocked subprocess.
+#
+#   docker-smoke-test (push to main only)
+#     Builds the dev-live Docker image, then runs the Dockerfile `test` target
+#     which: (1) validates Surge XT loads under headless X11, and
+#            (2) runs pytest -k "not slow" inside the image.
+#     No R2 secrets required.
+#
+#   docker-smoke-test-generate (push to main only)
+#     Uses make docker-ci-generate to run MODE=generate with N=5 real Surge XT
+#     samples (no R2 upload). Validates HDF5 structure and metadata.json.
+#     Equivalent to: make docker-ci-generate TRAIN_SAMPLES=5 VAL_SAMPLES=2 TEST_SAMPLES=2
+#
+#   docker-smoke-test-train (push to main only)
+#     Full E2E: generate tiny dataset → upload to R2 → download → 1 training step.
+#     Requires R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_BUCKET secrets.
+#     Uses TRAIN_ARGS="experiment=surge/flow_simple trainer.max_steps=1" (CPU-safe, ~30-90s).
+#     Cleans up the CI-scoped R2 prefix after completion.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, "release/*", "dev"]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: unit tests (no Docker, no VST, no R2) — runs on every push/PR
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit tests (pipeline + uploader)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v3
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-torch.txt --extra-index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-app.txt
+          pip install sh
+
+      - name: Run pipeline unit tests
+        run: |
+          pytest tests/test_run_dataset_pipeline.py -v
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Docker smoke test — build image + run Dockerfile test target
+  # (VST load + pytest -k "not slow" inside Docker)
+  # ---------------------------------------------------------------------------
+  docker-smoke-test:
+    name: Docker smoke test (image builds, VST loads, pytest passes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (dev-live target, no R2 secrets)
+        env:
+          GIT_PAT: ${{ secrets.GIT_PAT }}
+          DOCKER_BUILDKIT: "1"
+        run: |
+          make docker-build-dev-live \
+            GIT_REF=${{ github.sha }} \
+            GIT_PAT=${{ secrets.GIT_PAT }} \
+            DOCKER_BUILD_FLAGS="--load"
+
+      - name: Run Dockerfile test target (VST load + pytest -k "not slow")
+        # Equivalent to: docker buildx build --target test ...
+        # Builds on top of the dev-live image already in the local cache.
+        env:
+          GIT_PAT: ${{ secrets.GIT_PAT }}
+          DOCKER_BUILDKIT: "1"
+        run: |
+          DOCKER_BUILDKIT=1 docker buildx build \
+            -f docker/ubuntu22_04/Dockerfile \
+            --secret id=git_pat,env=GIT_PAT \
+            --build-arg IMAGE=dev-live \
+            --build-arg BUILD_MODE=prebuilt \
+            --build-arg SYNTH_PERMUTATIONS_GIT_REF=${{ github.sha }} \
+            --build-arg TARGETARCH=amd64 \
+            --target test \
+            --load \
+            -t tinaudio/perm:test \
+            .
+
+  # ---------------------------------------------------------------------------
+  # Job 3: generate smoke test — real Surge XT, HDF5 validation, no R2
+  # Equivalent to: make docker-ci-generate TRAIN_SAMPLES=5 VAL_SAMPLES=2 TEST_SAMPLES=2
+  # ---------------------------------------------------------------------------
+  docker-smoke-test-generate:
+    name: Docker smoke test — generate (real Surge XT, HDF5 validation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: docker-smoke-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Pull dev image (built by docker-smoke-test)
+        env:
+          GIT_PAT: ${{ secrets.GIT_PAT }}
+          DOCKER_BUILDKIT: "1"
+        run: |
+          make docker-build-dev-live \
+            GIT_REF=${{ github.sha }} \
+            GIT_PAT=${{ secrets.GIT_PAT }} \
+            DOCKER_BUILD_FLAGS="--load"
+
+      - name: Run generate smoke test (N=5 samples, output mounted for validation)
+        # Uses the same env vars as make docker-ci-generate but adds a volume
+        # mount so the host can inspect HDF5 output without docker cp.
+        run: |
+          mkdir -p smoke-output
+          docker run --rm --init \
+            -e MODE=generate \
+            -e PARAM_SPEC=surge_simple \
+            -e TRAIN_SAMPLES=5 \
+            -e VAL_SAMPLES=2 \
+            -e TEST_SAMPLES=2 \
+            -e IDLE_AFTER=0 \
+            -v "$(pwd)/smoke-output:/home/build/synth-permutations/data/surge_simple" \
+            tinaudio/perm:dev
+
+      - name: Validate HDF5 output and metadata
+        run: |
+          pip install h5py
+          python - <<'EOF'
+          import h5py, json, pathlib
+
+          for split in ["train", "val", "test"]:
+              path = f"smoke-output/{split}.h5"
+              with h5py.File(path, "r") as f:
+                  for key in ("audio", "mel_spec", "param_array"):
+                      assert key in f, f"{path}: missing dataset '{key}'"
+                  print(f"{split}: audio={f['audio'].shape}")
+
+          meta = json.loads(pathlib.Path("smoke-output/metadata.json").read_text())
+          assert "generation" in meta
+          assert "git_ref_source" in meta
+          assert "git_dirty" in meta
+          assert meta["splits"]["train"] == 5
+          assert meta["splits"]["val"] == 2
+          assert meta["splits"]["test"] == 2
+          print(f"metadata.json OK: git_ref_source={meta['git_ref_source']}, git_dirty={meta['git_dirty']}")
+          print("Generate smoke test passed.")
+          EOF
+
+  # ---------------------------------------------------------------------------
+  # Job 4: full E2E train smoke test — generate → upload R2 → download → train 1 step
+  # Requires R2_* secrets. TRAIN_ARGS="trainer.max_steps=1" keeps it CPU-safe (~30-90s).
+  # Equivalent to:
+  #   make docker-ci-generate R2_PREFIX=ci-smoke/<run_id> ... (with R2 creds)
+  #   make docker-ci-train R2_DATASET_PATH=ci-smoke/<run_id> TRAIN_ARGS="... trainer.max_steps=1"
+  # ---------------------------------------------------------------------------
+  docker-smoke-test-train:
+    name: Docker smoke test — E2E train (generate + upload + download + 1 step)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: docker-smoke-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Pull dev image (built by docker-smoke-test)
+        env:
+          GIT_PAT: ${{ secrets.GIT_PAT }}
+          DOCKER_BUILDKIT: "1"
+        run: |
+          make docker-build-dev-live \
+            GIT_REF=${{ github.sha }} \
+            GIT_PAT=${{ secrets.GIT_PAT }} \
+            R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }} \
+            R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }} \
+            R2_ENDPOINT=${{ secrets.R2_ENDPOINT }} \
+            R2_BUCKET=${{ secrets.R2_BUCKET }} \
+            DOCKER_BUILD_FLAGS="--load"
+
+      - name: Generate dataset and upload to R2 (CI-scoped prefix)
+        env:
+          CI_R2_PREFIX: ci-smoke/${{ github.run_id }}
+        run: |
+          make docker-ci-generate \
+            IMAGE_TAG=dev \
+            TRAIN_SAMPLES=5 \
+            VAL_SAMPLES=2 \
+            TEST_SAMPLES=2 \
+            PARAM_SPEC=surge_simple
+
+      - name: Download dataset from R2 and run 1 training step
+        env:
+          CI_R2_PREFIX: ci-smoke/${{ github.run_id }}
+        run: |
+          make docker-ci-train \
+            IMAGE_TAG=dev \
+            PARAM_SPEC=surge_simple \
+            R2_DATASET_PATH=ci-smoke/${{ github.run_id }} \
+            TRAIN_ARGS="experiment=surge/flow_simple \
+              trainer.max_steps=1 \
+              trainer=cpu \
+              data.predict_file=data/surge_simple/val.h5 \
+              data.batch_size=1 \
+              trainer.log_every_n_steps=1 \
+              data.num_workers=1 \
+              data.use_saved_mean_and_variance=false \
+              model.compile=false"
+
+      - name: Clean up CI R2 prefix
+        if: always()
+        run: |
+          docker run --rm \
+            -e R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }} \
+            -e AWS_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }} \
+            -e AWS_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }} \
+            tinaudio/perm:dev \
+            bash -c "rclone purge 'r2:${{ secrets.R2_BUCKET }}/ci-smoke/${{ github.run_id }}' && echo 'CI R2 prefix cleaned up'"

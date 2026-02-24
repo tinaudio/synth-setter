@@ -17,27 +17,54 @@
 # It creates a lightweight, CI-friendly X session sufficient for
 # plugin initialization without requiring a full desktop environment.
 
-#!/usr/bin/env bash
 set -euo pipefail
 
-export DISPLAY=${DISPLAY:-:99}
 export XAUTHORITY=${XAUTHORITY:-/tmp/.Xauthority}
 
 export LIBGL_ALWAYS_SOFTWARE=1
 export NO_AT_BRIDGE=1
 export JUCE_USE_XINPUT2=0
 
-# Start Xvfb
-Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
-XVFB_PID=$!
+# Create temp dir for display number coordination
+TMP_DIR=$(mktemp -d)
+DISPLAY_FILE="$TMP_DIR/display_num"
 
 cleanup() {
-  kill "$OPENBOX_PID" "$XSETTINGS_PID" "$XVFB_PID" 2>/dev/null || true
+  # Fix: Use :- syntax to avoid "unbound variable" errors if processes aren't started yet
+  kill "${OPENBOX_PID:-}" "${XSETTINGS_PID:-}" "${XVFB_PID:-}" 2>/dev/null || true
+  rm -rf "${TMP_DIR:-}"
 }
 trap cleanup EXIT
 
+# Start Xvfb (let it pick a display)
+# -displayfd 3 writes the chosen display number to file descriptor 3
+# 3>"$DISPLAY_FILE" redirects FD 3 to our temp file so we can read it later
+Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp 3>"$DISPLAY_FILE" 2>/tmp/xvfb.log &
+XVFB_PID=$!
+
+# Wait for Xvfb to output the display number
+count=0
+while [ ! -s "$DISPLAY_FILE" ]; do
+  sleep 0.1
+  count=$((count+1))
+  if [ "$count" -ge 100 ]; then
+     echo "Timeout waiting for Xvfb to start" >&2
+     cat /tmp/xvfb.log >&2
+     exit 1
+  fi
+  # Check if Xvfb died
+  if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+    echo "Xvfb died unexpectedly" >&2
+    cat /tmp/xvfb.log >&2
+    exit 1
+  fi
+done
+
+DISPLAY_NUM=$(cat "$DISPLAY_FILE")
+export DISPLAY=:${DISPLAY_NUM}
+
 # Wait for X to be ready (avoid races)
-for i in {1..50}; do
+for _ in {1..50}; do
   if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
     break
   fi

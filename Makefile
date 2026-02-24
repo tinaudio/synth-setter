@@ -33,69 +33,95 @@ train: ## Train the model
 # Docker targets
 # =====================================================================
 #
-# Two build modes:
-#   1. docker-build      — PRODUCTION image. Downloads the repo at a specific
-#                          commit SHA, builds Surge XT from source (or uses a
-#                          prebuilt .deb), installs all Python deps, and bakes
-#                          the source into the image. Result is fully
-#                          self-contained — run it anywhere (CI, cloud, vast.ai).
+# ⚠️  SECURITY: All images produced by this Makefile contain baked Cloudflare
+#     R2 credentials (rclone config). Push ONLY to a PRIVATE registry.
+#     Anyone who can pull the image has read/write access to the R2 bucket.
+#     See README for future hardening steps.
 #
-#   2. docker-build-dev  — DEV image. Same base as production (Surge + Python
-#                          deps installed), but does NOT bake source code into
-#                          the image. Instead you mount your local working tree
-#                          at runtime with docker-run-dev. Rebuild only when
-#                          dependencies or the Surge version change.
+# Two build modes:
+#   1. docker-build-dev-snapshot — self-contained image. Clones repo at GIT_REF,
+#                                  bakes source + deps + Surge XT + rclone/R2 config.
+#                                  Run it anywhere (CI, cloud, vast.ai).
+#
+#   2. docker-build-dev-live     — DEV image. Same base (Surge + deps + R2 config)
+#                                  but does NOT bake source code. Mount your local
+#                                  working tree at runtime with docker-run-dev.
+#                                  Rebuild only when deps or Surge version change.
 #
 # Required variables (pass on the command line):
 #   GIT_PAT             GitHub personal access token with repo read access.
 #                       Required because ktinubu/synth-permutations is private.
-#   GIT_REF             (docker-build only) Commit SHA, tag, or branch to bake
-#                       into the production image. Prefer a full commit SHA for
-#                       deterministic builds.
+#   GIT_REF             Commit SHA, tag, or branch to bake. Prefer full SHA.
+#   R2_ACCESS_KEY_ID    Cloudflare R2 API token access key.
+#   R2_SECRET_ACCESS_KEY Cloudflare R2 API token secret.
+#   R2_ENDPOINT         R2 S3-compatible endpoint URL
+#                       (e.g. https://<accountid>.r2.cloudflarestorage.com).
+#   R2_BUCKET           R2 bucket name. Baked as an ENV var into the image.
 #
 # Optional overrides:
 #   DOCKER_FILE         Path to Dockerfile          (default: docker/ubuntu22_04/Dockerfile)
 #   DOCKER_IMAGE        Image name                  (default: tinaudio/perm)
-#   DOCKER_BASE_IMAGE   Base Docker image            (default: ubuntu:22.04)
-#                       e.g. nvidia/cuda:12.8.1-devel-ubuntu22.04 for GPU builds
-#   DOCKER_BUILD_MODE   "source" or "prebuilt"       (default: source)
+#   DOCKER_BASE_IMAGE   Base Docker image            (default: vastai cuda base)
+#   DOCKER_BUILD_MODE   "source" or "prebuilt"       (default: prebuilt)
 #   DOCKER_TARGETPLATFORM   "linux/amd64" or "linux/arm64"           (default: linux/amd64)
 #   DOCKER_TORCH_IDX    PyTorch wheel index URL      (default: cu128 wheels)
-#   DOCKER_BUILD_FLAGS  Extra flags passed to        (default: empty)
-#                       docker build, e.g.:
-#                         --builder cloud-tinaudio-tinaudio-builder --push
-#                       passed verbatim to docker build. Use to override or add
-#                       any Dockerfile ARG without editing the Makefile, e.g.:
+#   DOCKER_BUILD_FLAGS  Extra flags passed verbatim to docker buildx build.
+#   IMAGE_TAG           Tag to use for docker-run-* and docker-ci-* targets (default: dev)
+#                       e.g. IMAGE_TAG=dev-snapshot-<sha> to run a specific pinned image.
+#   IDLE_AFTER          Set to 1 to drop to bash after generate/train completes (default: 0).
+#                       Useful for inspection on vast.ai. Not forwarded by docker-ci-* targets.
 #
 # Quick-start examples:
-#   # Production image at a specific commit
-#   make docker-build GIT_REF=abc123 GIT_PAT=ghp_xxxx
+#   # Self-contained image (for vast.ai)
+#   make docker-build-dev-snapshot GIT_REF=<commit-sha> GIT_PAT=<github-pat> \
+#     R2_ACCESS_KEY_ID=<key> R2_SECRET_ACCESS_KEY=<secret> \
+#     R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com R2_BUCKET=<bucket>
 #
-#   # Dev image (build once)
-#   make docker-build-dev GIT_PAT=ghp_xxxx
+#   # Dev image (build once, mount source at runtime)
+#   make docker-build-dev-live GIT_REF=<commit-sha> GIT_PAT=<github-pat> \
+#     R2_ACCESS_KEY_ID=<key> R2_SECRET_ACCESS_KEY=<secret> \
+#     R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com R2_BUCKET=<bucket>
 #
-#   # Run dev image with local code mounted (repeat as needed)
+#   # Run dataset generation (MODE=generate by default)
+#   make docker-run-generate TRAIN_SAMPLES=50000
+#
+#   # Download dataset from R2 and train
+#   make docker-run-train R2_DATASET_PATH=runs/surge_simple/<sha>
+#
+#   # Run dev image with local code mounted
 #   make docker-run-dev
 #
-#   # Use a remote Docker builder and push the result
-#   make docker-build GIT_REF=abc123 GIT_PAT=ghp_xxxx \
-#     DOCKER_BUILD_FLAGS="--builder cloud-tinaudio-tinaudio-builder --push"
-#
-#   # Override base image (e.g. for GPU builds)
-#   make docker-build GIT_REF=abc123 GIT_PAT=ghp_xxxx \
-#     DOCKER_BASE_IMAGE=nvidia/cuda:12.8.1-devel-ubuntu22.04
+#   # See docs/pipeline.md for full documentation and plug-and-play command examples.
 # =====================================================================
 DOCKER_FILE       ?= docker/ubuntu22_04/Dockerfile
 DOCKER_IMAGE      ?= tinaudio/perm
-DOCKER_BASE_IMAGE ?= vastai/base-image:cuda-12.8.1-cudnn-devel-ubuntu22.04-py310
+DOCKER_BASE_IMAGE ?= vastai/base-image:stock-ubuntu22.04-py310
 DOCKER_BUILD_MODE ?= prebuilt
 DOCKER_TARGETPLATFORM ?= linux/amd64
 TARGETARCH ?= amd64
 DOCKER_TORCH_IDX  ?= https://download.pytorch.org/whl/cu128
 DOCKER_BUILD_FLAGS ?=
+DOCKER_RUN_FLAGS ?=
 APP_PATH          := /home/build/synth-permutations
 CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse --short HEAD))
-USE_CLOUD_BUILDER ?= false
+USE_CLOUD_BUILDER ?= 0
+
+# R2 / rclone configuration — passed as BuildKit secrets + build-arg.
+# Set these on the command line or export them as environment variables.
+R2_ACCESS_KEY_ID     ?=
+R2_SECRET_ACCESS_KEY ?=
+R2_ENDPOINT          ?=
+R2_BUCKET            ?=
+
+# Common R2 secret flags added to every docker buildx build invocation.
+# Credentials are injected via BuildKit --secret (never appear in image layers
+# or docker history), but the resulting rclone.conf IS stored in the image.
+# ⚠️  Keep ALL produced images in a private registry.
+DOCKER_R2_SECRETS = \
+	--secret id=r2_access_key_id,env=R2_ACCESS_KEY_ID \
+	--secret id=r2_secret_access_key,env=R2_SECRET_ACCESS_KEY \
+	--secret id=r2_endpoint,env=R2_ENDPOINT \
+	--build-arg R2_BUCKET=$(R2_BUCKET)
 
 # TODO(ktinubu): Looking into TARGETARCH failing to set set by buildx
 # even when --platform is provided. In the meantime, we set TARGETARCH
@@ -112,12 +138,13 @@ DOCKER_BUILD_FLAGS += \
 endif
 
 
-docker-build-dev-snapshot: ## Build full production image (requires GIT_REF and GIT_PAT)
-	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required. Usage: make docker-build GIT_REF=<sha> GIT_PAT=<token>"; exit 1; fi
+docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_PAT, R2_* vars)
+	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required. Usage: make docker-build-dev-snapshot GIT_REF=<sha> GIT_PAT=<token> R2_ACCESS_KEY_ID=<key> ..."; exit 1; fi
 	DOCKER_BUILDKIT=1 docker buildx build \
 		-f $(DOCKER_FILE) \
 		$(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
+		$(DOCKER_R2_SECRETS) \
 		--platform $(DOCKER_TARGETPLATFORM) \
 		--build-arg IMAGE="dev-snapshot" \
 		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
@@ -129,16 +156,16 @@ docker-build-dev-snapshot: ## Build full production image (requires GIT_REF and 
 		. \
   		-- 2>&1 | tee data/docker_build_log.txt
 
-# Dev image: installs Surge + all Python deps but does NOT copy source code.
+# Dev image: installs Surge + all Python deps + R2 config but does NOT copy source code.
 # Your local repo is mounted at runtime via docker-run-dev.
 # The image is tagged with both :dev and :dev-<short-sha> so you can identify
 # which commit's dependency manifests were used.
-docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
-	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required. Usage: make docker-build GIT_REF=<sha> GIT_PAT=<token>"; exit 1; fi
+docker-build-dev-live: ## Build dev image (Surge + deps + R2 config, no baked-in source)
 	DOCKER_BUILDKIT=1 docker buildx build \
 		-f $(DOCKER_FILE) \
 		$(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
+		$(DOCKER_R2_SECRETS) \
 		--platform $(DOCKER_TARGETPLATFORM) \
 		--build-arg IMAGE="dev-live" \
 		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
@@ -151,11 +178,91 @@ docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
 		. \
   		-- 2>&1 | tee data/docker_build_log.txt
 
+ifeq ($(USE_LOCAL_WORKSPACE),1)
+DOCKER_RUN_FLAGS += \
+	-v "$(PWD):$(APP_PATH)" \
+	-w $(APP_PATH) \
+ 	--entrypoint /home/build/synth-permutations/scripts/docker_entrypoint.sh
+endif
 # Run the dev image with your local working tree mounted.
 # Edits to files on your host are reflected immediately inside the container.
 # Add --gpus all after docker run to enable GPU access.
-docker-run-dev: ## Run dev image with local source mounted
-	docker run --rm -it \
-		-v "$(PWD):$(APP_PATH)" \
-		-w $(APP_PATH) \
-		$(DOCKER_IMAGE):dev
+docker-run-dev: ## Run dev image with local source mounted (IMAGE_TAG=dev by default)
+	docker run --rm -it --init \
+		$(DOCKER_RUN_FLAGS) \
+		$(DOCKER_IMAGE):$(IMAGE_TAG)
+
+# Dataset generation / training defaults (override on the command line)
+TRAIN_SAMPLES    ?= 10000
+VAL_SAMPLES      ?= 1000
+TEST_SAMPLES     ?= 1000
+PARAM_SPEC       ?= surge_simple
+OUTPUT_DIR       ?= data/surge_simple
+# R2_DATASET_PATH: set when using docker-run-train / docker-ci-train
+R2_DATASET_PATH  ?=
+TRAIN_ARGS       ?= experiment=surge/flow_simple
+# IMAGE_TAG: tag for docker-run-* and docker-ci-* targets. Default is :dev (built by docker-build-dev-live).
+# Override to run a specific pinned image, e.g. IMAGE_TAG=dev-snapshot-<sha>
+IMAGE_TAG        ?= dev
+# IDLE_AFTER: set to 1 to drop to a bash shell after generate/train completes.
+# Useful for post-run inspection on vast.ai. Not forwarded by docker-ci-* targets.
+IDLE_AFTER       ?= 0
+
+# ---------------------------------------------------------------------------
+# Interactive run targets — for use on vast.ai or local dev with GPU.
+# These include -it (TTY) and --gpus all. Use docker-ci-* for CI or scripts.
+# ---------------------------------------------------------------------------
+
+docker-run-generate: ## Generate dataset + upload to R2 (MODE=generate, GPU). IDLE_AFTER=1 to stay in bash.
+	docker run --rm -it --gpus all --init \
+		$(DOCKER_RUN_FLAGS) \
+		-e MODE=generate \
+		-e PARAM_SPEC=$(PARAM_SPEC) \
+		-e TRAIN_SAMPLES=$(TRAIN_SAMPLES) \
+		-e VAL_SAMPLES=$(VAL_SAMPLES) \
+		-e TEST_SAMPLES=$(TEST_SAMPLES) \
+		-e OUTPUT_DIR=$(OUTPUT_DIR) \
+		-e IDLE_AFTER=$(IDLE_AFTER) \
+		$(DOCKER_IMAGE):$(IMAGE_TAG)
+
+docker-run-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_AFTER=1 to stay in bash.
+	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-run-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
+	docker run --rm -it --gpus all --init \
+		$(DOCKER_RUN_FLAGS) \
+		-e MODE=train \
+		-e PARAM_SPEC=$(PARAM_SPEC) \
+		-e R2_DATASET_PATH=$(R2_DATASET_PATH) \
+		-e OUTPUT_DIR=$(OUTPUT_DIR) \
+		-e TRAIN_ARGS="$(TRAIN_ARGS)" \
+		-e IDLE_AFTER=$(IDLE_AFTER) \
+		$(DOCKER_IMAGE):$(IMAGE_TAG)
+
+# ---------------------------------------------------------------------------
+# CI run targets — identical env vars to docker-run-* but without -it/--gpus.
+# Safe for use in CI runners and non-interactive scripts.
+# Used by .github/workflows/data-pipeline.yml and for local CI dry-runs.
+# ---------------------------------------------------------------------------
+
+docker-ci-generate: ## CI: generate dataset (no TTY, no GPU). Mirror of docker-run-generate for CI/scripts.
+	docker run --rm --init \
+		$(DOCKER_RUN_FLAGS) \
+		-e MODE=generate \
+		-e PARAM_SPEC=$(PARAM_SPEC) \
+		-e TRAIN_SAMPLES=$(TRAIN_SAMPLES) \
+		-e VAL_SAMPLES=$(VAL_SAMPLES) \
+		-e TEST_SAMPLES=$(TEST_SAMPLES) \
+		-e OUTPUT_DIR=$(OUTPUT_DIR) \
+		-e IDLE_AFTER=0 \
+		$(DOCKER_IMAGE):$(IMAGE_TAG)
+
+docker-ci-train: ## CI: download dataset from R2 and train (no TTY, no GPU). Mirror of docker-run-train for CI/scripts.
+	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-ci-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
+	docker run --rm --init \
+		$(DOCKER_RUN_FLAGS) \
+		-e MODE=train \
+		-e PARAM_SPEC=$(PARAM_SPEC) \
+		-e R2_DATASET_PATH=$(R2_DATASET_PATH) \
+		-e OUTPUT_DIR=$(OUTPUT_DIR) \
+		-e TRAIN_ARGS="$(TRAIN_ARGS)" \
+		-e IDLE_AFTER=0 \
+		$(DOCKER_IMAGE):$(IMAGE_TAG)

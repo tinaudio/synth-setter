@@ -12,6 +12,8 @@ ARG BASE_IMAGE=ubuntu:22.04
 # TODO(ktinubu): Check for unset TARGETARCH or TARGETPLATFORM. Fallback to amd, linux/amd but add tag to container
 # TODO(ktinubu): Add appropriate image labels.
 ARG IMAGE=dev-snapshot
+# R2 bucket name baked into the image (used by entrypoint + rclone)
+ARG R2_BUCKET=
 
 FROM ${BASE_IMAGE} AS amd64-vars
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
@@ -226,7 +228,6 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends ./surge-xt-linux-x64-1.3.4.deb \
     && rm surge-xt-linux-x64-1.3.4.deb
-RUN ls
 
 # ==========================================
 # Source stage: download synth-permutations at a specific git ref via tarball.
@@ -313,48 +314,116 @@ RUN --mount=from=wheels,source=/wheels,target=/wheels \
         -r /artifacts/requirements.txt && \
     rm -rf /artifacts/requirements*.txt
 
-# Runtime apt packages for headless VST loading
+# Runtime apt packages for headless VST loading + rclone for R2 uploads
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-    xvfb \
-    xauth \
-    dbus-x11 \
-    xsettingsd \
-    libgl1-mesa-dri \
-    libgl1-mesa-glx \
-    mesa-utils \
-    openbox \
-    x11-utils \
-    x11-xserver-utils
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      xvfb \
+      xauth \
+      dbus-x11 \
+      xsettingsd \
+      libgl1-mesa-dri \
+      libgl1-mesa-glx \
+      mesa-utils \
+      openbox \
+      x11-utils \
+      x11-xserver-utils \
+      rclone; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /artifacts
+COPY --from=synth-permutations-src /home/build/synth-permutations/scripts/run-linux-vst-headless.sh /artifacts/
+COPY --from=synth-permutations-src /home/build/synth-permutations/src/data/vst/core.py /artifacts/
+RUN chmod +x ./run-linux-vst-headless.sh
+# Validate that Surge XT loads correctly under headless X11
+RUN ./run-linux-vst-headless.sh \
+    python -X faulthandler -c "from core import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
 
 WORKDIR /home/build/synth-permutations
 
 # ==========================================
+# R2 config: bake Cloudflare R2 credentials into rclone config using BuildKit
+# secrets. Secrets never appear in image layers or `docker history`, but the
+# resulting /root/.config/rclone/rclone.conf IS stored in the image filesystem.
+#
+# ⚠️  SECURITY: This image contains baked cloud storage credentials.
+#     - Push ONLY to a private registry (Docker Hub private repo, GHCR private package, etc.)
+#     - Anyone who can pull this image has read/write access to the R2 bucket
+#     - Rotate R2 API tokens after each build campaign (tokens can't be revoked per-image)
+#     - See future hardening TODOs in the project README
+# ==========================================
+FROM builder-install-synth-permutations-deps AS r2-config-base
+ARG R2_BUCKET
+ENV R2_BUCKET=${R2_BUCKET}
+RUN --mount=type=secret,id=r2_access_key_id \
+    --mount=type=secret,id=r2_secret_access_key \
+    --mount=type=secret,id=r2_endpoint \
+    set -eu; \
+    if [ ! -s /run/secrets/r2_access_key_id ] || [ ! -s /run/secrets/r2_secret_access_key ] || [ ! -s /run/secrets/r2_endpoint ]; then \
+        echo "WARNING: One or more R2 secrets (r2_access_key_id, r2_secret_access_key, r2_endpoint) are missing or empty." >&2; \
+        echo "         R2 upload/download will not be available in this image." >&2; \
+        mkdir -p /root/.config/rclone; \
+        printf '[r2]\ntype = s3\nprovider = Cloudflare\n# credentials not configured\n' \
+            > /root/.config/rclone/rclone.conf; \
+    else \
+        mkdir -p /root/.config/rclone; \
+        printf '[r2]\ntype = s3\nprovider = Cloudflare\naccess_key_id = %s\nsecret_access_key = %s\nendpoint = %s\n' \
+            "$(cat /run/secrets/r2_access_key_id)" \
+            "$(cat /run/secrets/r2_secret_access_key)" \
+            "$(cat /run/secrets/r2_endpoint)" \
+            > /root/.config/rclone/rclone.conf; \
+        echo "R2 rclone config written." >&2; \
+    fi; \
+    chmod 600 /root/.config/rclone/rclone.conf
+
+# ==========================================
 # Dev target: Surge + Python deps pre-installed, no baked-in source code.
+# ⚠️  Contains baked R2 credentials — keep registry PRIVATE.
 # Usage: make docker-build-dev-live GIT_PAT=<token> && make docker-run-dev
 # TODO: consider a lighter dev base without Surge for faster builds when VST is not needed.
 # ==========================================
-FROM builder-install-synth-permutations-deps AS dev-live
-CMD ["bash"]
+FROM r2-config-base AS dev-live
+# No COPY of entrypoint — it comes from the runtime mount in docker-run-dev.
+# Bake a fallback that prints a helpful error if run without a mount.
+RUN printf '#!/bin/bash\necho "ERROR: dev-live requires a volume mount at /home/build/synth-permutations" >&2\nexit 1\n' \
+      > /usr/local/bin/entrypoint-fallback.sh && \
+    chmod +x /usr/local/bin/entrypoint-fallback.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint-fallback.sh"]
+CMD []
 
 # ==========================================
 # prod: full self-contained image — deps + baked-in source at SYNTH_PERMUTATIONS_GIT_REF.
+# ⚠️  Contains baked R2 credentials — keep registry PRIVATE.
 # ==========================================
 # TODO: Add linting.
-FROM builder-install-synth-permutations-deps AS prod
+FROM r2-config-base AS prod
+
+ARG SYNTH_PERMUTATIONS_GIT_REF
+ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
 # Copy full source (after deps for caching)
 COPY --from=synth-permutations-src /home/build/synth-permutations /home/build/synth-permutations
 
+# Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
+RUN pytest -k "not slow" -v
+
+COPY scripts/docker_entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD []
+
 # ==========================================
 # dev-snapshot: deps + live git clone at SYNTH_PERMUTATIONS_GIT_REF.
+# ⚠️  Contains baked R2 credentials — keep registry PRIVATE.
 # Useful for CI or one-off runs without mounting local source.
 # Usage: make docker-build-dev-snapshot GIT_REF=<sha> GIT_PAT=<token>
 # ==========================================
-FROM builder-install-synth-permutations-deps AS dev-snapshot
+FROM r2-config-base AS dev-snapshot
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
+ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
@@ -368,11 +437,16 @@ RUN --mount=type=secret,id=git_pat \
     git clone https://${token}@github.com/ktinubu/synth-permutations.git . && \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
-FROM ${IMAGE} AS test
-RUN chmod +x scripts/run-linux-vst-headless.sh
-RUN scripts/run-linux-vst-headless.sh \
-    python -X faulthandler -c "from src.data.vst import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
-# Record package versions
+# Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
+RUN pytest -k "not slow" -v
+
+COPY scripts/docker_entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD []
+
+FROM ${IMAGE} AS freeze-deps
+# Record package versions for audit / reproducibility
 RUN mkdir -p /usr/local/share/audit && \
     python -m pip freeze --all | sort > /usr/local/share/audit/pip-freeze.txt && \
     dpkg-query -W -f='${Package}=${Version}\n' | sort > /usr/local/share/audit/dpkg.txt
