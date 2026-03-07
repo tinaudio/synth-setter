@@ -123,7 +123,7 @@ case "$MODE" in
     OUTPUT_DIR="${OUTPUT_DIR:-data/surge_simple}"
     GIT_SHA="${SYNTH_PERMUTATIONS_GIT_REF:-unknown}"
     # Default R2 prefix encodes param_spec + git sha for traceability
-    R2_PREFIX="${R2_PREFIX:-runs/${PARAM_SPEC}/${GIT_SHA}}"
+    R2_PREFIX="${R2_PREFIX:-runs/${PARAM_SPEC}/${GIT_SHA}-$(date +%Y%m%d-%H%M%S)}"
     DRY_RUN_UPLOAD="${DRY_RUN_UPLOAD:-0}"
 
     echo "=== synth-permutations: dataset generation ==="
@@ -183,7 +183,7 @@ case "$MODE" in
 
     if [ -z "$R2_DATASET_PATH" ]; then
       echo "ERROR: MODE=train requires R2_DATASET_PATH to be set." >&2
-      echo "       e.g. docker run -e R2_DATASET_PATH=runs/surge_simple/abc1234 ..." >&2
+      echo "       e.g. docker run -e R2_DATASET_PATH=runs/surge_simple/{SHA}-YYYYMMDD-HHMMSS ..." >&2
       exit 1
     fi
 
