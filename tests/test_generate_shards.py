@@ -203,6 +203,34 @@ class TestGenerateShards:
         assert "/custom/plugin.vst3" in cmd
         assert "/custom/preset.vstpreset" in cmd
 
+    def test_headless_false_omits_wrapper(self, tmp_path, fake_vst_subprocess):
+        """Without --headless, the command starts with python (no Xvfb wrapper)."""
+        shard_dir = tmp_path / "shards"
+        generate_shards(
+            shard_dir=shard_dir,
+            num_shards=1,
+            shard_size=100,
+            param_spec="surge_simple",
+        )
+        cmd = fake_vst_subprocess[0]
+        assert cmd[0] == "python"
+        assert cmd[1] == "src/data/vst/generate_vst_dataset.py"
+
+    def test_headless_true_includes_wrapper(self, tmp_path, fake_vst_subprocess):
+        """With --headless, the command is prefixed with the Xvfb wrapper script."""
+        shard_dir = tmp_path / "shards"
+        generate_shards(
+            shard_dir=shard_dir,
+            num_shards=1,
+            shard_size=100,
+            param_spec="surge_simple",
+            headless=True,
+        )
+        cmd = fake_vst_subprocess[0]
+        assert cmd[0] == "scripts/run-linux-vst-headless.sh"
+        assert cmd[1] == "python"
+        assert cmd[2] == "src/data/vst/generate_vst_dataset.py"
+
 
 # ---------------------------------------------------------------------------
 # Tests — R2 upload

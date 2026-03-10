@@ -49,6 +49,7 @@ def generate_shards(
     signal_duration_seconds: float = 4.0,
     min_loudness: float = -55.0,
     sample_batch_size: int = 32,
+    headless: bool = False,
     uploader: DatasetUploader | None = None,
     r2_prefix: str | None = None,
 ) -> Path:
@@ -69,6 +70,9 @@ def generate_shards(
         signal_duration_seconds: Duration of each audio sample.
         min_loudness: Minimum loudness threshold in dB.
         sample_batch_size: Batch size for HDF5 writes.
+        headless: Wrap subprocess with Xvfb virtual display for headless Linux.
+        uploader: Optional uploader for pushing shards to R2.
+        r2_prefix: R2 path prefix (e.g. 'runs/batch42').
 
     Returns:
         Path to the shard_dir.
@@ -84,7 +88,6 @@ def generate_shards(
         shard_path = shard_dir / shard_name
 
         cmd = [
-            _HEADLESS_WRAPPER,
             "python",
             _GENERATE_SCRIPT,
             str(shard_path),
@@ -108,6 +111,8 @@ def generate_shards(
             "--sample_batch_size",
             str(sample_batch_size),
         ]
+        if headless:
+            cmd = [_HEADLESS_WRAPPER] + cmd
         print(
             f"[generate_shards] shard {seq + 1}/{num_shards}: "
             f"{shard_size} samples -> {shard_path}",
@@ -180,6 +185,12 @@ def generate_shards(
 @click.option("--min-loudness", default=-55.0, show_default=True)
 @click.option("--sample-batch-size", default=32, show_default=True)
 @click.option(
+    "--headless",
+    is_flag=True,
+    default=False,
+    help="Run under Xvfb virtual display for headless Linux environments without a GUI.",
+)
+@click.option(
     "--r2-bucket", default=None, envvar="R2_BUCKET", help="R2 bucket name. Omit to skip upload."
 )
 @click.option(
@@ -200,6 +211,7 @@ def main(
     signal_duration_seconds: float,
     min_loudness: float,
     sample_batch_size: int,
+    headless: bool,
     r2_bucket: str | None,
     r2_prefix: str | None,
     dry_run_upload: bool,
@@ -224,6 +236,7 @@ def main(
         signal_duration_seconds=signal_duration_seconds,
         min_loudness=min_loudness,
         sample_batch_size=sample_batch_size,
+        headless=headless,
         uploader=uploader,
         r2_prefix=r2_prefix,
     )
