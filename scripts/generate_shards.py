@@ -31,7 +31,7 @@ from src.data.uploader import DatasetUploader, RcloneUploader
 
 _GENERATE_SCRIPT = "src/data/vst/generate_vst_dataset.py"
 _HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
-_DEFAULT_PLUGIN_PATH = "/usr/lib/vst3/Surge XT.vst3"
+_DEFAULT_PLUGIN_PATH = "plugins/Surge XT.vst3"
 _DEFAULT_PRESET_PATH = "presets/surge-base.vstpreset"
 
 
