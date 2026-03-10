@@ -52,6 +52,62 @@ configs/experiment/surge                   <- Surge XT experiment configs
    - Adjust project/team defaults in [configs/logger/wandb.yaml](configs/logger/wandb.yaml).
    - You can also set `WANDB_ENTITY`, `WANDB_PROJECT`, or run with `logger=wandb`.
 
+## R2 upload (non-Docker)
+
+When running `generate_shards.py` outside Docker (e.g. on your local machine),
+you need [rclone](https://rclone.org/) installed and configured to upload
+shards to Cloudflare R2.
+
+1. **Install rclone:**
+
+   ```bash
+   # macOS
+   brew install rclone
+
+   # Linux (Debian/Ubuntu)
+   sudo apt install rclone
+   ```
+
+2. **Configure rclone for R2:**
+
+   ```bash
+   # Load your R2 credentials into the shell
+   set -a && source .env && set +a
+
+   # Run the setup script (creates an rclone remote named "r2")
+   bash scripts/setup-rclone.sh
+   ```
+
+   This reads `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_ENDPOINT`
+   from the environment (see [.env.example](.env.example) for how to obtain these).
+
+3. **Verify the connection:**
+
+   ```bash
+   rclone lsd r2:$R2_BUCKET
+   ```
+
+4. **Generate shards with upload:**
+
+   ```bash
+   python scripts/generate_shards.py \
+     --num-shards 12 --shard-size 10000 \
+     --output-dir data/surge_simple --param-spec surge_simple \
+     --r2-bucket "$R2_BUCKET" --r2-prefix "runs/my-run"
+   ```
+
+   Use `--local` to skip R2 upload entirely (no rclone needed):
+
+   ```bash
+   python scripts/generate_shards.py \
+     --num-shards 12 --shard-size 10000 \
+     --output-dir data/surge_simple --param-spec surge_simple \
+     --local
+   ```
+
+> **Note:** Docker images have rclone pre-configured at build time — this
+> setup is only needed for local (non-Docker) workflows.
+
 ## Tests
 
 Run the fast test suite:
