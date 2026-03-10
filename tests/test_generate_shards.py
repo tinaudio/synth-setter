@@ -341,8 +341,8 @@ class TestGenerateShardsCLI:
         assert result.exit_code == 0, result.output
         mock_uploader_cls.assert_called_once_with(bucket="my-bucket", dry_run=False)
 
-    def test_cli_no_r2_options_skips_upload(self, tmp_path, fake_vst_subprocess):
-        """CLI without --r2-bucket/--r2-prefix does not attempt upload."""
+    def test_cli_local_skips_upload(self, tmp_path, fake_vst_subprocess):
+        """CLI with --local skips upload even if R2 env vars are set."""
         from click.testing import CliRunner
 
         from scripts.generate_shards import main
@@ -359,7 +359,57 @@ class TestGenerateShardsCLI:
                 str(tmp_path / "out"),
                 "--param-spec",
                 "surge_simple",
+                "--local",
             ],
         )
         assert result.exit_code == 0, result.output
         assert "uploaded" not in result.output
+
+    def test_cli_missing_r2_bucket_fails(self, tmp_path, fake_vst_subprocess, monkeypatch):
+        """CLI without --local and missing --r2-bucket exits with an error."""
+        from click.testing import CliRunner
+
+        from scripts.generate_shards import main
+
+        monkeypatch.delenv("R2_BUCKET", raising=False)
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--num-shards",
+                "1",
+                "--shard-size",
+                "100",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--param-spec",
+                "surge_simple",
+                "--r2-prefix",
+                "runs/batch42",
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_cli_missing_r2_prefix_fails(self, tmp_path, fake_vst_subprocess):
+        """CLI without --local and missing --r2-prefix exits with an error."""
+        from click.testing import CliRunner
+
+        from scripts.generate_shards import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--num-shards",
+                "1",
+                "--shard-size",
+                "100",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--param-spec",
+                "surge_simple",
+                "--r2-bucket",
+                "my-bucket",
+            ],
+        )
+        assert result.exit_code != 0

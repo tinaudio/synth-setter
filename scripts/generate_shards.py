@@ -191,11 +191,12 @@ def generate_shards(
     help="Run under Xvfb virtual display for headless Linux environments without a GUI.",
 )
 @click.option(
-    "--r2-bucket", default=None, envvar="R2_BUCKET", help="R2 bucket name. Omit to skip upload."
+    "--local", is_flag=True, default=False, help="Skip R2 upload, generate locally only."
 )
 @click.option(
-    "--r2-prefix", default=None, help="R2 path prefix (e.g. 'runs/batch42'). Omit to skip upload."
+    "--r2-bucket", default=None, envvar="R2_BUCKET", help="R2 bucket name (or set R2_BUCKET env)."
 )
+@click.option("--r2-prefix", default=None, help="R2 path prefix (e.g. 'runs/batch42').")
 @click.option("--dry-run-upload", is_flag=True, default=False, help="Pass --dry-run to rclone.")
 def main(
     num_shards: int,
@@ -212,13 +213,20 @@ def main(
     min_loudness: float,
     sample_batch_size: int,
     headless: bool,
+    local: bool,
     r2_bucket: str | None,
     r2_prefix: str | None,
     dry_run_upload: bool,
 ) -> None:
     """Generate HDF5 dataset shards (split-agnostic)."""
     uploader = None
-    if r2_bucket and r2_prefix:
+    if not local:
+        if not r2_bucket:
+            raise click.UsageError(
+                "--r2-bucket is required (or set R2_BUCKET env). Use --local to skip upload."
+            )
+        if not r2_prefix:
+            raise click.UsageError("--r2-prefix is required. Use --local to skip upload.")
         uploader = RcloneUploader(bucket=r2_bucket, dry_run=dry_run_upload)
 
     shard_dir = Path(output_dir) / "shards"
