@@ -4,3 +4,5 @@
 #   pip install -r requirements-app.txt
 -r requirements-torch.txt
 -r requirements-app.txt
+# Install the project itself in editable mode so `import src` works from anywhere.
+-e .
