@@ -162,3 +162,6 @@ paper.txt
 
 # Devcontainers
 .devcontainer/
+
+# Plugin path
+plugins/
