@@ -34,6 +34,7 @@ _GENERATE_SCRIPT = "src/data/vst/generate_vst_dataset.py"
 _HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
 _DEFAULT_PLUGIN_PATH = "plugins/Surge XT.vst3"
 _DEFAULT_PRESET_PATH = "presets/surge-base.vstpreset"
+SHARD_SUBDIR = "shards"
 
 
 def _build_shard_cmd(
@@ -173,8 +174,7 @@ def generate_shards(
         with ThreadPoolExecutor(max_workers=parallel) as executor:
             list(executor.map(lambda t: _run_shard(*t), tasks))
 
-    # Write worker metadata to the parent directory
-    output_dir = shard_dir.parent
+    # Write worker metadata into shard_dir (alongside the .h5 files)
     meta = {
         "instance_id": instance_id,
         "num_shards": num_shards,
@@ -192,15 +192,14 @@ def generate_shards(
             "sample_batch_size": sample_batch_size,
         },
     }
-    meta_path = output_dir / f"{instance_id}-metadata.json"
+    meta_path = shard_dir / f"{instance_id}-metadata.json"
     meta_path.write_text(json.dumps(meta, indent=2))
     print(f"[generate_shards] worker metadata -> {meta_path}", flush=True)
 
-    # Upload shards + metadata to R2 if configured
+    # Upload shard_dir (shards + worker metadata) to R2 if configured
     if uploader is not None and r2_prefix is not None:
-        uploader.upload(shard_dir, f"{r2_prefix}/shards")
-        uploader.upload(output_dir, r2_prefix)
-        print(f"[generate_shards] uploaded to {r2_prefix}", flush=True)
+        uploader.upload(shard_dir, f"{r2_prefix}/{SHARD_SUBDIR}")
+        print(f"[generate_shards] uploaded to {r2_prefix}/{SHARD_SUBDIR}", flush=True)
 
     return shard_dir
 
@@ -289,7 +288,7 @@ def main(
             raise click.UsageError("--r2-prefix is required. Use --local to skip upload.")
         uploader = RcloneUploader(bucket=r2_bucket, dry_run=dry_run_upload)
 
-    shard_dir = Path(output_dir) / "shards"
+    shard_dir = Path(output_dir) / SHARD_SUBDIR
     generate_shards(
         shard_dir=shard_dir,
         num_shards=num_shards,

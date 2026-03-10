@@ -20,7 +20,7 @@ import rootutils
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from scripts.generate_shards import generate_shards
+from scripts.generate_shards import SHARD_SUBDIR, generate_shards
 from src.data.uploader import LocalFakeUploader
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ class TestGenerateShards:
 
     def test_generates_correct_number_of_shards(self, tmp_path, fake_vst_subprocess):
         """generate_shards creates the expected number of shard-*.h5 files."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=4,
@@ -115,7 +115,7 @@ class TestGenerateShards:
 
     def test_shard_naming_includes_instance_id(self, tmp_path, fake_vst_subprocess):
         """Shard filenames include the instance_id: shard-{id}-{seq}.h5."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=2,
@@ -129,7 +129,7 @@ class TestGenerateShards:
 
     def test_subprocess_calls(self, tmp_path, fake_vst_subprocess):
         """Mock subprocess is invoked once per shard with correct args."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=3,
@@ -142,9 +142,9 @@ class TestGenerateShards:
         assert len(generate_calls) == 3
 
     def test_writes_worker_metadata(self, tmp_path, fake_vst_subprocess):
-        """generate_shards writes {instance_id}-metadata.json in the parent dir."""
+        """generate_shards writes {instance_id}-metadata.json in shard_dir."""
         output_dir = tmp_path / "dataset"
-        shard_dir = output_dir / "shards"
+        shard_dir = output_dir / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=2,
@@ -152,7 +152,7 @@ class TestGenerateShards:
             param_spec="surge_simple",
             instance_id="worker01",
         )
-        meta_path = output_dir / "worker01-metadata.json"
+        meta_path = shard_dir / "worker01-metadata.json"
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
         assert meta["instance_id"] == "worker01"
@@ -162,7 +162,7 @@ class TestGenerateShards:
 
     def test_instance_id_auto_generated(self, tmp_path, fake_vst_subprocess):
         """When instance_id is not provided, a UUID-based ID is auto-generated."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=1,
@@ -190,7 +190,7 @@ class TestGenerateShards:
 
     def test_passes_plugin_options(self, tmp_path, fake_vst_subprocess):
         """Plugin path and preset path are forwarded to generate_vst_dataset."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=1,
@@ -205,7 +205,7 @@ class TestGenerateShards:
 
     def test_headless_false_omits_wrapper(self, tmp_path, fake_vst_subprocess):
         """Without --headless, the command starts with python (no Xvfb wrapper)."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=1,
@@ -218,7 +218,7 @@ class TestGenerateShards:
 
     def test_headless_true_includes_wrapper(self, tmp_path, fake_vst_subprocess):
         """With --headless, the command is prefixed with the Xvfb wrapper script."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=1,
@@ -242,7 +242,7 @@ class TestGenerateShardsParallel:
 
     def test_parallel_generates_correct_number_of_shards(self, tmp_path, fake_vst_subprocess):
         """Parallel mode creates the expected number of shard files."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=4,
@@ -255,7 +255,7 @@ class TestGenerateShardsParallel:
 
     def test_parallel_subprocess_calls(self, tmp_path, fake_vst_subprocess):
         """All N subprocess calls happen with parallel > 1."""
-        shard_dir = tmp_path / "shards"
+        shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=3,
@@ -271,7 +271,7 @@ class TestGenerateShardsParallel:
     def test_parallel_writes_worker_metadata(self, tmp_path, fake_vst_subprocess):
         """Metadata is written correctly after parallel generation."""
         output_dir = tmp_path / "dataset"
-        shard_dir = output_dir / "shards"
+        shard_dir = output_dir / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=2,
@@ -280,7 +280,7 @@ class TestGenerateShardsParallel:
             instance_id="par01",
             parallel=2,
         )
-        meta_path = output_dir / "par01-metadata.json"
+        meta_path = shard_dir / "par01-metadata.json"
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
         assert meta["instance_id"] == "par01"
@@ -298,7 +298,7 @@ class TestGenerateShardsUpload:
     def test_upload_copies_shards_and_metadata(self, tmp_path, fake_vst_subprocess):
         """When uploader + r2_prefix are provided, shards and metadata are uploaded."""
         output_dir = tmp_path / "dataset"
-        shard_dir = output_dir / "shards"
+        shard_dir = output_dir / SHARD_SUBDIR
         r2_dest = tmp_path / "fake_r2"
         uploader = LocalFakeUploader(dest_dir=r2_dest)
 
@@ -312,12 +312,14 @@ class TestGenerateShardsUpload:
             r2_prefix="runs/batch42",
         )
 
+        upload_dest = r2_dest / "runs/batch42" / SHARD_SUBDIR
+
         # Shards uploaded under runs/batch42/shards/
-        uploaded_shards = sorted((r2_dest / "runs/batch42/shards").glob("shard-*.h5"))
+        uploaded_shards = sorted(upload_dest.glob("shard-*.h5"))
         assert len(uploaded_shards) == 2
 
-        # Metadata uploaded under runs/batch42/
-        uploaded_meta = r2_dest / "runs/batch42" / "w1-metadata.json"
+        # Worker metadata uploaded alongside shards
+        uploaded_meta = upload_dest / "w1-metadata.json"
         assert uploaded_meta.exists()
         meta = json.loads(uploaded_meta.read_text())
         assert meta["instance_id"] == "w1"
@@ -325,7 +327,7 @@ class TestGenerateShardsUpload:
     def test_no_upload_without_uploader(self, tmp_path, fake_vst_subprocess):
         """When uploader is None, generate_shards completes without uploading."""
         output_dir = tmp_path / "dataset"
-        shard_dir = output_dir / "shards"
+        shard_dir = output_dir / SHARD_SUBDIR
 
         # Should not raise — upload is simply skipped
         generate_shards(
@@ -340,7 +342,7 @@ class TestGenerateShardsUpload:
     def test_no_upload_without_r2_prefix(self, tmp_path, fake_vst_subprocess):
         """When r2_prefix is None, generate_shards completes without uploading."""
         output_dir = tmp_path / "dataset"
-        shard_dir = output_dir / "shards"
+        shard_dir = output_dir / SHARD_SUBDIR
         r2_dest = tmp_path / "fake_r2"
         uploader = LocalFakeUploader(dest_dir=r2_dest)
 
