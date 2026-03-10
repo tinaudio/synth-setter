@@ -20,7 +20,7 @@ import rootutils
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from scripts.generate_shards import SHARD_SUBDIR, generate_shards
+from scripts.generate_shards import SHARD_SUBDIR, _resolve_parallel, generate_shards
 from src.data.uploader import LocalFakeUploader
 
 # ---------------------------------------------------------------------------
@@ -248,20 +248,22 @@ class TestGenerateShardsParallel:
             num_shards=4,
             shard_size=100,
             param_spec="surge_simple",
-            parallel=2,
+            parallel=True,
+            max_workers=2,
         )
         shards = sorted(shard_dir.glob("shard-*.h5"))
         assert len(shards) == 4
 
     def test_parallel_subprocess_calls(self, tmp_path, fake_vst_subprocess):
-        """All N subprocess calls happen with parallel > 1."""
+        """All N subprocess calls happen with parallel=True."""
         shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=3,
             shard_size=100,
             param_spec="surge_simple",
-            parallel=3,
+            parallel=True,
+            max_workers=3,
         )
         generate_calls = [
             c for c in fake_vst_subprocess if "generate_vst_dataset.py" in " ".join(c)
@@ -278,13 +280,104 @@ class TestGenerateShardsParallel:
             shard_size=100,
             param_spec="surge_simple",
             instance_id="par01",
-            parallel=2,
+            parallel=True,
+            max_workers=2,
         )
         meta_path = shard_dir / "par01-metadata.json"
         assert meta_path.exists()
         meta = json.loads(meta_path.read_text())
         assert meta["instance_id"] == "par01"
         assert meta["num_shards"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests — _resolve_parallel
+# ---------------------------------------------------------------------------
+
+
+class TestResolveParallel:
+    """Tests for auto-detection of parallel workers."""
+
+    def test_true_resolves_to_cpu_count(self):
+        """Parallel=True uses os.cpu_count() when cpu_count < num_shards."""
+        with patch("scripts.generate_shards.os.cpu_count", return_value=4):
+            assert _resolve_parallel(True, num_shards=10) == 4
+
+    def test_true_caps_at_num_shards(self):
+        """Parallel=True is capped at num_shards when cpu_count > num_shards."""
+        with patch("scripts.generate_shards.os.cpu_count", return_value=16):
+            assert _resolve_parallel(True, num_shards=3) == 3
+
+    def test_true_cpu_count_none_falls_back_to_one(self):
+        """Parallel=True falls back to 1 when os.cpu_count() returns None."""
+        with patch("scripts.generate_shards.os.cpu_count", return_value=None):
+            assert _resolve_parallel(True, num_shards=10) == 1
+
+    def test_true_with_max_workers_caps(self):
+        """Parallel=True with max_workers uses min(max_workers, num_shards)."""
+        with patch("scripts.generate_shards.os.cpu_count", return_value=16):
+            assert _resolve_parallel(True, num_shards=10, max_workers=4) == 4
+
+    def test_true_with_max_workers_capped_by_num_shards(self):
+        """max_workers is still capped at num_shards."""
+        with patch("scripts.generate_shards.os.cpu_count", return_value=16):
+            assert _resolve_parallel(True, num_shards=2, max_workers=8) == 2
+
+    def test_false_returns_one(self):
+        """Parallel=False returns 1 (sequential)."""
+        assert _resolve_parallel(False, num_shards=10) == 1
+
+    def test_false_ignores_max_workers(self):
+        """Parallel=False returns 1 even if max_workers is set."""
+        assert _resolve_parallel(False, num_shards=10, max_workers=4) == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests — parallel=0 integration
+# ---------------------------------------------------------------------------
+
+
+class TestAutoParallel:
+    """Integration tests: parallel=True auto-detects worker count."""
+
+    def test_parallel_true_generates_all_shards(self, tmp_path, fake_vst_subprocess):
+        """Parallel=True (auto) produces the correct number of shards."""
+        shard_dir = tmp_path / SHARD_SUBDIR
+        generate_shards(
+            shard_dir=shard_dir,
+            num_shards=4,
+            shard_size=100,
+            param_spec="surge_simple",
+            parallel=True,
+        )
+        shards = sorted(shard_dir.glob("shard-*.h5"))
+        assert len(shards) == 4
+
+    def test_max_workers_generates_all_shards(self, tmp_path, fake_vst_subprocess):
+        """Parallel=True with max_workers produces the correct number of shards."""
+        shard_dir = tmp_path / SHARD_SUBDIR
+        generate_shards(
+            shard_dir=shard_dir,
+            num_shards=4,
+            shard_size=100,
+            param_spec="surge_simple",
+            parallel=True,
+            max_workers=2,
+        )
+        shards = sorted(shard_dir.glob("shard-*.h5"))
+        assert len(shards) == 4
+
+    def test_default_parallel_generates_all_shards(self, tmp_path, fake_vst_subprocess):
+        """Default (no parallel arg) produces the correct number of shards."""
+        shard_dir = tmp_path / SHARD_SUBDIR
+        generate_shards(
+            shard_dir=shard_dir,
+            num_shards=3,
+            shard_size=100,
+            param_spec="surge_simple",
+        )
+        shards = sorted(shard_dir.glob("shard-*.h5"))
+        assert len(shards) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +539,81 @@ class TestGenerateShardsCLI:
             ],
         )
         assert result.exit_code != 0
+
+    def test_cli_parallel_flag_succeeds(self, tmp_path, fake_vst_subprocess):
+        """CLI with --parallel flag generates shards in parallel."""
+        from click.testing import CliRunner
+
+        from scripts.generate_shards import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--num-shards",
+                "2",
+                "--shard-size",
+                "100",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--param-spec",
+                "surge_simple",
+                "--local",
+                "--parallel",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_cli_max_workers_succeeds(self, tmp_path, fake_vst_subprocess):
+        """CLI with --parallel --max-workers generates shards with capped workers."""
+        from click.testing import CliRunner
+
+        from scripts.generate_shards import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--num-shards",
+                "4",
+                "--shard-size",
+                "100",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--param-spec",
+                "surge_simple",
+                "--local",
+                "--parallel",
+                "--max-workers",
+                "2",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_cli_max_workers_without_parallel_ignored(self, tmp_path, fake_vst_subprocess):
+        """CLI with --max-workers but without --parallel runs sequentially."""
+        from click.testing import CliRunner
+
+        from scripts.generate_shards import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--num-shards",
+                "2",
+                "--shard-size",
+                "100",
+                "--output-dir",
+                str(tmp_path / "out"),
+                "--param-spec",
+                "surge_simple",
+                "--local",
+                "--max-workers",
+                "4",
+            ],
+        )
+        assert result.exit_code == 0, result.output
 
     def test_cli_missing_r2_prefix_fails(self, tmp_path, fake_vst_subprocess):
         """CLI without --local and missing --r2-prefix exits with an error."""

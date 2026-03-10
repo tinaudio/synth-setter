@@ -20,6 +20,7 @@ Usage:
 """
 
 import json
+import os
 import subprocess  # nosec B404
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -35,6 +36,25 @@ _HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
 _DEFAULT_PLUGIN_PATH = "plugins/Surge XT.vst3"
 _DEFAULT_PRESET_PATH = "presets/surge-base.vstpreset"
 SHARD_SUBDIR = "shards"
+
+
+def _resolve_parallel(parallel: bool, num_shards: int, max_workers: int | None = None) -> int:
+    """Resolve parallel worker count.
+
+    Args:
+        parallel: If True, run shards concurrently. If False, sequential.
+        num_shards: Total number of shards (caps worker count).
+        max_workers: Optional upper bound on workers. When None, uses os.cpu_count().
+
+    Returns:
+        Number of concurrent workers (1 = sequential).
+    """
+    if not parallel:
+        return 1
+    cap = max_workers if max_workers is not None else os.cpu_count()
+    if cap is None:
+        return 1
+    return min(cap, num_shards)
 
 
 def _build_shard_cmd(
@@ -112,7 +132,8 @@ def generate_shards(
     min_loudness: float = -55.0,
     sample_batch_size: int = 32,
     headless: bool = False,
-    parallel: int = 1,
+    parallel: bool = True,
+    max_workers: int | None = None,
     uploader: DatasetUploader | None = None,
     r2_prefix: str | None = None,
 ) -> Path:
@@ -134,7 +155,8 @@ def generate_shards(
         min_loudness: Minimum loudness threshold in dB.
         sample_batch_size: Batch size for HDF5 writes.
         headless: Wrap subprocess with Xvfb virtual display for headless Linux.
-        parallel: Max concurrent shard subprocesses (1 = sequential).
+        parallel: Run shard subprocesses concurrently (True) or sequentially (False).
+        max_workers: Optional cap on concurrent workers. Defaults to os.cpu_count().
         uploader: Optional uploader for pushing shards to R2.
         r2_prefix: R2 path prefix (e.g. 'runs/batch42').
 
@@ -167,11 +189,12 @@ def generate_shards(
         )
         tasks.append((seq, num_shards, cmd, shard_path, shard_size))
 
-    if parallel <= 1:
+    workers = _resolve_parallel(parallel, num_shards, max_workers)
+    if workers <= 1:
         for task in tasks:
             _run_shard(*task)
     else:
-        with ThreadPoolExecutor(max_workers=parallel) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             list(executor.map(lambda t: _run_shard(*t), tasks))
 
     # Write worker metadata into shard_dir (alongside the .h5 files)
@@ -244,9 +267,15 @@ def generate_shards(
 )
 @click.option(
     "--parallel",
-    default=1,
-    show_default=True,
-    help="Max concurrent shard subprocesses (1 = sequential).",
+    is_flag=True,
+    default=False,
+    help="Run shard generation concurrently (auto-detects worker count from CPU cores).",
+)
+@click.option(
+    "--max-workers",
+    type=int,
+    default=None,
+    help="Cap on concurrent workers when --parallel is set (default: os.cpu_count()).",
 )
 @click.option(
     "--local", is_flag=True, default=False, help="Skip R2 upload, generate locally only."
@@ -271,7 +300,8 @@ def main(
     min_loudness: float,
     sample_batch_size: int,
     headless: bool,
-    parallel: int,
+    parallel: bool,
+    max_workers: int | None,
     local: bool,
     r2_bucket: str | None,
     r2_prefix: str | None,
@@ -305,6 +335,7 @@ def main(
         sample_batch_size=sample_batch_size,
         headless=headless,
         parallel=parallel,
+        max_workers=max_workers,
         uploader=uploader,
         r2_prefix=r2_prefix,
     )
