@@ -34,6 +34,10 @@ def _create_test_shards(
     directory: Path,
     num_shards: int,
     samples_per_shard: int | list[int],
+    *,  # keyword-only — avoids positional mis-ordering of shape overrides
+    audio_tail: tuple[int, ...] = _AUDIO_TAIL,
+    mel_tail: tuple[int, ...] = _MEL_TAIL,
+    param_width: int = _PARAM_WIDTH,
 ) -> tuple[list[Path], dict[str, np.ndarray]]:
     """Create shard-*.h5 files with deterministic data.
 
@@ -58,9 +62,9 @@ def _create_test_shards(
     offset = 0
     for i, n in enumerate(sizes):
         # Deterministic data: each sample's first element encodes its global index.
-        audio = np.full((n, *_AUDIO_TAIL), fill_value=offset, dtype=np.float32)
-        mel = np.full((n, *_MEL_TAIL), fill_value=offset + 0.5, dtype=np.float32)
-        param = np.full((n, _PARAM_WIDTH), fill_value=offset + 0.25, dtype=np.float32)
+        audio = np.full((n, *audio_tail), fill_value=offset, dtype=np.float32)
+        mel = np.full((n, *mel_tail), fill_value=offset + 0.5, dtype=np.float32)
+        param = np.full((n, param_width), fill_value=offset + 0.25, dtype=np.float32)
 
         # Make each sample uniquely identifiable by its global index.
         for j in range(n):
@@ -301,3 +305,121 @@ class TestReshardCLI:
         assert (dataset_root / "test.h5").exists()
         # Shards should still be in the shards/ subdir
         assert list((dataset_root / "shards").glob("shard-*.h5"))
+
+
+# ---------------------------------------------------------------------------
+# Equivalence tests: dynamic-size reshard vs fixed-size (reshard_data.py)
+#
+# The dynamic reshard_split() reads actual shard sizes from HDF5 files.
+# The legacy reshard_data.py hardcodes 10_000 samples per shard.
+# When all shards are uniform, both must produce identical virtual datasets.
+#
+# We use _FIXED_SHARD_SIZE=100 for test speed; the logic is identical at 10k.
+# Both CLIs are invoked via CliRunner for symmetric comparison.
+# ---------------------------------------------------------------------------
+
+_FIXED_SHARD_SIZE = 10_000
+_MINIMAL_AUDIO_TAIL = (1, 2)
+_MINIMAL_MEL_TAIL = (1, 1, 1)
+_MINIMAL_PARAM_WIDTH = 1
+
+
+class TestReshardEquivalence:
+    """Verify dynamic-size reshard matches the fixed-size reshard_data.py."""
+
+    @staticmethod
+    def _compare_splits(fixed_root, dynamic_root, split_names):
+        """Assert all datasets in each split file are identical."""
+        for split_name in split_names:
+            fixed_path = fixed_root / f"{split_name}.h5"
+            dynamic_path = dynamic_root / f"{split_name}.h5"
+
+            if not fixed_path.exists():
+                assert not dynamic_path.exists()
+                continue
+
+            with h5py.File(fixed_path, "r") as f, h5py.File(dynamic_path, "r") as d:
+                for ds_name in ("audio", "mel_spec", "param_array"):
+                    assert d[ds_name].shape == f[ds_name].shape, (
+                        f"{split_name}/{ds_name}: shape mismatch "
+                        f"dynamic={d[ds_name].shape} vs fixed={f[ds_name].shape}"
+                    )
+                    np.testing.assert_array_equal(
+                        d[ds_name][:],
+                        f[ds_name][:],
+                        err_msg=f"{split_name}/{ds_name}: data mismatch",
+                    )
+
+    @pytest.mark.parametrize(
+        "train_shards,val_shards,test_shards",
+        [
+            (1, 1, 1),
+            (3, 1, 1),
+            (8, 1, 1),
+            (10, 5, 5),
+            (18, 1, 1),
+        ],
+    )
+    def test_split_assignment_matches_fixed(self, tmp_path, train_shards, val_shards, test_shards):
+        """Dynamic and fixed reshard produce identical splits for uniform shards."""
+        from click.testing import CliRunner
+
+        from scripts.reshard_data import main as fixed_main
+        from scripts.reshard_data_dynamic_shard import main as dynamic_main
+
+        runner = CliRunner()
+        total = train_shards + val_shards + test_shards
+
+        # --- Fixed reshard: shards directly in root ---
+        fixed_root = tmp_path / "fixed"
+        fixed_root.mkdir()
+        _create_test_shards(
+            fixed_root,
+            num_shards=total,
+            samples_per_shard=_FIXED_SHARD_SIZE,
+            audio_tail=_MINIMAL_AUDIO_TAIL,
+            mel_tail=_MINIMAL_MEL_TAIL,
+            param_width=_MINIMAL_PARAM_WIDTH,
+        )
+        result_fixed = runner.invoke(
+            fixed_main,
+            [
+                str(fixed_root),
+                "--train-samples",
+                str(train_shards),
+                "--val-samples",
+                str(val_shards),
+                "--test-samples",
+                str(test_shards),
+            ],
+        )
+        assert result_fixed.exit_code == 0, result_fixed.output
+
+        # --- Dynamic reshard: shards in shards/ subdir ---
+        dynamic_root = tmp_path / "dynamic"
+        dynamic_shard_dir = dynamic_root / "shards"
+        dynamic_shard_dir.mkdir(parents=True)
+        _create_test_shards(
+            dynamic_shard_dir,
+            num_shards=total,
+            samples_per_shard=_FIXED_SHARD_SIZE,
+            audio_tail=_MINIMAL_AUDIO_TAIL,
+            mel_tail=_MINIMAL_MEL_TAIL,
+            param_width=_MINIMAL_PARAM_WIDTH,
+        )
+        result_dynamic = runner.invoke(
+            dynamic_main,
+            [
+                str(dynamic_root),
+                "--train-shards",
+                str(train_shards),
+                "--val-shards",
+                str(val_shards),
+                "--test-shards",
+                str(test_shards),
+            ],
+        )
+        assert result_dynamic.exit_code == 0, result_dynamic.output
+
+        # --- Compare all splits ---
+        self._compare_splits(fixed_root, dynamic_root, ("train", "val", "test"))
