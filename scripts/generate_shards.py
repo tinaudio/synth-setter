@@ -19,21 +19,15 @@ Usage:
         --instance-id worker01
 """
 
-from __future__ import annotations
-
 import json
 import subprocess  # nosec B404
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import click
 
-from src.data.uploader import RcloneUploader
-
-if TYPE_CHECKING:
-    from src.data.uploader import DatasetUploader
+from src.data.uploader import DatasetUploader, RcloneUploader
 
 _GENERATE_SCRIPT = "src/data/vst/generate_vst_dataset.py"
 _HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
