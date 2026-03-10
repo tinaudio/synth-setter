@@ -22,6 +22,7 @@ Usage:
 import json
 import subprocess  # nosec B404
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,66 @@ _GENERATE_SCRIPT = "src/data/vst/generate_vst_dataset.py"
 _HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
 _DEFAULT_PLUGIN_PATH = "plugins/Surge XT.vst3"
 _DEFAULT_PRESET_PATH = "presets/surge-base.vstpreset"
+
+
+def _build_shard_cmd(
+    seq: int,
+    shard_dir: Path,
+    instance_id: str,
+    shard_size: int,
+    param_spec: str,
+    plugin_path: str,
+    preset_path: str,
+    sample_rate: float,
+    channels: int,
+    velocity: int,
+    signal_duration_seconds: float,
+    min_loudness: float,
+    sample_batch_size: int,
+    headless: bool,
+) -> tuple[list[str], Path]:
+    """Build the subprocess command for a single shard."""
+    shard_name = f"shard-{instance_id}-{seq:04d}.h5"  # noqa: E231
+    shard_path = shard_dir / shard_name
+    cmd = [
+        "python",
+        _GENERATE_SCRIPT,
+        str(shard_path),
+        str(shard_size),
+        "--plugin_path",
+        plugin_path,
+        "--preset_path",
+        preset_path,
+        "--sample_rate",
+        str(sample_rate),
+        "--channels",
+        str(channels),
+        "--velocity",
+        str(velocity),
+        "--signal_duration_seconds",
+        str(signal_duration_seconds),
+        "--min_loudness",
+        str(min_loudness),
+        "--param_spec",
+        param_spec,
+        "--sample_batch_size",
+        str(sample_batch_size),
+    ]
+    if headless:
+        cmd = [_HEADLESS_WRAPPER] + cmd
+    return cmd, shard_path
+
+
+def _run_shard(
+    seq: int, num_shards: int, cmd: list[str], shard_path: Path, shard_size: int
+) -> None:
+    """Run a single shard subprocess."""
+    print(
+        f"[generate_shards] shard {seq + 1}/{num_shards}: "
+        f"{shard_size} samples -> {shard_path}",
+        flush=True,
+    )
+    subprocess.run(cmd, check=True)  # nosec B603
 
 
 def generate_shards(
@@ -50,6 +111,7 @@ def generate_shards(
     min_loudness: float = -55.0,
     sample_batch_size: int = 32,
     headless: bool = False,
+    parallel: int = 1,
     uploader: DatasetUploader | None = None,
     r2_prefix: str | None = None,
 ) -> Path:
@@ -71,6 +133,7 @@ def generate_shards(
         min_loudness: Minimum loudness threshold in dB.
         sample_batch_size: Batch size for HDF5 writes.
         headless: Wrap subprocess with Xvfb virtual display for headless Linux.
+        parallel: Max concurrent shard subprocesses (1 = sequential).
         uploader: Optional uploader for pushing shards to R2.
         r2_prefix: R2 path prefix (e.g. 'runs/batch42').
 
@@ -83,42 +146,32 @@ def generate_shards(
     shard_dir = Path(shard_dir)
     shard_dir.mkdir(parents=True, exist_ok=True)
 
+    tasks = []
     for seq in range(num_shards):
-        shard_name = f"shard-{instance_id}-{seq:04d}.h5"  # noqa: E231
-        shard_path = shard_dir / shard_name
-
-        cmd = [
-            "python",
-            _GENERATE_SCRIPT,
-            str(shard_path),
-            str(shard_size),
-            "--plugin_path",
-            plugin_path,
-            "--preset_path",
-            preset_path,
-            "--sample_rate",
-            str(sample_rate),
-            "--channels",
-            str(channels),
-            "--velocity",
-            str(velocity),
-            "--signal_duration_seconds",
-            str(signal_duration_seconds),
-            "--min_loudness",
-            str(min_loudness),
-            "--param_spec",
-            param_spec,
-            "--sample_batch_size",
-            str(sample_batch_size),
-        ]
-        if headless:
-            cmd = [_HEADLESS_WRAPPER] + cmd
-        print(
-            f"[generate_shards] shard {seq + 1}/{num_shards}: "
-            f"{shard_size} samples -> {shard_path}",
-            flush=True,
+        cmd, shard_path = _build_shard_cmd(
+            seq=seq,
+            shard_dir=shard_dir,
+            instance_id=instance_id,
+            shard_size=shard_size,
+            param_spec=param_spec,
+            plugin_path=plugin_path,
+            preset_path=preset_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            velocity=velocity,
+            signal_duration_seconds=signal_duration_seconds,
+            min_loudness=min_loudness,
+            sample_batch_size=sample_batch_size,
+            headless=headless,
         )
-        subprocess.run(cmd, check=True)  # nosec B603
+        tasks.append((seq, num_shards, cmd, shard_path, shard_size))
+
+    if parallel <= 1:
+        for task in tasks:
+            _run_shard(*task)
+    else:
+        with ThreadPoolExecutor(max_workers=parallel) as executor:
+            list(executor.map(lambda t: _run_shard(*t), tasks))
 
     # Write worker metadata to the parent directory
     output_dir = shard_dir.parent
@@ -191,6 +244,12 @@ def generate_shards(
     help="Run under Xvfb virtual display for headless Linux environments without a GUI.",
 )
 @click.option(
+    "--parallel",
+    default=1,
+    show_default=True,
+    help="Max concurrent shard subprocesses (1 = sequential).",
+)
+@click.option(
     "--local", is_flag=True, default=False, help="Skip R2 upload, generate locally only."
 )
 @click.option(
@@ -213,6 +272,7 @@ def main(
     min_loudness: float,
     sample_batch_size: int,
     headless: bool,
+    parallel: int,
     local: bool,
     r2_bucket: str | None,
     r2_prefix: str | None,
@@ -245,6 +305,7 @@ def main(
         min_loudness=min_loudness,
         sample_batch_size=sample_batch_size,
         headless=headless,
+        parallel=parallel,
         uploader=uploader,
         r2_prefix=r2_prefix,
     )

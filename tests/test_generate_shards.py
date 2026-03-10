@@ -233,6 +233,61 @@ class TestGenerateShards:
 
 
 # ---------------------------------------------------------------------------
+# Tests — parallel mode
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateShardsParallel:
+    """Tests for parallel shard generation."""
+
+    def test_parallel_generates_correct_number_of_shards(self, tmp_path, fake_vst_subprocess):
+        """Parallel mode creates the expected number of shard files."""
+        shard_dir = tmp_path / "shards"
+        generate_shards(
+            shard_dir=shard_dir,
+            num_shards=4,
+            shard_size=100,
+            param_spec="surge_simple",
+            parallel=2,
+        )
+        shards = sorted(shard_dir.glob("shard-*.h5"))
+        assert len(shards) == 4
+
+    def test_parallel_subprocess_calls(self, tmp_path, fake_vst_subprocess):
+        """All N subprocess calls happen with parallel > 1."""
+        shard_dir = tmp_path / "shards"
+        generate_shards(
+            shard_dir=shard_dir,
+            num_shards=3,
+            shard_size=100,
+            param_spec="surge_simple",
+            parallel=3,
+        )
+        generate_calls = [
+            c for c in fake_vst_subprocess if "generate_vst_dataset.py" in " ".join(c)
+        ]
+        assert len(generate_calls) == 3
+
+    def test_parallel_writes_worker_metadata(self, tmp_path, fake_vst_subprocess):
+        """Metadata is written correctly after parallel generation."""
+        output_dir = tmp_path / "dataset"
+        shard_dir = output_dir / "shards"
+        generate_shards(
+            shard_dir=shard_dir,
+            num_shards=2,
+            shard_size=100,
+            param_spec="surge_simple",
+            instance_id="par01",
+            parallel=2,
+        )
+        meta_path = output_dir / "par01-metadata.json"
+        assert meta_path.exists()
+        meta = json.loads(meta_path.read_text())
+        assert meta["instance_id"] == "par01"
+        assert meta["num_shards"] == 2
+
+
+# ---------------------------------------------------------------------------
 # Tests — R2 upload
 # ---------------------------------------------------------------------------
 
