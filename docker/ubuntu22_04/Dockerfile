@@ -406,6 +406,10 @@ ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 # Copy full source (after deps for caching)
 COPY --from=synth-permutations-src /home/build/synth-permutations /home/build/synth-permutations
 
+# Install the project package so `import src` works from any working directory.
+# --no-deps: all runtime deps already installed from requirements*.txt wheels.
+RUN pip install --no-deps -e .
+
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
 
@@ -436,6 +440,10 @@ RUN --mount=type=secret,id=git_pat \
     token="$(cat /run/secrets/git_pat)"; \
     git clone https://${token}@github.com/ktinubu/synth-permutations.git . && \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
+
+# Install the project package so `import src` works from any working directory.
+# --no-deps: all runtime deps already installed from requirements*.txt wheels.
+RUN pip install --no-deps -e .
 
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
