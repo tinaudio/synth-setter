@@ -378,6 +378,7 @@ case "$MODE" in
     python src/train.py \
       "data=${DATA_CONFIG}" \
       "data.dataset_root=${OUTPUT_DIR}" \
+      "data.predict_file=${OUTPUT_DIR}/val.h5" \
       $TRAIN_ARGS
 
     echo ""
