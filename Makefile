@@ -276,15 +276,18 @@ docker-ci-generate: ## CI: generate dataset (no TTY, no GPU). Mirror of docker-r
 		-e IDLE_AFTER=0 \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
-docker-ci-train: ## CI: download dataset from R2 and train (no TTY, no GPU). Mirror of docker-run-train for CI/scripts.
+docker-ci-train: ## CI: smoke-test training (no TTY, no GPU). Downloads dataset from R2 and runs a single training step on CPU to verify the pipeline works end-to-end.
 	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-ci-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
+# Smoke-test defaults come first; TRAIN_ARGS (from the user / CLI) is appended
+# last so Hydra's last-wins semantics let callers override any default.
+# e.g. TRAIN_ARGS="experiment=surge/flow_simple trainer.max_steps=10"
 	docker run --rm --init \
 		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		-e MODE=train \
 		-e PARAM_SPEC=$(PARAM_SPEC) \
 		-e R2_DATASET_PATH=$(R2_DATASET_PATH) \
 		-e OUTPUT_DIR=$(OUTPUT_DIR) \
-		-e TRAIN_ARGS="$(TRAIN_ARGS)" \
+		-e TRAIN_ARGS="trainer=cpu trainer.max_steps=1 trainer.log_every_n_steps=1 data.batch_size=1 $(TRAIN_ARGS)" \
 		-e IDLE_AFTER=0 \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
