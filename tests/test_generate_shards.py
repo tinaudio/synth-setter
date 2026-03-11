@@ -113,19 +113,25 @@ class TestGenerateShards:
         shards = sorted(shard_dir.glob("shard-*.h5"))
         assert len(shards) == 4
 
-    def test_shard_naming_includes_instance_id(self, tmp_path, fake_vst_subprocess):
-        """Shard filenames include the instance_id: shard-{id}-{seq}.h5."""
+    def test_shard_naming_with_prefix(self, tmp_path, fake_vst_subprocess):
+        """With a prefix, shard names are shard-{prefix}-{8hex}-{seq}.h5."""
         shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
             num_shards=2,
             shard_size=100,
             param_spec="surge_simple",
-            instance_id="abc12345",
+            instance_id_prefix="mypod",
         )
         shards = sorted(shard_dir.glob("shard-*.h5"))
-        assert shards[0].name == "shard-abc12345-0000.h5"
-        assert shards[1].name == "shard-abc12345-0001.h5"
+        assert len(shards) == 2
+        # Pattern: shard-mypod-<8hex>-0000.h5
+        for i, shard in enumerate(shards):
+            parts = shard.stem.split("-")
+            assert parts[0] == "shard"
+            assert parts[1] == "mypod"
+            assert len(parts[2]) == 8  # 8-char hex UUID suffix
+            assert parts[3] == f"{i:04d}"
 
     def test_subprocess_calls(self, tmp_path, fake_vst_subprocess):
         """Mock subprocess is invoked once per shard with correct args."""
@@ -141,8 +147,8 @@ class TestGenerateShards:
         ]
         assert len(generate_calls) == 3
 
-    def test_writes_worker_metadata(self, tmp_path, fake_vst_subprocess):
-        """generate_shards writes {instance_id}-metadata.json in shard_dir."""
+    def test_writes_worker_metadata_with_prefix(self, tmp_path, fake_vst_subprocess):
+        """Metadata file uses the full instance_id (prefix-uuid) and records it."""
         output_dir = tmp_path / "dataset"
         shard_dir = output_dir / SHARD_SUBDIR
         generate_shards(
@@ -150,18 +156,20 @@ class TestGenerateShards:
             num_shards=2,
             shard_size=100,
             param_spec="surge_simple",
-            instance_id="worker01",
+            instance_id_prefix="worker01",
         )
-        meta_path = shard_dir / "worker01-metadata.json"
-        assert meta_path.exists()
-        meta = json.loads(meta_path.read_text())
-        assert meta["instance_id"] == "worker01"
+        # Metadata filename: {prefix}-{8hex}-metadata.json
+        meta_files = list(shard_dir.glob("worker01-*-metadata.json"))
+        assert len(meta_files) == 1
+        meta = json.loads(meta_files[0].read_text())
+        assert meta["instance_id"].startswith("worker01-")
+        assert len(meta["instance_id"]) == len("worker01-") + 8
         assert meta["num_shards"] == 2
         assert meta["shard_size"] == 100
         assert meta["param_spec"] == "surge_simple"
 
-    def test_instance_id_auto_generated(self, tmp_path, fake_vst_subprocess):
-        """When instance_id is not provided, a UUID-based ID is auto-generated."""
+    def test_no_prefix_auto_generates_id(self, tmp_path, fake_vst_subprocess):
+        """When no prefix is provided, instance_id is an auto-generated 8-char hex."""
         shard_dir = tmp_path / SHARD_SUBDIR
         generate_shards(
             shard_dir=shard_dir,
@@ -177,16 +185,31 @@ class TestGenerateShards:
         assert parts[0] == "shard"
         assert len(parts[1]) == 8  # 8-char hex from uuid4
 
-    def test_auto_id_differs_between_calls(self, tmp_path, fake_vst_subprocess):
-        """Two separate generate_shards calls produce different auto-generated IDs."""
+    def test_same_prefix_produces_different_ids(self, tmp_path, fake_vst_subprocess):
+        """Two calls with the same prefix produce different instance IDs (retry detection)."""
         dir_a = tmp_path / "a" / "shards"
         dir_b = tmp_path / "b" / "shards"
-        generate_shards(shard_dir=dir_a, num_shards=1, shard_size=100, param_spec="surge_simple")
-        generate_shards(shard_dir=dir_b, num_shards=1, shard_size=100, param_spec="surge_simple")
+        generate_shards(
+            shard_dir=dir_a,
+            num_shards=1,
+            shard_size=100,
+            param_spec="surge_simple",
+            instance_id_prefix="samepod",
+        )
+        generate_shards(
+            shard_dir=dir_b,
+            num_shards=1,
+            shard_size=100,
+            param_spec="surge_simple",
+            instance_id_prefix="samepod",
+        )
 
         name_a = list(dir_a.glob("shard-*.h5"))[0].name
         name_b = list(dir_b.glob("shard-*.h5"))[0].name
+        # Same prefix but different UUID suffix
         assert name_a != name_b
+        assert name_a.startswith("shard-samepod-")
+        assert name_b.startswith("shard-samepod-")
 
     def test_passes_plugin_options(self, tmp_path, fake_vst_subprocess):
         """Plugin path and preset path are forwarded to generate_vst_dataset."""
@@ -279,14 +302,14 @@ class TestGenerateShardsParallel:
             num_shards=2,
             shard_size=100,
             param_spec="surge_simple",
-            instance_id="par01",
+            instance_id_prefix="par01",
             parallel=True,
             max_workers=2,
         )
-        meta_path = shard_dir / "par01-metadata.json"
-        assert meta_path.exists()
-        meta = json.loads(meta_path.read_text())
-        assert meta["instance_id"] == "par01"
+        meta_files = list(shard_dir.glob("par01-*-metadata.json"))
+        assert len(meta_files) == 1
+        meta = json.loads(meta_files[0].read_text())
+        assert meta["instance_id"].startswith("par01-")
         assert meta["num_shards"] == 2
 
 
@@ -400,7 +423,7 @@ class TestGenerateShardsUpload:
             num_shards=2,
             shard_size=100,
             param_spec="surge_simple",
-            instance_id="w1",
+            instance_id_prefix="w1",
             uploader=uploader,
             r2_prefix="runs/batch42",
         )
@@ -412,10 +435,10 @@ class TestGenerateShardsUpload:
         assert len(uploaded_shards) == 2
 
         # Worker metadata uploaded alongside shards
-        uploaded_meta = upload_dest / "w1-metadata.json"
-        assert uploaded_meta.exists()
-        meta = json.loads(uploaded_meta.read_text())
-        assert meta["instance_id"] == "w1"
+        uploaded_meta = list(upload_dest.glob("w1-*-metadata.json"))
+        assert len(uploaded_meta) == 1
+        meta = json.loads(uploaded_meta[0].read_text())
+        assert meta["instance_id"].startswith("w1-")
 
     def test_no_upload_without_uploader(self, tmp_path, fake_vst_subprocess):
         """When uploader is None, generate_shards completes without uploading."""

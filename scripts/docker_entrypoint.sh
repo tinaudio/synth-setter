@@ -206,7 +206,7 @@ case "$MODE" in
     INSTANCE_ID="${INSTANCE_ID:-${RUNPOD_POD_ID:-}}"
     INSTANCE_ID_FLAG=""
     if [ -n "$INSTANCE_ID" ]; then
-      INSTANCE_ID_FLAG="--instance-id $INSTANCE_ID"
+      INSTANCE_ID_FLAG="--instance-id-prefix $INSTANCE_ID"
     fi
 
     PARALLEL_FLAG="--parallel"

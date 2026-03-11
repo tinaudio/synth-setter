@@ -6,17 +6,19 @@ shards to train/val/test splits.
 
 Each shard is named shard-{instance_id}-{seq}.h5 where instance_id
 identifies the worker that produced it (auto-generated UUID if omitted).
+When an instance_id_prefix is provided (e.g. a RunPod pod ID), the
+instance_id becomes {prefix}-{uuid}, making retries distinguishable.
 
 Usage:
     python scripts/generate_shards.py \\
         --num-shards 12 --shard-size 10000 \\
         --output-dir data/surge_simple --param-spec surge_simple
 
-    # With explicit instance ID (for distributed workers)
+    # With instance ID prefix (for distributed workers with retry detection)
     python scripts/generate_shards.py \\
         --num-shards 10 --shard-size 10000 \\
         --output-dir data/surge_simple --param-spec surge_simple \\
-        --instance-id worker01
+        --instance-id-prefix mypod123
 """
 
 import json
@@ -122,7 +124,7 @@ def generate_shards(
     num_shards: int,
     shard_size: int,
     param_spec: str,
-    instance_id: str | None = None,
+    instance_id_prefix: str | None = None,
     plugin_path: str = _DEFAULT_PLUGIN_PATH,
     preset_path: str = _DEFAULT_PRESET_PATH,
     sample_rate: float = 44100.0,
@@ -144,8 +146,9 @@ def generate_shards(
         num_shards: Number of shard files to generate.
         shard_size: Number of samples per shard.
         param_spec: Parameter specification name (e.g. 'surge_simple').
-        instance_id: Worker identifier baked into filenames. Auto-generated
-            from uuid4 if not provided.
+        instance_id_prefix: Optional prefix for the worker identifier (e.g. a
+            RunPod pod ID). The final instance_id is {prefix}-{8hex} when set,
+            or just {8hex} when None.
         plugin_path: Path to the VST3 plugin binary.
         preset_path: Path to the VST preset file.
         sample_rate: Audio sample rate in Hz.
@@ -163,8 +166,11 @@ def generate_shards(
     Returns:
         Path to the shard_dir.
     """
-    if instance_id is None:
-        instance_id = uuid.uuid4().hex[:8]
+    uuid_suffix = uuid.uuid4().hex[:8]
+    if instance_id_prefix is not None:
+        instance_id = f"{instance_id_prefix}-{uuid_suffix}"
+    else:
+        instance_id = uuid_suffix
 
     shard_dir = Path(shard_dir)
     shard_dir.mkdir(parents=True, exist_ok=True)
@@ -246,10 +252,10 @@ def generate_shards(
     help="Param spec name: 'surge_xt' or 'surge_simple'.",
 )
 @click.option(
-    "--instance-id",
+    "--instance-id-prefix",
     type=str,
     default=None,
-    help="Worker instance ID (default: auto-generated 8-char UUID).",
+    help="Prefix for instance ID (e.g. pod ID). Final ID: {prefix}-{uuid}.",
 )
 @click.option("--plugin-path", default=_DEFAULT_PLUGIN_PATH, show_default=True)
 @click.option("--preset-path", default=_DEFAULT_PRESET_PATH, show_default=True)
@@ -290,7 +296,7 @@ def main(
     shard_size: int,
     output_dir: str,
     param_spec: str,
-    instance_id: str | None,
+    instance_id_prefix: str | None,
     plugin_path: str,
     preset_path: str,
     sample_rate: float,
@@ -324,7 +330,7 @@ def main(
         num_shards=num_shards,
         shard_size=shard_size,
         param_spec=param_spec,
-        instance_id=instance_id,
+        instance_id_prefix=instance_id_prefix,
         plugin_path=plugin_path,
         preset_path=preset_path,
         sample_rate=sample_rate,
