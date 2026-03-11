@@ -105,6 +105,8 @@ TARGETARCH ?= amd64
 DOCKER_TORCH_IDX  ?= https://download.pytorch.org/whl/cu128
 DOCKER_BUILD_FLAGS ?=
 DOCKER_RUN_FLAGS ?=
+_INTERNAL_BUILD_FLAGS :=
+_INTERNAL_RUN_FLAGS :=
 APP_PATH          := /home/build/synth-permutations
 CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse --short HEAD))
 USE_CLOUD_BUILDER ?= 0
@@ -133,7 +135,7 @@ DOCKER_R2_SECRETS = \
 DOCKER_BASE_IMAGE_TAG := $(subst /,_,$(subst :,__,$(DOCKER_BASE_IMAGE)))
 TARGET_PLATFORM_TAG := $(subst /,_,$(DOCKER_TARGETPLATFORM))
 ifeq ($(USE_CLOUD_BUILDER),1)
-DOCKER_BUILD_FLAGS += \
+_INTERNAL_BUILD_FLAGS += \
 	--builder cloud-tinaudio-tinaudio-builder \
 	--push \
 	--cache-from=type=registry,ref=tinaudio/perm:buildcache-$(TARGET_PLATFORM_TAG) \
@@ -145,7 +147,7 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required. Usage: make docker-build-dev-snapshot GIT_REF=<sha> GIT_PAT=<token> R2_ACCESS_KEY_ID=<key> ..."; exit 1; fi
 	DOCKER_BUILDKIT=1 docker buildx build \
 		-f $(DOCKER_FILE) \
-		$(DOCKER_BUILD_FLAGS) \
+		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
 		$(DOCKER_R2_SECRETS) \
 		--platform $(DOCKER_TARGETPLATFORM) \
@@ -166,7 +168,7 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 docker-build-dev-live: ## Build dev image (Surge + deps + R2 config, no baked-in source)
 	DOCKER_BUILDKIT=1 docker buildx build \
 		-f $(DOCKER_FILE) \
-		$(DOCKER_BUILD_FLAGS) \
+		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
 		$(DOCKER_R2_SECRETS) \
 		--platform $(DOCKER_TARGETPLATFORM) \
@@ -182,17 +184,17 @@ docker-build-dev-live: ## Build dev image (Surge + deps + R2 config, no baked-in
   		-- 2>&1 | tee data/docker_build_log.txt
 
 ifeq ($(USE_LOCAL_WORKSPACE),1)
-DOCKER_RUN_FLAGS += \
+_INTERNAL_RUN_FLAGS += \
 	-v "$(PWD):$(APP_PATH)" \
 	-w $(APP_PATH) \
- 	--entrypoint /home/build/synth-permutations/scripts/docker_entrypoint.sh
+	--entrypoint /home/build/synth-permutations/scripts/docker_entrypoint.sh
 endif
 # Run the dev image with your local working tree mounted.
 # Edits to files on your host are reflected immediately inside the container.
 # Add --gpus all after docker run to enable GPU access.
 docker-run-dev: ## Run dev image with local source mounted (IMAGE_TAG=dev by default)
 	docker run --rm -it --init \
-		$(DOCKER_RUN_FLAGS) \
+		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
 # Dataset generation / training defaults (override on the command line)
@@ -218,7 +220,7 @@ IDLE_AFTER       ?= 0
 
 docker-run-generate: ## Generate dataset + upload to R2 (MODE=generate, GPU). IDLE_AFTER=1 to stay in bash.
 	docker run --rm -it --gpus all --init \
-		$(DOCKER_RUN_FLAGS) \
+		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		-e MODE=generate \
 		-e PARAM_SPEC=$(PARAM_SPEC) \
 		-e TRAIN_SAMPLES=$(TRAIN_SAMPLES) \
@@ -231,7 +233,7 @@ docker-run-generate: ## Generate dataset + upload to R2 (MODE=generate, GPU). ID
 docker-run-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_AFTER=1 to stay in bash.
 	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-run-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
 	docker run --rm -it --gpus all --init \
-		$(DOCKER_RUN_FLAGS) \
+		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		-e MODE=train \
 		-e PARAM_SPEC=$(PARAM_SPEC) \
 		-e R2_DATASET_PATH=$(R2_DATASET_PATH) \
@@ -248,7 +250,7 @@ docker-run-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_
 
 docker-ci-generate: ## CI: generate dataset (no TTY, no GPU). Mirror of docker-run-generate for CI/scripts.
 	docker run --rm --init \
-		$(DOCKER_RUN_FLAGS) \
+		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		-e MODE=generate \
 		-e PARAM_SPEC=$(PARAM_SPEC) \
 		-e TRAIN_SAMPLES=$(TRAIN_SAMPLES) \
@@ -261,7 +263,7 @@ docker-ci-generate: ## CI: generate dataset (no TTY, no GPU). Mirror of docker-r
 docker-ci-train: ## CI: download dataset from R2 and train (no TTY, no GPU). Mirror of docker-run-train for CI/scripts.
 	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-ci-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
 	docker run --rm --init \
-		$(DOCKER_RUN_FLAGS) \
+		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		-e MODE=train \
 		-e PARAM_SPEC=$(PARAM_SPEC) \
 		-e R2_DATASET_PATH=$(R2_DATASET_PATH) \
