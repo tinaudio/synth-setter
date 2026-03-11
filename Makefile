@@ -158,12 +158,13 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
 		--build-arg TARGETARCH=$(TARGETARCH) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
+		-t $(DOCKER_IMAGE):dev-snapshot \
 		. \
   		-- 2>&1 | tee data/docker_build_log.txt
 
 # Dev image: installs Surge + all Python deps + R2 config but does NOT copy source code.
 # Your local repo is mounted at runtime via docker-run-dev.
-# The image is tagged with both :dev and :dev-<short-sha> so you can identify
+# The image is tagged with both :dev-live and :dev-live-<short-sha> so you can identify
 # which commit's dependency manifests were used.
 docker-build-dev-live: ## Build dev image (Surge + deps + R2 config, no baked-in source)
 	DOCKER_BUILDKIT=1 docker buildx build \
@@ -179,7 +180,7 @@ docker-build-dev-live: ## Build dev image (Surge + deps + R2 config, no baked-in
 		--build-arg TARGETARCH=$(TARGETARCH) \
 		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-live-$(CURRENT_LOCAL_GIT_REF) \
-		-t $(DOCKER_IMAGE):dev \
+		-t $(DOCKER_IMAGE):dev-live \
 		. \
   		-- 2>&1 | tee data/docker_build_log.txt
 
