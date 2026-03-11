@@ -98,7 +98,7 @@ train: ## Train the model
 # =====================================================================
 DOCKER_FILE       ?= docker/ubuntu22_04/Dockerfile
 DOCKER_IMAGE      ?= tinaudio/perm
-DOCKER_BASE_IMAGE ?= vastai/base-image:stock-ubuntu22.04-py310
+DOCKER_BASE_IMAGE ?= ubuntu:22.04
 DOCKER_BUILD_MODE ?= prebuilt
 DOCKER_TARGETPLATFORM ?= linux/amd64
 TARGETARCH ?= amd64
@@ -235,7 +235,7 @@ docker-run-generate: ## Generate dataset + upload to R2 (MODE=generate, GPU). ID
 		-e IDLE_AFTER=$(IDLE_AFTER) \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
-docker-run-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_AFTER=1 to stay in bash.
+docker-run-gpu-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_AFTER=1 to stay in bash.
 	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-run-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
 	docker run --rm -it --gpus all --init \
 		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
@@ -247,37 +247,7 @@ docker-run-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_
 		-e IDLE_AFTER=$(IDLE_AFTER) \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
-docker-run-finalize: ## Download shards from R2, reshard + stats + upload (MODE=finalize-shards, GPU)
-	@if [ -z "$(R2_PREFIX)" ]; then echo "ERROR: R2_PREFIX is required. e.g. make docker-run-finalize R2_PREFIX=runs/surge_simple/batch42"; exit 1; fi
-	docker run --rm -it --gpus all --init \
-		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
-		-e MODE=finalize-shards \
-		-e R2_PREFIX=$(R2_PREFIX) \
-		-e OUTPUT_DIR=$(OUTPUT_DIR) \
-		-e VAL_SHARDS=$(VAL_SHARDS) \
-		-e TEST_SHARDS=$(TEST_SHARDS) \
-		-e IDLE_AFTER=$(IDLE_AFTER) \
-		$(DOCKER_IMAGE):$(IMAGE_TAG)
-
-# ---------------------------------------------------------------------------
-# CI run targets — identical env vars to docker-run-* but without -it/--gpus.
-# Safe for use in CI runners and non-interactive scripts.
-# Used by .github/workflows/data-pipeline.yml and for local CI dry-runs.
-# ---------------------------------------------------------------------------
-
-docker-ci-generate: ## CI: generate dataset (no TTY, no GPU). Mirror of docker-run-generate for CI/scripts.
-	docker run --rm --init \
-		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
-		-e MODE=generate \
-		-e PARAM_SPEC=$(PARAM_SPEC) \
-		-e TRAIN_SAMPLES=$(TRAIN_SAMPLES) \
-		-e VAL_SAMPLES=$(VAL_SAMPLES) \
-		-e TEST_SAMPLES=$(TEST_SAMPLES) \
-		-e OUTPUT_DIR=$(OUTPUT_DIR) \
-		-e IDLE_AFTER=0 \
-		$(DOCKER_IMAGE):$(IMAGE_TAG)
-
-docker-ci-train: ## CI: smoke-test training (no TTY, no GPU). Downloads dataset from R2 and runs a single training step on CPU to verify the pipeline works end-to-end.
+docker-run-cpu-train: ## CI: smoke-test training (no TTY, no GPU). Downloads dataset from R2 and runs a single training step on CPU to verify the pipeline works end-to-end.
 	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-ci-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
 # Smoke-test defaults come first; TRAIN_ARGS (from the user / CLI) is appended
 # last so Hydra's last-wins semantics let callers override any default.
@@ -292,17 +262,18 @@ docker-ci-train: ## CI: smoke-test training (no TTY, no GPU). Downloads dataset 
 		-e IDLE_AFTER=0 \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
-docker-ci-finalize: ## CI: finalize shards (no TTY, no GPU). Mirror of docker-run-finalize for CI/scripts.
-	@if [ -z "$(R2_PREFIX)" ]; then echo "ERROR: R2_PREFIX is required. e.g. make docker-ci-finalize R2_PREFIX=runs/surge_simple/batch42"; exit 1; fi
-	docker run --rm --init \
+docker-run-finalize: ## Download shards from R2, reshard + stats + upload (MODE=finalize-shards, GPU)
+	@if [ -z "$(R2_PREFIX)" ]; then echo "ERROR: R2_PREFIX is required. e.g. make docker-run-finalize R2_PREFIX=runs/surge_simple/batch42"; exit 1; fi
+	docker run --rm -it --init \
 		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		-e MODE=finalize-shards \
 		-e R2_PREFIX=$(R2_PREFIX) \
 		-e OUTPUT_DIR=$(OUTPUT_DIR) \
 		-e VAL_SHARDS=$(VAL_SHARDS) \
 		-e TEST_SHARDS=$(TEST_SHARDS) \
-		-e IDLE_AFTER=0 \
+		-e IDLE_AFTER=$(IDLE_AFTER) \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
+
 
 # =====================================================================
 # RunPod targets — launch massively parallel shard generation
