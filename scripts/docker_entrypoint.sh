@@ -91,6 +91,21 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/home/build/synth-permutations}"
 cd "$APP_DIR"
 
+# ---------------------------------------------------------------------------
+# Optional: pull latest code before running the entrypoint.
+# ---------------------------------------------------------------------------
+if [ "${PULL_LATEST:-0}" = "1" ]; then
+  if [ -z "${GIT_PAT:-}" ]; then
+    echo "ERROR: PULL_LATEST=1 requires GIT_PAT to be set." >&2
+    exit 1
+  fi
+  echo "[hotpatch] Pulling latest from origin..."
+  git -C "$APP_DIR" pull origin "${SYNTH_PERMUTATIONS_GIT_REF:-experiment}"
+  pip install -e . --quiet
+  export PULL_LATEST=0
+  exec "$0" "$@"
+fi
+
 MODE="${MODE:-generate}"
 R2_BUCKET="${R2_BUCKET:-}"
 IDLE_AFTER="${IDLE_AFTER:-0}"
