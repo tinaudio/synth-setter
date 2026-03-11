@@ -29,6 +29,9 @@ test: ## Run not slow tests
 test-full: ## Run all tests
 	pytest
 
+test-bash: ## Run BATS tests for shell scripts
+	bats tests/*.bats
+
 train: ## Train the model
 	python src/train.py
 
