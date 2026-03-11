@@ -112,20 +112,23 @@ jobs:
           pytest -v
 
   # ---------------------------------------------------------------------------
-  # BATS tests for shell scripts (e.g. docker entrypoint validation)
+  # Pre-commit (shellcheck, checkmake, formatting, etc.) and BATS shell tests
   # ---------------------------------------------------------------------------
-  bats-tests:
-    name: BATS shell tests
+  pre-commit-and-bats:
+    name: Pre-commit + BATS tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install BATS
+      - name: Install dev tools
+        run: make setup-ci
+
+      - name: Run pre-commit checks
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
+          pip install pre-commit
+          make format
 
       - name: Run BATS tests
         run: make test-bash

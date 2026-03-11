@@ -33,6 +33,12 @@ sync: ## Merge changes from main branch to your current branch
 	git pull
 	git pull origin main
 
+setup: ## Install all dev dependencies (Python, pre-commit, bats)
+	bash scripts/setup-dev.sh
+
+setup-ci: ## Install shell lint/test tools only (for CI)
+	bash scripts/setup-dev.sh --ci
+
 setup-rclone: ## Configure rclone for Cloudflare R2 (requires .env sourced)
 	bash scripts/setup-rclone.sh
 
