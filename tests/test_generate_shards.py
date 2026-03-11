@@ -158,8 +158,8 @@ class TestGenerateShards:
             param_spec="surge_simple",
             instance_id_prefix="worker01",
         )
-        # Metadata filename: {prefix}-{8hex}-metadata.json
-        meta_files = list(shard_dir.glob("worker01-*-metadata.json"))
+        # Metadata filename: metadata-{prefix}-{8hex}.json
+        meta_files = list(shard_dir.glob("metadata-worker01-*.json"))
         assert len(meta_files) == 1
         meta = json.loads(meta_files[0].read_text())
         assert meta["instance_id"].startswith("worker01-")
@@ -306,7 +306,7 @@ class TestGenerateShardsParallel:
             parallel=True,
             max_workers=2,
         )
-        meta_files = list(shard_dir.glob("par01-*-metadata.json"))
+        meta_files = list(shard_dir.glob("metadata-par01-*.json"))
         assert len(meta_files) == 1
         meta = json.loads(meta_files[0].read_text())
         assert meta["instance_id"].startswith("par01-")
@@ -435,7 +435,7 @@ class TestGenerateShardsUpload:
         assert len(uploaded_shards) == 2
 
         # Worker metadata uploaded alongside shards
-        uploaded_meta = list(upload_dest.glob("w1-*-metadata.json"))
+        uploaded_meta = list(upload_dest.glob("metadata-w1-*.json"))
         assert len(uploaded_meta) == 1
         meta = json.loads(uploaded_meta[0].read_text())
         assert meta["instance_id"].startswith("w1-")

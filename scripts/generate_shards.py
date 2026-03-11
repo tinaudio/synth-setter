@@ -221,7 +221,7 @@ def generate_shards(
             "sample_batch_size": sample_batch_size,
         },
     }
-    meta_path = shard_dir / f"{instance_id}-metadata.json"
+    meta_path = shard_dir / f"metadata-{instance_id}.json"
     meta_path.write_text(json.dumps(meta, indent=2))
     print(f"[generate_shards] worker metadata -> {meta_path}", flush=True)
 
