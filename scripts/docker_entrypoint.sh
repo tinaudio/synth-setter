@@ -12,9 +12,9 @@
 #
 #     Key env vars:
 #       NUM_SHARDS          Number of shards to generate (REQUIRED).
-#       SHARD_SIZE          Samples per shard (default: 10000).
-#       PARAM_SPEC          Param spec to use (default: surge_simple).
-#       OUTPUT_DIR          Local output directory (default: data/surge_simple).
+#       SHARD_SIZE          Samples per shard (REQUIRED, Makefile default: 10000).
+#       PARAM_SPEC          Param spec to use (REQUIRED, Makefile default: surge_simple).
+#       OUTPUT_DIR          Local output directory (REQUIRED, Makefile default: data/surge_simple).
 #       R2_PREFIX           R2 path prefix (e.g. runs/20260310-143022-a3f2b1).
 #                           REQUIRED when R2_BUCKET is set.
 #       R2_BUCKET           R2 bucket name. Read from env var baked at build time.
@@ -34,9 +34,9 @@
 #       R2_PREFIX           R2 path prefix where shards live (REQUIRED).
 #                           Shards are expected at {R2_PREFIX}/shards/.
 #       R2_BUCKET           R2 bucket name (REQUIRED).
-#       OUTPUT_DIR          Local output directory (default: data/surge_simple).
-#       VAL_SHARDS          Number of shards for validation (default: 1).
-#       TEST_SHARDS         Number of shards for test (default: 1).
+#       OUTPUT_DIR          Local output directory (REQUIRED, Makefile default: data/surge_simple).
+#       VAL_SHARDS          Number of shards for validation (REQUIRED, Makefile default: 1).
+#       TEST_SHARDS         Number of shards for test (REQUIRED, Makefile default: 1).
 #       SKIP_UPLOAD         If "1", skip uploading results back to R2.
 #       DRY_RUN_UPLOAD      If "1", passes --dry-run to rclone upload.
 #       IDLE_AFTER          If "1", drop to bash after completion.
@@ -48,12 +48,12 @@
 #     Key env vars:
 #       R2_DATASET_PATH     R2 path to dataset dir (e.g. runs/surge_simple/abc1234).
 #                           REQUIRED.
-#       PARAM_SPEC          Param spec used when the dataset was generated.
-#                           Determines the Hydra data config (default: surge_simple).
-#                           Valid values: surge_simple, surge_xt
-#       OUTPUT_DIR          Local path to download dataset into
-#                           (default: $APP_DIR/data/surge_simple)
-#       TRAIN_ARGS          Args passed to src/train.py (default: experiment=surge/flow_simple)
+#       PARAM_SPEC          Param spec used when the dataset was generated (REQUIRED,
+#                           Makefile default: surge_simple). Valid: surge_simple, surge_xt
+#       OUTPUT_DIR          Local path to download dataset into (REQUIRED,
+#                           Makefile default: data/surge_simple).
+#       TRAIN_ARGS          Args passed to src/train.py (REQUIRED,
+#                           Makefile default: experiment=surge/flow_simple).
 #       R2_BUCKET           R2 bucket name. Read from env var baked at build time.
 #       IDLE_AFTER          If "1", drop to bash after completion (default: 0).
 #
@@ -135,9 +135,9 @@ case "$MODE" in
   # ---------------------------------------------------------------------------
   generate-shards)
     NUM_SHARDS="${NUM_SHARDS:?ERROR: NUM_SHARDS is required for MODE=generate-shards}"
-    SHARD_SIZE="${SHARD_SIZE:-10000}"
-    PARAM_SPEC="${PARAM_SPEC:-surge_simple}"
-    OUTPUT_DIR="${OUTPUT_DIR:-data/surge_simple}"
+    SHARD_SIZE="${SHARD_SIZE:?ERROR: SHARD_SIZE is required for MODE=generate-shards}"
+    PARAM_SPEC="${PARAM_SPEC:?ERROR: PARAM_SPEC is required for MODE=generate-shards}"
+    OUTPUT_DIR="${OUTPUT_DIR:?ERROR: OUTPUT_DIR is required for MODE=generate-shards}"
     PLUGIN_PATH="${PLUGIN_PATH:-/usr/lib/vst3/Surge XT.vst3}"
     DRY_RUN_UPLOAD="${DRY_RUN_UPLOAD:-0}"
 
@@ -214,9 +214,9 @@ case "$MODE" in
   # ---------------------------------------------------------------------------
   finalize-shards)
     R2_PREFIX="${R2_PREFIX:?ERROR: R2_PREFIX is required for MODE=finalize-shards}"
-    OUTPUT_DIR="${OUTPUT_DIR:-data/surge_simple}"
-    VAL_SHARDS="${VAL_SHARDS:-1}"
-    TEST_SHARDS="${TEST_SHARDS:-1}"
+    OUTPUT_DIR="${OUTPUT_DIR:?ERROR: OUTPUT_DIR is required for MODE=finalize-shards}"
+    VAL_SHARDS="${VAL_SHARDS:?ERROR: VAL_SHARDS is required for MODE=finalize-shards}"
+    TEST_SHARDS="${TEST_SHARDS:?ERROR: TEST_SHARDS is required for MODE=finalize-shards}"
     DRY_RUN_UPLOAD="${DRY_RUN_UPLOAD:-0}"
     SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
 
@@ -265,18 +265,12 @@ case "$MODE" in
 
   # ---------------------------------------------------------------------------
   train)
-    PARAM_SPEC="${PARAM_SPEC:-surge_simple}"
+    PARAM_SPEC="${PARAM_SPEC:?ERROR: PARAM_SPEC is required for MODE=train}"
     _set_param_spec_vars "$PARAM_SPEC"
 
-    R2_DATASET_PATH="${R2_DATASET_PATH:-}"
-    OUTPUT_DIR="${OUTPUT_DIR:-${APP_DIR}/data/surge_simple}"
-    TRAIN_ARGS="${TRAIN_ARGS:-experiment=surge/flow_simple trainer.limit_val_batches=10 trainer.max_steps=100000}"
-
-    if [ -z "$R2_DATASET_PATH" ]; then
-      echo "ERROR: MODE=train requires R2_DATASET_PATH to be set." >&2
-      echo "       e.g. docker run -e R2_DATASET_PATH=runs/surge_simple/{SHA}-YYYYMMDD-HHMMSS ..." >&2
-      exit 1
-    fi
+    R2_DATASET_PATH="${R2_DATASET_PATH:?ERROR: R2_DATASET_PATH is required for MODE=train}"
+    OUTPUT_DIR="${OUTPUT_DIR:?ERROR: OUTPUT_DIR is required for MODE=train}"
+    TRAIN_ARGS="${TRAIN_ARGS:?ERROR: TRAIN_ARGS is required for MODE=train}"
 
     if [ -z "$R2_BUCKET" ]; then
       echo "ERROR: R2_BUCKET is not set. Cannot download dataset from R2." >&2
