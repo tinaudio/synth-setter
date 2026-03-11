@@ -199,26 +199,17 @@ To use a GPU, add `--gpus all` to the `docker run` command (or override `DOCKER_
 > **See [docs/pipeline.md](docs/pipeline.md)** for a full architecture diagram, file inventory,
 > plug-and-play command examples, and metadata traceability documentation.
 
-The entrypoint script (`scripts/docker_entrypoint.sh`) dispatches on the `MODE` environment variable:
+The entrypoint script (`scripts/docker_entrypoint.sh`) dispatches on the `MODE` environment variable (required):
 
-| `MODE`               | What happens                                                                                                                                                          |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `generate` (default) | Generates Surge XT dataset splits, computes normalization stats, writes `metadata.json`, uploads to R2. Exits cleanly by default; set `IDLE_AFTER=1` to stay in bash. |
-| `train`              | Downloads a dataset from R2, then runs `python src/train.py`. Exits cleanly by default; set `IDLE_AFTER=1` to stay in bash.                                           |
-| `shell`              | Drops directly to bash (for debugging / manual runs).                                                                                                                 |
+| `MODE`            | What happens                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `generate-shards` | Generates split-agnostic HDF5 shards and uploads to R2. Designed for massively parallel cloud execution (e.g. RunPod).   |
+| `finalize-shards` | Downloads shards from R2, reshards into train/val/test splits, computes normalization stats, uploads results back to R2. |
+| `train`           | Downloads a dataset from R2, then runs `python src/train.py`. Set `IDLE_AFTER=1` to stay in bash.                        |
+| `shell`           | Drops directly to bash (for debugging / manual runs).                                                                    |
 
 ```bash
-# --- GENERATE DATASET (vast.ai instance A) ---
-docker run --rm --gpus all --init \
-  -e MODE=generate \
-  -e TRAIN_SAMPLES=50000 \
-  -e VAL_SAMPLES=5000 \
-  -e TEST_SAMPLES=5000 \
-  tinaudio/perm:<base-image-tag>-dev-snapshot-<commit-sha>
-# Uploads to r2:<bucket>/runs/surge_simple/<sha>/
-# Add -e IDLE_AFTER=1 to stay in bash for inspection after completion
-
-# --- TRAIN (vast.ai instance B, same image) ---
+# --- TRAIN (vast.ai instance, same image) ---
 docker run --rm --gpus all --init \
   -e MODE=train \
   -e R2_DATASET_PATH=runs/surge_simple/<commit-sha> \
@@ -226,11 +217,7 @@ docker run --rm --gpus all --init \
   tinaudio/perm:<base-image-tag>-dev-snapshot-<commit-sha>
 
 # --- OR: use Makefile helpers (interactive, GPU) ---
-make docker-run-generate TRAIN_SAMPLES=10000
-make docker-run-train R2_DATASET_PATH=runs/surge_simple/<commit-sha>
-
-# --- Run a specific pinned image tag instead of :dev ---
-make docker-run-generate IMAGE_TAG=<base-image-tag>-dev-snapshot-<commit-sha> TRAIN_SAMPLES=10000
+make docker-run-gpu-train R2_DATASET_PATH=runs/surge_simple/<commit-sha>
 ```
 
 Dataset files are uploaded to `r2:<bucket>/runs/<param_spec>/<git_sha>/` and a `metadata.json`
@@ -239,28 +226,25 @@ records the git SHA, param spec, sample counts, generation parameters, and code 
 
 ### Makefile variable reference
 
-| Variable                | Default                                                       | Description                                                                                    |
-| ----------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `GIT_REF`               | _(required)_                                                  | Commit SHA / tag / branch to clone or bake into the image                                      |
-| `GIT_PAT`               | _(required)_                                                  | GitHub PAT with repo read access (passed as a BuildKit secret)                                 |
-| `R2_ACCESS_KEY_ID`      | _(required for R2)_                                           | Cloudflare R2 API token access key (BuildKit secret)                                           |
-| `R2_SECRET_ACCESS_KEY`  | _(required for R2)_                                           | Cloudflare R2 API token secret (BuildKit secret)                                               |
-| `R2_ENDPOINT`           | _(required for R2)_                                           | R2 S3 endpoint URL (BuildKit secret)                                                           |
-| `R2_BUCKET`             | _(required for R2)_                                           | R2 bucket name (baked as ENV var)                                                              |
-| `DOCKER_FILE`           | `docker/ubuntu22_04/Dockerfile`                               | Path to the Dockerfile                                                                         |
-| `DOCKER_IMAGE`          | `tinaudio/perm`                                               | Image name                                                                                     |
-| `DOCKER_BASE_IMAGE`     | `vastai/base-image:cuda-12.8.1-cudnn-devel-ubuntu22.04-py310` | Base Docker image                                                                              |
-| `DOCKER_BUILD_MODE`     | `prebuilt`                                                    | `source` (build Surge from source) or `prebuilt` (use .deb)                                    |
-| `DOCKER_TARGETPLATFORM` | `linux/amd64`                                                 | `linux/amd64` or `linux/arm64`                                                                 |
-| `DOCKER_TORCH_IDX`      | `https://download.pytorch.org/whl/cu128`                      | PyTorch wheel index URL                                                                        |
-| `DOCKER_BUILD_FLAGS`    | _(empty)_                                                     | Extra flags passed verbatim to `docker build`                                                  |
-| `USE_CLOUD_BUILDER`     | `false`                                                       | Set to `1` to use the remote cloud builder and push the result                                 |
-| `TRAIN_SAMPLES`         | `10000`                                                       | Train split size for `docker-run-generate` / `docker-ci-generate`                              |
-| `VAL_SAMPLES`           | `1000`                                                        | Val split size for `docker-run-generate` / `docker-ci-generate`                                |
-| `TEST_SAMPLES`          | `1000`                                                        | Test split size for `docker-run-generate` / `docker-ci-generate`                               |
-| `R2_DATASET_PATH`       | _(required for train)_                                        | R2 path to download for `docker-run-train` / `docker-ci-train`                                 |
-| `IMAGE_TAG`             | `dev`                                                         | Image tag for all `docker-run-*` and `docker-ci-*` targets. Override to run a pinned snapshot. |
-| `IDLE_AFTER`            | `0`                                                           | Set to `1` to drop to bash after generate/train completes (interactive targets only).          |
+| Variable                | Default                                                       | Description                                                                  |
+| ----------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `GIT_REF`               | _(required)_                                                  | Commit SHA / tag / branch to clone or bake into the image                    |
+| `GIT_PAT`               | _(required)_                                                  | GitHub PAT with repo read access (passed as a BuildKit secret)               |
+| `R2_ACCESS_KEY_ID`      | _(required for R2)_                                           | Cloudflare R2 API token access key (BuildKit secret)                         |
+| `R2_SECRET_ACCESS_KEY`  | _(required for R2)_                                           | Cloudflare R2 API token secret (BuildKit secret)                             |
+| `R2_ENDPOINT`           | _(required for R2)_                                           | R2 S3 endpoint URL (BuildKit secret)                                         |
+| `R2_BUCKET`             | _(required for R2)_                                           | R2 bucket name (baked as ENV var)                                            |
+| `DOCKER_FILE`           | `docker/ubuntu22_04/Dockerfile`                               | Path to the Dockerfile                                                       |
+| `DOCKER_IMAGE`          | `tinaudio/perm`                                               | Image name                                                                   |
+| `DOCKER_BASE_IMAGE`     | `vastai/base-image:cuda-12.8.1-cudnn-devel-ubuntu22.04-py310` | Base Docker image                                                            |
+| `DOCKER_BUILD_MODE`     | `prebuilt`                                                    | `source` (build Surge from source) or `prebuilt` (use .deb)                  |
+| `DOCKER_TARGETPLATFORM` | `linux/amd64`                                                 | `linux/amd64` or `linux/arm64`                                               |
+| `DOCKER_TORCH_IDX`      | `https://download.pytorch.org/whl/cu128`                      | PyTorch wheel index URL                                                      |
+| `DOCKER_BUILD_FLAGS`    | _(empty)_                                                     | Extra flags passed verbatim to `docker build`                                |
+| `USE_CLOUD_BUILDER`     | `false`                                                       | Set to `1` to use the remote cloud builder and push the result               |
+| `R2_DATASET_PATH`       | _(required for train)_                                        | R2 path to download for `docker-run-gpu-train`                               |
+| `IMAGE_TAG`             | `dev`                                                         | Image tag for all `docker-run-*` targets. Override to run a pinned snapshot. |
+| `IDLE_AFTER`            | `0`                                                           | Set to `1` to drop to bash after completion (interactive targets only).      |
 
 ### Advanced examples
 

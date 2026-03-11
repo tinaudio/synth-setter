@@ -71,7 +71,7 @@ train: ## Train the model
 #   DOCKER_BUILD_FLAGS  Extra flags passed verbatim to docker buildx build.
 #   IMAGE_TAG           Tag to use for docker-run-* and docker-ci-* targets (default: dev)
 #                       e.g. IMAGE_TAG=dev-snapshot-<sha> to run a specific pinned image.
-#   IDLE_AFTER          Set to 1 to drop to bash after generate/train completes (default: 0).
+#   IDLE_AFTER          Set to 1 to drop to bash after completion (default: 0).
 #                       Useful for inspection on vast.ai. Not forwarded by docker-ci-* targets.
 #
 # Quick-start examples:
@@ -85,11 +85,8 @@ train: ## Train the model
 #     R2_ACCESS_KEY_ID=<key> R2_SECRET_ACCESS_KEY=<secret> \
 #     R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com R2_BUCKET=<bucket>
 #
-#   # Run dataset generation (MODE=generate by default)
-#   make docker-run-generate TRAIN_SAMPLES=50000
-#
 #   # Download dataset from R2 and train
-#   make docker-run-train R2_DATASET_PATH=runs/surge_simple/<sha>
+#   make docker-run-gpu-train R2_DATASET_PATH=runs/surge_simple/<sha>
 #
 #   # Run dev image with local code mounted
 #   make docker-run-dev
@@ -199,9 +196,6 @@ docker-run-dev: ## Run dev image with local source mounted (IMAGE_TAG=dev by def
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
 # Dataset generation / training defaults (override on the command line)
-TRAIN_SAMPLES    ?= 10000
-VAL_SAMPLES      ?= 1000
-TEST_SAMPLES     ?= 1000
 PARAM_SPEC       ?= surge_simple
 OUTPUT_DIR       ?= data/surge_simple
 # R2_DATASET_PATH: set when using docker-run-train / docker-ci-train
@@ -222,18 +216,6 @@ IDLE_AFTER       ?= 0
 # Interactive run targets — for use on vast.ai or local dev with GPU.
 # These include -it (TTY) and --gpus all. Use docker-ci-* for CI or scripts.
 # ---------------------------------------------------------------------------
-
-docker-run-generate: ## Generate dataset + upload to R2 (MODE=generate, GPU). IDLE_AFTER=1 to stay in bash.
-	docker run --rm -it --gpus all --init \
-		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
-		-e MODE=generate \
-		-e PARAM_SPEC=$(PARAM_SPEC) \
-		-e TRAIN_SAMPLES=$(TRAIN_SAMPLES) \
-		-e VAL_SAMPLES=$(VAL_SAMPLES) \
-		-e TEST_SAMPLES=$(TEST_SAMPLES) \
-		-e OUTPUT_DIR=$(OUTPUT_DIR) \
-		-e IDLE_AFTER=$(IDLE_AFTER) \
-		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
 docker-run-gpu-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_AFTER=1 to stay in bash.
 	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-run-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi

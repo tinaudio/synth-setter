@@ -58,35 +58,6 @@ ______________________________________________________________________
     ├── prod                   (fully baked production image)
     └── test                   VST load check + pytest -k "not slow"
 
-━━━ GENERATE (MODE=generate) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  docker run -e MODE=generate tinaudio/perm:dev
-    │
-    └── scripts/docker_entrypoint.sh
-          │  detects .git → sets git_ref_source, git_dirty
-          │  validates PARAM_SPEC (surge_simple | surge_xt)
-          │
-          └── scripts/run_dataset_pipeline.py::run_pipeline()
-                │
-                ├── [×3 splits: train / val / test]
-                │     scripts/run-linux-vst-headless.sh
-                │       └── src/data/vst/generate_vst_dataset.py
-                │             └── Surge XT VST (headless X11/xvfb)
-                │                   → {split}.h5
-                │                       audio      (float16, Blosc2)
-                │                       mel_spec   (float32, Blosc2)
-                │                       param_array (float32, Blosc2)
-                │
-                ├── scripts/get_dataset_stats.py
-                │     reads train.h5 → stats.npz (mean, std for normalization)
-                │
-                ├── _write_metadata()
-                │     → metadata.json  (see Metadata section below)
-                │
-                └── src/data/uploader.py::RcloneUploader.upload()
-                      rclone copy --checksum --progress
-                      → r2:<bucket>/runs/<param_spec>/<git_sha>/
-
 ━━━ TRAIN (MODE=train) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   docker run -e MODE=train -e R2_DATASET_PATH=runs/surge_simple/<sha> ...
@@ -125,7 +96,7 @@ ______________________________________________________________________
 | `Makefile`                             | Build + run targets                                       | Developer, CI                     |
 | `docker/ubuntu22_04/Dockerfile`        | Multi-stage image build                                   | `make docker-build-*`             |
 | `scripts/docker_entrypoint.sh`         | Container entry point; dispatches on `MODE`               | `docker run`                      |
-| `scripts/run_dataset_pipeline.py`      | Orchestrates generation pipeline (testable, VST-agnostic) | `docker_entrypoint.sh`            |
+| `scripts/run_dataset_pipeline.py`      | Orchestrates generation pipeline (testable, VST-agnostic) | standalone CLI                    |
 | `src/data/vst/generate_vst_dataset.py` | Renders audio + spectrograms via VST plugin               | `run_dataset_pipeline.py`         |
 | `scripts/run-linux-vst-headless.sh`    | Headless X11/xvfb wrapper for VST                         | `run_dataset_pipeline.py`         |
 | `scripts/get_dataset_stats.py`         | Computes mean/std normalization stats                     | `run_dataset_pipeline.py`         |
@@ -143,12 +114,10 @@ ______________________________________________________________________
 A frequent source of confusion is the difference between the `docker-run-*` and `docker-ci-*` Makefile
 targets. They use **identical environment variables** — the only difference is the `docker run` flags:
 
-| Target                | TTY   | GPU          | IDLE_AFTER  | Use when                            |
-| --------------------- | ----- | ------------ | ----------- | ----------------------------------- |
-| `docker-run-generate` | `-it` | `--gpus all` | forwarded   | vast.ai or local interactive run    |
-| `docker-run-train`    | `-it` | `--gpus all` | forwarded   | vast.ai or local interactive run    |
-| `docker-ci-generate`  | none  | none         | hardcoded 0 | CI runners, non-interactive scripts |
-| `docker-ci-train`     | none  | none         | hardcoded 0 | CI runners, non-interactive scripts |
+| Target                 | TTY   | GPU          | IDLE_AFTER  | Use when                            |
+| ---------------------- | ----- | ------------ | ----------- | ----------------------------------- |
+| `docker-run-gpu-train` | `-it` | `--gpus all` | forwarded   | vast.ai or local interactive run    |
+| `docker-run-cpu-train` | none  | none         | hardcoded 0 | CI runners, non-interactive scripts |
 
 All four targets also support `$(DOCKER_RUN_FLAGS)`, which is populated when you pass
 `USE_LOCAL_WORKSPACE=1`. This mounts your local source tree and overrides the entrypoint so
@@ -207,43 +176,26 @@ make docker-build-dev-live \
 # Your local code is live-mounted inside the container.
 # Edit files on the host; changes appear immediately in the container.
 make docker-run-dev USE_LOCAL_WORKSPACE=1
-
-# Run generate with your local source (useful when iterating on pipeline code)
-make docker-run-generate USE_LOCAL_WORKSPACE=1 TRAIN_SAMPLES=5 VAL_SAMPLES=2 TEST_SAMPLES=2
 ```
 
-### 3. Generate a dataset (tiny smoke run)
-
-```bash
-# Exits cleanly after completion (good for automation)
-make docker-run-generate TRAIN_SAMPLES=5 VAL_SAMPLES=2 TEST_SAMPLES=2
-
-# Stay in bash after completion for inspection
-make docker-run-generate TRAIN_SAMPLES=5 VAL_SAMPLES=2 TEST_SAMPLES=2 IDLE_AFTER=1
-
-# Full production run
-make docker-run-generate TRAIN_SAMPLES=50000 VAL_SAMPLES=5000 TEST_SAMPLES=5000
-# Uploads to r2:<bucket>/runs/surge_simple/<git-sha>/
-```
-
-### 4. Train from an R2 dataset
+### 3. Train from an R2 dataset (or local)
 
 ```bash
 # Download dataset and run full training
-make docker-run-train R2_DATASET_PATH=runs/surge_simple/<commit-sha>
+make docker-run-gpu-train R2_DATASET_PATH=runs/surge_simple/<commit-sha>
 
 # Override the experiment config
-make docker-run-train \
+make docker-run-gpu-train \
   R2_DATASET_PATH=runs/surge_simple/<commit-sha> \
   TRAIN_ARGS="experiment=surge/flow_simple trainer.max_epochs=50"
 
 # 1-step plumbing check (no GPU needed)
-make docker-run-train \
+make docker-run-cpu-train \
   R2_DATASET_PATH=runs/surge_simple/<commit-sha> \
   TRAIN_ARGS="experiment=surge/flow_simple trainer.max_steps=1"
 ```
 
-### 5. Build a self-contained snapshot image (for vast.ai)
+### 4. Build a self-contained snapshot image (for vast.ai / RunPod)
 
 ```bash
 # Bakes source at <commit-sha> — run anywhere without mounting anything.
@@ -256,24 +208,21 @@ make docker-build-dev-snapshot \
   R2_BUCKET=$R2_BUCKET
 
 # Run the snapshot image (no volume mount needed)
-make docker-run-generate \
+make docker-run-gpu-train \
   IMAGE_TAG=<base-image-tag>-dev-snapshot-<commit-sha> \
-  TRAIN_SAMPLES=50000
+  R2_DATASET_PATH=runs/surge_simple/<commit-sha>
 ```
 
-### 6. Local CI dry-run (no TTY, no GPU — mirrors what CI does)
+### 5. Local CI dry-run (no TTY, no GPU — mirrors what CI does)
 
 ```bash
-# Simulate the CI generate job locally
-make docker-ci-generate TRAIN_SAMPLES=5 VAL_SAMPLES=2 TEST_SAMPLES=2
-
 # Simulate the CI train job locally
-make docker-ci-train \
+make docker-run-cpu-train \
   R2_DATASET_PATH=runs/surge_simple/<commit-sha> \
   TRAIN_ARGS="experiment=surge/flow_simple trainer.max_steps=1"
 ```
 
-### 7. Run unit tests
+### 6. Run unit tests
 
 ```bash
 # Fast pipeline tests (no VST, no R2, no Docker)

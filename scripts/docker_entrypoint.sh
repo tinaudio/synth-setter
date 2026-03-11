@@ -2,26 +2,7 @@
 # =============================================================================
 # Docker entrypoint for synth-permutations images.
 #
-# Dispatches based on the MODE environment variable:
-#
-#   MODE=generate (default)
-#     Generate Surge XT dataset splits and upload to Cloudflare R2.
-#     By default the container exits cleanly after completion.
-#     Set IDLE_AFTER=1 to drop to a bash shell for inspection instead.
-#
-#     Key env vars (all have defaults):
-#       PARAM_SPEC          Param spec to use (default: surge_simple)
-#                           Valid values: surge_simple, surge_xt
-#       TRAIN_SAMPLES       Number of train samples (default: 10000)
-#       VAL_SAMPLES         Number of val samples   (default: 1000)
-#       TEST_SAMPLES        Number of test samples  (default: 1000)
-#       OUTPUT_DIR          Local output directory  (default: data/surge_simple)
-#       R2_PREFIX           R2 path prefix (e.g. runs/surge_simple/abc1234).
-#                           Auto-derived from PARAM_SPEC + SYNTH_PERMUTATIONS_GIT_REF
-#                           if not set.
-#       R2_BUCKET           R2 bucket name. Read from env var baked at build time.
-#       DRY_RUN_UPLOAD      If "1", passes --dry-run to rclone (no actual upload).
-#       IDLE_AFTER          If "1", drop to bash after completion (default: 0).
+# Dispatches based on the MODE environment variable (REQUIRED, no default):
 #
 #   MODE=generate-shards
 #     Generate split-agnostic HDF5 shards and upload to R2.
@@ -62,7 +43,6 @@
 #
 #   MODE=train
 #     Download a dataset from R2, then run training.
-#     By default the container exits cleanly after training completes.
 #     Set IDLE_AFTER=1 to drop to a bash shell for inspection instead.
 #
 #     Key env vars:
@@ -106,7 +86,7 @@ if [ "${PULL_LATEST:-0}" = "1" ]; then
   exec "$0" "$@"
 fi
 
-MODE="${MODE:-generate}"
+MODE="${MODE:?ERROR: MODE is required. Valid: generate-shards, finalize-shards, train, shell}"
 R2_BUCKET="${R2_BUCKET:-}"
 IDLE_AFTER="${IDLE_AFTER:-0}"
 
@@ -118,32 +98,20 @@ IDLE_AFTER="${IDLE_AFTER:-0}"
 #             (prod or dev-snapshot image via tarball). No .git present.
 #             SYNTH_PERMUTATIONS_GIT_REF is authoritative.
 #   "local" — source was mounted or git-cloned at runtime (dev-live image,
-#             or dev-snapshot via git clone). .git is present; git_sha and
-#             git_dirty reflect the actual runtime state of the working tree.
-#
-# git_dirty:
-#   "true"  — working tree had uncommitted changes at generation time.
-#   "false" — working tree was clean.
-#   ""      — could not be determined (passed as --git-dirty omitted).
+#             or dev-snapshot via git clone). .git is present; git_sha
+#             reflects the actual runtime state of the working tree.
 # ---------------------------------------------------------------------------
 GIT_SHA="${SYNTH_PERMUTATIONS_GIT_REF:-unknown}"
 GIT_REF_SOURCE="unknown"
-GIT_DIRTY_FLAG=""
 
 if git -C "$APP_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   # .git present — dev-live (mounted repo) or dev-snapshot (full git clone)
   GIT_REF_SOURCE="local"
   RUNTIME_SHA="$(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
   GIT_SHA="$RUNTIME_SHA"
-  if git -C "$APP_DIR" diff --quiet HEAD 2>/dev/null; then
-    GIT_DIRTY_FLAG="--git-dirty false"
-  else
-    GIT_DIRTY_FLAG="--git-dirty true"
-  fi
 else
   # No .git — source baked as tarball (prod or dev-snapshot via tarball)
   GIT_REF_SOURCE="baked"
-  GIT_DIRTY_FLAG="--git-dirty false"
 fi
 
 # ---------------------------------------------------------------------------
@@ -164,66 +132,6 @@ _set_param_spec_vars() {
 }
 
 case "$MODE" in
-  # ---------------------------------------------------------------------------
-  generate)
-    PARAM_SPEC="${PARAM_SPEC:-surge_simple}"
-    _set_param_spec_vars "$PARAM_SPEC"
-
-    TRAIN_SAMPLES="${TRAIN_SAMPLES:-10000}"
-    VAL_SAMPLES="${VAL_SAMPLES:-1000}"
-    TEST_SAMPLES="${TEST_SAMPLES:-1000}"
-    OUTPUT_DIR="${OUTPUT_DIR:-data/surge_simple}"
-    GIT_SHA="${SYNTH_PERMUTATIONS_GIT_REF:-unknown}"
-    # Default R2 prefix encodes param_spec + git sha for traceability
-    R2_PREFIX="${R2_PREFIX:-runs/${PARAM_SPEC}/${GIT_SHA}-$(date +%Y%m%d-%H%M%S)}"
-    DRY_RUN_UPLOAD="${DRY_RUN_UPLOAD:-0}"
-
-    echo "=== synth-permutations: dataset generation ==="
-    echo "  param_spec    : $PARAM_SPEC"
-    echo "  train_samples : $TRAIN_SAMPLES"
-    echo "  val_samples   : $VAL_SAMPLES"
-    echo "  test_samples  : $TEST_SAMPLES"
-    echo "  output_dir    : $OUTPUT_DIR"
-    echo "  r2_prefix     : $R2_PREFIX"
-    echo "  r2_bucket     : ${R2_BUCKET:-<not set — upload will be skipped>}"
-    echo "  dry_run       : $DRY_RUN_UPLOAD"
-    echo "  git_sha       : $GIT_SHA"
-    echo "  git_ref_source: $GIT_REF_SOURCE"
-    echo "  git_dirty     : ${GIT_DIRTY_FLAG:-<unknown>}"
-    echo ""
-
-    DRY_RUN_FLAG=""
-    if [ "$DRY_RUN_UPLOAD" = "1" ]; then
-      DRY_RUN_FLAG="--dry-run-upload"
-    fi
-
-    R2_ARGS=""
-    if [ -n "$R2_BUCKET" ]; then
-      R2_ARGS="--r2-bucket $R2_BUCKET --r2-prefix $R2_PREFIX"
-    fi
-
-    chmod +x scripts/run-linux-vst-headless.sh
-
-    # shellcheck disable=SC2086
-    python scripts/run_dataset_pipeline.py \
-      --param-spec "$PARAM_SPEC" \
-      --train-samples "$TRAIN_SAMPLES" \
-      --val-samples "$VAL_SAMPLES" \
-      --test-samples "$TEST_SAMPLES" \
-      --output-dir "$OUTPUT_DIR" \
-      --git-ref-source "$GIT_REF_SOURCE" \
-      $GIT_DIRTY_FLAG \
-      $R2_ARGS \
-      $DRY_RUN_FLAG
-
-    echo ""
-    echo "=== Generation complete. ==="
-    if [ "$IDLE_AFTER" = "1" ]; then
-      echo "IDLE_AFTER=1: dropping to bash for inspection."
-      exec bash
-    fi
-    ;;
-
   # ---------------------------------------------------------------------------
   generate-shards)
     NUM_SHARDS="${NUM_SHARDS:?ERROR: NUM_SHARDS is required for MODE=generate-shards}"
@@ -412,7 +320,7 @@ case "$MODE" in
 
   # ---------------------------------------------------------------------------
   *)
-    echo "ERROR: Unknown MODE='$MODE'. Valid values: generate, generate-shards, finalize-shards, train, shell." >&2
+    echo "ERROR: Unknown MODE='$MODE'. Valid values: generate-shards, finalize-shards, train, shell." >&2
     exit 1
     ;;
 esac
