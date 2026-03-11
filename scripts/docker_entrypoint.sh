@@ -347,7 +347,7 @@ case "$MODE" in
 
     R2_DATASET_PATH="${R2_DATASET_PATH:-}"
     OUTPUT_DIR="${OUTPUT_DIR:-${APP_DIR}/data/surge_simple}"
-    TRAIN_ARGS="${TRAIN_ARGS:-experiment=surge/flow_simple}"
+    TRAIN_ARGS="${TRAIN_ARGS:-experiment=surge/flow_simple trainer.limit_val_batches=10 trainer.max_steps=100000}"
 
     if [ -z "$R2_DATASET_PATH" ]; then
       echo "ERROR: MODE=train requires R2_DATASET_PATH to be set." >&2
