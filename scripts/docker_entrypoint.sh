@@ -23,6 +23,27 @@
 #       DRY_RUN_UPLOAD      If "1", passes --dry-run to rclone (no actual upload).
 #       IDLE_AFTER          If "1", drop to bash after completion (default: 0).
 #
+#   MODE=generate-shards
+#     Generate split-agnostic HDF5 shards and upload to R2.
+#     Designed for massively parallel cloud execution (e.g. RunPod).
+#     Each container generates NUM_SHARDS shards with a unique instance ID
+#     derived from RUNPOD_POD_ID (or auto-generated UUID).
+#
+#     Key env vars:
+#       NUM_SHARDS          Number of shards to generate (REQUIRED).
+#       SHARD_SIZE          Samples per shard (default: 10000).
+#       PARAM_SPEC          Param spec to use (default: surge_simple).
+#       OUTPUT_DIR          Local output directory (default: data/surge_simple).
+#       R2_PREFIX           R2 path prefix (e.g. runs/20260310-143022-a3f2b1).
+#                           REQUIRED when R2_BUCKET is set.
+#       R2_BUCKET           R2 bucket name. Read from env var baked at build time.
+#       INSTANCE_ID         Worker ID baked into shard filenames.
+#                           Auto-derived from RUNPOD_POD_ID if not set.
+#       PARALLEL            "1" (default) to run shards concurrently, "0" for sequential.
+#       MAX_WORKERS         Cap on concurrent workers (default: auto from CPU count).
+#       DRY_RUN_UPLOAD      If "1", passes --dry-run to rclone.
+#       IDLE_AFTER          If "1", drop to bash after completion.
+#
 #   MODE=train
 #     Download a dataset from R2, then run training.
 #     By default the container exits cleanly after training completes.
@@ -173,6 +194,85 @@ case "$MODE" in
     ;;
 
   # ---------------------------------------------------------------------------
+  generate-shards)
+    NUM_SHARDS="${NUM_SHARDS:?ERROR: NUM_SHARDS is required for MODE=generate-shards}"
+    SHARD_SIZE="${SHARD_SIZE:-10000}"
+    PARAM_SPEC="${PARAM_SPEC:-surge_simple}"
+    OUTPUT_DIR="${OUTPUT_DIR:-data/surge_simple}"
+    PLUGIN_PATH="${PLUGIN_PATH:-/usr/lib/vst3/Surge XT.vst3}"
+    DRY_RUN_UPLOAD="${DRY_RUN_UPLOAD:-0}"
+
+    # Auto-derive instance ID: prefer RUNPOD_POD_ID, fall back to auto-UUID
+    INSTANCE_ID="${INSTANCE_ID:-${RUNPOD_POD_ID:-}}"
+    INSTANCE_ID_FLAG=""
+    if [ -n "$INSTANCE_ID" ]; then
+      INSTANCE_ID_FLAG="--instance-id $INSTANCE_ID"
+    fi
+
+    PARALLEL_FLAG="--parallel"
+    if [ "${PARALLEL:-1}" = "0" ]; then
+      PARALLEL_FLAG=""
+    fi
+
+    MAX_WORKERS_FLAG=""
+    if [ -n "${MAX_WORKERS:-}" ]; then
+      MAX_WORKERS_FLAG="--max-workers $MAX_WORKERS"
+    fi
+
+    R2_ARGS=""
+    if [ -n "$R2_BUCKET" ]; then
+      R2_PREFIX="${R2_PREFIX:?ERROR: R2_PREFIX is required when R2_BUCKET is set}"
+      R2_ARGS="--r2-bucket $R2_BUCKET --r2-prefix $R2_PREFIX"
+    else
+      R2_ARGS="--local"
+    fi
+
+    DRY_RUN_FLAG=""
+    if [ "$DRY_RUN_UPLOAD" = "1" ]; then
+      DRY_RUN_FLAG="--dry-run-upload"
+    fi
+
+    echo "=== synth-permutations: shard generation ==="
+    echo "  num_shards    : $NUM_SHARDS"
+    echo "  shard_size    : $SHARD_SIZE"
+    echo "  param_spec    : $PARAM_SPEC"
+    echo "  output_dir    : $OUTPUT_DIR"
+    echo "  instance_id   : ${INSTANCE_ID:-<auto>}"
+    echo "  parallel      : ${PARALLEL:-1}"
+    echo "  max_workers   : ${MAX_WORKERS:-<auto>}"
+    echo "  r2_prefix     : ${R2_PREFIX:-<not set>}"
+    echo "  r2_bucket     : ${R2_BUCKET:-<not set — local only>}"
+    echo "  plugin_path   : $PLUGIN_PATH"
+    echo "  dry_run       : $DRY_RUN_UPLOAD"
+    echo "  git_sha       : $GIT_SHA"
+    echo "  git_ref_source: $GIT_REF_SOURCE"
+    echo ""
+
+    chmod +x scripts/run-linux-vst-headless.sh
+
+    # shellcheck disable=SC2086
+    python scripts/generate_shards.py \
+      --num-shards "$NUM_SHARDS" \
+      --shard-size "$SHARD_SIZE" \
+      --output-dir "$OUTPUT_DIR" \
+      --param-spec "$PARAM_SPEC" \
+      --plugin-path "$PLUGIN_PATH" \
+      --headless \
+      $PARALLEL_FLAG \
+      $MAX_WORKERS_FLAG \
+      $INSTANCE_ID_FLAG \
+      $R2_ARGS \
+      $DRY_RUN_FLAG
+
+    echo ""
+    echo "=== Shard generation complete. ==="
+    if [ "$IDLE_AFTER" = "1" ]; then
+      echo "IDLE_AFTER=1: dropping to bash for inspection."
+      exec bash
+    fi
+    ;;
+
+  # ---------------------------------------------------------------------------
   train)
     PARAM_SPEC="${PARAM_SPEC:-surge_simple}"
     _set_param_spec_vars "$PARAM_SPEC"
@@ -228,7 +328,7 @@ case "$MODE" in
 
   # ---------------------------------------------------------------------------
   *)
-    echo "ERROR: Unknown MODE='$MODE'. Valid values: generate, train, shell." >&2
+    echo "ERROR: Unknown MODE='$MODE'. Valid values: generate, generate-shards, train, shell." >&2
     exit 1
     ;;
 esac

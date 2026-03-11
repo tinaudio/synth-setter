@@ -269,3 +269,48 @@ docker-ci-train: ## CI: download dataset from R2 and train (no TTY, no GPU). Mir
 		-e TRAIN_ARGS="$(TRAIN_ARGS)" \
 		-e IDLE_AFTER=0 \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
+
+# =====================================================================
+# RunPod targets — launch massively parallel shard generation
+#
+# Requires:
+#   pip install runpod click
+#   export RUNPOD_API_KEY=<your-key>
+#
+# Quick-start:
+#   make runpod-launch-dry-run RUNPOD_IMAGE=tinaudio/perm:dev-snapshot-<sha>
+#   make runpod-launch RUNPOD_IMAGE=tinaudio/perm:dev-snapshot-<sha>
+#   make runpod-stop RUN_ID=<run-id>
+# =====================================================================
+RUNPOD_NUM_PODS       ?= 10
+RUNPOD_SHARDS_PER_POD ?= 10
+RUNPOD_SHARD_SIZE     ?= 10000
+RUNPOD_GPU_TYPE       ?= NVIDIA RTX A5000
+RUNPOD_CLOUD_TYPE     ?= COMMUNITY
+RUNPOD_IMAGE          ?= $(DOCKER_IMAGE):$(IMAGE_TAG)
+RUN_ID                ?=
+
+runpod-launch: ## Launch N RunPod pods for parallel shard generation
+	python scripts/runpod_launch.py \
+		--num-pods $(RUNPOD_NUM_PODS) \
+		--shards-per-pod $(RUNPOD_SHARDS_PER_POD) \
+		--shard-size $(RUNPOD_SHARD_SIZE) \
+		--image $(RUNPOD_IMAGE) \
+		--gpu-type "$(RUNPOD_GPU_TYPE)" \
+		--cloud-type $(RUNPOD_CLOUD_TYPE) \
+		--param-spec $(PARAM_SPEC)
+
+runpod-launch-dry-run: ## Dry run: show what would be launched without creating pods
+	python scripts/runpod_launch.py \
+		--num-pods $(RUNPOD_NUM_PODS) \
+		--shards-per-pod $(RUNPOD_SHARDS_PER_POD) \
+		--shard-size $(RUNPOD_SHARD_SIZE) \
+		--image $(RUNPOD_IMAGE) \
+		--gpu-type "$(RUNPOD_GPU_TYPE)" \
+		--cloud-type $(RUNPOD_CLOUD_TYPE) \
+		--param-spec $(PARAM_SPEC) \
+		--dry-run
+
+runpod-stop: ## Stop all RunPod pods for a given run (requires RUN_ID)
+	@if [ -z "$(RUN_ID)" ]; then echo "ERROR: RUN_ID is required. e.g. make runpod-stop RUN_ID=20260310-143022-a3f2b1"; exit 1; fi
+	python scripts/runpod_stop.py --run-id $(RUN_ID)
