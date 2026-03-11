@@ -44,7 +44,18 @@ def _rclone_download(
     """Download files from an rclone remote to a local directory."""
     local_dir.mkdir(parents=True, exist_ok=True)
     source = f"{rclone_remote}:{bucket}/{remote_path}"
-    cmd = ["rclone", "copy", source, str(local_dir), "--progress", "--checksum"]
+    cmd = [
+        "rclone",
+        "copy",
+        source,
+        str(local_dir),
+        "--progress",
+        "--checksum",
+        "--transfers",
+        "200",
+        "--checkers",
+        "200",
+    ]
     subprocess.run(cmd, check=True)  # nosec B603
 
 

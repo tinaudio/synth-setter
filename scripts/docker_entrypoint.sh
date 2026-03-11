@@ -370,7 +370,7 @@ case "$MODE" in
 
     echo "[download] rclone copy r2:${R2_BUCKET}/${R2_DATASET_PATH} ${OUTPUT_DIR}"
     mkdir -p "$OUTPUT_DIR"
-    rclone copy "r2:${R2_BUCKET}/${R2_DATASET_PATH}" "$OUTPUT_DIR" --progress --checksum
+    rclone copy "r2:${R2_BUCKET}/${R2_DATASET_PATH}" "$OUTPUT_DIR" --progress --checksum --transfers 200 --checkers 200
 
     echo ""
     echo "[train] python src/train.py data=${DATA_CONFIG} data.dataset_root=${OUTPUT_DIR} ${TRAIN_ARGS}"

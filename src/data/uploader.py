@@ -57,7 +57,18 @@ class RcloneUploader:
     def upload(self, local_dir: Path, remote_path: str) -> None:
         """Copy local_dir to r2:<bucket>/<remote_path> using rclone with checksum verification."""
         destination = f"{self.rclone_remote}:{self.bucket}/{remote_path}"
-        cmd = ["rclone", "copy", str(local_dir), destination, "--progress", "--checksum"]
+        cmd = [
+            "rclone",
+            "copy",
+            str(local_dir),
+            destination,
+            "--progress",
+            "--checksum",
+            "--transfers",
+            "200",
+            "--checkers",
+            "200",
+        ]
         if self.dry_run:
             cmd.append("--dry-run")
         subprocess.run(cmd, check=True)  # nosec B603
