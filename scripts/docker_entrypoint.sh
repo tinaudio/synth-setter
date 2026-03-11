@@ -44,6 +44,22 @@
 #       DRY_RUN_UPLOAD      If "1", passes --dry-run to rclone.
 #       IDLE_AFTER          If "1", drop to bash after completion.
 #
+#   MODE=finalize-shards
+#     Download shards from R2, reshard into train/val/test virtual datasets,
+#     compute normalization stats, and upload results back to R2.
+#     This is the aggregation step after distributed shard generation.
+#
+#     Key env vars:
+#       R2_PREFIX           R2 path prefix where shards live (REQUIRED).
+#                           Shards are expected at {R2_PREFIX}/shards/.
+#       R2_BUCKET           R2 bucket name (REQUIRED).
+#       OUTPUT_DIR          Local output directory (default: data/surge_simple).
+#       VAL_SHARDS          Number of shards for validation (default: 1).
+#       TEST_SHARDS         Number of shards for test (default: 1).
+#       SKIP_UPLOAD         If "1", skip uploading results back to R2.
+#       DRY_RUN_UPLOAD      If "1", passes --dry-run to rclone upload.
+#       IDLE_AFTER          If "1", drop to bash after completion.
+#
 #   MODE=train
 #     Download a dataset from R2, then run training.
 #     By default the container exits cleanly after training completes.
@@ -273,6 +289,58 @@ case "$MODE" in
     ;;
 
   # ---------------------------------------------------------------------------
+  finalize-shards)
+    R2_PREFIX="${R2_PREFIX:?ERROR: R2_PREFIX is required for MODE=finalize-shards}"
+    OUTPUT_DIR="${OUTPUT_DIR:-data/surge_simple}"
+    VAL_SHARDS="${VAL_SHARDS:-1}"
+    TEST_SHARDS="${TEST_SHARDS:-1}"
+    DRY_RUN_UPLOAD="${DRY_RUN_UPLOAD:-0}"
+    SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
+
+    if [ -z "$R2_BUCKET" ]; then
+      echo "ERROR: R2_BUCKET is not set. Cannot download/upload shards." >&2
+      exit 1
+    fi
+
+    echo "=== synth-permutations: finalize shards ==="
+    echo "  r2_prefix     : $R2_PREFIX"
+    echo "  r2_bucket     : $R2_BUCKET"
+    echo "  output_dir    : $OUTPUT_DIR"
+    echo "  val_shards    : $VAL_SHARDS"
+    echo "  test_shards   : $TEST_SHARDS"
+    echo "  skip_upload   : $SKIP_UPLOAD"
+    echo "  dry_run       : $DRY_RUN_UPLOAD"
+    echo ""
+
+    DRY_RUN_FLAG=""
+    if [ "$DRY_RUN_UPLOAD" = "1" ]; then
+      DRY_RUN_FLAG="--dry-run-upload"
+    fi
+
+    SKIP_UPLOAD_FLAG=""
+    if [ "$SKIP_UPLOAD" = "1" ]; then
+      SKIP_UPLOAD_FLAG="--skip-upload"
+    fi
+
+    # shellcheck disable=SC2086
+    python scripts/finalize_shards.py \
+      --r2-prefix "$R2_PREFIX" \
+      --r2-bucket "$R2_BUCKET" \
+      --output-dir "$OUTPUT_DIR" \
+      --val-shards "$VAL_SHARDS" \
+      --test-shards "$TEST_SHARDS" \
+      $DRY_RUN_FLAG \
+      $SKIP_UPLOAD_FLAG
+
+    echo ""
+    echo "=== Finalize shards complete. ==="
+    if [ "$IDLE_AFTER" = "1" ]; then
+      echo "IDLE_AFTER=1: dropping to bash for inspection."
+      exec bash
+    fi
+    ;;
+
+  # ---------------------------------------------------------------------------
   train)
     PARAM_SPEC="${PARAM_SPEC:-surge_simple}"
     _set_param_spec_vars "$PARAM_SPEC"
@@ -328,7 +396,7 @@ case "$MODE" in
 
   # ---------------------------------------------------------------------------
   *)
-    echo "ERROR: Unknown MODE='$MODE'. Valid values: generate, generate-shards, train, shell." >&2
+    echo "ERROR: Unknown MODE='$MODE'. Valid values: generate, generate-shards, finalize-shards, train, shell." >&2
     exit 1
     ;;
 esac

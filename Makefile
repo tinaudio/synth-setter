@@ -206,6 +206,10 @@ OUTPUT_DIR       ?= data/surge_simple
 # R2_DATASET_PATH: set when using docker-run-train / docker-ci-train
 R2_DATASET_PATH  ?=
 TRAIN_ARGS       ?= experiment=surge/flow_simple
+# finalize-shards defaults
+VAL_SHARDS       ?= 1
+TEST_SHARDS      ?= 1
+R2_PREFIX        ?=
 # IMAGE_TAG: tag for docker-run-* and docker-ci-* targets. Default is :dev (built by docker-build-dev-live).
 # Override to run a specific pinned image, e.g. IMAGE_TAG=dev-snapshot-<sha>
 IMAGE_TAG        ?= dev
@@ -242,6 +246,18 @@ docker-run-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_
 		-e IDLE_AFTER=$(IDLE_AFTER) \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
+docker-run-finalize: ## Download shards from R2, reshard + stats + upload (MODE=finalize-shards, GPU)
+	@if [ -z "$(R2_PREFIX)" ]; then echo "ERROR: R2_PREFIX is required. e.g. make docker-run-finalize R2_PREFIX=runs/surge_simple/batch42"; exit 1; fi
+	docker run --rm -it --gpus all --init \
+		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
+		-e MODE=finalize-shards \
+		-e R2_PREFIX=$(R2_PREFIX) \
+		-e OUTPUT_DIR=$(OUTPUT_DIR) \
+		-e VAL_SHARDS=$(VAL_SHARDS) \
+		-e TEST_SHARDS=$(TEST_SHARDS) \
+		-e IDLE_AFTER=$(IDLE_AFTER) \
+		$(DOCKER_IMAGE):$(IMAGE_TAG)
+
 # ---------------------------------------------------------------------------
 # CI run targets — identical env vars to docker-run-* but without -it/--gpus.
 # Safe for use in CI runners and non-interactive scripts.
@@ -269,6 +285,18 @@ docker-ci-train: ## CI: download dataset from R2 and train (no TTY, no GPU). Mir
 		-e R2_DATASET_PATH=$(R2_DATASET_PATH) \
 		-e OUTPUT_DIR=$(OUTPUT_DIR) \
 		-e TRAIN_ARGS="$(TRAIN_ARGS)" \
+		-e IDLE_AFTER=0 \
+		$(DOCKER_IMAGE):$(IMAGE_TAG)
+
+docker-ci-finalize: ## CI: finalize shards (no TTY, no GPU). Mirror of docker-run-finalize for CI/scripts.
+	@if [ -z "$(R2_PREFIX)" ]; then echo "ERROR: R2_PREFIX is required. e.g. make docker-ci-finalize R2_PREFIX=runs/surge_simple/batch42"; exit 1; fi
+	docker run --rm --init \
+		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
+		-e MODE=finalize-shards \
+		-e R2_PREFIX=$(R2_PREFIX) \
+		-e OUTPUT_DIR=$(OUTPUT_DIR) \
+		-e VAL_SHARDS=$(VAL_SHARDS) \
+		-e TEST_SHARDS=$(TEST_SHARDS) \
 		-e IDLE_AFTER=0 \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
