@@ -266,7 +266,7 @@ RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/nu
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip
+    python3 python3-pip python3-dev
 RUN python3 --version && \
     python3 -c "import sys; exit(0) if sys.version_info[:2] == (3,10) else exit(1)"
 ENV VIRTUAL_ENV=/venv/main
