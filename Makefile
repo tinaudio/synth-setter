@@ -229,7 +229,7 @@ docker-run-dev: ## Run dev image with local source mounted (IMAGE_TAG=dev by def
 PARAM_SPEC       ?= surge_simple
 SHARD_SIZE       ?= 10000
 OUTPUT_DIR       ?= data/surge_simple
-TRAIN_ARGS       ?= experiment=surge/flow_simple trainer.limit_val_batches=10 trainer.max_steps=100000
+TRAIN_ARGS       ?=
 # finalize-shards defaults
 VAL_SHARDS       ?= 1
 TEST_SHARDS      ?= 1
