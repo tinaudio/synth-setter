@@ -31,3 +31,4 @@ pyloudnorm
 h5py
 hdf5plugin
 dask[distributed]
+runpod==1.8.1
