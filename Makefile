@@ -238,7 +238,7 @@ TEST_SHARDS      ?= 1
 R2_PREFIX        ?=
 # IMAGE_TAG: tag for docker-run-* and docker-ci-* targets. Default is :dev (built by docker-build-dev-live).
 # Override to run a specific pinned image, e.g. IMAGE_TAG=dev-snapshot-<sha>
-IMAGE_TAG        ?= dev
+IMAGE_TAG        ?= dev-snapshot
 # IDLE_AFTER: set to 1 to drop to a bash shell after generate/train completes.
 # Useful for post-run inspection on vast.ai. Not forwarded by docker-ci-* targets.
 IDLE_AFTER       ?= 0
