@@ -88,7 +88,7 @@ STUB
   # Sanitize env: prevent host variables (e.g. from .env) from leaking into tests.
   unset R2_BUCKET R2_PREFIX R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
   unset NUM_SHARDS INSTANCE_ID RUNPOD_POD_ID
-  unset MODE PULL_LATEST GIT_PAT IDLE_AFTER
+  unset MODE PULL_LATEST GIT_PAT IDLE_AFTER SKIP_UPLOAD DRY_RUN_UPLOAD
 
   # Defaults for required config vars (entrypoint no longer has defaults;
   # Makefile is the single source of truth). Tests override/unset as needed.
@@ -291,6 +291,109 @@ STUB
   run_entrypoint
   [ "$status" -eq 0 ]
   [[ "$output" == *"download dataset"* ]]
+}
+
+@test "train: passes hydra.run.dir override to train.py" {
+  export MODE="train"
+  export PARAM_SPEC="surge_simple"
+  export R2_PREFIX="runs/surge_simple/abc123"
+  export R2_BUCKET="my-bucket"
+  export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
+  export TRAIN_ARGS="experiment=surge/flow_simple"
+  mkdir -p "$BATS_TEST_TMPDIR/data"
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"hydra.run.dir=logs/train/runs/surge_simple/abc123"* ]]
+}
+
+@test "train: uploads training output to R2 with wandb run ID" {
+  export MODE="train"
+  export PARAM_SPEC="surge_simple"
+  export R2_PREFIX="runs/surge_simple/abc123"
+  export R2_BUCKET="my-bucket"
+  export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
+  export TRAIN_ARGS="experiment=surge/flow_simple"
+  mkdir -p "$BATS_TEST_TMPDIR/data"
+
+  # Override python stub to write a fake wandb_run_id file
+  cat > "$FAKE_BIN/python" << 'STUB'
+#!/bin/bash
+echo "[stub] python $*"
+if [[ "$*" == *"src/train.py"* ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == hydra.run.dir=* ]]; then
+      OUTDIR="${arg#hydra.run.dir=}"
+      mkdir -p "$OUTDIR"
+      echo "fakeid99" > "$OUTDIR/wandb_run_id"
+    fi
+  done
+fi
+exit 0
+STUB
+  chmod +x "$FAKE_BIN/python"
+
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"rclone copy logs/train/runs/surge_simple/abc123 r2:my-bucket/runs/surge_simple/abc123/training/fakeid99/"* ]]
+}
+
+@test "train: uploads without run ID subdirectory when wandb_run_id file missing" {
+  export MODE="train"
+  export PARAM_SPEC="surge_simple"
+  export R2_PREFIX="runs/surge_simple/abc123"
+  export R2_BUCKET="my-bucket"
+  export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
+  export TRAIN_ARGS="experiment=surge/flow_simple"
+  mkdir -p "$BATS_TEST_TMPDIR/data"
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  # Upload happens to training/ without a run ID subdirectory
+  [[ "$output" == *"rclone copy logs/train/runs/surge_simple/abc123 r2:my-bucket/runs/surge_simple/abc123/training/"* ]]
+}
+
+@test "train: SKIP_UPLOAD=1 skips checkpoint upload" {
+  export MODE="train"
+  export PARAM_SPEC="surge_simple"
+  export R2_PREFIX="runs/surge_simple/abc123"
+  export R2_BUCKET="my-bucket"
+  export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
+  export TRAIN_ARGS="experiment=surge/flow_simple"
+  export SKIP_UPLOAD=1
+  mkdir -p "$BATS_TEST_TMPDIR/data"
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipping checkpoint upload"* ]]
+  # No rclone upload call (only the download call should appear)
+  [[ "$output" != *"rclone copy logs/train/"* ]]
+}
+
+@test "train: DRY_RUN_UPLOAD=1 passes --dry-run to rclone upload" {
+  export MODE="train"
+  export PARAM_SPEC="surge_simple"
+  export R2_PREFIX="runs/surge_simple/abc123"
+  export R2_BUCKET="my-bucket"
+  export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
+  export TRAIN_ARGS="experiment=surge/flow_simple"
+  export DRY_RUN_UPLOAD=1
+  mkdir -p "$BATS_TEST_TMPDIR/data"
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--dry-run"* ]]
+}
+
+@test "train: banner shows upload config" {
+  export MODE="train"
+  export PARAM_SPEC="surge_simple"
+  export R2_PREFIX="runs/surge_simple/abc123"
+  export R2_BUCKET="my-bucket"
+  export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
+  export TRAIN_ARGS="experiment=surge/flow_simple"
+  mkdir -p "$BATS_TEST_TMPDIR/data"
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"train_output_dir"* ]]
+  [[ "$output" == *"skip_upload"* ]]
+  [[ "$output" == *"dry_run"* ]]
 }
 
 

@@ -55,6 +55,8 @@
 #       TRAIN_ARGS          Args passed to src/train.py (REQUIRED,
 #                           Makefile default: experiment=surge/flow_simple).
 #       R2_BUCKET           R2 bucket name. Read from env var baked at build time.
+#       DRY_RUN_UPLOAD      If "1", passes --dry-run to rclone upload (default: 0).
+#       SKIP_UPLOAD         If "1", skip uploading training artifacts to R2 (default: 0).
 #       IDLE_AFTER          If "1", drop to bash after completion (default: 0).
 #
 #   MODE=shell
@@ -271,10 +273,19 @@ case "$MODE" in
     R2_PREFIX="${R2_PREFIX:?ERROR: R2_PREFIX is required for MODE=train}"
     OUTPUT_DIR="${OUTPUT_DIR:?ERROR: OUTPUT_DIR is required for MODE=train}"
     TRAIN_ARGS="${TRAIN_ARGS:?ERROR: TRAIN_ARGS is required for MODE=train}"
+    DRY_RUN_UPLOAD="${DRY_RUN_UPLOAD:-0}"
+    SKIP_UPLOAD="${SKIP_UPLOAD:-0}"
 
     if [ -z "$R2_BUCKET" ]; then
       echo "ERROR: R2_BUCKET is not set. Cannot download dataset from R2." >&2
       exit 1
+    fi
+
+    # Deterministic Hydra output dir — no timestamp randomness.
+    TRAIN_OUTPUT_DIR="logs/train/${R2_PREFIX}"
+    if [ -d "$TRAIN_OUTPUT_DIR" ]; then
+      echo "WARNING: $TRAIN_OUTPUT_DIR already exists. Removing stale output." >&2
+      rm -rf "$TRAIN_OUTPUT_DIR"
     fi
 
     echo "=== synth-permutations: download dataset + train ==="
@@ -282,7 +293,10 @@ case "$MODE" in
     echo "  data_config     : $DATA_CONFIG"
     echo "  r2_prefix       : $R2_PREFIX"
     echo "  output_dir      : $OUTPUT_DIR"
+    echo "  train_output_dir: $TRAIN_OUTPUT_DIR"
     echo "  train_args      : $TRAIN_ARGS"
+    echo "  skip_upload     : $SKIP_UPLOAD"
+    echo "  dry_run         : $DRY_RUN_UPLOAD"
     echo ""
 
     echo "[download] rclone copy r2:${R2_BUCKET}/${R2_PREFIX} ${OUTPUT_DIR}"
@@ -290,13 +304,40 @@ case "$MODE" in
     rclone copy "r2:${R2_BUCKET}/${R2_PREFIX}" "$OUTPUT_DIR" --progress --checksum --transfers 200 --checkers 200
 
     echo ""
-    echo "[train] python src/train.py data=${DATA_CONFIG} data.dataset_root=${OUTPUT_DIR} ${TRAIN_ARGS}"
+    echo "[train] python src/train.py data=${DATA_CONFIG} data.dataset_root=${OUTPUT_DIR} hydra.run.dir=${TRAIN_OUTPUT_DIR} ${TRAIN_ARGS}"
     # shellcheck disable=SC2086
     python src/train.py \
       "data=${DATA_CONFIG}" \
       "data.dataset_root=${OUTPUT_DIR}" \
       "data.predict_file=${OUTPUT_DIR}/val.h5" \
+      "hydra.run.dir=${TRAIN_OUTPUT_DIR}" \
       $TRAIN_ARGS
+
+    # Read W&B run ID if available (written by train.py after trainer.fit).
+    WANDB_RUN_ID=""
+    if [ -f "${TRAIN_OUTPUT_DIR}/wandb_run_id" ]; then
+      WANDB_RUN_ID=$(cat "${TRAIN_OUTPUT_DIR}/wandb_run_id")
+    fi
+
+    UPLOAD_SUFFIX="training/"
+    if [ -n "$WANDB_RUN_ID" ]; then
+      UPLOAD_SUFFIX="training/${WANDB_RUN_ID}/"
+    fi
+
+    if [ "$SKIP_UPLOAD" = "1" ]; then
+      echo "[upload] SKIP_UPLOAD=1: skipping checkpoint upload."
+    else
+      DRY_RUN_FLAG=""
+      if [ "$DRY_RUN_UPLOAD" = "1" ]; then
+        DRY_RUN_FLAG="--dry-run"
+      fi
+      echo "[upload] rclone copy ${TRAIN_OUTPUT_DIR} r2:${R2_BUCKET}/${R2_PREFIX}/${UPLOAD_SUFFIX}"
+      # shellcheck disable=SC2086
+      rclone copy "$TRAIN_OUTPUT_DIR" \
+        "r2:${R2_BUCKET}/${R2_PREFIX}/${UPLOAD_SUFFIX}" \
+        --progress --checksum --transfers 200 --checkers 200 \
+        $DRY_RUN_FLAG
+    fi
 
     echo ""
     echo "=== Training complete. ==="

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
@@ -6,7 +7,7 @@ import rootutils
 import torch
 import torch.multiprocessing as mp
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
-from lightning.pytorch.loggers import Logger
+from lightning.pytorch.loggers import Logger, WandbLogger
 from omegaconf import DictConfig
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -96,6 +97,14 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     if cfg.get("train"):
         log.info("Starting training!")
         trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+
+    # Write W&B run ID to file so the Docker entrypoint can read it for R2 uploads.
+    for lg in logger:
+        if isinstance(lg, WandbLogger):
+            run_id_file = Path(cfg.paths.output_dir) / "wandb_run_id"
+            run_id_file.write_text(lg.version)
+            log.info(f"W&B run ID: {lg.version}")
+            break
 
     train_metrics = trainer.callback_metrics
 

@@ -234,6 +234,10 @@ IMAGE_TAG        ?= dev
 # IDLE_AFTER: set to 1 to drop to a bash shell after generate/train completes.
 # Useful for post-run inspection on vast.ai. Not forwarded by docker-ci-* targets.
 IDLE_AFTER       ?= 0
+# DRY_RUN_UPLOAD: set to 1 to pass --dry-run to rclone uploads (train, generate-shards, finalize-shards).
+DRY_RUN_UPLOAD   ?= 0
+# SKIP_UPLOAD: set to 1 to skip uploading training artifacts to R2 after training.
+SKIP_UPLOAD      ?= 0
 
 # ---------------------------------------------------------------------------
 # Interactive run targets — for use on vast.ai or local dev with GPU.
@@ -250,6 +254,8 @@ docker-run-gpu-train: ## Download dataset from R2 and train (MODE=train, GPU). I
 		-e OUTPUT_DIR=$(OUTPUT_DIR) \
 		-e TRAIN_ARGS="$(TRAIN_ARGS)" \
 		-e IDLE_AFTER=$(IDLE_AFTER) \
+		-e DRY_RUN_UPLOAD=$(DRY_RUN_UPLOAD) \
+		-e SKIP_UPLOAD=$(SKIP_UPLOAD) \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
 docker-run-cpu-train: ## CI: smoke-test training (no TTY, no GPU). Downloads dataset from R2 and runs a single training step on CPU to verify the pipeline works end-to-end.
@@ -265,6 +271,7 @@ docker-run-cpu-train: ## CI: smoke-test training (no TTY, no GPU). Downloads dat
 		-e OUTPUT_DIR=$(OUTPUT_DIR) \
 		-e TRAIN_ARGS="trainer=cpu trainer.max_steps=1 trainer.log_every_n_steps=1 data.batch_size=1 $(TRAIN_ARGS)" \
 		-e IDLE_AFTER=0 \
+		-e SKIP_UPLOAD=1 \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
 docker-run-finalize: ## Download shards from R2, reshard + stats + upload (MODE=finalize-shards, GPU)
