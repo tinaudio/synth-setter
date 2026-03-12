@@ -212,12 +212,12 @@ The entrypoint script (`scripts/docker_entrypoint.sh`) dispatches on the `MODE` 
 # --- TRAIN (vast.ai instance, same image) ---
 docker run --rm --gpus all --init \
   -e MODE=train \
-  -e R2_DATASET_PATH=runs/surge_simple/<commit-sha> \
+  -e R2_PREFIX=runs/surge_simple/<commit-sha> \
   -e TRAIN_ARGS="experiment=surge/flow_simple" \
   tinaudio/perm:<base-image-tag>-dev-snapshot-<commit-sha>
 
 # --- OR: use Makefile helpers (interactive, GPU) ---
-make docker-run-gpu-train R2_DATASET_PATH=runs/surge_simple/<commit-sha>
+make docker-run-gpu-train R2_PREFIX=runs/surge_simple/<commit-sha>
 ```
 
 Dataset files are uploaded to `r2:<bucket>/runs/<param_spec>/<git_sha>/` and a `metadata.json`
@@ -242,7 +242,7 @@ records the git SHA, param spec, sample counts, generation parameters, and code 
 | `DOCKER_TORCH_IDX`      | `https://download.pytorch.org/whl/cu128`                      | PyTorch wheel index URL                                                      |
 | `DOCKER_BUILD_FLAGS`    | _(empty)_                                                     | Extra flags passed verbatim to `docker build`                                |
 | `USE_CLOUD_BUILDER`     | `false`                                                       | Set to `1` to use the remote cloud builder and push the result               |
-| `R2_DATASET_PATH`       | _(required for train)_                                        | R2 path to download for `docker-run-gpu-train`                               |
+| `R2_PREFIX`             | _(required for train)_                                        | R2 path prefix, shared across generate-shards, finalize-shards, and train    |
 | `IMAGE_TAG`             | `dev`                                                         | Image tag for all `docker-run-*` targets. Override to run a pinned snapshot. |
 | `IDLE_AFTER`            | `0`                                                           | Set to `1` to drop to bash after completion (interactive targets only).      |
 

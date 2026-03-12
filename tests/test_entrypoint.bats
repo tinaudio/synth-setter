@@ -86,7 +86,7 @@ STUB
   mkdir -p "$APP_DIR"
 
   # Sanitize env: prevent host variables (e.g. from .env) from leaking into tests.
-  unset R2_BUCKET R2_PREFIX R2_DATASET_PATH R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
+  unset R2_BUCKET R2_PREFIX R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY
   unset NUM_SHARDS INSTANCE_ID RUNPOD_POD_ID
   unset MODE PULL_LATEST GIT_PAT IDLE_AFTER
 
@@ -245,17 +245,17 @@ STUB
   [[ "$output" == *"PARAM_SPEC"* ]]
 }
 
-@test "train: missing R2_DATASET_PATH exits with error" {
+@test "train: missing R2_PREFIX exits with error" {
   export MODE="train"
-  unset R2_DATASET_PATH
+  unset R2_PREFIX
   run_entrypoint
   [ "$status" -ne 0 ]
-  [[ "$output" == *"R2_DATASET_PATH"* ]]
+  [[ "$output" == *"R2_PREFIX"* ]]
 }
 
 @test "train: missing OUTPUT_DIR exits with error" {
   export MODE="train"
-  export R2_DATASET_PATH="runs/surge_simple/abc123"
+  export R2_PREFIX="runs/surge_simple/abc123"
   unset OUTPUT_DIR
   run_entrypoint
   [ "$status" -ne 0 ]
@@ -264,7 +264,7 @@ STUB
 
 @test "train: missing TRAIN_ARGS exits with error" {
   export MODE="train"
-  export R2_DATASET_PATH="runs/surge_simple/abc123"
+  export R2_PREFIX="runs/surge_simple/abc123"
   unset TRAIN_ARGS
   run_entrypoint
   [ "$status" -ne 0 ]
@@ -273,7 +273,7 @@ STUB
 
 @test "train: missing R2_BUCKET exits with error" {
   export MODE="train"
-  export R2_DATASET_PATH="runs/surge_simple/abc123"
+  export R2_PREFIX="runs/surge_simple/abc123"
   export R2_BUCKET=""
   run_entrypoint
   [ "$status" -ne 0 ]
@@ -283,7 +283,7 @@ STUB
 @test "train: with required vars succeeds" {
   export MODE="train"
   export PARAM_SPEC="surge_simple"
-  export R2_DATASET_PATH="runs/surge_simple/abc123"
+  export R2_PREFIX="runs/surge_simple/abc123"
   export R2_BUCKET="my-bucket"
   export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
   export TRAIN_ARGS="experiment=surge/flow_simple"

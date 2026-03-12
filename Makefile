@@ -10,7 +10,6 @@ show-defaults: ## Print current values of all configurable variables
 	@echo "VAL_SHARDS       = $(VAL_SHARDS)"
 	@echo "TEST_SHARDS      = $(TEST_SHARDS)"
 	@echo "R2_PREFIX        = $(R2_PREFIX)"
-	@echo "R2_DATASET_PATH  = $(R2_DATASET_PATH)"
 	@echo "R2_BUCKET        = $(R2_BUCKET)"
 	@echo "IDLE_AFTER       = $(IDLE_AFTER)"
 	@echo "IMAGE_TAG        = $(IMAGE_TAG)"
@@ -108,7 +107,7 @@ train: ## Train the model
 #     R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com R2_BUCKET=<bucket>
 #
 #   # Download dataset from R2 and train
-#   make docker-run-gpu-train R2_DATASET_PATH=runs/surge_simple/<sha>
+#   make docker-run-gpu-train R2_PREFIX=runs/surge_simple/<sha>
 #
 #   # Run dev image with local code mounted
 #   make docker-run-dev
@@ -222,12 +221,12 @@ docker-run-dev: ## Run dev image with local source mounted (IMAGE_TAG=dev by def
 PARAM_SPEC       ?= surge_simple
 SHARD_SIZE       ?= 10000
 OUTPUT_DIR       ?= data/surge_simple
-# R2_DATASET_PATH: set when using docker-run-train / docker-ci-train
-R2_DATASET_PATH  ?=
 TRAIN_ARGS       ?= experiment=surge/flow_simple trainer.limit_val_batches=10 trainer.max_steps=100000
 # finalize-shards defaults
 VAL_SHARDS       ?= 1
 TEST_SHARDS      ?= 1
+# R2_PREFIX: R2 path prefix shared across all modes (generate-shards, finalize-shards, train).
+# e.g. R2_PREFIX=runs/surge_simple/abc1234
 R2_PREFIX        ?=
 # IMAGE_TAG: tag for docker-run-* and docker-ci-* targets. Default is :dev (built by docker-build-dev-live).
 # Override to run a specific pinned image, e.g. IMAGE_TAG=dev-snapshot-<sha>
@@ -242,19 +241,19 @@ IDLE_AFTER       ?= 0
 # ---------------------------------------------------------------------------
 
 docker-run-gpu-train: ## Download dataset from R2 and train (MODE=train, GPU). IDLE_AFTER=1 to stay in bash.
-	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-run-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
+	@if [ -z "$(R2_PREFIX)" ]; then echo "ERROR: R2_PREFIX is required. e.g. make docker-run-gpu-train R2_PREFIX=runs/surge_simple/<sha>"; exit 1; fi
 	docker run --rm -it --gpus all --init \
 		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		-e MODE=train \
 		-e PARAM_SPEC=$(PARAM_SPEC) \
-		-e R2_DATASET_PATH=$(R2_DATASET_PATH) \
+		-e R2_PREFIX=$(R2_PREFIX) \
 		-e OUTPUT_DIR=$(OUTPUT_DIR) \
 		-e TRAIN_ARGS="$(TRAIN_ARGS)" \
 		-e IDLE_AFTER=$(IDLE_AFTER) \
 		$(DOCKER_IMAGE):$(IMAGE_TAG)
 
 docker-run-cpu-train: ## CI: smoke-test training (no TTY, no GPU). Downloads dataset from R2 and runs a single training step on CPU to verify the pipeline works end-to-end.
-	@if [ -z "$(R2_DATASET_PATH)" ]; then echo "ERROR: R2_DATASET_PATH is required. e.g. make docker-ci-train R2_DATASET_PATH=runs/surge_simple/<sha>"; exit 1; fi
+	@if [ -z "$(R2_PREFIX)" ]; then echo "ERROR: R2_PREFIX is required. e.g. make docker-run-cpu-train R2_PREFIX=runs/surge_simple/<sha>"; exit 1; fi
 # Smoke-test defaults come first; TRAIN_ARGS (from the user / CLI) is appended
 # last so Hydra's last-wins semantics let callers override any default.
 # e.g. TRAIN_ARGS="experiment=surge/flow_simple trainer.max_steps=10"
@@ -262,7 +261,7 @@ docker-run-cpu-train: ## CI: smoke-test training (no TTY, no GPU). Downloads dat
 		$(_INTERNAL_RUN_FLAGS) $(DOCKER_RUN_FLAGS) \
 		-e MODE=train \
 		-e PARAM_SPEC=$(PARAM_SPEC) \
-		-e R2_DATASET_PATH=$(R2_DATASET_PATH) \
+		-e R2_PREFIX=$(R2_PREFIX) \
 		-e OUTPUT_DIR=$(OUTPUT_DIR) \
 		-e TRAIN_ARGS="trainer=cpu trainer.max_steps=1 trainer.log_every_n_steps=1 data.batch_size=1 $(TRAIN_ARGS)" \
 		-e IDLE_AFTER=0 \

@@ -46,8 +46,8 @@
 #     Set IDLE_AFTER=1 to drop to a bash shell for inspection instead.
 #
 #     Key env vars:
-#       R2_DATASET_PATH     R2 path to dataset dir (e.g. runs/surge_simple/abc1234).
-#                           REQUIRED.
+#       R2_PREFIX           R2 path prefix to dataset dir (e.g. runs/surge_simple/abc1234).
+#                           REQUIRED. Same prefix used by generate-shards and finalize-shards.
 #       PARAM_SPEC          Param spec used when the dataset was generated (REQUIRED,
 #                           Makefile default: surge_simple). Valid: surge_simple, surge_xt
 #       OUTPUT_DIR          Local path to download dataset into (REQUIRED,
@@ -268,7 +268,7 @@ case "$MODE" in
     PARAM_SPEC="${PARAM_SPEC:?ERROR: PARAM_SPEC is required for MODE=train}"
     _set_param_spec_vars "$PARAM_SPEC"
 
-    R2_DATASET_PATH="${R2_DATASET_PATH:?ERROR: R2_DATASET_PATH is required for MODE=train}"
+    R2_PREFIX="${R2_PREFIX:?ERROR: R2_PREFIX is required for MODE=train}"
     OUTPUT_DIR="${OUTPUT_DIR:?ERROR: OUTPUT_DIR is required for MODE=train}"
     TRAIN_ARGS="${TRAIN_ARGS:?ERROR: TRAIN_ARGS is required for MODE=train}"
 
@@ -280,14 +280,14 @@ case "$MODE" in
     echo "=== synth-permutations: download dataset + train ==="
     echo "  param_spec      : $PARAM_SPEC"
     echo "  data_config     : $DATA_CONFIG"
-    echo "  r2_dataset_path : $R2_DATASET_PATH"
+    echo "  r2_prefix       : $R2_PREFIX"
     echo "  output_dir      : $OUTPUT_DIR"
     echo "  train_args      : $TRAIN_ARGS"
     echo ""
 
-    echo "[download] rclone copy r2:${R2_BUCKET}/${R2_DATASET_PATH} ${OUTPUT_DIR}"
+    echo "[download] rclone copy r2:${R2_BUCKET}/${R2_PREFIX} ${OUTPUT_DIR}"
     mkdir -p "$OUTPUT_DIR"
-    rclone copy "r2:${R2_BUCKET}/${R2_DATASET_PATH}" "$OUTPUT_DIR" --progress --checksum --transfers 200 --checkers 200
+    rclone copy "r2:${R2_BUCKET}/${R2_PREFIX}" "$OUTPUT_DIR" --progress --checksum --transfers 200 --checkers 200
 
     echo ""
     echo "[train] python src/train.py data=${DATA_CONFIG} data.dataset_root=${OUTPUT_DIR} ${TRAIN_ARGS}"

@@ -60,12 +60,12 @@ ______________________________________________________________________
 
 ━━━ TRAIN (MODE=train) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  docker run -e MODE=train -e R2_DATASET_PATH=runs/surge_simple/<sha> ...
+  docker run -e MODE=train -e R2_PREFIX=runs/surge_simple/<sha> ...
     │
     └── scripts/docker_entrypoint.sh
           │
           ├── rclone copy --checksum --progress
-          │     r2:<bucket>/<R2_DATASET_PATH> → <OUTPUT_DIR>/
+          │     r2:<bucket>/<R2_PREFIX> → <OUTPUT_DIR>/
           │
           └── python src/train.py
                 data=<surge_simple|surge>           ← Hydra config
@@ -182,16 +182,16 @@ make docker-run-dev USE_LOCAL_WORKSPACE=1
 
 ```bash
 # Download dataset and run full training
-make docker-run-gpu-train R2_DATASET_PATH=runs/surge_simple/<commit-sha>
+make docker-run-gpu-train R2_PREFIX=runs/surge_simple/<commit-sha>
 
 # Override the experiment config
 make docker-run-gpu-train \
-  R2_DATASET_PATH=runs/surge_simple/<commit-sha> \
+  R2_PREFIX=runs/surge_simple/<commit-sha> \
   TRAIN_ARGS="experiment=surge/flow_simple trainer.max_epochs=50"
 
 # 1-step plumbing check (no GPU needed)
 make docker-run-cpu-train \
-  R2_DATASET_PATH=runs/surge_simple/<commit-sha> \
+  R2_PREFIX=runs/surge_simple/<commit-sha> \
   TRAIN_ARGS="experiment=surge/flow_simple trainer.max_steps=1"
 ```
 
@@ -210,7 +210,7 @@ make docker-build-dev-snapshot \
 # Run the snapshot image (no volume mount needed)
 make docker-run-gpu-train \
   IMAGE_TAG=<base-image-tag>-dev-snapshot-<commit-sha> \
-  R2_DATASET_PATH=runs/surge_simple/<commit-sha>
+  R2_PREFIX=runs/surge_simple/<commit-sha>
 ```
 
 ### 5. Local CI dry-run (no TTY, no GPU — mirrors what CI does)
@@ -218,7 +218,7 @@ make docker-run-gpu-train \
 ```bash
 # Simulate the CI train job locally
 make docker-run-cpu-train \
-  R2_DATASET_PATH=runs/surge_simple/<commit-sha> \
+  R2_PREFIX=runs/surge_simple/<commit-sha> \
   TRAIN_ARGS="experiment=surge/flow_simple trainer.max_steps=1"
 ```
 
