@@ -124,6 +124,7 @@ DOCKER_IMAGE      ?= tinaudio/perm
 #      docker pull ubuntu:22.04
 #      docker inspect ubuntu:22.04 --format='{{index .RepoDigests 0}}'
 DOCKER_BASE_IMAGE ?= ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751
+DOCKER_BASE_IMAGE_TAG ?= ubuntu22_04
 DOCKER_BUILD_MODE ?= prebuilt
 DOCKER_TARGETPLATFORM ?= linux/amd64
 TARGETARCH ?= amd64
@@ -160,8 +161,10 @@ DOCKER_SECRETS = \
 # TODO(ktinubu): Looking into TARGETARCH failing to set set by buildx
 # even when --platform is provided. In the meantime, we set TARGETARCH
 # to amd64 as fallback
-# Format base image and target platform: (ubuntu:22.04 -> ubuntu__22.04)
-DOCKER_BASE_IMAGE_TAG := $(subst /,_,$(subst :,__,$(DOCKER_BASE_IMAGE)))
+# Fallback: sanitize DOCKER_BASE_IMAGE into a valid tag component when
+# DOCKER_BASE_IMAGE_TAG is not set explicitly (e.g. custom base images).
+# Does not handle digest (@sha256:...) references — set DOCKER_BASE_IMAGE_TAG manually for those.
+DOCKER_BASE_IMAGE_TAG ?= $(subst /,_,$(subst :,__,$(DOCKER_BASE_IMAGE)))
 TARGET_PLATFORM_TAG := $(subst /,_,$(DOCKER_TARGETPLATFORM))
 ifeq ($(USE_CLOUD_BUILDER),1)
 _INTERNAL_BUILD_FLAGS += \
@@ -186,6 +189,7 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
 		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
 		--build-arg TARGETARCH=$(TARGETARCH) \
+		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
 		-t $(DOCKER_IMAGE):dev-snapshot \
 		. \
@@ -208,6 +212,7 @@ docker-build-dev-live: ## Build dev image (Surge + deps + R2 config, no baked-in
 		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(CURRENT_LOCAL_GIT_REF) \
 		--build-arg TARGETARCH=$(TARGETARCH) \
 		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
+		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-live-$(CURRENT_LOCAL_GIT_REF) \
 		-t $(DOCKER_IMAGE):dev-live \
 		. \
