@@ -396,6 +396,47 @@ STUB
   [[ "$output" == *"dry_run"* ]]
 }
 
+@test "train: banner shows wandb_auth when netrc has wandb entry" {
+  export MODE="train"
+  export PARAM_SPEC="surge_simple"
+  export R2_PREFIX="runs/surge_simple/abc123"
+  export R2_BUCKET="my-bucket"
+  export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
+  export TRAIN_ARGS="experiment=surge/flow_simple"
+  mkdir -p "$BATS_TEST_TMPDIR/data"
+
+  # Create a fake ~/.netrc with wandb entry
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
+  printf 'machine api.wandb.ai\n  login user\n  password testkey123\n' > "$HOME/.netrc"
+  chmod 600 "$HOME/.netrc"
+
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"wandb_auth"* ]]
+  [[ "$output" == *"netrc"* ]]
+}
+
+@test "train: banner shows wandb_auth not configured when netrc missing" {
+  export MODE="train"
+  export PARAM_SPEC="surge_simple"
+  export R2_PREFIX="runs/surge_simple/abc123"
+  export R2_BUCKET="my-bucket"
+  export OUTPUT_DIR="$BATS_TEST_TMPDIR/data"
+  export TRAIN_ARGS="experiment=surge/flow_simple"
+  mkdir -p "$BATS_TEST_TMPDIR/data"
+
+  # Ensure no ~/.netrc exists
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME"
+  rm -f "$HOME/.netrc"
+
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"wandb_auth"* ]]
+  [[ "$output" == *"not configured"* ]]
+}
+
 
 # ---------------------------------------------------------------------------
 # PULL_LATEST validation

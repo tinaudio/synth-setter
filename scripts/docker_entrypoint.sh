@@ -288,6 +288,12 @@ case "$MODE" in
       rm -rf "$TRAIN_OUTPUT_DIR"
     fi
 
+    # Detect W&B auth: check for api.wandb.ai entry in ~/.netrc
+    WANDB_AUTH="not configured"
+    if grep -qs 'api.wandb.ai' "$HOME/.netrc" 2>/dev/null; then
+      WANDB_AUTH="netrc"
+    fi
+
     echo "=== synth-permutations: download dataset + train ==="
     echo "  param_spec      : $PARAM_SPEC"
     echo "  data_config     : $DATA_CONFIG"
@@ -295,6 +301,7 @@ case "$MODE" in
     echo "  output_dir      : $OUTPUT_DIR"
     echo "  train_output_dir: $TRAIN_OUTPUT_DIR"
     echo "  train_args      : $TRAIN_ARGS"
+    echo "  wandb_auth      : $WANDB_AUTH"
     echo "  skip_upload     : $SKIP_UPLOAD"
     echo "  dry_run         : $DRY_RUN_UPLOAD"
     echo ""

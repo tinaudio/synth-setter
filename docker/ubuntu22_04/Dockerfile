@@ -379,6 +379,26 @@ RUN --mount=type=secret,id=r2_access_key_id \
     chmod 600 /root/.config/rclone/rclone.conf
 
 # ==========================================
+# W&B auth: bake Weights & Biases API key into ~/.netrc using BuildKit
+# secrets. The key never appears in image layers or `docker history`, but
+# the resulting ~/.netrc IS stored in the image filesystem.
+#
+# W&B reads ~/.netrc automatically (same mechanism as `wandb login`).
+# ==========================================
+RUN --mount=type=secret,id=wandb_api_key \
+    set -eu; \
+    if [ ! -s /run/secrets/wandb_api_key ]; then \
+        echo "WARNING: wandb_api_key secret is missing or empty." >&2; \
+        echo "         W&B logging will require WANDB_API_KEY at runtime." >&2; \
+    else \
+        printf 'machine api.wandb.ai\n  login user\n  password %s\n' \
+            "$(cat /run/secrets/wandb_api_key)" \
+            >> /root/.netrc; \
+        chmod 600 /root/.netrc; \
+        echo "W&B netrc config written." >&2; \
+    fi
+
+# ==========================================
 # Dev target: Surge + Python deps pre-installed, no baked-in source code.
 # ⚠️  Contains baked R2 credentials — keep registry PRIVATE.
 # Usage: make docker-build-dev-live GIT_PAT=<token> && make docker-run-dev

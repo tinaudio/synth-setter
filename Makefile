@@ -57,10 +57,10 @@ train: ## Train the model
 # Docker targets
 # =====================================================================
 #
-# ⚠️  SECURITY: All images produced by this Makefile contain baked Cloudflare
-#     R2 credentials (rclone config). Push ONLY to a PRIVATE registry.
-#     Anyone who can pull the image has read/write access to the R2 bucket.
-#     See README for future hardening steps.
+# ⚠️  SECURITY: All images produced by this Makefile contain baked credentials
+#     (R2 rclone config, W&B ~/.netrc). Push ONLY to a PRIVATE registry.
+#     Anyone who can pull the image has read/write access to the R2 bucket
+#     and can log to your W&B project. See README for future hardening steps.
 #
 # Two build modes:
 #   1. docker-build-dev-snapshot — self-contained image. Clones repo at GIT_REF,
@@ -81,6 +81,8 @@ train: ## Train the model
 #   R2_ENDPOINT         R2 S3-compatible endpoint URL
 #                       (e.g. https://<accountid>.r2.cloudflarestorage.com).
 #   R2_BUCKET           R2 bucket name. Baked as an ENV var into the image.
+#   WANDB_API_KEY       Weights & Biases API key. Baked into ~/.netrc.
+#                       Get it from: https://wandb.ai/authorize
 #
 # Optional overrides:
 #   DOCKER_FILE         Path to Dockerfile          (default: docker/ubuntu22_04/Dockerfile)
@@ -99,12 +101,14 @@ train: ## Train the model
 #   # Self-contained image (for vast.ai)
 #   make docker-build-dev-snapshot GIT_REF=<commit-sha> GIT_PAT=<github-pat> \
 #     R2_ACCESS_KEY_ID=<key> R2_SECRET_ACCESS_KEY=<secret> \
-#     R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com R2_BUCKET=<bucket>
+#     R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com R2_BUCKET=<bucket> \
+#     WANDB_API_KEY=<wandb-key>
 #
 #   # Dev image (build once, mount source at runtime)
 #   make docker-build-dev-live GIT_REF=<commit-sha> GIT_PAT=<github-pat> \
 #     R2_ACCESS_KEY_ID=<key> R2_SECRET_ACCESS_KEY=<secret> \
-#     R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com R2_BUCKET=<bucket>
+#     R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com R2_BUCKET=<bucket> \
+#     WANDB_API_KEY=<wandb-key>
 #
 #   # Download dataset from R2 and train
 #   make docker-run-gpu-train R2_PREFIX=runs/surge_simple/<sha>
@@ -136,14 +140,18 @@ R2_SECRET_ACCESS_KEY ?=
 R2_ENDPOINT          ?=
 R2_BUCKET            ?=
 
-# Common R2 secret flags added to every docker buildx build invocation.
+# W&B API key — baked into ~/.netrc via BuildKit secret.
+WANDB_API_KEY        ?=
+
+# Common secret flags added to every docker buildx build invocation.
 # Credentials are injected via BuildKit --secret (never appear in image layers
-# or docker history), but the resulting rclone.conf IS stored in the image.
+# or docker history), but the resulting config files ARE stored in the image.
 # ⚠️  Keep ALL produced images in a private registry.
-DOCKER_R2_SECRETS = \
+DOCKER_SECRETS = \
 	--secret id=r2_access_key_id,env=R2_ACCESS_KEY_ID \
 	--secret id=r2_secret_access_key,env=R2_SECRET_ACCESS_KEY \
 	--secret id=r2_endpoint,env=R2_ENDPOINT \
+	--secret id=wandb_api_key,env=WANDB_API_KEY \
 	--build-arg R2_BUCKET=$(R2_BUCKET)
 
 # TODO(ktinubu): Looking into TARGETARCH failing to set set by buildx
@@ -167,7 +175,7 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 		-f $(DOCKER_FILE) \
 		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
-		$(DOCKER_R2_SECRETS) \
+		$(DOCKER_SECRETS) \
 		--platform $(DOCKER_TARGETPLATFORM) \
 		--build-arg IMAGE="dev-snapshot" \
 		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
@@ -189,7 +197,7 @@ docker-build-dev-live: ## Build dev image (Surge + deps + R2 config, no baked-in
 		-f $(DOCKER_FILE) \
 		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
-		$(DOCKER_R2_SECRETS) \
+		$(DOCKER_SECRETS) \
 		--platform $(DOCKER_TARGETPLATFORM) \
 		--build-arg IMAGE="dev-live" \
 		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
