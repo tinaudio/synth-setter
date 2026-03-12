@@ -120,7 +120,10 @@ train: ## Train the model
 # =====================================================================
 DOCKER_FILE       ?= docker/ubuntu22_04/Dockerfile
 DOCKER_IMAGE      ?= tinaudio/perm
-DOCKER_BASE_IMAGE ?= ubuntu:22.04
+# ubuntu:22.04 digest retrieved via:
+#      docker pull ubuntu:22.04
+#      docker inspect ubuntu:22.04 --format='{{index .RepoDigests 0}}'
+DOCKER_BASE_IMAGE ?= ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751
 DOCKER_BUILD_MODE ?= prebuilt
 DOCKER_TARGETPLATFORM ?= linux/amd64
 TARGETARCH ?= amd64

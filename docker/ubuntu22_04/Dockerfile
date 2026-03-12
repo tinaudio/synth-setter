@@ -7,7 +7,10 @@ ARG BUILD_MODE=source
 ARG SURGE_GIT_REF=f7b97c682ade0b87da85ca5968b63d5c7c98e68d
 # Experiment branch commit SHA
 ARG SYNTH_PERMUTATIONS_GIT_REF=experiment
-ARG BASE_IMAGE=ubuntu:22.04
+# ubuntu:22.04 digest retrieved via:
+#      docker pull ubuntu:22.04
+#      docker inspect ubuntu:22.04 --format='{{index .RepoDigests 0}}'
+ARG BASE_IMAGE=ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751
 # TODO(ktinubu): Rename to something more useful and distrinct from BASE_IMAGE
 # TODO(ktinubu): Check for unset TARGETARCH or TARGETPLATFORM. Fallback to amd, linux/amd but add tag to container
 # TODO(ktinubu): Add appropriate image labels.
