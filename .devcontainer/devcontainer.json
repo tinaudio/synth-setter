@@ -1,0 +1,15 @@
+{
+	"name": "synth-permutations",
+	"image": "tinaudio/perm:dev-live",
+	"workspaceMount": "source=${localWorkspaceFolder},target=/home/build/synth-permutations,type=bind,consistency=cached",
+	"workspaceFolder": "/home/build/synth-permutations",
+	"postCreateCommand": "pip install --no-deps -e .",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-python.python",
+				"ms-python.vscode-pylance"
+			]
+		}
+	}
+}

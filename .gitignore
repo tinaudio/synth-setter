@@ -160,8 +160,5 @@ audio/
 checkpoints/
 paper.txt
 
-# Devcontainers
-.devcontainer/
-
 # Plugin path
 plugins/
