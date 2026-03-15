@@ -321,7 +321,7 @@ All structured files in the pipeline, in one place:
 
 ### 7.1 Storage as the Source of Truth
 
-The pipeline uses R2 as both the data layer and the coordination layer. **A shard is complete if and only if the canonical shard file exists in R2 and passes validation.** Worker metadata is supplementary — useful for debugging, never authoritative.
+The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by content hashes. **A shard is complete if and only if the canonical shard file exists in R2 and passes validation.** Worker metadata is supplementary — useful for debugging, never authoritative.
 
 **Why R2:**
 
@@ -746,6 +746,9 @@ A worker uploads `shard-042.h5` successfully but crashes before writing `worker-
 **Partial shard upload:**
 `rclone` crashes mid-upload. R2 may have a partial or corrupt object at the canonical path. **Consequence:** Reconciliation finds the file but it fails structural validation (not valid HDF5). **Mitigation:** The shard is quarantined and treated as missing. Next `generate` fills the gap.
 
+**Silent data corruption (bit rot / transfer corruption):**
+Local disk corruption between render and upload, or network corruption during transfer, produces a shard in R2 that differs from what the worker intended. **Consequence:** Corrupt shard passes filename checks but contains wrong data. **Mitigation:** All rclone operations use `--checksum`, which verifies content hashes after transfer. If a checksum mismatch is detected, the worker must delete the local shard, re-generate, and re-upload. Storage-layer bit rot within R2 is handled by R2 internally (server-side object checksums).
+
 **Slow worker overtaken by retry:**
 Worker A is assigned shard-042. Worker A is slow. User runs `generate` again, reconciliation sees shard-042 as missing, assigns to Worker B. Worker B completes first (valid). Worker A completes later (also valid, same content — deterministic). Worker A's upload overwrites Worker B's. **Consequence:** None if deterministic. If non-deterministic across hardware, last-writer-wins produces arbitrary result. **Mitigation:** Fix renderer non-determinism.
 
@@ -782,14 +785,15 @@ User runs `generate` after finalization (e.g., to replace a quarantined shard). 
 
 ### Risks
 
-| Risk                              | Likelihood | Impact                                      | Mitigation                                                              |
-| --------------------------------- | ---------- | ------------------------------------------- | ----------------------------------------------------------------------- |
-| RunPod availability               | Medium     | Workers queue or fail                       | ComputeBackend enables fallback                                         |
-| VST plugin crashes (SIGSEGV, OOM) | Medium     | Individual shards fail                      | Per-shard isolation + reconciliation fills gaps                         |
-| R2 eventual consistency           | Low        | Stale listing                               | R2 is strongly consistent for PUTs; polling interval handles edge cases |
-| HDF5 virtual dataset portability  | Low        | Breaks on different h5py versions           | Pin h5py in Docker                                                      |
-| Cost overrun from stuck workers   | Low        | Workers run indefinitely                    | Hard timeout in entrypoint; RunPod auto-stop                            |
-| Non-deterministic rendering       | Low        | Concurrent writes produce different content | Fix renderer; specs record renderer version                             |
+| Risk                              | Likelihood | Impact                                      | Mitigation                                                               |
+| --------------------------------- | ---------- | ------------------------------------------- | ------------------------------------------------------------------------ |
+| RunPod availability               | Medium     | Workers queue or fail                       | ComputeBackend enables fallback                                          |
+| VST plugin crashes (SIGSEGV, OOM) | Medium     | Individual shards fail                      | Per-shard isolation + reconciliation fills gaps                          |
+| R2 eventual consistency           | Low        | Stale listing                               | R2 is strongly consistent for PUTs; polling interval handles edge cases  |
+| HDF5 virtual dataset portability  | Low        | Breaks on different h5py versions           | Pin h5py in Docker                                                       |
+| Cost overrun from stuck workers   | Low        | Workers run indefinitely                    | Hard timeout in entrypoint; RunPod auto-stop                             |
+| Non-deterministic rendering       | Low        | Concurrent writes produce different content | Fix renderer; specs record renderer version                              |
+| Silent data corruption            | Low        | Corrupt shard accepted as valid             | `rclone --checksum` on all transfers; overhead negligible vs render time |
 
 ## 13. Out of Scope
 
@@ -1135,20 +1139,20 @@ Alternatives considered but not impactful enough for detailed analysis.
 
 ## Appendix B: Tech Stack
 
-| Component       | Technology                                                        | Role                                        |
-| --------------- | ----------------------------------------------------------------- | ------------------------------------------- |
-| Build           | Docker (BuildKit)                                                 | Reproducible compute environments           |
-| Storage         | Cloudflare R2                                                     | Data + coordination, free egress            |
-| Execution       | RunPod                                                            | Cheap on-demand cloud workers               |
-| Tracking        | Weights & Biases                                                  | Pipeline metrics, dataset artifact registry |
-| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                 | Shard storage with compression              |
-| CLI             | [Click](https://click.palletsprojects.com/)                       | Typed arguments, validation, `--help`       |
-| Validation      | [Pydantic](https://docs.pydantic.dev/) (strict mode)              | PipelineSpec, report, and config validation |
-| Logging         | [structlog](https://www.structlog.org/)                           | Structured JSON debug logging               |
-| Retry           | [tenacity](https://tenacity.readthedocs.io/)                      | Centralized retry policy                    |
-| Upload/download | [rclone](https://rclone.org/)                                     | R2 file transfer                            |
-| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)      | Reproducible environments                   |
-| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb) | VST synthesis                               |
+| Component       | Technology                                                        | Role                                             |
+| --------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
+| Build           | Docker (BuildKit)                                                 | Reproducible compute environments                |
+| Storage         | Cloudflare R2                                                     | Data + coordination, free egress                 |
+| Execution       | RunPod                                                            | Cheap on-demand cloud workers                    |
+| Tracking        | Weights & Biases                                                  | Pipeline metrics, dataset artifact registry      |
+| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                 | Shard storage with compression                   |
+| CLI             | [Click](https://click.palletsprojects.com/)                       | Typed arguments, validation, `--help`            |
+| Validation      | [Pydantic](https://docs.pydantic.dev/) (strict mode)              | PipelineSpec, report, and config validation      |
+| Logging         | [structlog](https://www.structlog.org/)                           | Structured JSON debug logging                    |
+| Retry           | [tenacity](https://tenacity.readthedocs.io/)                      | Centralized retry policy                         |
+| Upload/download | [rclone](https://rclone.org/)                                     | R2 file transfer; all transfers use `--checksum` |
+| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)      | Reproducible environments                        |
+| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb) | VST synthesis                                    |
 
 ## Appendix C: References
 
