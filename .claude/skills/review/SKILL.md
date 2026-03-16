@@ -1,6 +1,6 @@
 ---
 name: review
-description: Comprehensive code review orchestrating six standards checklists. Invoke with /review for local reviews. Also used by the pre-commit hook.
+description: Comprehensive code review orchestrating seven standards checklists. Invoke with /review for local reviews.
 ---
 
 # Code Review
@@ -9,7 +9,7 @@ You MUST complete all four steps below in order.
 
 ## Step 1: Load All Checklists
 
-You MUST invoke each of these six skills using the Skill tool before reviewing any code.
+You MUST invoke each of these seven skills using the Skill tool before reviewing any code.
 Each skill contains a detailed checklist. Do not skip any. Do not summarize from memory.
 
 1. **Invoke skill: `tdd-implementation`** — TDD Compliance Report checklist (16 items: Red-Green-Refactor, behavior testing, pytest-mock, test naming, mutation testing)
@@ -27,7 +27,7 @@ If a diff was already provided inline (e.g., piped from a commit hook), use that
 
 ## Step 3: Review Against All Checklists
 
-Go through EVERY checklist item from ALL four loaded skills. Evaluate ONLY the changed code.
+Go through EVERY checklist item from ALL seven loaded skills. Evaluate ONLY the changed code.
 
 - Skip style issues — Black and Ruff handle formatting.
 - Be strict. If a checklist item is violated, flag it.
@@ -42,7 +42,7 @@ BLOCK: file:line — [category] description
 WARN: file:line — [category] description
 ```
 
-Categories: `tdd`, `code-health`, `ml-pipeline`, `project`, `python-style`, `shell-style`
+Categories: `tdd`, `code-health`, `ml-pipeline`, `project`, `python-style`, `shell-style`, `ml-test`
 
 End with:
 

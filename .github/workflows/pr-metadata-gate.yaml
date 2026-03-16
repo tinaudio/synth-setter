@@ -1,0 +1,46 @@
+name: PR Linked Issue Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+    branches: [main, "release/*", "dev"]
+
+permissions:
+  pull-requests: read
+  issues: read
+
+jobs:
+  check-pr-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check linked issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          echo "::group::Fetching PR metadata"
+          PR_BODY=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.body // ""')
+          echo "::endgroup::"
+
+          # --- Linked issue check ---
+          # Check for currently-linked issues via the timeline API
+          # Count "connected" events minus "disconnected" events to get current links
+          CONNECTED=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" \
+            --paginate --jq '[.[] | select(.event == "connected")] | length')
+          DISCONNECTED=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" \
+            --paginate --jq '[.[] | select(.event == "disconnected")] | length')
+          LINKED_ISSUES=$(( ${CONNECTED:-0} - ${DISCONNECTED:-0} ))
+
+          # Also check body for closing keywords
+          BODY_REFS=$(echo "$PR_BODY" | grep -ciE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+' || true)
+
+          if [ "${LINKED_ISSUES}" -le 0 ] && [ "${BODY_REFS:-0}" -eq 0 ]; then
+            echo "::error::PR #${PR_NUMBER} has no linked GitHub issue. Add 'closes #N' to the PR body or link an issue via the sidebar."
+            exit 1
+          fi
+
+          echo "✓ Linked issue found"
+          echo "All PR metadata checks passed."

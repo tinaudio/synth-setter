@@ -8,9 +8,11 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  id-token: write
 
 jobs:
   claude-checklist-review:
+    if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,11 +24,12 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
-            Review this PR. Follow the Code Review section in CLAUDE.md — invoke all four
+            Review this PR. Follow the Code Review section in CLAUDE.md — invoke all seven
             review skills and evaluate every checklist item against the changed code.
             Prefix each comment with BLOCK: or WARN:.
 
   claude-deep-review:
+    if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

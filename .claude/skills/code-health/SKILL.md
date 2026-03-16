@@ -169,17 +169,12 @@ not implementation details.
 def retry_with_backoff(fn, max_attempts=3, base_delay=1.0):
     """Call fn, retrying on transient failures with exponential backoff.
 
-    Args:
-        fn: Callable that may raise TransientError.
-        max_attempts: Maximum number of tries (including the initial call).
-        base_delay: Initial delay in seconds; doubled after each retry.
-
-    Returns:
-        The return value of fn on success.
-
-    Raises:
-        TransientError: If all attempts fail, re-raises the last error.
-        PermanentError: Immediately, without retrying.
+    :param fn: Callable that may raise TransientError.
+    :param max_attempts: Maximum number of tries (including the initial call).
+    :param base_delay: Initial delay in seconds; doubled after each retry.
+    :returns: The return value of fn on success.
+    :raises TransientError: If all attempts fail, re-raises the last error.
+    :raises PermanentError: Immediately, without retrying.
     """
 ```
 
@@ -469,6 +464,22 @@ class OrderId:
 
 ______________________________________________________________________
 
+## PR Linked Issue Check (Hard Fail)
+
+Every pull request **must** have a linked GitHub issue before merge. This is
+a **hard check** — CI will block merge if missing.
+
+| #   | Requirement              | How to satisfy                                                    |
+| --- | ------------------------ | ----------------------------------------------------------------- |
+| H1  | **Linked GitHub Issue**  | Include `closes #N` / `fixes #N` in PR body, or link via sidebar  |
+
+This check is enforced by the `pr-metadata-gate` GitHub Actions workflow
+(`.github/workflows/pr-metadata-gate.yaml`). The workflow runs on every PR targeting
+`main`, `release/*`, or `dev` and produces `::error::` annotations so failures are
+visible inline on the PR.
+
+______________________________________________________________________
+
 ## PR and Code Review Practices
 
 ### 22. Prefer Small, Focused Pull Requests
@@ -629,6 +640,9 @@ user see what was evaluated and what to prioritize.
 
 | #   | Principle                                                                              | Status   | Finding    |
 | --- | -------------------------------------------------------------------------------------- | -------- | ---------- |
+| H1  | **GATE** Milestone assigned                                                            | ✅/❌    | Brief note |
+| H2  | **GATE** Linked GitHub issue                                                           | ✅/❌    | Brief note |
+| H3  | **GATE** GitHub Project assigned                                                       | ✅/❌    | Brief note |
 | 1   | Nesting depth                                                                          | ✅/⚠️/❌ | Brief note |
 | 2   | Data flow clarity                                                                      | ✅/⚠️/❌ | Brief note |
 | 3   | Cognitive load                                                                         | ✅/⚠️/❌ | Brief note |
@@ -655,6 +669,7 @@ user see what was evaluated and what to prioritize.
 | 24  | Branch name follows conventional format: `<type>/<short-description>`                  | ✅/⚠️/❌ | Brief note |
 
 Use ✅ for good, ⚠️ for needs attention with explanation, ❌ for significant issue.
+**H1–H3 are hard gates**: they only use ✅ or ❌ BLOCK — never ⚠️. A missing gate is always BLOCK.
 Skip rows that aren't applicable to the task (e.g., skip PR rows for single-file reviews).
 
 ### Summary

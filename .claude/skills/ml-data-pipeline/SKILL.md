@@ -221,11 +221,8 @@ For audio arrays specifically, encode shape contracts in the type annotation or 
 def compute_mel(waveform: np.ndarray) -> np.ndarray:
     """Compute mel spectrogram.
 
-    Args:
-        waveform: Shape (T,), float32, normalized to [-1, 1].
-
-    Returns:
-        Shape (n_mels, T // hop_length), float32, log-scaled.
+    :param waveform: Shape (T,), float32, normalized to [-1, 1].
+    :returns: Shape (n_mels, T // hop_length), float32, log-scaled.
     """
 ```
 
