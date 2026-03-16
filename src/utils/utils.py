@@ -13,8 +13,11 @@ log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
 
 def register_resolvers() -> None:
-    OmegaConf.register_new_resolver("mul", lambda x, y: x * y)
-    OmegaConf.register_new_resolver("div", lambda x, y: int(x) // int(y))
+    # Avoid double-registration when modules are imported multiple times in tests
+    if not OmegaConf.has_resolver("mul"):
+        OmegaConf.register_new_resolver("mul", lambda x, y: x * y)
+    if not OmegaConf.has_resolver("div"):
+        OmegaConf.register_new_resolver("div", lambda x, y: int(x) // int(y))
 
 
 def extras(cfg: DictConfig) -> None:
