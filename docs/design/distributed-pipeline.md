@@ -31,6 +31,8 @@ ______________________________________________________________________
 
 ## 1. Context & Motivation
 
+Topline goal: Get massive dataset generation working reliably enough, and know what went wrong when there is unexpected behavior.
+
 **synth-permutations** is a machine learning research project studying how neural networks can infer synthesizer parameters from audio. The core task: given a recording of a synthesizer, predict the knob settings (parameters) that produced it.
 
 Training these models requires large-scale datasets: 500k–1M+ audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as an HDF5 shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
