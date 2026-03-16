@@ -122,7 +122,8 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Install dev tools
-        run: make setup-ci
+        run: |
+          python -m pip install --upgrade pip
 
       - name: Run pre-commit checks
         run: |
@@ -130,7 +131,7 @@ jobs:
           make format
 
       - name: Run BATS tests
-        run: make test-bash
+        run: make test
 
   # upload code coverage report
   code-coverage:
