@@ -90,7 +90,7 @@ make finalize ARGS="--run-id surge_simple-480k-10k-20260313-100000"
 
 ### Goals
 
-- **Reproducible pipeline with full provenance.** Given the same config and code version, the pipeline produces an identical dataset. The input spec freezes all generation parameters (seeds, shapes, renderer version). Every dataset records what produced it: git commit, `is_repo_dirty: bool`, param spec, renderer version. This chain links dataset → code version → training run.
+- **Reproducible pipeline with full provenance.** Given the same config and code version, the pipeline produces an identical dataset. The input spec freezes all generation parameters (seeds, shapes, renderer version). Every dataset records what produced it: git commit, `is_repo_dirty: bool`, param spec, renderer version. This chain links dataset → code version → training run. Provenance matters because this is ML research: when a model behaves unexpectedly, you need to trace from the trained model back to the exact dataset, the exact code that generated it, and which worker attempt produced each shard. Without this chain, debugging training anomalies becomes guesswork. Per-shard provenance is tracked via lifecycle markers and content hashes in worker reports — you can determine which worker produced a shard, whether there were multiple attempts, and verify the hash matches what finalize consumed.
 - **Minimal hand-holding.** Two commands, no babysitting. Launch generation, come back later, run finalize. No monitoring dashboards to watch, no coordination services to keep alive, no manual intervention between steps.
 - **Debugability.** When something fails, the failure is easy to find and understand. Per-shard error tracking, structured debug logs that survive crashes, reconciliation reports that show exactly which shards are missing and why. No need to dig through cloud provider consoles.
 - **Low cost.** Cheap GPUs, free egress, no infrastructure to manage. A full dataset generation run costs ~$2. Monthly compute at 1-2 runs/week is ~$8-16. R2 storage accumulates but free egress makes it far cheaper than S3 for frequently-downloaded datasets.
@@ -102,12 +102,12 @@ make finalize ARGS="--run-id surge_simple-480k-10k-20260313-100000"
 ### Design Principles
 
 - **Storage is truth** — correctness is determined by inspecting actual shard files in R2, not by trusting worker-reported metadata. Metadata files are debugging hints, not the source of truth ([§7.1](#71-storage-as-the-source-of-truth))
-- **Reconciliation over orchestration** — the pipeline determines what work remains by comparing desired state (spec) against actual state (validated shards). We are not in the business of orchestrating. Any command is safe at any time ([§7.3](#73-reconciliation-based-execution))
-- **Deterministic work identity** — shard IDs are logical and deterministic (`shard-000042`), not tied to infrastructure. Any worker can compute any shard ([§7.2](#72-deterministic-shard-identities))
+- **Reconciliation over orchestration** — the pipeline determines what work remains by comparing desired state (spec) against actual state (validated shards). We are not in the business of orchestrating. Any command is safe at any time ([§7.4](#74-reconciliation-based-execution))
+- **Deterministic work identity** — shard IDs are logical and deterministic (`shard-000042`), not tied to infrastructure. Any worker can compute any shard ([§7.3](#73-deterministic-shard-identities))
 - **Stage isolation** — each processing stage is an independent, reconcilable transform with well-defined inputs and outputs ([§5](#5-stage-definitions))
-- **Fail visibly** — errors are captured, structured, and surfaced, never swallowed ([§7.7](#77-error-handling--crash-resilience))
-- **Validate at boundaries** — data is verified when entering and leaving each stage ([§7.4](#74-shard-validation))
-- **Thin abstractions** — only abstract what's needed. Two compute backends (local + RunPod), not a speculative provider framework ([§7.8](#78-compute-abstraction))
+- **Fail visibly** — errors are captured, structured, and surfaced, never swallowed ([§7.8](#78-error-handling--crash-resilience))
+- **Validate at boundaries** — data is verified when entering and leaving each stage ([§7.5](#75-shard-validation))
+- **Thin abstractions** — only abstract what's needed. Two compute backends (local + RunPod), not a speculative provider framework ([§7.9](#79-compute-abstraction))
 
 ### What This System Deliberately Avoids
 
@@ -250,19 +250,27 @@ The pipeline has two stages. Each is an independent command with well-defined in
       shard-000001.h5
       ...
       shard-000479.h5
-    quarantine/                          # Corrupt shards moved here
-      shard-000042.h5
     metadata/
       config.yaml                        # User recipe (provenance copy, not authoritative)
-      input_spec.json                      # Frozen input specification (authoritative)
-      worker-{worker_id}.json            # Per-worker summary report
-      worker-{worker_id}-debug.log             # Per-worker debug log stream (JSONL)
+      input_spec.json                    # Frozen input specification (authoritative)
+      dataset.json                       # Self-describing dataset card (written by finalize)
+      dataset.complete                   # Completion marker (written by finalize)
+      shards/                            # Per-shard metadata, grouped by shard ID
+        shard-000000/
+          {worker_id}-{attempt_uuid}.valid       # Lifecycle marker: validated + uploaded
+        shard-000042/
+          {worker_id}-{attempt_uuid}.rendering   # First attempt: started but crashed
+          {worker_id}-{attempt_uuid}.valid       # Second attempt: succeeded
+          quarantine/
+            shard-000042.h5                      # Corrupt version, preserved for debugging
+      worker_attempts/                    # Per-attempt worker artifacts
+        {worker_id}-{attempt_uuid}/
+          report.json                    # Worker summary — per-shard results, content_hash, timing
+          debug.log                      # Debug log (JSONL), uploaded by EXIT trap
     train.h5                             # Virtual dataset (written by finalize)
     val.h5
     test.h5
     stats.npz                            # Normalization statistics
-    dataset.json                         # Self-describing dataset card
-    dataset.complete                     # Completion marker (not a mutex)
 ```
 
 ### Artifact Taxonomy
@@ -287,10 +295,17 @@ All structured files in the pipeline, in one place:
               ┌─────────────┼─────────────┐
               │             │             │
        ┌──────▼──────┐  ┌──▼──────────┐  ┌▼──────────────┐
-       │ shard-*.h5   │  │ worker-*.json│  │ worker-*.log  │
-       │ (data)       │  │ (report)     │  │ (debug log)   │
-       │ HDF5 shards  │  │ Summary JSON │  │ JSONL stream  │
+       │ shard-*.h5   │  │ report.json  │  │ debug.log     │
+       │ (data)       │  │ (worker      │  │ (worker       │
+       │ HDF5 shards  │  │  summary)    │  │  debug log)   │
        └──────┬───────┘  └─────────────┘  └───────────────┘
+              │                │
+       ┌──────▼──────┐  ┌─────▼─────────┐
+       │ .rendering   │  │ .valid         │
+       │ .valid       │  │ .invalid       │
+       │ .invalid     │  │ (lifecycle     │
+       │ (lifecycle)  │  │  markers)      │
+       └──────┬───────┘  └───────────────┘
               │
      pipeline.cli finalize  ← consumes shards
        ┌──────▼───────┐
@@ -304,18 +319,36 @@ All structured files in the pipeline, in one place:
        └───────────────┘
 ```
 
-| Artifact                | Format | Produced By                         | Consumed By                      | Role                                                             |
-| ----------------------- | ------ | ----------------------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `config.yaml`           | YAML   | User (hand-written)                 | `pipeline.cli generate`          | Dataset recipe — what to produce                                 |
-| `input_spec.json`       | JSON   | `pipeline.cli generate` (first run) | `generate`, `status`, `finalize` | Frozen input specification — per-shard seeds, shapes, row ranges |
-| `shard-{id}.h5`         | HDF5   | Workers                             | `pipeline.cli finalize`          | Actual data — audio, mel spectrograms, parameter arrays          |
-| `worker-{id}.json`      | JSON   | Workers (at exit)                   | `pipeline.cli status`            | Worker summary — per-shard pass/fail, timing                     |
-| `worker-{id}-debug.log` | JSONL  | Workers (continuous)                | Humans (`jq`)                    | Debug log — full narrative, survives crashes via EXIT trap       |
-| `dataset.json`          | JSON   | `pipeline.cli finalize`             | Training scripts, humans         | Dataset card — provenance, structure, stats                      |
-| `dataset.complete`      | JSON   | `pipeline.cli finalize` (last step) | `finalize` (idempotency check)   | Completion marker — run_id, timestamp                            |
-| `stats.npz`             | NumPy  | `pipeline.cli finalize`             | Training scripts                 | Normalization statistics (mean, std)                             |
+| Artifact          | Path                                                         | Format     | Produced By              | Consumed By                      |
+| ----------------- | ------------------------------------------------------------ | ---------- | ------------------------ | -------------------------------- |
+| Config            | `metadata/config.yaml`                                       | YAML       | User                     | `generate`                       |
+| Input spec        | `metadata/input_spec.json`                                   | JSON       | `generate` (first run)   | `generate`, `status`, `finalize` |
+| Shard             | `shards/shard-{id}.h5`                                       | HDF5       | Workers                  | `finalize`                       |
+| Lifecycle marker  | `metadata/shards/shard-{id}/{worker}-{attempt}.{state}`      | Empty file | Workers / Reconciliation | `status`, humans                 |
+| Quarantined shard | `metadata/shards/shard-{id}/quarantine/shard-{id}.h5`        | HDF5       | Reconciliation           | Humans (debugging)               |
+| Worker report     | `metadata/worker_attempts/{worker_id}-{attempt}/report.json` | JSON       | Workers (at exit)        | `status`                         |
+| Debug log         | `metadata/worker_attempts/{worker_id}-{attempt}/debug.log`   | JSONL      | Workers (continuous)     | Humans (`jq`)                    |
+| Dataset card      | `metadata/dataset.json`                                      | JSON       | `finalize`               | Training scripts, humans         |
+| Completion marker | `metadata/dataset.complete`                                  | JSON       | `finalize` (last step)   | `finalize` (idempotency check)   |
+| Stats             | `stats.npz`                                                  | NumPy      | `finalize`               | Training scripts                 |
 
-**Naming conventions:** Config is YAML (human-authored). Everything machine-generated is JSON. Debug logs are JSONL (one event per line). Data is HDF5. The split: YAML for human input, JSON for machine output, JSONL for append-only streams.
+**Shard attempt lifecycle:** Each attempt is tracked by an empty marker file in the shard's metadata directory, named `{worker_id}-{attempt_uuid}.{state}`:
+
+| Marker       | Written by                               | Meaning                                                                                                                       |
+| ------------ | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `.rendering` | Worker (at start)                        | Rendering in progress. Replaced by `.valid` on success. Orphaned `.rendering` without a `.valid` indicates a crashed attempt. |
+| `.valid`     | Worker (after local validation + upload) | Shard validated locally and uploaded to canonical path. Content hash recorded in the worker report.                           |
+| `.invalid`   | Reconciliation                           | Existing shard failed validation. Shard moved to `quarantine/`. Reason logged in reconciliation output.                       |
+
+Listing a shard's metadata directory shows the full history at a glance:
+
+```
+$ rclone ls r2:bucket/{run_id}/data/metadata/shards/shard-000042/
+  0  pod-abc123-a1b2c3d4.rendering     # first attempt crashed
+  0  pod-def456-e5f6a7b8.valid         # second attempt succeeded
+```
+
+**Naming conventions:** Config is YAML (human-authored). Everything machine-generated is JSON. Debug logs are JSONL (one event per line). Data is HDF5. Metadata is grouped by shard ID (`metadata/shards/shard-{id}/`) so you can inspect all attempts and quarantined files for a single shard in one listing. Worker artifacts are grouped under `worker_attempts/{worker_id}-{attempt_uuid}/`. Lifecycle markers are empty files — presence is the state, no content to parse.
 
 ## 7. Design Decisions
 
@@ -345,7 +378,39 @@ This eliminates an entire class of edge cases:
 - Shard exists but status was never written → shard passes validation → it's complete
 - Worker metadata is missing but all shards validate → run is complete
 
-### 7.2 Deterministic Shard Identities
+### 7.2 Shard Lifecycle
+
+Every shard in the pipeline moves through a well-defined set of states. These states are derived from storage — marker files, shard files, and the dataset card — not from worker self-reporting.
+
+```
+missing → rendering → valid → finalized
+               ↓
+            invalid (quarantined)
+```
+
+| State         | How it's determined                                                                                                                  | Persisted as                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| **missing**   | Shard is in the input spec but no valid shard file or `.valid` marker exists in R2                                                   | Implicit (absence of shard + marker)                                                    |
+| **rendering** | `.rendering` marker exists for this shard. Worker has started but not yet uploaded a validated shard.                                | `metadata/shards/shard-{id}/{worker_id}-{attempt}.rendering`                            |
+| **valid**     | `.valid` marker exists. Shard was validated locally by the worker and uploaded to the canonical path.                                | `metadata/shards/shard-{id}/{worker_id}-{attempt}.valid`                                |
+| **invalid**   | `.invalid` marker exists. Reconciliation found the shard in R2 but it failed validation. The corrupt file is moved to `quarantine/`. | `metadata/shards/shard-{id}/{worker_id}-{attempt}.invalid` + `quarantine/shard-{id}.h5` |
+| **finalized** | Shard was consumed by `finalize`, content hash recorded in `dataset.json`. The dataset is sealed.                                    | Content hash in `dataset.json`, `dataset.complete` marker exists                        |
+
+**Transitions:**
+
+- **missing → rendering:** Worker begins shard generation, writes `.rendering` marker.
+- **rendering → valid:** Worker validates locally, uploads shard, replaces `.rendering` with `.valid`.
+- **rendering → missing:** Worker crashes. `.rendering` is orphaned — no `.valid` follows. Reconciliation treats the shard as missing. The orphaned `.rendering` marker is observable evidence of the crashed attempt.
+- **valid → invalid:** Reconciliation re-validates an existing shard and finds it corrupt (e.g., renderer non-determinism, bit rot detected by checksum mismatch). Shard moved to quarantine, `.invalid` written. Shard is now effectively missing and will be regenerated.
+- **valid → finalized:** `finalize` consumes the shard, records its content hash in `dataset.json`, and writes `dataset.complete`.
+
+**Key properties:**
+
+- **States are derived from storage, not reported by workers.** A `.rendering` marker with no `.valid` means the attempt failed, regardless of what the worker report says.
+- **Multiple attempts are visible.** A shard directory might contain `pod-abc.rendering` (crashed) and `pod-def.valid` (succeeded) — the full history is one `rclone ls` away.
+- **The finalized state is dataset-level, not shard-level.** Individual shards don't know they've been finalized. The `dataset.json` content hash and `dataset.complete` marker are the authority.
+
+### 7.3 Deterministic Shard Identities
 
 Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479.h5`. Defined at run creation, independent of which worker computes them.
 
@@ -358,14 +423,16 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 
 **Shard write protocol:**
 
-1. Render shard to a local temp file
-2. **Validate locally** (structural, shape, value, row count) — this is critical: only validated shards are uploaded. A corrupt render (VST crash, NaN values, truncated output) is caught here and never reaches R2. See [§7.9](#79-failure-modes--edge-cases) for why this matters.
-3. Upload to canonical path: `{run_id}/data/shards/shard-{id}.h5`
-4. Write worker report to `{run_id}/data/metadata/worker-{worker_id}.json`
+1. Write `.rendering` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
+2. Render shard to a local temp file
+3. **Validate locally** (structural, shape, value, row count) — this is critical: only validated shards are uploaded. A corrupt render (VST crash, NaN values, truncated output) is caught here and never reaches R2. See [§11.2](#112-failure-modes--edge-cases) for why this matters.
+4. Upload to canonical path: `{run_id}/data/shards/shard-{id}.h5`
+5. Replace `.rendering` with `.valid` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt_uuid}.valid`
+6. Write worker report (including content hash) to `metadata/workers/{worker_id}-{attempt_uuid}/report.json`
 
-> **Invariant:** A shard counts as complete only when the canonical object exists in storage and passes validation. Workers must validate locally before upload to prevent corrupt writes from overwriting valid data ([§7.6](#76-concurrency-semantics)).
+> **Invariant:** A shard counts as complete only when the canonical object exists in storage and passes validation. Workers must validate locally before upload to prevent corrupt writes from overwriting valid data ([§7.7](#77-concurrency-semantics)).
 
-### 7.3 Reconciliation-Based Execution
+### 7.4 Reconciliation-Based Execution
 
 Instead of tracking worker state or polling provider APIs, the pipeline determines what work remains by inspecting storage.
 
@@ -422,7 +489,7 @@ Recent worker errors (from metadata):
 
 Worker error details are overlaid from metadata files when present, but the core output (valid/missing/quarantined counts) is derived entirely from shard files.
 
-### 7.4 Shard Validation
+### 7.5 Shard Validation
 
 Every shard is validated before finalize merges it. Validation checks:
 
@@ -431,9 +498,9 @@ Every shard is validated before finalize merges it. Validation checks:
 - **Value**: No NaN/Inf values, audio within [-1, 1], parameters within spec bounds
 - **Row count**: Matches spec's expected shard size
 
-Corrupt shards are quarantined (moved to `quarantine/` prefix) and reported. Reconciliation treats quarantined shards as missing — they'll be regenerated on next `generate`.
+Corrupt shards are quarantined (moved to `metadata/shards/shard-{id}/quarantine/`) and reported. Keeping quarantined files alongside the shard's receipts means `rclone ls` of a shard's metadata directory shows the full history. Reconciliation treats quarantined shards as missing — they'll be regenerated on next `generate`.
 
-### 7.5 Finalize Workflow
+### 7.6 Finalize Workflow
 
 01. **Check for `dataset.complete`** — if present and all outputs validate, print "already finalized" and exit 0
 02. **Read spec** from R2
@@ -471,7 +538,7 @@ The input spec defines what the run should produce. `dataset.json` is the *outpu
 **Referenced:** full spec via `input_spec_sha256` and `input_spec_path`.
 **Excluded:** worker reports and debug logs — these are process artifacts, not dataset metadata.
 
-### 7.6 Concurrency Semantics
+### 7.7 Concurrency Semantics
 
 This is a single-user research pipeline running 1-2x/week. It is not designed for concurrent operation, but it is **safe** under concurrent operation. Nothing gets corrupted — you just waste compute.
 
@@ -522,7 +589,7 @@ Finalize checks completeness first. If shards are missing, it reports "generatio
 - **Non-deterministic outputs.** If floating-point non-determinism across different hardware produces different audio for the same seed, last-writer-wins means the final shard is arbitrary. The mitigation is to fix non-determinism in the renderer.
 - **Concurrent spec modification.** The spec is written once and never modified. If something modifies it after creation, all bets are off.
 
-### 7.7 Error Handling & Crash Resilience
+### 7.8 Error Handling & Crash Resilience
 
 The pipeline handles three categories of failure, including crashes from data generation code we don't own (the Surge XT VST plugin can SIGSEGV, OOM, or produce corrupt output).
 
@@ -536,14 +603,15 @@ A bash EXIT trap uploads the debug log and a fallback error JSON to R2 if the Py
 Regardless of how a shard was lost (crash, timeout, upload failure, corrupt output), reconciliation detects it as missing. The next `generate` invocation launches workers for exactly the missing shards. No manual investigation of failure modes is required to resume.
 
 **Error tracking artifacts:**
-Each worker produces two debugging artifacts:
+Each worker invocation produces three artifacts, all with unique filenames keyed by `{worker_id}-{attempt_uuid}`:
 
-- **Debug log** (`worker-{id}-debug.log`, JSONL) — append-only narrative, uploaded by EXIT trap, survives crashes
-- **Worker report** (`worker-{id}.json`, JSON) — derived summary, written at end of execution, missing if worker crashed
+- **Lifecycle markers** (`shards/shard-{id}/{worker_id}-{attempt}.rendering` / `.valid`) — empty files tracking attempt state. Orphaned `.rendering` without `.valid` = crashed attempt.
+- **Worker report** (`worker_attempts/{worker_id}-{attempt}/report.json`, JSON) — derived summary with content hashes, written at end of execution, missing if worker crashed
+- **Debug log** (`worker_attempts/{worker_id}-{attempt}/debug.log`, JSONL) — append-only narrative, uploaded by EXIT trap, survives crashes
 
-Missing worker metadata never blocks completion. A run is successful when all shard files exist and validate.
+Unique filenames per attempt mean retries never overwrite previous artifacts. Missing worker metadata never blocks completion. A run is successful when all shard files exist and validate.
 
-### 7.8 Compute Abstraction
+### 7.9 Compute Abstraction
 
 The CLI is not a job supervisor. It submits work and exits. Completeness is determined solely by validated outputs in storage, never by polling a provider API.
 
@@ -679,7 +747,7 @@ Credentials are baked into Docker images via BuildKit `--secret` — not visible
 
 - `dataset.json` contains the complete output record
 - W&B shows pipeline metrics and dataset artifact lineage
-- Debug logs in R2 (`metadata/worker-{id}-debug.log`) provide full JSONL debug log streams, queryable with `jq`
+- Debug logs in R2 (`metadata/worker_attempts/{worker_id}-{attempt}/debug.log`) provide full JSONL debug log streams, queryable with `jq`
 - Quarantined shards preserved for debugging
 
 ### 10.3 Cost Model
@@ -905,7 +973,7 @@ class DatasetCard(BaseModel):
 
 ### 14.3 Worker Report Schema
 
-Schema for worker reports described in [§7.7](#77-error-handling--crash-resilience).
+Schema for worker reports described in [§7.8](#78-error-handling--crash-resilience).
 
 ```python
 class ShardResult(BaseModel):
@@ -963,7 +1031,7 @@ Example: surge_simple-480k-10k-20260312-143022
 
 ### 14.6 Structured Logging
 
-Implementation of debug logging described in [§7.7](#77-error-handling--crash-resilience).
+Implementation of debug logging described in [§7.8](#78-error-handling--crash-resilience).
 
 Workers use `structlog` with JSON rendering for append-only debug log streams:
 
@@ -1128,8 +1196,10 @@ Alternatives considered but not impactful enough for detailed analysis.
 | **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                          |
 | **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                       |
 | **dataset.complete**       | Marker file written by finalize as the very last step. Means "finalization is done" — not a mutex or lock. Contains run_id and timestamp.                                                                                                                                                                          |
-| **Debug log**              | JSONL file (`worker-{id}-debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                                                     |
-| **Worker report**          | JSON summary (`worker-{id}.json`) of a worker's results. Written at exit, missing if worker crashed.                                                                                                                                                                                                               |
+| **Debug log**              | JSONL file (`metadata/worker_attempts/{worker_id}-{attempt}/debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                  |
+| **Worker report**          | JSON summary (`metadata/worker_attempts/{worker_id}-{attempt}/report.json`) of a worker's results, including content hashes for provenance. Written at exit, missing if worker crashed.                                                                                                                            |
+| **Lifecycle marker**       | Empty file in `metadata/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. States: `.rendering` (in progress), `.valid` (validated + uploaded), `.invalid` (failed reconciliation). Presence is the state — no content to parse.                                                                           |
+| **Quarantined shard**      | A corrupt shard moved to `metadata/shards/shard-{id}/quarantine/` for debugging. Kept alongside lifecycle markers so `rclone ls` of a shard's metadata directory shows the full history.                                                                                                                           |
 | **Dataset card**           | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                         |
 | **param_spec**             | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Examples: `surge_simple` (92 params), `surge_xt` (189 params).                                                                                                                                            |
 | **VST**                    | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                          |
