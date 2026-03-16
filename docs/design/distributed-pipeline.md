@@ -336,11 +336,11 @@ All structured files in the pipeline, in one place:
 
 **Shard attempt lifecycle:** Each attempt is tracked by an empty marker file in the shard's metadata directory, named `{worker_id}-{attempt_uuid}.{state}`:
 
-| Marker       | Written by                               | Meaning                                                                                                                       |
-| ------------ | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `.rendering` | Worker (at start)                        | Rendering in progress. Replaced by `.valid` on success. Orphaned `.rendering` without a `.valid` indicates a crashed attempt. |
-| `.valid`     | Worker (after local validation + upload) | Shard validated locally and uploaded to canonical path. Content hash recorded in the worker report.                           |
-| `.invalid`   | Reconciliation                           | Existing shard failed validation. Shard moved to `quarantine/`. Reason logged in reconciliation output.                       |
+| Marker       | Written by                               | Meaning                                                                                                                                                                            |
+| ------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.rendering` | Worker (at start)                        | Rendering in progress. `.valid` is written alongside on success (append-only — `.rendering` is not deleted). Orphaned `.rendering` without a `.valid` indicates a crashed attempt. |
+| `.valid`     | Worker (after local validation + upload) | Shard validated locally and uploaded to canonical path. Content hash recorded in the worker report.                                                                                |
+| `.invalid`   | Reconciliation                           | Existing shard failed validation. Shard *copied* to `quarantine/` (not moved — move is a copy+delete, dangerous if another worker is about to overwrite with a valid version).     |
 
 Listing a shard's metadata directory shows the full history at a glance:
 
@@ -358,14 +358,38 @@ $ rclone ls r2:bucket/{run_id}/data/metadata/shards/shard-000042/
 
 The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by content hashes. **A shard is complete if and only if the canonical shard file exists in R2 and passes validation.** Worker metadata is supplementary — useful for debugging, never authoritative.
 
-**Why R2:**
+**Why R2 for coordination and not a database or queue:**
 
-- Workers already upload shards to R2, so the write path exists
+Object storage lacks atomic compare-and-set, locking, and transactions. A traditional coordination system (Redis, Postgres, SQS) would provide these. We use R2 anyway — this is a deliberate trade-off, not a convenience choice.
+
+The pipeline doesn't need what coordination systems provide:
+
+- **No atomic compare-and-set** — shard outputs are deterministic, so concurrent writes produce identical content. Last-writer-wins is safe when all writers agree ([§7.7](#77-concurrency-semantics)).
+- **No locking** — each shard is assigned to one worker per invocation. The assignment is a simple partition of the missing set. No lock acquisition needed.
+- **No transactions** — stages are independent. There is no multi-shard operation that must succeed or fail atomically.
+- **No queue** — work discovery is reconciliation (compare spec against storage). A queue would be a second source of truth for "what work remains" — and a less reliable one than the files themselves.
+
+What a coordination system *would* cost:
+
+- **Infrastructure to manage.** Redis/Postgres must be provisioned, monitored, backed up, and secured. For a pipeline that runs 1-2x/week, this is disproportionate.
+- **A second failure mode.** If the coordination system is down, the pipeline can't run — even though R2 (where the actual data lives) is fine.
+- **Split-brain risk.** Coordination system says "shard-042 is complete" but the file is missing from R2. Now you have two sources of truth that disagree. The current design has one source of truth: the files.
+
+What R2 provides instead:
+
+- Workers already upload shards to R2, so the coordination write path is free
 - R2 state survives worker termination and cleanup
 - S3-compatible — coordination layer is portable to any cloud
 - Free egress — datasets are frequently downloaded for training
-- No additional infrastructure to manage
 - Files are human-readable and inspectable (`rclone cat` + `jq`)
+- [Strong read-after-write consistency](https://developers.cloudflare.com/r2/reference/consistency/) — no stale reads
+
+The patterns that make R2-as-coordination safe despite no atomicity:
+
+- **Deterministic shard IDs** — canonical paths are known from the spec, no claiming needed ([§7.3](#73-deterministic-shard-identities))
+- **Idempotent operations** — every command is safe to re-run
+- **Append-only metadata** — lifecycle markers and worker reports use unique filenames, never overwritten ([§7.2](#72-shard-lifecycle))
+- **Reconciliation from storage** — the pipeline re-derives state from files on every invocation, never caches coordination state locally
 
 **State model — three things determine pipeline state:**
 
@@ -390,20 +414,20 @@ missing → rendering → valid → finalized
             invalid (quarantined)
 ```
 
-| State         | How it's determined                                                                                                                  | Persisted as                                                                            |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| **missing**   | Shard is in the input spec but no valid shard file or `.valid` marker exists in R2                                                   | Implicit (absence of shard + marker)                                                    |
-| **rendering** | `.rendering` marker exists for this shard. Worker has started but not yet uploaded a validated shard.                                | `metadata/shards/shard-{id}/{worker_id}-{attempt}.rendering`                            |
-| **valid**     | `.valid` marker exists. Shard was validated locally by the worker and uploaded to the canonical path.                                | `metadata/shards/shard-{id}/{worker_id}-{attempt}.valid`                                |
-| **invalid**   | `.invalid` marker exists. Reconciliation found the shard in R2 but it failed validation. The corrupt file is moved to `quarantine/`. | `metadata/shards/shard-{id}/{worker_id}-{attempt}.invalid` + `quarantine/shard-{id}.h5` |
-| **finalized** | Shard was consumed by `finalize`, content hash recorded in `dataset.json`. The dataset is sealed.                                    | Content hash in `dataset.json`, `dataset.complete` marker exists                        |
+| State         | How it's determined                                                                                                                                                                                                             | Persisted as                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **missing**   | Shard is in the input spec but no valid shard file or `.valid` marker exists in R2                                                                                                                                              | Implicit (absence of shard + marker)                                                    |
+| **rendering** | `.rendering` marker exists for this shard. Worker has started but not yet uploaded a validated shard.                                                                                                                           | `metadata/shards/shard-{id}/{worker_id}-{attempt}.rendering`                            |
+| **valid**     | `.valid` marker exists. Shard was validated locally by the worker and uploaded to the canonical path.                                                                                                                           | `metadata/shards/shard-{id}/{worker_id}-{attempt}.valid`                                |
+| **invalid**   | `.invalid` marker exists. Reconciliation found the shard in R2 but it failed validation. The corrupt file is *copied* to `quarantine/` for debugging (not moved — the canonical path is left for the next worker to overwrite). | `metadata/shards/shard-{id}/{worker_id}-{attempt}.invalid` + `quarantine/shard-{id}.h5` |
+| **finalized** | Shard was consumed by `finalize`, content hash recorded in `dataset.json`. The dataset is sealed.                                                                                                                               | Content hash in `dataset.json`, `dataset.complete` marker exists                        |
 
 **Transitions:**
 
 - **missing → rendering:** Worker begins shard generation, writes `.rendering` marker.
-- **rendering → valid:** Worker validates locally, uploads shard, replaces `.rendering` with `.valid`.
+- **rendering → valid:** Worker validates locally, uploads shard, writes `.valid` marker. The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
 - **rendering → missing:** Worker crashes. `.rendering` is orphaned — no `.valid` follows. Reconciliation treats the shard as missing. The orphaned `.rendering` marker is observable evidence of the crashed attempt.
-- **valid → invalid:** Reconciliation re-validates an existing shard and finds it corrupt (e.g., renderer non-determinism, bit rot detected by checksum mismatch). Shard moved to quarantine, `.invalid` written. Shard is now effectively missing and will be regenerated.
+- **valid → invalid:** Reconciliation re-validates an existing shard and finds it corrupt (e.g., renderer non-determinism, bit rot detected by checksum mismatch). Corrupt shard *copied* to quarantine for debugging (not moved — deleting the canonical path is dangerous if another worker is about to overwrite it with a valid version). `.invalid` marker written. Shard is now effectively missing and will be regenerated.
 - **valid → finalized:** `finalize` consumes the shard, records its content hash in `dataset.json`, and writes `dataset.complete`.
 
 **Key properties:**
@@ -429,7 +453,7 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 2. Render shard to a local temp file
 3. **Validate locally** (structural, shape, value, row count) — this is critical: only validated shards are uploaded. A corrupt render (VST crash, NaN values, truncated output) is caught here and never reaches R2. See [§11.2](#112-failure-modes--edge-cases) for why this matters.
 4. Upload to canonical path: `{run_id}/data/shards/shard-{id}.h5`
-5. Replace `.rendering` with `.valid` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt_uuid}.valid`
+5. Write `.valid` marker alongside `.rendering` (append-only — `.rendering` is not deleted): `metadata/shards/shard-{id}/{worker_id}-{attempt_uuid}.valid`
 6. Write worker report (including content hash) to `metadata/workers/{worker_id}-{attempt_uuid}/report.json`
 
 > **Invariant:** A shard counts as complete only when the canonical object exists in storage and passes validation. Workers must validate locally before upload to prevent corrupt writes from overwriting valid data ([§7.7](#77-concurrency-semantics)).
@@ -500,7 +524,7 @@ Every shard is validated before finalize merges it. Validation checks:
 - **Value**: No NaN/Inf values, audio within [-1, 1], parameters within spec bounds
 - **Row count**: Matches spec's expected shard size
 
-Corrupt shards are quarantined (moved to `metadata/shards/shard-{id}/quarantine/`) and reported. Keeping quarantined files alongside the shard's receipts means `rclone ls` of a shard's metadata directory shows the full history. Reconciliation treats quarantined shards as missing — they'll be regenerated on next `generate`.
+Corrupt shards are quarantined (*copied* to `metadata/shards/shard-{id}/quarantine/`, not moved — the canonical path is left intact for the next worker to overwrite). Keeping quarantined files alongside the shard's lifecycle markers means `rclone ls` of a shard's metadata directory shows the full history. Reconciliation treats shards with `.invalid` markers as missing — they'll be regenerated on next `generate`.
 
 ### 7.6 Finalize Workflow
 
@@ -643,7 +667,7 @@ W&B serves as a lightweight observability layer for the pipeline — a few key m
 | ---------------------------------- | ----- | ----------------------------------------------------- |
 | `pipeline/shards_total`            | int   | Total shards in spec                                  |
 | `pipeline/shards_valid`            | int   | Shards that passed validation                         |
-| `pipeline/shards_quarantined`      | int   | Shards moved to quarantine                            |
+| `pipeline/shards_quarantined`      | int   | Shards copied to quarantine                           |
 | `pipeline/total_samples`           | int   | Total samples across all shards                       |
 | `pipeline/generation_time_seconds` | float | Wall clock: spec created_at → last shard uploaded     |
 | `pipeline/finalize_time_seconds`   | float | Wall clock: finalize start → dataset.complete written |
@@ -1203,7 +1227,7 @@ Alternatives considered but not impactful enough for detailed analysis.
 | **Debug log**              | JSONL file (`metadata/worker_attempts/{worker_id}-{attempt}/debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                  |
 | **Worker report**          | JSON summary (`metadata/worker_attempts/{worker_id}-{attempt}/report.json`) of a worker's results, including content hashes for provenance. Written at exit, missing if worker crashed.                                                                                                                            |
 | **Lifecycle marker**       | Empty file in `metadata/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. States: `.rendering` (in progress), `.valid` (validated + uploaded), `.invalid` (failed reconciliation). Presence is the state — no content to parse.                                                                           |
-| **Quarantined shard**      | A corrupt shard moved to `metadata/shards/shard-{id}/quarantine/` for debugging. Kept alongside lifecycle markers so `rclone ls` of a shard's metadata directory shows the full history.                                                                                                                           |
+| **Quarantined shard**      | A corrupt shard *copied* (not moved) to `metadata/shards/shard-{id}/quarantine/` for debugging. Kept alongside lifecycle markers so `rclone ls` of a shard's metadata directory shows the full history.                                                                                                            |
 | **Dataset card**           | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                         |
 | **param_spec**             | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Examples: `surge_simple` (92 params), `surge_xt` (189 params).                                                                                                                                            |
 | **VST**                    | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                          |
