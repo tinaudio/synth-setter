@@ -24,25 +24,25 @@ repos:
       - id: black
         args: [--line-length, "99"]
 
-  # python import sorting
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.12.0
+  # python linting + import sorting + syntax upgrades (replaces flake8, isort, pyupgrade)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.5
     hooks:
-      - id: isort
-        args: ["--profile", "black", "--filter-files"]
-
-  # python upgrading syntax to newer version
-  - repo: https://github.com/asottile/pyupgrade
-    rev: v3.3.1
-    hooks:
-      - id: pyupgrade
-        args: [--py38-plus]
+      - id: ruff
+        args: [--fix]
 
   # python docstring formatting
-  - repo: https://github.com/myint/docformatter
-    rev: v1.7.4
+  # Using local hook because docformatter v1.7.4's .pre-commit-hooks.yaml
+  # defines a 'docformatter-venv' hook with language: python_venv, which
+  # causes pre-commit to fail manifest validation on older versions.
+  - repo: local
     hooks:
       - id: docformatter
+        name: docformatter
+        entry: docformatter
+        language: python
+        types: [python]
+        additional_dependencies: ["docformatter[tomli]==1.7.4"]
         args:
           [
             --in-place,
@@ -54,7 +54,7 @@ repos:
 
   # python docstring coverage checking
   - repo: https://github.com/econchick/interrogate
-    rev: 1.5.0 # or master if you're bold
+    rev: 1.7.0
     hooks:
       - id: interrogate
         args:
@@ -68,26 +68,13 @@ repos:
             -vv,
           ]
 
-  # python check (PEP8), programming errors and code complexity
-  - repo: https://github.com/PyCQA/flake8
-    rev: 6.0.0
-    hooks:
-      - id: flake8
-        args:
-          [
-            "--extend-ignore",
-            "E203,E402,E501,F401,F841,RST2,RST301",
-            "--exclude",
-            "logs/*,data/*",
-          ]
-        additional_dependencies: [flake8-rst-docstrings==0.3.0]
-
   # python security linter
   - repo: https://github.com/PyCQA/bandit
     rev: "1.7.5"
     hooks:
       - id: bandit
         args: ["-s", "B101"]
+        additional_dependencies: ["pbr"]
 
   # yaml formatting
   - repo: https://github.com/pre-commit/mirrors-prettier
@@ -103,18 +90,23 @@ repos:
     hooks:
       - id: shellcheck
 
+  # makefile linter
+  - repo: https://github.com/checkmake/checkmake.git
+    rev: 0.2.2
+    hooks:
+      - id: checkmake
+
   # md formatting
   - repo: https://github.com/executablebooks/mdformat
-    rev: 0.7.16
+    rev: 1.0.0
     hooks:
       - id: mdformat
         args: ["--number"]
         additional_dependencies:
-          - mdformat-gfm
-          - mdformat-tables
-          - mdformat_frontmatter
-          # - mdformat-toc
-          # - mdformat-black
+          - mdformat-gfm==1.0.0
+          - mdformat_frontmatter==2.0.10
+          # optional: mdformat-tables is redundant if you use mdformat-gfm
+          # - mdformat-tables
 
   # word spelling linter
   - repo: https://github.com/codespell-project/codespell
@@ -123,25 +115,10 @@ repos:
       - id: codespell
         args:
           - --skip=logs/**,data/**,*.ipynb
-          # - --ignore-words-list=abc,def
+          - --ignore-words-list=abc,def,ot
 
   # jupyter notebook cell output clearing
   - repo: https://github.com/kynan/nbstripout
     rev: 0.6.1
     hooks:
       - id: nbstripout
-
-  # jupyter notebook linting
-  - repo: https://github.com/nbQA-dev/nbQA
-    rev: 1.6.3
-    hooks:
-      - id: nbqa-black
-        args: ["--line-length=99"]
-      - id: nbqa-isort
-        args: ["--profile=black"]
-      - id: nbqa-flake8
-        args:
-          [
-            "--extend-ignore=E203,E402,E501,F401,F841",
-            "--exclude=logs/*,data/*",
-          ]
