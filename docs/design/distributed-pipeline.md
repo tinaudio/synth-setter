@@ -171,8 +171,8 @@ Both planes use R2. There is no separate database, message queue, or coordinatio
 
 What if reconciliation itself has a bug — e.g., it validates a corrupt shard as good?
 
-- **Defense in depth:** Validation runs four independent checks; all must pass ([§7.5](#75-shard-validation)).
-- **Finalize re-validates:** Workers, reconciliation, and finalize all call the same validation function — no divergence between validation passes.
+- **Defense in depth:** Workers run four independent validation checks before upload; all must pass ([§7.5](#75-shard-validation)).
+- **Tiered validation:** Workers do full 4-check validation. Finalize structural-checks staged shards before promoting. Each tier catches a different class of failure.
 - **Training is the ultimate check:** A corrupt dataset will fail to train properly, providing end-to-end verification.
 - **Manual spot-checking is feasible:** At 1-2 runs/week, eyeballing a few shards is practical and encouraged.
 
@@ -206,36 +206,37 @@ The pipeline has two stages. Each is an independent command with well-defined in
 │                               │         ┌────────────────┐
 │  1. Validate auth (R2+RunPod) │         │  Cloudflare R2  │
 │  2. Read/create spec  ◄───┼────────►│                │
-│  3. List existing shards  ◄───┼─────────┤  {run_id}/     │
-│  4. Validate existing shards  │         │   data/shards/ │
-│  5. Compute missing set       │         │   metadata/    │
+│  3. List staged shards    ◄───┼─────────┤  {run_id}/     │
+│  4. Validate staged shards    │         │   metadata/    │
+│  5. Compute missing set       │         │   workers/     │
 │  6. Partition across N workers│         │                │
 │  7. Submit N tasks            │         │                │
 │  8. Exit                      │         │                │
 └───────────────────────────────┘         │                │
                                           │                │
          ┌───────────────────┐            │                │
-         │  Worker 1         │───────────►│  shard-000000  │
-         │  (RunPod worker)  │            │  shard-000001  │
-         │  shards 0-47      │            │  ...           │
+         │  Worker 1         │───────────►│  metadata/     │
+         │  (RunPod worker)  │            │   workers/     │
+         │  shards 0-47      │            │   shards/      │
          └───────────────────┘            │                │
          ┌───────────────────┐            │                │
-         │  Worker N         │───────────►│  shard-000432  │
-         │  shards 432+      │            │  ...           │
+         │  Worker N         │───────────►│  (staging)     │
+         │  shards 432+      │            │                │
          └───────────────────┘            │                │
                                           │                │
 ┌───────────────────────────────┐         │                │
 │  make finalize RUN_ID=...     │         │                │
 │  (local or cloud)             │         │                │
 │                               │         │  data/         │
-│  1. Read spec         ◄───┼─────────┤   train.h5     │
-│  2. Validate all shards   ◄───┼─────────┤   val.h5       │
-│  3. Download shards       ◄───┼─────────┤   test.h5      │
-│  4. Reshard → train/val/test  │         │   stats.npz    │
-│  5. Compute stats             │         │   dataset.json │
-│  6. Register in W&B      ────┼──┐      │   dataset.complete│
-│  7. Upload finalized      ────┼──┼─────►│                │
-│  8. Write dataset.complete ───┼──┘      │                │
+│  1. Read spec          ◄───┼─────────┤   train.h5     │
+│  2. Validate staged shards ◄──┼─────────┤   val.h5       │
+│  3. Promote to data/shards ───┼─────────►   test.h5      │
+│  4. Download canonical shards ┼─────────┤   stats.npz    │
+│  5. Reshard → train/val/test  │         │   dataset.json │
+│  6. Compute stats             │         │   dataset.complete│
+│  7. Register in W&B      ────┼──┐      │                │
+│  8. Upload finalized      ────┼──┼─────►│                │
+│  9. Write dataset.complete ───┼──┘      │                │
 └───────────────────────────────┘         └────────────────┘
 ```
 
@@ -244,32 +245,35 @@ The pipeline has two stages. Each is an independent command with well-defined in
 ```
 {run_id}/                              # e.g. surge_simple-480k-10k-20260312-143022
   data/
-    shards/
-      shard-000000.h5                    # Deterministic logical shard IDs
+    shards/                              # Written ONLY by finalize (promoted from staging)
+      shard-000000.h5                    # Canonical finalized shards
       shard-000001.h5
       ...
       shard-000479.h5
-    metadata/
-      config.yaml                        # User recipe (provenance copy, not authoritative)
-      input_spec.json                    # Frozen input specification (authoritative)
-      dataset.json                       # Self-describing dataset card (written by finalize)
-      dataset.complete                   # Completion marker (written by finalize)
-      shards/                            # Per-shard metadata, grouped by shard ID
-        shard-000000/
-          {worker_id}-{attempt_uuid}.valid       # Lifecycle marker: validated + uploaded
-        shard-000042/
-          {worker_id}-{attempt_uuid}.rendering   # First attempt: started but crashed
-          {worker_id}-{attempt_uuid}.valid       # Second attempt: succeeded
-          quarantine/
-            shard-000042.h5                      # Corrupt version, preserved for debugging
-      worker_attempts/                    # Per-attempt worker artifacts
-        {worker_id}-{attempt_uuid}/
-          report.json                    # Worker summary — per-shard results, content_hash, timing
-          debug.log                      # Debug log (JSONL), uploaded by EXIT trap
     train.h5                             # Virtual dataset (written by finalize)
     val.h5
     test.h5
     stats.npz                            # Normalization statistics
+  metadata/
+    config.yaml                          # User recipe (provenance copy, not authoritative)
+    input_spec.json                      # Frozen input specification (authoritative)
+    dataset.json                         # Self-describing dataset card (written by finalize)
+    dataset.complete                     # Completion marker (written by finalize)
+    workers/                             # Everything workers produce goes here
+      shards/                            # Per-shard staging area + lifecycle markers
+        shard-000000/
+          {worker_id}-{attempt_uuid}.h5          # Worker's validated shard output
+          {worker_id}-{attempt_uuid}.valid       # Lifecycle marker: validated + uploaded
+        shard-000042/
+          {worker_id}-{attempt_uuid}.h5          # Second attempt's shard output
+          {worker_id}-{attempt_uuid}.rendering   # First attempt: started but crashed
+          {worker_id}-{attempt_uuid}.valid       # Second attempt: succeeded
+          quarantine/
+            {worker_id}-{attempt_uuid}.h5        # Corrupt version, preserved for debugging
+      attempts/                           # Per-attempt worker artifacts
+        {worker_id}-{attempt_uuid}/
+          report.json                    # Worker summary — per-shard results, content_hash, timing
+          debug.log                      # Debug log (JSONL), uploaded by EXIT trap
 ```
 
 ### Artifact Taxonomy
@@ -294,19 +298,25 @@ All structured files in the pipeline, in one place:
               ┌─────────────┼─────────────┐
               │             │             │
        ┌──────▼──────┐  ┌──▼──────────┐  ┌▼──────────────┐
-       │ shard-*.h5   │  │ report.json  │  │ debug.log     │
-       │ (data)       │  │ (worker      │  │ (worker       │
-       │ HDF5 shards  │  │  summary)    │  │  debug log)   │
+       │ {w}-{a}.h5   │  │ report.json  │  │ debug.log     │
+       │ (staged      │  │ (worker      │  │ (worker       │
+       │  shard)      │  │  summary)    │  │  debug log)   │
        └──────┬───────┘  └─────────────┘  └───────────────┘
-              │                │
-       ┌──────▼──────┐  ┌─────▼─────────┐
-       │ .rendering   │  │ .valid         │
-       │ .valid       │  │ .invalid       │
-       │ .invalid     │  │ (lifecycle     │
-       │ (lifecycle)  │  │  markers)      │
-       └──────┬───────┘  └───────────────┘
               │
-     pipeline.cli finalize  ← consumes shards
+       ┌──────▼──────┐   All worker output → metadata/workers/
+       │ .rendering   │
+       │ .valid       │
+       │ .invalid     │
+       │ (lifecycle)  │
+       └──────┬───────┘
+              │
+     pipeline.cli finalize  ← validates + promotes staged shards
+              │
+       ┌──────▼───────┐
+       │shard-{id}.h5  │ ─── Promoted to data/shards/ (canonical)
+       │(finalized)    │     Written ONLY by finalize
+       └──────┬───────┘
+              │
        ┌──────▼───────┐
        │ dataset.json  │ ─── Output record (dataset card)
        │ (output)      │     What was produced, how to use it
@@ -318,42 +328,48 @@ All structured files in the pipeline, in one place:
        └───────────────┘
 ```
 
-| Artifact          | Path                                                         | Format     | Produced By              | Consumed By                      |
-| ----------------- | ------------------------------------------------------------ | ---------- | ------------------------ | -------------------------------- |
-| Config            | `metadata/config.yaml`                                       | YAML       | User                     | `generate`                       |
-| Input spec        | `metadata/input_spec.json`                                   | JSON       | `generate` (first run)   | `generate`, `status`, `finalize` |
-| Shard             | `shards/shard-{id}.h5`                                       | HDF5       | Workers                  | `finalize`                       |
-| Lifecycle marker  | `metadata/shards/shard-{id}/{worker}-{attempt}.{state}`      | Empty file | Workers / Reconciliation | `status`, humans                 |
-| Quarantined shard | `metadata/shards/shard-{id}/quarantine/shard-{id}.h5`        | HDF5       | Reconciliation           | Humans (debugging)               |
-| Worker report     | `metadata/worker_attempts/{worker_id}-{attempt}/report.json` | JSON       | Workers (at exit)        | `status`                         |
-| Debug log         | `metadata/worker_attempts/{worker_id}-{attempt}/debug.log`   | JSONL      | Workers (continuous)     | Humans (`jq`)                    |
-| Dataset card      | `metadata/dataset.json`                                      | JSON       | `finalize`               | Training scripts, humans         |
-| Completion marker | `metadata/dataset.complete`                                  | JSON       | `finalize` (last step)   | `finalize` (idempotency check)   |
-| Stats             | `stats.npz`                                                  | NumPy      | `finalize`               | Training scripts                 |
+| Artifact          | Path                                                                  | Format     | Produced By                     | Consumed By                        |
+| ----------------- | --------------------------------------------------------------------- | ---------- | ------------------------------- | ---------------------------------- |
+| Config            | `metadata/config.yaml`                                                | YAML       | User                            | `generate`                         |
+| Input spec        | `metadata/input_spec.json`                                            | JSON       | `generate` (first run)          | `generate`, `status`, `finalize`   |
+| Staged shard      | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5`            | HDF5       | Workers                         | `finalize` (promotes to canonical) |
+| Canonical shard   | `data/shards/shard-{id}.h5`                                           | HDF5       | `finalize` (copy from staging)  | Training scripts                   |
+| Lifecycle marker  | `metadata/workers/shards/shard-{id}/{worker}-{attempt}.{state}`       | Empty file | Workers / Finalize              | `status`, humans                   |
+| Quarantined shard | `metadata/workers/shards/shard-{id}/quarantine/{worker}-{attempt}.h5` | HDF5       | Workers (on validation failure) | Humans (debugging)                 |
+| Worker report     | `metadata/workers/attempts/{worker_id}-{attempt}/report.json`         | JSON       | Workers (at exit)               | `status`                           |
+| Debug log         | `metadata/workers/attempts/{worker_id}-{attempt}/debug.log`           | JSONL      | Workers (continuous)            | Humans (`jq`)                      |
+| Dataset card      | `metadata/dataset.json`                                               | JSON       | `finalize`                      | Training scripts, humans           |
+| Completion marker | `metadata/dataset.complete`                                           | JSON       | `finalize` (last step)          | `finalize` (idempotency check)     |
+| Stats             | `data/stats.npz`                                                      | NumPy      | `finalize`                      | Training scripts                   |
 
-**Shard attempt lifecycle:** Each attempt is tracked by an empty marker file in the shard's metadata directory, named `{worker_id}-{attempt_uuid}.{state}`:
+**Shard attempt lifecycle:** Each attempt produces a shard file and lifecycle markers in the shard's staging directory, all named `{worker_id}-{attempt_uuid}`:
 
-| Marker       | Written by                               | Meaning                                                                                                                                                                            |
-| ------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.rendering` | Worker (at start)                        | Rendering in progress. `.valid` is written alongside on success (append-only — `.rendering` is not deleted). Orphaned `.rendering` without a `.valid` indicates a crashed attempt. |
-| `.valid`     | Worker (after local validation + upload) | Shard validated locally and uploaded to canonical path. Content hash recorded in the worker report.                                                                                |
-| `.invalid`   | Reconciliation                           | Existing shard failed validation. Shard *copied* to `quarantine/` (not moved — move is a copy+delete, dangerous if another worker is about to overwrite with a valid version).     |
+| File / Marker                  | Written by                                                               | Meaning                                                                                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{worker}-{attempt}.h5`        | Worker (after local validation)                                          | The worker's validated shard output. Sits alongside its lifecycle markers. Multiple attempts for the same shard are visible by name.                                               |
+| `{worker}-{attempt}.rendering` | Worker (at start)                                                        | Rendering in progress. `.valid` is written alongside on success (append-only — `.rendering` is not deleted). Orphaned `.rendering` without a `.valid` indicates a crashed attempt. |
+| `{worker}-{attempt}.valid`     | Worker (after local validation + upload)                                 | Shard validated locally and uploaded to staging. Content hash recorded in the worker report.                                                                                       |
+| `{worker}-{attempt}.invalid`   | Worker (on validation failure) or Finalize (on structural check failure) | Shard failed validation. Corrupt shard uploaded to `quarantine/` for debugging.                                                                                                    |
+| `{worker}-{attempt}.promoted`  | Finalize                                                                 | Staged shard was structural-checked and promoted to `data/shards/shard-{id}.h5`. Content hash recorded in `dataset.json`.                                                          |
 
-Listing a shard's metadata directory shows the full history at a glance:
+Listing a shard's staging directory shows the full history — shard files, lifecycle markers, and quarantined attempts — at a glance:
 
 ```
-$ rclone ls r2:bucket/{run_id}/data/metadata/shards/shard-000042/
-  0  pod-abc123-a1b2c3d4.rendering     # first attempt crashed
-  0  pod-def456-e5f6a7b8.valid         # second attempt succeeded
+$ rclone ls r2:bucket/{run_id}/metadata/workers/shards/shard-000042/
+         0  pod-abc123-a1b2c3d4.rendering   # first attempt started (crashed — no .valid)
+  67108864  pod-def456-e5f6a7b8.h5          # second attempt's shard
+         0  pod-def456-e5f6a7b8.rendering   # second attempt started
+         0  pod-def456-e5f6a7b8.valid       # second attempt validated + staged
+         0  pod-def456-e5f6a7b8.promoted    # promoted to data/shards/ by finalize
 ```
 
-**Naming conventions:** Config is YAML (human-authored). Everything machine-generated is JSON. Debug logs are JSONL (one event per line). Data is HDF5. Metadata is grouped by shard ID (`metadata/shards/shard-{id}/`) so you can inspect all attempts and quarantined files for a single shard in one listing. Worker artifacts are grouped under `worker_attempts/{worker_id}-{attempt_uuid}/`. Lifecycle markers are empty files — presence is the state, no content to parse.
+**Naming conventions:** Config is YAML (human-authored). Everything machine-generated is JSON. Debug logs are JSONL (one event per line). Data is HDF5. All worker-produced files live under `metadata/workers/` — shards and markers grouped by shard ID (`metadata/workers/shards/shard-{id}/`), worker artifacts grouped by attempt (`metadata/workers/attempts/{worker_id}-{attempt_uuid}/`). The `data/` prefix is written only by finalize. Lifecycle markers are empty files — presence is the state, no content to parse.
 
 ## 7. Design Decisions
 
 ### 7.1 Storage as the Source of Truth
 
-The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by content hashes. **A shard is complete if and only if the canonical shard file exists in R2 and passes validation.** Worker metadata is supplementary — useful for debugging, never authoritative.
+The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by content hashes. Workers write shard files and markers to a **staging prefix** (`metadata/workers/shards/`). Finalize validates staged shards and **promotes** them to the **canonical prefix** (`data/shards/`). This separation ensures workers never write to the canonical data path, and finalized data is stable once promoted.
 
 **Why R2 for coordination and not a database or queue:**
 
@@ -361,7 +377,7 @@ Object storage lacks atomic compare-and-set, locking, and transactions. A tradit
 
 The pipeline doesn't need what coordination systems provide:
 
-- **No atomic compare-and-set** — shard outputs are deterministic, so concurrent writes produce identical content. Last-writer-wins is safe when all writers agree ([§7.7](#77-concurrency-semantics)).
+- **No atomic compare-and-set** — workers write to per-attempt filenames in a staging prefix, so concurrent writes never collide. Finalize is the only writer to canonical paths ([§7.7](#77-concurrency-semantics)).
 - **No locking** — each shard is assigned to one worker per invocation. The assignment is a simple partition of the missing set. No lock acquisition needed.
 - **No transactions** — stages are independent. There is no multi-shard operation that must succeed or fail atomically.
 - **No queue** — work discovery is reconciliation (compare spec against storage). A queue would be a second source of truth for "what work remains" — and a less reliable one than the files themselves.
@@ -388,52 +404,54 @@ The patterns that make R2-as-coordination safe despite no atomicity:
 - **Append-only metadata** — lifecycle markers and worker reports use unique filenames, never overwritten ([§7.2](#72-shard-lifecycle))
 - **Reconciliation from storage** — the pipeline re-derives state from files on every invocation, never caches coordination state locally
 
-**State model — three things determine pipeline state:**
+**State model — pipeline state is determined from two prefixes:**
 
 1. **Spec** — desired state: which shards should exist
-2. **Shard files** — actual state: which shards exist and pass validation
-3. **Metadata files** — hints: worker reports, timing, error messages (never authoritative, never block completion)
+2. **Staging prefix** (`metadata/workers/shards/`) — which shards workers have produced and validated. This is where `generate` and `status` look.
+3. **Canonical prefix** (`data/shards/`) — which shards finalize has promoted. Written only by finalize. Once promoted, zombie worker uploads to staging cannot affect the finalized data.
+4. **Worker metadata** (reports, logs) — debugging hints, never authoritative, never block completion
 
-This eliminates an entire class of edge cases:
+This separation eliminates an entire class of edge cases:
 
-- Worker crashes before writing status → shard file is missing → reconciliation detects it
-- Status reports success but upload failed → shard file is missing → reconciliation detects it
-- Shard exists but status was never written → shard passes validation → it's complete
-- Worker metadata is missing but all shards validate → run is complete
+- Worker crashes before upload → no staged file → reconciliation detects it
+- Worker report claims success but upload failed → no staged file → reconciliation detects it
+- Staged shard exists but report is missing → shard passes validation → it's complete
+- Zombie worker uploads after finalize → goes to staging, doesn't touch canonical `data/shards/`
 
 ### 7.2 Shard Lifecycle
 
-> **Completeness rule:** A shard is complete if and only if the canonical shard file (`shards/shard-{id}.h5`) exists in R2 and passes validation ([§7.5](#75-shard-validation)). Markers are forensic metadata — they record *what happened* but do not determine *what is true*. If a `.valid` marker exists but the shard file is missing or corrupt, the shard is **missing** (or invalid). Reconciliation ignores the marker.
+> **Completeness rule:** A shard is **valid** (ready for finalization) if a staged `.h5` file and a `.valid` marker exist in `metadata/workers/shards/shard-{id}/`. A shard is **finalized** if it has been promoted to `data/shards/shard-{id}.h5` by finalize. `generate`/`status` determines shard state from file existence and markers, not by re-validating data ([§7.5](#75-shard-validation)).
 
-Every shard moves through a well-defined set of states. The **authoritative** state is derived from shard file existence and validation. Markers provide forensic evidence of worker activity but are not part of the correctness model.
+Every shard moves through a well-defined set of states. Workers perform full validation before upload; subsequent stages trust the `.valid` marker and perform only lightweight checks.
 
 ```
-missing → rendering → valid → finalized
+missing → rendering → valid (staged) → finalized (canonical)
                ↓
             invalid (quarantined)
 ```
 
-| State         | Authoritative determination                                                                                                                             | Marker evidence                                                                                            |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **missing**   | Shard is in the input spec but no canonical shard file exists or it fails validation                                                                    | May have orphaned `.rendering` markers from crashed attempts                                               |
-| **rendering** | Worker has started but canonical shard file does not yet exist or validate                                                                              | `.rendering` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt}.rendering`                          |
-| **valid**     | Canonical shard file exists in R2 and passes validation. `.valid` marker corroborates                                                                   | `.valid` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt}.valid`                                  |
-| **invalid**   | Canonical shard file exists but fails validation. Corrupt file *copied* to `quarantine/` (not moved — canonical path left for next worker to overwrite) | `.invalid` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt}.invalid` + `quarantine/shard-{id}.h5` |
-| **finalized** | Shard was consumed by `finalize`, content hash recorded in `dataset.json`. The dataset is sealed                                                        | `dataset.complete` marker exists (dataset-level, not per-shard)                                            |
+| State              | How it's determined                                                                                          | Where it lives                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| **missing**        | Shard is in the input spec but no staged `.h5` + `.valid` marker exists                                      | Implicit (absence). May have orphaned `.rendering` markers from crashed attempts |
+| **rendering**      | Worker has started but no `.valid` marker exists yet                                                         | `.rendering` marker in `metadata/workers/shards/shard-{id}/`                     |
+| **valid (staged)** | `.h5` file + `.valid` marker exist in staging. Worker validated before upload. Ready for finalize to promote | `metadata/workers/shards/shard-{id}/{worker_id}-{attempt}.h5` + `.valid` marker  |
+| **invalid**        | Worker validation failed. Corrupt file uploaded to `quarantine/` for debugging                               | `.invalid` marker + `quarantine/{worker_id}-{attempt}.h5`                        |
+| **finalized**      | Finalize structural-checked and promoted the shard to `data/shards/shard-{id}.h5`. Dataset is sealed         | `data/shards/shard-{id}.h5` + `.promoted` marker + `dataset.complete`            |
 
 **Transitions:**
 
-- **missing → rendering:** Worker begins shard generation, writes `.rendering` marker.
-- **rendering → valid:** Worker validates locally, uploads shard, writes `.valid` marker. The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
-- **rendering → missing:** Worker crashes. `.rendering` is orphaned — no `.valid` follows. Reconciliation treats the shard as missing. The orphaned `.rendering` marker is observable evidence of the crashed attempt.
-- **valid → invalid:** Reconciliation re-validates an existing shard and finds it corrupt (e.g., renderer non-determinism, bit rot detected by checksum mismatch). Corrupt shard *copied* to quarantine for debugging (not moved — deleting the canonical path is dangerous if another worker is about to overwrite it with a valid version). `.invalid` marker written. Shard is now effectively missing and will be regenerated.
-- **valid → finalized:** `finalize` consumes the shard, records its content hash in `dataset.json`, and writes `dataset.complete`.
+- **missing → rendering:** Worker begins shard generation, writes `.rendering` marker to staging.
+- **rendering → valid:** Worker validates locally (full 4-check), uploads shard `.h5` and `.valid` marker to staging. The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
+- **rendering → invalid:** Worker validates locally and the shard fails. Worker uploads the corrupt shard to `quarantine/` and writes `.invalid` marker, preserving the evidence for debugging. The shard is treated as missing on next `generate`.
+- **rendering → missing:** Worker crashes before uploading anything. `.rendering` is orphaned — no `.valid` follows. The orphaned `.rendering` marker is observable evidence of the crashed attempt.
+- **valid → finalized:** Finalize structural-checks the staged shard, copies it to `data/shards/shard-{id}.h5`, writes `.promoted` marker, records content hash in `dataset.json`, and writes `dataset.complete` after all shards are promoted. Staged files remain in place (append-only — no deletion).
 
 **Key properties:**
 
-- **File existence + validation is authoritative; markers are forensic.** Reconciliation determines shard state by validating the canonical file, not by reading markers. Markers help humans debug — e.g., a `.rendering` with no `.valid` indicates a crashed attempt — but never override the file-based determination.
-- **Multiple attempts are visible.** A shard directory might contain `pod-abc.rendering` (crashed) and `pod-def.valid` (succeeded) — the full history is one `rclone ls` away.
-- **The finalized state is dataset-level, not shard-level.** Individual shards don't know they've been finalized. The `dataset.json` content hash and `dataset.complete` marker are the authority.
+- **Workers are the primary validators.** Full 4-check validation happens once, at the worker, before upload. `generate`/`status` trusts `.valid` markers. Finalize does a lightweight structural check as defense-in-depth ([§7.5](#75-shard-validation)).
+- **Multiple attempts are visible.** A shard's staging directory might contain `pod-abc.rendering` (crashed, no `.valid`), `pod-def.h5` + `pod-def.valid` (succeeded), and `pod-def.promoted` (finalized) — the full history is one `rclone ls` away.
+- **Workers and finalize write to separate prefixes.** Workers only write under `metadata/workers/`. Finalize only writes to `data/` (plus `.promoted` markers). A zombie worker uploading after finalize cannot overwrite canonical data.
+- **The finalized state is per-shard and dataset-level.** Per-shard: `data/shards/shard-{id}.h5` + `.promoted` marker. Dataset-level: `dataset.complete` marker and content hashes in `dataset.json`.
 
 ### 7.3 Deterministic Shard Identities
 
@@ -441,21 +459,28 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 
 - **Any worker can compute any shard** — retries simply recompute the same logical shard
 - **Resumability is a set difference:** `spec_shards - validated_shards = work_remaining`
-- **No naming collisions** — the canonical path is always `shard-{logical_index}.h5`
-- **Infrastructure details** (worker IDs) appear only in metadata files, not in shard paths
+- **No naming collisions** — each worker attempt writes to a unique filename (`{worker_id}-{attempt_uuid}.h5`), and the canonical path (`data/shards/shard-{id}.h5`) is written only by finalize
+- **Infrastructure details** (worker IDs) appear in staging filenames and metadata, not in canonical shard paths
 
 **Work assignment:** The CLI partitions shards across N workers. Worker 1 gets shards 0-47, Worker 2 gets shards 48-95, etc. But the shard's identity is independent of which worker computes it. If Worker 1 fails and its shards are reassigned to Worker 3, output paths are unchanged.
 
 **Shard write protocol:**
 
-1. Write `.rendering` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
+1. Write `.rendering` marker: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
 2. Render shard to a local temp file
-3. **Validate locally** (structural, shape, value, row count) — this is critical: only validated shards are uploaded. A corrupt render (VST crash, NaN values, truncated output) is caught here and never reaches R2. See [§11.2](#112-failure-modes--edge-cases) for why this matters.
-4. Upload to canonical path: `{run_id}/data/shards/shard-{id}.h5`
-5. Write `.valid` marker alongside `.rendering` (append-only — `.rendering` is not deleted): `metadata/shards/shard-{id}/{worker_id}-{attempt_uuid}.valid`
-6. Write worker report (including content hash) to `metadata/workers/{worker_id}-{attempt_uuid}/report.json`
+3. **Validate locally** — full 4-check validation (structural, shape, value, row count). This is the primary defense against corrupt data.
+4. **If validation passes:**
+   - Upload shard to staging: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.h5`
+   - Write `.valid` marker (append-only — `.rendering` is not deleted): `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.valid`
+5. **If validation fails:**
+   - Upload shard to quarantine: `metadata/workers/shards/shard-{id}/quarantine/{worker_id}-{attempt_uuid}.h5`
+   - Write `.invalid` marker: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.invalid`
+   - Log the failure with details (which check failed, values found)
+6. Write worker report (including content hash for valid shards, error details for failures) to `metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json`
 
-> **Invariant:** A shard counts as complete only when the canonical object exists in storage and passes validation. Workers must validate locally before upload to prevent corrupt writes from overwriting valid data ([§7.7](#77-concurrency-semantics)).
+Workers never write to `data/shards/`. The canonical path `data/shards/shard-{id}.h5` is written only by finalize during promotion ([§7.6](#76-finalize-workflow)).
+
+> **Invariant:** Only worker-validated shards reach the staging path. Corrupt renders are uploaded directly to quarantine, preserving the evidence for debugging while keeping the staging area clean.
 
 ### 7.4 Reconciliation-Based Execution
 
@@ -464,20 +489,21 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 **`generate` reconciliation:**
 
 1. Read spec from R2 (or create if first run)
-2. List existing shard files in R2
-3. Validate each existing shard (structure, shape, value, row count)
-4. Compute `missing = spec_shards - validated_shards`
-5. If nothing missing → "generation complete", exit 0
-6. Partition missing shards across N workers
-7. Submit N tasks, exit
+2. List staged shards in `metadata/workers/shards/` — check for `.h5` + `.valid` marker per shard (no data loading, no re-validation — [§7.5](#75-shard-validation))
+3. Compute `missing = spec_shards - staged_valid_shards`
+4. If nothing missing → "generation complete", exit 0
+5. Partition missing shards across N workers
+6. Submit N tasks, exit
 
 **`finalize` reconciliation:**
 
 1. Read spec from R2
-2. Check for `dataset.complete` — if present and outputs validate, exit 0 ("already finalized")
-3. List and validate all shards
+2. Check for `dataset.complete` — if present and all canonical outputs exist, exit 0 ("already finalized")
+3. List staged shards — check for `.h5` + `.valid` marker per shard
 4. If any shards missing → report which ones, exit 1
-5. Download, reshard, compute stats, register in W&B, upload, write `dataset.complete`
+5. Structural-check each staged shard (valid HDF5, datasets present, shapes match — [§7.5](#75-shard-validation))
+6. Promote validated staged shards to `data/shards/`, write `.promoted` marker per shard
+7. Download canonical shards, reshard, compute stats, register in W&B, upload, write `dataset.complete`
 
 **Key properties:**
 
@@ -487,63 +513,82 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 
 **`make status` — reconciliation report:**
 
-`make status` runs the same reconciliation logic as `generate` but only prints the result. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
+`make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for `.h5` + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
 
 ```
 $ python -m pipeline.cli status --run-id surge_simple-480k-10k-20260313-100000
 
 Run: surge_simple-480k-10k-20260313-100000
 Spec shards: 48
-Valid shards:     44
-Missing shards:   2
-Quarantined:      2
-Worker reports:   9
+Staged (valid):   44
+Missing:           2
+Quarantined:       2
+Finalized:         0
+Worker reports:    9
 
 Missing:
   shard-000005
   shard-000019
 
 Quarantined:
-  shard-000006  NaN values
-  shard-000023  row count mismatch
+  shard-000006  NaN values (worker-quarantined)
+  shard-000023  row count mismatch (worker-quarantined)
 
 Recent worker errors (from metadata):
   worker-abc123: shard-000006 failed: NaN in audio buffer
   worker-def456: shard-000019 upload timeout
 ```
 
-Worker error details are overlaid from metadata files when present, but the core output (valid/missing/quarantined counts) is derived entirely from shard files.
+Worker error details are overlaid from metadata files when present. The core output (staged/missing/quarantined/finalized counts) is derived from file existence and markers, not from data validation.
 
 ### 7.5 Shard Validation
 
-The system's correctness depends on shard validation. There is one canonical validation function (`validation.validate_shard`), called by workers (before upload), reconciliation (during `status`/`generate`), and finalize (before merging). All three code paths use the same function — there is no separate implementation to diverge.
+Validation is **tiered** — each stage does the minimum work needed for its role, avoiding redundant re-validation of shards that workers already checked.
 
-**A shard is accepted if and only if all four checks pass:**
+**Full validation (4 checks)** — run by workers before upload:
 
 - **Structural**: Valid HDF5, expected datasets present (`audio`, `mel_spec`, `param_array`)
 - **Shape**: Array dimensions match spec (sample rate, spectrogram bins, parameter count)
 - **Value**: No NaN/Inf values, audio within [-1, 1], parameters within spec bounds
 - **Row count**: Matches spec's expected shard size
 
-**Content hashes** (SHA-256 over the full HDF5 file) are recorded in worker reports for provenance and divergence detection. They are not used as acceptance criteria — acceptance is determined solely by the four checks above. If two workers produce different hashes for the same shard, the content hashes surface the divergence for investigation.
+**Existence check** — run by `generate`/`status` during reconciliation:
+
+- Check for `.h5` + `.valid` marker in staging directory. No data loading.
+- The trust chain justifies this: workers do full 4-check validation before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
+
+**Structural check** — run by finalize before promoting staged shards to `data/shards/`:
+
+- Valid HDF5 file that opens with `h5py`, expected datasets present, shapes match spec.
+- This catches the only realistic failure between worker validation and finalize: transfer corruption or bit rot. Value-level corruption (NaN, wrong bounds) and row count mismatches were already caught by workers — re-checking would require loading all data from every shard, which is redundant.
+- If a staged shard fails the structural check, finalize writes `.invalid` for that attempt, reports the failure, and exits 1. The shard is treated as missing and regenerated on next `generate`.
+
+| Stage               | Validation                                              | Cost                                   | Why                                                                 |
+| ------------------- | ------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
+| **Worker**          | Full 4-check (structural, shape, value, row count)      | Expensive (loads all data)             | Primary defense — catches VST crashes, NaN, wrong shapes            |
+| **Generate/status** | Existence (`.h5` + `.valid` marker)                     | Cheap (file listing)                   | Workers already validated; re-validation is redundant               |
+| **Finalize**        | Structural (valid HDF5, datasets present, shapes match) | Moderate (opens file, no data loading) | Catches transfer corruption; last checkpoint before sealing dataset |
+
+**Content hashes** (SHA-256 over the full HDF5 file) are recorded in worker reports for provenance and divergence detection. They are not used as acceptance criteria. If two workers produce different hashes for the same shard, the content hashes surface the divergence for investigation.
 
 **Semantic corruption:** Validation catches structural and numerical issues but cannot detect all semantic corruption (e.g., audio that is valid float32 in [-1, 1] but sounds wrong due to a renderer bug). Training is the ultimate semantic check ([§4](#4-system-overview), "Reconciliation Correctness"). At 1-2 runs/week, manual spot-checking of a few samples is practical and encouraged.
 
-Corrupt shards are quarantined (*copied* to `metadata/shards/shard-{id}/quarantine/`, not moved — the canonical path is left intact for the next worker to overwrite). Keeping quarantined files alongside the shard's lifecycle markers means `rclone ls` of a shard's metadata directory shows the full history. Reconciliation treats quarantined shards as missing — they'll be regenerated on next `generate`.
+**Quarantine:** Workers that fail local validation upload the corrupt shard directly to `metadata/workers/shards/shard-{id}/quarantine/{worker}-{attempt}.h5` with an `.invalid` marker, preserving the evidence for debugging. `generate`/`status` sees the shard as missing (no `.valid` marker) and assigns it on the next run.
 
 ### 7.6 Finalize Workflow
 
-01. **Check for `dataset.complete`** — if present and all outputs validate, print "already finalized" and exit 0
+01. **Check for `dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
-03. **List and validate** all shard files
-04. **Check completeness** — if any shards missing/quarantined, report which ones and exit 1
-05. **Download validated shards** to local storage
-06. **Reshard** into train/val/test virtual HDF5 datasets
-07. **Compute normalization statistics** (mean, std across training set)
-08. **Write `dataset.json`** — self-describing dataset card
-09. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
-10. **Upload finalized dataset** to R2
-11. **Write `dataset.complete`** — completion marker (last step)
+03. **Check completeness** — list staged shards, check for `.h5` + `.valid` marker per shard. If any missing, report which ones and exit 1
+04. **Structural-check staged shards** — open each staged shard with `h5py`, verify expected datasets present and shapes match spec. No data loading. If any fail, write `.invalid` marker, report the failure, and exit 1 (shard is treated as missing on next `generate`)
+05. **Promote staged shards** — copy each validated shard from `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5` to `data/shards/shard-{id}.h5`. Write `.promoted` marker for each. Staged files are not deleted (append-only)
+06. **Download canonical shards** from `data/shards/` to local storage
+07. **Reshard** into train/val/test virtual HDF5 datasets
+08. **Compute normalization statistics** (mean, std across training set)
+09. **Write `dataset.json`** — self-describing dataset card (includes content hashes of promoted shards)
+10. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
+11. **Upload finalized dataset** to R2
+12. **Write `dataset.complete`** — completion marker (last step)
 
 **`dataset.complete` semantics:**
 
@@ -575,28 +620,24 @@ This is a single-user research pipeline running 1-2x/week. It is not designed fo
 
 **Why concurrent operations can't corrupt data:**
 
-1. **Deterministic outputs within the same execution environment.** Two workers computing the same shard (same seed, same config, same Docker image, same CPU architecture) produce identical content. No randomness or timestamp-dependent state in the output.
-2. **R2 last-writer-wins.** R2 (like S3) has PUT-overwrites-PUT semantics. When both writers produce identical content, the overwrite is a no-op in practice.
+1. **Workers write to per-attempt filenames.** Each attempt uploads to `{worker_id}-{attempt_uuid}.h5` — unique per invocation. Two workers computing the same shard write to different files in the same staging directory. No overwrites, no races.
+2. **Finalize is the only writer to canonical paths.** `data/shards/shard-{id}.h5` is written only by finalize, which picks a single validated staged shard to promote. Zombie workers uploading to staging after finalize has run cannot affect the canonical data.
+3. **Deterministic outputs within the same execution environment.** Two workers computing the same shard (same seed, same config, same Docker image, same CPU architecture) produce identical content. Non-determinism across hardware is detectable via content hashes.
 
 **Scenario: `generate` run on the same run_id multiple times in quick succession**
 
-Both invocations read R2, both see the same missing shards, both launch workers for the same shards. Two workers race to write `shard-000042.h5`:
+Both invocations read the staging prefix, both see the same missing shards, both launch workers for the same shards. Two workers both generate shard-042:
 
-1. Both workers render with the same seed → identical HDF5 content
-2. Both upload to the same canonical path in R2
-3. R2 accepts both PUTs unconditionally — no conditional write, no ETag check, no if-none-match
-4. `rclone copy --checksum` may skip the upload if the content already matches (rclone checks hash before uploading)
-5. **Result:** identical shard in R2, wasted compute
+1. Worker A uploads `metadata/workers/shards/shard-000042/pod-abc-uuid1.h5`
+2. Worker B uploads `metadata/workers/shards/shard-000042/pod-def-uuid2.h5`
+3. Both files coexist — different filenames, no overwrite
+4. **Result:** two valid staged shards, wasted compute. Finalize picks one to promote.
 
-**R2 does not reject duplicate writes.** There is no mechanism in the R2/S3 API (as used via rclone) to reject a write to an existing key. Writes always succeed. The design accepts this because deterministic outputs make overwrites harmless.
-
-**What semantics do we want?** Skip-if-valid. The worker should check if the shard already exists and validates before uploading. This is implemented at the worker level (check canonical path before upload), not at the storage level (R2 has no conditional PUT via rclone). Even if the check races, the fallback (overwrite with identical content) is safe.
-
-**Overwrite policy:** Only one worker should be assigned a shard at a time (CLI partitions the missing set). A shard may only be overwritten if missing or failing validation. If duplicate writes occur (two workers racing), both produce identical content (deterministic), so the overwrite is harmless. Finalize never merges ambiguous duplicates — one canonical path per shard.
+**Skip-if-valid optimization:** Workers check the staging directory for an existing valid shard before uploading. If one exists, the worker skips the upload and moves to the next shard. This is an optimization, not a correctness requirement — the staging model is safe even without it.
 
 **Scenario: concurrent `finalize` on the same run_id**
 
-Two finalize invocations both read the input spec, validate shards, download, reshard, upload, and write `dataset.complete`. Both produce identical outputs from the same validated shards. `dataset.complete` does not provide mutex semantics — R2 has no atomic test-and-set. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
+Two finalize invocations both read the input spec, validate staged shards, promote to `data/shards/`, download, reshard, upload, and write `dataset.complete`. Both pick the same staged shards (or equivalent valid ones) and produce identical canonical outputs. `dataset.complete` does not provide mutex semantics — R2 has no atomic test-and-set. The marker's purpose is to let subsequent invocations skip finalization ("already finalized"), not to prevent concurrent finalization. **Result:** identical outputs, wasted compute.
 
 **Scenario: accidentally-launched finalize while another finalize is running**
 
@@ -609,17 +650,19 @@ No data corruption either way.
 
 **Scenario: `generate` while `finalize` is running**
 
-Finalize takes a snapshot of shard state during its validation pass. If generate launches new workers that upload shards during finalize's download phase, finalize either already has a consistent snapshot or sees additional valid shards (which only helps). Neither case produces a corrupt dataset.
+Finalize takes a snapshot of staged shard state during its validation pass. If generate launches new workers that upload to the staging prefix during finalize, those uploads don't affect the canonical `data/shards/` prefix that finalize writes to. Neither case produces a corrupt dataset.
 
 **Scenario: `finalize` while workers are still uploading**
 
-Finalize checks completeness first. If shards are missing, it reports "generation incomplete" and exits 1. No partial dataset is produced.
+Finalize checks completeness by validating the staging prefix first. If shards are missing, it reports "generation incomplete" and exits 1. No partial dataset is produced.
 
-**Caveat: bad write can overwrite good write.** If `generate` is run twice in quick succession and the second invocation's worker produces a corrupt shard (e.g., VST crash mid-render) for a shard that was valid from the first invocation, R2 accepts the corrupt overwrite. **Mitigation:** Workers must validate shard integrity locally *before* uploading to R2. If local validation fails, the worker skips the upload and logs the failure. Only validated shards reach R2. This is the critical safety property: the upload path is `render → validate locally → upload only if valid`.
+**Scenario: zombie worker uploads after finalize completes**
+
+A worker from a previous `generate` invocation hangs for hours, then finally uploads its shard to the staging prefix. This upload lands in `metadata/workers/shards/`, not in `data/shards/`. The canonical finalized data is unaffected. The zombie's staged shard is visible but harmless — it's simply an additional attempt record. See [§11.2](#112-failure-modes--edge-cases) for detailed analysis.
 
 **What this system does NOT protect against:**
 
-- **Non-deterministic outputs.** If floating-point non-determinism across different hardware produces different audio for the same seed, last-writer-wins means the final shard is arbitrary. The mitigation is to fix non-determinism in the renderer.
+- **Non-deterministic outputs across hardware.** If floating-point non-determinism across different CPU architectures produces different audio for the same seed, multiple staged shards for the same shard ID may differ. Finalize picks one — the result is valid but arbitrary. Content hashes in worker reports detect this divergence. The mitigation is to fix non-determinism in the renderer or constrain the execution environment.
 - **Concurrent spec modification.** The spec is written once and never modified. If something modifies it after creation, correctness guarantees do not hold.
 
 > **Scope of concurrency safety:** The safety arguments in this section assume deterministic rendering within the execution environment (same Docker image + CPU architecture). The pipeline does not enforce homogeneous worker hardware. Content hashes in worker reports detect divergence when it occurs — the mitigation is to fix the renderer or constrain the environment, not to add locking.
@@ -640,11 +683,11 @@ Regardless of how a shard was lost (crash, timeout, upload failure, corrupt outp
 **Error tracking artifacts:**
 Each worker invocation produces three artifacts, all with unique filenames keyed by `{worker_id}-{attempt_uuid}`:
 
-- **Lifecycle markers** (`shards/shard-{id}/{worker_id}-{attempt}.rendering` / `.valid`) — empty files tracking attempt state. Orphaned `.rendering` without `.valid` = crashed attempt.
-- **Worker report** (`worker_attempts/{worker_id}-{attempt}/report.json`, JSON) — derived summary with content hashes, written at end of execution, missing if worker crashed
-- **Debug log** (`worker_attempts/{worker_id}-{attempt}/debug.log`, JSONL) — append-only narrative, uploaded by EXIT trap, survives crashes
+- **Staged shard + lifecycle markers** (`workers/shards/shard-{id}/{worker_id}-{attempt}.h5` / `.rendering` / `.valid`) — shard file and empty markers tracking attempt state. Orphaned `.rendering` without `.valid` = crashed attempt.
+- **Worker report** (`workers/attempts/{worker_id}-{attempt}/report.json`, JSON) — derived summary with content hashes, written at end of execution, missing if worker crashed
+- **Debug log** (`workers/attempts/{worker_id}-{attempt}/debug.log`, JSONL) — append-only narrative, uploaded by EXIT trap, survives crashes
 
-Unique filenames per attempt mean retries never overwrite previous artifacts. Missing worker metadata never blocks completion. A run is successful when all shard files exist and validate.
+All worker artifacts live under `metadata/workers/`. Unique filenames per attempt mean retries never overwrite previous artifacts. Missing worker metadata never blocks completion. A run is successful when all staged shard files exist and validate.
 
 ### 7.9 Compute Abstraction
 
@@ -798,7 +841,7 @@ Credentials are baked into Docker images via BuildKit `--secret` — not visible
 
 - `dataset.json` contains the complete output record
 - W&B shows pipeline metrics and dataset artifact lineage
-- Debug logs in R2 (`metadata/worker_attempts/{worker_id}-{attempt}/debug.log`) provide full JSONL debug log streams, queryable with `jq`
+- Debug logs in R2 (`metadata/workers/attempts/{worker_id}-{attempt}/debug.log`) provide full JSONL debug log streams, queryable with `jq`
 - Quarantined shards preserved for debugging
 
 ### 10.3 Cost Model
@@ -856,20 +899,23 @@ This is stronger than S3's original eventual consistency model (which was [upgra
 
 Non-obvious failure modes, edge cases, and blind spots. Each includes the scenario, consequence, and mitigation.
 
-**Corrupt shard overwrites valid shard:**
-A second `generate` invocation assigns shard-042 to a new worker. The worker's VST plugin crashes mid-render, producing a corrupt file. The worker uploads it to R2, overwriting the valid shard from the first invocation. **Consequence:** Reconciliation may accept the corrupt shard if the corruption is subtle (e.g., wrong values but valid structure). **Mitigation:** Workers validate shards locally *before* uploading ([§7.5](#75-shard-validation)). If local validation fails, the upload is skipped and the failure is logged. Only validated shards reach R2. This is the primary defense — validation happens before upload in all code paths (worker write protocol step 3 in [§7.3](#73-deterministic-shard-identities)).
+**Corrupt shard in staging:**
+A worker's VST plugin crashes mid-render, producing a corrupt file. The worker uploads it to the staging prefix with a unique per-attempt filename. **Consequence:** A corrupt .h5 file exists alongside valid ones in the shard's staging directory. **Mitigation:** Workers validate shards locally *before* uploading ([§7.5](#75-shard-validation)). If local validation fails, the upload is skipped and the failure is logged. Only validated shards reach staging. Even if a corrupt shard slips through, reconciliation re-validates staged files and quarantines failures. The staging model means a corrupt upload never overwrites a valid one — each attempt has a unique filename.
 
 **Non-atomic cross-file writes:**
-A worker uploads `shard-042.h5` successfully but crashes before writing `worker-{id}.json`. Or vice versa. These are separate R2 PUTs — they cannot be made atomic. **Consequence:** Worker report may be out of sync with actual shard state. **Mitigation:** Reconciliation validates actual shard files, not worker reports ([§7.1](#71-storage-as-the-source-of-truth)). Per-attempt UUIDs make mismatches observable.
+A worker uploads `shard-042.h5` successfully but crashes before writing `worker-{id}.json`. Or vice versa. These are separate R2 PUTs — they cannot be made atomic. **Consequence:** Worker report may be out of sync with actual shard state. **Mitigation:** `generate`/`status` checks file existence and `.valid` markers, not worker reports ([§7.1](#71-storage-as-the-source-of-truth)). Per-attempt UUIDs make mismatches observable.
 
 **Partial shard upload:**
-`rclone` crashes mid-upload. R2 may have a partial or corrupt object at the canonical path. **Consequence:** Reconciliation finds the file but it fails structural validation (not valid HDF5). **Mitigation:** The shard is quarantined and treated as missing. Next `generate` fills the gap.
+`rclone` crashes mid-upload. R2 may have a partial or corrupt object at the staging path (though this is rare — R2 PUTs are atomic for single objects, and multipart uploads don't appear until finalized). **Consequence:** A corrupt `.h5` may exist in staging without a `.valid` marker (worker crashed before writing it). Or with a `.valid` marker if the crash happened during a subsequent upload. **Mitigation:** If no `.valid` marker, `generate` treats the shard as missing. If `.valid` exists, finalize's structural check catches the corruption before promotion. The partial upload does not affect any other attempt's file (unique filenames).
 
 **Silent data corruption (bit rot / transfer corruption):**
 Local disk corruption between render and upload, or network corruption during transfer, produces a shard in R2 that differs from what the worker intended. **Consequence:** Corrupt shard passes filename checks but contains wrong data. **Mitigation:** All rclone operations use `--checksum`, which verifies content hashes after transfer. If a checksum mismatch is detected, the worker must delete the local shard, re-generate, and re-upload. Storage-layer bit rot within R2 is handled by R2 internally (server-side object checksums).
 
 **Slow worker overtaken by retry:**
-Worker A is assigned shard-042. Worker A is slow. User runs `generate` again, reconciliation sees shard-042 as missing, assigns to Worker B. Worker B completes first (valid). Worker A completes later (also valid, same content — deterministic). Worker A's upload overwrites Worker B's. **Consequence:** None if deterministic. If non-deterministic across hardware, last-writer-wins produces arbitrary result. **Mitigation:** Fix renderer non-determinism.
+Worker A is assigned shard-042. Worker A is slow. User runs `generate` again, reconciliation sees shard-042 as missing (no valid staged shard), assigns to Worker B. Worker B completes first, uploads `pod-B-uuid2.h5` with `.valid` marker. Worker A completes later, uploads `pod-A-uuid1.h5` with `.valid` marker. **Consequence:** Two valid staged shards exist for shard-042. Finalize picks one to promote to `data/shards/shard-000042.h5`. If both workers ran on the same hardware, the shards are identical. If on different hardware, the shards may differ at the floating-point level — finalize picks arbitrarily but the result is valid. **Mitigation:** Content hashes in worker reports detect divergence. Hard timeout on workers prevents long-running zombies.
+
+**Zombie worker uploads after finalize:**
+Worker A hangs for 12 hours, then completes and uploads shard-042 to the staging prefix. Meanwhile, Worker B already uploaded shard-042, finalize promoted it to `data/shards/shard-000042.h5`, and the dataset is in use for training. **Consequence:** Worker A's upload lands in `metadata/workers/shards/shard-000042/pod-A-uuid1.h5` — a new file in the staging directory. The canonical `data/shards/shard-000042.h5` is unaffected. The finalized dataset hash is stable. **Mitigation:** The staging/canonical separation ensures zombie uploads cannot corrupt finalized data. Hard timeout on workers and RunPod auto-stop prevent zombies in the first place. Re-running finalize would re-validate staging and re-promote, but would pick the same (or equivalent) shard — the canonical output is stable.
 
 **Spec deleted after generation starts:**
 Workers receive shard assignments via environment variables at launch. If the spec is deleted from R2 after launch, workers continue fine but subsequent `status`/`generate` fail. **Consequence:** Orphaned run. **Mitigation:** Spec is immutable, should never be deleted.
@@ -888,7 +934,7 @@ User runs `generate` after finalization (e.g., to replace a quarantined shard). 
 
 2. **No incremental finalization.** Crashes during finalize restart from scratch. Acceptable because finalize processes existing data and is fast to retry.
 
-3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. Concurrency safety also depends on deterministic rendering — if two workers produce different output for the same seed, last-writer-wins makes the result arbitrary.
+3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. If multiple workers produce different output for the same shard on different hardware, finalize picks one staged shard arbitrarily — the result is valid but not deterministic across heterogeneous environments.
 
 4. **R2 listing at scale.** Reconciliation lists all shard objects (1000/page). At 480 shards: 1 API call. At 48,000: 48 calls — still fast, but a completion-marker approach would scale better.
 
@@ -1135,10 +1181,10 @@ configs/
 | **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                          |
 | **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                       |
 | **dataset.complete**       | Marker file written by finalize as the very last step. Means "finalization is done" — not a mutex or lock. Contains run_id and timestamp.                                                                                                                                                                          |
-| **Debug log**              | JSONL file (`metadata/worker_attempts/{worker_id}-{attempt}/debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                  |
-| **Worker report**          | JSON summary (`metadata/worker_attempts/{worker_id}-{attempt}/report.json`) of a worker's results, including content hashes for provenance. Written at exit, missing if worker crashed.                                                                                                                            |
-| **Lifecycle marker**       | Empty file in `metadata/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. States: `.rendering` (in progress), `.valid` (validated + uploaded), `.invalid` (failed reconciliation). Presence is the state — no content to parse.                                                                           |
-| **Quarantined shard**      | A corrupt shard *copied* (not moved) to `metadata/shards/shard-{id}/quarantine/` for debugging. Kept alongside lifecycle markers so `rclone ls` of a shard's metadata directory shows the full history.                                                                                                            |
+| **Debug log**              | JSONL file (`metadata/workers/attempts/{worker_id}-{attempt}/debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                 |
+| **Worker report**          | JSON summary (`metadata/workers/attempts/{worker_id}-{attempt}/report.json`) of a worker's results, including content hashes for provenance. Written at exit, missing if worker crashed.                                                                                                                           |
+| **Lifecycle marker**       | Empty file in `metadata/workers/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. States: `.rendering` (in progress), `.valid` (validated + staged), `.invalid` (failed validation), `.promoted` (promoted to canonical by finalize). Presence is the state — no content to parse.                        |
+| **Quarantined shard**      | A corrupt shard uploaded by the worker to `metadata/workers/shards/shard-{id}/quarantine/` on validation failure. Preserves the evidence for debugging alongside lifecycle markers.                                                                                                                                |
 | **Dataset card**           | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                         |
 | **param_spec**             | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Examples: `surge_simple` (92 params), `surge_xt` (189 params).                                                                                                                                            |
 | **VST**                    | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                          |
