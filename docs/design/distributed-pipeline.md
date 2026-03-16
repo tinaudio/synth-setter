@@ -605,7 +605,7 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 01. **Check for `dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
 03. **Check completeness** — list staged shards, check for `.h5` + `.valid` marker per shard. If any missing, report which ones and exit 1
-04. **Select and structural-check staged shards** — for each shard, if multiple staged attempts exist, select the one whose `.valid` marker has the earliest R2 `LastModified` timestamp (the first worker to commit). Open each selected shard with `h5py`, verify expected datasets present and shapes match spec. No data loading. If any fail, write `.invalid` marker, report the failure, and exit 1 (shard is treated as missing on next `generate`)
+04. **Select and structural-check staged shards** — for each shard, if multiple staged attempts exist, select the one with the lexicographically smallest `{worker_id}-{attempt_uuid}` filename. Deterministic selection avoids dependence on clock accuracy or storage timestamp behavior. Open each selected shard with `h5py`, verify expected datasets present and shapes match spec. No data loading. If any fail, write `.invalid` marker, report the failure, and exit 1 (shard is treated as missing on next `generate`)
 05. **Promote staged shards** — copy each selected shard from `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5` to `data/shards/shard-{id}.h5`. Write `.promoted` marker for each. Staged files are not deleted (append-only)
 06. **Download canonical shards** from `data/shards/` to local storage
 07. **Compute normalization statistics** (mean, std across training set)
@@ -632,6 +632,8 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 **Finalize idempotency:** Finalize reruns from scratch unless `dataset.complete` plus all finalized outputs are present and valid. No partial checkpoints — if finalize crashes after `train.h5` but before `stats.npz`, the next run starts over. This is simple and correct: finalize processes data already in R2, so reruns are cheap (minutes).
 
 **Canonical data immutability:** After finalize writes `dataset.complete`, the contents of `data/shards/` and the finalized outputs are considered immutable. The pipeline does not enforce this at the storage level (R2 has no object locking), but no pipeline command modifies canonical data after finalization. Manual modification of `data/shards/` after finalize invalidates the dataset hash and provenance chain.
+
+**Quarantine cleanup:** Quarantined shards accumulate across retries. After `dataset.complete` is written, finalize can optionally delete `quarantine/` contents for completed shards (`--keep-quarantine-days` controls retention). Default: keep all quarantined files.
 
 **`dataset.json` — dataset card:**
 
@@ -660,7 +662,7 @@ Both invocations read the staging prefix, both see the same missing shards, both
 1. Worker A uploads `metadata/workers/shards/shard-000042/pod-abc-uuid1.h5`
 2. Worker B uploads `metadata/workers/shards/shard-000042/pod-def-uuid2.h5`
 3. Both files coexist — different filenames, no overwrite
-4. **Result:** two valid staged shards, wasted compute. Finalize picks the one with the earliest `.valid` timestamp to promote.
+4. **Result:** two valid staged shards, wasted compute. Finalize picks the lexicographically smallest filename to promote.
 
 **Skip-if-valid optimization:** Workers check the staging directory for an existing valid shard before uploading. If one exists, the worker skips the upload and moves to the next shard. This is an optimization, not a correctness requirement — the staging model is safe even without it.
 
@@ -691,10 +693,10 @@ A worker from a previous `generate` invocation hangs for hours, then finally upl
 
 **What this system does NOT protect against:**
 
-- **Non-deterministic outputs across hardware.** If floating-point non-determinism across different CPU architectures produces different audio for the same seed, multiple staged shards for the same shard ID may differ. Finalize picks the earliest-committed attempt — the result is valid and deterministic (given the same `.valid` timestamps), but content may vary across heterogeneous environments. Content hashes and `cpu_arch` in worker reports detect this divergence. The mitigation is to fix non-determinism in the renderer or constrain the execution environment.
+- **Non-deterministic outputs across hardware.** If floating-point non-determinism across different CPU architectures produces different audio for the same seed, multiple staged shards for the same shard ID may differ. Finalize picks the lexicographically smallest attempt — the selection is deterministic, but content may vary across heterogeneous environments. Content hashes and `cpu_arch` in worker reports detect this divergence. The mitigation is to fix non-determinism in the renderer or constrain the execution environment.
 - **Concurrent spec modification.** The spec is written once and never modified. If something modifies it after creation, correctness guarantees do not hold.
 
-> **Scope of concurrency safety:** The safety arguments in this section assume deterministic rendering within the execution environment (same Docker image + CPU architecture). The pipeline does not enforce homogeneous worker hardware. Workers record `cpu_arch` and `os_info` in their reports; when content hashes diverge across attempts, these fields identify the source. The mitigation is to fix the renderer or constrain the environment, not to add locking.
+> **Scope of concurrency safety:** The safety arguments in this section assume deterministic rendering within the execution environment (same Docker image + CPU architecture). The pipeline does not enforce homogeneous worker hardware — it detects but does not prevent architectural divergence. Workers record `cpu_arch` and `os_info` in their reports; when content hashes diverge across attempts, these fields identify the source. `dataset.json` records all unique worker architectures encountered (`worker_architectures`); if multiple architectures appear, finalize logs a warning. For bit-reproducible runs, pin RunPod instance types to a consistent CPU architecture. The mitigation for divergence is to fix the renderer or constrain the environment, not to add locking.
 
 ### 7.8 Error Handling & Crash Resilience
 
@@ -738,6 +740,8 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 **Local mode fidelity:** Local mode mimics R2 exactly — same directory structure, same spec format, same shard naming, same validation function. Only the storage transport changes.
 
+**RunPod instance tagging:** The CLI tags all RunPod instances with the `run_id` at launch. A `pipeline.cli cleanup --run-id <id>` command queries the RunPod API for any pods matching that `run_id` and terminates them — a safety net for orphaned pods if the CLI crashes after launching workers but before logging pod IDs locally.
+
 ### 7.10 Output Format: HDF5 vs WebDataset
 
 The pipeline supports two output formats, selected via `output_format` in the config and frozen in the spec. The format determines what finalize produces and how training consumes the data. Generation is unaffected — workers always produce HDF5 shards regardless of output format.
@@ -772,7 +776,7 @@ train-000000.tar
 
 Shard count is tuned for GPU worker count — one shard per GPU worker per epoch is ideal; exact sizing depends on batch size and network bandwidth.
 
-**Training integration:** The `webdataset` Python library provides streaming, shuffling, batching, and multi-worker support out of the box. R2 free egress makes streaming from object storage practical. Each GPU worker gets a disjoint subset of `.tar` shards — no coordination needed.
+**Training integration:** The `webdataset` Python library provides streaming, shuffling, batching, and multi-worker support out of the box. R2 free egress makes streaming from object storage practical. Each GPU worker gets a disjoint subset of `.tar` shards — no coordination needed. Training code must use WebDataset's built-in shuffle (or `shardshuffle`) — finalize writes shards in deterministic order for reproducibility; shuffling is the training loader's responsibility.
 
 ## 8. Experiment Tracking (Weights & Biases)
 
@@ -800,7 +804,7 @@ The finalized dataset is registered as a W&B Artifact of type `"dataset"`:
 - **Metadata:** run_id, param_spec, code_version, is_repo_dirty, total_samples, split sizes
 - **References:** R2 path to the actual HDF5 data (not uploaded to W&B — too large)
 
-This creates a dataset entry in the W&B artifact registry that can be referenced by training runs, establishing **artifact lineage**: code version → dataset artifact → training run → model checkpoint. See [Appendix E.3](#e3-wb-integration) for the implementation.
+This creates a dataset entry in the W&B artifact registry that can be referenced by training runs, establishing **artifact lineage**: code version → dataset artifact → training run → model checkpoint. Training runs close the lineage loop by declaring the dataset as an input: `artifact = run.use_artifact(f"dataset-{run_id}:latest")`. See [Appendix E.3](#e3-wb-integration) for the full implementation.
 
 ## 9. Alternatives Considered
 
@@ -995,11 +999,11 @@ User runs `generate` after finalization (e.g., to replace a quarantined shard). 
 
 ### Known Limitations
 
-1. **Single-machine finalize bottleneck.** Finalize downloads all shards to one machine. A 10k-sample shard is typically 50-100MB depending on audio length and spectrogram resolution. At 480 shards (~30GB), this takes minutes on a laptop. The practical upper bound for local finalize is ~100-200GB before disk or memory constraints require a cloud finalize worker with large local storage, or a two-pass statistics approach.
+1. **Single-machine finalize bottleneck.** Finalize downloads all shards to one machine. A 10k-sample shard is typically 50-100MB depending on audio length and spectrogram resolution. At 480 shards (~30GB), this takes minutes on a laptop. Current architecture scales to ~100-200GB datasets on a laptop. Beyond that, finalize should run on a cloud worker (same Docker image, same `ComputeBackend` protocol — add a `--finalize-on-cloud` flag that reuses the worker entrypoint). Incremental statistics (reservoir sampling or one-pass mean/std sketches) would eliminate the need to download all shards for stats computation.
 
 2. **No incremental finalization.** Crashes during finalize restart from scratch. Acceptable because finalize processes existing data and is fast to retry.
 
-3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. If multiple workers produce different output for the same shard on different hardware, finalize picks the earliest-committed staged shard — the selection is deterministic but the content may vary across heterogeneous environments.
+3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. If multiple workers produce different output for the same shard on different hardware, finalize picks the lexicographically smallest attempt — the selection is deterministic but the content may vary across heterogeneous environments.
 
 4. **R2 listing at scale.** Reconciliation lists staged shard objects (1000/page). At 480 shards: 1 API call. At 48,000: 48 calls — still fast. A future optimization could write a `metadata/shards.manifest` file listing all promoted shard IDs after finalize, allowing subsequent operations to read a single file instead of listing the prefix. Not needed at current scale.
 
@@ -1096,7 +1100,7 @@ class PipelineSpec(BaseModel):
     sample_rate: int
     shard_size: int
     num_shards: int
-    splits: dict[str, int]  # {"train": 44, "val": 2, "test": 2}
+    splits: dict[str, int]  # {"train": 44, "val": 2, "test": 2} (shard counts, not sample counts)
     shards: list[ShardSpec]
 ```
 
@@ -1131,6 +1135,7 @@ class DatasetCard(BaseModel):
 
     # Integrity
     validation_summary: ValidationSummary
+    worker_architectures: list[str]  # e.g. ["x86_64"] or ["x86_64", "aarch64"] if heterogeneous
 
     # Reference to full spec
     input_spec_sha256: str
@@ -1194,6 +1199,8 @@ On first `generate`:
 4. Materialize `PipelineSpec` — expand config into shard-level spec (seeds, shapes, row ranges)
 5. Upload spec + source config to R2
 6. Proceed with reconciliation
+
+**Dirty repo handling:** When `is_repo_dirty` is true, `generate` automatically creates a `git diff` and uploads it to `metadata/run_diff.patch`. This allows reconstructing the exact code state even when changes weren't committed — common during rapid ML research iteration.
 
 **Config drift protection:** If `--config` is passed for a `run_id` that already has a spec, the command errors. The spec is authoritative after creation.
 
