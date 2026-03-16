@@ -1172,7 +1172,35 @@ class WorkerReport(BaseModel):
     os_info: str             # e.g. "Linux 5.15.0-generic"
 ```
 
-### 14.4 Config Materialization
+### 14.4 Sample Type
+
+A typed container for individual training samples during finalize's transcode step (HDF5 → WebDataset). This is a `dataclass`, not a Pydantic model — the data is already validated NumPy arrays at this point, so Pydantic's serialization validation is unnecessary overhead (see validation boundaries below).
+
+```python
+@dataclass(frozen=True, slots=True)
+class Sample:
+    sample_id: int
+    audio: np.ndarray       # shape: (channels, samples)
+    mel_spec: np.ndarray    # shape: (mels, frames)
+    params: np.ndarray      # shape: (num_params,)
+```
+
+The `Sample` type ensures the transcode loop reads and writes the correct fields — a bug that drops `mel_spec` or swaps `audio` and `params` is caught by type hints rather than silently producing a broken `.tar` archive. `frozen=True` prevents accidental mutation during transcoding.
+
+**Validation boundaries — when to use what:**
+
+The pipeline uses different validation tools depending on where data crosses a trust boundary:
+
+| Boundary                        | Tool                | Why                                                                                     |
+| ------------------------------- | ------------------- | --------------------------------------------------------------------------------------- |
+| External input (config YAML)    | Pydantic (strict)   | Untrusted human input — catch type errors, missing fields, invalid values at parse time |
+| Serialization (spec, reports)   | Pydantic (strict)   | JSON crossing process boundaries (R2 ↔ CLI ↔ workers) — enforce schema on every read    |
+| Shard data (HDF5 arrays)        | Validation function | NumPy arrays inside HDF5 — Pydantic can't validate `ndarray`; custom checks required    |
+| Internal transform (HDF5 → WDS) | `dataclass` (above) | Data already validated — typed container prevents field mixups during transcoding       |
+
+Pydantic is for trust boundaries — where data enters the system from an external source (user config, JSON from R2, worker reports from other processes). Dataclasses are for internal contracts — where data has already been validated and you just need a typed container to prevent programming errors. No runtime validation overhead on 480k samples.
+
+### 14.5 Config Materialization
 
 A run starts from a typed YAML config file:
 
@@ -1204,14 +1232,14 @@ On first `generate`:
 
 **Config drift protection:** If `--config` is passed for a `run_id` that already has a spec, the command errors. The spec is authoritative after creation.
 
-### 14.5 Run ID Format
+### 14.6 Run ID Format
 
 ```
 {experiment_name}-{total_train_samples}-{shard_size}-{YYYYMMDD-HHMMSS}
 Example: surge_simple-480k-10k-20260312-143022
 ```
 
-### 14.6 CLI & Directory Structure
+### 14.7 CLI & Directory Structure
 
 ```
 pipeline/
