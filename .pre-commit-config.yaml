@@ -118,6 +118,21 @@ repos:
           - --skip=logs/**,data/**,*.ipynb
           - --ignore-words-list=ot
 
+  # jupyter notebook linting/formatting (code cells)
+  - repo: https://github.com/nbQA-dev/nbQA
+    rev: 1.7.0
+    hooks:
+      - id: nbqa-black
+        name: nbqa-black (format notebooks)
+        additional_dependencies: ["black==23.1.0"]
+        args: ["--line-length=99"]
+        files: "^notebooks/.*\\.ipynb$"
+      - id: nbqa-ruff
+        name: nbqa-ruff (lint notebooks)
+        additional_dependencies: ["ruff==0.5.5"]
+        args: ["--fix"]
+        files: "^notebooks/.*\\.ipynb$"
+
   # jupyter notebook cell output clearing
   - repo: https://github.com/kynan/nbstripout
     rev: 0.6.1
