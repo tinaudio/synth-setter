@@ -217,7 +217,11 @@ repos:
     hooks:
       - id: mdformat
         args: ["--number"]
-        exclude: "^README\\.md$"
+        exclude: >-
+          (?x)^(
+            README\.md|
+            \.claude/.*
+          )$
         additional_dependencies:
           - mdformat-gfm==1.0.0
           - mdformat_frontmatter==2.0.10
@@ -227,7 +231,11 @@ repos:
     rev: v2.2.4
     hooks:
       - id: codespell
-        exclude: "^src/models/ksin_flow_matching_module\\.py$"
+        exclude: >-
+          (?x)^(
+            src/models/ksin_flow_matching_module\.py|
+            \.claude/.*
+          )$
         args:
           - --skip=logs/**,data/**,*.ipynb
           # "ot" is a valid abbreviation (optimal transport) that codespell flags

@@ -53,20 +53,20 @@ ______________________________________________________________________
 - Use `finally` for cleanup; prefer `with` statements for resource management
 - Do NOT use `assert` for validation — assertions are stripped with `-O`
 
-### 1.3 Mutable Global State
+### 1.5 Mutable Global State
 
 - Avoid mutable global state
 - Module-level constants are fine: `MAX_RETRIES = 3` (all-caps)
 - Mark module-level mutable values as internal with `_leading_underscore`
 
-### 1.4 Comprehensions & Generators
+### 1.6 Comprehensions & Generators
 
 - Single-clause comprehensions and simple filters are OK
 - Multiple `for` clauses or complex filter expressions: use a regular loop instead
-- Generator functions are fine; use `Yields:` in docstrings not `Returns:`
+- Generator functions are fine; use `:yields:` in docstrings not `:returns:`
 - Prefer `operator` module functions over lambdas for common operations
 
-### 1.5 Default Arguments
+### 1.7 Default Arguments
 
 - **Never use mutable objects as default values** (`list`, `dict`, `set`)
 - Use `None` as default, initialize inside the function:
@@ -76,18 +76,18 @@ ______________________________________________________________________
           items = []
   ```
 
-### 1.6 Conditional Expressions
+### 1.8 Conditional Expressions
 
 - OK for simple cases: `x = 1 if cond else 2`
 - Each portion must fit on one line; otherwise use a full `if` statement
 
-### 1.7 Properties
+### 1.9 Properties
 
 - Use `@property` only for computations or lazy evaluation
 - Don't wrap simple attribute access in a property
 - Don't create properties that subclasses might need to override
 
-### 1.8 True/False Evaluations
+### 1.10 True/False Evaluations
 
 - Use implicit false: `if foo:` not `if foo != []:`
 - Use `if foo is None:` for None checks (never `if foo == None:`)
@@ -95,20 +95,20 @@ ______________________________________________________________________
 - For NumPy arrays, use `.size` for emptiness (not implicit bool)
 - `'0'` (string) evaluates to True
 
-### 1.9 Decorators
+### 1.11 Decorators
 
 - Use judiciously when there is a clear advantage
 - Never use `staticmethod` unless forced by an API
 - Use `classmethod` only for named constructors or class-level operations
 - Decorators run at import time — avoid external dependencies in decorator code
 
-### 1.10 Threading
+### 1.12 Threading
 
 - Do not rely on atomicity of built-in types
 - Use `queue.Queue` for inter-thread communication
 - Prefer `threading.Condition` over lower-level locks
 
-### 1.11 Power Features
+### 1.13 Power Features
 
 - Avoid: custom metaclasses, bytecode access, dynamic inheritance, `__del__` methods
 - Standard library internals using these are fine
@@ -167,47 +167,20 @@ sorting. The following are NOT auto-enforced:
   """
   ```
 - Test module docstrings are optional unless they provide context about test execution
-- Docstring summary lines must stay within 80 chars (even though Black allows 99 for code)
+- Docstring summary lines must stay within the project line-length limit (99 chars)
 
-### 2.4 Docstrings (Google Style)
+### 2.4 Docstrings
 
-Use `"""triple double quotes"""`. Structure:
+Docstring compliance is enforced by pre-commit hooks.
 
-```python
-def fetch_shard(shard_id: int, storage: StorageBackend) -> Path:
-    """Download a shard from storage to local filesystem.
-
-    Validates the shard exists before downloading. Uses --checksum
-    for transfer integrity verification.
-
-    Args:
-        shard_id: Logical shard index (0-based).
-        storage: Backend to download from.
-
-    Returns:
-        Local path to the downloaded shard file.
-
-    Raises:
-        ShardNotFoundError: If shard doesn't exist in storage.
-        TransferError: If checksum verification fails.
-    """
-```
-
-- One-line summary (\<=80 chars) ending with period
-- Blank line before body
-- `Args:`, `Returns:`, `Raises:` sections as needed
-- Omit `Returns:` if docstring starts with "Return" or "Yield" and only returns None
-- Overridden methods (`@override`) need docstrings only if behavior differs materially
-- Class docstrings: describe what instances represent, document public attributes in `Attributes:` section
-
-### 2.4 Comments
+### 2.5 Comments
 
 - Comments start 2+ spaces from code, `#` followed by space
 - Never describe code — assume readers know Python, explain intent
 - Use `TODO:` with bug reference: `# TODO: b/12345 - handle edge case`
 - Don't reference individuals in TODOs
 
-### 2.5 Strings
+### 2.6 Strings
 
 - Use f-strings, `%`, or `.format()` for formatting — never `+` in loops
 - Accumulate with `list.append()` + `''.join()` for linear complexity
@@ -215,13 +188,13 @@ def fetch_shard(shard_id: int, storage: StorageBackend) -> Path:
 - For logging: use pattern-parameters not f-strings: `logger.info('Version: %s', version)`
 - Error messages: precisely match conditions, clearly identify interpolated values
 
-### 2.6 Files and Resources
+### 2.7 Files and Resources
 
 - Always use `with` statements for files, sockets, and similar resources
 - Use `contextlib.closing()` for objects lacking `with` support
 - Never rely on `__del__` for cleanup
 
-### 2.7 Type Annotations
+### 2.8 Type Annotations
 
 - Annotate all public APIs and complex code
 - Don't annotate `self`/`cls` (except when using `Self` for proper type info)
@@ -240,13 +213,13 @@ def fetch_shard(shard_id: int, storage: StorageBackend) -> Path:
 - Suppress type errors with `# type: ignore` only with specific error codes
 - Use `str` for text, `bytes` for binary. Never `typing.Text`
 
-### 2.8 Function Length
+### 2.9 Function Length
 
 - Prefer small, focused functions
 - No hard limit, but consider refactoring at ~40 lines
 - Keep functions short for easier testing, modification, and debugging
 
-### 2.9 Main Guard
+### 2.10 Main Guard
 
 - Use `if __name__ == '__main__':` for all executable modules
 - Don't execute top-level operations that shouldn't run during import
@@ -262,7 +235,7 @@ ______________________________________________________________________
 | PY3  | No mutable default arguments (`list`, `dict`, `set` as defaults)           | BLOCK    |
 | PY4  | No `assert` for validation (stripped with `-O`)                            | BLOCK    |
 | PY5  | Naming follows convention table above                                      | WARN     |
-| PY6  | Public functions have Google-style docstrings with Args/Returns/Raises     | WARN     |
+| PY6  | Public functions have docstrings                                           | WARN     |
 | PY7  | Module docstrings present with usage examples for public modules           | WARN     |
 | PY8  | Type annotations on all public API function signatures                     | BLOCK    |
 | PY9  | Nullable types explicit: `X \| None` not implicit via `= None`             | WARN     |
@@ -277,4 +250,4 @@ ______________________________________________________________________
 | PY18 | `if __name__ == '__main__':` guard on executable modules                   | WARN     |
 | PY19 | Nested functions only when closing over locals; else use `_` module-level  | WARN     |
 | PY20 | Default iterators used; no mutating containers while iterating             | WARN     |
-| PY21 | Docstring summary lines \<= 80 chars (even with Black line-length=99)      | WARN     |
+| PY21 | Docstring summary lines \<= 99 chars                                       | WARN     |
