@@ -92,7 +92,7 @@ make finalize ARGS="--run-id surge_simple-480k-10k-20260313-100000"
 
 ### Goals
 
-- **Reproducible pipeline with full provenance.** Given the same config and code version, the pipeline produces an identical dataset. The input spec freezes all generation parameters (seeds, shapes, renderer version). Every dataset records what produced it: git commit, `is_repo_dirty: bool`, param spec, renderer version. This chain links dataset → code version → training run. Provenance matters because this is ML research: when a model behaves unexpectedly, you need to trace from the trained model back to the exact dataset, the exact code that generated it, and which worker attempt produced each shard. Without this chain, debugging training anomalies becomes guesswork. Per-shard provenance is tracked via lifecycle markers and content hashes in worker reports — you can determine which worker produced a shard, whether there were multiple attempts, and verify the hash matches what finalize consumed.
+- **Reproducible pipeline with full provenance.** The input spec freezes all generation parameters — per-shard seeds, shapes, renderer version. Re-running from the same spec on the same hardware and Docker image produces an identical dataset. This is a *controlled-conditions* guarantee, not an absolute one: VST plugin floating-point behavior may vary across CPU architectures, and Docker base image updates could change system libraries. The pipeline records enough provenance to detect and diagnose these differences (git commit, `is_repo_dirty: bool`, renderer version, per-shard content hashes), but does not claim bit-identical output across arbitrary hardware. Provenance matters because this is ML research: when a model behaves unexpectedly, you need to trace from the trained model back to the exact dataset, the exact code that generated it, and which worker attempt produced each shard. Per-shard provenance is tracked via lifecycle markers and content hashes in worker reports.
 - **Minimal hand-holding.** Two commands, no babysitting. Launch generation, come back later, run finalize. No monitoring dashboards to watch, no coordination services to keep alive, no manual intervention between steps.
 - **Debugability.** When something fails, the failure is easy to find and understand. Per-shard error tracking, structured debug logs that survive crashes, reconciliation reports that show exactly which shards are missing and why. No need to dig through cloud provider consoles.
 - **Low cost.** Cheap GPUs, free egress, no infrastructure to manage. A full dataset generation run costs ~$2. Monthly compute at 1-2 runs/week is ~$8-16. R2 storage accumulates but free egress makes it far cheaper than S3 for frequently-downloaded datasets.
@@ -839,7 +839,7 @@ User runs `generate` after finalization (e.g., to replace a quarantined shard). 
 
 2. **No incremental finalization.** Crashes during finalize restart from scratch. Acceptable because finalize processes existing data and is fast to retry.
 
-3. **Assumes deterministic rendering.** Concurrency safety depends on identical output for same (seed, config). If floating-point non-determinism across hardware produces different audio, the mitigation is to fix the renderer.
+3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. Concurrency safety also depends on deterministic rendering — if two workers produce different output for the same seed, last-writer-wins makes the result arbitrary.
 
 4. **R2 listing at scale.** Reconciliation lists all shard objects (1000/page). At 480 shards: 1 API call. At 48,000: 48 calls — still fast, but a completion-marker approach would scale better.
 
@@ -940,6 +940,8 @@ class PipelineSpec(BaseModel):
 ```
 
 All structured data uses Pydantic `BaseModel` in strict mode. Strict mode catches silent type coercion at serialization boundaries. `frozen=True` makes specs immutable at the type level.
+
+**Seed derivation:** Per-shard seeds are computed deterministically during spec materialization: `seed = base_seed + shard_id`, where `base_seed` is derived from the run config. This means the same config always produces the same spec (and therefore the same seeds). Reproducibility comes from re-running with the same frozen spec — the spec is the reproducibility unit, not the config.
 
 **Why JSON for specs and reports:** Machine-generated, stored in R2, read back by the CLI. JSON is the simplest correct format — Pydantic has native JSON methods (`.model_dump_json()` / `.model_validate_json()`), it's human-readable (`rclone cat` + `jq`), and handles nested structures natively. Config files use YAML because they're human-authored.
 
