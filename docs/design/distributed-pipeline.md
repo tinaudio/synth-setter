@@ -622,7 +622,7 @@ The output artifact metadata — a self-describing card for the finalized datase
 
 The input spec defines what the run should produce. `dataset.json` is the *output* record (what was actually produced). The spec has hundreds of shard-level entries. `dataset.json` inlines only what someone needs to load and use the dataset, and references the spec by SHA-256.
 
-**Inlined:** provenance (code version, git dirty, param spec, renderer), structure (splits, total samples), stats (normalization values), validation summary.
+**Inlined:** provenance (code version, git dirty, param spec, renderer version), structure (splits, total samples), stats (normalization values), validation summary.
 **Referenced:** full spec via `input_spec_sha256` and `input_spec_path`.
 **Excluded:** worker reports and debug logs — these are process artifacts, not dataset metadata.
 
@@ -1038,7 +1038,7 @@ class PipelineSpec(BaseModel):
     code_version: str       # git commit hash
     is_repo_dirty: bool         # True if working tree had uncommitted changes
     param_spec: str
-    renderer: str
+    renderer_version: str   # Auto-extracted from plugin bundle at materialization
     sample_rate: int
     shard_size: int
     num_shards: int
@@ -1066,7 +1066,7 @@ class DatasetCard(BaseModel):
     code_version: str
     is_repo_dirty: bool
     param_spec: str
-    renderer: str
+    renderer_version: str
     sample_rate: int
 
     # Structure
@@ -1120,7 +1120,7 @@ A run starts from a typed YAML config file:
 # configs/pipeline/surge_simple_480k.yaml
 experiment_name: surge_simple
 param_spec: surge_simple
-renderer: surge-xt-1.3.1
+plugin_path: plugins/Surge XT.vst3
 sample_rate: 16000
 shard_size: 10000
 num_shards: 48
@@ -1133,10 +1133,11 @@ splits:
 On first `generate`:
 
 1. Load YAML, validate against Pydantic `RunConfig` (strict mode)
-2. Derive `run_id`: `{experiment_name}-{train_size}-{shard_size}-{YYYYMMDD-HHMMSS}`
-3. Materialize `PipelineSpec` — expand config into shard-level spec (seeds, shapes, row ranges)
-4. Upload spec + source config to R2
-5. Proceed with reconciliation
+2. Extract `renderer_version` from the plugin bundle (`CFBundleShortVersionString` from `Info.plist` on macOS, `Version` from `moduleinfo.json` on Linux)
+3. Derive `run_id`: `{experiment_name}-{train_size}-{shard_size}-{YYYYMMDD-HHMMSS}`
+4. Materialize `PipelineSpec` — expand config into shard-level spec (seeds, shapes, row ranges)
+5. Upload spec + source config to R2
+6. Proceed with reconciliation
 
 **Config drift protection:** If `--config` is passed for a `run_id` that already has a spec, the command errors. The spec is authoritative after creation.
 
