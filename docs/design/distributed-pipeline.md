@@ -989,9 +989,31 @@ Additional stages could follow the same contract (§5) without modifying existin
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
-### Data Format Abstraction
+### WebDataset Output Format
 
-The pipeline currently uses HDF5 exclusively. A `ShardWriter`/`ShardReader` protocol could allow swapping to WebDataset (streaming), Parquet (columnar), or Lance (versioned). This should be added when a second format is concretely needed, not speculatively.
+The pipeline currently uses HDF5 for both generation and training. This works for single-machine training where finalize downloads all shards to local storage. For multi-GPU training at scale (B200s, many GPUs), HDF5 has two limitations:
+
+- **Poor streaming access.** HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequentially without coordinating seeks across workers. Streaming HDF5 virtual datasets from R2 during training would create heavy seek traffic and GPU idle time.
+- **Storage constraints.** Downloading the full dataset to every training node wastes storage and time. Streaming from R2 during training requires a format optimized for sequential HTTP reads.
+
+**WebDataset** (`.tar` shards) solves both: each shard is a sequential tar archive that can be streamed over HTTP, distributed across GPU workers without coordination, and read with near-zero overhead. It is the standard for PyTorch multi-node training (used by LAION, BigScience, etc.).
+
+**What changes — finalize gains a `--format wds` option:**
+
+- Finalize already downloads, validates, and reshards. The new format adds a transcoding step: HDF5 → `.tar` shards, each containing N samples as `{sample_id}.audio.npy` + `{sample_id}.params.npy` + `{sample_id}.mel.npy`
+- Shard count tuned for GPU worker count (one shard per GPU worker per epoch is ideal; exact sizing depends on batch size and network bandwidth)
+- Stats and metadata still written as before (`stats.npz`, `dataset.json`)
+- The `webdataset` library provides streaming, shuffling, batching, and multi-worker support out of the box
+
+**What doesn't change — generation stays HDF5:**
+
+- Workers still generate HDF5 shards (good for atomic writes, validation, random-access debugging)
+- The staging/canonical split is unaffected
+- WebDataset is a training distribution format, not a generation format
+
+**When:** Add when multi-GPU training is the concrete bottleneck. R2 free egress makes streaming from object storage practical when the time comes.
+
+A general `ShardWriter`/`ShardReader` protocol could allow swapping to other formats (Parquet, Lance) in the future, but WebDataset is the concrete next step.
 
 ### Content-Addressable Outputs
 
