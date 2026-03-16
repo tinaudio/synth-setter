@@ -8,24 +8,23 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                                                | What it covers                                                |
-| --- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| 1   | [Context & Motivation](#1-context--motivation)                                         | Problem statement, infrastructure layers                      |
-| 2   | [Typical Workflow](#2-typical-workflow)                                                | End-to-end CLI example                                        |
-| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles)          | Requirements, principles, anti-goals, success metrics         |
-| 4   | [System Overview](#4-system-overview)                                                  | Architecture summary, data/control plane, watchmen            |
-| 5   | [Stage Definitions](#5-stage-definitions)                                              | Generate and finalize stages                                  |
-| 6   | [Data Flow & Architecture](#6-data-flow--architecture)                                 | Diagrams, R2 layout, artifact taxonomy                        |
-| 7   | [Design Decisions](#7-design-decisions)                                                | Storage-as-truth, reconciliation, concurrency, error handling |
-| 8   | [Experiment Tracking](#8-experiment-tracking-weights--biases)                          | W&B metrics, artifacts, lineage                               |
-| 9   | [Alternatives Considered](#9-alternatives-considered)                                  | Comparison chart, detailed rejections                         |
-| 10  | [Operations & Infrastructure](#10-operations--infrastructure)                          | Credentials, monitoring, cost model                           |
-| 11  | [Concurrency, Consistency & Failure Modes](#11-concurrency-consistency--failure-modes) | R2 consistency, edge cases, failure analysis                  |
-| 12  | [Open Questions, Risks & Limitations](#12-open-questions-risks--limitations)           | Known gaps and trade-offs                                     |
-| 13  | [Out of Scope](#13-out-of-scope)                                                       | Future work — not referenced elsewhere                        |
-| 14  | [Implementation Details](#14-implementation-details)                                   | Schemas, CLI structure, libraries, W&B integration            |
-| 15  | [Discarded Choices](#15-discarded-choices)                                             | Brief rejections of minor alternatives                        |
-| A–D | [Appendices](#appendix-a-glossary)                                                     | Glossary, tech stack, references, roadmap                     |
+| §   | Section                                                                                | What it covers                                                       |
+| --- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| 1   | [Context & Motivation](#1-context--motivation)                                         | Problem statement, infrastructure layers                             |
+| 2   | [Typical Workflow](#2-typical-workflow)                                                | End-to-end CLI example                                               |
+| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles)          | Requirements, principles, anti-goals, success metrics                |
+| 4   | [System Overview](#4-system-overview)                                                  | Architecture summary, data/control plane, reconciliation correctness |
+| 5   | [Stage Definitions](#5-stage-definitions)                                              | Generate and finalize stages                                         |
+| 6   | [Data Flow & Architecture](#6-data-flow--architecture)                                 | Diagrams, R2 layout, artifact taxonomy                               |
+| 7   | [Design Decisions](#7-design-decisions)                                                | Storage-as-truth, reconciliation, concurrency, error handling        |
+| 8   | [Experiment Tracking](#8-experiment-tracking-weights--biases)                          | W&B metrics, artifacts, lineage                                      |
+| 9   | [Alternatives Considered](#9-alternatives-considered)                                  | Comparison chart, detailed rejections                                |
+| 10  | [Operations & Infrastructure](#10-operations--infrastructure)                          | Credentials, monitoring, cost model                                  |
+| 11  | [Concurrency, Consistency & Failure Modes](#11-concurrency-consistency--failure-modes) | R2 consistency, edge cases, failure analysis                         |
+| 12  | [Open Questions, Risks & Limitations](#12-open-questions-risks--limitations)           | Known gaps and trade-offs                                            |
+| 13  | [Out of Scope](#13-out-of-scope)                                                       | Future work — not referenced elsewhere                               |
+| 14  | [Implementation Details](#14-implementation-details)                                   | Schemas, CLI structure, config materialization                       |
+| A–E | [Appendices](#appendix-a-glossary)                                                     | Glossary, tech stack, references, roadmap, implementation recipes    |
 
 ______________________________________________________________________
 
@@ -103,13 +102,13 @@ make finalize ARGS="--run-id surge_simple-480k-10k-20260313-100000"
 
 ### Design Principles
 
-- **Storage is truth** — correctness is determined by inspecting actual shard files in R2, not by trusting worker-reported metadata. Metadata files are debugging hints, not the source of truth ([§7.1](#71-storage-as-the-source-of-truth))
-- **Reconciliation over orchestration** — the pipeline determines what work remains by comparing desired state (spec) against actual state (validated shards). We are not in the business of orchestrating. Any command is safe at any time ([§7.4](#74-reconciliation-based-execution))
-- **Deterministic work identity** — shard IDs are logical and deterministic (`shard-000042`), not tied to infrastructure. Any worker can compute any shard ([§7.3](#73-deterministic-shard-identities))
-- **Stage isolation** — each processing stage is an independent, reconcilable transform with well-defined inputs and outputs ([§5](#5-stage-definitions))
+- **Storage is truth** — shard completeness is determined by file existence + validation, not metadata ([§7.1](#71-storage-as-the-source-of-truth))
+- **Reconciliation over orchestration** — compare desired state (spec) against actual state (validated shards) to determine remaining work ([§7.4](#74-reconciliation-based-execution))
+- **Deterministic work identity** — shard IDs are logical (`shard-000042`), not tied to infrastructure ([§7.3](#73-deterministic-shard-identities))
+- **Stage isolation** — each stage is an independent, reconcilable transform with well-defined inputs and outputs ([§5](#5-stage-definitions))
 - **Fail visibly** — errors are captured, structured, and surfaced, never swallowed ([§7.8](#78-error-handling--crash-resilience))
 - **Validate at boundaries** — data is verified when entering and leaving each stage ([§7.5](#75-shard-validation))
-- **Thin abstractions** — only abstract what's needed. Two compute backends (local + RunPod), not a speculative provider framework ([§7.9](#79-compute-abstraction))
+- **Thin abstractions** — only abstract what's needed; two compute backends, not a speculative framework ([§7.9](#79-compute-abstraction))
 
 ### What This System Deliberately Avoids
 
@@ -120,7 +119,7 @@ make finalize ARGS="--run-id surge_simple-480k-10k-20260313-100000"
 - **Automatic stage chaining** — explicit commands are clearer at 2 stages
 - **Provider job supervision** — submit work and exit; storage determines completeness
 - **Speculative provider abstractions** — only local + RunPod until a third is needed
-- **Owning provider observability** — RunPod pod health monitoring is RunPod's problem, not ours. We determine completeness from storage, not provider APIs
+- **Owning provider observability** — provider-side monitoring is the provider's responsibility; completeness is determined from storage
 
 ### Success Metrics
 
@@ -141,15 +140,16 @@ make finalize ARGS="--run-id surge_simple-480k-10k-20260313-100000"
 - **Sub-second latency.** Worker startup and R2 operations are minute-scale.
 - **GPU scheduling.** Generation is CPU-bound; GPU allocation is RunPod's concern.
 - **Replacing training infrastructure.** This pipeline produces datasets. Training is a separate concern.
+- **Production-grade infrastructure.** This is a research pipeline optimized for simplicity and debuggability, not a production system. We accept wasted compute (redundant writes, full restarts on finalize crash) in exchange for simpler code with fewer failure modes. Automation that minimizes wasted work (auto-retry, partial checkpoints, progress-aware scheduling) adds complexity not justified at 1-2 runs/week.
 
-### Do Not Build
+### Explicit Non-Requirements
 
 - Generic DAG parser or dependency graph executor
 - Automatic stage chaining engine
 - Stage plugin registry or dynamic stage discovery
 - Workflow definition language or config-driven stage ordering
 - Stage lifecycle hooks (pre-stage, post-stage, on-failure)
-- RunPod health monitoring or observability tooling — engineering effort is not justified for a 1-2x/week pipeline
+- RunPod health monitoring or observability tooling — not justified for a 1-2x/week pipeline
 - Provider-agnostic abstraction beyond the two backends actually tested
 
 ## 4. System Overview
@@ -165,19 +165,16 @@ R2 serves as both the **data plane** and the **control plane**:
 | **Data plane**    | Actual dataset content | HDF5 shards, virtual datasets, stats.npz             |
 | **Control plane** | Coordination metadata  | Spec, worker reports, debug logs, `dataset.complete` |
 
-Both planes use R2. There is no separate database, message queue, or coordination service. This means one piece of infrastructure to manage, one set of credentials, one failure mode to reason about. The trade-off: R2 has no atomic test-and-set, so mutual exclusion is not possible. This is acceptable because all operations are idempotent and produce deterministic outputs (§7.6).
+Both planes use R2. There is no separate database, message queue, or coordination service. This means one piece of infrastructure to manage, one set of credentials, one failure mode to reason about. The trade-off: R2 has no atomic test-and-set, so mutual exclusion is not possible. This is acceptable because all operations are idempotent and produce deterministic outputs ([§7.7](#77-concurrency-semantics)).
 
-### Who Watches the Watchmen
+### Reconciliation Correctness
 
-The reconciliation report (`make status`) is the system's single watchman. It reads the input spec, lists and validates every shard, and prints a deterministic summary. It's stateless, runs from any machine, and its logic is a simple set difference: `spec_shards - validated_shards = missing`.
+What if reconciliation itself has a bug — e.g., it validates a corrupt shard as good?
 
-But what if reconciliation itself has a bug — e.g., it validates a corrupt shard as good?
-
-- **Defense in depth:** Validation runs four independent checks (structural, shape, value, row count). All four must pass.
-- **Finalize re-validates:** Finalize runs its own validation pass before merging, independent of any earlier reconciliation.
-- **Training is the ultimate check:** A corrupt dataset will fail to train properly. This provides end-to-end verification.
+- **Defense in depth:** Validation runs four independent checks; all must pass ([§7.5](#75-shard-validation)).
+- **Finalize re-validates:** Workers, reconciliation, and finalize all call the same validation function — no divergence between validation passes.
+- **Training is the ultimate check:** A corrupt dataset will fail to train properly, providing end-to-end verification.
 - **Manual spot-checking is feasible:** At 1-2 runs/week, eyeballing a few shards is practical and encouraged.
-- **The spec is immutable:** The spec is written once and never modified. The `run_id` in `dataset.complete` links back to the exact spec used.
 
 ## 5. Stage Definitions
 
@@ -205,7 +202,7 @@ The pipeline has two stages. Each is an independent command with well-defined in
 ```
 ┌───────────────────────────────┐
 │  make generate RUN_ID=...     │
-│  (local machine)              │
+│  (CLI — local machine)        │
 │                               │         ┌────────────────┐
 │  1. Validate auth (R2+RunPod) │         │  Cloudflare R2  │
 │  2. Read/create spec  ◄───┼────────►│                │
@@ -406,7 +403,9 @@ This eliminates an entire class of edge cases:
 
 ### 7.2 Shard Lifecycle
 
-Every shard in the pipeline moves through a well-defined set of states. These states are derived from storage — marker files, shard files, and the dataset card — not from worker self-reporting.
+> **Completeness rule:** A shard is complete if and only if the canonical shard file (`shards/shard-{id}.h5`) exists in R2 and passes validation ([§7.5](#75-shard-validation)). Markers are forensic metadata — they record *what happened* but do not determine *what is true*. If a `.valid` marker exists but the shard file is missing or corrupt, the shard is **missing** (or invalid). Reconciliation ignores the marker.
+
+Every shard moves through a well-defined set of states. The **authoritative** state is derived from shard file existence and validation. Markers provide forensic evidence of worker activity but are not part of the correctness model.
 
 ```
 missing → rendering → valid → finalized
@@ -414,13 +413,13 @@ missing → rendering → valid → finalized
             invalid (quarantined)
 ```
 
-| State         | How it's determined                                                                                                                                                                                                             | Persisted as                                                                            |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| **missing**   | Shard is in the input spec but no valid shard file or `.valid` marker exists in R2                                                                                                                                              | Implicit (absence of shard + marker)                                                    |
-| **rendering** | `.rendering` marker exists for this shard. Worker has started but not yet uploaded a validated shard.                                                                                                                           | `metadata/shards/shard-{id}/{worker_id}-{attempt}.rendering`                            |
-| **valid**     | `.valid` marker exists. Shard was validated locally by the worker and uploaded to the canonical path.                                                                                                                           | `metadata/shards/shard-{id}/{worker_id}-{attempt}.valid`                                |
-| **invalid**   | `.invalid` marker exists. Reconciliation found the shard in R2 but it failed validation. The corrupt file is *copied* to `quarantine/` for debugging (not moved — the canonical path is left for the next worker to overwrite). | `metadata/shards/shard-{id}/{worker_id}-{attempt}.invalid` + `quarantine/shard-{id}.h5` |
-| **finalized** | Shard was consumed by `finalize`, content hash recorded in `dataset.json`. The dataset is sealed.                                                                                                                               | Content hash in `dataset.json`, `dataset.complete` marker exists                        |
+| State         | Authoritative determination                                                                                                                             | Marker evidence                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **missing**   | Shard is in the input spec but no canonical shard file exists or it fails validation                                                                    | May have orphaned `.rendering` markers from crashed attempts                                               |
+| **rendering** | Worker has started but canonical shard file does not yet exist or validate                                                                              | `.rendering` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt}.rendering`                          |
+| **valid**     | Canonical shard file exists in R2 and passes validation. `.valid` marker corroborates                                                                   | `.valid` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt}.valid`                                  |
+| **invalid**   | Canonical shard file exists but fails validation. Corrupt file *copied* to `quarantine/` (not moved — canonical path left for next worker to overwrite) | `.invalid` marker: `metadata/shards/shard-{id}/{worker_id}-{attempt}.invalid` + `quarantine/shard-{id}.h5` |
+| **finalized** | Shard was consumed by `finalize`, content hash recorded in `dataset.json`. The dataset is sealed                                                        | `dataset.complete` marker exists (dataset-level, not per-shard)                                            |
 
 **Transitions:**
 
@@ -432,7 +431,7 @@ missing → rendering → valid → finalized
 
 **Key properties:**
 
-- **States are derived from storage, not reported by workers.** A `.rendering` marker with no `.valid` means the attempt failed, regardless of what the worker report says.
+- **File existence + validation is authoritative; markers are forensic.** Reconciliation determines shard state by validating the canonical file, not by reading markers. Markers help humans debug — e.g., a `.rendering` with no `.valid` indicates a crashed attempt — but never override the file-based determination.
 - **Multiple attempts are visible.** A shard directory might contain `pod-abc.rendering` (crashed) and `pod-def.valid` (succeeded) — the full history is one `rclone ls` away.
 - **The finalized state is dataset-level, not shard-level.** Individual shards don't know they've been finalized. The `dataset.json` content hash and `dataset.complete` marker are the authority.
 
@@ -517,14 +516,20 @@ Worker error details are overlaid from metadata files when present, but the core
 
 ### 7.5 Shard Validation
 
-Every shard is validated before finalize merges it. Validation checks:
+The system's correctness depends on shard validation. There is one canonical validation function (`validation.validate_shard`), called by workers (before upload), reconciliation (during `status`/`generate`), and finalize (before merging). All three code paths use the same function — there is no separate implementation to diverge.
+
+**A shard is accepted if and only if all four checks pass:**
 
 - **Structural**: Valid HDF5, expected datasets present (`audio`, `mel_spec`, `param_array`)
-- **Shape**: Array dimensions match spec spec (sample rate, spectrogram bins, parameter count)
+- **Shape**: Array dimensions match spec (sample rate, spectrogram bins, parameter count)
 - **Value**: No NaN/Inf values, audio within [-1, 1], parameters within spec bounds
 - **Row count**: Matches spec's expected shard size
 
-Corrupt shards are quarantined (*copied* to `metadata/shards/shard-{id}/quarantine/`, not moved — the canonical path is left intact for the next worker to overwrite). Keeping quarantined files alongside the shard's lifecycle markers means `rclone ls` of a shard's metadata directory shows the full history. Reconciliation treats shards with `.invalid` markers as missing — they'll be regenerated on next `generate`.
+**Content hashes** (SHA-256 over the full HDF5 file) are recorded in worker reports for provenance and divergence detection. They are not used as acceptance criteria — acceptance is determined solely by the four checks above. If two workers produce different hashes for the same shard, the content hashes surface the divergence for investigation.
+
+**Semantic corruption:** Validation catches structural and numerical issues but cannot detect all semantic corruption (e.g., audio that is valid float32 in [-1, 1] but sounds wrong due to a renderer bug). Training is the ultimate semantic check ([§4](#4-system-overview), "Reconciliation Correctness"). At 1-2 runs/week, manual spot-checking of a few samples is practical and encouraged.
+
+Corrupt shards are quarantined (*copied* to `metadata/shards/shard-{id}/quarantine/`, not moved — the canonical path is left intact for the next worker to overwrite). Keeping quarantined files alongside the shard's lifecycle markers means `rclone ls` of a shard's metadata directory shows the full history. Reconciliation treats quarantined shards as missing — they'll be regenerated on next `generate`.
 
 ### 7.6 Finalize Workflow
 
@@ -548,7 +553,7 @@ Corrupt shards are quarantined (*copied* to `metadata/shards/shard-{id}/quaranti
 - Contains: `run_id` and finalization timestamp
 - If `dataset.complete` exists and all outputs validate → dataset is ready for training
 - If `dataset.complete` exists but outputs are missing → stale marker from a crashed finalize, cleaned up on next run
-- Two concurrent finalize processes both write `dataset.complete` — this is fine, they produce identical outputs (§7.6)
+- Two concurrent finalize processes both write `dataset.complete` — this is fine, they produce identical outputs ([§7.7](#77-concurrency-semantics))
 
 **Why `dataset.complete` and not `dataset.lock`:** The file is a completion marker, not a lock. Calling it `.lock` implies mutex semantics that don't exist and can't exist (R2 has no atomic test-and-set). The name should communicate what it means: finalization is complete.
 
@@ -570,7 +575,7 @@ This is a single-user research pipeline running 1-2x/week. It is not designed fo
 
 **Why concurrent operations can't corrupt data:**
 
-1. **Deterministic outputs.** Two workers computing the same shard (same seed, same config) produce identical content. No randomness or timestamp-dependent state in the output.
+1. **Deterministic outputs within the same execution environment.** Two workers computing the same shard (same seed, same config, same Docker image, same CPU architecture) produce identical content. No randomness or timestamp-dependent state in the output.
 2. **R2 last-writer-wins.** R2 (like S3) has PUT-overwrites-PUT semantics. When both writers produce identical content, the overwrite is a no-op in practice.
 
 **Scenario: `generate` run on the same run_id multiple times in quick succession**
@@ -586,6 +591,8 @@ Both invocations read R2, both see the same missing shards, both launch workers 
 **R2 does not reject duplicate writes.** There is no mechanism in the R2/S3 API (as used via rclone) to reject a write to an existing key. Writes always succeed. The design accepts this because deterministic outputs make overwrites harmless.
 
 **What semantics do we want?** Skip-if-valid. The worker should check if the shard already exists and validates before uploading. This is implemented at the worker level (check canonical path before upload), not at the storage level (R2 has no conditional PUT via rclone). Even if the check races, the fallback (overwrite with identical content) is safe.
+
+**Overwrite policy:** Only one worker should be assigned a shard at a time (CLI partitions the missing set). A shard may only be overwritten if missing or failing validation. If duplicate writes occur (two workers racing), both produce identical content (deterministic), so the overwrite is harmless. Finalize never merges ambiguous duplicates — one canonical path per shard.
 
 **Scenario: concurrent `finalize` on the same run_id**
 
@@ -613,7 +620,9 @@ Finalize checks completeness first. If shards are missing, it reports "generatio
 **What this system does NOT protect against:**
 
 - **Non-deterministic outputs.** If floating-point non-determinism across different hardware produces different audio for the same seed, last-writer-wins means the final shard is arbitrary. The mitigation is to fix non-determinism in the renderer.
-- **Concurrent spec modification.** The spec is written once and never modified. If something modifies it after creation, all bets are off.
+- **Concurrent spec modification.** The spec is written once and never modified. If something modifies it after creation, correctness guarantees do not hold.
+
+> **Scope of concurrency safety:** The safety arguments in this section assume deterministic rendering within the execution environment (same Docker image + CPU architecture). The pipeline does not enforce homogeneous worker hardware. Content hashes in worker reports detect divergence when it occurs — the mitigation is to fix the renderer or constrain the environment, not to add locking.
 
 ### 7.8 Error Handling & Crash Resilience
 
@@ -655,9 +664,11 @@ class ComputeBackend(Protocol):
 
 No `check_tasks` method exists. Provider APIs answer the wrong question ("is the worker running?") when the right question is "are the shards done?" Storage answers that definitively.
 
+**Local mode fidelity:** Local mode mimics R2 exactly — same directory structure, same spec format, same shard naming, same validation function. Only the storage transport changes.
+
 ## 8. Experiment Tracking (Weights & Biases)
 
-W&B serves as a lightweight observability layer for the pipeline — a few key metrics and the dataset as a first-class artifact. It is not a monitoring dashboard or a log aggregator.
+W&B serves as a lightweight observability layer for the pipeline — a few key metrics and the dataset as a first-class artifact. It is not a monitoring dashboard or a log aggregator. W&B is an index and lineage tracker, not the authoritative dataset store. R2 holds the data; `dataset.json` holds the metadata; W&B points to both.
 
 ### What Goes in W&B
 
@@ -681,7 +692,7 @@ The finalized dataset is registered as a W&B Artifact of type `"dataset"`:
 - **Metadata:** run_id, param_spec, code_version, is_repo_dirty, total_samples, split sizes
 - **References:** R2 path to the actual HDF5 data (not uploaded to W&B — too large)
 
-This creates a dataset entry in the W&B artifact registry that can be referenced by training runs, establishing **artifact lineage**: code version → dataset artifact → training run → model checkpoint. See [§14.11](#1411-wb-integration) for the implementation.
+This creates a dataset entry in the W&B artifact registry that can be referenced by training runs, establishing **artifact lineage**: code version → dataset artifact → training run → model checkpoint. See [Appendix E.3](#e3-wb-integration) for the implementation.
 
 ## 9. Alternatives Considered
 
@@ -723,21 +734,21 @@ Why it doesn't work:
 **Rejected (was the original interface).** The first draft of `ComputeBackend` had `submit()` and `check_tasks()` — the latter polling provider APIs for task status.
 
 - **Provider task state is unreliable.** RunPod can report "running" for a worker that OOM-killed 10 minutes ago.
-- **It duplicates reconciliation.** Storage already answers "is this shard done?" Adding a second, weaker signal creates two sources of truth.
+- **It duplicates reconciliation.** Storage already answers "is this shard done?" ([§7.1](#71-storage-as-the-source-of-truth)). Adding a second, weaker signal creates two sources of truth.
 - **It couples the protocol to provider lifecycles.** Pods are persistent and inspectable; serverless functions are ephemeral. A `check_tasks` method pretends providers are more similar than they are.
-- **It tempts you into building a job supervisor.** Once you can check status, you'll want to retry, timeout, notify — and now you're building a scheduler instead of a data pipeline. We are not in the business of managing provider observability.
+- **Scope creep risk.** Once you can check status, the next step is retry logic, timeout heuristics, and notifications — a scheduler, not a data pipeline.
 
 ### 9.4 Hadoop / MapReduce
 
-**Rejected.** Hadoop is designed for processing existing large datasets with shuffle, sort, and reduce phases over HDFS. This pipeline's workload is fully parallel data *generation* — no inter-worker communication, no data dependencies, no reduce step. Hadoop's infrastructure (HDFS cluster, YARN resource manager, JVM-based framework) is massive overkill. The pipeline would use Hadoop as an expensive pod launcher, ignoring everything that makes Hadoop Hadoop.
+**Rejected.** Hadoop is designed for processing existing large datasets with shuffle, sort, and reduce phases over HDFS. This pipeline's workload is fully parallel data *generation* — no inter-worker communication, no data dependencies, no reduce step. Hadoop's infrastructure (HDFS cluster, YARN resource manager, JVM-based framework) would be unused overhead — the pipeline would only use it as a pod launcher.
 
 ### 9.5 `make status` as Provider-Status Command
 
-**Rejected (was the original monitoring approach).** The first draft described polling as showing live pod status from RunPod's API.
+**Rejected (was the original monitoring approach).** The first draft described `make status` as showing live pod status from RunPod's API.
 
-- **Provider APIs answer the wrong question.** "Is the worker running?" ≠ "are the shards done?" A worker can be running and producing nothing.
-- **It's not portable.** Polling RunPod workers is RunPod-specific.
-- **It tempts you into building monitoring tooling** — status enums, timeout heuristics, provider-specific error parsing — when the actual information needed is "which shards are missing?"
+- **Provider APIs answer the wrong question.** "Is the worker running?" ≠ "are the shards done?" Storage answers the right question ([§7.1](#71-storage-as-the-source-of-truth)).
+- **Not portable.** Polling RunPod workers is RunPod-specific.
+- **Scope creep risk.** Leads to status enums, timeout heuristics, and provider-specific error parsing.
 
 ### 9.6 CLI Flags as Run Configuration
 
@@ -748,6 +759,20 @@ Why it doesn't work:
 - **Mix concerns.** Dataset spec and operational config in the same flat namespace.
 
 The design uses typed YAML config files. The config describes what to produce; the input spec freezes it. Operational concerns (worker count, backend) are CLI arguments.
+
+### 9.7 Minor Alternatives
+
+| Alternative                            | Verdict  | One-line reason                                                              |
+| -------------------------------------- | -------- | ---------------------------------------------------------------------------- |
+| Apache Spark                           | Rejected | JVM dependency, no reduce step needed, fully parallel workload               |
+| Ray                                    | Rejected | Cluster management overhead, overkill for independent tasks                  |
+| Dataclasses + manual JSON              | Rejected | No validation on deserialization — Pydantic strict mode is better            |
+| OmegaConf for pipeline config          | Rejected | Interpolation/merge features not needed — PyYAML + Pydantic sufficient       |
+| Worker report as only debugging record | Rejected | Crashes erase end-of-execution artifacts — debug logs with EXIT trap survive |
+| Duplicating spec into dataset.json     | Rejected | Two sources of truth — reference by SHA-256 instead                          |
+| Make as primary CLI                    | Rejected | No typed arguments, no --help — Click CLI with Make as thin alias            |
+| Hand-rolled retry loops                | Rejected | Proliferate and diverge — centralized retry policy                           |
+| Generic stage orchestration framework  | Rejected | Two stages don't justify a framework                                         |
 
 ## 10. Operations & Infrastructure
 
@@ -767,7 +792,7 @@ Credentials are baked into Docker images via BuildKit `--secret` — not visible
 
 - `make status` runs the storage reconciliation report — deterministic, stateless, runnable from any machine
 - No long-running monitoring process required
-- We do not build or own RunPod worker health monitoring — the engineering effort is not justified for 1-2x/week usage, and provider observability is the provider's responsibility
+- Provider-side worker health monitoring is out of scope — not justified for 1-2x/week usage
 
 **After a run:**
 
@@ -823,7 +848,7 @@ This is stronger than S3's original eventual consistency model (which was [upgra
 
 **What R2 does NOT provide:**
 
-- **Conditional writes.** No `If-None-Match` or `If-Match` headers via rclone. Writes are unconditional (last-writer-wins). See [§7.6](#76-concurrency-semantics) for why this is acceptable.
+- **Conditional writes.** No `If-None-Match` or `If-Match` headers via rclone. Writes are unconditional (last-writer-wins). See [§7.7](#77-concurrency-semantics) for why this is acceptable.
 - **Atomic multi-object writes.** Writing `shard-042.h5` and `worker-{id}.json` are two separate PUTs. They can't be made atomic. See [§11.2](#112-failure-modes--edge-cases).
 - **Read-your-writes across regions.** R2 is globally distributed; the pipeline assumes single-region usage (all operations from one R2 endpoint).
 
@@ -832,10 +857,10 @@ This is stronger than S3's original eventual consistency model (which was [upgra
 Non-obvious failure modes, edge cases, and blind spots. Each includes the scenario, consequence, and mitigation.
 
 **Corrupt shard overwrites valid shard:**
-A second `generate` invocation assigns shard-042 to a new worker. The worker's VST plugin crashes mid-render, producing a corrupt file. The worker uploads it to R2, overwriting the valid shard from the first invocation. **Consequence:** Reconciliation may accept the corrupt shard if the corruption is subtle (e.g., wrong values but valid structure). **Mitigation:** Workers validate shards locally before uploading ([§7.4](#74-shard-validation)). If local validation fails, the upload is skipped. This is the primary defense.
+A second `generate` invocation assigns shard-042 to a new worker. The worker's VST plugin crashes mid-render, producing a corrupt file. The worker uploads it to R2, overwriting the valid shard from the first invocation. **Consequence:** Reconciliation may accept the corrupt shard if the corruption is subtle (e.g., wrong values but valid structure). **Mitigation:** Workers validate shards locally *before* uploading ([§7.5](#75-shard-validation)). If local validation fails, the upload is skipped and the failure is logged. Only validated shards reach R2. This is the primary defense — validation happens before upload in all code paths (worker write protocol step 3 in [§7.3](#73-deterministic-shard-identities)).
 
 **Non-atomic cross-file writes:**
-A worker uploads `shard-042.h5` successfully but crashes before writing `worker-{id}.json`. Or: the worker writes `worker-{id}.json` (claiming success for shard-042) but crashes before the shard upload completes. These two artifacts are separate R2 PUTs — they cannot be made atomic. **Consequence:** Worker report may be out of sync with actual shard state. A report may claim a shard succeeded when the file doesn't exist, or a shard may exist without a corresponding report. **Mitigation:** Reconciliation never trusts worker reports for correctness ([§7.1](#71-storage-as-the-source-of-truth)). It validates actual shard files. Worker reports are supplementary debugging hints. Each worker invocation includes an attempt UUID, so mismatches between report and shards are at least observable.
+A worker uploads `shard-042.h5` successfully but crashes before writing `worker-{id}.json`. Or vice versa. These are separate R2 PUTs — they cannot be made atomic. **Consequence:** Worker report may be out of sync with actual shard state. **Mitigation:** Reconciliation validates actual shard files, not worker reports ([§7.1](#71-storage-as-the-source-of-truth)). Per-attempt UUIDs make mismatches observable.
 
 **Partial shard upload:**
 `rclone` crashes mid-upload. R2 may have a partial or corrupt object at the canonical path. **Consequence:** Reconciliation finds the file but it fails structural validation (not valid HDF5). **Mitigation:** The shard is quarantined and treated as missing. Next `generate` fills the gap.
@@ -859,7 +884,7 @@ User runs `generate` after finalization (e.g., to replace a quarantined shard). 
 
 ### Known Limitations
 
-1. **Single-machine finalize bottleneck.** Finalize downloads all shards to one machine. At 480 shards × 10k samples (~30GB), this takes minutes. At 10M+ samples, finalize would need a cloud worker with large local storage, or a two-pass statistics approach.
+1. **Single-machine finalize bottleneck.** Finalize downloads all shards to one machine. A 10k-sample shard is typically 50-100MB depending on audio length and spectrogram resolution. At 480 shards (~30GB), this takes minutes on a laptop. The practical upper bound for local finalize is ~100-200GB before disk or memory constraints require a cloud finalize worker with large local storage, or a two-pass statistics approach.
 
 2. **No incremental finalization.** Crashes during finalize restart from scratch. Acceptable because finalize processes existing data and is fast to retry.
 
@@ -1057,50 +1082,7 @@ On first `generate`:
 Example: surge_simple-480k-10k-20260312-143022
 ```
 
-### 14.6 Structured Logging
-
-Implementation of debug logging described in [§7.8](#78-error-handling--crash-resilience).
-
-Workers use `structlog` with JSON rendering for append-only debug log streams:
-
-```python
-import structlog
-
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer(),
-    ],
-    wrapper_class=structlog.stdlib.BoundLogger,
-)
-
-log = structlog.get_logger().bind(run_id=run_id, worker_id=worker_id)
-log.info("shard_started", shard_id=42)
-log.info("shard_validated", shard_id=42, rows=10000)
-log.error("shard_failed", shard_id=43, error="NaN in audio buffer")
-```
-
-Structured output goes to stdout (live debugging via `docker logs`). The entrypoint tees stdout to a local file, uploaded to R2 as `worker-{id}-debug.log` by the bash EXIT trap — survives crashes.
-
-### 14.7 Retry Policy
-
-All transient storage operations use `tenacity` with a centralized policy:
-
-```python
-# pipeline/retry.py
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
-storage_retry = retry(
-    stop=stop_after_attempt(5),
-    wait=wait_exponential(multiplier=1, min=1, max=16),
-    retry=retry_if_exception_type((TimeoutError, ConnectionError)),
-    reraise=True,
-)
-```
-
-One definition, applied everywhere via decorator. Permanent failures (auth, wrong bucket) reraise immediately.
-
-### 14.8 CLI & Directory Structure
+### 14.6 CLI & Directory Structure
 
 ```
 pipeline/
@@ -1136,77 +1118,6 @@ configs/
   trainer/             # Training configs (Hydra)
     ddp.yaml
 ```
-
-### 14.9 LocalBackend Storage Invariant
-
-Local mode mimics R2 exactly: same directory structure, same spec format, same shard naming, same validation. Only the storage transport changes. This makes local mode a high-fidelity test of the production pipeline.
-
-### 14.10 Overwrite and Retry Policy
-
-- **Only one worker should be assigned a shard at a time.** The CLI partitions the missing set.
-- **A shard may only be overwritten if missing or failing validation.** Workers check the canonical path before uploading; if a valid shard exists, they skip it.
-- **If duplicate writes occur** (two workers racing), both produce identical content (deterministic), so the overwrite is harmless.
-- **Finalize never merges ambiguous duplicates.** One canonical path per shard, no deduplication logic.
-
-### 14.11 W&B Integration
-
-Implementation of experiment tracking described in [§8](#8-experiment-tracking-weights--biases).
-
-```python
-# In finalize, after resharding and stats:
-import wandb
-
-run = wandb.init(project="surge-data-pipeline", job_type="data-pipeline")
-
-# Log pipeline metrics
-run.log({
-    "pipeline/shards_total": spec.num_shards,
-    "pipeline/shards_valid": validation_summary.valid,
-    "pipeline/shards_quarantined": validation_summary.quarantined,
-    "pipeline/total_samples": total_samples,
-    "pipeline/errors_total": total_errors,
-})
-
-# Register dataset as artifact
-artifact = wandb.Artifact(
-    name=f"dataset-{spec.run_id}",
-    type="dataset",
-    metadata={
-        "run_id": spec.run_id,
-        "param_spec": spec.param_spec,
-        "code_version": spec.code_version,
-        "total_samples": total_samples,
-        "splits": card.splits,
-    },
-)
-artifact.add_file(input_spec_path)        # input_spec.json
-artifact.add_file(card_path)        # dataset.json
-artifact.add_reference(f"r2://{bucket}/{run_id}/data/")  # pointer to R2 data
-run.log_artifact(artifact)
-run.finish()
-```
-
-Training runs declare the dataset as an input, closing the lineage loop:
-
-```python
-artifact = run.use_artifact(f"dataset-{run_id}:latest")
-```
-
-## 15. Discarded Choices
-
-Alternatives considered but not impactful enough for detailed analysis.
-
-| Alternative                            | Verdict  | One-line reason                                                              |
-| -------------------------------------- | -------- | ---------------------------------------------------------------------------- |
-| Apache Spark                           | Rejected | JVM dependency, no reduce step needed, fully parallel workload               |
-| Ray                                    | Rejected | Cluster management overhead, overkill for independent tasks                  |
-| Dataclasses + manual JSON              | Rejected | No validation on deserialization — Pydantic strict mode is better            |
-| OmegaConf for pipeline config          | Rejected | Interpolation/merge features not needed — PyYAML + Pydantic sufficient       |
-| Worker report as only debugging record | Rejected | Crashes erase end-of-execution artifacts — debug logs with EXIT trap survive |
-| Duplicating spec into dataset.json     | Rejected | Two sources of truth — reference by SHA-256 instead                          |
-| Make as primary CLI                    | Rejected | No typed arguments, no --help — Click CLI with Make as thin alias            |
-| Hand-rolled retry loops                | Rejected | Proliferate and diverge — centralized retry policy                           |
-| Generic stage orchestration framework  | Rejected | Two stages don't justify a framework                                         |
 
 ## Appendix A: Glossary
 
@@ -1272,5 +1183,94 @@ Full staged implementation plan: [greedy-tickling-harbor.md](greedy-tickling-har
 | 6     | End-to-end integration test              | Stage 5      |
 | 7     | Credential management (Docker)           | Stage 5      |
 | 8     | ComputeBackend protocol + LocalBackend   | Stage 5      |
+
+## Appendix E: Implementation Recipes
+
+Library configuration snippets referenced from the main design. These are illustrative — the authoritative implementations live in the codebase.
+
+### E.1 Structured Logging
+
+Workers use `structlog` with JSON rendering for append-only debug log streams ([§7.8](#78-error-handling--crash-resilience)):
+
+```python
+import structlog
+
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.stdlib.BoundLogger,
+)
+
+log = structlog.get_logger().bind(run_id=run_id, worker_id=worker_id)
+log.info("shard_started", shard_id=42)
+log.info("shard_validated", shard_id=42, rows=10000)
+log.error("shard_failed", shard_id=43, error="NaN in audio buffer")
+```
+
+Structured output goes to stdout (live debugging via `docker logs`). The entrypoint tees stdout to a local file, uploaded to R2 by the bash EXIT trap — survives crashes.
+
+### E.2 Retry Policy
+
+All transient storage operations use `tenacity` with a centralized policy:
+
+```python
+# pipeline/retry.py
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+storage_retry = retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=16),
+    retry=retry_if_exception_type((TimeoutError, ConnectionError)),
+    reraise=True,
+)
+```
+
+One definition, applied everywhere via decorator. Permanent failures (auth, wrong bucket) reraise immediately.
+
+### E.3 W&B Integration
+
+Implementation of experiment tracking ([§8](#8-experiment-tracking-weights--biases)):
+
+```python
+# In finalize, after resharding and stats:
+import wandb
+
+run = wandb.init(project="surge-data-pipeline", job_type="data-pipeline")
+
+# Log pipeline metrics
+run.log({
+    "pipeline/shards_total": spec.num_shards,
+    "pipeline/shards_valid": validation_summary.valid,
+    "pipeline/shards_quarantined": validation_summary.quarantined,
+    "pipeline/total_samples": total_samples,
+    "pipeline/errors_total": total_errors,
+})
+
+# Register dataset as artifact
+artifact = wandb.Artifact(
+    name=f"dataset-{spec.run_id}",
+    type="dataset",
+    metadata={
+        "run_id": spec.run_id,
+        "param_spec": spec.param_spec,
+        "code_version": spec.code_version,
+        "total_samples": total_samples,
+        "splits": card.splits,
+    },
+)
+artifact.add_file(input_spec_path)        # input_spec.json
+artifact.add_file(card_path)        # dataset.json
+artifact.add_reference(f"r2://{bucket}/{run_id}/data/")  # pointer to R2 data
+run.log_artifact(artifact)
+run.finish()
+```
+
+Training runs declare the dataset as an input, closing the lineage loop:
+
+```python
+artifact = run.use_artifact(f"dataset-{run_id}:latest")
+```
 
 ______________________________________________________________________
