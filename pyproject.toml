@@ -30,7 +30,7 @@ line-length = 99
 exclude = ["logs/*", "data/*"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = ["E", "F", "I", "UP", "W"]
 
 [tool.coverage.report]
 exclude_lines = [
