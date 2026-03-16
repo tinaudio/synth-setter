@@ -74,7 +74,8 @@ repos:
     hooks:
       - id: bandit
         args: ["-s", "B101"]
-        additional_dependencies: ["pbr>=2.0.0,<8"]
+        # bandit uses pbr for package metadata at build time
+        additional_dependencies: ["pbr>=6.0.0,<8"]
 
   # yaml formatting
   - repo: https://github.com/pre-commit/mirrors-prettier
