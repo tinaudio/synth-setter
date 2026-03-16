@@ -590,8 +590,8 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 01. **Check for `dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
 03. **Check completeness** — list staged shards, check for `.h5` + `.valid` marker per shard. If any missing, report which ones and exit 1
-04. **Structural-check staged shards** — open each staged shard with `h5py`, verify expected datasets present and shapes match spec. No data loading. If any fail, write `.invalid` marker, report the failure, and exit 1 (shard is treated as missing on next `generate`)
-05. **Promote staged shards** — copy each validated shard from `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5` to `data/shards/shard-{id}.h5`. Write `.promoted` marker for each. Staged files are not deleted (append-only)
+04. **Select and structural-check staged shards** — for each shard, if multiple staged attempts exist, select the one whose `.valid` marker has the earliest R2 `LastModified` timestamp (the first worker to commit). Open each selected shard with `h5py`, verify expected datasets present and shapes match spec. No data loading. If any fail, write `.invalid` marker, report the failure, and exit 1 (shard is treated as missing on next `generate`)
+05. **Promote staged shards** — copy each selected shard from `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5` to `data/shards/shard-{id}.h5`. Write `.promoted` marker for each. Staged files are not deleted (append-only)
 06. **Download canonical shards** from `data/shards/` to local storage
 07. **Reshard** into train/val/test virtual HDF5 datasets
 08. **Compute normalization statistics** (mean, std across training set)
@@ -613,6 +613,8 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 **Why `dataset.complete` and not `dataset.lock`:** The file is a completion marker, not a lock. Calling it `.lock` implies mutex semantics that don't exist and can't exist (R2 has no atomic test-and-set). The name should communicate what it means: finalization is complete.
 
 **Finalize idempotency:** Finalize reruns from scratch unless `dataset.complete` plus all finalized outputs are present and valid. No partial checkpoints — if finalize crashes after `train.h5` but before `stats.npz`, the next run starts over. This is simple and correct: finalize processes data already in R2, so reruns are cheap (minutes).
+
+**Canonical data immutability:** After finalize writes `dataset.complete`, the contents of `data/shards/` and the finalized outputs are considered immutable. The pipeline does not enforce this at the storage level (R2 has no object locking), but no pipeline command modifies canonical data after finalization. Manual modification of `data/shards/` after finalize invalidates the dataset hash and provenance chain.
 
 **`dataset.json` — dataset card:**
 
@@ -641,7 +643,7 @@ Both invocations read the staging prefix, both see the same missing shards, both
 1. Worker A uploads `metadata/workers/shards/shard-000042/pod-abc-uuid1.h5`
 2. Worker B uploads `metadata/workers/shards/shard-000042/pod-def-uuid2.h5`
 3. Both files coexist — different filenames, no overwrite
-4. **Result:** two valid staged shards, wasted compute. Finalize picks one to promote.
+4. **Result:** two valid staged shards, wasted compute. Finalize picks the one with the earliest `.valid` timestamp to promote.
 
 **Skip-if-valid optimization:** Workers check the staging directory for an existing valid shard before uploading. If one exists, the worker skips the upload and moves to the next shard. This is an optimization, not a correctness requirement — the staging model is safe even without it.
 
@@ -672,10 +674,10 @@ A worker from a previous `generate` invocation hangs for hours, then finally upl
 
 **What this system does NOT protect against:**
 
-- **Non-deterministic outputs across hardware.** If floating-point non-determinism across different CPU architectures produces different audio for the same seed, multiple staged shards for the same shard ID may differ. Finalize picks one — the result is valid but arbitrary. Content hashes in worker reports detect this divergence. The mitigation is to fix non-determinism in the renderer or constrain the execution environment.
+- **Non-deterministic outputs across hardware.** If floating-point non-determinism across different CPU architectures produces different audio for the same seed, multiple staged shards for the same shard ID may differ. Finalize picks the earliest-committed attempt — the result is valid and deterministic (given the same `.valid` timestamps), but content may vary across heterogeneous environments. Content hashes and `cpu_arch` in worker reports detect this divergence. The mitigation is to fix non-determinism in the renderer or constrain the execution environment.
 - **Concurrent spec modification.** The spec is written once and never modified. If something modifies it after creation, correctness guarantees do not hold.
 
-> **Scope of concurrency safety:** The safety arguments in this section assume deterministic rendering within the execution environment (same Docker image + CPU architecture). The pipeline does not enforce homogeneous worker hardware. Content hashes in worker reports detect divergence when it occurs — the mitigation is to fix the renderer or constrain the environment, not to add locking.
+> **Scope of concurrency safety:** The safety arguments in this section assume deterministic rendering within the execution environment (same Docker image + CPU architecture). The pipeline does not enforce homogeneous worker hardware. Workers record `cpu_arch` and `os_info` in their reports; when content hashes diverge across attempts, these fields identify the source. The mitigation is to fix the renderer or constrain the environment, not to add locking.
 
 ### 7.8 Error Handling & Crash Resilience
 
@@ -944,9 +946,9 @@ User runs `generate` after finalization (e.g., to replace a quarantined shard). 
 
 2. **No incremental finalization.** Crashes during finalize restart from scratch. Acceptable because finalize processes existing data and is fast to retry.
 
-3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. If multiple workers produce different output for the same shard on different hardware, finalize picks one staged shard arbitrarily — the result is valid but not deterministic across heterogeneous environments.
+3. **Reproducibility is controlled-conditions, not absolute.** The pipeline guarantees that the same spec + same Docker image + same hardware = identical dataset. But VST plugin floating-point behavior can vary across CPU architectures (x86 vs ARM, SSE vs AVX), and Docker base image updates change system libraries. Content hashes in worker reports detect when this happens, but the pipeline does not enforce cross-hardware bit-identity. If multiple workers produce different output for the same shard on different hardware, finalize picks the earliest-committed staged shard — the selection is deterministic but the content may vary across heterogeneous environments.
 
-4. **R2 listing at scale.** Reconciliation lists all shard objects (1000/page). At 480 shards: 1 API call. At 48,000: 48 calls — still fast, but a completion-marker approach would scale better.
+4. **R2 listing at scale.** Reconciliation lists staged shard objects (1000/page). At 480 shards: 1 API call. At 48,000: 48 calls — still fast. A future optimization could write a `metadata/shards.manifest` file listing all promoted shard IDs after finalize, allowing subsequent operations to read a single file instead of listing the prefix. Not needed at current scale.
 
 5. **No partial dataset usage.** Training can't start until finalize completes. Acceptable for batch workflows.
 
@@ -1101,6 +1103,10 @@ class WorkerReport(BaseModel):
     errors: list[str]
     started_at: str         # ISO 8601
     completed_at: str
+
+    # Environment (for debugging non-determinism across hardware)
+    cpu_arch: str            # e.g. "x86_64", "aarch64"
+    os_info: str             # e.g. "Linux 5.15.0-generic"
 ```
 
 ### 14.4 Config Materialization
