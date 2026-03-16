@@ -16,7 +16,7 @@ ______________________________________________________________________
 | 4   | [System Overview](#4-system-overview)                                                  | Architecture summary, data/control plane, reconciliation correctness |
 | 5   | [Stage Definitions](#5-stage-definitions)                                              | Generate and finalize stages                                         |
 | 6   | [Data Flow & Architecture](#6-data-flow--architecture)                                 | Diagrams, R2 layout, artifact taxonomy                               |
-| 7   | [Design Decisions](#7-design-decisions)                                                | Storage-as-truth, reconciliation, concurrency, error handling        |
+| 7   | [Design Decisions](#7-design-decisions)                                                | Storage-as-truth, reconciliation, concurrency, output formats        |
 | 8   | [Experiment Tracking](#8-experiment-tracking-weights--biases)                          | W&B metrics, artifacts, lineage                                      |
 | 9   | [Alternatives Considered](#9-alternatives-considered)                                  | Comparison chart, detailed rejections                                |
 | 10  | [Operations & Infrastructure](#10-operations--infrastructure)                          | Credentials, monitoring, cost model                                  |
@@ -74,7 +74,8 @@ python -m pipeline.cli generate --run-id surge_simple-480k-10k-20260313-100000
 
 # 5. Finalize — download, reshard, compute stats, register in W&B
 python -m pipeline.cli finalize --run-id surge_simple-480k-10k-20260313-100000
-# → 48/48 valid. Resharding → train.h5, val.h5, test.h5
+# → 48/48 valid. output_format: hdf5
+# → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
 # → Stats computed. Dataset registered in W&B.
 # → dataset.complete written.
 ```
@@ -180,10 +181,17 @@ What if reconciliation itself has a bug — e.g., it validates a corrupt shard a
 
 The pipeline has two stages. Each is an independent command with well-defined inputs and outputs.
 
-| Stage        | Command                 | Input                                     | Output                                                                           | Compute                        |
-| ------------ | ----------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------ |
-| **Generate** | `pipeline.cli generate` | Config YAML (first run) or spec (retries) | HDF5 shards in `{run_id}/data/shards/`                                           | CPU — VST audio rendering      |
-| **Finalize** | `pipeline.cli finalize` | Validated shards in R2                    | `train.h5`, `val.h5`, `test.h5`, `stats.npz`, `dataset.json`, `dataset.complete` | CPU — download, reshard, stats |
+| Stage        | Command                 | Input                                     | Output                                                                        | Compute                        |
+| ------------ | ----------------------- | ----------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------ |
+| **Generate** | `pipeline.cli generate` | Config YAML (first run) or spec (retries) | HDF5 shards in staging                                                        | CPU — VST audio rendering      |
+| **Finalize** | `pipeline.cli finalize` | Validated staged shards in R2             | Format-dependent (see below), `stats.npz`, `dataset.json`, `dataset.complete` | CPU — download, reshard, stats |
+
+Finalize output depends on `output_format` in the spec:
+
+| `output_format` | Finalize outputs                                                                 | Training access pattern            |
+| --------------- | -------------------------------------------------------------------------------- | ---------------------------------- |
+| `hdf5`          | `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets)                          | Local random access                |
+| `wds`           | `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives) | Sequential streaming (local or R2) |
 
 **Stage order is static and explicit.** Generate must complete before finalize. The user runs generate, checks the report, then runs finalize. There is no automatic chaining.
 
@@ -250,9 +258,16 @@ The pipeline has two stages. Each is an independent command with well-defined in
       shard-000001.h5
       ...
       shard-000479.h5
+    # output_format: hdf5
     train.h5                             # Virtual dataset (written by finalize)
     val.h5
     test.h5
+    # output_format: wds
+    train-000000.tar                     # WebDataset archives (written by finalize)
+    train-000001.tar
+    ...
+    val-000000.tar
+    test-000000.tar
     stats.npz                            # Normalization statistics
   metadata/
     config.yaml                          # User recipe (provenance copy, not authoritative)
@@ -593,9 +608,11 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 04. **Select and structural-check staged shards** — for each shard, if multiple staged attempts exist, select the one whose `.valid` marker has the earliest R2 `LastModified` timestamp (the first worker to commit). Open each selected shard with `h5py`, verify expected datasets present and shapes match spec. No data loading. If any fail, write `.invalid` marker, report the failure, and exit 1 (shard is treated as missing on next `generate`)
 05. **Promote staged shards** — copy each selected shard from `metadata/workers/shards/shard-{id}/{worker}-{attempt}.h5` to `data/shards/shard-{id}.h5`. Write `.promoted` marker for each. Staged files are not deleted (append-only)
 06. **Download canonical shards** from `data/shards/` to local storage
-07. **Reshard** into train/val/test virtual HDF5 datasets
-08. **Compute normalization statistics** (mean, std across training set)
-09. **Write `dataset.json`** — self-describing dataset card (includes content hashes of promoted shards)
+07. **Compute normalization statistics** (mean, std across training set)
+08. **Produce training outputs** — format depends on `output_format` in the spec:
+    - `hdf5`: Reshard into `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets). Good for local single-GPU training.
+    - `wds`: Transcode into `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives). Each `.tar` shard contains samples as `{sample_id}.audio.npy` + `{sample_id}.params.npy` + `{sample_id}.mel.npy`. Good for multi-GPU streaming from R2.
+09. **Write `dataset.json`** — self-describing dataset card (includes content hashes, output format, shard manifest)
 10. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
 11. **Upload finalized dataset** to R2
 12. **Write `dataset.complete`** — completion marker (last step)
@@ -622,7 +639,7 @@ The output artifact metadata — a self-describing card for the finalized datase
 
 The input spec defines what the run should produce. `dataset.json` is the *output* record (what was actually produced). The spec has hundreds of shard-level entries. `dataset.json` inlines only what someone needs to load and use the dataset, and references the spec by SHA-256.
 
-**Inlined:** provenance (code version, git dirty, param spec, renderer version), structure (splits, total samples), stats (normalization values), validation summary.
+**Inlined:** provenance (code version, git dirty, param spec, renderer version, output format), structure (splits, total samples), stats (normalization values), validation summary.
 **Referenced:** full spec via `input_spec_sha256` and `input_spec_path`.
 **Excluded:** worker reports and debug logs — these are process artifacts, not dataset metadata.
 
@@ -720,6 +737,42 @@ class ComputeBackend(Protocol):
 No `check_tasks` method exists. Provider APIs answer the wrong question ("is the worker running?") when the right question is "are the shards done?" Storage answers that definitively.
 
 **Local mode fidelity:** Local mode mimics R2 exactly — same directory structure, same spec format, same shard naming, same validation function. Only the storage transport changes.
+
+### 7.10 Output Format: HDF5 vs WebDataset
+
+The pipeline supports two output formats, selected via `output_format` in the config and frozen in the spec. The format determines what finalize produces and how training consumes the data. Generation is unaffected — workers always produce HDF5 shards regardless of output format.
+
+**Why two formats:**
+
+- **HDF5** (`output_format: hdf5`): Virtual datasets (`train.h5`, `val.h5`, `test.h5`) that reference promoted shards. Good for local single-GPU training where the full dataset is downloaded to the training machine. Random access, fast local I/O.
+- **WebDataset** (`output_format: wds`): Sequential `.tar` archives (`train-{shard}.tar`, etc.) optimized for streaming. Each archive contains N samples as individual NumPy files. Good for multi-GPU training (B200s, many GPUs) where streaming from R2 avoids downloading the full dataset to every node.
+
+**Why HDF5 is insufficient for multi-GPU training:**
+
+HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequentially without coordinating seeks across workers. Streaming HDF5 virtual datasets from R2 during training creates heavy seek traffic and GPU idle time. Downloading the full dataset to every training node wastes storage and time at scale. WebDataset solves both — each `.tar` shard is a sequential stream that can be read over HTTP with near-zero overhead.
+
+**Why generation stays HDF5 regardless of output format:**
+
+Workers generate HDF5 because it is the right format for atomic writes, random-access validation, and debugging. The staging/canonical split is unaffected by output format. WebDataset is a training distribution format, not a generation format. Finalize handles the transcoding — it already downloads, validates, and reshards, so adding a format conversion step is a natural extension.
+
+**WebDataset shard structure:**
+
+Each `.tar` shard contains samples as individual files:
+
+```
+train-000000.tar
+├── 000000.audio.npy
+├── 000000.params.npy
+├── 000000.mel.npy
+├── 000001.audio.npy
+├── 000001.params.npy
+├── 000001.mel.npy
+└── ...
+```
+
+Shard count is tuned for GPU worker count — one shard per GPU worker per epoch is ideal; exact sizing depends on batch size and network bandwidth.
+
+**Training integration:** The `webdataset` Python library provides streaming, shuffling, batching, and multi-worker support out of the box. R2 free egress makes streaming from object storage practical. Each GPU worker gets a disjoint subset of `.tar` shards — no coordination needed.
 
 ## 8. Experiment Tracking (Weights & Biases)
 
@@ -989,31 +1042,9 @@ Additional stages could follow the same contract (§5) without modifying existin
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
-### WebDataset Output Format
+### Data Format Abstraction
 
-The pipeline currently uses HDF5 for both generation and training. This works for single-machine training where finalize downloads all shards to local storage. For multi-GPU training at scale (B200s, many GPUs), HDF5 has two limitations:
-
-- **Poor streaming access.** HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequentially without coordinating seeks across workers. Streaming HDF5 virtual datasets from R2 during training would create heavy seek traffic and GPU idle time.
-- **Storage constraints.** Downloading the full dataset to every training node wastes storage and time. Streaming from R2 during training requires a format optimized for sequential HTTP reads.
-
-**WebDataset** (`.tar` shards) solves both: each shard is a sequential tar archive that can be streamed over HTTP, distributed across GPU workers without coordination, and read with near-zero overhead. It is the standard for PyTorch multi-node training (used by LAION, BigScience, etc.).
-
-**What changes — finalize gains a `--format wds` option:**
-
-- Finalize already downloads, validates, and reshards. The new format adds a transcoding step: HDF5 → `.tar` shards, each containing N samples as `{sample_id}.audio.npy` + `{sample_id}.params.npy` + `{sample_id}.mel.npy`
-- Shard count tuned for GPU worker count (one shard per GPU worker per epoch is ideal; exact sizing depends on batch size and network bandwidth)
-- Stats and metadata still written as before (`stats.npz`, `dataset.json`)
-- The `webdataset` library provides streaming, shuffling, batching, and multi-worker support out of the box
-
-**What doesn't change — generation stays HDF5:**
-
-- Workers still generate HDF5 shards (good for atomic writes, validation, random-access debugging)
-- The staging/canonical split is unaffected
-- WebDataset is a training distribution format, not a generation format
-
-**When:** Add when multi-GPU training is the concrete bottleneck. R2 free egress makes streaming from object storage practical when the time comes.
-
-A general `ShardWriter`/`ShardReader` protocol could allow swapping to other formats (Parquet, Lance) in the future, but WebDataset is the concrete next step.
+The pipeline supports HDF5 and WebDataset output formats ([§7.10](#710-output-format-hdf5-vs-webdataset)). A general `ShardWriter`/`ShardReader` protocol could allow adding further formats (Parquet, Lance) in the future. This should be added when a third format is concretely needed, not speculatively.
 
 ### Content-Addressable Outputs
 
@@ -1061,6 +1092,7 @@ class PipelineSpec(BaseModel):
     is_repo_dirty: bool         # True if working tree had uncommitted changes
     param_spec: str
     renderer_version: str   # Auto-extracted from plugin bundle at materialization
+    output_format: str      # "hdf5" or "wds" — determines finalize output
     sample_rate: int
     shard_size: int
     num_shards: int
@@ -1089,6 +1121,7 @@ class DatasetCard(BaseModel):
     is_repo_dirty: bool
     param_spec: str
     renderer_version: str
+    output_format: str      # "hdf5" or "wds"
     sample_rate: int
 
     # Structure
@@ -1143,6 +1176,7 @@ A run starts from a typed YAML config file:
 experiment_name: surge_simple
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3
+output_format: hdf5       # "hdf5" (local training) or "wds" (multi-GPU streaming)
 sample_rate: 16000
 shard_size: 10000
 num_shards: 48
@@ -1233,6 +1267,7 @@ configs/
 | **Mel spectrogram**        | Frequency-domain audio representation used as neural network input. 128 mels, ~100 frames/sec.                                                                                                                                                                                                                     |
 | **Fully parallel**         | Workload where tasks are completely independent — no communication or shared state between workers.                                                                                                                                                                                                                |
 | **rclone**                 | CLI tool for syncing files to cloud storage. Used as the R2 upload/download mechanism.                                                                                                                                                                                                                             |
+| **WebDataset**             | [WebDataset](https://github.com/webdataset/webdataset), a PyTorch-compatible format for streaming training data. Stores samples in sequential `.tar` archives optimized for HTTP/S3 streaming. Used as the `wds` output format for multi-GPU training.                                                             |
 
 ## Appendix B: Tech Stack
 
@@ -1242,7 +1277,8 @@ configs/
 | Storage         | Cloudflare R2                                                     | Data + coordination, free egress                 |
 | Execution       | RunPod                                                            | Cheap on-demand cloud workers                    |
 | Tracking        | Weights & Biases                                                  | Pipeline metrics, dataset artifact registry      |
-| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                 | Shard storage with compression                   |
+| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                 | Shard generation + local training format         |
+| Training format | [WebDataset](https://github.com/webdataset/webdataset)            | Streaming `.tar` shards for multi-GPU training   |
 | CLI             | [Click](https://click.palletsprojects.com/)                       | Typed arguments, validation, `--help`            |
 | Validation      | [Pydantic](https://docs.pydantic.dev/) (strict mode)              | PipelineSpec, report, and config validation      |
 | Logging         | [structlog](https://www.structlog.org/)                           | Structured JSON debug logging                    |
