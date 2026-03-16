@@ -1093,11 +1093,14 @@ class ShardResult(BaseModel):
     filename: str
     rows: int
     success: bool
+    content_hash: str | None = None  # SHA-256 of the .h5 file (None if failed)
+    render_time_sec: float
     error: str | None = None
 
 class WorkerReport(BaseModel):
     model_config = ConfigDict(strict=True)
     worker_id: str          # Infrastructure ID (for debugging)
+    attempt_uuid: str       # Unique per invocation, used in staging filenames
     assigned_shards: list[int]
     results: list[ShardResult]
     errors: list[str]
