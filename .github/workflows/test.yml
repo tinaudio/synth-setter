@@ -99,8 +99,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-torch.txt
-          pip install -r requirements-app.txt
+          pip install -r requirements.txt
+
 
       - name: List dependencies
         run: |
@@ -149,10 +149,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-torch.txt
-          pip install -r requirements-app.txt
+          pip install -r requirements.txt
           pip install pytest-cov[toml]
           pip install sh
+
 
       - name: Run tests and collect coverage
         run: pytest --cov src # NEEDS TO BE UPDATED WHEN CHANGING THE NAME OF "src" FOLDER
