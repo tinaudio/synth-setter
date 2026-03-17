@@ -54,6 +54,7 @@ def test_train_fast_dev_run_gpu(cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.fast_dev_run = True
         cfg_train.trainer.accelerator = "gpu"
+        cfg_train.data.batch_size = 32
     train(cfg_train)
 
 
