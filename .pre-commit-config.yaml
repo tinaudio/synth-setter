@@ -17,26 +17,62 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
 
-  # python code formatting
+  # python linting + import sorting + syntax upgrades (replaces flake8, isort, pyupgrade)
+  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.5
+    hooks:
+      - id: ruff
+        args: [--fix]
+        exclude: &legacy_excludes >-
+          (?x)^(
+            src/data/audio_datamodule\.py|
+            src/data/fm_datamodule\.py|
+            src/data/kosc_datamodule\.py|
+            src/data/ksin_datamodule\.py|
+            src/data/mnist_datamodule\.py|
+            src/data/ot\.py|
+            src/data/surge_datamodule\.py|
+            src/data/vst/core\.py|
+            src/data/vst/generate_vst_dataset\.py|
+            src/data/vst/param_spec\.py|
+            src/data/vst/surge_xt_param_spec\.py|
+            src/eval\.py|
+            src/metrics\.py|
+            src/models/components/cnn\.py|
+            src/models/components/embed_pool\.py|
+            src/models/components/loss\.py|
+            src/models/components/residual_mlp\.py|
+            src/models/components/simple_dense_net\.py|
+            src/models/components/sinkhorn\.py|
+            src/models/components/transformer\.py|
+            src/models/components/vae\.py|
+            src/models/components/vector_field\.py|
+            src/models/ksin_ff_module\.py|
+            src/models/ksin_flow_matching_module\.py|
+            src/models/mnist_module\.py|
+            src/models/surge_ff_module\.py|
+            src/models/surge_flow_matching_module\.py|
+            src/models/surge_flowvae_module\.py|
+            src/train\.py|
+            src/utils/callbacks\.py|
+            src/utils/instantiators\.py|
+            src/utils/logging_utils\.py|
+            src/utils/math\.py|
+            src/utils/pylogger\.py|
+            src/utils/rich_utils\.py|
+            src/utils/utils\.py|
+            tests/conftest\.py
+          )$
+
+  # python code formatting (runs after ruff so formatting is the final step)
+  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
   - repo: https://github.com/psf/black
     rev: 23.1.0
     hooks:
       - id: black
         args: [--line-length, "99"]
-
-  # python import sorting
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.12.0
-    hooks:
-      - id: isort
-        args: ["--profile", "black", "--filter-files"]
-
-  # python upgrading syntax to newer version
-  - repo: https://github.com/asottile/pyupgrade
-    rev: v3.3.1
-    hooks:
-      - id: pyupgrade
-        args: [--py38-plus]
+        exclude: *legacy_excludes
 
   # python docstring formatting
   # Using local hook because docformatter v1.7.4's .pre-commit-hooks.yaml
@@ -76,20 +112,6 @@ repos:
             -vv,
           ]
         exclude: *legacy_excludes
-
-  # python check (PEP8), programming errors and code complexity
-  - repo: https://github.com/PyCQA/flake8
-    rev: 6.0.0
-    hooks:
-      - id: flake8
-        args:
-          [
-            "--extend-ignore",
-            "E203,E402,E501,F401,F841,RST2,RST301",
-            "--exclude",
-            "logs/*,data/*",
-          ]
-        additional_dependencies: [flake8-rst-docstrings==0.3.0]
 
   # python security linter
   # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
