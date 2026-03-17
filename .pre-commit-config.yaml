@@ -39,10 +39,17 @@ repos:
         args: [--py38-plus]
 
   # python docstring formatting
-  - repo: https://github.com/myint/docformatter
-    rev: v1.7.4
+  # Using local hook because docformatter v1.7.4's .pre-commit-hooks.yaml
+  # defines a 'docformatter-venv' hook with language: python_venv, which
+  # causes pre-commit to fail manifest validation on older versions.
+  - repo: local
     hooks:
       - id: docformatter
+        name: docformatter
+        entry: docformatter
+        language: python
+        types: [python]
+        additional_dependencies: ["docformatter[tomli]==1.7.4"]
         args:
           [
             --in-place,
