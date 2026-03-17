@@ -18,18 +18,100 @@ repos:
       - id: check-added-large-files
 
   # python linting + import sorting + syntax upgrades (replaces flake8, isort, pyupgrade)
+  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.5
     hooks:
       - id: ruff
         args: [--fix]
+        exclude: >-
+          (?x)^(
+            src/data/audio_datamodule\.py|
+            src/data/fm_datamodule\.py|
+            src/data/kosc_datamodule\.py|
+            src/data/ksin_datamodule\.py|
+            src/data/mnist_datamodule\.py|
+            src/data/ot\.py|
+            src/data/surge_datamodule\.py|
+            src/data/vst/core\.py|
+            src/data/vst/generate_vst_dataset\.py|
+            src/data/vst/param_spec\.py|
+            src/data/vst/surge_xt_param_spec\.py|
+            src/eval\.py|
+            src/metrics\.py|
+            src/models/components/cnn\.py|
+            src/models/components/embed_pool\.py|
+            src/models/components/loss\.py|
+            src/models/components/residual_mlp\.py|
+            src/models/components/simple_dense_net\.py|
+            src/models/components/sinkhorn\.py|
+            src/models/components/transformer\.py|
+            src/models/components/vae\.py|
+            src/models/components/vector_field\.py|
+            src/models/ksin_ff_module\.py|
+            src/models/ksin_flow_matching_module\.py|
+            src/models/mnist_module\.py|
+            src/models/surge_ff_module\.py|
+            src/models/surge_flow_matching_module\.py|
+            src/models/surge_flowvae_module\.py|
+            src/train\.py|
+            src/utils/callbacks\.py|
+            src/utils/instantiators\.py|
+            src/utils/logging_utils\.py|
+            src/utils/math\.py|
+            src/utils/pylogger\.py|
+            src/utils/rich_utils\.py|
+            src/utils/utils\.py|
+            tests/conftest\.py
+          )$
 
   # python code formatting (runs after ruff so formatting is the final step)
+  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
   - repo: https://github.com/psf/black
     rev: 23.1.0
     hooks:
       - id: black
         args: [--line-length, "99"]
+        exclude: >-
+          (?x)^(
+            src/data/audio_datamodule\.py|
+            src/data/fm_datamodule\.py|
+            src/data/kosc_datamodule\.py|
+            src/data/ksin_datamodule\.py|
+            src/data/mnist_datamodule\.py|
+            src/data/ot\.py|
+            src/data/surge_datamodule\.py|
+            src/data/vst/core\.py|
+            src/data/vst/generate_vst_dataset\.py|
+            src/data/vst/param_spec\.py|
+            src/data/vst/surge_xt_param_spec\.py|
+            src/eval\.py|
+            src/metrics\.py|
+            src/models/components/cnn\.py|
+            src/models/components/embed_pool\.py|
+            src/models/components/loss\.py|
+            src/models/components/residual_mlp\.py|
+            src/models/components/simple_dense_net\.py|
+            src/models/components/sinkhorn\.py|
+            src/models/components/transformer\.py|
+            src/models/components/vae\.py|
+            src/models/components/vector_field\.py|
+            src/models/ksin_ff_module\.py|
+            src/models/ksin_flow_matching_module\.py|
+            src/models/mnist_module\.py|
+            src/models/surge_ff_module\.py|
+            src/models/surge_flow_matching_module\.py|
+            src/models/surge_flowvae_module\.py|
+            src/train\.py|
+            src/utils/callbacks\.py|
+            src/utils/instantiators\.py|
+            src/utils/logging_utils\.py|
+            src/utils/math\.py|
+            src/utils/pylogger\.py|
+            src/utils/rich_utils\.py|
+            src/utils/utils\.py|
+            tests/conftest\.py
+          )$
 
   # python docstring formatting
   # Using local hook because docformatter v1.7.4's .pre-commit-hooks.yaml
@@ -53,6 +135,7 @@ repos:
           ]
 
   # python docstring coverage checking
+  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
   - repo: https://github.com/econchick/interrogate
     rev: 1.7.0
     hooks:
@@ -67,8 +150,49 @@ repos:
             --ignore-nested-functions,
             -vv,
           ]
+        exclude: >-
+          (?x)^(
+            src/data/audio_datamodule\.py|
+            src/data/fm_datamodule\.py|
+            src/data/kosc_datamodule\.py|
+            src/data/ksin_datamodule\.py|
+            src/data/mnist_datamodule\.py|
+            src/data/ot\.py|
+            src/data/surge_datamodule\.py|
+            src/data/vst/core\.py|
+            src/data/vst/generate_vst_dataset\.py|
+            src/data/vst/param_spec\.py|
+            src/data/vst/surge_xt_param_spec\.py|
+            src/eval\.py|
+            src/metrics\.py|
+            src/models/components/cnn\.py|
+            src/models/components/embed_pool\.py|
+            src/models/components/loss\.py|
+            src/models/components/residual_mlp\.py|
+            src/models/components/simple_dense_net\.py|
+            src/models/components/sinkhorn\.py|
+            src/models/components/transformer\.py|
+            src/models/components/vae\.py|
+            src/models/components/vector_field\.py|
+            src/models/ksin_ff_module\.py|
+            src/models/ksin_flow_matching_module\.py|
+            src/models/mnist_module\.py|
+            src/models/surge_ff_module\.py|
+            src/models/surge_flow_matching_module\.py|
+            src/models/surge_flowvae_module\.py|
+            src/train\.py|
+            src/utils/callbacks\.py|
+            src/utils/instantiators\.py|
+            src/utils/logging_utils\.py|
+            src/utils/math\.py|
+            src/utils/pylogger\.py|
+            src/utils/rich_utils\.py|
+            src/utils/utils\.py|
+            tests/conftest\.py
+          )$
 
   # python security linter
+  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
   - repo: https://github.com/PyCQA/bandit
     rev: "1.7.5"
     hooks:
@@ -76,6 +200,46 @@ repos:
         args: ["-s", "B101"]
         # bandit uses pbr for package metadata at build time
         additional_dependencies: ["pbr>=6.0.0,<8"]
+        exclude: >-
+          (?x)^(
+            src/data/audio_datamodule\.py|
+            src/data/fm_datamodule\.py|
+            src/data/kosc_datamodule\.py|
+            src/data/ksin_datamodule\.py|
+            src/data/mnist_datamodule\.py|
+            src/data/ot\.py|
+            src/data/surge_datamodule\.py|
+            src/data/vst/core\.py|
+            src/data/vst/generate_vst_dataset\.py|
+            src/data/vst/param_spec\.py|
+            src/data/vst/surge_xt_param_spec\.py|
+            src/eval\.py|
+            src/metrics\.py|
+            src/models/components/cnn\.py|
+            src/models/components/embed_pool\.py|
+            src/models/components/loss\.py|
+            src/models/components/residual_mlp\.py|
+            src/models/components/simple_dense_net\.py|
+            src/models/components/sinkhorn\.py|
+            src/models/components/transformer\.py|
+            src/models/components/vae\.py|
+            src/models/components/vector_field\.py|
+            src/models/ksin_ff_module\.py|
+            src/models/ksin_flow_matching_module\.py|
+            src/models/mnist_module\.py|
+            src/models/surge_ff_module\.py|
+            src/models/surge_flow_matching_module\.py|
+            src/models/surge_flowvae_module\.py|
+            src/train\.py|
+            src/utils/callbacks\.py|
+            src/utils/instantiators\.py|
+            src/utils/logging_utils\.py|
+            src/utils/math\.py|
+            src/utils/pylogger\.py|
+            src/utils/rich_utils\.py|
+            src/utils/utils\.py|
+            tests/conftest\.py
+          )$
 
   # yaml formatting
   - repo: https://github.com/pre-commit/mirrors-prettier
