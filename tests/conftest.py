@@ -8,6 +8,9 @@ from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
+from src.utils.utils import register_resolvers
+
+register_resolvers()
 
 @pytest.fixture(scope="package")
 def cfg_train_global() -> DictConfig:
@@ -32,6 +35,8 @@ def cfg_train_global() -> DictConfig:
             cfg.extras.print_config = False
             cfg.extras.enforce_tags = False
             cfg.logger = None
+            if "callbacks" in cfg and cfg.callbacks and "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
 
     return cfg
 
@@ -57,6 +62,8 @@ def cfg_eval_global() -> DictConfig:
             cfg.extras.print_config = False
             cfg.extras.enforce_tags = False
             cfg.logger = None
+            if "callbacks" in cfg and cfg.callbacks and "lr_monitor" in cfg.callbacks:
+                del cfg.callbacks.lr_monitor
 
     return cfg
 
