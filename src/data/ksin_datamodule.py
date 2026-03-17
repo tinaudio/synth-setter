@@ -40,8 +40,9 @@ def _sample_freqs_shifted(
     device: Union[str, torch.device],
     generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
-    """Sample frequencies with different train and test distributions. These are
-    slightly overlapping truncated normal distributions.
+    """Sample frequencies with different train and test distributions.
+
+    These are slightly overlapping truncated normal distributions.
     """
     freqs = torch.empty(num_samples, k, device=device)
     mean = -1.0 / 3.0 if not is_test else 1.0 / 3.0
@@ -150,11 +151,11 @@ class KSinDataset(torch.utils.data.Dataset):
 
 
 class KSinDataModule(LightningDataModule):
-    """k-Sin is a simple synthetic synthesiser parameter estimation task designed to
-    elicit problematic behaviour in response to permutation invariant labels.
+    """K-Sin is a simple synthetic synthesiser parameter estimation task designed to elicit
+    problematic behaviour in response to permutation invariant labels.
 
-    Each item consists of a signal containing a mixture of sinusoids, and the amplitude
-    and frequency parameters used to generate the sinusoids.
+    Each item consists of a signal containing a mixture of sinusoids, and the amplitude and
+    frequency parameters used to generate the sinusoids.
     """
 
     def __init__(
@@ -169,6 +170,7 @@ class KSinDataModule(LightningDataModule):
         batch_size: int = 1024,
         ot: bool = False,
         num_workers: int = 0,
+        pin_memory: bool = False,
     ):
         super().__init__()
 
@@ -185,6 +187,7 @@ class KSinDataModule(LightningDataModule):
 
         # dataloader
         self.batch_size = batch_size
+        self.pin_memory = pin_memory
 
         self.device = None
         self.num_workers = num_workers
@@ -222,6 +225,7 @@ class KSinDataModule(LightningDataModule):
                 shuffle=True,
                 collate_fn=ot_collate_fn if self.ot else regular_collate_fn,
                 num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
             )
             self.val = torch.utils.data.DataLoader(
                 val_ds,
@@ -229,6 +233,7 @@ class KSinDataModule(LightningDataModule):
                 shuffle=False,
                 collate_fn=regular_collate_fn,
                 num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
             )
         else:
             test_ds = KSinDataset(
@@ -247,6 +252,7 @@ class KSinDataModule(LightningDataModule):
                 shuffle=False,
                 collate_fn=regular_collate_fn,
                 num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
             )
 
     def train_dataloader(self):
