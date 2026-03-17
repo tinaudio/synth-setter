@@ -19,7 +19,8 @@ def test_train_fast_dev_run(cfg_train: DictConfig) -> None:
         cfg_train.trainer.fast_dev_run = True
         cfg_train.trainer.accelerator = "cpu"
         cfg_train.data.batch_size = 32
-        # Shrink model for CI
+        # Prevent CPU tunitest OOM by shrinking
+        # model, batch, dataset size + turning of compilation
         cfg_train.model.net.channels = 4
         cfg_train.model.net.encoder_blocks = 1
         cfg_train.model.net.trunk_blocks = 1
