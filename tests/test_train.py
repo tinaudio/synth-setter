@@ -25,9 +25,6 @@ def test_train_fast_dev_run(cfg_train: DictConfig) -> None:
         cfg_train.model.net.encoder_blocks = 1
         cfg_train.model.net.trunk_blocks = 1
         cfg_train.model.net.hidden_dim = 32
-        cfg_train.model.compile = False
-        cfg_train.data.batch_size = 2
-        cfg_train.data.num_workers = 1
         cfg_train.data.signal_length = 64
         cfg_train.data.train_val_test_sizes = [4, 4, 4]
     train(cfg_train)
