@@ -34,6 +34,7 @@ def cfg_train_global() -> DictConfig:
             cfg.data.pin_memory = False
             cfg.extras.print_config = False
             cfg.extras.enforce_tags = False
+            cfg.model.compile = False
             cfg.logger = None
             if "callbacks" in cfg and cfg.callbacks and "lr_monitor" in cfg.callbacks:
                 del cfg.callbacks.lr_monitor
