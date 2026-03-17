@@ -38,6 +38,7 @@ def cfg_train_global() -> DictConfig:
             cfg.data.pin_memory = False
             cfg.extras.print_config = False
             cfg.extras.enforce_tags = False
+            cfg.model.compile = False
             cfg.logger = None
 
     return cfg
