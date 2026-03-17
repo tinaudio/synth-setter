@@ -1,5 +1,8 @@
 name: Full Tests (including slow)
 
+# Intentionally no pull_request trigger. Slow tests require a GPU runner which
+# isn't available yet. This runs on manual dispatch and post-merge to main only.
+# TODO: add pull_request trigger once a GPU-capable runner is configured (#35).
 on:
   workflow_dispatch:
   push:

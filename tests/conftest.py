@@ -10,6 +10,10 @@ from omegaconf import DictConfig, open_dict
 
 from src.utils.utils import register_resolvers
 
+# Register custom OmegaConf resolvers (mul, div) needed to parse Hydra configs.
+# This import pulls in torch/lightning transitively via src.utils.utils, but every
+# test in this suite already requires those dependencies, so there is no benefit to
+# isolating resolver registration into a lighter module.
 register_resolvers()
 
 @pytest.fixture(scope="package")
@@ -36,8 +40,9 @@ def cfg_train_global() -> DictConfig:
             cfg.extras.enforce_tags = False
             cfg.model.compile = False
             cfg.logger = None
-            if "callbacks" in cfg and cfg.callbacks and "lr_monitor" in cfg.callbacks:
-                del cfg.callbacks.lr_monitor
+            callbacks = cfg.get("callbacks")
+            if callbacks is not None and "lr_monitor" in callbacks:
+                del callbacks.lr_monitor
 
     return cfg
 
@@ -63,8 +68,9 @@ def cfg_eval_global() -> DictConfig:
             cfg.extras.print_config = False
             cfg.extras.enforce_tags = False
             cfg.logger = None
-            if "callbacks" in cfg and cfg.callbacks and "lr_monitor" in cfg.callbacks:
-                del cfg.callbacks.lr_monitor
+            callbacks = cfg.get("callbacks")
+            if callbacks is not None and "lr_monitor" in callbacks:
+                del callbacks.lr_monitor
 
     return cfg
 
