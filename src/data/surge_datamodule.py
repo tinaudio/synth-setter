@@ -244,6 +244,7 @@ class SurgeDataModule(LightningDataModule):
         repeat_first_batch: bool = False,
         predict_file: Optional[str] = None,
         conditioning: Literal["mel", "m2l"] = "mel",
+        pin_memory: bool = True,
     ):
         super().__init__()
 
@@ -256,6 +257,7 @@ class SurgeDataModule(LightningDataModule):
         self.repeat_first_batch = repeat_first_batch
         self.predict_file = predict_file
         self.conditioning = conditioning
+        self.pin_memory = pin_memory
 
     def setup(self, stage: Optional[str] = None):
         self.train_dataset = SurgeXTDataset(
@@ -307,7 +309,7 @@ class SurgeDataModule(LightningDataModule):
             self.train_dataset,
             batch_size=None,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=self.pin_memory,
             # sampler=WithinChunkShuffledSampler(
             #     self.batch_size, len(self.train_dataset), 4
             # ),
@@ -322,7 +324,7 @@ class SurgeDataModule(LightningDataModule):
             batch_size=None,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=self.pin_memory,
         )
 
     def test_dataloader(self):
@@ -331,7 +333,7 @@ class SurgeDataModule(LightningDataModule):
             batch_size=None,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=self.pin_memory,
         )
 
     def predict_dataloader(self):
@@ -340,7 +342,7 @@ class SurgeDataModule(LightningDataModule):
             batch_size=None,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True,
+            pin_memory=self.pin_memory,
         )
 
     def teardown(self, stage: Optional[str] = None):
