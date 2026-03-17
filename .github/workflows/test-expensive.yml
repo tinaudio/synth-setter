@@ -1,0 +1,42 @@
+name: Full Tests (including slow)
+
+# Intentionally no pull_request trigger — the full suite (including @slow tests)
+# takes too long for PR feedback loops.  Runs on manual dispatch and post-merge
+# to main only.  GPU-requiring tests (guarded by @RunIf(min_gpus=1)) are skipped
+# automatically on CPU runners.
+# TODO: add pull_request trigger once runtime is acceptable for PR CI (#35).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  run_tests:
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install sh
+
+      - name: List dependencies
+        run: |
+          python -m pip list
+
+      - name: Run pytest
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: |
+          pytest -vv -s
