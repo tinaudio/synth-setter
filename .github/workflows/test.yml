@@ -39,8 +39,10 @@ jobs:
           python -m pip list
 
       - name: Run pytest
+        env:
+          HYDRA_FULL_ERROR: "1"
         run: |
-          pytest -v
+          pytest  -k "not slow"  -vv -s
 
   run_tests_macos:
     runs-on: ${{ matrix.os }}
@@ -74,8 +76,9 @@ jobs:
           python -m pip list
 
       - name: Run pytest
-        run: |
-          pytest -v
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: pytest  -k "not slow"  -vv -s
 
   # upload code coverage report
   code-coverage:
@@ -99,7 +102,9 @@ jobs:
           pip install sh
 
       - name: Run tests and collect coverage
-        run: pytest --cov src # NEEDS TO BE UPDATED WHEN CHANGING THE NAME OF "src" FOLDER
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: pytest -k "not slow" --cov src # NEEDS TO BE UPDATED WHEN CHANGING THE NAME OF "src" FOLDER
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
