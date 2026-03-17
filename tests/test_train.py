@@ -8,6 +8,9 @@ from omegaconf import DictConfig, open_dict
 from src.train import train
 from tests.helpers.run_if import RunIf
 
+# TODO(#39): replace hardcoded accelerator overrides with --accelerator pytest flag
+# TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
+
 
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     """Run for 1 train, val and test step with small batch size, no compile.
@@ -88,6 +91,7 @@ def test_train_epoch_gpu_amp(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+# TODO: fix val_check_interval incompatibility with check_val_every_n_epoch=None (#47)
 @pytest.mark.slow
 def test_train_epoch_double_val_loop(cfg_train: DictConfig) -> None:
     """Train 1 epoch with validation loop twice per epoch.
