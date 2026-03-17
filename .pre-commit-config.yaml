@@ -116,6 +116,12 @@ repos:
     hooks:
       - id: shellcheck
 
+  # makefile linter
+  - repo: https://github.com/checkmake/checkmake.git
+    rev: 0.2.2
+    hooks:
+      - id: checkmake
+
   # md formatting
   - repo: https://github.com/executablebooks/mdformat
     rev: 0.7.16
