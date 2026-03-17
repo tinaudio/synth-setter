@@ -80,7 +80,7 @@ jobs:
 
   # upload code coverage report
   code-coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
