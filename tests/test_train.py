@@ -30,8 +30,9 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+@pytest.mark.slow
 def test_train_fast_dev_run(cfg_train: DictConfig) -> None:
-    """Run for 1 train, val and test step.
+    """Run for 1 train, val and test step with torch.compile enabled.
 
     :param cfg_train: A DictConfig containing a valid training configuration.
     """
@@ -39,6 +40,7 @@ def test_train_fast_dev_run(cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.fast_dev_run = True
         cfg_train.trainer.accelerator = "cpu"
+        cfg_train.model.compile = True
     train(cfg_train)
 
 
