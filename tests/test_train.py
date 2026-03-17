@@ -9,6 +9,27 @@ from src.train import train
 from tests.helpers.run_if import RunIf
 
 
+def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
+    """Run for 1 train, val and test step with small batch size, no compile.
+
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    """
+    HydraConfig().set_config(cfg_train)
+    with open_dict(cfg_train):
+        # Prevent CPU unittest OOM by shrinking model,
+        # batch, training example, dataset size.
+        cfg_train.trainer.fast_dev_run = True
+        cfg_train.trainer.accelerator = "cpu"
+        cfg_train.data.batch_size = 32
+        cfg_train.model.net.channels = 4
+        cfg_train.model.net.encoder_blocks = 1
+        cfg_train.model.net.trunk_blocks = 1
+        cfg_train.model.net.hidden_dim = 32
+        cfg_train.data.signal_length = 64
+        cfg_train.data.train_val_test_sizes = [4, 4, 4]
+    train(cfg_train)
+
+
 def test_train_fast_dev_run(cfg_train: DictConfig) -> None:
     """Run for 1 train, val and test step.
 
