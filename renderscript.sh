@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 tempfile=$(mktemp)
 Xvfb -displayfd 3 -screen 0 1280x720x24 -ac 3>"$tempfile" &
 XVFB_PID=$!
