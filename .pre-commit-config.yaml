@@ -65,6 +65,13 @@ repos:
             tests/.*\.py
           )$
 
+  # check-jsonschema: validates JSON/YAML against JSON schemas
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.29.4
+    hooks:
+      - id: check-jsonschema
+        types: [json, yaml]
+
   # docformatter: auto-wraps and normalises docstrings (sphinx style).
   # Config lives in pyproject.toml under [tool.docformatter].
   # Local hook because v1.7.4's upstream manifest uses language: python_venv,
