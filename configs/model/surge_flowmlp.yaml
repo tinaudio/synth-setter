@@ -25,7 +25,6 @@ vector_field:
   conditioning_dim: ${model.encoder.d_model}
   num_layers: 9
 
-
 # training
 cfg_dropout_rate: 0.1
 

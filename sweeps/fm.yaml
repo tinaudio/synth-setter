@@ -19,7 +19,7 @@ parameters:
       # - fm/flow_asym
       - fm/flow_fixed
       - fm/flow_fixed_asym
-  'experiment/fm/algorithm':
+  "experiment/fm/algorithm":
     values:
       - conditional
       - mixed

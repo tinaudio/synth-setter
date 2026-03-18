@@ -50,7 +50,6 @@ num_params: 90
 # training
 cfg_dropout_rate: 0.1
 
-
 rectified_sigma_min: 0.0
 
 # sampling

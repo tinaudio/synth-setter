@@ -11,6 +11,5 @@ model:
     projection:
       final_ffn: false
 
-
 experiment_name: surge-simple-onehot
 run_name: flow-nofinalffn
