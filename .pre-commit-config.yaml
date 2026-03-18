@@ -5,7 +5,7 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.4.0
     hooks:
-      # list of supported hooks: https://pre-commit.com/hooks.html
+      # general file hygiene: whitespace, encoding, secrets, file size
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-docstring-first
@@ -16,9 +16,9 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
 
-  # python linting, formatting, import sorting, syntax upgrades, security checks
-  # (replaces flake8, isort, pyupgrade, black, bandit)
-  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
+  # ruff: linting (E/F/I/S/T/UP/W rules) and formatting for Python & Jupyter.
+  # Config lives in pyproject.toml under [tool.ruff]. Legacy src/ files are
+  # excluded via extend-exclude there (see issue #25).
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.5
     hooks:
@@ -31,10 +31,10 @@ repos:
         args: [--force-exclude]
         types_or: [python, jupyter]
 
-  # python docstring formatting
-  # Using local hook because docformatter v1.7.4's .pre-commit-hooks.yaml
-  # defines a 'docformatter-venv' hook with language: python_venv, which
-  # causes pre-commit to fail manifest validation on older versions.
+  # docformatter: auto-wraps and normalises docstrings (sphinx style).
+  # Config lives in pyproject.toml under [tool.docformatter].
+  # Local hook because v1.7.4's upstream manifest uses language: python_venv,
+  # which breaks pre-commit on older versions.
   - repo: local
     hooks:
       - id: docformatter
@@ -45,17 +45,14 @@ repos:
         additional_dependencies: ["docformatter[tomli]==1.7.4"]
         args: [--in-place]
 
-  # python docstring coverage checking
-  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
+  # interrogate: enforces docstring coverage (fail-under=80%).
+  # Config lives in pyproject.toml under [tool.interrogate].
+  # The exclude list must live here because interrogate doesn't read
+  # ruff's extend-exclude from pyproject.toml (see issue #25).
   - repo: https://github.com/econchick/interrogate
     rev: 1.7.0
     hooks:
-      # Config (fail-under, ignore flags, verbosity) lives in pyproject.toml
-      # under [tool.interrogate]. Only the exclude list stays here because
-      # interrogate doesn't share ruff's extend-exclude in pyproject.toml.
       - id: interrogate
-        # interrogate doesn't read pyproject.toml excludes, so this list is
-        # maintained separately from ruff's extend-exclude in pyproject.toml.
         exclude: >-
           (?x)^(
             src/data/audio_datamodule\.py|
@@ -103,6 +100,7 @@ repos:
     hooks:
       - id: prettier
         types: [yaml]
+        # environment.yaml uses conda-specific syntax that prettier mangles
         exclude: "environment.yaml"
 
   # shell scripts linter
@@ -126,8 +124,6 @@ repos:
         additional_dependencies:
           - mdformat-gfm==1.0.0
           - mdformat_frontmatter==2.0.10
-          # optional: mdformat-tables is redundant if you use mdformat-gfm
-          # - mdformat-tables
 
   # word spelling linter
   - repo: https://github.com/codespell-project/codespell
@@ -136,6 +132,7 @@ repos:
       - id: codespell
         args:
           - --skip=logs/**,data/**,*.ipynb
+          # "ot" is a valid abbreviation (optimal transport) that codespell flags
           - --ignore-words-list=ot
 
   # jupyter notebook cell output clearing

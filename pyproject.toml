@@ -70,7 +70,10 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
+# E=pycodestyle errors, F=pyflakes, I=isort, S=bandit security,
+# T=T10 (print) + T20 (debugger), UP=pyupgrade, W=pycodestyle warnings
 select = ["E", "F", "I", "S", "T", "UP", "W"]
+# E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
 
 [tool.interrogate]
