@@ -6,7 +6,7 @@ from src.data.vst import param_specs
 
 TABLE_PREAMBLE = """
 \\begin{longtable}{rlccl}
- \\addlinespace[-\\aboverulesep] 
+ \\addlinespace[-\\aboverulesep]
  \\cmidrule[\\heavyrulewidth]{2-5}
     &
      Parameter &
@@ -16,7 +16,7 @@ TABLE_PREAMBLE = """
 
 TABLE_POSTAMBLE = """
  \\cmidrule[\\heavyrulewidth]{2-5}
- \\addlinespace[-\\belowrulesep] 
+ \\addlinespace[-\\belowrulesep]
 \\rule{0pt}{0ex}\\\\
 \\caption{}
 \\label{tab:}

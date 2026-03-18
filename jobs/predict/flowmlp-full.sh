@@ -35,4 +35,4 @@ python src/eval.py \
     mode=predict \
     data.batch_size=1024 \
     data.num_workers=11 \
-    ckpt_path=$CKPT_PATH 
+    ckpt_path=$CKPT_PATH

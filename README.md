@@ -2,7 +2,7 @@
 
 # Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching
 
-This repository accompanies a submission to ISMIR 2025. A full README explaining how to use this code will be provided before the conference. In the meantime, audio examples are available at the [online supplement](https://benhayes.net/synth-perm/). 
+This repository accompanies a submission to ISMIR 2025. A full README explaining how to use this code will be provided before the conference. In the meantime, audio examples are available at the [online supplement](https://benhayes.net/synth-perm/).
 
 If you would like to explore the source code, you may find the below helpful:
 

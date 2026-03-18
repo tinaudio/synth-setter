@@ -82,7 +82,7 @@ def get_stats_directory(directory):
             logger.info(f"Processed {i + 1} files...")
 
     mean, std = finalize(existing)
-    
+
 
     logger.info(f"Saving to {str(out_file)}")
 
