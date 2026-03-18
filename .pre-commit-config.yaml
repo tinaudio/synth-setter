@@ -22,13 +22,12 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.5
     hooks:
-      # --force-exclude makes ruff respect extend-exclude in pyproject.toml,
-      # so the legacy file list is maintained in one place only.
+      # ruff-pre-commit already passes --force-exclude in its entry point,
+      # so ruff respects extend-exclude in pyproject.toml automatically.
       - id: ruff
-        args: [--fix, --force-exclude]
+        args: [--fix]
         types_or: [python, jupyter]
       - id: ruff-format
-        args: [--force-exclude]
         types_or: [python, jupyter]
 
   # docformatter: auto-wraps and normalises docstrings (sphinx style).
