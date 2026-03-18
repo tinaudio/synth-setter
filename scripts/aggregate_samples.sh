@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 ## declare an array variable
 declare -a datasets=("full" "simple" "nsynth" "fsd")
 

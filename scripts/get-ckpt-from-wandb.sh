@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 wandbid=$1
 CANDIDATES=$(
   find logs/train -type d -wholename "*wandb/*$wandbid" -print0 \
