@@ -1,0 +1,143 @@
+name: Auto-approve PR
+
+# Re-evaluates whenever a condition might change:
+# - CI checks finish (check_suite)
+# - A review is submitted (Copilot, Claude, human)
+# - PR is marked ready for review (leaves draft)
+on:
+  check_suite:
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [ready_for_review]
+
+jobs:
+  auto-approve:
+    # Only run on non-fork, non-draft PRs targeting main
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APPROVAL_BOT_APP_ID }}
+          private-key: ${{ secrets.APPROVAL_BOT_PRIVATE_KEY }}
+
+      - name: Resolve PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # check_suite doesn't include PR number directly — look it up
+          if [ "${{ github.event_name }}" = "check_suite" ]; then
+            PR_NUMBER=$(gh api "repos/${{ github.repository }}/commits/${{ github.event.check_suite.head_sha }}/pulls" \
+              --jq '.[0].number // empty')
+            if [ -z "$PR_NUMBER" ]; then
+              echo "No PR found for this check suite — skipping"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          fi
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Check all conditions
+        if: steps.pr.outputs.skip != 'true'
+        id: conditions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR=${{ steps.pr.outputs.number }}
+          REPO="${{ github.repository }}"
+          PASS=true
+
+          # --- Condition 1: PR is not a draft ---
+          IS_DRAFT=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.draft')
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "::notice::PR is a draft — skipping"
+            PASS=false
+          fi
+
+          # --- Condition 2: All CI checks pass ---
+          if [ "$PASS" = "true" ]; then
+            FAILED=$(gh api "repos/${REPO}/commits/$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha')/check-runs" \
+              --jq '[.check_runs[] | select(.name != "auto-approve") | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral" and .status != "queued" and .status != "in_progress")] | length')
+            PENDING=$(gh api "repos/${REPO}/commits/$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha')/check-runs" \
+              --jq '[.check_runs[] | select(.name != "auto-approve") | select(.status == "queued" or .status == "in_progress")] | length')
+            if [ "$PENDING" -gt 0 ]; then
+              echo "::notice::${PENDING} check(s) still running — will re-evaluate when they complete"
+              PASS=false
+            elif [ "$FAILED" -gt 0 ]; then
+              echo "::notice::${FAILED} check(s) failed — skipping"
+              PASS=false
+            fi
+          fi
+
+          # --- Condition 3: Claude review has no BLOCK issues ---
+          if [ "$PASS" = "true" ]; then
+            VERDICT=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+              --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("VERDICT:"))] | last | .body // ""')
+            if echo "$VERDICT" | grep -q "^VERDICT: CHANGES_REQUESTED"; then
+              echo "::notice::Claude review found BLOCK-level issues — skipping"
+              PASS=false
+            elif [ -z "$VERDICT" ]; then
+              echo "::notice::No Claude review verdict yet — skipping"
+              PASS=false
+            fi
+          fi
+
+          # --- Condition 4: No unresolved Copilot review threads ---
+          if [ "$PASS" = "true" ]; then
+            OWNER="${{ github.repository_owner }}"
+            REPO_NAME=$(echo "$REPO" | cut -d/ -f2)
+            UNRESOLVED=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $pr: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $pr) {
+                    reviewThreads(first: 100) {
+                      nodes {
+                        isResolved
+                        comments(first: 1) {
+                          nodes { author { login } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }' -f owner="$OWNER" -f repo="$REPO_NAME" -F pr="$PR" \
+              --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+                | select(.isResolved == false)
+                | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
+              ] | length')
+            if [ "$UNRESOLVED" -gt 0 ]; then
+              echo "::notice::${UNRESOLVED} unresolved Copilot thread(s) — skipping"
+              PASS=false
+            fi
+          fi
+
+          echo "approve=$PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Approve PR
+        if: steps.pr.outputs.skip != 'true' && steps.conditions.outputs.approve == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Check if bot already approved (avoid duplicate approvals)
+          ALREADY=$(gh api "repos/${{ github.repository }}/pulls/${{ steps.pr.outputs.number }}/reviews" \
+            --jq '[.[] | select(.state == "APPROVED") | select(.user.login | endswith("[bot]"))] | length')
+          if [ "$ALREADY" -gt 0 ]; then
+            echo "::notice::Bot already approved — skipping duplicate"
+            exit 0
+          fi
+          gh pr review ${{ steps.pr.outputs.number }} --approve \
+            --body "All conditions met: CI passing, Claude review clean, no unresolved Copilot threads. Auto-approved."
