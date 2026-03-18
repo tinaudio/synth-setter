@@ -70,7 +70,7 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "S", "UP", "W"]
+select = ["E", "F", "I", "S", "T", "UP", "W"]
 ignore = ["E501", "S101"]
 
 [tool.coverage.report]
