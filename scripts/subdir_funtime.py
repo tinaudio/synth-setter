@@ -1,9 +1,10 @@
-import os
-import click
-import numpy as np
-import librosa
-from pedalboard.io import AudioFile
 import logging
+import os
+
+import click
+import librosa
+import numpy as np
+from pedalboard.io import AudioFile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -13,6 +14,7 @@ MEL_PARAMS = [
     (25, 10, 64),
     (100, 50, 128),
 ]
+
 
 def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0):
     """Given an audio signal 'y' of shape (channels, samples), compute three mel-spectrograms using
@@ -43,6 +45,7 @@ def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0):
 
     return mel_specs
 
+
 def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
     """Compute the mean spectral (mel) distance (MSS) between 'target' and 'pred' audio, both of
     which must be numpy arrays of shape (channels, samples)."""
@@ -57,23 +60,19 @@ def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
     dist /= len(target_specs)
     return dist
 
+
 @click.command()
 @click.option(
-    "--root_dir",
-    required=True,
-    help="Path to the folder containing sample_1, sample_2, etc."
+    "--root_dir", required=True, help="Path to the folder containing sample_1, sample_2, etc."
 )
 @click.option(
-    "--n_subdirs",
-    default=10,
-    show_default=True,
-    help="Number of subdirectories to process."
+    "--n_subdirs", default=10, show_default=True, help="Number of subdirectories to process."
 )
 @click.option(
     "--output_txt",
     default="mss_results.txt",
     show_default=True,
-    help="Output file name for storing sorted results."
+    help="Output file name for storing sorted results.",
 )
 def main(root_dir, n_subdirs, output_txt):
     """Script that computes the MSS metric for up to N subdirectories (each containing 'pred.wav'
@@ -81,8 +80,7 @@ def main(root_dir, n_subdirs, output_txt):
     value."""
     # Grab all potential subdirectories in root_dir
     all_subdirs = sorted(
-        d for d in os.listdir(root_dir)
-        if os.path.isdir(os.path.join(root_dir, d))
+        d for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))
     )
 
     # If you only want sample_<number> style subdirs, you could filter here. E.g.:
@@ -125,6 +123,7 @@ def main(root_dir, n_subdirs, output_txt):
             f_out.write(f"{subdir_name}\t{mss_val:.6f}\n")
 
     logger.info(f"Done. Results written to {output_txt}")
+
 
 if __name__ == "__main__":
     main()

@@ -1,6 +1,6 @@
-import math
+from collections.abc import Callable
 from functools import partial
-from typing import Any, Callable, Dict, Literal, Optional, Tuple
+from typing import Any, Literal
 
 import torch
 from lightning import LightningModule
@@ -85,16 +85,12 @@ class SurgeFlowMatchingModule(LightningModule):
 
         return x0, x1
 
-    def _rectified_probability_path(
-        self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor
-    ):
+    def _rectified_probability_path(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor):
         x_t = x0 * (1 - t) * (1 - self.hparams.rectified_sigma_min) + x1 * t
 
         return x_t
 
-    def _sample_probability_path(
-        self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor
-    ):
+    def _sample_probability_path(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor):
         x_t = self._rectified_probability_path(x0, x1, t)
         return x_t
 
@@ -107,9 +103,7 @@ class SurgeFlowMatchingModule(LightningModule):
         target = self._rectified_vector_field(x0, x1)
         return target
 
-    def _get_conditioning_from_batch(
-        self, batch: dict[str, torch.Tensor]
-    ) -> torch.Tensor:
+    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         if self.hparams.conditioning == "mel":
             return batch["mel_spec"]
         elif self.hparams.conditioning == "m2l":
@@ -117,7 +111,7 @@ class SurgeFlowMatchingModule(LightningModule):
         else:
             raise ValueError(f"Unknown conditioning {self.hparams.conditioning}")
 
-    def _train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]):
+    def _train_step(self, batch: tuple[torch.Tensor, torch.Tensor]):
         conditioning = self._get_conditioning_from_batch(batch)
         params = batch["params"]
         noise = batch["noise"]
@@ -151,14 +145,12 @@ class SurgeFlowMatchingModule(LightningModule):
 
         return loss, penalty
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         loss, penalty = self._train_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
         if penalty is not None:
-            self.log(
-                "train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True
-            )
+            self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
 
         return loss + penalty
 
@@ -170,7 +162,7 @@ class SurgeFlowMatchingModule(LightningModule):
 
     def _sample(
         self,
-        conditioning: Optional[torch.Tensor],
+        conditioning: torch.Tensor | None,
         noise: torch.Tensor,
         steps: int,
         cfg_strength: float,
@@ -200,7 +192,7 @@ class SurgeFlowMatchingModule(LightningModule):
 
         return sample
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,
@@ -211,16 +203,14 @@ class SurgeFlowMatchingModule(LightningModule):
 
         per_param_mse = (pred_params - batch["params"]).square().mean(dim=0)
         param_mse = per_param_mse.mean()
-        self.log(
-            "val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True
-        )
+        self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
         return {"param_mse": param_mse, "per_param_mse": per_param_mse}
 
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         conditioning = self._get_conditioning_from_batch(batch)
         pred_params = self._sample(
             conditioning,
@@ -230,9 +220,7 @@ class SurgeFlowMatchingModule(LightningModule):
         )
 
         param_mse = (pred_params - batch["params"]).square().mean()
-        self.log(
-            "test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True
-        )
+        self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
         return param_mse
 
@@ -272,7 +260,7 @@ class SurgeFlowMatchingModule(LightningModule):
         self.log_dict(vf_norms, on_step=True, on_epoch=False)
         self.log_dict(encoder_norms, on_step=True, on_epoch=False)
 
-    def configure_optimizers(self) -> Dict[str, Any]:
+    def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
 
         if self.hparams.warmup_steps > 0:

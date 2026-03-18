@@ -1,16 +1,19 @@
 import math
+from collections.abc import Callable
 from functools import partial
-from typing import Any, Callable, Dict, Literal, Tuple
-from warnings import warn
+from typing import Any, Literal
 
 import ot as pot
 import torch
 from lightning import LightningModule
-from scipy.optimize import linear_sum_assignment
 from lightning.pytorch.utilities import grad_norm
+from scipy.optimize import linear_sum_assignment
 
-from src.metrics import (ChamferDistance, LinearAssignmentDistance,
-                         LogSpectralDistance, SpectralDistance)
+from src.metrics import (
+    ChamferDistance,
+    LinearAssignmentDistance,
+    LogSpectralDistance,
+)
 from src.utils.math import divmod
 
 
@@ -250,16 +253,12 @@ class KSinFlowMatchingModule(LightningModule):
         else:
             raise NotImplementedError(f"Unknown coupling {self.hparams.coupling}")
 
-    def _rectified_probability_path(
-        self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor
-    ):
+    def _rectified_probability_path(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor):
         x_t = x0 * (1 - t) * (1 - self.hparams.rectified_sigma_min) + x1 * t
 
         return x_t
 
-    def _cfm_probability_path(
-        self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor
-    ):
+    def _cfm_probability_path(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor):
         mu_t = x0 * (1 - t) + x1 * t
         sigma_t = self.hparams.cfm_sigma * torch.randn_like(mu_t)
         x_t = mu_t + sigma_t
@@ -274,9 +273,7 @@ class KSinFlowMatchingModule(LightningModule):
 
         return x_t
 
-    def _sample_probability_path(
-        self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor
-    ):
+    def _sample_probability_path(self, x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor):
         if self.hparams.probability_path == "rectified":
             x_t = self._rectified_probability_path(x0, x1, t)
         elif self.hparams.probability_path == "cfm":
@@ -284,9 +281,7 @@ class KSinFlowMatchingModule(LightningModule):
         elif self.hparams.probability_path == "fm":
             x_t = self._fm_probability_path(x0, x1, t)
         else:
-            raise NotImplementedError(
-                f"Unknown probability path {self.hparams.probability_path}"
-            )
+            raise NotImplementedError(f"Unknown probability path {self.hparams.probability_path}")
 
         return x_t
 
@@ -312,13 +307,11 @@ class KSinFlowMatchingModule(LightningModule):
         elif self.hparams.probability_path == "fm":
             target = self._fm_vector_field(x1, x_t, t)
         else:
-            raise NotImplementedError(
-                f"Unknown probability path {self.hparams.probability_path}"
-            )
+            raise NotImplementedError(f"Unknown probability path {self.hparams.probability_path}")
 
         return target
 
-    def _train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]):
+    def _train_step(self, batch: tuple[torch.Tensor, torch.Tensor]):
         signal, params, noise, _ = batch
 
         # Get conditioning vector
@@ -351,7 +344,7 @@ class KSinFlowMatchingModule(LightningModule):
 
         return loss, penalty
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         if self.global_step < self.hparams.freeze_for_first_n_steps:
             # freeze vector_field and encoder, leaving only projection active
             for param in self.vector_field.parameters():
@@ -373,9 +366,7 @@ class KSinFlowMatchingModule(LightningModule):
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
         if penalty is not None:
-            self.log(
-                "train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True
-            )
+            self.log("train/penalty", penalty, on_step=True, on_epoch=True, prog_bar=True)
 
         return loss + penalty
 
@@ -394,7 +385,7 @@ class KSinFlowMatchingModule(LightningModule):
 
     def _sample(
         self,
-        batch: Tuple[torch.Tensor, torch.Tensor],
+        batch: tuple[torch.Tensor, torch.Tensor],
         steps: int,
         cfg_strength: float,
     ):
@@ -422,7 +413,7 @@ class KSinFlowMatchingModule(LightningModule):
 
         return sample, y, x
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         preds, targets, inputs = self._sample(
             batch,
             self.hparams.validation_sample_steps,
@@ -436,15 +427,13 @@ class KSinFlowMatchingModule(LightningModule):
         # self.val_lad(preds, targets)
 
         self.log("val/lsd", self.val_lsd, on_step=False, on_epoch=True, prog_bar=True)
-        self.log(
-            "val/chamfer", self.val_chamfer, on_step=False, on_epoch=True, prog_bar=True
-        )
+        self.log("val/chamfer", self.val_chamfer, on_step=False, on_epoch=True, prog_bar=True)
         # self.log("val/lad", self.val_lad, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         preds, targets, inputs = self._sample(
             batch, self.hparams.test_sample_steps, self.hparams.test_cfg_strength
         )
@@ -486,7 +475,7 @@ class KSinFlowMatchingModule(LightningModule):
         self.log_dict(encoder_norms, on_step=True, on_epoch=True)
         self.log_dict(vf_norms, on_step=True, on_epoch=True)
 
-    def configure_optimizers(self) -> Dict[str, Any]:
+    def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
 
         if self.hparams.scheduler is not None:

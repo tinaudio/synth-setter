@@ -51,8 +51,8 @@ def main():
 
     params = list(set(simple_params + full_params))
     params = sorted(params)
-    params = [(p, True) if p in simple_params else (p, False) for p in params ]
-    params = [(p, s, True) if p in full_params else (p, s, False) for p, s in params ]
+    params = [(p, True) if p in simple_params else (p, False) for p in params]
+    params = [(p, s, True) if p in full_params else (p, s, False) for p, s in params]
     params = [(clean_param(p), s, f) for p, s, f in params]
 
     params = {p: {"simple": s, "full": f} for p, s, f in params}
@@ -65,9 +65,7 @@ def main():
 
     print(TABLE_PREAMBLE)
     for k, v in params.items():
-        print(
-            f" &\n{k} &\n{YES if v['simple'] else NO} & {YES if v['full'] else NO} &\n \\\\"
-        )
+        print(f" &\n{k} &\n{YES if v['simple'] else NO} & {YES if v['full'] else NO} &\n \\\\")
 
     print(TABLE_POSTAMBLE)
 

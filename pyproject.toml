@@ -29,48 +29,7 @@ target-version = "py310"
 line-length = 99
 exclude = ["logs", "data"]
 # Legacy files excluded until per-file lint cleanup is done (see issue #25).
-extend-exclude = [
-    "notebooks/",
-    "scripts/",
-    "src/utils/__init__.py",
-    "src/data/audio_datamodule.py",
-    "src/data/fm_datamodule.py",
-    "src/data/kosc_datamodule.py",
-    "src/data/ksin_datamodule.py",
-    "src/data/mnist_datamodule.py",
-    "src/data/ot.py",
-    "src/data/surge_datamodule.py",
-    "src/data/vst/core.py",
-    "src/data/vst/generate_vst_dataset.py",
-    "src/data/vst/param_spec.py",
-    "src/data/vst/surge_xt_param_spec.py",
-    "src/eval.py",
-    "src/metrics.py",
-    "src/models/components/cnn.py",
-    "src/models/components/embed_pool.py",
-    "src/models/components/loss.py",
-    "src/models/components/residual_mlp.py",
-    "src/models/components/simple_dense_net.py",
-    "src/models/components/sinkhorn.py",
-    "src/models/components/transformer.py",
-    "src/models/components/vae.py",
-    "src/models/components/vector_field.py",
-    "src/models/ksin_ff_module.py",
-    "src/models/ksin_flow_matching_module.py",
-    "src/models/mnist_module.py",
-    "src/models/surge_ff_module.py",
-    "src/models/surge_flow_matching_module.py",
-    "src/models/surge_flowvae_module.py",
-    "src/train.py",
-    "src/utils/callbacks.py",
-    "src/utils/instantiators.py",
-    "src/utils/logging_utils.py",
-    "src/utils/math.py",
-    "src/utils/pylogger.py",
-    "src/utils/rich_utils.py",
-    "src/utils/utils.py",
-    "tests/conftest.py",
-]
+extend-exclude = []
 
 [tool.ruff.lint]
 # E=pycodestyle errors, F=pyflakes, I=isort, S=bandit security,
@@ -78,6 +37,27 @@ extend-exclude = [
 select = ["E", "F", "I", "S", "T", "UP", "W"]
 # E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/**" = ["E702", "E722", "F841", "T201"]
+"scripts/add_music2latent.py" = ["S605"]
+"scripts/compute_audio_metrics.py" = ["T201"]
+"scripts/get_dataset_stats.py" = ["E402", "T201"]
+"scripts/make_sig_perf.py" = ["E402", "T201"]
+"scripts/model_from_wandb_repl.py" = ["E402"]
+"scripts/paramspec_to_table.py" = ["E402", "T201"]
+"scripts/plot_param2tok.py" = ["E402", "E741", "F841", "T201"]
+"scripts/predict_vst_audio.py" = ["E402", "F841"]
+"scripts/reshard_data.py" = ["T201"]
+"scripts/subdir_funtime.py" = ["F841"]
+"src/eval.py" = ["E402", "F841"]
+"src/models/components/transformer.py" = ["F841"]
+"src/models/components/vae.py" = ["E402", "T201"]
+"src/models/ksin_ff_module.py" = ["F821"]
+"src/models/surge_ff_module.py" = ["F821"]
+"src/train.py" = ["E402"]
+"src/utils/__init__.py" = ["F401"]
+"src/utils/callbacks.py" = ["F821", "T201"]
 
 [tool.interrogate]
 verbose = 2

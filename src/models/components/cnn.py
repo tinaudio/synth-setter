@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -8,8 +8,8 @@ class ResidualMLPBlock(nn.Module):
     def __init__(
         self,
         in_dim: int,
-        hidden_dim: Optional[int] = None,
-        out_dim: Optional[int] = None,
+        hidden_dim: int | None = None,
+        out_dim: int | None = None,
     ) -> None:
         super().__init__()
         if hidden_dim is None:
@@ -28,9 +28,7 @@ class ResidualMLPBlock(nn.Module):
         )
 
         self.residual = (
-            nn.Identity()
-            if in_dim == out_dim
-            else nn.Linear(in_dim, out_dim, bias=False)
+            nn.Identity() if in_dim == out_dim else nn.Linear(in_dim, out_dim, bias=False)
         )
 
     def forward(self, x):
@@ -49,8 +47,8 @@ class ResidualBlock(nn.Module):
     def __init__(
         self,
         in_dim: int,
-        hidden_dim: Optional[int] = None,
-        out_dim: Optional[int] = None,
+        hidden_dim: int | None = None,
+        out_dim: int | None = None,
         kernel_size: int = 7,
         norm: Literal["bn", "ln"] = "bn",
     ):
@@ -72,11 +70,7 @@ class ResidualBlock(nn.Module):
                 padding=kernel_size // 2,
             ),
             nn.GELU(),
-            (
-                nn.BatchNorm1d(hidden_dim)
-                if norm == "bn"
-                else LayerNormConv1dFriendly(hidden_dim)
-            ),
+            (nn.BatchNorm1d(hidden_dim) if norm == "bn" else LayerNormConv1dFriendly(hidden_dim)),
             nn.Conv1d(
                 in_channels=hidden_dim,
                 out_channels=out_dim,
@@ -103,9 +97,7 @@ class ResidualBlock(nn.Module):
 
 
 class ConvDownsampler(nn.Module):
-    def __init__(
-        self, in_dim: int, out_dim: int, stride: int, norm: Literal["bn", "ln"] = "bn"
-    ):
+    def __init__(self, in_dim: int, out_dim: int, stride: int, norm: Literal["bn", "ln"] = "bn"):
         super().__init__()
         self.net = nn.Sequential(
             nn.BatchNorm1d(in_dim) if norm == "bn" else LayerNormConv1dFriendly(in_dim),

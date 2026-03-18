@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal, Tuple
+from typing import Literal
 
 import click
 import hydra
@@ -16,7 +16,7 @@ from src.utils import register_resolvers
 
 def wandb_dir_to_ckpt_and_hparams(
     wandb_dir: Path, ckpt_type: Literal["best", "last"]
-) -> Tuple[Path, Path]:
+) -> tuple[Path, Path]:
     log_dir = wandb_dir.parent.parent
     ckpt_dir = log_dir / "checkpoints"
 
@@ -97,9 +97,7 @@ def main(
 
     if len(ckpts_and_hparams) > 1:
         # take the one with the most recently updated hparam file
-        ckpt_file, hparam_file = max(
-            ckpts_and_hparams, key=lambda x: x[1].stat().st_mtime
-        )
+        ckpt_file, hparam_file = max(ckpts_and_hparams, key=lambda x: x[1].stat().st_mtime)
     elif len(ckpts_and_hparams) == 1:
         ckpt_file, hparam_file = ckpts_and_hparams[0]
     else:

@@ -1,9 +1,10 @@
 #!/usr/bin/env python
+import concurrent.futures
 import os
 from pathlib import Path
+
 import click
 import h5py
-import concurrent.futures
 
 
 def rewrite_shard(shard: Path, output_dir: Path) -> (Path, bool, str):
@@ -21,8 +22,7 @@ def rewrite_shard(shard: Path, output_dir: Path) -> (Path, bool, str):
     temp_file = output_dir / f"{shard.stem}.temp.h5"
 
     try:
-        with h5py.File(shard, "r") as f_in, \
-             h5py.File(temp_file, "w", libver="latest") as f_out:
+        with h5py.File(shard, "r") as f_in, h5py.File(temp_file, "w", libver="latest") as f_out:
             # Copy every top-level item (dataset or group) from the input file.
             for key in f_in:
                 f_in.copy(key, f_out)
@@ -38,10 +38,16 @@ def rewrite_shard(shard: Path, output_dir: Path) -> (Path, bool, str):
 @click.command()
 @click.argument("input_dir", type=str)
 @click.argument("output_dir", type=str)
-@click.option("--pattern", "-p", type=str, default="shard-*.h5",
-              help="Glob pattern to find shard files in the input directory.")
-@click.option("--workers", "-w", type=int, default=4,
-              help="Number of worker processes to run in parallel.")
+@click.option(
+    "--pattern",
+    "-p",
+    type=str,
+    default="shard-*.h5",
+    help="Glob pattern to find shard files in the input directory.",
+)
+@click.option(
+    "--workers", "-w", type=int, default=4, help="Number of worker processes to run in parallel."
+)
 def main(input_dir, output_dir, pattern, workers):
     """Rewrite each HDF5 file matching the given pattern in INPUT_DIR so that it is created with
     libver="latest" (i.e. with a superblock version >= 3) and write the new files to OUTPUT_DIR."""
@@ -54,7 +60,9 @@ def main(input_dir, output_dir, pattern, workers):
         click.echo(f"No files found matching pattern '{pattern}' in {input_dir}.")
         return
 
-    click.echo(f"Found {len(shard_files)} file(s). Rewriting with libver='latest' using {workers} workers...")
+    click.echo(
+        f"Found {len(shard_files)} file(s). Rewriting with libver='latest' using {workers} workers..."
+    )
 
     # Process the shards in parallel.
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
