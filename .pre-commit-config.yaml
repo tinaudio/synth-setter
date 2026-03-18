@@ -12,16 +12,14 @@ repos:
       - id: check-yaml
       - id: detect-private-key
       - id: check-executables-have-shebangs
-        exclude: >-
-          (?x)^(
-            jobs/predict/get-ckpt-from-wandb\.sh|
-            renderscript\.sh|
-            scripts/aggregate_samples\.sh|
-            scripts/get-ckpt-from-wandb\.sh
-          )$
+      # prevent accidental commits to main branch
+      - id: no-commit-to-branch
+        args: [--branch, main]
       - id: check-toml
       - id: check-case-conflict
       - id: check-added-large-files
+      - id: check-json
+      - id: debug-statements
 
   # ruff: linting (E/F/I/S/T/UP/W rules) and formatting for Python & Jupyter.
   # Config lives in pyproject.toml under [tool.ruff]. Legacy src/ files are
@@ -65,12 +63,23 @@ repos:
             tests/.*\.py
           )$
 
-  # check-jsonschema: validates JSON/YAML against JSON schemas
+  # check-jsonschema: validates GitHub workflow files against schema
   - repo: https://github.com/python-jsonschema/check-jsonschema
     rev: 0.29.4
     hooks:
-      - id: check-jsonschema
-        types: [json, yaml]
+      - id: check-github-workflows
+
+  # validate-pyproject: validates pyproject.toml against PEP 517/518
+  - repo: https://github.com/abravalheri/validate-pyproject
+    rev: v0.18
+    hooks:
+      - id: validate-pyproject
+
+  # gitlint: lints commit messages for conventional commits compliance
+  - repo: https://github.com/jorisroovers/gitlint
+    rev: v0.19.1
+    hooks:
+      - id: gitlint
 
   # docformatter: auto-wraps and normalises docstrings (sphinx style).
   # Config lives in pyproject.toml under [tool.docformatter].
@@ -224,3 +233,17 @@ repos:
     hooks:
       - id: nbstripout
         exclude: "^notebooks/inpsect-models\\.ipynb$"
+
+  # C++ formatting and linting (no-op until .cpp/.h files are added)
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v17.0.6
+    hooks:
+      - id: clang-format
+        args: [--style=Google]
+        types_or: [c, c++]
+
+  - repo: https://github.com/cpplint/cpplint
+    rev: 1.6.1
+    hooks:
+      - id: cpplint
+        args: [--filter=-legal/copyright]
