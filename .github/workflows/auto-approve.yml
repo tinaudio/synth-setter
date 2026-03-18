@@ -96,32 +96,44 @@ jobs:
             fi
           fi
 
-          # --- Condition 3: No unresolved Copilot review threads ---
+          # --- Condition 3: Copilot has reviewed and all threads are resolved ---
           if [ "$PASS" = "true" ]; then
             OWNER="${{ github.repository_owner }}"
             REPO_NAME=$(echo "$REPO" | cut -d/ -f2)
-            UNRESOLVED=$(gh api graphql -f query='
-              query($owner: String!, $repo: String!, $pr: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  pullRequest(number: $pr) {
-                    reviewThreads(first: 100) {
-                      nodes {
-                        isResolved
-                        comments(first: 1) {
-                          nodes { author { login } }
+
+            # Check that Copilot has submitted at least one review
+            COPILOT_REVIEWS=$(gh api "repos/${REPO}/pulls/${PR}/reviews" \
+              --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length')
+            if [ "$COPILOT_REVIEWS" -eq 0 ]; then
+              echo "::notice::Copilot has not reviewed yet — skipping"
+              PASS=false
+            fi
+
+            # Check for unresolved Copilot threads
+            if [ "$PASS" = "true" ]; then
+              UNRESOLVED=$(gh api graphql -f query='
+                query($owner: String!, $repo: String!, $pr: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $pr) {
+                      reviewThreads(first: 100) {
+                        nodes {
+                          isResolved
+                          comments(first: 1) {
+                            nodes { author { login } }
+                          }
                         }
                       }
                     }
                   }
-                }
-              }' -f owner="$OWNER" -f repo="$REPO_NAME" -F pr="$PR" \
-              --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-                | select(.isResolved == false)
-                | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
-              ] | length')
-            if [ "$UNRESOLVED" -gt 0 ]; then
-              echo "::notice::${UNRESOLVED} unresolved Copilot thread(s) — skipping"
-              PASS=false
+                }' -f owner="$OWNER" -f repo="$REPO_NAME" -F pr="$PR" \
+                --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+                  | select(.isResolved == false)
+                  | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
+                ] | length')
+              if [ "$UNRESOLVED" -gt 0 ]; then
+                echo "::notice::${UNRESOLVED} unresolved Copilot thread(s) — skipping"
+                PASS=false
+              fi
             fi
           fi
 
