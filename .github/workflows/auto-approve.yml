@@ -153,5 +153,5 @@ jobs:
             echo "::notice::Bot already approved — skipping duplicate"
             exit 0
           fi
-          gh pr review ${{ steps.pr.outputs.number }} --approve \
-            --body "All conditions met: CI passing, Claude review clean, no unresolved Copilot threads. Auto-approved."
+          gh pr review ${{ steps.pr.outputs.number }} --repo "${{ github.repository }}" --approve \
+            --body "All conditions met: CI passing, no unresolved Copilot threads. Auto-approved."
