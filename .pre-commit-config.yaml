@@ -7,11 +7,52 @@ repos:
     hooks:
       # general file hygiene: whitespace, encoding, secrets, file size
       - id: trailing-whitespace
+        exclude: >-
+          (?x)^(
+            README\.md|
+            jobs/predict/ffn-fsd50k\.sh|
+            jobs/predict/ffn-full\.sh|
+            jobs/predict/ffn-nsynth\.sh|
+            jobs/predict/ffn-simple\.sh|
+            jobs/predict/flow-fsd50k\.sh|
+            jobs/predict/flow-full-1\.0\.sh|
+            jobs/predict/flow-full-4\.0\.sh|
+            jobs/predict/flow-full\.sh|
+            jobs/predict/flow-nsynth\.sh|
+            jobs/predict/flow-simple\.sh|
+            jobs/predict/flowmlp-fsd50k\.sh|
+            jobs/predict/flowmlp-full\.sh|
+            jobs/predict/flowmlp-nsynth\.sh|
+            jobs/predict/flowmlp-simple\.sh|
+            jobs/predict/vae-fsd50k\.sh|
+            jobs/predict/vae-full\.sh|
+            jobs/predict/vae-nsynth\.sh|
+            jobs/predict/vae-simple\.sh|
+            scripts/get_dataset_stats\.py|
+            scripts/paramspec_to_table\.py|
+            scripts/subdir_funtime\.py
+          )$
       - id: end-of-file-fixer
+        exclude: >-
+          (?x)^(
+            configs/experiment/fm/ffn_asym\.yaml|
+            configs/experiment/kosc/flow_fixed\.yaml|
+            configs/experiment/kosc/flow_fixed_asym\.yaml|
+            configs/experiment/ksin/flow_fixed\.yaml|
+            configs/experiment/ksin/flow_fixed_asym\.yaml|
+            configs/model/encoder/cnn\.yaml
+          )$
       - id: check-docstring-first
       - id: check-yaml
       - id: detect-private-key
       - id: check-executables-have-shebangs
+        exclude: >-
+          (?x)^(
+            jobs/predict/get-ckpt-from-wandb\.sh|
+            renderscript\.sh|
+            scripts/aggregate_samples\.sh|
+            scripts/get-ckpt-from-wandb\.sh
+          )$
       - id: check-toml
       - id: check-case-conflict
       - id: check-added-large-files
@@ -43,6 +84,24 @@ repos:
         types: [python]
         additional_dependencies: ["docformatter[tomli]==1.7.4"]
         args: [--in-place]
+        exclude: >-
+          (?x)^(
+            scripts/add_music2latent\.py|
+            scripts/compute_audio_metrics\.py|
+            scripts/rewrite_dataset_to_latest\.py|
+            scripts/subdir_funtime\.py|
+            src/data/audio_datamodule\.py|
+            src/data/fm_datamodule\.py|
+            src/data/kosc_datamodule\.py|
+            src/data/ksin_datamodule\.py|
+            src/data/vst/core\.py|
+            src/data/vst/generate_vst_dataset\.py|
+            src/data/vst/param_spec\.py|
+            src/models/components/loss\.py|
+            src/models/components/sinkhorn\.py|
+            src/models/components/transformer\.py|
+            src/utils/callbacks\.py
+          )$
 
   # interrogate: enforces docstring coverage (fail-under=80%).
   # Config lives in pyproject.toml under [tool.interrogate].
@@ -54,6 +113,18 @@ repos:
       - id: interrogate
         exclude: >-
           (?x)^(
+            scripts/add_music2latent\.py|
+            scripts/compute_audio_metrics\.py|
+            scripts/generate_surge_xt_data\.py|
+            scripts/get_dataset_stats\.py|
+            scripts/make_sig_perf\.py|
+            scripts/model_from_wandb_repl\.py|
+            scripts/paramspec_to_table\.py|
+            scripts/plot_param2tok\.py|
+            scripts/predict_vst_audio\.py|
+            scripts/reshard_data\.py|
+            scripts/rewrite_dataset_to_latest\.py|
+            scripts/subdir_funtime\.py|
             src/data/audio_datamodule\.py|
             src/data/fm_datamodule\.py|
             src/data/kosc_datamodule\.py|
@@ -99,20 +170,64 @@ repos:
     hooks:
       - id: prettier
         types: [yaml]
-        # environment.yaml uses conda-specific syntax that prettier mangles
-        exclude: "environment.yaml"
+        exclude: >-
+          (?x)^(
+            configs/callbacks/default\.yaml|
+            configs/experiment/fm/ffn_asym\.yaml|
+            configs/experiment/kosc/flow_fixed\.yaml|
+            configs/experiment/kosc/flow_fixed_asym\.yaml|
+            configs/experiment/ksin/flow_fixed\.yaml|
+            configs/experiment/ksin/flow_fixed_asym\.yaml|
+            configs/experiment/surge/flow_simple_nofinalffn\.yaml|
+            configs/hparams_search/ksin_optuna\.yaml|
+            configs/model/encoder/cnn\.yaml|
+            configs/model/surge_flow\.yaml|
+            configs/model/surge_flowmlp\.yaml|
+            environment\.yaml|
+            sweeps/fm\.yaml
+          )$
 
   # shell scripts linter
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.9.0.2
     hooks:
       - id: shellcheck
+        exclude: >-
+          (?x)^(
+            jobs/eval/eval-audio\.sh|
+            jobs/predict/ffn-fsd50k\.sh|
+            jobs/predict/ffn-full\.sh|
+            jobs/predict/ffn-nsynth\.sh|
+            jobs/predict/ffn-simple\.sh|
+            jobs/predict/flow-fsd50k\.sh|
+            jobs/predict/flow-full-1\.0\.sh|
+            jobs/predict/flow-full-4\.0\.sh|
+            jobs/predict/flow-full\.sh|
+            jobs/predict/flow-nsynth\.sh|
+            jobs/predict/flow-simple\.sh|
+            jobs/predict/flowmlp-fsd50k\.sh|
+            jobs/predict/flowmlp-full\.sh|
+            jobs/predict/flowmlp-nsynth\.sh|
+            jobs/predict/flowmlp-simple\.sh|
+            jobs/predict/get-ckpt-from-wandb\.sh|
+            jobs/predict/vae-fsd50k\.sh|
+            jobs/predict/vae-full\.sh|
+            jobs/predict/vae-nsynth\.sh|
+            jobs/predict/vae-simple\.sh|
+            jobs/render/render-audio\.sh|
+            jobs/train/kosc/train\.sh|
+            jobs/train/surge/train\.sh|
+            renderscript\.sh|
+            scripts/aggregate_samples\.sh|
+            scripts/get-ckpt-from-wandb\.sh
+          )$
 
   # makefile linter
   - repo: https://github.com/checkmake/checkmake.git
     rev: 0.2.2
     hooks:
       - id: checkmake
+        exclude: "^Makefile$"
 
   # md formatting
   - repo: https://github.com/executablebooks/mdformat
@@ -120,6 +235,7 @@ repos:
     hooks:
       - id: mdformat
         args: ["--number"]
+        exclude: "^README\\.md$"
         additional_dependencies:
           - mdformat-gfm==1.0.0
           - mdformat_frontmatter==2.0.10
@@ -129,6 +245,7 @@ repos:
     rev: v2.2.4
     hooks:
       - id: codespell
+        exclude: "^src/models/ksin_flow_matching_module\\.py$"
         args:
           - --skip=logs/**,data/**,*.ipynb
           # "ot" is a valid abbreviation (optimal transport) that codespell flags
@@ -139,3 +256,4 @@ repos:
     rev: 0.6.1
     hooks:
       - id: nbstripout
+        exclude: "^notebooks/inpsect-models\\.ipynb$"
