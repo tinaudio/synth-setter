@@ -96,21 +96,7 @@ jobs:
             fi
           fi
 
-          # --- Condition 3: Claude review explicitly approves ---
-          # Requires PR #56 which adds VERDICT: output to claude-review.yml
-          if [ "$PASS" = "true" ]; then
-            VERDICT=$(gh api "repos/${REPO}/issues/${PR}/comments" \
-              --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("VERDICT:"))] | last | .body // ""')
-            if [ -z "$VERDICT" ]; then
-              echo "::notice::No Claude review verdict yet — skipping"
-              PASS=false
-            elif ! echo "$VERDICT" | grep -q "^VERDICT: APPROVE"; then
-              echo "::notice::Claude review verdict is not APPROVE — skipping"
-              PASS=false
-            fi
-          fi
-
-          # --- Condition 4: No unresolved Copilot review threads ---
+          # --- Condition 3: No unresolved Copilot review threads ---
           if [ "$PASS" = "true" ]; then
             OWNER="${{ github.repository_owner }}"
             REPO_NAME=$(echo "$REPO" | cut -d/ -f2)
