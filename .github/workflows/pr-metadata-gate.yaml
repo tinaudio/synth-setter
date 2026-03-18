@@ -12,6 +12,7 @@ permissions:
 jobs:
   check-pr-metadata:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check linked issue
         env:
@@ -22,22 +23,44 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
 
           echo "::group::Fetching PR metadata"
-          PR_BODY=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.body // ""')
+          PR_BODY=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.body // ""') || {
+            echo "::error::Failed to fetch PR body from GitHub API"
+            exit 1
+          }
           echo "::endgroup::"
 
           # --- Linked issue check ---
           # Check for currently-linked issues via the timeline API
           # Count "connected" events minus "disconnected" events to get current links
           CONNECTED=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" \
-            --paginate --jq '[.[] | select(.event == "connected")] | length')
+            --paginate --jq '[.[] | select(.event == "connected")] | length') || {
+            echo "::error::Failed to fetch timeline events from GitHub API. Re-run the job if transient."
+            exit 1
+          }
           DISCONNECTED=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" \
-            --paginate --jq '[.[] | select(.event == "disconnected")] | length')
-          LINKED_ISSUES=$(( ${CONNECTED:-0} - ${DISCONNECTED:-0} ))
+            --paginate --jq '[.[] | select(.event == "disconnected")] | length') || {
+            echo "::error::Failed to fetch timeline events from GitHub API. Re-run the job if transient."
+            exit 1
+          }
+
+          if ! [[ "$CONNECTED" =~ ^[0-9]+$ ]] || ! [[ "$DISCONNECTED" =~ ^[0-9]+$ ]]; then
+            echo "::error::Timeline API returned unexpected non-numeric values (connected=${CONNECTED}, disconnected=${DISCONNECTED})"
+            exit 1
+          fi
+          LINKED_ISSUES=$(( CONNECTED - DISCONNECTED ))
 
           # Also check body for closing keywords
-          BODY_REFS=$(echo "$PR_BODY" | grep -ciE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+' || true)
+          BODY_REFS=$(echo "$PR_BODY" | grep -ciE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+') || {
+            rc=$?
+            if [ "$rc" -eq 1 ]; then
+              BODY_REFS=0  # No matches found — expected case
+            else
+              echo "::error::grep failed with exit code ${rc} while parsing PR body"
+              exit 1
+            fi
+          }
 
-          if [ "${LINKED_ISSUES}" -le 0 ] && [ "${BODY_REFS:-0}" -eq 0 ]; then
+          if [ "${LINKED_ISSUES}" -le 0 ] && [ "${BODY_REFS}" -eq 0 ]; then
             echo "::error::PR #${PR_NUMBER} has no linked GitHub issue. Add 'closes #N' to the PR body or link an issue via the sidebar."
             exit 1
           fi

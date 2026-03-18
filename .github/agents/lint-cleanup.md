@@ -10,13 +10,13 @@ Only formatting, docstrings, and lint fixes. **No functional changes.**
 
 ## Workflow
 
-For each file listed in the `exclude` blocks of `flake8`, `black`, `interrogate`, and `bandit` hooks in `.pre-commit-config.yaml`:
+For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shellcheck`, `codespell`, and other hooks in `.pre-commit-config.yaml` (ruff per-file-ignores live in `pyproject.toml`):
 
 1. **Create a branch**: `chore/lint-cleanup/<module-name>` (e.g., `chore/lint-cleanup/surge-datamodule`)
-2. **Run hooks on the file**: `e.g. `interrogate`
+2. **Run hooks on the file**: `e.g. `interrogate\`
 3. **Auto-fix what you can**: `ruff` and `docformatter` handle most formatting issues automatically
 4. **Manually fix remaining violations**:
-   - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter --style=sphinx` config
+   - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`)
 5. **Remove the file from all `exclude` blocks** in `.pre-commit-config.yaml`
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
 7. **Run tests**: `make test` — all tests must still pass
@@ -30,7 +30,7 @@ For each file listed in the `exclude` blocks of `flake8`, `black`, `interrogate`
 - Never add features, refactor algorithms, or rename public APIs
 - `# noqa` / `# nosec` only with a justification comment explaining why
 - If a file requires functional changes to pass lint (e.g., unused imports that are actually used dynamically), skip it and leave a comment on #25
-- Use `--line-length=99` for black (configured in pyproject.toml)
+- Line length is 99 (configured in `pyproject.toml` under `[tool.ruff]`)
 - Docstrings follow Sphinx style (`:param:`, `:returns:`, `:raises:`) — matches `docformatter --style=sphinx`
 - Run `make test` after every file to catch regressions
 

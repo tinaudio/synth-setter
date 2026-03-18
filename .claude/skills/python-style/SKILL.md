@@ -9,11 +9,11 @@ description: >-
 # Python Style Guide
 
 Adapted from the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
-Where this project's conventions (Black line-length=99, Ruff) override Google defaults, this
-guide notes the deviation.
+Where this project's conventions (Ruff format line-length=99, Ruff lint) override Google defaults,
+this guide notes the deviation.
 
-**Project overrides:** Black (line-length=99) handles formatting. Ruff handles import sorting
-and lint. This guide covers everything Black and Ruff don't enforce.
+**Project overrides:** Ruff format (line-length=99) handles formatting. Ruff handles import
+sorting and lint. This guide covers everything Ruff doesn't enforce.
 
 ______________________________________________________________________
 
@@ -119,7 +119,7 @@ ______________________________________________________________________
 
 ### 2.1 Formatting
 
-**Handled by Black/Ruff:** indentation (4 spaces), line length (99), whitespace, import
+**Handled by Ruff:** indentation (4 spaces), line length (99), whitespace, import
 sorting. The following are NOT auto-enforced:
 
 - No semicolons to terminate lines or combine statements

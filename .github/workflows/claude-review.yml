@@ -8,18 +8,27 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  id-token: write
 
 jobs:
-  claude-checklist-review:
+  claude-review:
     if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Claude Checklist Review
+      - name: Validate API key is configured
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not configured. Claude review cannot run."
+            exit 1
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Claude Code Review
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -28,16 +37,9 @@ jobs:
             review skills and evaluate every checklist item against the changed code.
             Prefix each comment with BLOCK: or WARN:.
 
-  claude-deep-review:
-    if: github.event.pull_request.head.repo.fork == false
+  skip-notice:
+    if: github.event.pull_request.head.repo.fork == true
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Claude Deep Review
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: /review-pr
+      - name: Post fork PR notice
+        run: echo "::notice::Claude review is skipped for fork PRs (secrets are unavailable)."
