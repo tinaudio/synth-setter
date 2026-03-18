@@ -11,10 +11,8 @@ from pedalboard.io import AudioFile
 
 
 def _call_with_interrupt(fn: Callable, sleep_time: float = 2.0):
-    """
-    Calls the function fn on the main thread, while another thread
-    sends a KeyboardInterrupt (SIGINT) to the main thread.
-    """
+    """Calls the function fn on the main thread, while another thread sends a KeyboardInterrupt
+    (SIGINT) to the main thread."""
 
     def send_interrupt():
         # Brief sleep so that fn starts before we send the interrupt

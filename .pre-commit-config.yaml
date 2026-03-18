@@ -50,24 +50,6 @@ repos:
         types: [python]
         additional_dependencies: ["docformatter[tomli]==1.7.4"]
         args: [--in-place]
-        exclude: >-
-          (?x)^(
-            scripts/add_music2latent\.py|
-            scripts/compute_audio_metrics\.py|
-            scripts/rewrite_dataset_to_latest\.py|
-            scripts/subdir_funtime\.py|
-            src/data/audio_datamodule\.py|
-            src/data/fm_datamodule\.py|
-            src/data/kosc_datamodule\.py|
-            src/data/ksin_datamodule\.py|
-            src/data/vst/core\.py|
-            src/data/vst/generate_vst_dataset\.py|
-            src/data/vst/param_spec\.py|
-            src/models/components/loss\.py|
-            src/models/components/sinkhorn\.py|
-            src/models/components/transformer\.py|
-            src/utils/callbacks\.py
-          )$
 
   # interrogate: enforces docstring coverage (fail-under=80%).
   # Config lives in pyproject.toml under [tool.interrogate].

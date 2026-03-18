@@ -3,9 +3,8 @@ import torch.nn as nn
 
 
 def params_to_tokens(params: torch.Tensor, params_per_token: int = 2):
-    """Assuming our model outputs a tensor of shape (batch, 2k), we stack it into a
-    tensor of shape (batch, k, 2) to allow for metric computation.
-    """
+    """Assuming our model outputs a tensor of shape (batch, 2k), we stack it into a tensor of shape
+    (batch, k, 2) to allow for metric computation."""
     units = params.chunk(params_per_token, dim=-1)
     return torch.stack(units, dim=-1)
 

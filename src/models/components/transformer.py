@@ -289,22 +289,17 @@ class SinusoidalConditioning(nn.Module):
 
 
 class MutualAttentionProjection(nn.Module):
-    """
-    p (b, n) parameters
-    sinusoidal embed -> MLP
-    +
-    pos embed
+    """P (b, n) parameters sinusoidal embed -> MLP + pos embed.
 
     to get (b, n, d) tokens
 
-    then concat with k learnt tokens for (b, n + k, d)
-    apply self attn and take last k for (b, k, d)
+    then concat with k learnt tokens for (b, n + k, d) apply self attn and take last k for (b, k,
+    d)
 
     pass through transformer
 
-    at output concat with n learnt tokens for (b, n + k, d)
-    apply self attn and take first n
-    final ffn to 1d
+    at output concat with n learnt tokens for (b, n + k, d) apply self attn and take first n final
+    ffn to 1d
     """
 
     def __init__(self, d_model: int, num_params: int, num_tokens: int):
@@ -511,6 +506,7 @@ class ApproxEquivTransformer(nn.Module):
 
 class PatchEmbed(nn.Module):
     """Convolutional patch encoder like in ViT, with overlap from AST.
+
     Difference is we zero pad up to next whole patch.
     """
 
