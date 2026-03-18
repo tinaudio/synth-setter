@@ -43,14 +43,7 @@ repos:
         language: python
         types: [python]
         additional_dependencies: ["docformatter[tomli]==1.7.4"]
-        args:
-          [
-            --in-place,
-            --wrap-summaries=99,
-            --wrap-descriptions=99,
-            --style=sphinx,
-            --black,
-          ]
+        args: [--in-place]
 
   # python docstring coverage checking
   # Legacy src/ files excluded until per-file lint cleanup is done (see issue).

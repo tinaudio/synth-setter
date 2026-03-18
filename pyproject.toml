@@ -73,6 +73,12 @@ extend-exclude = [
 select = ["E", "F", "I", "S", "T", "UP", "W"]
 ignore = ["E501", "S101"]
 
+[tool.docformatter]
+wrap-summaries = 99
+wrap-descriptions = 99
+style = "sphinx"
+black = true
+
 [tool.coverage.report]
 exclude_lines = [
     "pragma: nocover",
