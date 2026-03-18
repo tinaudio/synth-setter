@@ -13,12 +13,10 @@ Only formatting, docstrings, and lint fixes. **No functional changes.**
 For each file listed in the `exclude` blocks of `flake8`, `black`, `interrogate`, and `bandit` hooks in `.pre-commit-config.yaml`:
 
 1. **Create a branch**: `chore/lint-cleanup/<module-name>` (e.g., `chore/lint-cleanup/surge-datamodule`)
-2. **Run hooks on the file**: `pre-commit run flake8 --files <file>`, then `black`, `interrogate`, `bandit`
-3. **Auto-fix what you can**: `black` and `docformatter` handle most formatting issues automatically
+2. **Run hooks on the file**: `e.g. `interrogate`
+3. **Auto-fix what you can**: `ruff` and `docformatter` handle most formatting issues automatically
 4. **Manually fix remaining violations**:
    - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter --style=sphinx` config
-   - `bandit` security warnings: fix if real, add `# nosec BXXX` with justification comment if false positive
-   - Note: `E501`, `E402`, `F401`, and `F841` are already in flake8's `extend-ignore` — don't waste time on these
 5. **Remove the file from all `exclude` blocks** in `.pre-commit-config.yaml`
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
 7. **Run tests**: `make test` — all tests must still pass
