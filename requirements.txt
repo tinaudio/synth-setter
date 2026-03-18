@@ -19,6 +19,7 @@ wandb
 # --------- others --------- #
 rootutils       # standardizing the project root setup
 pre-commit      # hooks for applying linters on commit
+pyright         # linter dep (static type checker)
 rich            # beautiful text formatting in terminal
 pytest          # tests
 scipy==1.14.1
