@@ -35,20 +35,20 @@ jobs:
           prompt: |
             Review this PR. Follow the Code Review section in CLAUDE.md — invoke all seven
             review skills and evaluate every checklist item against the changed code.
-            Prefix each comment with BLOCK: or WARN:.
+            Prefix each finding comment with BLOCK: or WARN:.
 
-            After reviewing, if there are NO BLOCK-level issues, add a final comment that
-            starts with exactly "VERDICT: APPROVE". If there ARE BLOCK-level issues,
-            add a final comment starting with "VERDICT: CHANGES_REQUESTED".
+            After reviewing, post one final summary comment. Do NOT prefix it with
+            BLOCK: or WARN:. Start it with exactly "VERDICT: APPROVE" if there are no
+            BLOCK-level issues, or "VERDICT: CHANGES_REQUESTED" if there are.
             Still leave all individual WARN comments regardless.
 
       - name: Auto-approve if no blocking issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LAST_COMMENT=$(gh pr view ${{ github.event.pull_request.number }} \
-            --json comments --jq '.comments[-1].body')
-          if echo "$LAST_COMMENT" | grep -q "^VERDICT: APPROVE"; then
+          VERDICT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("VERDICT:"))] | last | .body // ""')
+          if echo "$VERDICT" | grep -q "^VERDICT: APPROVE"; then
             gh pr review ${{ github.event.pull_request.number }} --approve \
               --body "No BLOCK-level issues found. Auto-approved by Claude review."
           fi

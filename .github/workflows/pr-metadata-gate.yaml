@@ -61,7 +61,7 @@ jobs:
           }
 
           if [ "${LINKED_ISSUES}" -le 0 ] && [ "${BODY_REFS}" -eq 0 ]; then
-            echo "::error::PR #${PR_NUMBER} has no linked GitHub issue. Add 'Closes #N', 'Part of #N', or 'Related to #N' to the PR body."
+            echo "::error::PR #${PR_NUMBER} has no linked GitHub issue. Add an issue reference (e.g., 'Closes #N', 'Part of #N', or just '#N') to the PR body."
             exit 1
           fi
 
