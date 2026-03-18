@@ -37,6 +37,22 @@ jobs:
             review skills and evaluate every checklist item against the changed code.
             Prefix each comment with BLOCK: or WARN:.
 
+            After reviewing, if there are NO BLOCK-level issues, add a final comment that
+            starts with exactly "VERDICT: APPROVE". If there ARE BLOCK-level issues,
+            add a final comment starting with "VERDICT: CHANGES_REQUESTED".
+            Still leave all individual WARN comments regardless.
+
+      - name: Auto-approve if no blocking issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LAST_COMMENT=$(gh pr view ${{ github.event.pull_request.number }} \
+            --json comments --jq '.comments[-1].body')
+          if echo "$LAST_COMMENT" | grep -q "^VERDICT: APPROVE"; then
+            gh pr review ${{ github.event.pull_request.number }} --approve \
+              --body "No BLOCK-level issues found. Auto-approved by Claude review."
+          fi
+
   skip-notice:
     if: github.event.pull_request.head.repo.fork == true
     runs-on: ubuntu-latest
