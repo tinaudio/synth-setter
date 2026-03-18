@@ -12,8 +12,8 @@ synth-setter: Synth inversion, sound matching and preset exploration tools
 
 ### Formatting & Linting (enforced by pre-commit)
 
-- **Black** (line-length=99)
-- **Ruff** (rules: E, F, W, I, UP, D417; docstrings)
+- **Ruff format** (line-length=99)
+- **Ruff** (rules: E, F, I, S, T, UP, W)
 - Run `make format` before committing
 
 ### Writing Code
@@ -61,7 +61,7 @@ When reviewing code or PRs, invoke these skills in order:
 6. `shell-style` — Google Shell Style Guide checklist (19 items, `.sh` files only)
 7. `ml-test` — ML testing checklist (25 items, model/pipeline test code)
 
-Review all changed code against every checklist. Prefix findings with BLOCK: (must fix) or WARN: (advisory). Skip style issues (Black/Ruff handle formatting).
+Review all changed code against every checklist. Prefix findings with BLOCK: (must fix) or WARN: (advisory). Skip style issues (Ruff handles formatting and linting).
 
 ## Don't
 

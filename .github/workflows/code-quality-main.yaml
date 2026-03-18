@@ -28,4 +28,6 @@ jobs:
       - name: Run pre-commits
         uses: pre-commit/action@v3.0.1
         env:
+          # no-commit-to-branch hook rejects commits on main, but this CI job
+          # runs after merge to main, so the hook must be skipped. See 628fa8e.
           SKIP: no-commit-to-branch
