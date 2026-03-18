@@ -13,7 +13,7 @@ Only formatting, docstrings, and lint fixes. **No functional changes.**
 For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shellcheck`, `codespell`, and other hooks in `.pre-commit-config.yaml` (ruff per-file-ignores live in `pyproject.toml`):
 
 1. **Create a branch**: `chore/lint-cleanup/<module-name>` (e.g., `chore/lint-cleanup/surge-datamodule`)
-2. **Run hooks on the file**: `e.g. `interrogate\`
+2. **Run hooks on the file**, e.g. `interrogate`
 3. **Auto-fix what you can**: `ruff` and `docformatter` handle most formatting issues automatically
 4. **Manually fix remaining violations**:
    - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`)
