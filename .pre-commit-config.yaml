@@ -25,17 +25,45 @@ repos:
 
   # ruff: linting (E/F/I/S/T/UP/W rules) and formatting for Python & Jupyter.
   # Config lives in pyproject.toml under [tool.ruff]. Legacy src/ files are
-  # excluded via extend-exclude there (see issue #25).
+  # excluded via per-file-ignores there (see issue #25).
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.5
     hooks:
       # ruff-pre-commit already passes --force-exclude in its entry point,
-      # so ruff respects extend-exclude in pyproject.toml automatically.
+      # so ruff respects per-file-ignores in pyproject.toml automatically.
       - id: ruff
         args: [--fix]
         types_or: [python, jupyter]
       - id: ruff-format
         types_or: [python, jupyter]
+
+  # pyright: static type checker for Python (local hook)
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: pyright
+        language: python
+        types: [python]
+        additional_dependencies: ["pyright"]
+        exclude: >-
+          (?x)^(
+            notebooks/|
+            scripts/.*\.py|
+            src/data/.*\.py|
+            src/eval\.py|
+            src/metrics\.py|
+            src/models/.*\.py|
+            src/train\.py|
+            src/utils/callbacks\.py|
+            src/utils/instantiators\.py|
+            src/utils/logging_utils\.py|
+            src/utils/math\.py|
+            src/utils/pylogger\.py|
+            src/utils/rich_utils\.py|
+            src/utils/utils\.py|
+            tests/.*\.py
+          )$
 
   # docformatter: auto-wraps and normalises docstrings (sphinx style).
   # Config lives in pyproject.toml under [tool.docformatter].
