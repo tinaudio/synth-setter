@@ -36,6 +36,7 @@ jobs:
             Review this PR. Follow the Code Review section in CLAUDE.md — invoke all seven
             review skills and evaluate every checklist item against the changed code.
             Prefix each comment with BLOCK: or WARN:.
+          show_full_output: true
 
   skip-notice:
     if: github.event.pull_request.head.repo.fork == true
