@@ -50,17 +50,10 @@ repos:
   - repo: https://github.com/econchick/interrogate
     rev: 1.7.0
     hooks:
+      # Config (fail-under, ignore flags, verbosity) lives in pyproject.toml
+      # under [tool.interrogate]. Only the exclude list stays here because
+      # interrogate doesn't share ruff's extend-exclude in pyproject.toml.
       - id: interrogate
-        args:
-          [
-            --verbose,
-            --fail-under=80,
-            --ignore-init-module,
-            --ignore-init-method,
-            --ignore-module,
-            --ignore-nested-functions,
-            -vv,
-          ]
         # interrogate doesn't read pyproject.toml excludes, so this list is
         # maintained separately from ruff's extend-exclude in pyproject.toml.
         exclude: >-

@@ -73,6 +73,14 @@ extend-exclude = [
 select = ["E", "F", "I", "S", "T", "UP", "W"]
 ignore = ["E501", "S101"]
 
+[tool.interrogate]
+verbose = 2
+fail-under = 80
+ignore-init-module = true
+ignore-init-method = true
+ignore-module = true
+ignore-nested-functions = true
+
 [tool.docformatter]
 wrap-summaries = 99
 wrap-descriptions = 99
