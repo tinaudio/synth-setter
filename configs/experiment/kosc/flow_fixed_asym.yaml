@@ -14,4 +14,3 @@ model:
 data:
   break_symmetry: true
   ot: true
-
