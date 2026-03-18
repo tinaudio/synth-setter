@@ -8,15 +8,6 @@ repos:
       # general file hygiene: whitespace, encoding, secrets, file size
       - id: trailing-whitespace
       - id: end-of-file-fixer
-        exclude: >-
-          (?x)^(
-            configs/experiment/fm/ffn_asym\.yaml|
-            configs/experiment/kosc/flow_fixed\.yaml|
-            configs/experiment/kosc/flow_fixed_asym\.yaml|
-            configs/experiment/ksin/flow_fixed\.yaml|
-            configs/experiment/ksin/flow_fixed_asym\.yaml|
-            configs/model/encoder/cnn\.yaml
-          )$
       - id: check-docstring-first
       - id: check-yaml
       - id: detect-private-key

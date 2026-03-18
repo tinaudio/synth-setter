@@ -10,4 +10,3 @@ run_name: flow_fixed_asym
 data:
   break_symmetry: true
   ot: true
-
