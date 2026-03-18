@@ -31,7 +31,7 @@ For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shell
 - `# noqa` / `# nosec` only with a justification comment explaining why
 - If a file requires functional changes to pass lint (e.g., unused imports that are actually used dynamically), skip it and leave a comment on #25
 - Line length is 99 (configured in `pyproject.toml` under `[tool.ruff]`)
-- Docstrings follow Sphinx style (`:param:`, `:returns:`, `:raises:`) — matches `docformatter --style=sphinx`
+- Docstrings follow Sphinx style (`:param:`, `:returns:`, `:raises:`) — matches `docformatter` config (`style = "sphinx"` in `pyproject.toml`)
 - Run `make test` after every file to catch regressions
 
 ## Files
