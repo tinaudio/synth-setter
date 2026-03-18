@@ -27,10 +27,11 @@ testpaths = "tests/"
 [tool.ruff]
 target-version = "py310"
 line-length = 99
-exclude = ["logs/*", "data/*"]
+exclude = ["logs", "data"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "W"]
+select = ["E", "F", "I", "S", "UP", "W"]
+ignore = ["E501", "S101"]
 
 [tool.coverage.report]
 exclude_lines = [
