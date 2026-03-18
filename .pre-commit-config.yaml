@@ -7,31 +7,6 @@ repos:
     hooks:
       # general file hygiene: whitespace, encoding, secrets, file size
       - id: trailing-whitespace
-        exclude: >-
-          (?x)^(
-            README\.md|
-            jobs/predict/ffn-fsd50k\.sh|
-            jobs/predict/ffn-full\.sh|
-            jobs/predict/ffn-nsynth\.sh|
-            jobs/predict/ffn-simple\.sh|
-            jobs/predict/flow-fsd50k\.sh|
-            jobs/predict/flow-full-1\.0\.sh|
-            jobs/predict/flow-full-4\.0\.sh|
-            jobs/predict/flow-full\.sh|
-            jobs/predict/flow-nsynth\.sh|
-            jobs/predict/flow-simple\.sh|
-            jobs/predict/flowmlp-fsd50k\.sh|
-            jobs/predict/flowmlp-full\.sh|
-            jobs/predict/flowmlp-nsynth\.sh|
-            jobs/predict/flowmlp-simple\.sh|
-            jobs/predict/vae-fsd50k\.sh|
-            jobs/predict/vae-full\.sh|
-            jobs/predict/vae-nsynth\.sh|
-            jobs/predict/vae-simple\.sh|
-            scripts/get_dataset_stats\.py|
-            scripts/paramspec_to_table\.py|
-            scripts/subdir_funtime\.py
-          )$
       - id: end-of-file-fixer
         exclude: >-
           (?x)^(

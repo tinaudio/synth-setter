@@ -30,7 +30,7 @@ def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0):
         hop = int(hop_size * sample_rate / 1000.0)
 
         spec = librosa.feature.melspectrogram(
-            y=y, 
+            y=y,
             sr=sample_rate,
             n_mels=n_mels,
             n_fft=win,
@@ -84,7 +84,7 @@ def main(root_dir, n_subdirs, output_txt):
     """
     # Grab all potential subdirectories in root_dir
     all_subdirs = sorted(
-        d for d in os.listdir(root_dir) 
+        d for d in os.listdir(root_dir)
         if os.path.isdir(os.path.join(root_dir, d))
     )
 
