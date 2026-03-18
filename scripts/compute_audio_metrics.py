@@ -41,7 +41,7 @@ from pedalboard.io import AudioFile
 
 
 def subdir_matches_pattern(dir: Path) -> bool:
-    """Returns true if subdir contains pred.wav and target.wav"""
+    """Returns true if subdir contains pred.wav and target.wav."""
     return (dir / "target.wav").exists() and (dir / "pred.wav").exists()
 
 

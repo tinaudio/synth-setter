@@ -199,7 +199,7 @@ class ContinuousParameter(Parameter):
 
 
 class NoteDurationParameter(Parameter):
-    """A special parameter for sampling note durations"""
+    """A special parameter for sampling note durations."""
 
     def __init__(self, name: str, max_note_duration_seconds: float):
         super().__init__(name)

@@ -15,9 +15,10 @@ MEL_PARAMS = [
 ]
 
 def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0):
-    """
-    Given an audio signal 'y' of shape (channels, samples), compute three mel-spectrograms
-    using different window/hop/mel parameters. Return them as a list of dB-scaled numpy arrays.
+    """Given an audio signal 'y' of shape (channels, samples), compute three mel-spectrograms using
+    different window/hop/mel parameters.
+
+    Return them as a list of dB-scaled numpy arrays.
     """
     # If the input audio has more than 1 channel, we can average down to mono
     # or otherwise choose a specific channel. Here we simply sum across channels:
@@ -43,10 +44,8 @@ def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0):
     return mel_specs
 
 def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
-    """
-    Compute the mean spectral (mel) distance (MSS) between 'target' and 'pred' audio,
-    both of which must be numpy arrays of shape (channels, samples).
-    """
+    """Compute the mean spectral (mel) distance (MSS) between 'target' and 'pred' audio, both of
+    which must be numpy arrays of shape (channels, samples)."""
     logger.info("Computing MSS...")
     target_specs = compute_mel_specs(target)
     pred_specs = compute_mel_specs(pred)
@@ -77,11 +76,9 @@ def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
     help="Output file name for storing sorted results."
 )
 def main(root_dir, n_subdirs, output_txt):
-    """
-    Script that computes the MSS metric for up to N subdirectories (each containing
-    'pred.wav' and 'target.wav') and writes a text file containing the subdir names
-    sorted by ascending MSS value.
-    """
+    """Script that computes the MSS metric for up to N subdirectories (each containing 'pred.wav'
+    and 'target.wav') and writes a text file containing the subdir names sorted by ascending MSS
+    value."""
     # Grab all potential subdirectories in root_dir
     all_subdirs = sorted(
         d for d in os.listdir(root_dir)

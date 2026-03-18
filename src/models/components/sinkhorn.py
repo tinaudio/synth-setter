@@ -68,8 +68,9 @@ def sinkhorn(
 
 class SinkhornAttention(nn.Module):
     """Applies attention using a fixed number of Sinkhorn iterations in lieu of softmax.
-    This allows our attention matrix to approximate a doubly stochastic matrix, or a
-    transportation polytope in the case of cross-attention.
+
+    This allows our attention matrix to approximate a doubly stochastic matrix, or a transportation
+    polytope in the case of cross-attention.
     """
 
     def __init__(

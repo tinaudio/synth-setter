@@ -7,9 +7,8 @@ import concurrent.futures
 
 
 def rewrite_shard(shard: Path, output_dir: Path) -> (Path, bool, str):
-    """
-    Rewrites a given HDF5 shard file so that it is created with libver="latest"
-    and writes the new file to output_dir.
+    """Rewrites a given HDF5 shard file so that it is created with libver="latest" and writes the
+    new file to output_dir.
 
     Parameters:
         shard (Path): Path to the input HDF5 shard file.
@@ -44,10 +43,8 @@ def rewrite_shard(shard: Path, output_dir: Path) -> (Path, bool, str):
 @click.option("--workers", "-w", type=int, default=4,
               help="Number of worker processes to run in parallel.")
 def main(input_dir, output_dir, pattern, workers):
-    """
-    Rewrite each HDF5 file matching the given pattern in INPUT_DIR so that it is created
-    with libver="latest" (i.e. with a superblock version >= 3) and write the new files to OUTPUT_DIR.
-    """
+    """Rewrite each HDF5 file matching the given pattern in INPUT_DIR so that it is created with
+    libver="latest" (i.e. with a superblock version >= 3) and write the new files to OUTPUT_DIR."""
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

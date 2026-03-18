@@ -168,11 +168,11 @@ class KOscDataset(torch.utils.data.Dataset):
 
 
 class KOscDataModule(LightningDataModule):
-    """k-Osc is a simple synthetic synthesiser parameter estimation task designed to
-    elicit problematic behaviour in response to permutation invariant labels.
+    """K-Osc is a simple synthetic synthesiser parameter estimation task designed to elicit
+    problematic behaviour in response to permutation invariant labels.
 
-    Each item consists of a signal containing a mixture of sinusoids, and the amplitude
-    and frequency parameters used to generate the sinusoids.
+    Each item consists of a signal containing a mixture of sinusoids, and the amplitude and
+    frequency parameters used to generate the sinusoids.
     """
 
     def __init__(

@@ -19,8 +19,10 @@ from src.models.surge_flow_matching_module import SurgeFlowMatchingModule
 
 
 class PlotLossPerTimestep(Callback):
-    """Takes a batch from the validation dataloader, and runs it through the model at
-    a number of different values for t. Plots the loss as a function of t.
+    """Takes a batch from the validation dataloader, and runs it through the model at a number of
+    different values for t.
+
+    Plots the loss as a function of t.
     """
 
     def __init__(self, num_timesteps: int = 100):

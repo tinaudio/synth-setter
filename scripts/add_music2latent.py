@@ -22,9 +22,9 @@ def get_shard_id(shard_path: Path) -> int:
 def reader_process(
     shard_path: Path, batch_size: int, read_queue: Queue, batch_indices: List[int]
 ):
-    """
-    Opens the HDF5 file in read-only SWMR mode and reads only the batches whose
-    indices are in `batch_indices` from the "audio" dataset.
+    """Opens the HDF5 file in read-only SWMR mode and reads only the batches whose indices are in
+    `batch_indices` from the "audio" dataset.
+
     Each read batch is put on the read_queue as a tuple: (start_index, end_index, audio_data).
     When finished, a None is put on the queue as a sentinel.
     """
@@ -40,9 +40,10 @@ def reader_process(
 
 
 def writer_process(shard_path: Path, write_queue: Queue):
-    """
-    Opens the HDF5 file in read/write SWMR mode and writes processed batches into the
-    "music2latent" dataset. Each item in the write_queue is expected to be a tuple:
+    """Opens the HDF5 file in read/write SWMR mode and writes processed batches into the
+    "music2latent" dataset.
+
+    Each item in the write_queue is expected to be a tuple:
     (start_index, end_index, processed_data). When finished (i.e. when receiving None),
     the process exits.
     """
@@ -63,11 +64,10 @@ def writer_process(shard_path: Path, write_queue: Queue):
 def process_shard(
     shard_path: Path, batch_size: int, m2l: EncoderDecoder, num_readers: int
 ):
-    """
-    For a given shard, first pre-create the output dataset if needed.
-    Then spawn multiple reader processes and one writer process.
-    The main (GPU) process pulls batches from the read_queue, processes them,
-    and pushes the results onto the write_queue.
+    """For a given shard, first pre-create the output dataset if needed.
+
+    Then spawn multiple reader processes and one writer process. The main (GPU) process pulls
+    batches from the read_queue, processes them, and pushes the results onto the write_queue.
     """
     # First, create (or verify) the output dataset.
     # first we run `h5clear -s file`

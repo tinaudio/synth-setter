@@ -38,9 +38,10 @@ class VSTDataSample:
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Values hardcoded to be roughly like those used by the audio spectrogram
-    transformer. i.e. 100 frames per second, 128 mels, ~25ms window, hamming
-    window."""
+    """Values hardcoded to be roughly like those used by the audio spectrogram transformer.
+
+    i.e. 100 frames per second, 128 mels, ~25ms window, hamming window.
+    """
 
     n_fft = int(0.025 * sample_rate)
     hop_length = int(sample_rate / 100.0)
