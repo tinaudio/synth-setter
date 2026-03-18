@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from typing import List, Optional
 
 import click
 import librosa
@@ -60,7 +59,7 @@ def write_spectrograms(
             ax=axs[i],
             cmap="magma",
         )
-        axs[i].set_title(f"Pred (Chan {i+1})")
+        axs[i].set_title(f"Pred (Chan {i + 1})")
 
     for i, spec in enumerate(target_specs):
         spec = librosa.amplitude_to_db(spec, ref=np.max)
@@ -73,7 +72,7 @@ def write_spectrograms(
             ax=axs[i + len(pred_specs)],
             cmap="magma",
         )
-        axs[i + len(pred_specs)].set_title(f"Target (Chan {i+1})")
+        axs[i + len(pred_specs)].set_title(f"Target (Chan {i + 1})")
 
     plt.tight_layout()
     plt.savefig(save_path)
@@ -185,9 +184,7 @@ def main(
                 target_params_ = target_params[j].numpy()
                 target_params_ = (target_params_ + 1) / 2
                 target_params_ = np.clip(target_params_, 0, 1)
-                target_synth_params, target_note_params = param_spec.decode(
-                    target_params_
-                )
+                target_synth_params, target_note_params = param_spec.decode(target_params_)
 
                 load_preset(plugin, preset_path)
                 new_target = render_params(

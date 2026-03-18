@@ -1,6 +1,4 @@
-import math
-from functools import partial
-from typing import Any, Callable, Dict, Literal, Optional, Tuple
+from typing import Any
 
 import torch
 from lightning import LightningModule
@@ -27,7 +25,7 @@ class SurgeFeedForwardModule(LightningModule):
         # so it's worth to make sure validation metrics don't store results from these checks
         pass
 
-    def model_step(self, batch: Dict[str, torch.Tensor]):
+    def model_step(self, batch: dict[str, torch.Tensor]):
         target_params = batch["params"]
         mel_spec = batch["mel_spec"]
 
@@ -35,7 +33,7 @@ class SurgeFeedForwardModule(LightningModule):
         loss = torch.nn.functional.mse_loss(pred_params, target_params)
         return loss, pred_params, target_params, mel_spec
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         loss, *_ = self.model_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
 
@@ -44,33 +42,29 @@ class SurgeFeedForwardModule(LightningModule):
     def on_train_epoch_end(self) -> None:
         pass
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         loss, preds, targets, *_ = self.model_step(batch)
         per_param_mse = (preds - targets).square().mean(dim=0)
         param_mse = per_param_mse.mean()
-        self.log(
-            "val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True
-        )
+        self.log("val/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
         return {"param_mse": param_mse, "per_param_mse": per_param_mse}
 
     def on_validation_epoch_end(self):
         pass
 
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         loss, preds, targets, *_ = self.model_step(batch)
         per_param_mse = (preds - targets).square().mean(dim=0)
         param_mse = per_param_mse.mean()
-        self.log(
-            "test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True
-        )
+        self.log("test/param_mse", param_mse, on_step=False, on_epoch=True, prog_bar=True)
 
         return {"param_mse": param_mse, "per_param_mse": per_param_mse}
 
     def on_test_epoch_end(self) -> None:
         pass
 
-    def predict_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
+    def predict_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         mel_spec = batch["mel_spec"]
         preds = self.net(mel_spec)
         return (
@@ -89,7 +83,7 @@ class SurgeFeedForwardModule(LightningModule):
         norms = {f"net/{k}": v for k, v in norms.items()}
         self.log_dict(norms, on_step=True, on_epoch=False)
 
-    def configure_optimizers(self) -> Dict[str, Any]:
+    def configure_optimizers(self) -> dict[str, Any]:
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
 
         if self.hparams.warmup_steps > 0:

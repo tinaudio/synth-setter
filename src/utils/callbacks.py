@@ -1,18 +1,15 @@
 import os
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import wandb
-from einops import rearrange
 from lightning.pytorch.callbacks import BasePredictionWriter, Callback
 
 from src.data.vst import param_specs
 from src.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
-    PositionalEncoding,
 )
 from src.models.ksin_flow_matching_module import KSinFlowMatchingModule
 from src.models.surge_flow_matching_module import SurgeFlowMatchingModule
@@ -39,9 +36,7 @@ class PlotLossPerTimestep(Callback):
 
         # Get conditioning vector
         conditioning = pl_module.encoder(signal)
-        z = pl_module.vector_field.apply_dropout(
-            conditioning, pl_module.hparams.cfg_dropout_rate
-        )
+        z = pl_module.vector_field.apply_dropout(conditioning, pl_module.hparams.cfg_dropout_rate)
 
         x0, x1, z = pl_module._sample_x0_and_x1(params, z)
 
@@ -118,12 +113,8 @@ class PlotPositionalEncodingSimilarity(Callback):
         fig, ax = plt.subplots(n_rows, n_cols, figsize=(2 * n_cols, 2 * n_rows))
 
         for i, sim in enumerate(sims):
-            ax[i // n_cols, i % n_cols].imshow(
-                sim.cpu().numpy(), vmin=-1, vmax=1, aspect="equal"
-            )
-            ax[i // n_cols, i % n_cols].set_title(
-                f"PE {i // n_cols}-{i % n_cols}", fontsize=8
-            )
+            ax[i // n_cols, i % n_cols].imshow(sim.cpu().numpy(), vmin=-1, vmax=1, aspect="equal")
+            ax[i // n_cols, i % n_cols].set_title(f"PE {i // n_cols}-{i % n_cols}", fontsize=8)
 
         for i in range(n_pe, n_rows * n_cols):
             ax[i // n_cols, i % n_cols].axis("off")
@@ -163,7 +154,7 @@ class PlotLearntProjection(Callback):
     def __init__(
         self,
         after_val: bool = True,
-        every_n_steps: Optional[int] = None,
+        every_n_steps: int | None = None,
         sort_assignments: bool = True,
     ):
         super().__init__()
@@ -177,9 +168,7 @@ class PlotLearntProjection(Callback):
     def _sort_assignments(self, assignment):
         assignment = assignment.abs()
         k = torch.arange(assignment.shape[-1], device=assignment.device)[None]
-        positional_average = torch.sum(assignment * k, dim=-1) / torch.sum(
-            assignment, dim=-1
-        )
+        positional_average = torch.sum(assignment * k, dim=-1) / torch.sum(assignment, dim=-1)
         sorted_idxs = torch.argsort(positional_average)
         assignment = assignment[sorted_idxs]
         return assignment
@@ -212,24 +201,16 @@ class PlotLearntProjection(Callback):
         return fig
 
     def _get_value_similarity(self, pl_module):
-        proj = (
-            pl_module.vector_field.projection.in_projection
-        )  # num_params x d_embed x d_model
+        proj = pl_module.vector_field.projection.in_projection  # num_params x d_embed x d_model
 
-        sim_proj = torch.nn.functional.cosine_similarity(
-            proj[None], proj[:, None], dim=-1
-        )
+        sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
     def _get_output_similarity(self, pl_module):
-        proj = (
-            pl_module.vector_field.projection.out_projection.T
-        )  # num_params x d_embed x d_model
+        proj = pl_module.vector_field.projection.out_projection.T  # num_params x d_embed x d_model
 
-        sim_proj = torch.nn.functional.cosine_similarity(
-            proj[None], proj[:, None], dim=-1
-        )
+        sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
@@ -275,9 +256,7 @@ class PlotLearntProjection(Callback):
     def _log_plots(self, fig_ass, fig_value, trainer):
         plot_ass = wandb.Image(fig_ass)
         plot_value = wandb.Image(fig_value)
-        wandb.log(
-            {"assignment": plot_ass, "value": plot_value}, step=trainer.global_step
-        )
+        wandb.log({"assignment": plot_ass, "value": plot_value}, step=trainer.global_step)
 
         plt.close(fig_ass)
         plt.close(fig_value)
@@ -360,9 +339,7 @@ class PredictionWriter(BasePredictionWriter):
         torch.save(batch["audio"], os.path.join(self.output_dir, "target-audio.pt"))
 
         if "params" in batch:
-            torch.save(
-                batch["params"], os.path.join(self.output_dir, "target-params.pt")
-            )
+            torch.save(batch["params"], os.path.join(self.output_dir, "target-params.pt"))
 
 
 class LogPerParamMSE(Callback):

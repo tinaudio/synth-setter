@@ -16,6 +16,7 @@ from src.utils.utils import register_resolvers
 # isolating resolver registration into a lighter module.
 register_resolvers()
 
+
 @pytest.fixture(scope="package")
 def cfg_train_global() -> DictConfig:
     """A pytest fixture for setting up a default Hydra DictConfig for training.

@@ -26,7 +26,6 @@ import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import List
 
 import click
 import librosa
@@ -45,7 +44,7 @@ def subdir_matches_pattern(dir: Path) -> bool:
     return (dir / "target.wav").exists() and (dir / "pred.wav").exists()
 
 
-def find_possible_subdirs(audio_dir: Path) -> List[Path]:
+def find_possible_subdirs(audio_dir: Path) -> list[Path]:
     all_subdirectories = [d for d in audio_dir.glob("*") if d.is_dir()]
     matching_dirs = [d for d in all_subdirectories if subdir_matches_pattern(d)]
     return matching_dirs
@@ -102,9 +101,7 @@ def compute_jtfs(y: np.ndarray, J: int = 10, Q: int = 12):
     return scatter(y)
 
 
-def compute_jtfs_distance(
-    target: np.ndarray, pred: np.ndarray, J: int = 10, Q: int = 12
-) -> float:
+def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: int = 12) -> float:
     logger.info("Computing JTFS...")
 
     target_jtfs = compute_jtfs(target, J, Q)
@@ -205,9 +202,7 @@ def compute_sot(target: np.ndarray, pred: np.ndarray) -> float:
     target_stft = get_stft(target)
     pred_stft = get_stft(pred)
 
-    target_stft = target_stft / np.clip(
-        target_stft.sum(axis=-1, keepdims=True), 1e-6, None
-    )
+    target_stft = target_stft / np.clip(target_stft.sum(axis=-1, keepdims=True), 1e-6, None)
     pred_stft = pred_stft / np.clip(pred_stft.sum(axis=-1, keepdims=True), 1e-6, None)
 
     dists = batched_wasserstein_distance_np(target_stft, pred_stft)
@@ -252,7 +247,7 @@ def compute_metrics_on_dir(audio_dir: Path) -> dict[str, float]:
     return dict(mss=mss, wmfcc=wmfcc, sot=sot, rms=rms)
 
 
-def compute_metrics(audio_dirs: List[Path], output_dir: Path):
+def compute_metrics(audio_dirs: list[Path], output_dir: Path):
     idxs = []
     rows = []
     for dir in audio_dirs:
@@ -289,16 +284,12 @@ def main(audio_dir: str, output_dir: str, num_workers: int):
 
     sublist_length = len(audio_dirs) // num_workers
     sublists = [
-        audio_dirs[i * sublist_length : (i + 1) * sublist_length]
-        for i in range(num_workers)
+        audio_dirs[i * sublist_length : (i + 1) * sublist_length] for i in range(num_workers)
     ]
 
     metric_dfs = []
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = [
-            executor.submit(compute_metrics, sublist, output_dir)
-            for sublist in sublists
-        ]
+        futures = [executor.submit(compute_metrics, sublist, output_dir) for sublist in sublists]
 
         for future in as_completed(futures):
             metric_file = future.result()

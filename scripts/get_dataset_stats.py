@@ -3,7 +3,6 @@ import sys
 
 import dask.array as da
 import h5py
-import hdf5plugin
 import numpy as np
 import rootutils
 from dask.distributed import Client, progress
@@ -83,14 +82,12 @@ def get_stats_directory(directory):
 
     mean, std = finalize(existing)
 
-
     logger.info(f"Saving to {str(out_file)}")
 
     np.savez(out_file, mean=mean, std=std)
 
 
 if __name__ == "__main__":
-
     # filename = "/data/scratch/acw585/surge/train.hdf5"
     filename = sys.argv[1]
 

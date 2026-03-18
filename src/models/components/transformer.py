@@ -1,6 +1,5 @@
 import math
-from functools import cached_property
-from typing import Literal, Optional, Tuple
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -8,9 +7,7 @@ from einops import rearrange
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(
-        self, size: int, num_pos: int, init: Literal["zeros", "norm0.02"] = "zeros"
-    ):
+    def __init__(self, size: int, num_pos: int, init: Literal["zeros", "norm0.02"] = "zeros"):
         super().__init__()
 
         if init == "zeros":
@@ -65,9 +62,7 @@ class LearntProjection(nn.Module):
     ):
         super().__init__()
 
-        assignment = torch.full(
-            (num_tokens, num_params), 1.0 / math.sqrt(num_tokens * num_params)
-        )
+        assignment = torch.full((num_tokens, num_params), 1.0 / math.sqrt(num_tokens * num_params))
         assignment = assignment + 1e-4 * torch.randn_like(assignment)
         self._assignment = nn.Parameter(assignment)
 
@@ -77,7 +72,6 @@ class LearntProjection(nn.Module):
 
         self._in_projection = nn.Parameter(proj.clone())
         self._out_projection = nn.Parameter(proj.T.clone())
-
 
         if initial_ffn:
             self.initial_ffn = nn.Sequential(
@@ -136,9 +130,6 @@ class LearntProjection(nn.Module):
         return penalty
 
 
-
-
-
 class AdaptiveLayerNorm(nn.LayerNorm):
     def __init__(self, dim: int, conditioning_dim: int, *args, **kwargs):
         super().__init__(dim, *args, **kwargs)
@@ -166,9 +157,7 @@ class DiTransformerBlock(nn.Module):
     ):
         super().__init__()
         if first_norm:
-            self.norm1 = (
-                nn.LayerNorm(d_model) if norm == "layer" else nn.RMSNorm(d_model)
-            )
+            self.norm1 = nn.LayerNorm(d_model) if norm == "layer" else nn.RMSNorm(d_model)
         else:
             self.norm1 = nn.Identity()
         self.norm2 = nn.LayerNorm(d_model) if norm == "layer" else nn.RMSNorm(d_model)
@@ -239,7 +228,6 @@ class DiTransformerBlock(nn.Module):
             x = a2 * x + res
 
         return x
-
 
 
 class SinusoidalEncoding(nn.Module):
@@ -371,9 +359,7 @@ class ApproxEquivTransformer(nn.Module):
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
         conditioning_dim = (
-            conditioning_dim + 1
-            if time_encoding == "scalar"
-            else conditioning_dim + d_enc
+            conditioning_dim + 1 if time_encoding == "scalar" else conditioning_dim + d_enc
         )
 
         self.conditioning_ffn = nn.Sequential(
@@ -463,7 +449,7 @@ class ApproxEquivTransformer(nn.Module):
         self,
         x: torch.Tensor,
         t: torch.Tensor,
-        conditioning: Optional[torch.Tensor] = None,
+        conditioning: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if conditioning is None:
             conditioning = self.cfg_dropout_token.expand(x.shape[0], -1)
@@ -516,7 +502,7 @@ class PatchEmbed(nn.Module):
         stride: int,
         in_channels: int,
         d_model: int,
-        spec_shape: Tuple[int] = (128, 401),
+        spec_shape: tuple[int] = (128, 401),
     ):
         super().__init__()
         assert stride < patch_size, "Overlap must be less than patch size"
@@ -537,9 +523,7 @@ class PatchEmbed(nn.Module):
         self.num_tokens = self._get_num_tokens(in_channels, spec_shape)
 
     def _get_num_tokens(self, in_channels, spec_shape):
-        x = torch.randn(
-            1, in_channels, *spec_shape, device=self.projection.weight.device
-        )
+        x = torch.randn(1, in_channels, *spec_shape, device=self.projection.weight.device)
         out_shape = self.projection(self.pad(x)).shape
         return math.prod(out_shape[-2:])
 
@@ -571,7 +555,7 @@ class AudioSpectrogramTransformer(nn.Module):
         patch_size: int = 16,
         patch_stride: int = 10,
         input_channels: int = 2,
-        spec_shape: Tuple[int] = (128, 401),
+        spec_shape: tuple[int] = (128, 401),
     ):
         super().__init__()
 
@@ -649,7 +633,7 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
         patch_size: int = 16,
         patch_stride: int = 10,
         input_channels: int = 2,
-        spec_shape: Tuple[int] = (128, 401),
+        spec_shape: tuple[int] = (128, 401),
     ):
         super().__init__(
             d_model=d_model,

@@ -9,9 +9,7 @@ def params_to_tokens(params: torch.Tensor, params_per_token: int = 2):
     return torch.stack(units, dim=-1)
 
 
-def chamfer_loss(
-    predicted: torch.Tensor, target: torch.Tensor, params_per_token: int = 2
-):
+def chamfer_loss(predicted: torch.Tensor, target: torch.Tensor, params_per_token: int = 2):
     predicted_tokens = params_to_tokens(predicted, params_per_token)
     target_tokens = params_to_tokens(target, params_per_token)
 

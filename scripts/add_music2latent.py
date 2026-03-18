@@ -1,10 +1,9 @@
 #!/usr/bin/env python
-import time
 import multiprocessing
 import os
+import time
 from multiprocessing import Process, Queue
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import click
 import h5py
@@ -19,9 +18,7 @@ def get_shard_id(shard_path: Path) -> int:
     return int(shard_path.stem.split("-")[1])
 
 
-def reader_process(
-    shard_path: Path, batch_size: int, read_queue: Queue, batch_indices: List[int]
-):
+def reader_process(shard_path: Path, batch_size: int, read_queue: Queue, batch_indices: list[int]):
     """Opens the HDF5 file in read-only SWMR mode and reads only the batches whose indices are in
     `batch_indices` from the "audio" dataset.
 
@@ -61,9 +58,7 @@ def writer_process(shard_path: Path, write_queue: Queue):
             f.flush()  # Flush so changes are visible in SWMR mode.
 
 
-def process_shard(
-    shard_path: Path, batch_size: int, m2l: EncoderDecoder, num_readers: int
-):
+def process_shard(shard_path: Path, batch_size: int, m2l: EncoderDecoder, num_readers: int):
     """For a given shard, first pre-create the output dataset if needed.
 
     Then spawn multiple reader processes and one writer process. The main (GPU) process pulls
@@ -77,9 +72,7 @@ def process_shard(
         num_samples = f["audio"].shape[0]
         if "music2latent" not in f:
             # Adjust the shape and dtype as needed.
-            f.create_dataset(
-                "music2latent", shape=(num_samples, 128, 42), dtype=np.float32
-            )
+            f.create_dataset("music2latent", shape=(num_samples, 128, 42), dtype=np.float32)
         f.flush()
 
     f.close()
@@ -151,12 +144,8 @@ def process_shard(
 
 @click.command()
 @click.argument("data_dir", type=str)
-@click.option(
-    "--batch-size", "-c", type=int, default=1024, help="Batch size for processing."
-)
-@click.option(
-    "--shard-range", "-r", type=int, nargs=2, default=None, help="Optional shard range."
-)
+@click.option("--batch-size", "-c", type=int, default=1024, help="Batch size for processing.")
+@click.option("--shard-range", "-r", type=int, nargs=2, default=None, help="Optional shard range.")
 @click.option("--shard", "-s", type=int, default=None, help="Optional shard index.")
 @click.option(
     "--num-readers",
@@ -168,8 +157,8 @@ def process_shard(
 def main(
     data_dir: str,
     batch_size: int,
-    shard_range: Optional[Tuple[int, int]],
-    shard: Optional[int],
+    shard_range: tuple[int, int] | None,
+    shard: int | None,
     num_readers: int,
 ):
     data_dir = Path(data_dir)
@@ -179,9 +168,7 @@ def main(
         raise ValueError("Cannot specify both --shard-range and --shard.")
 
     if shard_range is not None:
-        data_shards = [
-            ds for ds in data_shards if get_shard_id(ds) in range(*shard_range)
-        ]
+        data_shards = [ds for ds in data_shards if get_shard_id(ds) in range(*shard_range)]
     if shard is not None:
         data_shards = [ds for ds in data_shards if get_shard_id(ds) == shard]
 
