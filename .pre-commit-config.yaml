@@ -23,10 +23,55 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.5
     hooks:
+      # --force-exclude makes ruff respect extend-exclude in pyproject.toml,
+      # so the legacy file list is maintained in one place only.
       - id: ruff
         args: [--fix, --force-exclude]
         types_or: [python, jupyter]
-        exclude: &legacy_excludes >-
+      - id: ruff-format
+        args: [--force-exclude]
+        types_or: [python, jupyter]
+
+  # python docstring formatting
+  # Using local hook because docformatter v1.7.4's .pre-commit-hooks.yaml
+  # defines a 'docformatter-venv' hook with language: python_venv, which
+  # causes pre-commit to fail manifest validation on older versions.
+  - repo: local
+    hooks:
+      - id: docformatter
+        name: docformatter
+        entry: docformatter
+        language: python
+        types: [python]
+        additional_dependencies: ["docformatter[tomli]==1.7.4"]
+        args:
+          [
+            --in-place,
+            --wrap-summaries=99,
+            --wrap-descriptions=99,
+            --style=sphinx,
+            --black,
+          ]
+
+  # python docstring coverage checking
+  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
+  - repo: https://github.com/econchick/interrogate
+    rev: 1.7.0
+    hooks:
+      - id: interrogate
+        args:
+          [
+            --verbose,
+            --fail-under=80,
+            --ignore-init-module,
+            --ignore-init-method,
+            --ignore-module,
+            --ignore-nested-functions,
+            -vv,
+          ]
+        # interrogate doesn't read pyproject.toml excludes, so this list is
+        # maintained separately from ruff's extend-exclude in pyproject.toml.
+        exclude: >-
           (?x)^(
             src/data/audio_datamodule\.py|
             src/data/fm_datamodule\.py|
@@ -66,49 +111,6 @@ repos:
             src/utils/utils\.py|
             tests/conftest\.py
           )$
-      - id: ruff-format
-        args: [--force-exclude]
-        types_or: [python, jupyter]
-        exclude: *legacy_excludes
-
-  # python docstring formatting
-  # Using local hook because docformatter v1.7.4's .pre-commit-hooks.yaml
-  # defines a 'docformatter-venv' hook with language: python_venv, which
-  # causes pre-commit to fail manifest validation on older versions.
-  - repo: local
-    hooks:
-      - id: docformatter
-        name: docformatter
-        entry: docformatter
-        language: python
-        types: [python]
-        additional_dependencies: ["docformatter[tomli]==1.7.4"]
-        args:
-          [
-            --in-place,
-            --wrap-summaries=99,
-            --wrap-descriptions=99,
-            --style=sphinx,
-            --black,
-          ]
-
-  # python docstring coverage checking
-  # Legacy src/ files excluded until per-file lint cleanup is done (see issue).
-  - repo: https://github.com/econchick/interrogate
-    rev: 1.7.0
-    hooks:
-      - id: interrogate
-        args:
-          [
-            --verbose,
-            --fail-under=80,
-            --ignore-init-module,
-            --ignore-init-method,
-            --ignore-module,
-            --ignore-nested-functions,
-            -vv,
-          ]
-        exclude: *legacy_excludes
 
   # yaml formatting
   - repo: https://github.com/pre-commit/mirrors-prettier
