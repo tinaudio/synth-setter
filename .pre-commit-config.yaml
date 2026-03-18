@@ -118,22 +118,6 @@ repos:
     hooks:
       - id: prettier
         types: [yaml]
-        exclude: >-
-          (?x)^(
-            configs/callbacks/default\.yaml|
-            configs/experiment/fm/ffn_asym\.yaml|
-            configs/experiment/kosc/flow_fixed\.yaml|
-            configs/experiment/kosc/flow_fixed_asym\.yaml|
-            configs/experiment/ksin/flow_fixed\.yaml|
-            configs/experiment/ksin/flow_fixed_asym\.yaml|
-            configs/experiment/surge/flow_simple_nofinalffn\.yaml|
-            configs/hparams_search/ksin_optuna\.yaml|
-            configs/model/encoder/cnn\.yaml|
-            configs/model/surge_flow\.yaml|
-            configs/model/surge_flowmlp\.yaml|
-            environment\.yaml|
-            sweeps/fm\.yaml
-          )$
 
   # shell scripts linter
   - repo: https://github.com/shellcheck-py/shellcheck-py
