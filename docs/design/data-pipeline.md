@@ -34,7 +34,7 @@ Topline goal: Get massive dataset generation working reliably enough, and know w
 
 **synth-setter** is a collection of tools for synthesizer inversion, sound matching and preset exploration.
 
-Training these models requires large-scale datasets: 500k–1M+ audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as an HDF5 shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
+Training models for these tasks requires large-scale datasets: 500k–1M+ audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as an HDF5 shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
@@ -208,44 +208,44 @@ Finalize output depends on `output_format` in the spec:
 ### Reconciliation Flow
 
 ```
-┌───────────────────────────────┐
-│  make generate RUN_ID=...     │
-│  (CLI — local machine)        │
-│                               │         ┌────────────────┐
-│  1. Validate auth (R2+RunPod) │         │  Cloudflare R2  │
-│  2. Read/create spec  ◄───┼────────►│                │
-│  3. List staged shards    ◄───┼─────────┤  {run_id}/     │
-│  4. Validate staged shards    │         │   metadata/    │
-│  5. Compute missing set       │         │   workers/     │
-│  6. Partition across N workers│         │                │
-│  7. Submit N tasks            │         │                │
-│  8. Exit                      │         │                │
-└───────────────────────────────┘         │                │
-                                          │                │
-         ┌───────────────────┐            │                │
-         │  Worker 1         │───────────►│  metadata/     │
-         │  (RunPod worker)  │            │   workers/     │
-         │  shards 0-47      │            │   shards/      │
-         └───────────────────┘            │                │
-         ┌───────────────────┐            │                │
-         │  Worker N         │───────────►│  (staging)     │
-         │  shards 432+      │            │                │
-         └───────────────────┘            │                │
-                                          │                │
-┌───────────────────────────────┐         │                │
-│  make finalize RUN_ID=...     │         │                │
-│  (local or cloud)             │         │                │
-│                               │         │  data/         │
-│  1. Read spec          ◄───┼─────────┤   train.h5     │
-│  2. Validate staged shards ◄──┼─────────┤   val.h5       │
-│  3. Promote to data/shards ───┼─────────►   test.h5      │
-│  4. Download canonical shards ┼─────────┤   stats.npz    │
-│  5. Reshard → train/val/test  │         │   dataset.json │
-│  6. Compute stats             │         │   dataset.complete│
-│  7. Register in W&B      ────┼──┐      │                │
-│  8. Upload finalized      ────┼──┼─────►│                │
-│  9. Write dataset.complete ───┼──┘      │                │
-└───────────────────────────────┘         └────────────────┘
+┌────────────────────────────────┐
+│  make generate RUN_ID=...      │
+│  (CLI — local machine)         │
+│                                │        ┌──────────────────┐
+│  1. Validate auth (R2+RunPod)  │        │  Cloudflare R2   │
+│  2. Read/create spec     ◄─────┼───────►│                  │
+│  3. List staged shards   ◄─────┼────────┤  {run_id}/       │
+│  4. Validate staged shards     │        │   metadata/      │
+│  5. Compute missing set        │        │   workers/       │
+│  6. Partition across N workers │        │                  │
+│  7. Submit N tasks             │        │                  │
+│  8. Exit                       │        │                  │
+└────────────────────────────────┘        │                  │
+                                          │                  │
+         ┌───────────────────┐            │                  │
+         │  Worker 1         │───────────►│  metadata/       │
+         │  (RunPod worker)  │            │   workers/       │
+         │  shards 0-47      │            │   shards/        │
+         └───────────────────┘            │                  │
+         ┌───────────────────┐            │                  │
+         │  Worker N         │───────────►│  (staging)       │
+         │  shards 432+      │            │                  │
+         └───────────────────┘            │                  │
+                                          │                  │
+┌────────────────────────────────┐        │                  │
+│  make finalize RUN_ID=...      │        │                  │
+│  (local or cloud)              │        │                  │
+│                                │        │  data/           │
+│  1. Read spec            ◄─────┼────────┤   train.h5       │
+│  2. Validate staged      ◄─────┼────────┤   val.h5         │
+│  3. Promote to data/shards ────┼───────►│   test.h5        │
+│  4. Download canonical shards  │        │   stats.npz      │
+│  5. Reshard → train/val/test   │        │   dataset.json   │
+│  6. Compute stats              │        │   dataset.complete│
+│  7. Register in W&B            │        │                  │
+│  8. Upload finalized     ──────┼───────►│                  │
+│  9. Write dataset.complete     │        │                  │
+└────────────────────────────────┘        └──────────────────┘
 ```
 
 ### R2 File Structure
@@ -296,51 +296,51 @@ Finalize output depends on `output_format` in the spec:
 All structured files in the pipeline, in one place:
 
 ```
-                     ┌──────────────┐
-                     │  config.yaml  │ ─── User-authored recipe
-                     │  (user input) │     Human-written YAML
-                     └──────┬───────┘
-                            │
+                     ┌────────────────┐
+                     │  config.yaml   │ ─── User-authored recipe
+                     │  (user input)  │     Human-written YAML
+                     └───────┬────────┘
+                             │
                    pipeline.cli generate  ← creates on first run
-                            │
-                     ┌──────▼───────┐
-                     │  input_spec.json    │ ─── Frozen input specification
-                     │  (immutable)  │     Machine-generated, write-once
-                     └──────┬───────┘
-                            │
+                             │
+                     ┌───────▼──────────┐
+                     │ input_spec.json  │ ─── Frozen input specification
+                     │ (immutable)      │     Machine-generated, write-once
+                     └───────┬──────────┘
+                             │
                    Workers (RunPod / local)  ← submitted by generate
-                            │
-              ┌─────────────┼─────────────┐
-              │             │             │
-       ┌──────▼──────┐  ┌──▼──────────┐  ┌▼──────────────┐
-       │ {w}-{a}.h5   │  │ report.json  │  │ debug.log     │
-       │ (staged      │  │ (worker      │  │ (worker       │
-       │  shard)      │  │  summary)    │  │  debug log)   │
-       └──────┬───────┘  └─────────────┘  └───────────────┘
+                             │
+              ┌──────────────┼──────────────────────┐
+              │              │                      │
+       ┌──────▼────────┐  ┌──▼──────────┐  ┌────────▼───────┐
+       │ {w}-{a}.h5    │  │ report.json │  │ debug.log      │
+       │ (staged       │  │ (worker     │  │ (worker        │
+       │  shard)       │  │  summary)   │  │  debug log)    │
+       └──────┬────────┘  └─────────────┘  └────────────────┘
               │
-       ┌──────▼──────┐   All worker output → metadata/workers/
-       │ .rendering   │
-       │ .valid       │
-       │ .invalid     │
-       │ (lifecycle)  │
-       └──────┬───────┘
-              │
+       ┌──────▼────────┐  All worker output → metadata/workers/
+       │ .rendering    │
+       │ .valid        │
+       │ .invalid      │
+       │ (lifecycle)   │
+       └──────┬────────┘
+
      pipeline.cli finalize  ← validates + promotes staged shards
               │
-       ┌──────▼───────┐
-       │shard-{id}.h5  │ ─── Promoted to data/shards/ (canonical)
-       │(finalized)    │     Written ONLY by finalize
-       └──────┬───────┘
-              │
-       ┌──────▼───────┐
-       │ dataset.json  │ ─── Output record (dataset card)
-       │ (output)      │     What was produced, how to use it
-       └──────┬───────┘
+       ┌──────▼────────┐
+       │ shard-{id}.h5 │ ─── Promoted to data/shards/ (canonical)
+       │ (finalized)   │     Written ONLY by finalize
+       └──────┬────────┘
               │
        ┌──────▼────────┐
+       │ dataset.json  │ ─── Output record (dataset card)
+       │ (output)      │     What was produced, how to use it
+       └──────┬────────┘
+              │
+       ┌──────▼─────────┐
        │dataset.complete│ ─── Completion marker
        │ (marker)       │     "Finalization is done"
-       └───────────────┘
+       └────────────────┘
 ```
 
 | Artifact          | Path                                                                  | Format     | Produced By                     | Consumed By                        |

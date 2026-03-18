@@ -6,7 +6,7 @@ synth-setter: Synth inversion, sound matching and preset exploration tools
 
 - Python 3.10+, PyTorch Lightning, Hydra configs
 - Data pipeline: distributed shard generation on RunPod, stored in Cloudflare R2
-- Design doc: `docs/design/distributed-pipeline.md`
+- Design doc: `docs/design/data-pipeline.md`
 
 ## Code Standards
 
