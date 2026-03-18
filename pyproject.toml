@@ -28,8 +28,11 @@ testpaths = "tests/"
 target-version = "py310"
 line-length = 99
 exclude = ["logs", "data"]
-# Legacy src/ files excluded until per-file lint cleanup is done (see issue #25).
+# Legacy files excluded until per-file lint cleanup is done (see issue #25).
 extend-exclude = [
+    "notebooks/",
+    "scripts/",
+    "src/utils/__init__.py",
     "src/data/audio_datamodule.py",
     "src/data/fm_datamodule.py",
     "src/data/kosc_datamodule.py",
