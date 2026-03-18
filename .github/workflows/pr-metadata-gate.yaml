@@ -49,8 +49,8 @@ jobs:
           fi
           LINKED_ISSUES=$(( CONNECTED - DISCONNECTED ))
 
-          # Also check body for closing keywords
-          BODY_REFS=$(echo "$PR_BODY" | grep -ciE '(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#[0-9]+') || {
+          # Check body for any issue/PR references (#N)
+          BODY_REFS=$(echo "$PR_BODY" | grep -coE '#[0-9]+') || {
             rc=$?
             if [ "$rc" -eq 1 ]; then
               BODY_REFS=0  # No matches found — expected case
@@ -61,7 +61,7 @@ jobs:
           }
 
           if [ "${LINKED_ISSUES}" -le 0 ] && [ "${BODY_REFS}" -eq 0 ]; then
-            echo "::error::PR #${PR_NUMBER} has no linked GitHub issue. Add 'closes #N' to the PR body or link an issue via the sidebar."
+            echo "::error::PR #${PR_NUMBER} has no linked GitHub issue. Add 'Closes #N', 'Part of #N', or 'Related to #N' to the PR body."
             exit 1
           fi
 
