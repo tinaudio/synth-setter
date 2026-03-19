@@ -76,16 +76,16 @@ make predict EXPERIMENT=surge/flow_simple CKPT=r2:synth-data/checkpoints/flow-si
 # → Predictions written to logs/eval/flow_simple/{run}/predictions/
 
 # 3. Render audio — auto-detects display, launches Xvfb if headless
-make render PRED_DIR=outputs/flow_simple/predictions/
-# → Audio written to outputs/flow_simple/audio/sample_{0..N}/
+make render PRED_DIR=logs/eval/flow_simple/{run}-{timestamp}/predictions/ OUTPUT_DIR=logs/eval/flow_simple/{run}-{timestamp}/audio/
+# → Audio written to logs/eval/flow_simple/{run}-{timestamp}/audio/sample_{0..N}/
 
 # 4. Compute metrics
-make metrics AUDIO_DIR=outputs/flow_simple/audio/
-# → outputs/flow_simple/metrics/metrics.csv
-# → outputs/flow_simple/metrics/aggregated_metrics.csv
+make metrics AUDIO_DIR=logs/eval/flow_simple/{run}-{timestamp}/audio/ OUTPUT_DIR=logs/eval/flow_simple/{run}-{timestamp}/metrics/
+# → logs/eval/flow_simple/{run}-{timestamp}/metrics/metrics.csv
+# → logs/eval/flow_simple/{run}-{timestamp}/metrics/aggregated_metrics.csv
 
 # 5. (Optional) Upload artifacts to R2
-make upload-eval RUN_ID=flow_simple
+make upload-eval RUN_DIR=logs/eval/flow_simple/{run}-{timestamp}/
 # → r2:synth-data/eval/flow_simple/{predictions,audio,metrics}/
 ```
 
@@ -201,7 +201,7 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
 | ----------- | ----------------------------------------------------------------------------------------------------- |
 | **Command** | `python src/eval.py mode=predict experiment={exp} data={data} ckpt_path={ckpt}`                       |
 | **Input**   | Trained checkpoint (`.ckpt`), test dataset (HDF5 shard or virtual dataset)                            |
-| **Output**  | `pred-batch_{N}.pt`, `target-audio-batch_{N}.pt`, `target-params-batch_{N}.pt`                        |
+| **Output**  | `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, `target-params-{batch_idx}.pt`                  |
 | **Compute** | GPU — model forward pass                                                                              |
 | **Config**  | Hydra composition: `configs/eval.yaml` + `configs/data/{data}.yaml` + `configs/experiment/{exp}.yaml` |
 
@@ -216,13 +216,13 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 ### 5.2 Render
 
-| Property     | Value                                                                                          |
-| ------------ | ---------------------------------------------------------------------------------------------- |
-| **Command**  | `python scripts/predict_vst_audio.py --pred-dir {pred_dir} --plugin {vst} --preset {preset}`   |
-| **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                   |
-| **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv` |
-| **Compute**  | CPU — VST audio rendering via pedalboard                                                       |
-| **Requires** | Display server (Xvfb on headless Linux, native on macOS)                                       |
+| Property     | Value                                                                                                    |
+| ------------ | -------------------------------------------------------------------------------------------------------- |
+| **Command**  | `python scripts/predict_vst_audio.py {pred_dir} {output_dir} --plugin_path {vst} --preset_path {preset}` |
+| **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                             |
+| **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`           |
+| **Compute**  | CPU — VST audio rendering via pedalboard                                                                 |
+| **Requires** | Display server (Xvfb on headless Linux, native on macOS)                                                 |
 
 The render stage loads each predicted parameter tensor, decodes it using the `ParamSpec`, and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison.
 
@@ -231,15 +231,15 @@ The render stage loads each predicted parameter tensor, decodes it using the `Pa
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
 - On macOS: uses native display, no wrapper needed — `make render` calls the Python script directly
 - On headless Linux: launches Xvfb, sets `DISPLAY`, runs script, kills Xvfb
-- Plugin path default: `plugins/Surge XT.vst3` (overridable via `--plugin`)
-- Preset path default: `presets/surge-simple.vstpreset` (overridable via `--preset`)
+- Plugin path default: `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
+- Preset path default: `presets/surge-base.vstpreset` (overridable via `--preset_path`)
 - Parameters are denormalized from `[-1, 1]` → `[0, 1]` before decoding
 
 ### 5.3 Metrics
 
 | Property    | Value                                                                                     |
 | ----------- | ----------------------------------------------------------------------------------------- |
-| **Command** | `python scripts/compute_audio_metrics.py --audio-dir {audio_dir}`                         |
+| **Command** | `python scripts/compute_audio_metrics.py {audio_dir} {output_dir}`                        |
 | **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`    |
 | **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std across samples)            |
 | **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`) |
@@ -256,9 +256,9 @@ Four metrics are computed for each (predicted, target) audio pair:
 **Key behaviors:**
 
 - Uses `ProcessPoolExecutor` for parallel metric computation across samples
-- Audio loaded via `audiofile.AudioFile` at native sample rate
+- Audio loaded via `pedalboard.io.AudioFile` at native sample rate
 - MSS uses three windows: 10ms, 25ms, 100ms (hops: 5ms, 10ms, 50ms)
-- Output CSV schema: `sample_idx, mss, wmfcc, sot, rms`
+- Output CSV: per-sample metrics indexed by directory name, aggregated means/stds
 
 ## 6. R2 Integration
 
@@ -293,10 +293,9 @@ def rclone_sync(
     src: str,
     dst: str,
     *,
-    checksum: bool = True,         # CLAUDE.md: always --checksum
     flags: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Sync src to dst via rclone. Raises on non-zero exit."""
+    """Sync src to dst via rclone. Always uses --checksum. Raises on non-zero exit."""
 ```
 
 R2 credentials are the **only** values that belong in `.env` — they are secrets that must never be committed:
@@ -428,15 +427,18 @@ The only env vars in configs are `PROJECT_ROOT` (set automatically by `rootutils
 
 ```bash
 # renderscript.sh (simplified logic)
+cleanup() { [[ -n "${XVFB_PID:-}" ]] && kill "$XVFB_PID" 2>/dev/null; }
+trap cleanup EXIT
+
 if [[ "$OSTYPE" == darwin* ]]; then
     # macOS — native display always available
     python scripts/predict_vst_audio.py "$@"
 elif [[ -z "$DISPLAY" ]]; then
     # Headless Linux — launch Xvfb
     Xvfb :99 &
+    XVFB_PID=$!
     export DISPLAY=:99
     python scripts/predict_vst_audio.py "$@"
-    kill $XVFB_PID
 else
     # Linux with display
     python scripts/predict_vst_audio.py "$@"
@@ -998,7 +1000,7 @@ ______________________________________________________________________
 | `scripts/predict_vst_audio.py`     | 232      | VST rendering from predicted parameters     | Plugin path defaults                           |
 | `renderscript.sh`                  | 59       | Xvfb wrapper for headless rendering         | Assumes Linux, no macOS support                |
 | `scripts/compute_audio_metrics.py` | 323      | Parallel metric computation                 | None (already portable)                        |
-| `jobs/predict/*.sh`                | 14 files | SGE job scripts, one per model (deprecated) | SGE directives, hardcoded paths, `module load` |
+| `jobs/predict/*.sh`                | 19 files | SGE job scripts, one per model (deprecated) | SGE directives, hardcoded paths, `module load` |
 
 ### Data Configs
 
