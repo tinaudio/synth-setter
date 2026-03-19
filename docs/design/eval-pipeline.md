@@ -371,12 +371,12 @@ r2_checkpoint:
 After metrics, optionally upload all eval outputs to R2:
 
 ```bash
-make upload-eval RUN_ID=flow_simple
+make upload-eval RUN_DIR=logs/eval/flow_simple/{run}-{timestamp}/
 # Equivalent to:
-# rclone sync outputs/flow_simple/ r2:synth-data/eval/flow_simple/ --checksum
+# rclone sync logs/eval/flow_simple/{run}-{timestamp}/ r2:synth-data/eval/flow_simple/{run}/ --checksum
 ```
 
-Toggle via Hydra config or CLI flag. Not automatic — explicit `make` target.
+Not automatic — explicit `make` target. Toggle via Hydra config or CLI flag.
 
 ## 7. Design Decisions
 
