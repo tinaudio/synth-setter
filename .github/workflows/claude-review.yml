@@ -19,11 +19,22 @@ jobs:
     env:
       GH_PR_NUMBER: ${{ inputs.pr_number }}
     steps:
+      - name: Reject fork PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          is_fork=$(gh api repos/${{ github.repository }}/pulls/${{ inputs.pr_number }} --jq '.head.repo.fork')
+          if [ "$is_fork" = "true" ]; then
+            echo "::error::Refusing to run on fork PR (secrets would be exposed)."
+            exit 1
+          fi
+
       - name: Checkout PR head
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: refs/pull/${{ inputs.pr_number }}/head
+          persist-credentials: false
 
       - name: Validate API key is configured
         run: |
