@@ -58,7 +58,7 @@ main ──●──────────●───────────
 | **Phase 5: Pipeline CLI** #72     | 5.1–5.3 | Generate, status, finalize commands      | Full integration tests pass     |
 | **Phase 6: Production + E2E** #73 | 6.1     | RunPod backend, Docker updates, E2E      | E2E test + adhoc Docker test    |
 
-**6 phases, 14 steps (one PR per step)**
+**6 phases, 15 steps (one PR per step)**
 
 ______________________________________________________________________
 
@@ -427,7 +427,7 @@ ______________________________________________________________________
 
 Sub-issue: [#7](https://github.com/ktinubu/synth-permutations/issues/7) (buildx TARGET_ARCH)
 
-### Step 3.1: Docker Infrastructure ([#7](https://github.com/ktinubu/synth-permutations/issues/7))
+### Step 3.1: Docker Infrastructure ([#70](https://github.com/ktinubu/synth-permutations/issues/70), [#7](https://github.com/ktinubu/synth-permutations/issues/7))
 
 **Goal:** Port Docker build system from `experiment`. Needed for worker containers.
 

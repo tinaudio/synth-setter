@@ -781,6 +781,7 @@ else:
 **P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/ktinubu/synth-permutations/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). The seeding lines in `_render_shard` above are commented out until this is implemented. Post-launch, uncomment and seed both RNGs from `shard_spec.seed`:
 
 ```python
+import numpy as np
 random.seed(shard_spec.seed)
 np.random.seed(shard_spec.seed)
 ```
@@ -789,12 +790,12 @@ Without dual seeding, parameters sampled via `np.random.choice` / `np.random.uni
 
 **Trade-off summary:**
 
-| Approach                    | Crash isolation             | Seed passing             | Per-shard timeout   | Plugin state                       | Testability                   |
-| --------------------------- | --------------------------- | ------------------------ | ------------------- | ---------------------------------- | ----------------------------- |
-| Direct function call        | None (SIGSEGV kills worker) | `random.seed()`          | Manual timer        | Shared (unsafe if mutable)         | Inject fake `generate_fn`     |
-| `multiprocessing` fork      | OS process boundary         | Python arg               | `join(timeout)`     | Inherited via COW (unsafe for VST) | Inject fake `generate_fn`     |
-| **`multiprocessing` spawn** | **OS process boundary**     | **Python arg**           | **`join(timeout)`** | **Fresh load (clean)**             | **Inject fake `generate_fn`** |
-| `subprocess.run`            | OS process boundary         | Needs `--seed` CLI param | `timeout=` kwarg    | Fresh load (clean)                 | Must mock subprocess          |
+| Approach                    | Crash isolation             | Seed passing             | Per-shard timeout   | Plugin state                       | Testability                        |
+| --------------------------- | --------------------------- | ------------------------ | ------------------- | ---------------------------------- | ---------------------------------- |
+| Direct function call        | None (SIGSEGV kills worker) | `random.seed()`          | Manual timer        | Shared (unsafe if mutable)         | Inject fake `generate_fn`          |
+| `multiprocessing` fork      | OS process boundary         | Python arg               | `join(timeout)`     | Inherited via COW (unsafe for VST) | Inject fake `generate_fn`          |
+| **`multiprocessing` spawn** | **OS process boundary**     | **Python arg**           | **`join(timeout)`** | **Fresh load (clean)**             | **LocalBackend in-process inject** |
+| `subprocess.run`            | OS process boundary         | Needs `--seed` CLI param | `timeout=` kwarg    | Fresh load (clean)                 | Must mock subprocess               |
 
 **Cost:** Per-shard process startup (~0.5-1s) plus fresh plugin load (~1-3s for Surge XT). Shard renders take minutes, so this is negligible — roughly 1-3% overhead.
 
@@ -814,7 +815,7 @@ class ComputeBackend(Protocol):
 **Two implementations:**
 
 - **RunPodBackend**: Production. Wraps the `runpod` Python SDK. Maps tasks to workers (RunPod calls these "pods").
-- **LocalBackend**: Development and testing. Launches Docker containers locally. Uses local filesystem as the "R2" equivalent — same directory structure, same spec format, same validation logic.
+- **LocalBackend**: Development and testing. Runs the worker loop in-process (no Docker, no spawn) with a local filesystem as the "R2" equivalent — same directory structure, same spec format, same validation logic. Accepts an optional `generate_fn` callable for test injection. Docker container fidelity is validated separately via `test_local_docker.sh`.
 
 No `check_tasks` method exists. Provider APIs answer the wrong question ("is the worker running?") when the right question is "are the shards done?" Storage answers that definitively.
 
