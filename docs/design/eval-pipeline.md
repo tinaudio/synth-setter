@@ -98,22 +98,21 @@ make docker-eval EXPERIMENT=surge/flow_simple CKPT=r2:synth-data/checkpoints/flo
 # → Copies metrics.csv to host
 ```
 
-### SGE cluster (backward-compatible)
+### SGE cluster (deprecated — no engineering effort)
 
-```bash
-# Consolidated job script — replaces 19 individual scripts
-qsub jobs/predict/predict.sh -v MODEL=flow_simple,DATASET=surge_simple
-```
+The 19 SGE scripts in `jobs/predict/` stay as-is. They are not ported, consolidated,
+or maintained. If they still work on the cluster, great. If they break, use the
+portable `make` targets instead. No new code references SGE.
 
 ## 3. Goals, Non-Goals & Design Principles
 
 ### Goals
 
-- **Run anywhere.** The evaluation pipeline must work on local macOS dev machines, local Linux machines, Docker containers, CI runners, and the existing SGE cluster. Environment differences are handled by config, not by code forks.
+- **Run anywhere.** The evaluation pipeline must work on local macOS dev machines, local Linux machines, Docker containers, and CI runners. Environment differences are handled by config, not by code forks.
 - **R2 as the artifact backbone.** Datasets, checkpoints, and eval outputs are stored in R2. Any machine with credentials can pull what it needs and push what it produces. No more "the data is on the cluster."
 - **Zero manual data wrangling.** If a dataset or checkpoint isn't local, the pipeline fetches it from R2 automatically. If eval outputs should be archived, the pipeline uploads them. No `rclone sync` commands in READMEs.
 - **Idempotent and resumable.** Every `make` target is safe to re-run. `rclone --checksum` ensures no redundant transfers. Rendering only processes missing audio. Metrics only recompute when inputs change.
-- **Backward-compatible with SGE.** The consolidated job script still works with `qsub`. SGE directives are comments to bash — the same script runs locally with `bash jobs/predict/predict.sh`.
+- **SGE is deprecated.** The 19 SGE scripts stay as-is — no engineering effort to maintain or consolidate them. They may still work on the cluster but are not tested or supported going forward.
 - **Debuggable.** When a metric looks wrong, you can trace from the aggregated CSV → per-sample CSV → rendered audio → predicted parameters → checkpoint → training run → dataset. Every link in this chain is a file you can inspect.
 
 ### Design Principles
@@ -121,7 +120,7 @@ qsub jobs/predict/predict.sh -v MODEL=flow_simple,DATASET=surge_simple
 - **Secrets in `.env`, paths in Hydra** — `.env` holds only credentials (R2, W&B). All paths use Hydra defaults with CLI overrides ([§7.1](#71-secrets-in-env-paths-in-hydra))
 - **Auto-detect, don't configure** — headless rendering detects the display server automatically ([§7.3](#73-headless-rendering))
 - **Storage before compute** — verify datasets/checkpoints exist before running inference ([§7.4](#74-storage-before-compute))
-- **One script, parameterized** — model variants are arguments, not separate scripts ([§7.5](#75-sge-consolidation))
+- **Experiment configs pin models** — each model variant has its own experiment config with a pinned checkpoint ([§7.5](#75-checkpoint-resolution))
 - **`--checksum` always** — all rclone operations use checksum verification (project rule from CLAUDE.md)
 
 ### What This System Deliberately Avoids
@@ -137,9 +136,8 @@ qsub jobs/predict/predict.sh -v MODEL=flow_simple,DATASET=surge_simple
 | Metric                     | Target                                                       | How to Measure                                       |
 | -------------------------- | ------------------------------------------------------------ | ---------------------------------------------------- |
 | Local eval from cold start | Fresh clone → metrics CSV in < 15 min (small fixture)        | Time from `git clone` to `metrics.csv` on dev laptop |
-| Environment coverage       | Works on macOS, Linux, Docker, SGE                           | CI matrix + manual SGE test                          |
+| Environment coverage       | Works on macOS, Linux, Docker, CI                            | CI matrix                                            |
 | Data fetch reliability     | `r2:` paths resolve and download without manual intervention | E2E test with R2 fixture                             |
-| Script consolidation       | 19 predict scripts → 1                                       | `ls jobs/predict/` count                             |
 | Zero hardcoded paths       | No `/data/scratch/` in committed configs                     | `grep -r '/data/scratch' configs/`                   |
 
 ### Non-Goals
@@ -193,7 +191,6 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
 | macOS dev      | Local or R2    | Native       | `plugins/Surge XT`  | MPS  | `make predict`     |
 | Linux dev      | Local or R2    | Xvfb (auto)  | `plugins/Surge XT`  | CUDA | `make predict`     |
 | Docker         | R2             | Xvfb (baked) | Baked in image      | CUDA | `make docker-eval` |
-| SGE cluster    | Cluster path   | Xvfb         | Apptainer container | CUDA | `qsub`             |
 | GitHub Actions | R2 (fixture)   | Xvfb         | Headless stub or CI | None | PR trigger         |
 
 ## 5. Stage Definitions
@@ -349,26 +346,26 @@ Behavior:
 
 ### 6.4 Checkpoint Sync
 
-Checkpoints support the `r2:` prefix in `ckpt_path`:
+See [§7.5](#75-checkpoint-resolution) for full `ckpt_path` resolution behavior.
 
-```bash
-# Downloads checkpoint before eval, caches locally
-python src/eval.py ckpt_path=r2:synth-data/checkpoints/flow-simple/best.ckpt ...
-```
+**Download** (eval): `ckpt_path=r2:synth-data/checkpoints/flow-simple/best.ckpt`
+resolves via rclone to `.cache/checkpoints/`, cached with checksum.
 
-Behavior:
-
-- If `ckpt_path` starts with `r2:` → download to `.cache/checkpoints/{path}` via rclone
-- If cached copy exists and checksum matches → no-op
-- Replace `ckpt_path` with local path before passing to Lightning
-
-After training, optionally upload the best checkpoint:
+**Upload** (training): An `R2CheckpointUploader` callback piggybacks on Lightning's
+`ModelCheckpoint` save events. Every time a checkpoint is saved locally (per existing
+`every_n_train_steps: 5000`), the callback uploads it to R2:
 
 ```yaml
-# configs/callbacks/default.yaml
-model_checkpoint:
-  r2_upload_path: r2:synth-data/checkpoints/{experiment}/{run_id}/  # NEW — optional
+# configs/callbacks/default_surge.yaml — add to callback list when R2 upload desired
+r2_checkpoint:
+  _target_: src.callbacks.r2_checkpoint.R2CheckpointUploader
+  r2_path: ???  # required, no default — e.g. r2:synth-data/checkpoints/flow-simple/run-123/
 ```
+
+- **No default `r2_path`** — must be explicitly specified when adding the callback
+- Uploads best + last on each save event
+- `--checksum` prevents redundant uploads
+- Worst-case loss on crash: `every_n_train_steps` interval (5000 steps)
 
 ### 6.5 Eval Artifact Upload
 
@@ -454,22 +451,69 @@ fi
 
 **Rationale:** A missing dataset or corrupt checkpoint discovered mid-inference wastes GPU time. `prepare_data()` runs before `setup()` in Lightning's lifecycle — the natural place for this check. For R2 downloads, we validate the rclone exit code and file existence before proceeding.
 
-### 7.5 SGE Consolidation
+### 7.5 Checkpoint Resolution
 
-**Decision:** Replace 19 near-identical predict scripts with one parameterized script.
+#### Current behavior
+
+`ckpt_path` works differently in eval vs training:
+
+| Context                     | Config value      | Behavior                                                                                                 |
+| --------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
+| **Eval** (`eval.yaml`)      | `ckpt_path: ???`  | Required — Hydra errors if not provided. Forces explicit CLI arg.                                        |
+| **Training** (`train.yaml`) | `ckpt_path: null` | Optional — `null` means start fresh. If provided, Lightning resumes (optimizer state, epoch, scheduler). |
+
+Today, the 19 SGE scripts resolve checkpoints via `get-ckpt-from-wandb.sh`, which searches
+`logs/train/` for a W&B run ID and finds the corresponding `last.ckpt` on the local filesystem.
+This only works on the machine where training happened.
+
+Each script hardcodes a specific W&B run ID — the checkpoint is **stable per model variant**,
+not changing every run:
 
 ```bash
-# Before: jobs/predict/flow-simple.sh, jobs/predict/vae-simple.sh, ...
-# After: jobs/predict/predict.sh — takes MODEL and DATASET as parameters
-
-#$ -l gpu=1
-#$ -pe smp 12
-MODEL=${MODEL:-flow_simple}
-DATASET=${DATASET:-surge_simple}
-python src/eval.py experiment=surge/$MODEL data=$DATASET mode=predict ckpt_path=$CKPT_PATH
+# jobs/predict/flow-simple.sh
+source jobs/predict/get-ckpt-from-wandb.sh x118ylu9   # always this run ID
 ```
 
-**Rationale:** The 19 scripts differ only in model name, dataset, and occasionally checkpoint path. A parameterized script eliminates copy-paste errors and makes it obvious which axis of variation matters.
+#### Proposed design
+
+Three resolution patterns, each appropriate for a different use case:
+
+| Pattern                | Where specified                             | Use case                                                                   | Example                                                      |
+| ---------------------- | ------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| CLI arg                | Command line                                | Ad-hoc eval of a new/local checkpoint                                      | `python src/eval.py ckpt_path=./my-ckpt.ckpt`                |
+| Experiment config      | `configs/experiment/surge/flow_simple.yaml` | Reproducible eval of a known model — checkpoint is pinned, portable via R2 | `ckpt_path: r2:synth-data/checkpoints/flow-simple/best.ckpt` |
+| `null` (training only) | `configs/train.yaml`                        | Start training fresh                                                       | Already works                                                |
+
+**Resolution order** (Hydra's standard override precedence):
+
+1. CLI override → highest priority
+2. Experiment config → pinned per model variant
+3. Base config (`eval.yaml: ???`) → forces one of the above
+
+**`r2:` prefix handling:**
+
+- If `ckpt_path` starts with `r2:` → download to `.cache/checkpoints/{path}` via rclone
+- If cached copy exists and checksum matches → no-op
+- Replace `ckpt_path` with the resolved local path before passing to Lightning
+
+**What this replaces:**
+
+- `get-ckpt-from-wandb.sh` — replaced by `r2:` prefix in experiment configs
+- Per-script W&B run IDs — replaced by pinned R2 paths in experiment YAML
+- 19 SGE scripts — deprecated, not maintained
+
+#### Proposed design outcomes
+
+| Config value                                                 | What happens                                                      | Portable? | Reproducible?                 |
+| ------------------------------------------------------------ | ----------------------------------------------------------------- | --------- | ----------------------------- |
+| `ckpt_path: ???` (base eval.yaml)                            | Hydra errors — forces user to specify                             | —         | —                             |
+| `ckpt_path: ./local/best.ckpt` (CLI)                         | Uses local file directly                                          | No        | No (path is machine-specific) |
+| `ckpt_path: r2:synth-data/.../best.ckpt` (experiment config) | Downloads from R2, caches locally, passes local path to Lightning | Yes       | Yes (R2 path is stable)       |
+| `ckpt_path: r2:synth-data/.../best.ckpt` (CLI override)      | Same as above, but ad-hoc                                         | Yes       | No (not pinned in config)     |
+| `ckpt_path: null` (train.yaml)                               | Start training from scratch                                       | Yes       | Yes                           |
+| `ckpt_path: r2:synth-data/.../last.ckpt` (training resume)   | Downloads last checkpoint, resumes optimizer/epoch state          | Yes       | Yes                           |
+
+**Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). It is either a required CLI arg (ad-hoc) or pinned in an experiment config (reproducible). The `r2:` prefix makes pinned values portable across machines.
 
 ### 7.6 Makefile as CLI Interface
 
@@ -509,7 +553,6 @@ python src/eval.py experiment=surge/$MODEL data=$DATASET mode=predict ckpt_path=
                 │
                 └──→ #97 Runbook (P2)
 
-     #95 SGE Consolidation (P2, independent)
 ```
 
 ### Blocking Matrix
@@ -521,7 +564,6 @@ python src/eval.py experiment=surge/$MODEL data=$DATASET mode=predict ckpt_path=
 | #86   | Portable render     | —             | #88, #89, #97           |
 | #87   | Portable metrics    | —             | #88, #89, #93, #96, #97 |
 | #90   | rclone wrapper      | —             | #91, #92, #93           |
-| #95   | Consolidate SGE     | —             | —                       |
 | #88   | Docker eval         | #85, #86, #87 | #89                     |
 | #89   | E2E CI              | #85–88        | —                       |
 | #91   | R2 dataset download | #90, #94      | —                       |
@@ -532,7 +574,7 @@ python src/eval.py experiment=surge/$MODEL data=$DATASET mode=predict ckpt_path=
 
 ### Parallel Execution Windows
 
-**5 issues can start immediately (no blockers):** #94, #86, #87, #90, #95
+**4 issues can start immediately (no blockers):** #94, #86, #87, #90
 
 **Critical path:** `#94 → #85 → #88 → #89` (4 steps, longest chain)
 
@@ -553,7 +595,6 @@ Mar 31 ─────────── Apr 07 ──────────�
 │   │   ├── #86 Render ────┤          │          │
 │   │   ├── #92 R2 Ckpt ──┤          │          │
 │   │   │   ├── #87 Metrics ───┤      │          │
-│   │   │   ├── #95 SGE ──────┤      │          │
 │   │   │   │   ├── #88 Docker ──┤    │          │
 │   │   │   │   ├── #93 R2 Art. ─┤    │          │
 │   │   │   │   │   ├── #96 W&B ────┤  │          │
@@ -607,7 +648,7 @@ main ──●──────────●───────────
 
 | PR                         | Issues        | Contents                                          | CI gate                                  |
 | -------------------------- | ------------- | ------------------------------------------------- | ---------------------------------------- |
-| **#1: Foundation**         | #94, #95      | Config cleanup, SGE consolidation                 | `ruff check`, no hardcoded paths         |
+| **#1: Foundation**         | #94           | Config cleanup, sensible Hydra defaults           | `ruff check`, no hardcoded paths         |
 | **#2: Portable Stages**    | #85, #86, #87 | Predict, render, metrics + Makefile targets       | `make predict/render/metrics` on fixture |
 | **#3: R2 Core**            | #90, #91, #92 | rclone wrapper, dataset download, checkpoint sync | Unit tests with mock rclone              |
 | **#4: Docker + Artifacts** | #88, #93      | Docker eval, R2 artifact upload                   | Docker build + `make docker-eval`        |
@@ -617,11 +658,11 @@ main ──●──────────●───────────
 **Branch:** `dev/eval-pipeline` off `main`
 **Priorities:** TDD first, small commits, always-green CI.
 
-### PR #1: Foundation (Phases 1–2)
+### PR #1: Foundation (Phase 1)
 
 #### Phase 1: Remove Hardcoded Paths (#94)
 
-**Goal:** Replace all cluster-specific paths in committed configs with env var interpolation.
+**Goal:** Replace all cluster-specific paths in committed configs with sensible Hydra defaults.
 
 **Files to modify:**
 
@@ -635,22 +676,7 @@ main ──●──────────●───────────
 - `test_no_hardcoded_paths_in_configs` — grep committed YAML for `/data/scratch`
 - `test_configs_have_sensible_defaults` — load each data config, verify `dataset_root` is a relative path
 
-#### Phase 2: Consolidate SGE Scripts (#95)
-
-**Goal:** Replace 19 near-identical predict scripts with one parameterized script.
-
-**Files to create:**
-
-- `jobs/predict/predict.sh` — parameterized with `$MODEL`, `$DATASET`, `$CKPT_PATH`
-
-**Files to delete:**
-
-- `jobs/predict/flow-simple.sh`, `jobs/predict/vae-simple.sh`, etc. (all 19)
-
-**Tests:**
-
-- `test_consolidated_script_runs_with_defaults` — `bash -n jobs/predict/predict.sh` (syntax check)
-- Manually verify on SGE cluster (not automated)
+**Note:** The 19 SGE scripts in `jobs/predict/` are left as-is (deprecated, not consolidated).
 
 ### PR #2: Portable Stages (Phases 3–5)
 
@@ -669,8 +695,8 @@ main ──●──────────●───────────
 
 **Key behaviors:**
 
-- `dataset_root` has a sensible Hydra default; override via CLI for cluster paths
-- `ckpt_path=` is a required CLI arg (no env var, no default — changes every run)
+- `dataset_root` has a sensible Hydra default; override via CLI when needed
+- `ckpt_path` resolved per [§7.5](#75-checkpoint-resolution) — CLI arg or experiment config, supports `r2:` prefix
 - `paths.log_dir` keeps the existing default (`${paths.root_dir}/logs/`)
 - Fails fast with clear error if dataset not found
 
@@ -843,7 +869,7 @@ main ──●──────────●───────────
 
 **Files to create:**
 
-- `docs/eval-runbook.md` — setup, env vars, make targets, Docker, SGE, troubleshooting
+- `docs/eval-runbook.md` — setup, credentials, make targets, Docker, troubleshooting
 
 ______________________________________________________________________
 
@@ -871,7 +897,7 @@ ______________________________________________________________________
 | `scripts/predict_vst_audio.py`     | 232      | VST rendering from predicted parameters     | Plugin path defaults                           |
 | `renderscript.sh`                  | 59       | Xvfb wrapper for headless rendering         | Assumes Linux, no macOS support                |
 | `scripts/compute_audio_metrics.py` | 323      | Parallel metric computation                 | None (already portable)                        |
-| `jobs/predict/*.sh`                | 14 files | SGE job scripts, one per model              | SGE directives, hardcoded paths, `module load` |
+| `jobs/predict/*.sh`                | 14 files | SGE job scripts, one per model (deprecated) | SGE directives, hardcoded paths, `module load` |
 
 ### Data Configs
 
