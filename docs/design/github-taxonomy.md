@@ -8,33 +8,33 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                        | What it covers                                                 |
-| --- | -------------------------------------------------------------- | -------------------------------------------------------------- |
-| 1   | [Overview](#1-overview)                                        | How GitHub metadata organizes work in this repo                |
-| 2   | [Projects](#2-projects)                                        | 5 user-level GitHub Projects V2, fields, status workflow       |
-| 3   | [Labels](#3-labels)                                            | 20 labels across 4 categories — domain, priority, status, type |
-| 4   | [Milestones](#4-milestones)                                    | 5 milestones mapping to product releases                       |
-| 5   | [Epics](#5-epics)                                              | Umbrella issues grouping phases and steps                      |
-| 6   | [Parent-Child Relationships](#6-parent-child-relationships)    | Native sub-issues                                              |
-| 7   | [Phase/Step Convention](#7-phasestep-convention)               | Unified Phase/Step hierarchy, decoupled from PRs               |
-| 8   | [Blocking & Dependencies](#8-blocking--dependencies)           | Blocked label, body-text conventions, critical paths           |
-| 9   | [Priority Tiers](#9-priority-tiers)                            | P0–P3 distribution by domain                                   |
-| 10  | [Cross-Project Issue Sharing](#10-cross-project-issue-sharing) | Issues that appear in multiple projects                        |
-| 11  | [Design Doc ↔ Issue Linkage](#11-design-doc--issue-linkage)    | How design docs reference and track GitHub issues              |
-| 12  | [Entity-Relationship Model](#12-entity-relationship-model)     | How all metadata types relate to each other                    |
-| 13  | [Open Items](#13-open-items)                                   | Remaining gaps — deferred or pending                           |
+| §   | Section                                                        | What it covers                                              |
+| --- | -------------------------------------------------------------- | ----------------------------------------------------------- |
+| 1   | [Overview](#1-overview)                                        | How GitHub metadata organizes work in this repo             |
+| 2   | [Projects](#2-projects)                                        | User-level GitHub Projects V2, fields, status workflow      |
+| 3   | [Labels](#3-labels)                                            | Labels across 4 categories — domain, priority, status, type |
+| 4   | [Milestones](#4-milestones)                                    | Milestones mapping to product releases                      |
+| 5   | [Epics](#5-epics)                                              | Umbrella issues grouping phases and steps                   |
+| 6   | [Parent-Child Relationships](#6-parent-child-relationships)    | Native sub-issues                                           |
+| 7   | [Phase/Step Convention](#7-phasestep-convention)               | Unified Phase/Step hierarchy, decoupled from PRs            |
+| 8   | [Blocking & Dependencies](#8-blocking--dependencies)           | Blocked label, body-text conventions, critical paths        |
+| 9   | [Priority Tiers](#9-priority-tiers)                            | P0–P3 distribution by domain                                |
+| 10  | [Cross-Project Issue Sharing](#10-cross-project-issue-sharing) | Issues that appear in multiple projects                     |
+| 11  | [Design Doc ↔ Issue Linkage](#11-design-doc--issue-linkage)    | How design docs reference and track GitHub issues           |
+| 12  | [Entity-Relationship Model](#12-entity-relationship-model)     | How all metadata types relate to each other                 |
+| 13  | [Open Items](#13-open-items)                                   | Remaining gaps — deferred or pending                        |
 
 ______________________________________________________________________
 
 ## 1. Overview
 
-synth-permutations organizes work across five GitHub Projects V2 (user-level), five milestones, 20 labels, and four epic issues. Two active work streams — the **data pipeline** (#74) and the **evaluation pipeline** (#98/#99) — drive the majority of tracked work. A third work stream — **training pipeline** (#107) — is at the brain dump stage.
+synth-permutations organizes work across GitHub Projects V2 (user-level), milestones, labels, and epic issues. Two active work streams — the **data pipeline** (#74) and the **evaluation pipeline** (#98/#99) — drive the majority of tracked work. A third work stream — **training pipeline** (#107) — is at the brain dump stage.
 
 Each work stream follows a consistent pattern: **design doc → epic issue → phases/steps → sub-issues**, with blocking relationships encoded via labels and issue body conventions. Projects provide board views with status tracking (Todo → In Progress → Done), while milestones tie issues to release targets.
 
 ## 2. Projects
 
-Five user-level GitHub Projects V2, all linked to the repo:
+User-level GitHub Projects V2, all linked to the repo:
 
 | #   | Project         | Items | Custom Fields Beyond Defaults                     |
 | --- | --------------- | ----- | ------------------------------------------------- |
@@ -75,7 +75,7 @@ gh project view <number> --owner ktinubu
 
 ## 3. Labels
 
-20 labels organized into 4 categories:
+Labels organized into 4 categories:
 
 | Category           | Labels                                                                               |
 | ------------------ | ------------------------------------------------------------------------------------ |
@@ -134,7 +134,7 @@ gh project view <number> --owner ktinubu
 | ci-automation v1.0.0 | TBD        | 15     | CI & Automation |
 | code-health v1.0.0   | TBD        | 8      | Code Health     |
 
-Every work stream now has a milestone.
+Every work stream has a milestone.
 
 ## 5. Epics
 
@@ -215,7 +215,7 @@ For detailed blocking matrices and parallel execution windows, see the respectiv
 
 ### Blocked issue count
 
-18 issues currently carry the `blocked` label — 10 in the data pipeline and 8 in the eval pipeline.
+Issues carrying the `blocked` label span both the data pipeline and eval pipeline work streams.
 
 ## 9. Priority Tiers
 
