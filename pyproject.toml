@@ -20,6 +20,7 @@ filterwarnings = [
 log_cli = "True"
 markers = [
   "slow: slow tests",
+  "pipeline: pipeline integration tests",
 ]
 minversion = "6.0"
 testpaths = "tests/"

@@ -1,0 +1,37 @@
+# --------- hydra --------- #
+hydra-colorlog==1.2.0
+hydra-core==1.3.2
+hydra-optuna-sweeper==1.2.0
+
+# --------- loggers --------- #
+wandb
+
+# --------- pipeline --------- #
+click
+numpy
+pydantic
+pyyaml
+structlog
+tenacity
+webdataset
+
+# --------- others --------- #
+dask[distributed]
+einops
+h5py
+hdf5plugin
+librosa
+loguru
+matplotlib
+mido
+pedalboard
+POT
+pre-commit
+pyloudnorm
+pyright
+pytest
+rich
+rootutils
+runpod==1.8.1
+scipy==1.14.1
+threadpoolctl
