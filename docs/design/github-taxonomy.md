@@ -233,29 +233,25 @@ All 5 projects include the **Parent issue** and **Sub-issues progress** fields. 
 
 A previous body-text convention (`**Parent:** #N` in issue bodies) has been retired in favor of native sub-issues.
 
-## 7. Phase/Step Naming & Implementation Plans
+## 7. Phase/Step Convention
 
-Two different planning conventions are in use:
+All work streams use a unified **Phase / Step** hierarchy:
 
-| Work Stream   | Convention          | Example                | Tracking Doc             |
-| ------------- | ------------------- | ---------------------- | ------------------------ |
-| Data Pipeline | Phase N · Step N.M  | Phase 2 · Step 2.1     | `implementation-plan.md` |
-| Eval Pipeline | PR grouping (#1–#6) | PR #2: Portable Stages | `eval-pipeline.md` §12   |
+- **Phase** — a large feature or functional area (e.g., "Pipeline Core", "Portable Stages"). Each phase is a GitHub issue and a sub-issue of its epic.
+- **Step** — a testable unit of work within a phase (e.g., "Schema validation", "rclone wrapper"). Each step is a GitHub issue and a sub-issue of its phase.
+- **PR** — a shipping unit, orthogonal to the hierarchy. A PR may contain one step, multiple small steps, or part of a large step. PRs are not prescribed by the plan — they're decided at implementation time based on what makes sense to review and merge together.
 
-### Data pipeline convention
+### Naming
 
-- 6 sequential **phases** (#68–#73), each a GitHub issue
-- 2 **cross-cutting** issues (#76, #77) outside the phase hierarchy
-- Each phase contains **steps** (e.g., Step 2.1, Step 2.2), each a sub-issue with one PR per step
-- Phase/Step naming: `Phase N (Name) · Step N.M`
+- Phases: `Phase N: Name` (e.g., "Phase 2: Pipeline Core")
+- Steps: `Step N.M: Name` (e.g., "Step 2.1: Schemas")
+- Step numbering reflects position within a phase, not PR boundaries
 
-### Eval pipeline convention
+### Project fields
 
-- 6 **PRs** grouping 2–3 issues each
-- Internal phase numbering within PRs (e.g., "PR #1: Foundation → Phase 1: Remove Hardcoded Paths")
-- Issues are not called "steps" — they're named by function (e.g., "Portable predict stage")
+Both the Data Pipeline and Evaluation projects have a **Phase** single-select field for grouping and filtering in project views.
 
-### Merge path (both work streams)
+### Merge path
 
 ```
 main ──●──────────●────────────●──────────●──────────●──────────●──→
@@ -263,7 +259,7 @@ main ──●──────────●───────────
     Phase 1    Phase 2      Phase 3    Phase 4    Phase 5    Phase 6
 ```
 
-One PR per step (data pipeline) or grouped PRs (eval pipeline), always merging to `main`.
+All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs within a phase can land in any order as long as steps are independently testable.
 
 ## 8. Blocking & Dependencies
 
