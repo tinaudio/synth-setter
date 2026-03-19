@@ -308,7 +308,7 @@ def test_spec_materialization_end_to_end(tmp_path):
 
 ______________________________________________________________________
 
-### Step 2.2: Storage Layer
+### Step 2.2: Storage Layer ([#102](https://github.com/ktinubu/synth-permutations/issues/102))
 
 **Goal:** Abstract R2/local filesystem with design doc's path layout. Wraps `src/data/uploader.py`.
 
@@ -365,7 +365,7 @@ def test_storage_shard_lifecycle(tmp_path):
 
 ______________________________________________________________________
 
-### Step 2.3: Shard Validation
+### Step 2.3: Shard Validation ([#103](https://github.com/ktinubu/synth-permutations/issues/103))
 
 **Goal:** 3-tier validation from design doc §7.5.
 
@@ -448,7 +448,7 @@ ______________________________________________________________________
 
 Sub-issues: [#3](https://github.com/ktinubu/synth-permutations/issues/3) (vst/core.py throughput), [#23](https://github.com/ktinubu/synth-permutations/issues/23) (VST generation throughput)
 
-### Step 4.1: Reconciliation Engine
+### Step 4.1: Reconciliation Engine ([#104](https://github.com/ktinubu/synth-permutations/issues/104))
 
 **Goal:** Compare spec against storage state to determine remaining work.
 
@@ -493,7 +493,7 @@ def test_reconciliation_mixed_state(tmp_path):
 
 ______________________________________________________________________
 
-### Step 4.2: ComputeBackend + Worker
+### Step 4.2: ComputeBackend + Worker ([#105](https://github.com/ktinubu/synth-permutations/issues/105))
 
 **Goal:** Compute abstraction + worker-side shard generation with lifecycle markers.
 
@@ -771,7 +771,7 @@ ______________________________________________________________________
 
 ## 10. Phase 6 — Production & E2E ([#73](https://github.com/ktinubu/synth-permutations/issues/73))
 
-### Step 6.1: RunPodBackend + Docker Updates + E2E
+### Step 6.1: RunPodBackend + Docker Updates + E2E ([#106](https://github.com/ktinubu/synth-permutations/issues/106))
 
 **Goal:** Production backend, Docker integration, full E2E.
 
