@@ -55,15 +55,11 @@ Every project includes these built-in fields:
 
 ### Status workflow
 
-```mermaid
-stateDiagram-v2
-    [*] --> Todo : Issue created
-    Todo --> in_progress : Work begins
-    Todo --> Todo : Blocked (label added)
-    in_progress --> Done : PR merged / issue closed
-    in_progress --> Todo : Work paused / re-blocked
-    state "In Progress" as in_progress
-    Done --> [*]
+```
+Todo  ──→  In Progress  ──→  Done
+  ↑            │
+  └────────────┘  (re-blocked)
+  ↺ blocked label
 ```
 
 Projects are **user-level** (owned by `ktinubu`, not the repo). Access them via:
@@ -297,50 +293,10 @@ erDiagram
     PROJECT ||--o{ ISSUE : contains
     MILESTONE ||--o{ ISSUE : groups
     ISSUE ||--o{ LABEL : has
-    ISSUE ||--o| ISSUE : "parent of"
-    ISSUE ||--o{ ISSUE : "blocks"
-    ISSUE }o--|| PR : "linked to"
-    ISSUE }o--o| DESIGN_DOC : "tracked in"
-
-    PROJECT {
-        string title
-        enum status "Todo | In Progress | Done"
-        date start_date
-        date target_date
-        string parent_issue
-        int sub_issues_progress
-    }
-
-    MILESTONE {
-        string title
-        date due_date
-        string description
-    }
-
-    ISSUE {
-        int number
-        string title
-        string body
-        enum state "open | closed"
-    }
-
-    LABEL {
-        string name
-        string color
-        enum category "domain | priority | status | type"
-    }
-
-    PR {
-        int number
-        string branch
-        enum state "open | merged | closed"
-    }
-
-    DESIGN_DOC {
-        string path
-        string status "Draft | Approved"
-        string tracking_issues
-    }
+    ISSUE ||--o| ISSUE : parent
+    ISSUE ||--o{ ISSUE : blocks
+    ISSUE }o--|| PR : linked
+    ISSUE }o--o| DESIGN_DOC : tracked
 ```
 
 ### Project field comparison
@@ -358,23 +314,15 @@ erDiagram
 
 ### Issue lifecycle
 
-```mermaid
-stateDiagram-v2
-    [*] --> Open : Issue created
-    Open --> Labeled : Labels added (domain, priority, type)
-    Labeled --> Milestoned : Milestone assigned
-    Milestoned --> InProject : Added to project (Status: Todo)
+When an issue is created:
 
-    InProject --> Blocked : blocked label added
-    Blocked --> InProject : Blocker resolved, label removed
-
-    InProject --> in_progress : Work starts (Status: In Progress)
-    in_progress --> PRLinked : PR opened
-    state "In Progress" as in_progress
-    PRLinked --> Done : PR merged (Status: Done)
-    Done --> Closed : Issue closed
-    Closed --> [*]
-```
+1. Add labels (domain, priority, type)
+2. Assign to a milestone
+3. Add to the relevant project (Status: **Todo**)
+4. If blocked, add the `blocked` label
+5. When work starts, move to **In Progress**
+6. Link the PR
+7. When the PR merges, move to **Done** and close the issue
 
 ## 13. Open Items
 
