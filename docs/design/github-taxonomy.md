@@ -12,8 +12,8 @@ ______________________________________________________________________
 | --- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | 1   | [Overview](#1-overview)                                                               | How GitHub metadata organizes work in this repo                |
 | 2   | [Projects](#2-projects)                                                               | 5 user-level GitHub Projects V2, fields, status workflow       |
-| 3   | [Labels](#3-labels)                                                                   | 21 labels across 5 categories — domain, priority, status, type |
-| 4   | [Milestones](#4-milestones)                                                           | 3 milestones mapping to product releases                       |
+| 3   | [Labels](#3-labels)                                                                   | 20 labels across 5 categories — domain, priority, status, type |
+| 4   | [Milestones](#4-milestones)                                                           | 5 milestones mapping to product releases                       |
 | 5   | [Epics](#5-epics)                                                                     | Umbrella issues grouping phases and steps                      |
 | 6   | [Parent-Child Relationships](#6-parent-child-relationships)                           | Native sub-issues and body-text conventions                    |
 | 7   | [Phase/Step Naming & Implementation Plans](#7-phasestep-naming--implementation-plans) | Two planning conventions across work streams                   |
@@ -29,7 +29,7 @@ ______________________________________________________________________
 
 ## 1. Overview
 
-synth-permutations organizes work across five GitHub Projects V2 (user-level), three milestones, 21 labels, and three epic issues. Two active work streams — the **data pipeline** (#74) and the **evaluation pipeline** (#98/#99) — drive the majority of tracked work. A third work stream — **training pipeline** (#107) — is at the brain dump stage.
+synth-permutations organizes work across five GitHub Projects V2 (user-level), five milestones, 20 labels, and four epic issues. Two active work streams — the **data pipeline** (#74) and the **evaluation pipeline** (#98/#99) — drive the majority of tracked work. A third work stream — **training pipeline** (#107) — is at the brain dump stage.
 
 Each work stream follows a consistent pattern: **design doc → epic issue → phases/steps → sub-issues**, with blocking relationships encoded via labels and issue body conventions. Projects provide board views with status tracking (Todo → In Progress → Done), while milestones tie issues to release targets.
 
@@ -75,7 +75,7 @@ gh project view <number> --owner ktinubu
 
 ## 3. Labels
 
-21 labels organized into 5 categories:
+20 labels organized into 5 categories:
 
 ```mermaid
 mindmap
@@ -99,7 +99,6 @@ mindmap
       evaluation
       testing
       training
-      ci ⚠️
     Priority
       P0 🔴
       P1 🟠
@@ -109,15 +108,14 @@ mindmap
 
 ### Domain labels
 
-| Label           | Color   | Description                                       | Project |
-| --------------- | ------- | ------------------------------------------------- | ------- |
-| `data-pipeline` | #0e8a16 | Data Pipeline project                             | #2      |
-| `ci-automation` | #1d76db | CI & Automation project                           | #1      |
-| `code-health`   | #fbca04 | Code Health project                               | #3      |
-| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference       | #4      |
-| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config     | #1      |
-| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure        | #5      |
-| `ci`            | #0E8A16 | CI/CD *(overlaps with `ci-automation` — see §13)* | #1      |
+| Label           | Color   | Description                                   | Project |
+| --------------- | ------- | --------------------------------------------- | ------- |
+| `data-pipeline` | #0e8a16 | Data Pipeline project                         | #2      |
+| `ci-automation` | #1d76db | CI & Automation project                       | #1      |
+| `code-health`   | #fbca04 | Code Health project                           | #3      |
+| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference   | #4      |
+| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config | #1      |
+| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure    | #5      |
 
 ### Priority labels
 
@@ -150,13 +148,15 @@ mindmap
 
 ## 4. Milestones
 
-| Milestone            | Due        | Issues | Work Stream   |
-| -------------------- | ---------- | ------ | ------------- |
-| data-pipeline v1.0.0 | 2026-03-30 | 17     | Data Pipeline |
-| evaluation v1.0.0    | 2026-04-14 | 16     | Evaluation    |
-| training v1.0.0      | TBD        | 1      | Training      |
+| Milestone            | Due        | Issues | Work Stream     |
+| -------------------- | ---------- | ------ | --------------- |
+| data-pipeline v1.0.0 | 2026-03-30 | 17     | Data Pipeline   |
+| evaluation v1.0.0    | 2026-04-14 | 16     | Evaluation      |
+| training v1.0.0      | TBD        | 1      | Training        |
+| ci-automation v1.0.0 | TBD        | 15     | CI & Automation |
+| code-health v1.0.0   | TBD        | 8      | Code Health     |
 
-Milestones map 1:1 to work streams. CI & Automation and Code Health work currently have no milestone — see §13.
+Every work stream now has a milestone.
 
 ## 5. Epics
 
@@ -230,25 +230,9 @@ graph TD
 
 ## 6. Parent-Child Relationships
 
-Two conventions coexist for expressing parent-child relationships:
-
-### Native GitHub sub-issues
-
 All 5 projects include the **Parent issue** and **Sub-issues progress** fields. GitHub natively tracks these relationships and auto-computes progress bars.
 
-### Body-text convention
-
-Issue bodies include explicit parent references:
-
-```markdown
-**Parent:** #74
-```
-
-This predates the native sub-issue feature and is used in all data pipeline phase/step issues (#68–#73, #78–#82, #102–#106).
-
-### Recommendation
-
-See §14 — consolidate on native sub-issues and phase out the body-text convention.
+A previous body-text convention (`**Parent:** #N` in issue bodies) has been retired in favor of native sub-issues.
 
 ## 7. Phase/Step Naming & Implementation Plans
 
@@ -361,7 +345,7 @@ graph LR
 
 ### Blocked issue count
 
-10 issues currently carry the `blocked` label, all in the data pipeline work stream. The eval pipeline documents blocking relationships in its design doc but does not use the `blocked` label.
+18 issues currently carry the `blocked` label — 10 in the data pipeline and 8 in the eval pipeline.
 
 ## 9. Priority Tiers
 
@@ -548,53 +532,50 @@ stateDiagram-v2
 
 ## 13. Gap Analysis
 
-| #   | Gap                                 | Severity | Description                                                                                      |
-| --- | ----------------------------------- | -------- | ------------------------------------------------------------------------------------------------ |
-| G1  | `ci` vs `ci-automation` overlap     | Low      | Two labels covering the same domain — `ci` has 1 issue, `ci-automation` has the rest             |
-| G2  | No milestones for CI or Code Health | Medium   | Only pipeline, eval, and training work is time-boxed                                             |
-| G3  | P0 label unused                     | Low      | Exists but no issues assigned — unclear when it would be used                                    |
-| G4  | Blocking not machine-readable       | Medium   | Body-text convention (`## Blocked by`) only; not GitHub's native tracking                        |
-| G5  | Dual parent-child conventions       | Low      | Both native sub-issues AND body-text `**Parent:** #N` used                                       |
-| G6  | Inconsistent planning conventions   | Medium   | Data pipeline: Phase/Step; Eval pipeline: PR grouping — different numbering schemes              |
-| G7  | Issues in multiple projects         | Info     | Intentional for cross-cutting visibility, but could cause confusion about ownership              |
-| G8  | Inconsistent custom fields          | Low      | Only Data Pipeline + Evaluation have Start/Target Date; Code Health and CI lack them             |
-| G9  | No issue templates                  | Low      | Issues follow conventions but no `.github/ISSUE_TEMPLATE/` enforces the `**Parent:**` format     |
-| G10 | Priority coverage gaps              | Low      | CI (29 issues) and Code Health (15 issues) have zero priority labels assigned                    |
-| G11 | Eval blocking label mismatch        | Low      | Eval pipeline documents blocking in its design doc but doesn't use the `blocked` label on issues |
+| #   | Gap                                 | Severity  | Description                                                                      |
+| --- | ----------------------------------- | --------- | -------------------------------------------------------------------------------- |
+| G1  | `ci` vs `ci-automation` overlap     | **Fixed** | Deleted `ci` label, migrated 8 issues to `ci-automation`                         |
+| G2  | No milestones for CI or Code Health | **Fixed** | Created `ci-automation v1.0.0` and `code-health v1.0.0` milestones               |
+| G3  | P0 label unused                     | Deferred  | Keep until a critical incident needs it                                          |
+| G4  | Blocking not machine-readable       | Deferred  | `## Blocked by` body-text convention remains; GitHub may add native blocking     |
+| G5  | Dual parent-child conventions       | **Fixed** | Removed `**Parent:** #N` from 7 issue bodies; native sub-issues only             |
+| G6  | Inconsistent planning conventions   | Open      | Data pipeline: Phase/Step; Eval: PR grouping — design decision pending           |
+| G7  | Issues in multiple projects         | Accepted  | Intentional for cross-cutting visibility                                         |
+| G8  | Inconsistent custom fields          | **Fixed** | Added Start Date / Target Date fields to CI & Code Health projects               |
+| G9  | No issue templates                  | **Fixed** | Created `.github/ISSUE_TEMPLATE/` with epic, phase, step, and bug templates      |
+| G10 | Priority coverage gaps              | **Fixed** | Added Priority single-select field to all 5 projects; values set on all items    |
+| G11 | Eval blocking label mismatch        | **Fixed** | Added `blocked` label to 8 eval pipeline issues matching the design doc's matrix |
 
-## 14. Proposed Target Taxonomy & Migration
+## 14. Changes Made (this PR)
 
-### Immediate (this PR)
-
-Already completed as part of this document:
+### GitHub metadata changes (already applied)
 
 - [x] Link Code Health (#3) and Evaluation (#4) projects to repo
 - [x] Create Training project (#5) and link to repo
-- [x] Create `training` label
-- [x] Create `training v1.0.0` milestone
-- [x] Create training epic issue (#107)
+- [x] Create `training` label, `training v1.0.0` milestone, epic #107
+- [x] Delete `ci` label, migrate 8 issues to `ci-automation` (G1)
+- [x] Create `ci-automation v1.0.0` and `code-health v1.0.0` milestones (G2)
+- [x] Assign milestones to all CI and Code Health issues (G2)
+- [x] Remove `**Parent:** #N` from 7 issue bodies (G5)
+- [x] Add Start Date / Target Date fields to CI & Code Health projects (G8)
+- [x] Add Priority single-select field to all 5 projects, set values on all items (G10)
+- [x] Add Phase single-select field to Data Pipeline project, set values on all 34 items
+- [x] Add PR Group single-select field to Evaluation project, set values on all 15 items
+- [x] Add `blocked` label to 8 eval pipeline issues (G11)
 
-### Short-term
+### Code changes (in this PR)
 
-| Action                                                           | Gap | Effort |
-| ---------------------------------------------------------------- | --- | ------ |
-| Delete `ci` label, migrate its 1 issue to `ci-automation`        | G1  | 5 min  |
-| Add `blocked` label to eval pipeline blocked issues              | G11 | 10 min |
-| Add Start Date / Target Date fields to CI & Code Health projects | G8  | 5 min  |
-| Assign priority labels to CI/Code Health issues                  | G10 | 15 min |
+- [x] `docs/design/github-taxonomy.md` — this document
+- [x] `.github/ISSUE_TEMPLATE/epic.yml` — epic issue template (G9)
+- [x] `.github/ISSUE_TEMPLATE/phase.yml` — phase issue template (G9)
+- [x] `.github/ISSUE_TEMPLATE/step.yml` — step issue template (G9)
+- [x] `.github/ISSUE_TEMPLATE/bug.yml` — bug report template (G9)
+- [x] `.github/ISSUE_TEMPLATE/config.yml` — template chooser config (G9)
 
-### Medium-term
+### Remaining open items
 
-| Action                                                                  | Gap | Effort          |
-| ----------------------------------------------------------------------- | --- | --------------- |
-| Create milestones for CI and Code Health                                | G2  | 10 min          |
-| Retire body-text `**Parent:**` convention in favor of native sub-issues | G5  | 30 min          |
-| Align planning conventions across work streams                          | G6  | Design decision |
-| Add `.github/ISSUE_TEMPLATE/` for epics, phases, steps                  | G9  | 1 hour          |
-
-### Deferred
-
-| Action                       | Gap | Notes                                        |
-| ---------------------------- | --- | -------------------------------------------- |
-| Remove or repurpose P0 label | G3  | Keep until a critical incident needs it      |
-| Machine-readable blocking    | G4  | GitHub may add native blocking; wait and see |
+| Item                         | Gap | Notes                                                           |
+| ---------------------------- | --- | --------------------------------------------------------------- |
+| Align planning conventions   | G6  | Design decision: adopt one scheme or document when to use which |
+| Remove or repurpose P0 label | G3  | Keep until a critical incident needs it                         |
+| Machine-readable blocking    | G4  | GitHub may add native blocking; wait and see                    |

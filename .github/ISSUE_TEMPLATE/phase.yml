@@ -1,0 +1,56 @@
+name: Phase
+description: A phase within an epic — groups related implementation steps
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Phases group implementation steps under an epic.
+        Add this issue as a sub-issue of the parent epic.
+
+  - type: input
+    id: epic
+    attributes:
+      label: Epic
+      description: Parent epic issue number (e.g., #74)
+      placeholder: "#"
+    validations:
+      required: true
+
+  - type: input
+    id: design-doc-section
+    attributes:
+      label: Design doc section
+      description: Reference to the relevant design doc section (e.g., data-pipeline.md §5)
+      placeholder: data-pipeline.md §
+    validations:
+      required: false
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What this phase covers
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: Implementation steps (will become sub-issues, one PR per step)
+      placeholder: |
+        - [ ] Step N.1: ...
+        - [ ] Step N.2: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      description: Issues that must be completed before this phase can start
+      placeholder: |
+        - #68 (Phase 1)
+    validations:
+      required: false
