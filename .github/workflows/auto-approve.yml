@@ -47,7 +47,7 @@ jobs:
               --jq '.[0].number // empty')
             if [ -z "$PR_NUMBER" ]; then
               echo "::notice::No PR found for this workflow run"
-              exit 1
+              exit 78
             fi
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             PR_NUMBER="${{ github.event.inputs.pr_number }}"
@@ -93,8 +93,8 @@ jobs:
           PENDING=$(echo "$CHECK_DATA" | grep -c "^queued\|^in_progress" || true)
           FAILED=$(echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" | grep -c . || true)
           if [ "$PENDING" -gt 0 ]; then
-            echo "::error::${PENDING} check(s) still running — waiting"
-            exit 1
+            echo "::notice::${PENDING} check(s) still running — waiting"
+            exit 78
           elif [ "$FAILED" -gt 0 ]; then
             echo "::error::${FAILED} check(s) failed"
             echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" >&2
@@ -108,8 +108,8 @@ jobs:
           COPILOT_REVIEWS=$(gh api "repos/${REPO}/pulls/${PR}/reviews" \
             --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length')
           if [ "$COPILOT_REVIEWS" -eq 0 ]; then
-            echo "::error::Copilot has not reviewed yet — waiting"
-            exit 1
+            echo "::notice::Copilot has not reviewed yet — waiting"
+            exit 78
           fi
 
           UNRESOLVED=$(gh api graphql -f query='
@@ -132,8 +132,8 @@ jobs:
               | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
             ] | length')
           if [ "$UNRESOLVED" -gt 0 ]; then
-            echo "::error::${UNRESOLVED} unresolved Copilot thread(s) — not eligible"
-            exit 1
+            echo "::notice::${UNRESOLVED} unresolved Copilot thread(s) — waiting"
+            exit 78
           fi
 
           echo "All conditions met"
