@@ -66,15 +66,14 @@ Separately, the data pipeline (#74) already uses R2 as the source of truth for g
 ### Local development (target state)
 
 ```bash
-# 1. Set up environment (one-time)
+# 1. Set up credentials (one-time) — .env is for secrets only
 cp .env.example .env
-# Edit .env: DATA_ROOT, R2 credentials, CKPT_PATH
+# Edit .env: R2 credentials, WANDB_API_KEY
 
-# 2. Run prediction — downloads dataset from R2 if not local
+# 2. Run prediction — dataset path and checkpoint are Hydra args, not env vars
 make predict EXPERIMENT=surge/flow_simple CKPT=r2:synth-data/checkpoints/flow-simple/best.ckpt
-# → Dataset synced from R2 to $DATA_ROOT/surge-simple/
 # → Checkpoint downloaded to .cache/checkpoints/flow-simple/best.ckpt
-# → Predictions written to outputs/flow_simple/predictions/
+# → Predictions written to logs/eval/flow_simple/{run}/predictions/
 
 # 3. Render audio — auto-detects display, launches Xvfb if headless
 make render PRED_DIR=outputs/flow_simple/predictions/
@@ -119,7 +118,7 @@ qsub jobs/predict/predict.sh -v MODEL=flow_simple,DATASET=surge_simple
 
 ### Design Principles
 
-- **Env-driven configuration** — machine-specific paths live in `.env` or env vars, never in committed configs ([§7.1](#71-env-driven-paths))
+- **Secrets in `.env`, paths in Hydra** — `.env` holds only credentials (R2, W&B). All paths use Hydra defaults with CLI overrides ([§7.1](#71-secrets-in-env-paths-in-hydra))
 - **Auto-detect, don't configure** — headless rendering detects the display server automatically ([§7.3](#73-headless-rendering))
 - **Storage before compute** — verify datasets/checkpoints exist before running inference ([§7.4](#74-storage-before-compute))
 - **One script, parameterized** — model variants are arguments, not separate scripts ([§7.5](#75-sge-consolidation))
@@ -213,8 +212,8 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 **Key behaviors:**
 
-- Dataset path resolved from `data.dataset_root` (env var `DATA_ROOT` or CLI override)
-- If `data.r2_path` is set, `SurgeDataModule.prepare_data()` syncs from R2 before loading
+- Dataset path resolved from `data.dataset_root` (Hydra default: `data/surge-simple`, CLI override for cluster)
+- If `data.r2_path` is explicitly set, `SurgeDataModule.prepare_data()` syncs from R2 before loading
 - Checkpoint path supports `r2:` prefix — auto-downloads to local cache before loading
 - Output directory: `{paths.log_dir}/eval/{experiment_name}/{run_id}/predictions/`
 
@@ -303,34 +302,50 @@ def rclone_sync(
     """Sync src to dst via rclone. Raises on non-zero exit."""
 ```
 
-R2 credentials are configured via env vars (same pattern as the data pipeline):
+R2 credentials are the **only** values that belong in `.env` — they are secrets that must never be committed:
 
 ```bash
-# .env
+# .env — secrets only, nothing else
 RCLONE_CONFIG_R2_TYPE=s3
 RCLONE_CONFIG_R2_ACCESS_KEY_ID=...
 RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=...
 RCLONE_CONFIG_R2_ENDPOINT=https://{account_id}.r2.cloudflarestorage.com
+WANDB_API_KEY=...
 ```
+
+Paths, dataset roots, checkpoint locations, and log directories are **not** in `.env` — they are Hydra config values with sensible defaults and CLI overrides.
 
 ### 6.3 Dataset Download
 
-When `data.r2_path` is set in a Hydra data config, `SurgeDataModule.prepare_data()` syncs the dataset to `data.dataset_root` before the data loaders are created.
+When `data.r2_path` is explicitly provided (via CLI override or experiment config), `SurgeDataModule.prepare_data()` syncs the dataset to `data.dataset_root` before the data loaders are created.
 
 ```yaml
-# configs/data/surge_simple.yaml
+# configs/data/surge_simple.yaml — no r2_path, no env vars for paths
 _target_: src.data.surge_datamodule.SurgeDataModule
-dataset_root: ${oc.env:DATA_ROOT,data/surge-simple}
-r2_path: r2:synth-data/data/surge-simple/         # NEW — optional
+dataset_root: data/surge-simple                    # sensible local default
+# r2_path: deliberately absent — must be specified explicitly when needed
 batch_size: 128
 num_workers: 11
 ```
 
+To use R2, pass it explicitly:
+
+```bash
+# CLI override — explicit, visible, no hidden state
+python src/eval.py data.r2_path=r2:synth-data/data/surge-simple/ ...
+
+# Or in an experiment config that opts in
+# configs/experiment/surge/flow_simple.yaml
+data:
+  r2_path: r2:synth-data/data/surge-simple/
+```
+
 Behavior:
 
-- If `r2_path` is not set → no-op (local-only mode)
+- If `r2_path` is absent (default) → no-op (local-only mode, no R2 dependency)
 - If `dataset_root` already has the data (checksum match) → no-op
 - Otherwise → `rclone_sync(r2_path, dataset_root)`
+- **No default value for `r2_path`** — you opt in explicitly, never accidentally
 
 ### 6.4 Checkpoint Sync
 
@@ -369,19 +384,34 @@ Toggle via Hydra config or CLI flag. Not automatic — explicit `make` target.
 
 ## 7. Design Decisions
 
-### 7.1 Env-Driven Paths
+### 7.1 Secrets in `.env`, Paths in Hydra
 
-**Decision:** Replace all hardcoded cluster paths with OmegaConf env var interpolation.
+**Decision:** `.env` holds only credentials (R2, W&B). All paths use plain Hydra defaults with CLI overrides — no `${oc.env:}` interpolation for paths.
 
 ```yaml
-# Before
+# Before — hardcoded cluster path
 dataset_root: /data/scratch/acw585/surge-simple/
 
-# After
-dataset_root: ${oc.env:DATA_ROOT,data/surge-simple}
+# After — sensible local default, override via CLI when needed
+dataset_root: data/surge-simple
 ```
 
-**Rationale:** Committed configs must work on every machine. Machine-specific paths belong in `.env` (local dev), environment variables (CI), or CLI overrides (one-off runs). The `oc.env` resolver with a sensible default means configs work out of the box for the common case (data in project directory) while supporting override for cluster paths.
+```bash
+# On the cluster, override via CLI — explicit and visible
+python src/eval.py data.dataset_root=/data/scratch/acw585/surge-simple/ ...
+
+# R2 path — must be specified explicitly, no default
+python src/eval.py data.r2_path=r2:synth-data/data/surge-simple/ ...
+```
+
+**Rationale:** `.env` files are invisible state — you can't read a config and know what it does without also reading `.env`. Hydra already has a CLI override mechanism. Using `${oc.env:DATA_ROOT}` in configs adds a second override layer that can conflict with the first. Keeping paths as plain Hydra values means:
+
+- Configs are self-describing — read the YAML, know what happens
+- CLI overrides are visible in the command line and in Hydra's `overrides.yaml` log
+- No "what's in my `.env` again?" debugging
+- `.env` has a single purpose: secrets that must never be committed
+
+The only env vars in configs are `PROJECT_ROOT` (set automatically by `rootutils`) and credentials (`RCLONE_CONFIG_R2_*`, `WANDB_API_KEY`).
 
 ### 7.2 rclone Over boto3/S3 SDK
 
@@ -595,15 +625,15 @@ main ──●──────────●───────────
 
 **Files to modify:**
 
-- `configs/data/surge_simple.yaml` — `dataset_root` → `${oc.env:DATA_ROOT,...}`
-- `configs/data/surge_mini.yaml` — same
+- `configs/data/surge_simple.yaml` — `dataset_root` → `data/surge-simple` (plain default)
+- `configs/data/surge_mini.yaml` — same pattern
 - `configs/data/surge_simple_onehot.yaml` — same (if exists)
-- `.env.example` — add `DATA_ROOT`, `CKPT_PATH`, `LOG_DIR`
+- `.env.example` — R2 credentials and `WANDB_API_KEY` only (no path vars)
 
 **Tests:**
 
 - `test_no_hardcoded_paths_in_configs` — grep committed YAML for `/data/scratch`
-- `test_env_var_interpolation` — OmegaConf resolves `DATA_ROOT` from env
+- `test_configs_have_sensible_defaults` — load each data config, verify `dataset_root` is a relative path
 
 #### Phase 2: Consolidate SGE Scripts (#95)
 
@@ -639,9 +669,9 @@ main ──●──────────●───────────
 
 **Key behaviors:**
 
-- `DATA_ROOT` env var resolves dataset path
-- `CKPT_PATH` or `ckpt_path=` CLI arg for checkpoint
-- `LOG_DIR` or `paths.log_dir=` for output directory
+- `dataset_root` has a sensible Hydra default; override via CLI for cluster paths
+- `ckpt_path=` is a required CLI arg (no env var, no default — changes every run)
+- `paths.log_dir` keeps the existing default (`${paths.root_dir}/logs/`)
 - Fails fast with clear error if dataset not found
 
 #### Phase 4: Portable Render (#86)
@@ -703,12 +733,12 @@ main ──●──────────●───────────
 
 #### Phase 7: R2 Dataset Download (#91)
 
-**Goal:** `data.r2_path` in Hydra config triggers auto-download in `prepare_data()`.
+**Goal:** When `data.r2_path` is explicitly specified, `prepare_data()` syncs from R2.
 
 **Files to modify:**
 
-- `src/data/surge_datamodule.py` — add `r2_path` field, call `rclone_sync` in `prepare_data()`
-- `configs/data/surge_simple.yaml` — add `r2_path` field (commented out by default)
+- `src/data/surge_datamodule.py` — add optional `r2_path` field, call `rclone_sync` in `prepare_data()`
+- Data configs unchanged — `r2_path` is absent by default, specified via CLI or experiment config
 
 **Files to create:**
 
@@ -716,10 +746,11 @@ main ──●──────────●───────────
 
 **Key behaviors:**
 
-- No-op if `r2_path` not set
+- No-op if `r2_path` not specified (default — local-only mode)
 - No-op if local data matches (checksum)
 - Sync runs in `prepare_data()` (before `setup()`)
 - Logs download progress via structlog
+- **No default value** — R2 download is always an explicit opt-in
 
 #### Phase 8: R2 Checkpoint Sync (#92)
 
@@ -757,8 +788,9 @@ main ──●──────────●───────────
 
 - Xvfb baked into image (always headless in Docker)
 - Surge XT plugin installed in image
-- `.env` file mounted for R2 credentials
+- `.env` file mounted for credentials only (R2, W&B)
 - Output directory mounted as volume
+- Paths passed as `docker run` args, not env vars
 
 #### Phase 10: R2 Eval Artifact Upload (#93)
 
@@ -826,7 +858,7 @@ ______________________________________________________________________
 | **Xvfb**       | X Virtual Framebuffer — provides a virtual display for headless Linux rendering |
 | **pedalboard** | Spotify's Python library for loading and running VST plugins                    |
 | **rclone**     | CLI tool for syncing files to/from cloud storage (S3, R2, GCS, etc.)            |
-| **OmegaConf**  | Hydra's config library — supports `${oc.env:VAR,default}` interpolation         |
+| **OmegaConf**  | Hydra's config library — supports interpolation and CLI overrides               |
 | **SGE**        | Sun Grid Engine — HPC job scheduler used on university clusters                 |
 
 ## Appendix B: Current File Inventory
