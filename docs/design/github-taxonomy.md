@@ -228,18 +228,50 @@ See `docs/org-migration-checklist.md` (PR #116) for the full pre/during/post che
 | **Issue Fields**    | Priority field is preconfigured; pin to relevant issue types               | `P0`–`P3` priority labels, Priority project field           |
 | **Hierarchy view**  | Enable in project table views                                              | Manual expand/collapse                                      |
 
-### Labels to retire after migration
+### Cleanup commands (run after native features are set up)
 
-| Label                              | Replaced by                            |
-| ---------------------------------- | -------------------------------------- |
-| `bug`                              | Issue Type: Bug                        |
-| `enhancement`                      | Issue Type: Task / Epic / Phase / Step |
-| `blocked`                          | Native blocking                        |
-| `P0 🔴`, `P1 🟠`, `P2 🟡`, `P3 🔵` | Issue Fields: Priority                 |
+Delete labels replaced by native features (`bug` and `enhancement` kept — used by Dependabot and external tooling):
 
-### Project fields to retire after migration
+```bash
+gh label delete "blocked" --yes
+gh label delete "P0 🔴" --yes
+gh label delete "P1 🟠" --yes
+gh label delete "P2 🟡" --yes
+gh label delete "P3 🔵" --yes
+```
 
-| Field                    | Replaced by                  | Projects affected         |
-| ------------------------ | ---------------------------- | ------------------------- |
-| Phase (single-select)    | Issue Types + hierarchy view | Data Pipeline, Evaluation |
-| Priority (single-select) | Issue Fields: Priority       | All                       |
+Delete project fields replaced by Issue Types and Issue Fields:
+
+```bash
+# Phase field — Data Pipeline (get ID, then delete)
+gh project field-list 2 --owner <org> --format json \
+  | jq -r '.fields[] | select(.name == "Phase") | .id' \
+  | xargs -I{} gh project field-delete --id {}
+
+# Phase field — Evaluation
+gh project field-list 4 --owner <org> --format json \
+  | jq -r '.fields[] | select(.name == "Phase") | .id' \
+  | xargs -I{} gh project field-delete --id {}
+
+# Priority field — all projects
+for p in 1 2 3 4 5; do
+  gh project field-list $p --owner <org> --format json \
+    | jq -r '.fields[] | select(.name == "Priority") | .id' \
+    | xargs -I{} gh project field-delete --id {}
+done
+```
+
+Migrate existing blocking relationships from body text to native:
+
+```bash
+# For each blocked issue, get node IDs and add native dependency
+BLOCKED=$(gh issue view <blocked_num> --json id -q .id)
+BLOCKER=$(gh issue view <blocker_num> --json id -q .id)
+gh api graphql -f query="
+mutation {
+  addBlockedBy(input: {
+    issueId: \"$BLOCKED\"
+    blockingIssueId: \"$BLOCKER\"
+  }) { blockedIssue { number } }
+}"
+```
