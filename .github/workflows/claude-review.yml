@@ -1,29 +1,38 @@
 name: Claude Code Review
 
+# Runs automatically when a PR is opened, and on-demand via the
+# "needs-claude-review" label. Inline comments require pull_request
+# context — workflow_dispatch can't post them (actions/runner#662,
+# claude-code-action#635).
 on:
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: "PR number to review"
-        required: true
-        type: number
+  pull_request:
+    types: [opened, labeled]
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
 
 jobs:
   claude-review:
+    # Run on open, or when the "needs-claude-review" label is added.
+    # The label guard prevents reviews firing on unrelated labels.
+    if: >
+      github.event.pull_request.head.repo.fork == false &&
+      (
+        github.event.action == 'opened' ||
+        (github.event.action == 'labeled' && github.event.label.name == 'needs-claude-review')
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
       id-token: write
     timeout-minutes: 15
-    env:
-      GH_PR_NUMBER: ${{ inputs.pr_number }}
     steps:
-      - name: Checkout PR head
+      - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: refs/pull/${{ inputs.pr_number }}/head
           persist-credentials: false
 
       - name: Validate API key is configured
@@ -57,4 +66,3 @@ jobs:
             Review this PR. Follow the Code Review section in CLAUDE.md — invoke all seven
             review skills and evaluate every checklist item against the changed code.
             Prefix each comment with BLOCK: or WARN:.
-          show_full_output: true
