@@ -14,7 +14,7 @@ ______________________________________________________________________
 | 2   | [Issue Types](#2-issue-types)                              | Native Epic, Phase, Task, Bug, Feature            |
 | 3   | [Hierarchy](#3-hierarchy)                                  | Epic → Phase → Task via native sub-issues         |
 | 4   | [Blocking & Dependencies](#4-blocking--dependencies)       | Native blocking, file-overlap sequencing          |
-| 5   | [Priority](#5-priority)                                    | Native Issue Fields                               |
+| 5   | [Priority](#5-priority)                                    | Priority via project fields                       |
 | 6   | [Labels](#6-labels)                                        | Domain labels for work stream classification      |
 | 7   | [Milestones](#7-milestones)                                | Milestones mapping to product releases            |
 | 8   | [Projects](#8-projects)                                    | Org-level GitHub Projects V2, views, status       |
@@ -27,7 +27,7 @@ ______________________________________________________________________
 
 ## 1. Overview
 
-synth-setter organizes work using GitHub's native issue tracking: **Issue Types** (Epic, Phase, Task, Bug, Feature), **native blocking**, **sub-issues** for hierarchy, **Issue Fields** for priority, **Projects V2** for views, and **milestones** for releases. Labels provide domain classification only.
+synth-setter organizes work using GitHub's native issue tracking: **Issue Types** (Epic, Phase, Task, Bug, Feature), **native blocking**, **sub-issues** for hierarchy, **Projects V2** for views, and **milestones** for releases. Labels provide domain classification only.
 
 Each work stream follows: **design doc → Epic → Phases → Tasks**.
 
@@ -116,11 +116,9 @@ Priority is tracked via a **Priority** single-select field on each project:
 | P2       | Docker, E2E, production, consolidation |
 | P3       | Nice-to-have                           |
 
-When GitHub's **Issue Fields** (org-level, public preview) becomes available, Priority will move from a per-project field to a native issue-level field — searchable across repositories without needing project membership.
-
 ## 6. Labels
 
-Labels classify issues by **domain** only. Type, priority, and blocking are handled by native features.
+Labels classify issues by **domain** only. Type and blocking are handled by native features; priority is a project field.
 
 | Label           | Color   | Description                                   | Project |
 | --------------- | ------- | --------------------------------------------- | ------- |
@@ -190,7 +188,7 @@ Design docs also include dependency graphs, blocking matrices, and timeline visu
 ```
 ISSUE
   ├── has one → ISSUE_TYPE (Epic | Phase | Task | Bug | Feature)
-  ├── has one → PRIORITY (P0 | P1 | P2 | P3) — via Issue Fields
+  ├── has one → PRIORITY (P0 | P1 | P2 | P3) — via project field
   ├── has one → MILESTONE
   ├── has one → PROJECT (via project membership)
   ├── has many → LABELS (domain only)
@@ -207,7 +205,7 @@ ISSUE
 2. Add **domain label** (data-pipeline, evaluation, etc.)
 3. Assign to a **milestone**
 4. Add to the relevant **project** (Status: **Todo**)
-5. Set **Priority** via Issue Fields
+5. Set **Priority** via the project field
 6. If blocked, add **native blocking** dependency via the sidebar
 7. When work starts, move to **In Progress**
 8. Link the PR
@@ -229,7 +227,6 @@ See `docs/org-migration-checklist.md` (PR #116) for the full pre/during/post che
 | ------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------- |
 | **Issue Types**     | Create Epic and Phase types in org settings (Task, Bug, Feature are defaults) | Title-prefix naming conventions, `enhancement` label |
 | **Native blocking** | Add `blockedBy`/`blocking` relationships on existing issues via sidebar       | `blocked` label, `## Blocked by` body text           |
-| **Issue Fields**    | Priority field is preconfigured; pin to relevant issue types                  | `P0`–`P3` priority labels, Priority project field    |
 | **Hierarchy view**  | Enable in project table views                                                 | Manual expand/collapse                               |
 
 ### Cleanup commands (run after native features are set up)
@@ -257,17 +254,6 @@ gh project field-list 2 --owner <org> --format json \
 gh project field-list 4 --owner <org> --format json \
   | jq -r '.fields[] | select(.name == "Phase") | .id' \
   | xargs -I{} gh project field-delete --id {}
-```
-
-**Keep the Priority project field** until Issue Fields (org-level) becomes available. When it does, migrate values to the native field and then delete:
-
-```bash
-# Priority field — all projects (defer until Issue Fields is available)
-for p in 1 2 3 4 5; do
-  gh project field-list $p --owner <org> --format json \
-    | jq -r '.fields[] | select(.name == "Priority") | .id' \
-    | xargs -I{} gh project field-delete --id {}
-done
 ```
 
 Migrate existing blocking relationships from body text to native:
