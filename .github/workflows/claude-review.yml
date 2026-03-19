@@ -1,23 +1,29 @@
 name: Claude Code Review
 
 on:
-  pull_request:
-    types: [opened, synchronize]
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+        type: number
 
 jobs:
   claude-review:
-    if: github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
       id-token: write
     timeout-minutes: 15
+    env:
+      GH_PR_NUMBER: ${{ inputs.pr_number }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout PR head
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: refs/pull/${{ inputs.pr_number }}/head
 
       - name: Validate API key is configured
         run: |
@@ -51,10 +57,3 @@ jobs:
             review skills and evaluate every checklist item against the changed code.
             Prefix each comment with BLOCK: or WARN:.
           show_full_output: true
-
-  skip-notice:
-    if: github.event.pull_request.head.repo.fork == true
-    runs-on: ubuntu-latest
-    steps:
-      - name: Post fork PR notice
-        run: echo "::notice::Claude review is skipped for fork PRs (secrets are unavailable)."
