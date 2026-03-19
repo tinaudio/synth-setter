@@ -1085,6 +1085,7 @@ class ShardSpec(BaseModel):
     row_count: int
     expected_datasets: list[str]  # ["audio", "mel_spec", "param_array"]
     audio_shape: tuple[int, int]
+    mel_shape: tuple[int, int]
     param_shape: tuple[int, int]
 
 class PipelineSpec(BaseModel):
