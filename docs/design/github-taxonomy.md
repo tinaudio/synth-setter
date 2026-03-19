@@ -229,37 +229,12 @@ See `docs/org-migration-checklist.md` (PR #116) for the full pre/during/post che
 | **Native blocking** | Add `blockedBy`/`blocking` relationships on existing issues via sidebar       | `blocked` label, `## Blocked by` body text           |
 | **Hierarchy view**  | Enable in project table views                                                 | Manual expand/collapse                               |
 
-### Cleanup commands (run after native features are set up)
+### Cleanup (run after native features are set up)
 
-Delete labels replaced by native features (`bug` kept — used by Dependabot):
-
-```bash
-gh label delete "enhancement" --yes
-gh label delete "blocked" --yes
-gh label delete "P0 🔴" --yes
-gh label delete "P1 🟠" --yes
-gh label delete "P2 🟡" --yes
-gh label delete "P3 🔵" --yes
-```
-
-Delete project fields replaced by Issue Types:
+**1. Migrate blocking relationships to native**, then remove `blocked` label and `## Blocked by` body text from issues:
 
 ```bash
-# Phase field — Data Pipeline (get ID, then delete)
-gh project field-list 2 --owner <org> --format json \
-  | jq -r '.fields[] | select(.name == "Phase") | .id' \
-  | xargs -I{} gh project field-delete --id {}
-
-# Phase field — Evaluation
-gh project field-list 4 --owner <org> --format json \
-  | jq -r '.fields[] | select(.name == "Phase") | .id' \
-  | xargs -I{} gh project field-delete --id {}
-```
-
-Migrate existing blocking relationships from body text to native:
-
-```bash
-# For each blocked issue, get node IDs and add native dependency
+# Add native dependency
 BLOCKED=$(gh issue view <blocked_num> --json id -q .id)
 BLOCKER=$(gh issue view <blocker_num> --json id -q .id)
 gh api graphql -f query="
@@ -270,3 +245,27 @@ mutation {
   }) { blockedIssue { number } }
 }"
 ```
+
+**2. Delete retired labels** (`bug` kept — used by Dependabot):
+
+```bash
+gh label delete "enhancement" --yes
+gh label delete "blocked" --yes
+gh label delete "P0 🔴" --yes
+gh label delete "P1 🟠" --yes
+gh label delete "P2 🟡" --yes
+gh label delete "P3 🔵" --yes
+```
+
+**3. Delete retired project fields:**
+
+```bash
+# Phase field — Data Pipeline and Evaluation
+for p in 2 4; do
+  gh project field-list $p --owner <org> --format json \
+    | jq -r '.fields[] | select(.name == "Phase") | .id' \
+    | xargs -I{} gh project field-delete --id {}
+done
+```
+
+**4. Set issue types on existing issues** — assign Epic, Phase, Task, Bug, Feature types to all open issues via the sidebar or GraphQL `updateIssue` mutation.
