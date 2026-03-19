@@ -11,8 +11,8 @@ ______________________________________________________________________
 | §   | Section                                                    | What it covers                                    |
 | --- | ---------------------------------------------------------- | ------------------------------------------------- |
 | 1   | [Overview](#1-overview)                                    | How GitHub metadata organizes work in this repo   |
-| 2   | [Issue Types](#2-issue-types)                              | Native Epic, Phase, Step, Bug, Task               |
-| 3   | [Hierarchy](#3-hierarchy)                                  | Epic → Phase → Step via native sub-issues         |
+| 2   | [Issue Types](#2-issue-types)                              | Native Epic, Phase, Task, Bug, Feature            |
+| 3   | [Hierarchy](#3-hierarchy)                                  | Epic → Phase → Task via native sub-issues         |
 | 4   | [Blocking & Dependencies](#4-blocking--dependencies)       | Native blocking, file-overlap sequencing          |
 | 5   | [Priority](#5-priority)                                    | Native Issue Fields                               |
 | 6   | [Labels](#6-labels)                                        | Domain labels for work stream classification      |
@@ -27,23 +27,27 @@ ______________________________________________________________________
 
 ## 1. Overview
 
-synth-setter organizes work using GitHub's native issue tracking: **Issue Types** (Epic, Phase, Step, Bug, Task), **native blocking**, **sub-issues** for hierarchy, **Issue Fields** for priority, **Projects V2** for views, and **milestones** for releases. Labels provide domain classification only.
+synth-setter organizes work using GitHub's native issue tracking: **Issue Types** (Epic, Phase, Task, Bug, Feature), **native blocking**, **sub-issues** for hierarchy, **Issue Fields** for priority, **Projects V2** for views, and **milestones** for releases. Labels provide domain classification only.
 
-Each work stream follows: **design doc → Epic → Phases → Steps**.
+Each work stream follows: **design doc → Epic → Phases → Tasks**.
 
 ## 2. Issue Types
 
 Issues are classified using GitHub's native Issue Types (org-level):
 
-| Type      | Purpose                                          | Example                                |
-| --------- | ------------------------------------------------ | -------------------------------------- |
-| **Epic**  | Umbrella issue grouping phases for a work stream | #74 distributed data pipeline          |
-| **Phase** | Large feature area within an epic                | #69 Pipeline Core                      |
-| **Step**  | Testable unit of work within a phase             | #102 storage layer                     |
-| **Bug**   | Something isn't working                          | #10 OmegaConf resolver re-registration |
-| **Task**  | General work that doesn't fit the above          | CI improvements, code health goals     |
+| Type        | Purpose                                          | Example                                |
+| ----------- | ------------------------------------------------ | -------------------------------------- |
+| **Epic**    | Umbrella issue grouping phases for a work stream | #74 distributed data pipeline          |
+| **Phase**   | Large feature area within an epic                | #69 Pipeline Core                      |
+| **Task**    | Unit of work (standalone or within a phase)      | #102 storage layer, CI improvements    |
+| **Bug**     | Something isn't working                          | #10 OmegaConf resolver re-registration |
+| **Feature** | A request, idea, or new functionality            | #23 improve generation throughput      |
 
 Types are set on the issue itself, filterable in issue lists, and show distinct icons.
+
+**Hierarchy types** (Epic, Phase) define structure. **Work types** (Task, Bug, Feature) are orthogonal — a Task under a Phase is what was previously called a "step".
+
+**Hierarchy types** (Epic, Phase) define structure. **Work types** (Task, Bug, Feature) are orthogonal — a Task under a Phase is what was previously called a "step".
 
 ## 3. Hierarchy
 
@@ -162,7 +166,7 @@ Title, Assignees, Status (`Todo` → `In Progress` → `Done`), Labels, Linked P
 - **Table** — flat list, sortable/filterable by any field
 - **Board** — kanban grouped by Status
 - **Roadmap** — timeline using Start Date / Target Date
-- **Hierarchy** — expandable Epic → Phase → Step tree (up to 8 levels)
+- **Hierarchy** — expandable Epic → Phase → Task tree (up to 8 levels)
 
 ### Cross-project issue sharing
 
