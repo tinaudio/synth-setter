@@ -1388,19 +1388,16 @@ configs/
 
 ## Appendix D: Implementation Roadmap
 
-Full staged implementation plan: [greedy-tickling-harbor.md](greedy-tickling-harbor.md)
+Full implementation plan: [implementation-plan.md](implementation-plan.md) · Epic: [#74](https://github.com/ktinubu/synth-permutations/issues/74)
 
-| Stage | Scope                                    | Dependencies |
-| ----- | ---------------------------------------- | ------------ |
-| 0     | Mutation testing + presubmit             | None         |
-| 1     | Constants module + naming overhaul       | Stage 0      |
-| 2     | Auth checks                              | Stage 1      |
-| 3     | Structured logging + worker reports      | Stage 1      |
-| 4     | R2 operations + shard validation         | Stage 1      |
-| 5     | Reconciliation-based generate + finalize | Stages 1-4   |
-| 6     | End-to-end integration test              | Stage 5      |
-| 7     | Credential management (Docker)           | Stage 5      |
-| 8     | ComputeBackend protocol + LocalBackend   | Stage 5      |
+| Phase | Scope                                        | Steps   | GitHub issue |
+| ----- | -------------------------------------------- | ------- | ------------ |
+| 1     | Foundation — deps, shared code, CI           | 1.1–1.4 | #68          |
+| 2     | Pipeline Core — schemas, storage, validation | 2.1–2.3 | #69          |
+| 3     | Docker — Dockerfile, entrypoint, headless    | 3.1     | #70          |
+| 4     | Pipeline Engine — reconciliation, compute    | 4.1–4.2 | #71          |
+| 5     | Pipeline CLI — generate, status, finalize    | 5.1–5.3 | #72          |
+| 6     | Production — RunPod backend, E2E             | 6.1     | #73          |
 
 ## Appendix E: Implementation Recipes
 

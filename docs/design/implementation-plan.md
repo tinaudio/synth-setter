@@ -8,21 +8,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                  | GitHub issue |
-| --- | -------------------------------------------------------- | ------------ |
-| 1   | [Priorities & Conventions](#1-priorities--conventions)   | —            |
-| 2   | [Merge Path](#2-merge-path)                              | #74          |
-| 3   | [Codebase Inventory](#3-codebase-inventory)              | —            |
-| 4   | [Pipeline Config Schema](#4-pipeline-config-schema)      | —            |
-| 5   | [PR #1 — Foundation](#5-pr-1--foundation-68)             | #68          |
-| 6   | [PR #2 — Pipeline Core](#6-pr-2--pipeline-core-69)       | #69          |
-| 7   | [PR #3 — Docker](#7-pr-3--docker-infrastructure-70)      | #70          |
-| 8   | [PR #4 — Pipeline Engine](#8-pr-4--pipeline-engine-71)   | #71          |
-| 9   | [PR #5 — Pipeline CLI](#9-pr-5--pipeline-cli-72)         | #72          |
-| 10  | [PR #6 — Production & E2E](#10-pr-6--production--e2e-73) | #73          |
-| 11  | [Cross-cutting work](#11-cross-cutting-work)             | #76, #77     |
-| 12  | [Verification Strategy](#12-verification-strategy)       | —            |
-| 13  | [Assumptions](#13-assumptions)                           | —            |
+| §   | Section                                                       | GitHub issue |
+| --- | ------------------------------------------------------------- | ------------ |
+| 1   | [Priorities & Conventions](#1-priorities--conventions)        | —            |
+| 2   | [Merge Path](#2-merge-path)                                   | #74          |
+| 3   | [Codebase Inventory](#3-codebase-inventory)                   | —            |
+| 4   | [Pipeline Config Schema](#4-pipeline-config-schema)           | —            |
+| 5   | [Phase 1 — Foundation](#5-phase-1--foundation-68)             | #68          |
+| 6   | [Phase 2 — Pipeline Core](#6-phase-2--pipeline-core-69)       | #69          |
+| 7   | [Phase 3 — Docker](#7-phase-3--docker-infrastructure-70)      | #70          |
+| 8   | [Phase 4 — Pipeline Engine](#8-phase-4--pipeline-engine-71)   | #71          |
+| 9   | [Phase 5 — Pipeline CLI](#9-phase-5--pipeline-cli-72)         | #72          |
+| 10  | [Phase 6 — Production & E2E](#10-phase-6--production--e2e-73) | #73          |
+| 11  | [Cross-cutting work](#11-cross-cutting-work)                  | #76, #77     |
+| 12  | [Verification Strategy](#12-verification-strategy)            | —            |
+| 13  | [Assumptions](#13-assumptions)                                | —            |
 
 ______________________________________________________________________
 
@@ -31,13 +31,13 @@ ______________________________________________________________________
 **Priorities (in order):**
 
 1. Every step has integration + unit tests, written before implementation (TDD)
-2. Small commits (one step = one commit)
+2. Small PRs (one step = one PR)
 3. Always-working pipeline — CI validates every PR
 
 **Conventions:**
 
-- Steps 1-4 and 8 are infrastructure — verification via CI green / Docker builds, not test-first TDD
-- TDD applies to Steps 5-7, 9-14
+- Steps 1.1–1.4 and 3.1 are infrastructure — verification via CI green / Docker builds, not test-first TDD
+- TDD applies to Steps 2.1–2.3, 4.1–6.1
 - `pipeline/` at project root (not `src/`) — invoked via `python -m pipeline`
 - Tests in `tests/pipeline/` with own `conftest.py`
 
@@ -48,20 +48,20 @@ ______________________________________________________________________
 ```
 main ──●──────────●────────────●──────────●──────────●──────────●──→
        │          │            │          │          │          │
-       PR#1      PR#2         PR#3       PR#4       PR#5       PR#6
-       #68       #69          #70        #71        #72        #73
+    Phase 1    Phase 2      Phase 3    Phase 4    Phase 5    Phase 6
+      #68        #69          #70        #71        #72        #73
 ```
 
-| PR                           | Steps | Contents                                 | CI gate                         |
-| ---------------------------- | ----- | ---------------------------------------- | ------------------------------- |
-| **#1: Foundation** #68       | 1-4   | Deps, uploader, design doc, CI setup     | `pytest` passes, ruff clean     |
-| **#2: Pipeline Core** #69    | 5-7   | Schemas, storage, validation             | `pytest tests/pipeline/` passes |
-| **#3: Docker** #70           | 8     | Dockerfile, entrypoint, headless, Make   | Docker build succeeds, BATS     |
-| **#4: Pipeline Engine** #71  | 9-10  | Reconciliation, compute backend + worker | `pytest tests/pipeline/` passes |
-| **#5: Pipeline CLI** #72     | 11-13 | Generate, status, finalize commands      | Full integration tests pass     |
-| **#6: Production + E2E** #73 | 14    | RunPod backend, Docker updates, E2E      | E2E test + adhoc Docker test    |
+| Phase                             | Steps   | Contents                                 | CI gate                         |
+| --------------------------------- | ------- | ---------------------------------------- | ------------------------------- |
+| **Phase 1: Foundation** #68       | 1.1–1.5 | Deps, uploader, design doc, CI setup     | `pytest` passes, ruff clean     |
+| **Phase 2: Pipeline Core** #69    | 2.1–2.3 | Schemas, storage, validation             | `pytest tests/pipeline/` passes |
+| **Phase 3: Docker** #70           | 3.1     | Dockerfile, entrypoint, headless, Make   | Docker build succeeds, BATS     |
+| **Phase 4: Pipeline Engine** #71  | 4.1–4.2 | Reconciliation, compute backend + worker | `pytest tests/pipeline/` passes |
+| **Phase 5: Pipeline CLI** #72     | 5.1–5.3 | Generate, status, finalize commands      | Full integration tests pass     |
+| **Phase 6: Production + E2E** #73 | 6.1     | RunPod backend, Docker updates, E2E      | E2E test + adhoc Docker test    |
 
-**Total: 14 steps, 6 PRs**
+**6 phases, 14 steps (one PR per step)**
 
 ______________________________________________________________________
 
@@ -133,9 +133,9 @@ transcoding step.
 
 ______________________________________________________________________
 
-## 5. PR #1 — Foundation ([#68](https://github.com/ktinubu/synth-permutations/issues/68))
+## 5. Phase 1 — Foundation ([#68](https://github.com/ktinubu/synth-permutations/issues/68))
 
-### Step 1: Dependencies & Tooling ([#78](https://github.com/ktinubu/synth-permutations/issues/78)) ✅
+### Step 1.1: Dependencies & Tooling ([#78](https://github.com/ktinubu/synth-permutations/issues/78)) ✅
 
 **Goal:** Port build dependencies and code quality tooling from `experiment`.
 
@@ -154,13 +154,13 @@ ______________________________________________________________________
 **Design notes:**
 
 - `hdf5plugin` included in deps — required at read time for Blosc2-compressed virtual
-  datasets (B6). Phase 13 finalize and all HDF5 tests must `import hdf5plugin`.
+  datasets (B6). Step 5.3 finalize and all HDF5 tests must `import hdf5plugin`.
 - `pydantic`, `structlog`, `tenacity`, `click`, `pyyaml`, `webdataset` added beyond what
   `experiment` has (R13).
 
 ______________________________________________________________________
 
-### Step 2: Core Shared Code ([#79](https://github.com/ktinubu/synth-permutations/issues/79))
+### Step 1.2: Core Shared Code ([#79](https://github.com/ktinubu/synth-permutations/issues/79))
 
 **Goal:** Port `uploader.py` and minor fixes that the pipeline depends on.
 
@@ -179,7 +179,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-### Step 3: Design Doc & Config ([#80](https://github.com/ktinubu/synth-permutations/issues/80))
+### Step 1.3: Design Doc & Config ([#80](https://github.com/ktinubu/synth-permutations/issues/80))
 
 **Goal:** Ensure design doc and environment config are on `main`.
 
@@ -188,7 +188,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-### Step 4: CI Setup ([#81](https://github.com/ktinubu/synth-permutations/issues/81))
+### Step 1.4: CI Setup ([#81](https://github.com/ktinubu/synth-permutations/issues/81))
 
 **Goal:** Ensure every subsequent PR is validated by CI.
 
@@ -209,11 +209,11 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-## 6. PR #2 — Pipeline Core ([#69](https://github.com/ktinubu/synth-permutations/issues/69))
+## 6. Phase 2 — Pipeline Core ([#69](https://github.com/ktinubu/synth-permutations/issues/69))
 
 Sub-issues: [#18](https://github.com/ktinubu/synth-permutations/issues/18) (config-driven runs), [#20](https://github.com/ktinubu/synth-permutations/issues/20) (schema versioning), [#22](https://github.com/ktinubu/synth-permutations/issues/22) (deterministic shard assignment)
 
-### Step 5: Pydantic Schemas ([#18](https://github.com/ktinubu/synth-permutations/issues/18), [#20](https://github.com/ktinubu/synth-permutations/issues/20), [#22](https://github.com/ktinubu/synth-permutations/issues/22))
+### Step 2.1: Pydantic Schemas ([#18](https://github.com/ktinubu/synth-permutations/issues/18), [#20](https://github.com/ktinubu/synth-permutations/issues/20), [#22](https://github.com/ktinubu/synth-permutations/issues/22))
 
 **Goal:** Define the data models that everything else depends on.
 
@@ -299,7 +299,7 @@ def test_spec_materialization_end_to_end(tmp_path):
 
 ______________________________________________________________________
 
-### Step 6: Storage Layer
+### Step 2.2: Storage Layer
 
 **Goal:** Abstract R2/local filesystem with design doc's path layout. Wraps `src/data/uploader.py`.
 
@@ -356,7 +356,7 @@ def test_storage_shard_lifecycle(tmp_path):
 
 ______________________________________________________________________
 
-### Step 7: Shard Validation
+### Step 2.3: Shard Validation
 
 **Goal:** 3-tier validation from design doc §7.5.
 
@@ -413,11 +413,11 @@ def test_tiered_validation_catches_correct_failures(tmp_path):
 
 ______________________________________________________________________
 
-## 7. PR #3 — Docker Infrastructure ([#70](https://github.com/ktinubu/synth-permutations/issues/70))
+## 7. Phase 3 — Docker Infrastructure ([#70](https://github.com/ktinubu/synth-permutations/issues/70))
 
 Sub-issue: [#7](https://github.com/ktinubu/synth-permutations/issues/7) (buildx TARGET_ARCH)
 
-### Step 8: Docker Infrastructure ([#7](https://github.com/ktinubu/synth-permutations/issues/7))
+### Step 3.1: Docker Infrastructure ([#7](https://github.com/ktinubu/synth-permutations/issues/7))
 
 **Goal:** Port Docker build system from `experiment`. Needed for worker containers.
 
@@ -435,11 +435,11 @@ Sub-issue: [#7](https://github.com/ktinubu/synth-permutations/issues/7) (buildx 
 
 ______________________________________________________________________
 
-## 8. PR #4 — Pipeline Engine ([#71](https://github.com/ktinubu/synth-permutations/issues/71))
+## 8. Phase 4 — Pipeline Engine ([#71](https://github.com/ktinubu/synth-permutations/issues/71))
 
 Sub-issues: [#3](https://github.com/ktinubu/synth-permutations/issues/3) (vst/core.py throughput), [#23](https://github.com/ktinubu/synth-permutations/issues/23) (VST generation throughput)
 
-### Step 9: Reconciliation Engine
+### Step 4.1: Reconciliation Engine
 
 **Goal:** Compare spec against storage state to determine remaining work.
 
@@ -484,7 +484,7 @@ def test_reconciliation_mixed_state(tmp_path):
 
 ______________________________________________________________________
 
-### Step 10: ComputeBackend + Worker
+### Step 4.2: ComputeBackend + Worker
 
 **Goal:** Compute abstraction + worker-side shard generation with lifecycle markers.
 
@@ -567,11 +567,11 @@ def test_local_backend_generates_shards_with_lifecycle(tmp_path):
 
 ______________________________________________________________________
 
-## 9. PR #5 — Pipeline CLI ([#72](https://github.com/ktinubu/synth-permutations/issues/72))
+## 9. Phase 5 — Pipeline CLI ([#72](https://github.com/ktinubu/synth-permutations/issues/72))
 
 Sub-issues: [#17](https://github.com/ktinubu/synth-permutations/issues/17) (modular CLI), [#19](https://github.com/ktinubu/synth-permutations/issues/19) (WebDataset output), [#21](https://github.com/ktinubu/synth-permutations/issues/21) (reconciliation status)
 
-### Step 11: CLI — `generate` ([#17](https://github.com/ktinubu/synth-permutations/issues/17))
+### Step 5.1: CLI — `generate` ([#17](https://github.com/ktinubu/synth-permutations/issues/17))
 
 **Goal:** Unified CLI entry point via `python -m pipeline` (via `__main__.py` importing
 Click group from `cli.py`).
@@ -628,7 +628,7 @@ def test_generate_cli_end_to_end(tmp_path):
 
 ______________________________________________________________________
 
-### Step 12: CLI — `status` ([#21](https://github.com/ktinubu/synth-permutations/issues/21))
+### Step 5.2: CLI — `status` ([#21](https://github.com/ktinubu/synth-permutations/issues/21))
 
 **Goal:** Read-only reconciliation report.
 
@@ -663,7 +663,7 @@ def test_status_after_partial_generate(tmp_path):
 
 ______________________________________________________________________
 
-### Step 13: CLI — `finalize` ([#19](https://github.com/ktinubu/synth-permutations/issues/19))
+### Step 5.3: CLI — `finalize` ([#19](https://github.com/ktinubu/synth-permutations/issues/19))
 
 **Goal:** Validate staged → promote → download → stats → training outputs → dataset card.
 
@@ -751,9 +751,9 @@ def test_finalize_wds_output_format(tmp_path):
 
 ______________________________________________________________________
 
-## 10. PR #6 — Production & E2E ([#73](https://github.com/ktinubu/synth-permutations/issues/73))
+## 10. Phase 6 — Production & E2E ([#73](https://github.com/ktinubu/synth-permutations/issues/73))
 
-### Step 14: RunPodBackend + Docker Updates + E2E
+### Step 6.1: RunPodBackend + Docker Updates + E2E
 
 **Goal:** Production backend, Docker integration, full E2E.
 
@@ -881,15 +881,15 @@ All gaps below have been folded into their relevant steps above. This appendix
 serves as a changelog of what was added beyond the original implementation plan.
 
 **GP1. `generate --dry-run` not tested in reference tests.**
-Step 11 lists `--dry-run` as a behavior but the reference test doesn't exercise it.
+Step 5.1 lists `--dry-run` as a behavior but the reference test doesn't exercise it.
 Add a unit test: `--dry-run` prints shard assignments, creates no spec, submits no work.
 
 **GP2. `status` command JSON output not specified.**
 Issue #21 deliverables include "Output as table (terminal) and JSON (machine-readable)"
-but Step 12 only describes table output. Add `--json` flag to `status` command.
+but Step 5.2 only describes table output. Add `--json` flag to `status` command.
 
 **GP3. No test for auth validation failure.**
-Step 11 specifies auth validation before compute but no reference test covers the
+Step 5.1 specifies auth validation before compute but no reference test covers the
 failure case. Add unit test: missing R2 credentials → clear error message, exit 1,
 no workers launched.
 
@@ -902,25 +902,25 @@ actionable message if not.
 Design doc Appendix E.1 shows structured logging config but no CLI flag controls
 verbosity. Add `--log-level` flag (default: `INFO`, options: `DEBUG`, `INFO`, `WARNING`).
 
-**GP6. Worker quarantine path not in Step 10.**
+**GP6. Worker quarantine path not in Step 4.2.**
 Design doc §7.2 describes `rendering → invalid`: worker uploads corrupt shard to
-`quarantine/` and writes `.invalid` marker. Step 10 worker description covers only the
+`quarantine/` and writes `.invalid` marker. Step 4.2 worker description covers only the
 happy path. Add quarantine behavior + reference test for validation-failure shard.
 
-**GP7. Skip-if-valid optimization missing from Step 10.**
+**GP7. Skip-if-valid optimization missing from Step 4.2.**
 Design doc §7.7: "Workers check the staging directory for an existing valid shard
-before uploading. If one exists, the worker skips the upload." Not in Step 10.
+before uploading. If one exists, the worker skips the upload." Not in Step 4.2.
 Add as optimization (not correctness requirement).
 
 **GP8. Storage layer missing path helpers for quarantine, attempts, and finalize outputs.**
-Step 6 storage layer should expose path helpers for `quarantine/` subdirectory,
+Step 2.2 storage layer should expose path helpers for `quarantine/` subdirectory,
 `metadata/workers/attempts/{w}-{a}/` (report.json, debug.log), and `data/` finalize
 outputs (train.h5, stats.npz, dataset.json, dataset.complete). Currently only
 shard lifecycle paths are described.
 
 **GP9. `status` command should overlay worker errors from reports.**
 Design doc §7.4 shows `status` output including "Recent worker errors (from metadata)"
-overlaid from worker reports. Step 12 only describes shard counts and missing IDs.
+overlaid from worker reports. Step 5.2 only describes shard counts and missing IDs.
 
 **GP10. Design doc schema gaps to fix.**
 Several fields in the design doc §14 schemas need updating to match the implementation:
