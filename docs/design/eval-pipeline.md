@@ -529,6 +529,107 @@ Three resolution patterns, each appropriate for a different use case:
 
 **Rationale:** Make targets are discoverable (`make help`), composable, and already the project convention. They hide environment-specific complexity (display detection, R2 paths) behind a consistent interface.
 
+### 7.7 Current vs Proposed: Full Comparison
+
+This section consolidates every configuration and environment behavior change in one place.
+
+#### Current behavior (as-is)
+
+| Concern                   | Current mechanism                                                   | Where defined                              | Portable? | Problem                                           |
+| ------------------------- | ------------------------------------------------------------------- | ------------------------------------------ | --------- | ------------------------------------------------- |
+| **Dataset path**          | Hardcoded `/data/scratch/acw585/surge-simple/`                      | `configs/data/surge_simple.yaml`           | No        | Only works on university cluster                  |
+| **Checkpoint resolution** | `get-ckpt-from-wandb.sh` searches local `logs/train/` by W&B run ID | `jobs/predict/*.sh` (19 scripts)           | No        | Requires training logs on same machine            |
+| **Checkpoint path**       | `ckpt_path: ???` in eval, resolved by shell script to local path    | `configs/eval.yaml` + shell                | No        | Local filesystem dependency                       |
+| **R2 dataset access**     | Not supported                                                       | —                                          | —         | Must manually copy data to machine                |
+| **R2 checkpoint access**  | Not supported                                                       | —                                          | —         | Must train on same machine or use W&B `log_model` |
+| **R2 checkpoint upload**  | W&B `log_model: true` uploads to W&B artifacts                      | `configs/logger/wandb.yaml`                | Partially | Slow for large files, no rclone/R2 path           |
+| **Credentials**           | No `.env` pattern for R2                                            | —                                          | —         | No standardized credential management             |
+| **Display handling**      | `renderscript.sh` assumes Linux + Xvfb                              | `renderscript.sh`                          | No        | Fails on macOS (no Xvfb needed), no auto-detect   |
+| **Log directory**         | `${paths.root_dir}/logs/` via `PROJECT_ROOT`                        | `configs/paths/default.yaml`               | Yes       | Already works                                     |
+| **Predict output**        | `${paths.output_dir}/predictions`                                   | `configs/callbacks/prediction_writer.yaml` | Yes       | Already works                                     |
+| **W&B entity**            | Hardcoded `entity: "benhayes"`                                      | `configs/logger/wandb.yaml`                | No        | Wrong for other users                             |
+| **SGE scripts**           | 19 near-identical scripts, one per model                            | `jobs/predict/*.sh`                        | No        | Copy-paste errors, cluster-only                   |
+| **Eval CLI**              | Raw `python src/eval.py ...` with many args                         | Shell scripts                              | No        | No `make` targets, hard to discover               |
+
+#### Proposed behavior (to-be)
+
+| Concern                      | Proposed mechanism                                                          | Where defined                               | Portable? | Change from current                         |
+| ---------------------------- | --------------------------------------------------------------------------- | ------------------------------------------- | --------- | ------------------------------------------- |
+| **Dataset path**             | `dataset_root: data/surge-simple` (relative default)                        | `configs/data/surge_simple.yaml`            | Yes       | Hardcoded → relative default                |
+| **Dataset path override**    | CLI: `data.dataset_root=/cluster/path/`                                     | Command line                                | Yes       | Implicit → explicit                         |
+| **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in experiment configs                       | `configs/eval.yaml` + `configs/experiment/` | Yes       | Shell script → Hydra config                 |
+| **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                          | Command line                                | No        | Same as today but without shell wrapper     |
+| **Checkpoint: reproducible** | `ckpt_path: r2:synth-data/.../best.ckpt` in experiment config               | `configs/experiment/surge/flow_simple.yaml` | Yes       | **New** — portable, pinned                  |
+| **R2 dataset access**        | `data.r2_path=r2:synth-data/...` triggers auto-download in `prepare_data()` | CLI or experiment config (no default)       | Yes       | **New** — explicit opt-in                   |
+| **R2 checkpoint download**   | `r2:` prefix → rclone download to `.cache/checkpoints/`                     | `resolve_ckpt_path()` in `src/utils/`       | Yes       | **New** — replaces `get-ckpt-from-wandb.sh` |
+| **R2 checkpoint upload**     | `R2CheckpointUploader` callback, fires on every `ModelCheckpoint` save      | `configs/callbacks/` (no default, explicit) | Yes       | **New** — crash-resilient periodic upload   |
+| **Credentials**              | `.env` for R2 + W&B secrets only                                            | `.env` / `.env.example`                     | Yes       | **New** — secrets only, no paths            |
+| **Display handling**         | Auto-detect: macOS native / Linux Xvfb / Docker baked                       | `renderscript.sh`                           | Yes       | Linux-only → cross-platform                 |
+| **Log directory**            | `${paths.root_dir}/logs/` (unchanged)                                       | `configs/paths/default.yaml`                | Yes       | No change                                   |
+| **Predict output**           | `${paths.output_dir}/predictions` (unchanged)                               | `configs/callbacks/prediction_writer.yaml`  | Yes       | No change                                   |
+| **W&B entity**               | Configurable via env or CLI                                                 | `configs/logger/wandb.yaml`                 | Yes       | Hardcoded → configurable                    |
+| **SGE scripts**              | Deprecated — left as-is, not maintained                                     | `jobs/predict/*.sh`                         | No        | Active → deprecated                         |
+| **Eval CLI**                 | `make predict`, `make render`, `make metrics`                               | `Makefile`                                  | Yes       | **New** — discoverable, consistent          |
+
+#### What changes, what stays
+
+| Category       | Items that change                                                                                                                                                          | Items that stay |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| **Removed**    | Hardcoded cluster paths, `get-ckpt-from-wandb.sh` reliance, SGE as supported platform                                                                                      |                 |
+| **Deprecated** | 19 SGE scripts (left in repo, no maintenance), W&B-only checkpoint download                                                                                                |                 |
+| **New**        | `r2:` prefix resolution, `R2CheckpointUploader` callback, `r2_path` opt-in, `make` targets, cross-platform display, `.env` for secrets                                     |                 |
+| **Modified**   | `dataset_root` (hardcoded → relative default), `renderscript.sh` (Linux-only → auto-detect), W&B entity (hardcoded → configurable)                                         |                 |
+| **Unchanged**  | `ckpt_path: ???` in eval.yaml, `ckpt_path: null` in train.yaml, `log_dir`, `output_dir`, prediction writer, W&B metric logging, CSV logger, `ModelCheckpoint` save cadence |                 |
+
+#### Diff analysis
+
+**1. `.env` scope (§7.1)**
+
+|                      | Current              | Proposed                                                             |
+| -------------------- | -------------------- | -------------------------------------------------------------------- |
+| **What's in `.env`** | Nothing standardized | R2 credentials + `WANDB_API_KEY`                                     |
+| **Paths**            | Hardcoded in YAML    | Hydra defaults + CLI overrides                                       |
+| **Risk eliminated**  | —                    | Invisible state: can't read YAML + `.env` and know what happens      |
+| **Trade-off**        | —                    | Cluster users must pass CLI overrides instead of setting one env var |
+
+**2. Checkpoint resolution (§7.5)**
+
+|                            | Current                                     | Proposed                                                              |
+| -------------------------- | ------------------------------------------- | --------------------------------------------------------------------- |
+| **Eval checkpoint**        | Shell script finds local file by W&B run ID | Pinned `r2:` path in experiment config or CLI arg                     |
+| **Training checkpoint**    | `ckpt_path: null` (start fresh)             | Same — no change                                                      |
+| **Training resume**        | `ckpt_path=/local/path/last.ckpt`           | `ckpt_path=r2:synth-data/.../last.ckpt` (portable)                    |
+| **Upload during training** | W&B `log_model: true` only                  | W&B + `R2CheckpointUploader` callback (explicit opt-in)               |
+| **Risk eliminated**        | —                                           | "Checkpoint is on the cluster" — R2 makes it available everywhere     |
+| **Trade-off**              | —                                           | Requires R2 credentials; first download is slow for large checkpoints |
+
+**3. Dataset access (§6.3)**
+
+|                     | Current                    | Proposed                                                        |
+| ------------------- | -------------------------- | --------------------------------------------------------------- |
+| **Local data**      | Hardcoded path, must exist | Relative default `data/surge-simple`, override via CLI          |
+| **Remote data**     | Not supported              | `r2_path` opt-in triggers auto-download                         |
+| **Risk eliminated** | —                          | "Data is on the cluster" — R2 makes it available everywhere     |
+| **Trade-off**       | —                          | First download of a 100GB dataset takes time; cached after that |
+
+**4. Display handling (§7.3)**
+
+|                     | Current       | Proposed                                 |
+| ------------------- | ------------- | ---------------------------------------- |
+| **macOS**           | Not supported | Native display, no Xvfb                  |
+| **Headless Linux**  | Xvfb assumed  | Xvfb auto-launched if `$DISPLAY` unset   |
+| **Docker**          | Not supported | Xvfb baked into image                    |
+| **Risk eliminated** | —             | "Works on Linux only" → works everywhere |
+| **Trade-off**       | —             | None — strictly better                   |
+
+**5. SGE deprecation**
+
+|                  | Current                            | Proposed                                                                                         |
+| ---------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **SGE scripts**  | 19 scripts, actively used          | Left as-is, not maintained                                                                       |
+| **Cluster eval** | `qsub jobs/predict/flow-simple.sh` | `make predict EXPERIMENT=surge/flow_simple CKPT=r2:...` (SSH to cluster, run make target)        |
+| **Risk**         | —                                  | If SGE scripts break, no fix is coming. Acceptable — cluster is not the primary dev environment. |
+
 ## 8. Dependency Graph & Parallelism
 
 ### Issue Dependencies
