@@ -97,7 +97,7 @@ jobs:
           fi
 
           # --- Condition 2: All CI checks pass ---
-          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '.check_runs[] | select(.name != "auto-approve" and .name != "claude-review") | "\(.status) \(.conclusion // "none") \(.name)"')
+          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '.check_runs[] | select(.name != "auto-approve" and .name != "Auto-approve status" and .name != "claude-review") | "\(.status) \(.conclusion // "none") \(.name)"')
           PENDING=$(echo "$CHECK_DATA" | grep -c "^queued\|^in_progress" || true)
           FAILED=$(echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" | grep -c . || true)
           if [ "$PENDING" -gt 0 ]; then
