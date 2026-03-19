@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Epics group related phases/stages under a single tracking issue.
-        Each epic should have a corresponding design doc.
+        Link a design doc if one exists (brain dumps count).
 
   - type: input
     id: design-doc
