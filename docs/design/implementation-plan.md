@@ -207,6 +207,18 @@ ______________________________________________________________________
 
 **Verification:** Push to dev branch → CI runs → green
 
+### Step 1.5: .env.example ([#82](https://github.com/ktinubu/synth-permutations/issues/82))
+
+**Goal:** Add `.env.example` with R2, W&B, RunPod env var template so new contributors
+know which credentials are needed without exposing real values.
+
+**Files to create:**
+
+- `.env.example` — template with placeholder values for `R2_ACCESS_KEY_ID`,
+  `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `WANDB_API_KEY`, `RUNPOD_API_KEY`
+
+**Verification:** File exists, `.env` is in `.gitignore`, no real credentials committed.
+
 ______________________________________________________________________
 
 ## 6. Phase 2 — Pipeline Core ([#69](https://github.com/ktinubu/synth-permutations/issues/69))
@@ -337,12 +349,12 @@ ______________________________________________________________________
 def test_storage_shard_lifecycle(tmp_path):
     """Write complete shard lifecycle, verify directory layout matches design doc."""
     storage = LocalStorageBackend(root=tmp_path)
-    run_id, shard_id = "test-10k-1k-20260315-120000", "shard-000042"
+    run_id, shard_id = "test-10k-1k-20260315-120000", 42
     worker_id, attempt = "pod-abc", "uuid1234"
 
     storage.write_rendering_marker(run_id, shard_id, worker_id, attempt)
     storage.upload_file(_create_fake_h5(tmp_path / "local.h5"), run_id,
-        f"metadata/workers/shards/{shard_id}/{worker_id}-{attempt}.h5")
+        f"metadata/workers/shards/shard-{shard_id:06d}/{worker_id}-{attempt}.h5")
     storage.write_valid_marker(run_id, shard_id, worker_id, attempt)
 
     markers = storage.list_shard_markers(run_id, shard_id)
@@ -350,7 +362,7 @@ def test_storage_shard_lifecycle(tmp_path):
     assert f"{worker_id}-{attempt}.h5" in markers
     assert f"{worker_id}-{attempt}.valid" in markers
 
-    shard_dir = tmp_path / run_id / "metadata/workers/shards" / shard_id
+    shard_dir = tmp_path / run_id / "metadata/workers/shards" / f"shard-{shard_id:06d}"
     assert (shard_dir / f"{worker_id}-{attempt}.valid").exists()
 ```
 
@@ -499,7 +511,7 @@ ______________________________________________________________________
 - `run_worker(task_spec, storage, generate_fn, max_workers=None)` — manages concurrent
   shard rendering with per-shard process isolation.
 - **Per-shard process isolation:** Each shard renders in a separate OS process via
-  `multiprocessing.Process(start_method="spawn")`. The parent worker spawns one child
+  `multiprocessing.get_context("spawn").Process(...)`. The parent worker spawns one child
   per shard, catches exit codes (0 = success, -11 = SIGSEGV, -9 = OOM kill), and handles
   failures without losing other in-progress shards. `spawn` starts a fresh Python
   interpreter per child — no inherited VST plugin state, no shared mutable globals.
@@ -536,8 +548,8 @@ ______________________________________________________________________
 
 - Worker lifecycle marker ordering — assert `.rendering` exists in storage before `.valid`
 - Quarantine path: validation failure → `.invalid` marker + shard in `quarantine/`
-- Process crash isolation: fake `generate_fn` that raises `SystemExit(-11)` (simulating
-  SIGSEGV) → parent catches exit code, marks shard invalid, continues to next shard
+- Process crash isolation: fake `generate_fn` that calls `os.kill(os.getpid(), signal.SIGSEGV)`
+  in the child process → parent sees `exitcode == -11`, marks shard invalid, continues to next
 - Per-shard timeout: slow `generate_fn` → child killed after timeout, shard marked invalid
 - Failure isolation, report generation, content hashes
 - LocalBackend submit + metadata
@@ -592,7 +604,8 @@ Click group from `cli.py`).
 - Early validation: check `plugin_path` exists before materialization — actionable
   error if VST3 bundle not found (avoids unclear renderer_version extraction failure).
 - First run: config → validate → extract `renderer_version` → materialize spec →
-  upload spec + source config to `metadata/config.yaml` → if `is_repo_dirty`, upload
+  upload frozen spec to `metadata/input_spec.json` + source config to
+  `metadata/config.yaml` (provenance copy) → if `is_repo_dirty`, upload
   `git diff` to `metadata/run_diff.patch` → reconcile → partition → submit → exit.
   Print `run_id` prominently so user can use it for status/finalize.
 - Retry: `--run-id` → load spec → reconcile → submit missing → exit
@@ -621,9 +634,9 @@ def test_generate_cli_end_to_end(tmp_path):
     storage = LocalStorageBackend(root=storage_root)
     for i in range(4):
         assert any(m.endswith(".valid")
-            for m in storage.list_shard_markers(run_id, f"shard-{i:06d}"))
-    assert storage.exists(run_id, "metadata/input_spec.json")
-    assert storage.exists(run_id, "metadata/config.yaml")  # provenance copy
+            for m in storage.list_shard_markers(run_id, i))  # shard_id is int
+    assert storage.exists(run_id, "metadata/input_spec.json")  # frozen PipelineSpec
+    assert storage.exists(run_id, "metadata/config.yaml")  # source YAML (provenance)
 ```
 
 ______________________________________________________________________
@@ -834,10 +847,14 @@ These tests are written incrementally as each PR lands.
 
 - Hard timeout in `scripts/docker_entrypoint.sh` — kill worker process after
   configurable max duration (`WORKER_TIMEOUT_SECONDS`)
-- EXIT trap still fires on timeout kill (debug log + error.json uploaded)
+- EXIT trap fires on SIGTERM timeout kill (debug log + error.json uploaded).
+  **Note:** EXIT traps do NOT fire on SIGKILL (OOM-killer, `kill -9`). For hard kills,
+  logs are lost unless an out-of-process shipper is added. Current mitigation: use
+  SIGTERM with a grace period before SIGKILL escalation, and rely on reconciliation
+  (Layer 3) to detect the missing shards.
 - RunPod `auto-stop` configuration in `RunPodBackend.submit()`
 - `--timeout` flag on `generate` command
-- BATS test: worker killed after timeout still uploads debug log
+- BATS test: worker killed via SIGTERM after timeout still uploads debug log
 
 ______________________________________________________________________
 
@@ -859,7 +876,7 @@ ______________________________________________________________________
 04. Integration tests use `LocalStorageBackend`, not real R2
 05. W&B optional (`--skip-wandb`) — tests skip it; mock test for artifact structure
 06. Workers use ThreadPoolExecutor for parallel shard generation
-07. Each shard renders in a child process via `multiprocessing.Process(start_method="spawn")`.
+07. Each shard renders in a child process via `multiprocessing.get_context("spawn").Process(...)`.
     Parent passes `generate_fn` + `shard_spec` as Python args, child calls
     `random.seed(shard_spec.seed)` before rendering. Provides OS-level crash isolation
     (SIGSEGV/OOM kill only one shard), per-shard timeout, and clean VST plugin state.

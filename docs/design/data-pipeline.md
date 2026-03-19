@@ -703,7 +703,7 @@ A worker from a previous `generate` invocation hangs for hours, then finally upl
 The pipeline handles three categories of failure, including crashes from data generation code we don't own (the Surge XT VST plugin can SIGSEGV, OOM, or produce corrupt output).
 
 **Layer 1 — Per-shard process isolation:**
-Each shard is rendered in a separate OS process (`multiprocessing.Process` with `start_method="spawn"`). This provides crash isolation at the OS level: a SIGSEGV or OOM kill in the VST plugin terminates only that child process — the parent worker catches the non-zero exit code, marks the shard as invalid, quarantines it, and moves to the next shard. The worker report accumulates per-shard results including exit codes for crashed shards.
+Each shard is rendered in a separate OS process using a spawn context (`multiprocessing.get_context("spawn").Process(...)`). This provides crash isolation at the OS level: a SIGSEGV or OOM kill in the VST plugin terminates only that child process — the parent worker catches the non-zero exit code, marks the shard as invalid, quarantines it, and moves to the next shard. The worker report accumulates per-shard results including exit codes for crashed shards.
 
 Per-shard process isolation is necessary because try/except only catches Python exceptions — it cannot intercept SIGSEGV, OOM kills, or other OS-level crashes from the VST plugin (native C++ code). Without process boundaries, a single shard crash would kill the entire worker and all its in-progress shards.
 
@@ -711,6 +711,8 @@ See [§7.8.1](#781-per-shard-process-isolation) for the design decision, trade-o
 
 **Layer 2 — Entrypoint crash trap:**
 A bash EXIT trap uploads the debug log and a fallback error JSON to R2 if the Python worker process itself dies entirely (import error, uncaught exception that escapes Layer 1). The debug log captures everything up to the crash. Even if no worker report is written, the log survives. Note: Layer 1 process isolation handles most crash scenarios (SIGSEGV, OOM per shard). Layer 2 catches failures of the worker process itself.
+
+**Limitation:** EXIT traps do not fire on SIGKILL (`kill -9`), which is how the Linux OOM-killer terminates processes. If the worker's parent process is OOM-killed, no logs are uploaded. Mitigation: (1) the entrypoint uses SIGTERM with a grace period before escalating to SIGKILL for timeouts, (2) Layer 3 reconciliation detects the missing shards regardless, and (3) RunPod pod logs provide a fallback audit trail for OOM events.
 
 **Layer 3 — Reconciliation fills gaps:**
 Regardless of how a shard was lost (crash, timeout, upload failure, corrupt output), reconciliation detects it as missing. The next `generate` invocation launches workers for exactly the missing shards. No manual investigation of failure modes is required to resume.
@@ -728,10 +730,13 @@ All worker artifacts live under `metadata/workers/`. Unique filenames per attemp
 
 **Problem:** The VST plugin (Surge XT) is native C++ code loaded into the Python process. It can SIGSEGV, OOM, or corrupt global state — failures that Python's try/except cannot catch. Without process boundaries, a single shard crash kills the entire worker and all its in-progress shards.
 
-**Decision:** Each shard renders in a separate OS process via `multiprocessing.Process` with `start_method="spawn"`.
+**Decision:** Each shard renders in a separate OS process via a spawn context (`ctx = multiprocessing.get_context("spawn"); ctx.Process(...)`).
 
 ```python
 import multiprocessing
+import random
+
+_spawn_ctx = multiprocessing.get_context("spawn")
 
 def _render_shard(shard_spec, shard_path, generate_fn):
     """Runs in a child process — SIGSEGV here won't kill the parent."""
@@ -739,7 +744,7 @@ def _render_shard(shard_spec, shard_path, generate_fn):
     generate_fn(shard_path, shard_spec)
 
 # In the parent worker:
-p = multiprocessing.Process(
+p = _spawn_ctx.Process(
     target=_render_shard,
     args=(shard_spec, local_path, generate_fn),
 )
@@ -1143,7 +1148,7 @@ class ShardSpec(BaseModel):
     row_count: int
     expected_datasets: list[str]  # ["audio", "mel_spec", "param_array"]
     audio_shape: tuple[int, int]
-    mel_shape: tuple[int, int]
+    mel_shape: tuple[int, int]    # per-row shape of mel_spec dataset: (mels, frames)
     param_shape: tuple[int, int]
 
 class PipelineSpec(BaseModel):
