@@ -8,9 +8,6 @@ on:
   pull_request:
     types: [opened, labeled]
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
 
 jobs:
   claude-review:
