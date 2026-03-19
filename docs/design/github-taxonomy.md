@@ -77,34 +77,12 @@ gh project view <number> --owner ktinubu
 
 20 labels organized into 4 categories:
 
-```mermaid
-mindmap
-  root((Labels))
-    Status / Workflow
-      bug
-      duplicate
-      invalid
-      wontfix
-      blocked
-    Feature / Type
-      enhancement
-      documentation
-      good first issue
-      help wanted
-      question
-    Domain
-      data-pipeline
-      ci-automation
-      code-health
-      evaluation
-      testing
-      training
-    Priority
-      P0 🔴
-      P1 🟠
-      P2 🟡
-      P3 🔵
-```
+| Category           | Labels                                                                               |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| **Domain**         | `data-pipeline`, `ci-automation`, `code-health`, `evaluation`, `testing`, `training` |
+| **Priority**       | `P0 🔴`, `P1 🟠`, `P2 🟡`, `P3 🔵`                                                   |
+| **Status**         | `bug`, `duplicate`, `invalid`, `wontfix`, `blocked`                                  |
+| **Feature / Type** | `enhancement`, `documentation`, `good first issue`, `help wanted`, `question`        |
 
 ### Domain labels
 
@@ -169,70 +147,25 @@ Epics are umbrella issues that group related phases, steps, or sub-issues. Each 
 | #99  | feat(storage): R2 integration for datasets and checkpoints | 4 pieces   | Eval + Pipeline | `eval-pipeline.md` §6                |
 | #107 | feat(training): training pipeline & ops                    | TBD        | Training        | `training-ops-braindump.md` (PR #84) |
 
-### Data pipeline epic hierarchy
+### Hierarchy pattern
+
+Every work stream follows the same structure:
 
 ```mermaid
 graph TD
-    E74["#74 Epic: Distributed Data Pipeline"]
-
-    E74 --> P1["#68 Phase 1: Foundation"]
-    E74 --> P2["#69 Phase 2: Pipeline Core"]
-    E74 --> P3["#70 Phase 3: Docker"]
-    E74 --> P4["#71 Phase 4: Pipeline Engine"]
-    E74 --> P5["#72 Phase 5: Pipeline CLI"]
-    E74 --> P6["#73 Phase 6: Production & E2E"]
-    E74 --> XC1["#76 Cross-cutting: Testing"]
-    E74 --> XC2["#77 Cross-cutting: Reliability"]
-
-    P1 --> S11["#78 Step 1.1 ✅"]
-    P1 --> S12["#79 Step 1.2"]
-    P1 --> S13["#80 Step 1.3"]
-    P1 --> S14["#81 Step 1.4"]
-
-    P2 --> S21a["#18 Step 2.1a: Schemas"]
-    P2 --> S21b["#20 Step 2.1b: Versioning"]
-    P2 --> S21c["#22 Step 2.1c: Shard Assignment"]
-    P2 --> S22["#102 Step 2.2: Storage"]
-    P2 --> S23["#103 Step 2.3: Validation"]
-
-    P3 --> S31["#7 Step 3.1: Docker"]
-
-    P4 --> S41["#104 Step 4.1: Reconciliation"]
-    P4 --> S42["#105 Step 4.2: Compute + Worker"]
-
-    P5 --> S51["#17 CLI"]
-    P5 --> S52["#19 WDS Output"]
-    P5 --> S53["#21 Status Reporting"]
-
-    P6 --> S61["#106 Step 6.1: RunPod + E2E"]
-
-    style S11 fill:#22c55e,color:#fff
+    Epic["Epic"] --> Phase1["Phase 1"]
+    Epic --> Phase2["Phase 2"]
+    Epic --> PhaseN["Phase N"]
+    Phase1 --> Step1["Step 1.1"]
+    Phase1 --> Step2["Step 1.2"]
+    Phase2 --> Step3["Step 2.1"]
 ```
 
-### Evaluation pipeline epic hierarchy
-
-```mermaid
-graph TD
-    E98["#98 Epic: Evaluation Pipeline"]
-    E99["#99 Epic: R2 Integration"]
-
-    E98 --> I85["#85 Predict Stage"]
-    E98 --> I86["#86 Render Stage"]
-    E98 --> I87["#87 Metrics Stage"]
-    E98 --> I88["#88 Docker Eval"]
-    E98 --> I89["#89 E2E CI"]
-
-    E99 --> I90["#90 rclone Wrapper"]
-    E99 --> I91["#91 R2 Dataset Download"]
-    E99 --> I92["#92 R2 Checkpoint Sync"]
-    E99 --> I93["#93 R2 Artifact Upload"]
-```
+For the full hierarchy of each work stream, see the corresponding design doc or implementation plan.
 
 ## 6. Parent-Child Relationships
 
 All 5 projects include the **Parent issue** and **Sub-issues progress** fields. GitHub natively tracks these relationships and auto-computes progress bars.
-
-A previous body-text convention (`**Parent:** #N` in issue bodies) has been retired in favor of native sub-issues.
 
 ## 7. Phase/Step Convention
 
@@ -268,76 +201,17 @@ All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs wi
 
 - **`blocked` label** — applied to issues that cannot start yet
 - **`## Blocked by` section** in issue body — lists specific issue numbers
-- **Design doc dependency graphs** — ASCII art in `eval-pipeline.md` §8 (PR #101), blocking matrix tables
+- **Design doc dependency graphs** — ASCII art and blocking matrices in design docs
+- **File-overlap sequencing** — within the same work stream, steps that modify the same files should be sequenced to avoid merge conflicts. This doesn’t require the `blocked` label — just coordinate the PR order.
 
-### Data pipeline critical path
+### Critical paths
 
-```mermaid
-graph LR
-    P1["#68 Phase 1<br/>Foundation"]
-    P2["#69 Phase 2<br/>Pipeline Core"]
-    P3["#70 Phase 3<br/>Docker"]
-    P4["#71 Phase 4<br/>Engine"]
-    P5["#72 Phase 5<br/>CLI"]
-    P6["#73 Phase 6<br/>Production"]
+Each work stream’s design doc defines a dependency DAG. The critical path determines which phases must complete before others can start:
 
-    P1 --> P2
-    P2 --> P3
-    P2 --> P4
-    P3 --> P5
-    P4 --> P5
-    P5 --> P6
+- **Data pipeline:** Phase 1 → Phase 2 → {Phase 3, Phase 4} → Phase 5 → Phase 6
+- **Eval pipeline:** #94 → #85 → #88 → #89 (4-step critical path)
 
-    style P1 fill:#f59e0b,color:#fff
-```
-
-### Eval pipeline critical path
-
-```mermaid
-graph LR
-    I94["#94 Config<br/>Cleanup"]
-    I85["#85 Predict"]
-    I86["#86 Render"]
-    I87["#87 Metrics"]
-    I88["#88 Docker"]
-    I89["#89 E2E CI"]
-    I90["#90 rclone<br/>Wrapper"]
-    I91["#91 R2<br/>Dataset"]
-    I92["#92 R2<br/>Checkpoint"]
-    I93["#93 R2<br/>Artifacts"]
-
-    I94 --> I85
-    I85 --> I88
-    I86 --> I88
-    I87 --> I88
-    I88 --> I89
-
-    I90 --> I91
-    I90 --> I92
-    I90 --> I93
-    I94 --> I91
-    I87 --> I93
-
-    style I94 fill:#f59e0b,color:#fff
-    style I85 fill:#f59e0b,color:#fff
-    style I88 fill:#f59e0b,color:#fff
-    style I89 fill:#f59e0b,color:#fff
-```
-
-### Eval pipeline blocking matrix
-
-| Issue | Title               | Blocked by    | Blocks                  |
-| ----- | ------------------- | ------------- | ----------------------- |
-| #94   | Config cleanup      | —             | #85, #91                |
-| #85   | Portable predict    | #94           | #88, #89, #97           |
-| #86   | Portable render     | —             | #88, #89, #97           |
-| #87   | Portable metrics    | —             | #88, #89, #93, #96, #97 |
-| #90   | rclone wrapper      | —             | #91, #92, #93           |
-| #88   | Docker eval         | #85, #86, #87 | #89                     |
-| #89   | E2E CI              | #85–#88       | —                       |
-| #91   | R2 dataset download | #90, #94      | —                       |
-| #92   | R2 checkpoint sync  | #90           | —                       |
-| #93   | R2 artifact upload  | #90, #87      | —                       |
+For detailed blocking matrices and parallel execution windows, see the respective design docs.
 
 ### Blocked issue count
 
@@ -482,38 +356,16 @@ erDiagram
 
 ### Project field comparison
 
-```mermaid
-graph TB
-    subgraph "Shared Fields (all projects)"
-        F1[Title]
-        F2[Assignees]
-        F3["Status (Todo/In Progress/Done)"]
-        F4[Labels]
-        F5[Linked PRs]
-        F6[Milestone]
-        F7[Repository]
-        F8[Reviewers]
-        F9[Parent issue]
-        F10[Sub-issues progress]
-    end
-
-    subgraph "All projects"
-        F11[Priority]
-    end
-
-    subgraph "All except Training"
-        F12[Start Date]
-        F13[Target Date]
-    end
-
-    subgraph "Data Pipeline + Evaluation"
-        F14[Phase]
-    end
-
-    subgraph "Data Pipeline only"
-        F15["v 1.0.0"]
-    end
-```
+| Field               | CI  | Data Pipeline | Code Health | Evaluation | Training |
+| ------------------- | --- | ------------- | ----------- | ---------- | -------- |
+| Status              | ✅  | ✅            | ✅          | ✅         | ✅       |
+| Priority            | ✅  | ✅            | ✅          | ✅         | ✅       |
+| Parent issue        | ✅  | ✅            | ✅          | ✅         | ✅       |
+| Sub-issues progress | ✅  | ✅            | ✅          | ✅         | ✅       |
+| Start Date          | ✅  | ✅            | ✅          | ✅         | —        |
+| Target Date         | ✅  | ✅            | ✅          | ✅         | —        |
+| Phase               | —   | ✅            | —           | ✅         | —        |
+| v 1.0.0             | —   | ✅            | —           | —          | —        |
 
 ### Issue lifecycle
 
