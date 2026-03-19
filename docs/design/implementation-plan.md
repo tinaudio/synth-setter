@@ -255,6 +255,13 @@ Sub-issues: [#18](https://github.com/ktinubu/synth-permutations/issues/18) (conf
 - `materialize_spec(config: RunConfig, timestamp=None, renderer_version=None) -> PipelineSpec`.
   Optional `renderer_version` override for testing; test fixtures pass `"test-1.0"` explicitly.
 
+**Design doc schema gaps to fix alongside this step:**
+
+- `ValidationSummary` class not defined in design doc (referenced in `DatasetCard` §14.2)
+- `base_seed` not in `PipelineSpec` schema §14.1 (referenced in text)
+- Generation params (preset_path, channels, etc.) not in `PipelineSpec` schema §14.1
+- `shard_manifest` not in `DatasetCard` schema §14.2 (mentioned in §7.6 prose)
+
 **Unit tests (write first):**
 
 - Construction, strict validation, immutability, JSON round-trip
@@ -303,14 +310,19 @@ ______________________________________________________________________
 
 **Key behaviors:**
 
-- Path computation matching design doc §6 R2 layout
+- Path computation matching design doc §6 R2 layout, including helpers for:
+  - Shard lifecycle: `write_rendering_marker`, `write_valid_marker`, `write_invalid_marker`
+  - Quarantine: `upload_to_quarantine(run_id, shard_id, worker_id, attempt, local_path)`
+  - Worker attempts: `upload_report(run_id, worker_id, attempt, report)`,
+    `upload_debug_log(run_id, worker_id, attempt, log_path)`
+  - Finalize outputs: paths for `data/shards/`, `data/train.h5`, `data/stats.npz`,
+    `metadata/dataset.json`, `metadata/dataset.complete`
 - `StorageBackend` protocol: `list_shard_markers`, `write_marker`, `upload_file`,
   `download_file`, `list_prefix`, `exists`
 - `LocalStorageBackend`: filesystem-based
 - `R2StorageBackend`: wraps `RcloneUploader.upload()` for directory uploads, adds
   `rclone copyto` (single file), `rclone lsf` (list), `rclone lsjson` (exists) for
   file-level ops. All rclone operations include `--checksum` (design doc §11.2).
-- Marker helpers: `write_rendering_marker`, `write_valid_marker`, etc.
 
 **Unit tests (write first):**
 
@@ -489,8 +501,14 @@ ______________________________________________________________________
   **locally** → validate locally → upload `.h5` to storage → write `.valid` to storage.
   `.rendering` in remote storage survives worker death (crash resilience).
 - Per-shard try/except isolation, concurrent execution
+- On validation failure: upload corrupt shard to `quarantine/`, write `.invalid` marker,
+  log failure details (design doc §7.2). `.rendering` marker remains (append-only, never deleted).
+- Skip-if-valid optimization: before generating, check staging directory for an existing
+  `.valid` shard. If found, skip and move to next shard. Optimization, not correctness
+  requirement (design doc §7.7).
 - Produces `WorkerReport` with per-shard results, content hashes (SHA-256), timing
-- Creates JSONL debug log via structlog file handler (design doc §7.8, Appendix E.1)
+- Creates JSONL debug log via structlog file handler to a known local path so the bash
+  EXIT trap can upload it on crash (design doc §7.8, Appendix E.1)
 - Worker calls `make_dataset()` as Python function with `random.seed(shard_spec.seed)`
   set per-shard — avoids missing `--seed` CLI param issue.
 
@@ -505,6 +523,7 @@ ______________________________________________________________________
 **Unit tests (write first):**
 
 - Worker lifecycle marker ordering — assert `.rendering` exists in storage before `.valid`
+- Quarantine path: validation failure → `.invalid` marker + shard in `quarantine/`
 - Failure isolation, report generation, content hashes
 - LocalBackend submit + metadata
 
@@ -552,7 +571,11 @@ Click group from `cli.py`).
 
 - `python -m pipeline generate --config <yaml> --workers N --backend local|runpod`
 - `--storage-root` (local path for LocalBackend, or env-based for R2)
-- Auth validation: check R2 connectivity + RunPod API key before launching
+- `--log-level` (default: `INFO`, options: `DEBUG`, `INFO`, `WARNING`)
+- Auth validation: check R2 connectivity + RunPod API key before launching.
+  On failure: clear error message, exit 1, no workers launched.
+- Early validation: check `plugin_path` exists before materialization — actionable
+  error if VST3 bundle not found (avoids unclear renderer_version extraction failure).
 - First run: config → validate → extract `renderer_version` → materialize spec →
   upload spec + source config to `metadata/config.yaml` → if `is_repo_dirty`, upload
   `git diff` to `metadata/run_diff.patch` → reconcile → partition → submit → exit.
@@ -563,7 +586,10 @@ Click group from `cli.py`).
 
 **Unit tests (write first):**
 
-- First run creates spec, retry loads existing, config drift error, dry-run no-op
+- First run creates spec, retry loads existing, config drift error
+- `--dry-run` prints shard assignments, creates no spec, submits no work
+- Auth validation failure: missing R2 credentials → clear error, exit 1, no workers
+- `plugin_path` validation: nonexistent path → actionable error before materialization
 
 **Reference test:**
 
@@ -597,9 +623,12 @@ ______________________________________________________________________
 **Key behaviors:**
 
 - `python -m pipeline status --run-id <id> --storage-root <path>` — prints shard counts, missing IDs
+- `--json` flag for machine-readable output (design doc §7.4 shows both table and structured output)
+- Overlay recent worker errors from `metadata/workers/attempts/*/report.json` when
+  available (design doc §7.4 status output example)
 - Exit 0 if all valid, 1 otherwise. No writes to storage.
 
-**Unit tests:** All-valid exit 0, missing exit 1, invalid shows details
+**Unit tests:** All-valid exit 0, missing exit 1, invalid shows details, `--json` output parseable
 
 **Reference test:**
 
@@ -829,6 +858,9 @@ ______________________________________________________________________
 ______________________________________________________________________
 
 ## Appendix: New Gaps Found During Plan Port
+
+All gaps below have been folded into their relevant steps above. This appendix
+serves as a changelog of what was added beyond the original implementation plan.
 
 **GP1. `generate --dry-run` not tested in reference tests.**
 Step 11 lists `--dry-run` as a behavior but the reference test doesn't exercise it.
