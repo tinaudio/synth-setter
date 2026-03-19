@@ -8,125 +8,46 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                        | What it covers                                        |
-| --- | -------------------------------------------------------------- | ----------------------------------------------------- |
-| 1   | [Overview](#1-overview)                                        | How GitHub metadata organizes work in this repo       |
-| 2   | [Issue Types](#2-issue-types)                                  | Native Epic, Phase, Step, Bug classification          |
-| 3   | [Projects](#3-projects)                                        | Org-level GitHub Projects V2, fields, status workflow |
-| 4   | [Labels](#4-labels)                                            | Domain labels for work stream classification          |
-| 5   | [Milestones](#5-milestones)                                    | Milestones mapping to product releases                |
-| 6   | [Epics & Hierarchy](#6-epics--hierarchy)                       | Epic → Phase → Step via native sub-issues             |
-| 7   | [Phase/Step Convention](#7-phasestep-convention)               | Unified Phase/Step hierarchy, decoupled from PRs      |
-| 8   | [Blocking & Dependencies](#8-blocking--dependencies)           | Native blocking dependencies, critical paths          |
-| 9   | [Priority](#9-priority)                                        | Priority via Issue Fields                             |
-| 10  | [Cross-Project Issue Sharing](#10-cross-project-issue-sharing) | Issues that appear in multiple projects               |
-| 11  | [Design Doc ↔ Issue Linkage](#11-design-doc--issue-linkage)    | How design docs reference and track GitHub issues     |
-| 12  | [Entity-Relationship Model](#12-entity-relationship-model)     | How all metadata types relate to each other           |
+| §   | Section                                                    | What it covers                                    |
+| --- | ---------------------------------------------------------- | ------------------------------------------------- |
+| 1   | [Overview](#1-overview)                                    | How GitHub metadata organizes work in this repo   |
+| 2   | [Issue Types](#2-issue-types)                              | Native Epic, Phase, Step, Bug, Task               |
+| 3   | [Hierarchy](#3-hierarchy)                                  | Epic → Phase → Step via native sub-issues         |
+| 4   | [Blocking & Dependencies](#4-blocking--dependencies)       | Native blocking, file-overlap sequencing          |
+| 5   | [Priority](#5-priority)                                    | Native Issue Fields                               |
+| 6   | [Labels](#6-labels)                                        | Domain labels for work stream classification      |
+| 7   | [Milestones](#7-milestones)                                | Milestones mapping to product releases            |
+| 8   | [Projects](#8-projects)                                    | Org-level GitHub Projects V2, views, status       |
+| 9   | [Design Doc ↔ Issue Linkage](#9-design-doc--issue-linkage) | How design docs reference and track GitHub issues |
+| 10  | [Schema](#10-schema)                                       | Entity-relationship model                         |
+| 11  | [Issue Lifecycle](#11-issue-lifecycle)                     | How an issue moves from creation to close         |
+| 12  | [Changes Required](#12-changes-required)                   | Migration steps and setup for native features     |
 
 ______________________________________________________________________
 
 ## 1. Overview
 
-synth-permutations organizes work using GitHub’s native issue tracking features: **Issue Types** (Epic, Phase, Step, Bug), **native blocking** dependencies, **sub-issues** for hierarchy, **Projects V2** for views, and **milestones** for release targets. Labels provide domain classification.
+synth-permutations organizes work using GitHub's native issue tracking: **Issue Types** (Epic, Phase, Step, Bug, Task), **native blocking**, **sub-issues** for hierarchy, **Issue Fields** for priority, **Projects V2** for views, and **milestones** for releases. Labels provide domain classification only.
 
-Each work stream follows: **design doc → Epic → Phases → Steps**, with blocking relationships tracked via GitHub’s native dependency system. Projects provide board, table, hierarchy, and roadmap views.
+Each work stream follows: **design doc → Epic → Phases → Steps**.
 
 ## 2. Issue Types
 
-Issues are classified using GitHub’s native Issue Types (org-level):
+Issues are classified using GitHub's native Issue Types (org-level):
 
 | Type      | Purpose                                          | Example                                |
 | --------- | ------------------------------------------------ | -------------------------------------- |
 | **Epic**  | Umbrella issue grouping phases for a work stream | #74 distributed data pipeline          |
 | **Phase** | Large feature area within an epic                | #69 Pipeline Core                      |
 | **Step**  | Testable unit of work within a phase             | #102 storage layer                     |
-| **Bug**   | Something isn’t working                          | #10 OmegaConf resolver re-registration |
-| **Task**  | General work that doesn’t fit the above          | CI improvements, code health goals     |
+| **Bug**   | Something isn't working                          | #10 OmegaConf resolver re-registration |
+| **Task**  | General work that doesn't fit the above          | CI improvements, code health goals     |
 
-Issue types replace naming conventions — the type is set on the issue itself, not inferred from the title prefix. Types are filterable in issue lists and show distinct icons.
+Types are set on the issue itself, filterable in issue lists, and show distinct icons.
 
-## 3. Projects
+## 3. Hierarchy
 
-Org-level GitHub Projects V2, linked to the repo:
-
-| #   | Project         | Custom Fields Beyond Defaults            |
-| --- | --------------- | ---------------------------------------- |
-| 1   | CI & Automation | Priority, Start Date, Target Date        |
-| 2   | Data Pipeline   | Phase, Priority, Start Date, Target Date |
-| 3   | Code Health     | Priority, Start Date, Target Date        |
-| 4   | Evaluation      | Phase, Priority, Start Date, Target Date |
-| 5   | Training        | Priority                                 |
-
-### Default fields (all projects)
-
-Every project includes these built-in fields:
-
-- **Title**, **Assignees**, **Labels**, **Linked pull requests**, **Milestone**, **Repository**, **Reviewers**
-- **Status** — single-select: `Todo` → `In Progress` → `Done`
-- **Parent issue** — native GitHub sub-issue tracking
-- **Sub-issues progress** — auto-computed from sub-issue states
-
-### Status workflow
-
-`Todo` → `In Progress` → `Done` (can move back to Todo if re-blocked)
-
-### Hierarchy view
-
-Projects support a **hierarchy view** that renders the Epic → Phase → Step tree directly in table views, expandable up to 8 levels deep.
-
-## 4. Labels
-
-Labels classify issues by **domain** (which work stream) and **workflow status**:
-
-| Category           | Labels                                                                               |
-| ------------------ | ------------------------------------------------------------------------------------ |
-| **Domain**         | `data-pipeline`, `ci-automation`, `code-health`, `evaluation`, `testing`, `training` |
-| **Status**         | `duplicate`, `invalid`, `wontfix`                                                    |
-| **Feature / Type** | `good first issue`, `help wanted`, `question`                                        |
-
-### Domain labels
-
-| Label           | Color   | Description                                   | Project |
-| --------------- | ------- | --------------------------------------------- | ------- |
-| `data-pipeline` | #0e8a16 | Data Pipeline project                         | #2      |
-| `ci-automation` | #1d76db | CI & Automation project                       | #1      |
-| `code-health`   | #fbca04 | Code Health project                           | #3      |
-| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference   | #4      |
-| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config | #1      |
-| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure    | #5      |
-
-### What moved to native features
-
-| Former label/convention   | Replaced by                                |
-| ------------------------- | ------------------------------------------ |
-| `bug`, `enhancement`      | Issue Types (Bug, Task, Epic, Phase, Step) |
-| `blocked`                 | Native blocking (§8)                       |
-| `P0`–`P3` priority labels | Issue Fields — native Priority field (§9)  |
-
-## 5. Milestones
-
-| Milestone            | Work Stream     |
-| -------------------- | --------------- |
-| data-pipeline v1.0.0 | Data Pipeline   |
-| evaluation v1.0.0    | Evaluation      |
-| training v1.0.0      | Training        |
-| ci-automation v1.0.0 | CI & Automation |
-| code-health v1.0.0   | Code Health     |
-
-Every work stream has a milestone. Sub-issues automatically inherit their parent’s milestone.
-
-## 6. Epics & Hierarchy
-
-Epics are issues with the **Epic** issue type that group related phases and steps via native sub-issues. Each has a corresponding design doc:
-
-| Epic | Title                                                      | Project         | Design Doc                           |
-| ---- | ---------------------------------------------------------- | --------------- | ------------------------------------ |
-| #74  | feat(pipeline): distributed data pipeline                  | Data Pipeline   | `data-pipeline.md`                   |
-| #98  | feat(eval): evaluation pipeline — predict, render, metrics | Evaluation      | `eval-pipeline.md` (PR #101)         |
-| #99  | feat(storage): R2 integration for datasets and checkpoints | Eval + Pipeline | `eval-pipeline.md` §6                |
-| #107 | feat(training): training pipeline & ops                    | Training        | `training-ops-braindump.md` (PR #84) |
-
-### Hierarchy
+All work streams use the same structure:
 
 ```
 Epic (type: Epic)
@@ -138,33 +59,33 @@ Epic (type: Epic)
 └── Phase N
 ```
 
-All hierarchy is tracked via native sub-issues (up to 8 levels). Projects render this as an expandable tree via **hierarchy view**.
+- **Phase** — a large feature or functional area. Each phase is a sub-issue of its epic.
+- **Step** — a testable unit of work within a phase. Each step is a sub-issue of its phase.
+- **PR** — a shipping unit, orthogonal to the hierarchy. A PR may contain one step, multiple small steps, or part of a large step.
 
-## 7. Phase/Step Convention
-
-All work streams use a unified **Phase / Step** hierarchy:
-
-- **Phase** — a large feature or functional area (e.g., "Pipeline Core", "Portable Stages"). Each phase is a GitHub issue with the **Phase** issue type and a sub-issue of its epic.
-- **Step** — a testable unit of work within a phase (e.g., "Schema validation", "rclone wrapper"). Each step is a GitHub issue with the **Step** issue type and a sub-issue of its phase.
-- **PR** — a shipping unit, orthogonal to the hierarchy. A PR may contain one step, multiple small steps, or part of a large step. PRs are not prescribed by the plan — they’re decided at implementation time based on what makes sense to review and merge together.
+Hierarchy is tracked via native sub-issues (up to 8 levels). Projects render this as an expandable tree via **hierarchy view**.
 
 ### Naming
 
 - Phases: `Phase N: Name` (e.g., "Phase 2: Pipeline Core")
 - Steps: `Step N.M: Name` (e.g., "Step 2.1: Schemas")
-- Step numbering reflects position within a phase, not PR boundaries
-
-### Project fields
-
-Both the Data Pipeline and Evaluation projects have a **Phase** single-select field for grouping and filtering in project views.
 
 ### Merge path
 
 All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs within a phase can land in any order as long as steps are independently testable.
 
-## 8. Blocking & Dependencies
+### Current epics
 
-Blocking is tracked via GitHub’s **native dependency system**:
+| Epic | Title                                                      | Project         | Design Doc                           |
+| ---- | ---------------------------------------------------------- | --------------- | ------------------------------------ |
+| #74  | feat(pipeline): distributed data pipeline                  | Data Pipeline   | `data-pipeline.md`                   |
+| #98  | feat(eval): evaluation pipeline — predict, render, metrics | Evaluation      | `eval-pipeline.md` (PR #101)         |
+| #99  | feat(storage): R2 integration for datasets and checkpoints | Eval + Pipeline | `eval-pipeline.md` §6                |
+| #107 | feat(training): training pipeline & ops                    | Training        | `training-ops-braindump.md` (PR #84) |
+
+## 4. Blocking & Dependencies
+
+Blocking is tracked via GitHub's **native dependency system**:
 
 - **Mark as blocked by** / **Mark as blocking** — set from the issue sidebar under "Relationships"
 - Blocked issues show a **Blocked icon** in project boards and issue lists
@@ -173,16 +94,16 @@ Blocking is tracked via GitHub’s **native dependency system**:
 
 ### Critical paths
 
-Each work stream’s design doc defines a dependency DAG. The critical path determines which phases must complete before others can start:
+Each work stream's design doc defines a dependency DAG:
 
 - **Data pipeline:** Phase 1 → Phase 2 → {Phase 3, Phase 4} → Phase 5 → Phase 6
 - **Eval pipeline:** #94 → #85 → #88 → #89
 
 For detailed blocking matrices and parallel execution windows, see the respective design docs.
 
-## 9. Priority
+## 5. Priority
 
-Priority is set via GitHub’s native **Issue Fields** (org-level):
+Priority is set via GitHub's native **Issue Fields** (org-level):
 
 | Priority | Typical usage                          |
 | -------- | -------------------------------------- |
@@ -193,69 +114,82 @@ Priority is set via GitHub’s native **Issue Fields** (org-level):
 
 Issue Fields are searchable across repositories and can be used as columns in project views for grouping, filtering, and sorting.
 
-## 10. Cross-Project Issue Sharing
+## 6. Labels
 
-Some issues appear in multiple projects for cross-cutting visibility:
+Labels classify issues by **domain** only. Type, priority, and blocking are handled by native features.
 
-| Issues   | Projects                        | Reason                            |
-| -------- | ------------------------------- | --------------------------------- |
-| #76, #77 | Data Pipeline + CI & Automation | Cross-cutting testing/reliability |
-| #90–#93  | Data Pipeline + Evaluation      | R2 integration shared across both |
-| #78–#82  | Data Pipeline + CI & Automation | Phase 1 steps include CI setup    |
+| Label           | Color   | Description                                   | Project |
+| --------------- | ------- | --------------------------------------------- | ------- |
+| `data-pipeline` | #0e8a16 | Data Pipeline project                         | #2      |
+| `ci-automation` | #1d76db | CI & Automation project                       | #1      |
+| `code-health`   | #fbca04 | Code Health project                           | #3      |
+| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference   | #4      |
+| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config | #1      |
+| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure    | #5      |
 
-This is intentional — cross-cutting work should be visible on relevant boards. GitHub Projects V2 shares a single status field across projects, so status drift is not a concern.
+Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wanted`, `question`) are retained for their standard GitHub purposes.
 
-## 11. Design Doc ↔ Issue Linkage
+## 7. Milestones
 
-Design docs and GitHub issues are cross-referenced through several conventions:
+| Milestone            | Work Stream     |
+| -------------------- | --------------- |
+| data-pipeline v1.0.0 | Data Pipeline   |
+| evaluation v1.0.0    | Evaluation      |
+| training v1.0.0      | Training        |
+| ci-automation v1.0.0 | CI & Automation |
+| code-health v1.0.0   | Code Health     |
 
-### In design doc headers
+Every work stream has a milestone. Sub-issues automatically inherit their parent's milestone.
 
-```markdown
-> **Tracking**: #98 (eval epic), #99 (R2 epic)
-```
+## 8. Projects
 
-### In implementation plan index tables
+Org-level GitHub Projects V2, linked to the repo:
 
-```markdown
-| §   | Section                                         | GitHub issue |
-| --- | ----------------------------------------------- | ------------ |
-| 5   | [Phase 1 — Foundation](#5-phase-1--foundation)  | #68          |
-```
+| #   | Project         | Custom Fields           |
+| --- | --------------- | ----------------------- |
+| 1   | CI & Automation | Start Date, Target Date |
+| 2   | Data Pipeline   | Start Date, Target Date |
+| 3   | Code Health     | Start Date, Target Date |
+| 4   | Evaluation      | Start Date, Target Date |
+| 5   | Training        | —                       |
 
-### In issue bodies
+### Built-in fields (all projects)
 
-Issues reference design doc sections:
+Title, Assignees, Status (`Todo` → `In Progress` → `Done`), Labels, Linked PRs, Milestone, Repository, Reviewers, Parent issue, Sub-issues progress.
 
-```markdown
-**Design doc:** data-pipeline.md §7.1 (Storage as truth)
-```
+### Views
 
-### Completion tracking
+- **Table** — flat list, sortable/filterable by any field
+- **Board** — kanban grouped by Status
+- **Roadmap** — timeline using Start Date / Target Date
+- **Hierarchy** — expandable Epic → Phase → Step tree (up to 8 levels)
 
-The implementation plan tracks step completion inline:
+### Cross-project issue sharing
 
-```markdown
-### Step 1.1: Dependencies & Tooling (#78) ✅
-**Completed in PR #75.**
-```
+Some issues appear in multiple projects for cross-cutting visibility (e.g., R2 integration issues in both Data Pipeline and Evaluation). GitHub Projects V2 shares a single status field across projects, so status drift is not a concern.
 
-### Dependency visualization
+## 9. Design Doc ↔ Issue Linkage
 
-Design docs include:
+Design docs and GitHub issues are cross-referenced through these conventions:
 
-- ASCII dependency graphs and blocking matrices
-- Timeline visualizations with parallel execution windows
-- Phase/step tables with CI gates
+| Convention                | Example                                                    |
+| ------------------------- | ---------------------------------------------------------- |
+| Design doc header         | `> **Tracking**: #98 (eval epic), #99 (R2 epic)`           |
+| Implementation plan index | `§5 Phase 1 — Foundation → #68`                            |
+| Issue body reference      | `**Design doc:** data-pipeline.md §7.1 (Storage as truth)` |
+| Completion tracking       | `### Step 1.1 (#78) ✅ — Completed in PR #75.`             |
 
-## 12. Entity-Relationship Model
+Design docs also include dependency graphs, blocking matrices, and timeline visualizations.
+
+## 10. Schema
 
 ```
 ISSUE
   ├── has one → ISSUE_TYPE (Epic | Phase | Step | Bug | Task)
+  ├── has one → PRIORITY (P0 | P1 | P2 | P3) — via Issue Fields
   ├── has one → MILESTONE
   ├── has one → PROJECT (via project membership)
-  ├── has many → LABELS (domain: data-pipeline, evaluation, ...)
+  ├── has many → LABELS (domain only)
   ├── has one → PARENT ISSUE (native sub-issue)
   ├── has many → SUB-ISSUES
   ├── blocks / blocked by → other ISSUEs (native dependencies)
@@ -263,21 +197,7 @@ ISSUE
   └── tracked in → DESIGN_DOC
 ```
 
-### Project field comparison
-
-| Field               | CI  | Data Pipeline | Code Health | Evaluation | Training |
-| ------------------- | --- | ------------- | ----------- | ---------- | -------- |
-| Status              | ✅  | ✅            | ✅          | ✅         | ✅       |
-| Priority            | ✅  | ✅            | ✅          | ✅         | ✅       |
-| Parent issue        | ✅  | ✅            | ✅          | ✅         | ✅       |
-| Sub-issues progress | ✅  | ✅            | ✅          | ✅         | ✅       |
-| Start Date          | ✅  | ✅            | ✅          | ✅         | —        |
-| Target Date         | ✅  | ✅            | ✅          | ✅         | —        |
-| Phase               | —   | ✅            | —           | ✅         | —        |
-
-### Issue lifecycle
-
-When an issue is created:
+## 11. Issue Lifecycle
 
 1. Set the **Issue Type** (Epic, Phase, Step, Bug, Task)
 2. Add **domain label** (data-pipeline, evaluation, etc.)
@@ -288,3 +208,38 @@ When an issue is created:
 7. When work starts, move to **In Progress**
 8. Link the PR
 9. When the PR merges, move to **Done** and close the issue
+
+## 12. Changes Required
+
+### Org migration
+
+See `docs/org-migration-checklist.md` (PR #116) for the full pre/during/post checklist. Key steps:
+
+- Create GitHub org and transfer repo
+- Re-create repo secrets (ANTHROPIC_API_KEY, APPROVAL_BOT_APP_ID, APPROVAL_BOT_PRIVATE_KEY, RUNPOD_API_KEY)
+- Verify Projects V2 still linked
+
+### Native features to enable post-migration
+
+| Feature             | What to set up                                                             | What it replaces                                            |
+| ------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| **Issue Types**     | Create Epic, Phase, Step types in org settings (Bug and Task are defaults) | Title-prefix naming conventions, `bug`/`enhancement` labels |
+| **Native blocking** | Add `blockedBy`/`blocking` relationships on existing issues via sidebar    | `blocked` label, `## Blocked by` body text                  |
+| **Issue Fields**    | Priority field is preconfigured; pin to relevant issue types               | `P0`–`P3` priority labels, Priority project field           |
+| **Hierarchy view**  | Enable in project table views                                              | Manual expand/collapse                                      |
+
+### Labels to retire after migration
+
+| Label                              | Replaced by                            |
+| ---------------------------------- | -------------------------------------- |
+| `bug`                              | Issue Type: Bug                        |
+| `enhancement`                      | Issue Type: Task / Epic / Phase / Step |
+| `blocked`                          | Native blocking                        |
+| `P0 🔴`, `P1 🟠`, `P2 🟡`, `P3 🔵` | Issue Fields: Priority                 |
+
+### Project fields to retire after migration
+
+| Field                    | Replaced by                  | Projects affected         |
+| ------------------------ | ---------------------------- | ------------------------- |
+| Phase (single-select)    | Issue Types + hierarchy view | Data Pipeline, Evaluation |
+| Priority (single-select) | Issue Fields: Priority       | All                       |
