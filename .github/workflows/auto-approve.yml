@@ -46,9 +46,8 @@ jobs:
             PR_NUMBER=$(gh api "repos/${{ github.repository }}/commits/${{ github.event.workflow_run.head_sha }}/pulls" \
               --jq '.[0].number // empty')
             if [ -z "$PR_NUMBER" ]; then
-              echo "No PR found for this workflow run — skipping"
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              exit 0
+              echo "::notice::No PR found for this workflow run"
+              exit 1
             fi
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             PR_NUMBER="${{ github.event.inputs.pr_number }}"
@@ -56,10 +55,8 @@ jobs:
             PR_NUMBER="${{ github.event.pull_request.number }}"
           fi
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - name: Check all conditions
-        if: steps.pr.outputs.skip != 'true'
         id: conditions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,7 +64,6 @@ jobs:
           set -euo pipefail
           PR=${{ steps.pr.outputs.number }}
           REPO="${{ github.repository }}"
-          PASS=true
 
           # Fetch PR metadata once
           PR_DATA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '{draft: .draft, fork: (.head.repo.fork // false), base: .base.ref, sha: .head.sha}')
@@ -78,80 +74,72 @@ jobs:
 
           # --- Condition 0: Only approve PRs targeting main ---
           if [ "$BASE_REF" != "main" ]; then
-            echo "::notice::PR targets ${BASE_REF}, not main — skipping"
-            PASS=false
+            echo "::error::PR targets ${BASE_REF}, not main — not eligible"
+            exit 1
           fi
 
           # --- Condition 1: PR is not a draft or fork ---
-          if [ "$PASS" = "true" ] && [ "$IS_DRAFT" = "true" ]; then
-            echo "::notice::PR is a draft — skipping"
-            PASS=false
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "::error::PR is a draft — not eligible"
+            exit 1
           fi
-          if [ "$PASS" = "true" ] && [ "$IS_FORK" = "true" ]; then
-            echo "::notice::PR is from a fork — skipping"
-            PASS=false
+          if [ "$IS_FORK" = "true" ]; then
+            echo "::error::PR is from a fork — not eligible"
+            exit 1
           fi
 
           # --- Condition 2: All CI checks pass ---
-          if [ "$PASS" = "true" ]; then
-            CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '.check_runs[] | select(.name != "auto-approve" and .name != "claude-review") | "\(.status) \(.conclusion // "none") \(.name)"')
-            PENDING=$(echo "$CHECK_DATA" | grep -c "^queued\|^in_progress" || true)
-            FAILED=$(echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" | grep -c . || true)
-            if [ "$PENDING" -gt 0 ]; then
-              echo "::notice::${PENDING} check(s) still running — skipping"
-              PASS=false
-            elif [ "$FAILED" -gt 0 ]; then
-              echo "::error::${FAILED} check(s) failed"
-              echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" >&2
-              exit 1
-            fi
+          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '.check_runs[] | select(.name != "auto-approve" and .name != "claude-review") | "\(.status) \(.conclusion // "none") \(.name)"')
+          PENDING=$(echo "$CHECK_DATA" | grep -c "^queued\|^in_progress" || true)
+          FAILED=$(echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" | grep -c . || true)
+          if [ "$PENDING" -gt 0 ]; then
+            echo "::error::${PENDING} check(s) still running — waiting"
+            exit 1
+          elif [ "$FAILED" -gt 0 ]; then
+            echo "::error::${FAILED} check(s) failed"
+            echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" >&2
+            exit 1
           fi
 
           # --- Condition 3: Copilot has reviewed and all threads are resolved ---
-          if [ "$PASS" = "true" ]; then
-            OWNER="${{ github.repository_owner }}"
-            REPO_NAME=$(echo "$REPO" | cut -d/ -f2)
+          OWNER="${{ github.repository_owner }}"
+          REPO_NAME=$(echo "$REPO" | cut -d/ -f2)
 
-            # Check that Copilot has submitted at least one review
-            COPILOT_REVIEWS=$(gh api "repos/${REPO}/pulls/${PR}/reviews" \
-              --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length')
-            if [ "$COPILOT_REVIEWS" -eq 0 ]; then
-              echo "::notice::Copilot has not reviewed yet — skipping"
-              PASS=false
-            fi
+          COPILOT_REVIEWS=$(gh api "repos/${REPO}/pulls/${PR}/reviews" \
+            --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length')
+          if [ "$COPILOT_REVIEWS" -eq 0 ]; then
+            echo "::error::Copilot has not reviewed yet — waiting"
+            exit 1
+          fi
 
-            # Check for unresolved Copilot threads
-            if [ "$PASS" = "true" ]; then
-              UNRESOLVED=$(gh api graphql -f query='
-                query($owner: String!, $repo: String!, $pr: Int!) {
-                  repository(owner: $owner, name: $repo) {
-                    pullRequest(number: $pr) {
-                      reviewThreads(first: 100) {
-                        nodes {
-                          isResolved
-                          comments(first: 1) {
-                            nodes { author { login } }
-                          }
-                        }
+          UNRESOLVED=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $pr: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr) {
+                  reviewThreads(first: 100) {
+                    nodes {
+                      isResolved
+                      comments(first: 1) {
+                        nodes { author { login } }
                       }
                     }
                   }
-                }' -f owner="$OWNER" -f repo="$REPO_NAME" -F pr="$PR" \
-                --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-                  | select(.isResolved == false)
-                  | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
-                ] | length')
-              if [ "$UNRESOLVED" -gt 0 ]; then
-                echo "::notice::${UNRESOLVED} unresolved Copilot thread(s) — skipping"
-                PASS=false
-              fi
-            fi
+                }
+              }
+            }' -f owner="$OWNER" -f repo="$REPO_NAME" -F pr="$PR" \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+              | select(.isResolved == false)
+              | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
+            ] | length')
+          if [ "$UNRESOLVED" -gt 0 ]; then
+            echo "::error::${UNRESOLVED} unresolved Copilot thread(s) — not eligible"
+            exit 1
           fi
 
-          echo "approve=$PASS" >> "$GITHUB_OUTPUT"
+          echo "All conditions met"
 
       - name: Approve PR
-        if: steps.pr.outputs.skip != 'true' && steps.conditions.outputs.approve == 'true'
+        if: success()
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
