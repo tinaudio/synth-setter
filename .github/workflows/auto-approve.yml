@@ -139,7 +139,7 @@ jobs:
             }' -f owner="$OWNER" -f repo="$REPO_NAME" -F pr="$PR" \
             --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
               | select(.isResolved == false)
-              | select(.comments.nodes[0].author.login == "copilot-pull-request-reviewer")
+              | select(.comments.nodes[0].author.login | startswith("copilot-pull-request-reviewer"))
             ] | length')
           if [ "$UNRESOLVED" -gt 0 ]; then
             echo "result=neutral" >> "$GITHUB_OUTPUT"
