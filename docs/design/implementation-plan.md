@@ -154,6 +154,7 @@ ______________________________________________________________________
   datasets (B6). Step 5.3 finalize and all HDF5 tests must `import hdf5plugin`.
 - `pydantic`, `structlog`, `tenacity`, `click`, `pyyaml`, `webdataset` added beyond what
   `experiment` has (R13).
+- `mutmut` added to dev dependencies — required for verification strategy (§12).
 
 ______________________________________________________________________
 
@@ -479,9 +480,9 @@ def test_reconciliation_mixed_state(tmp_path):
     storage = LocalStorageBackend(root=tmp_path)
     spec = _make_test_spec(num_shards=10, shard_size=100)
     for i in range(7):
-        _write_valid_shard(storage, spec.run_id, spec.shards[i], tmp_path)
-    _write_rendering_only(storage, spec.run_id, spec.shards[7])
-    _write_invalid_shard(storage, spec.run_id, spec.shards[8])
+        _write_valid_shard(storage, spec.run_id, spec.shards[i].shard_id, tmp_path)
+    _write_rendering_only(storage, spec.run_id, spec.shards[7].shard_id)
+    _write_invalid_shard(storage, spec.run_id, spec.shards[8].shard_id)
     # shard 9: no markers (missing)
 
     result = reconcile(spec, storage)
@@ -505,7 +506,7 @@ ______________________________________________________________________
 
 **Key behaviors — Worker:**
 
-- `run_worker(task_spec, storage, generate_fn, max_workers=None)` — manages concurrent
+- `run_worker(task_spec, storage, max_workers=None)` — manages concurrent
   shard rendering with per-shard process isolation.
 - **Per-shard process isolation:** Each shard renders in a separate OS process via
   `multiprocessing.get_context("spawn").Process(...)`. The parent worker spawns one child
@@ -514,7 +515,7 @@ ______________________________________________________________________
   interpreter per child — no inherited VST plugin state, no shared mutable globals.
   See design doc §7.8.1 for full trade-off analysis.
 - Per-shard lifecycle: write `.rendering` to **remote** storage FIRST → spawn child process
-  → child calls `generate_fn(shard_path, shard_spec)` with `random.seed(shard_spec.seed)` →
+  → child imports and calls `make_dataset(shard_path, shard_spec)` →
   parent waits with `join(timeout=SHARD_TIMEOUT)` → on success: validate locally →
   upload `.h5` to storage → write `.valid` to storage.
   `.rendering` in remote storage survives worker/child death (crash resilience).
@@ -550,10 +551,13 @@ ______________________________________________________________________
 
 - Worker lifecycle marker ordering — assert `.rendering` exists in storage before `.valid`
 - Quarantine path: validation failure → `.invalid` marker + shard in `quarantine/`
-- Process crash isolation: `LocalBackend` test with a `generate_fn` that calls
+- Process crash isolation: test spawns a child process via `_render_shard` (same
+  spawn path as production) with a module-level `crash_generate` that calls
   `os.kill(os.getpid(), signal.SIGSEGV)` → parent sees `exitcode == -11`,
-  marks shard invalid, continues to next
-- Per-shard timeout: slow `generate_fn` in `LocalBackend` → child killed after timeout, shard marked invalid
+  marks shard invalid, continues to next. Cannot use `LocalBackend` in-process
+  mode for this — must exercise the real spawn path.
+- Per-shard timeout: test spawns a child via `_render_shard` with a module-level
+  `slow_generate` that sleeps forever → child killed after timeout, shard marked invalid
 - Failure isolation, report generation, content hashes
 - LocalBackend submit + metadata
 
