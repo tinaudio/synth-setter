@@ -1,11 +1,12 @@
 name: Step
-description: A single implementation step — one PR, one deliverable
+description: A single testable unit of work within a phase
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Steps are the atomic unit of work — each step = one PR.
+        Steps are the atomic testable unit of work. A PR may contain
+        one step, multiple steps, or part of a large step.
         Add this issue as a sub-issue of the parent phase.
 
   - type: input

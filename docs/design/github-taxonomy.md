@@ -12,7 +12,7 @@ ______________________________________________________________________
 | --- | -------------------------------------------------------------- | -------------------------------------------------------------- |
 | 1   | [Overview](#1-overview)                                        | How GitHub metadata organizes work in this repo                |
 | 2   | [Projects](#2-projects)                                        | 5 user-level GitHub Projects V2, fields, status workflow       |
-| 3   | [Labels](#3-labels)                                            | 20 labels across 5 categories — domain, priority, status, type |
+| 3   | [Labels](#3-labels)                                            | 20 labels across 4 categories — domain, priority, status, type |
 | 4   | [Milestones](#4-milestones)                                    | 5 milestones mapping to product releases                       |
 | 5   | [Epics](#5-epics)                                              | Umbrella issues grouping phases and steps                      |
 | 6   | [Parent-Child Relationships](#6-parent-child-relationships)    | Native sub-issues                                              |
@@ -36,13 +36,13 @@ Each work stream follows a consistent pattern: **design doc → epic issue → p
 
 Five user-level GitHub Projects V2, all linked to the repo:
 
-| #   | Project         | Items | Custom Fields Beyond Defaults    |
-| --- | --------------- | ----- | -------------------------------- |
-| 1   | CI & Automation | 29    | —                                |
-| 2   | Data Pipeline   | 34    | v 1.0.0, Start Date, Target Date |
-| 3   | Code Health     | 15    | —                                |
-| 4   | Evaluation      | 15    | Start Date, Target Date          |
-| 5   | Training        | 1     | *(new — skeleton, fields TBD)*   |
+| #   | Project         | Items | Custom Fields Beyond Defaults                     |
+| --- | --------------- | ----- | ------------------------------------------------- |
+| 1   | CI & Automation | 29    | Priority, Start Date, Target Date                 |
+| 2   | Data Pipeline   | 34    | Phase, Priority, v 1.0.0, Start Date, Target Date |
+| 3   | Code Health     | 15    | Priority, Start Date, Target Date                 |
+| 4   | Evaluation      | 15    | Phase, Priority, Start Date, Target Date          |
+| 5   | Training        | 1     | Priority                                          |
 
 ### Default fields (all projects)
 
@@ -58,10 +58,11 @@ Every project includes these built-in fields:
 ```mermaid
 stateDiagram-v2
     [*] --> Todo : Issue created
-    Todo --> InProgress : Work begins
+    Todo --> in_progress : Work begins
     Todo --> Todo : Blocked (label added)
-    InProgress --> Done : PR merged / issue closed
-    InProgress --> Todo : Work paused / re-blocked
+    in_progress --> Done : PR merged / issue closed
+    in_progress --> Todo : Work paused / re-blocked
+    state "In Progress" as in_progress
     Done --> [*]
 ```
 
@@ -74,7 +75,7 @@ gh project view <number> --owner ktinubu
 
 ## 3. Labels
 
-20 labels organized into 5 categories:
+20 labels organized into 4 categories:
 
 ```mermaid
 mindmap
@@ -161,12 +162,12 @@ Every work stream now has a milestone.
 
 Epics are umbrella issues that group related phases, steps, or sub-issues. Each has a corresponding design doc:
 
-| Epic | Title                                                      | Sub-issues | Project         | Design Doc                  |
-| ---- | ---------------------------------------------------------- | ---------- | --------------- | --------------------------- |
-| #74  | feat(pipeline): distributed data pipeline                  | 6 phases   | Data Pipeline   | `data-pipeline.md`          |
-| #98  | feat(eval): evaluation pipeline — predict, render, metrics | 5 stages   | Evaluation      | `eval-pipeline.md`          |
-| #99  | feat(storage): R2 integration for datasets and checkpoints | 4 pieces   | Eval + Pipeline | `eval-pipeline.md` §6       |
-| #107 | feat(training): training pipeline & ops                    | TBD        | Training        | `training-ops-braindump.md` |
+| Epic | Title                                                      | Sub-issues | Project         | Design Doc                           |
+| ---- | ---------------------------------------------------------- | ---------- | --------------- | ------------------------------------ |
+| #74  | feat(pipeline): distributed data pipeline                  | 6 phases   | Data Pipeline   | `data-pipeline.md`                   |
+| #98  | feat(eval): evaluation pipeline — predict, render, metrics | 5 stages   | Evaluation      | `eval-pipeline.md` (PR #101)         |
+| #99  | feat(storage): R2 integration for datasets and checkpoints | 4 pieces   | Eval + Pipeline | `eval-pipeline.md` §6                |
+| #107 | feat(training): training pipeline & ops                    | TBD        | Training        | `training-ops-braindump.md` (PR #84) |
 
 ### Data pipeline epic hierarchy
 
@@ -267,7 +268,7 @@ All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs wi
 
 - **`blocked` label** — applied to issues that cannot start yet
 - **`## Blocked by` section** in issue body — lists specific issue numbers
-- **Design doc dependency graphs** — ASCII art in `eval-pipeline.md` §8, blocking matrix tables
+- **Design doc dependency graphs** — ASCII art in `eval-pipeline.md` §8 (PR #101), blocking matrix tables
 
 ### Data pipeline critical path
 
@@ -496,14 +497,21 @@ graph TB
         F10[Sub-issues progress]
     end
 
-    subgraph "Data Pipeline + Evaluation"
-        F11[Phase]
+    subgraph "All projects"
+        F11[Priority]
+    end
+
+    subgraph "All except Training"
         F12[Start Date]
         F13[Target Date]
     end
 
+    subgraph "Data Pipeline + Evaluation"
+        F14[Phase]
+    end
+
     subgraph "Data Pipeline only"
-        F14["v 1.0.0"]
+        F15["v 1.0.0"]
     end
 ```
 
@@ -519,8 +527,9 @@ stateDiagram-v2
     InProject --> Blocked : blocked label added
     Blocked --> InProject : Blocker resolved, label removed
 
-    InProject --> InProgress : Work starts (Status: In Progress)
-    InProgress --> PRLinked : PR opened
+    InProject --> in_progress : Work starts (Status: In Progress)
+    in_progress --> PRLinked : PR opened
+    state "In Progress" as in_progress
     PRLinked --> Done : PR merged (Status: Done)
     Done --> Closed : Issue closed
     Closed --> [*]

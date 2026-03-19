@@ -38,7 +38,7 @@ body:
     id: steps
     attributes:
       label: Steps
-      description: Implementation steps (will become sub-issues, one PR per step)
+      description: Implementation steps (will become sub-issues)
       placeholder: |
         - [ ] Step N.1: ...
         - [ ] Step N.2: ...
