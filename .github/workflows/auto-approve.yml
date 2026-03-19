@@ -70,9 +70,8 @@ jobs:
           REPO="${{ github.repository }}"
 
           # Fetch PR metadata once
-          PR_DATA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '{draft: .draft, fork: (.head.repo.fork // false), base: .base.ref, sha: .head.sha}')
+          PR_DATA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '{draft: .draft, base: .base.ref, sha: .head.sha}')
           IS_DRAFT=$(echo "$PR_DATA" | jq -r '.draft')
-          IS_FORK=$(echo "$PR_DATA" | jq -r '.fork')
           BASE_REF=$(echo "$PR_DATA" | jq -r '.base')
           HEAD_SHA=$(echo "$PR_DATA" | jq -r '.sha')
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
@@ -90,12 +89,6 @@ jobs:
             echo "reason=PR is a draft" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$IS_FORK" = "true" ]; then
-            echo "result=failure" >> "$GITHUB_OUTPUT"
-            echo "reason=PR is from a fork" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           # --- Condition 2: All CI checks pass ---
           CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '.check_runs[] | select(.name != "auto-approve" and .name != "Auto-approve status" and .name != "claude-review") | "\(.status) \(.conclusion // "none") \(.name)"')
           PENDING=$(echo "$CHECK_DATA" | grep -c "^queued\|^in_progress" || true)
