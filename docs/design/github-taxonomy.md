@@ -530,52 +530,10 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
-## 13. Gap Analysis
+## 13. Open Items
 
-| #   | Gap                                 | Severity  | Description                                                                      |
-| --- | ----------------------------------- | --------- | -------------------------------------------------------------------------------- |
-| G1  | `ci` vs `ci-automation` overlap     | **Fixed** | Deleted `ci` label, migrated 8 issues to `ci-automation`                         |
-| G2  | No milestones for CI or Code Health | **Fixed** | Created `ci-automation v1.0.0` and `code-health v1.0.0` milestones               |
-| G3  | P0 label unused                     | Deferred  | Keep until a critical incident needs it                                          |
-| G4  | Blocking not machine-readable       | Deferred  | `## Blocked by` body-text convention remains; GitHub may add native blocking     |
-| G5  | Dual parent-child conventions       | **Fixed** | Removed `**Parent:** #N` from 7 issue bodies; native sub-issues only             |
-| G6  | Inconsistent planning conventions   | Open      | Data pipeline: Phase/Step; Eval: PR grouping — design decision pending           |
-| G7  | Issues in multiple projects         | Accepted  | Intentional for cross-cutting visibility                                         |
-| G8  | Inconsistent custom fields          | **Fixed** | Added Start Date / Target Date fields to CI & Code Health projects               |
-| G9  | No issue templates                  | **Fixed** | Created `.github/ISSUE_TEMPLATE/` with epic, phase, step, and bug templates      |
-| G10 | Priority coverage gaps              | **Fixed** | Added Priority single-select field to all 5 projects; values set on all items    |
-| G11 | Eval blocking label mismatch        | **Fixed** | Added `blocked` label to 8 eval pipeline issues matching the design doc's matrix |
-
-## 14. Changes Made (this PR)
-
-### GitHub metadata changes (already applied)
-
-- [x] Link Code Health (#3) and Evaluation (#4) projects to repo
-- [x] Create Training project (#5) and link to repo
-- [x] Create `training` label, `training v1.0.0` milestone, epic #107
-- [x] Delete `ci` label, migrate 8 issues to `ci-automation` (G1)
-- [x] Create `ci-automation v1.0.0` and `code-health v1.0.0` milestones (G2)
-- [x] Assign milestones to all CI and Code Health issues (G2)
-- [x] Remove `**Parent:** #N` from 7 issue bodies (G5)
-- [x] Add Start Date / Target Date fields to CI & Code Health projects (G8)
-- [x] Add Priority single-select field to all 5 projects, set values on all items (G10)
-- [x] Add Phase single-select field to Data Pipeline project, set values on all 34 items
-- [x] Add PR Group single-select field to Evaluation project, set values on all 15 items
-- [x] Add `blocked` label to 8 eval pipeline issues (G11)
-
-### Code changes (in this PR)
-
-- [x] `docs/design/github-taxonomy.md` — this document
-- [x] `.github/ISSUE_TEMPLATE/epic.yml` — epic issue template (G9)
-- [x] `.github/ISSUE_TEMPLATE/phase.yml` — phase issue template (G9)
-- [x] `.github/ISSUE_TEMPLATE/step.yml` — step issue template (G9)
-- [x] `.github/ISSUE_TEMPLATE/bug.yml` — bug report template (G9)
-- [x] `.github/ISSUE_TEMPLATE/config.yml` — template chooser config (G9)
-
-### Remaining open items
-
-| Item                         | Gap | Notes                                                           |
-| ---------------------------- | --- | --------------------------------------------------------------- |
-| Align planning conventions   | G6  | Design decision: adopt one scheme or document when to use which |
-| Remove or repurpose P0 label | G3  | Keep until a critical incident needs it                         |
-| Machine-readable blocking    | G4  | GitHub may add native blocking; wait and see                    |
+| #   | Item                              | Status   | Notes                                                                  |
+| --- | --------------------------------- | -------- | ---------------------------------------------------------------------- |
+| G3  | P0 label unused                   | Deferred | Keep until a critical incident needs it                                |
+| G4  | Blocking not machine-readable     | Deferred | `## Blocked by` body-text remains; GitHub may add native blocking      |
+| G6  | Inconsistent planning conventions | Open     | Data pipeline: Phase/Step; Eval: PR grouping — design decision pending |
