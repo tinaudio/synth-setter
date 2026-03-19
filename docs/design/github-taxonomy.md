@@ -68,15 +68,11 @@ Every project includes these built-in fields:
 
 ### Status workflow
 
-```
-Todo  ──→  In Progress  ──→  Done
-  ↑            │
-  └────────────┘  (re-blocked)
-```
+`Todo` → `In Progress` → `Done` (can move back to Todo if re-blocked)
 
 ### Hierarchy view
 
-Projects support a **hierarchy view** that renders the Epic → Phase → Step tree directly in table views. Sub-issues can be expanded/collapsed up to 8 levels deep, and support drag-and-drop reordering.
+Projects support a **hierarchy view** that renders the Epic → Phase → Step tree directly in table views, expandable up to 8 levels deep.
 
 ## 4. Labels
 
@@ -130,25 +126,19 @@ Epics are issues with the **Epic** issue type that group related phases and step
 | #99  | feat(storage): R2 integration for datasets and checkpoints | Eval + Pipeline | `eval-pipeline.md` §6                |
 | #107 | feat(training): training pipeline & ops                    | Training        | `training-ops-braindump.md` (PR #84) |
 
-### Hierarchy pattern
+### Hierarchy
 
-Every work stream follows the same structure:
-
-```mermaid
-graph TD
-    Epic["Epic"] --> Phase1["Phase 1"]
-    Epic --> Phase2["Phase 2"]
-    Epic --> PhaseN["Phase N"]
-    Phase1 --> Step1["Step 1.1"]
-    Phase1 --> Step2["Step 1.2"]
-    Phase2 --> Step3["Step 2.1"]
+```
+Epic (type: Epic)
+├── Phase 1 (type: Phase, sub-issue of Epic)
+│   ├── Step 1.1 (type: Step, sub-issue of Phase 1)
+│   └── Step 1.2
+├── Phase 2
+│   └── Step 2.1
+└── Phase N
 ```
 
-GitHub’s **hierarchy view** in Projects renders this tree natively — expandable/collapsible up to 8 levels deep.
-
-### Parent-child relationships
-
-All hierarchy is tracked via native sub-issues. The **Parent issue** and **Sub-issues progress** fields are built-in to every project.
+All hierarchy is tracked via native sub-issues (up to 8 levels). Projects render this as an expandable tree via **hierarchy view**.
 
 ## 7. Phase/Step Convention
 
@@ -169,12 +159,6 @@ All work streams use a unified **Phase / Step** hierarchy:
 Both the Data Pipeline and Evaluation projects have a **Phase** single-select field for grouping and filtering in project views.
 
 ### Merge path
-
-```
-main ──●──────────●────────────●──────────●──────────●──────────●──→
-       │          │            │          │          │          │
-    Phase 1    Phase 2      Phase 3    Phase 4    Phase 5    Phase 6
-```
 
 All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs within a phase can land in any order as long as steps are independently testable.
 
@@ -266,18 +250,17 @@ Design docs include:
 
 ## 12. Entity-Relationship Model
 
-How all metadata types relate to each other:
-
-```mermaid
-erDiagram
-    PROJECT ||--o{ ISSUE : contains
-    MILESTONE ||--o{ ISSUE : groups
-    ISSUE ||--o{ LABEL : has
-    ISSUE ||--o| ISSUE : parent
-    ISSUE ||--o{ ISSUE : blocks
-    ISSUE }o--|| PR : linked
-    ISSUE }o--o| DESIGN_DOC : tracked
-    ISSUE ||--|| ISSUE_TYPE : typed
+```
+ISSUE
+  ├── has one → ISSUE_TYPE (Epic | Phase | Step | Bug | Task)
+  ├── has one → MILESTONE
+  ├── has one → PROJECT (via project membership)
+  ├── has many → LABELS (domain: data-pipeline, evaluation, ...)
+  ├── has one → PARENT ISSUE (native sub-issue)
+  ├── has many → SUB-ISSUES
+  ├── blocks / blocked by → other ISSUEs (native dependencies)
+  ├── linked to → PR
+  └── tracked in → DESIGN_DOC
 ```
 
 ### Project field comparison
