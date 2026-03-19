@@ -209,7 +209,7 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 **Key behaviors:**
 
-- Dataset path resolved from `data.dataset_root` (Hydra default: `data/surge-simple`, CLI override for cluster)
+- Dataset path resolved from `data.dataset_root` (default: `${paths.data_dir}/surge-simple`, CLI override for cluster)
 - If `data.r2_path` is explicitly set, `SurgeDataModule.prepare_data()` syncs from R2 before loading
 - Checkpoint path supports `r2:` prefix — auto-downloads to local cache before loading
 - Output directory: `{paths.log_dir}/eval/{experiment_name}/{run_id}/predictions/`
@@ -318,7 +318,7 @@ When `data.r2_path` is explicitly provided (via CLI override or experiment confi
 ```yaml
 # configs/data/surge_simple.yaml — no r2_path, no env vars for paths
 _target_: src.data.surge_datamodule.SurgeDataModule
-dataset_root: data/surge-simple                    # sensible local default
+dataset_root: ${paths.data_dir}/surge-simple        # matches existing paths convention
 # r2_path: deliberately absent — must be specified explicitly when needed
 batch_size: 128
 num_workers: 11
@@ -388,8 +388,8 @@ Toggle via Hydra config or CLI flag. Not automatic — explicit `make` target.
 # Before — hardcoded cluster path
 dataset_root: /data/scratch/acw585/surge-simple/
 
-# After — sensible local default, override via CLI when needed
-dataset_root: data/surge-simple
+# After — uses existing paths convention, resolves to {PROJECT_ROOT}/data/surge-simple
+dataset_root: ${paths.data_dir}/surge-simple
 ```
 
 ```bash
@@ -557,7 +557,7 @@ This section consolidates every configuration and environment behavior change in
 
 | Concern                      | Proposed mechanism                                                          | Where defined                               | Portable? | Change from current                         |
 | ---------------------------- | --------------------------------------------------------------------------- | ------------------------------------------- | --------- | ------------------------------------------- |
-| **Dataset path**             | `dataset_root: data/surge-simple` (relative default)                        | `configs/data/surge_simple.yaml`            | Yes       | Hardcoded → relative default                |
+| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge-simple` (paths convention)           | `configs/data/surge_simple.yaml`            | Yes       | Hardcoded → paths convention                |
 | **Dataset path override**    | CLI: `data.dataset_root=/cluster/path/`                                     | Command line                                | Yes       | Implicit → explicit                         |
 | **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in experiment configs                       | `configs/eval.yaml` + `configs/experiment/` | Yes       | Shell script → Hydra config                 |
 | **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                          | Command line                                | No        | Same as today but without shell wrapper     |
@@ -607,12 +607,12 @@ This section consolidates every configuration and environment behavior change in
 
 **3. Dataset access (§6.3)**
 
-|                     | Current                    | Proposed                                                        |
-| ------------------- | -------------------------- | --------------------------------------------------------------- |
-| **Local data**      | Hardcoded path, must exist | Relative default `data/surge-simple`, override via CLI          |
-| **Remote data**     | Not supported              | `r2_path` opt-in triggers auto-download                         |
-| **Risk eliminated** | —                          | "Data is on the cluster" — R2 makes it available everywhere     |
-| **Trade-off**       | —                          | First download of a 100GB dataset takes time; cached after that |
+|                     | Current                    | Proposed                                                                 |
+| ------------------- | -------------------------- | ------------------------------------------------------------------------ |
+| **Local data**      | Hardcoded path, must exist | `${paths.data_dir}/surge-simple` (existing convention), override via CLI |
+| **Remote data**     | Not supported              | `r2_path` opt-in triggers auto-download                                  |
+| **Risk eliminated** | —                          | "Data is on the cluster" — R2 makes it available everywhere              |
+| **Trade-off**       | —                          | First download of a 100GB dataset takes time; cached after that          |
 
 **4. Display handling (§7.3)**
 
@@ -769,7 +769,7 @@ main ──●──────────●───────────
 
 **Files to modify:**
 
-- `configs/data/surge_simple.yaml` — `dataset_root` → `data/surge-simple` (plain default)
+- `configs/data/surge_simple.yaml` — `dataset_root` → `${paths.data_dir}/surge-simple` (matches `mnist.yaml` convention)
 - `configs/data/surge_mini.yaml` — same pattern
 - `configs/data/surge_simple_onehot.yaml` — same (if exists)
 - `.env.example` — R2 credentials and `WANDB_API_KEY` only (no path vars)
