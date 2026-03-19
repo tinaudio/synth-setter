@@ -103,7 +103,7 @@ For detailed blocking matrices and parallel execution windows, see the respectiv
 
 ## 5. Priority
 
-Priority is set via GitHub's native **Issue Fields** (org-level):
+Priority is tracked via a **Priority** single-select field on each project:
 
 | Priority | Typical usage                          |
 | -------- | -------------------------------------- |
@@ -112,7 +112,7 @@ Priority is set via GitHub's native **Issue Fields** (org-level):
 | P2       | Docker, E2E, production, consolidation |
 | P3       | Nice-to-have                           |
 
-Issue Fields are searchable across repositories and can be used as columns in project views for grouping, filtering, and sorting.
+When GitHub's **Issue Fields** (org-level, public preview) becomes available, Priority will move from a per-project field to a native issue-level field — searchable across repositories without needing project membership.
 
 ## 6. Labels
 
@@ -145,13 +145,13 @@ Every work stream has a milestone. Sub-issues automatically inherit their parent
 
 Org-level GitHub Projects V2, linked to the repo:
 
-| #   | Project         | Custom Fields           |
-| --- | --------------- | ----------------------- |
-| 1   | CI & Automation | Start Date, Target Date |
-| 2   | Data Pipeline   | Start Date, Target Date |
-| 3   | Code Health     | Start Date, Target Date |
-| 4   | Evaluation      | Start Date, Target Date |
-| 5   | Training        | —                       |
+| #   | Project         | Custom Fields                     |
+| --- | --------------- | --------------------------------- |
+| 1   | CI & Automation | Priority, Start Date, Target Date |
+| 2   | Data Pipeline   | Priority, Start Date, Target Date |
+| 3   | Code Health     | Priority, Start Date, Target Date |
+| 4   | Evaluation      | Priority, Start Date, Target Date |
+| 5   | Training        | Priority                          |
 
 ### Built-in fields (all projects)
 
@@ -241,7 +241,7 @@ gh label delete "P2 🟡" --yes
 gh label delete "P3 🔵" --yes
 ```
 
-Delete project fields replaced by Issue Types and Issue Fields:
+Delete project fields replaced by Issue Types:
 
 ```bash
 # Phase field — Data Pipeline (get ID, then delete)
@@ -253,8 +253,12 @@ gh project field-list 2 --owner <org> --format json \
 gh project field-list 4 --owner <org> --format json \
   | jq -r '.fields[] | select(.name == "Phase") | .id' \
   | xargs -I{} gh project field-delete --id {}
+```
 
-# Priority field — all projects
+**Keep the Priority project field** until Issue Fields (org-level) becomes available. When it does, migrate values to the native field and then delete:
+
+```bash
+# Priority field — all projects (defer until Issue Fields is available)
 for p in 1 2 3 4 5; do
   gh project field-list $p --owner <org> --format json \
     | jq -r '.fields[] | select(.name == "Priority") | .id' \
