@@ -8,22 +8,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                                               | What it covers                                                 |
-| --- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| 1   | [Overview](#1-overview)                                                               | How GitHub metadata organizes work in this repo                |
-| 2   | [Projects](#2-projects)                                                               | 5 user-level GitHub Projects V2, fields, status workflow       |
-| 3   | [Labels](#3-labels)                                                                   | 20 labels across 5 categories — domain, priority, status, type |
-| 4   | [Milestones](#4-milestones)                                                           | 5 milestones mapping to product releases                       |
-| 5   | [Epics](#5-epics)                                                                     | Umbrella issues grouping phases and steps                      |
-| 6   | [Parent-Child Relationships](#6-parent-child-relationships)                           | Native sub-issues and body-text conventions                    |
-| 7   | [Phase/Step Naming & Implementation Plans](#7-phasestep-naming--implementation-plans) | Two planning conventions across work streams                   |
-| 8   | [Blocking & Dependencies](#8-blocking--dependencies)                                  | Blocked label, body-text conventions, critical paths           |
-| 9   | [Priority Tiers](#9-priority-tiers)                                                   | P0–P3 distribution by domain                                   |
-| 10  | [Cross-Project Issue Sharing](#10-cross-project-issue-sharing)                        | Issues that appear in multiple projects                        |
-| 11  | [Design Doc ↔ Issue Linkage](#11-design-doc--issue-linkage)                           | How design docs reference and track GitHub issues              |
-| 12  | [Entity-Relationship Model](#12-entity-relationship-model)                            | How all metadata types relate to each other                    |
-| 13  | [Gap Analysis](#13-gap-analysis)                                                      | Inconsistencies, missing metadata, recommendations             |
-| 14  | [Proposed Target Taxonomy & Migration](#14-proposed-target-taxonomy--migration)       | Concrete changes to improve consistency                        |
+| §   | Section                                                        | What it covers                                                 |
+| --- | -------------------------------------------------------------- | -------------------------------------------------------------- |
+| 1   | [Overview](#1-overview)                                        | How GitHub metadata organizes work in this repo                |
+| 2   | [Projects](#2-projects)                                        | 5 user-level GitHub Projects V2, fields, status workflow       |
+| 3   | [Labels](#3-labels)                                            | 20 labels across 5 categories — domain, priority, status, type |
+| 4   | [Milestones](#4-milestones)                                    | 5 milestones mapping to product releases                       |
+| 5   | [Epics](#5-epics)                                              | Umbrella issues grouping phases and steps                      |
+| 6   | [Parent-Child Relationships](#6-parent-child-relationships)    | Native sub-issues                                              |
+| 7   | [Phase/Step Convention](#7-phasestep-convention)               | Unified Phase/Step hierarchy, decoupled from PRs               |
+| 8   | [Blocking & Dependencies](#8-blocking--dependencies)           | Blocked label, body-text conventions, critical paths           |
+| 9   | [Priority Tiers](#9-priority-tiers)                            | P0–P3 distribution by domain                                   |
+| 10  | [Cross-Project Issue Sharing](#10-cross-project-issue-sharing) | Issues that appear in multiple projects                        |
+| 11  | [Design Doc ↔ Issue Linkage](#11-design-doc--issue-linkage)    | How design docs reference and track GitHub issues              |
+| 12  | [Entity-Relationship Model](#12-entity-relationship-model)     | How all metadata types relate to each other                    |
+| 13  | [Open Items](#13-open-items)                                   | Remaining gaps — deferred or pending                           |
 
 ______________________________________________________________________
 
@@ -501,13 +500,14 @@ graph TB
         F10[Sub-issues progress]
     end
 
-    subgraph "Data Pipeline only"
-        F11["v 1.0.0"]
-    end
-
     subgraph "Data Pipeline + Evaluation"
+        F11[Phase]
         F12[Start Date]
         F13[Target Date]
+    end
+
+    subgraph "Data Pipeline only"
+        F14["v 1.0.0"]
     end
 ```
 
@@ -532,8 +532,7 @@ stateDiagram-v2
 
 ## 13. Open Items
 
-| #   | Item                              | Status   | Notes                                                                  |
-| --- | --------------------------------- | -------- | ---------------------------------------------------------------------- |
-| G3  | P0 label unused                   | Deferred | Keep until a critical incident needs it                                |
-| G4  | Blocking not machine-readable     | Deferred | `## Blocked by` body-text remains; GitHub may add native blocking      |
-| G6  | Inconsistent planning conventions | Open     | Data pipeline: Phase/Step; Eval: PR grouping — design decision pending |
+| #   | Item                          | Status   | Notes                                                             |
+| --- | ----------------------------- | -------- | ----------------------------------------------------------------- |
+| G3  | P0 label unused               | Deferred | Keep until a critical incident needs it                           |
+| G4  | Blocking not machine-readable | Deferred | `## Blocked by` body-text remains; GitHub may add native blocking |
