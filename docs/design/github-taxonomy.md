@@ -27,7 +27,7 @@ ______________________________________________________________________
 
 ## 1. Overview
 
-synth-permutations organizes work using GitHub's native issue tracking: **Issue Types** (Epic, Phase, Step, Bug, Task), **native blocking**, **sub-issues** for hierarchy, **Issue Fields** for priority, **Projects V2** for views, and **milestones** for releases. Labels provide domain classification only.
+synth-setter organizes work using GitHub's native issue tracking: **Issue Types** (Epic, Phase, Step, Bug, Task), **native blocking**, **sub-issues** for hierarchy, **Issue Fields** for priority, **Projects V2** for views, and **milestones** for releases. Labels provide domain classification only.
 
 Each work stream follows: **design doc → Epic → Phases → Steps**.
 
