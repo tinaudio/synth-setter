@@ -36,13 +36,13 @@ Each work stream follows a consistent pattern: **design doc → epic issue → p
 
 User-level GitHub Projects V2, all linked to the repo:
 
-| #   | Project         | Items | Custom Fields Beyond Defaults                     |
-| --- | --------------- | ----- | ------------------------------------------------- |
-| 1   | CI & Automation | 29    | Priority, Start Date, Target Date                 |
-| 2   | Data Pipeline   | 34    | Phase, Priority, v 1.0.0, Start Date, Target Date |
-| 3   | Code Health     | 15    | Priority, Start Date, Target Date                 |
-| 4   | Evaluation      | 15    | Phase, Priority, Start Date, Target Date          |
-| 5   | Training        | 1     | Priority                                          |
+| #   | Project         | Custom Fields Beyond Defaults                     |
+| --- | --------------- | ------------------------------------------------- |
+| 1   | CI & Automation | Priority, Start Date, Target Date                 |
+| 2   | Data Pipeline   | Phase, Priority, v 1.0.0, Start Date, Target Date |
+| 3   | Code Health     | Priority, Start Date, Target Date                 |
+| 4   | Evaluation      | Phase, Priority, Start Date, Target Date          |
+| 5   | Training        | Priority                                          |
 
 ### Default fields (all projects)
 
@@ -97,12 +97,12 @@ Labels organized into 4 categories:
 
 ### Priority labels
 
-| Label   | Color   | Issues | Usage                            |
-| ------- | ------- | ------ | -------------------------------- |
-| `P0 🔴` | #B60205 | 0      | Critical — unused *(see §13)*    |
-| `P1 🟠` | #D93F0B | 15     | High — foundation, core stages   |
-| `P2 🟡` | #FBCA04 | 12     | Medium — Docker, E2E, production |
-| `P3 🔵` | #0075CA | 2      | Low — nice-to-have               |
+| Label   | Color   | Usage                            |
+| ------- | ------- | -------------------------------- |
+| `P0 🔴` | #B60205 | Critical                         |
+| `P1 🟠` | #D93F0B | High — foundation, core stages   |
+| `P2 🟡` | #FBCA04 | Medium — Docker, E2E, production |
+| `P3 🔵` | #0075CA | Low — nice-to-have               |
 
 ### Status/Workflow labels
 
@@ -126,13 +126,13 @@ Labels organized into 4 categories:
 
 ## 4. Milestones
 
-| Milestone            | Due        | Issues | Work Stream     |
-| -------------------- | ---------- | ------ | --------------- |
-| data-pipeline v1.0.0 | 2026-03-30 | 17     | Data Pipeline   |
-| evaluation v1.0.0    | 2026-04-14 | 16     | Evaluation      |
-| training v1.0.0      | TBD        | 1      | Training        |
-| ci-automation v1.0.0 | TBD        | 15     | CI & Automation |
-| code-health v1.0.0   | TBD        | 8      | Code Health     |
+| Milestone            | Work Stream     |
+| -------------------- | --------------- |
+| data-pipeline v1.0.0 | Data Pipeline   |
+| evaluation v1.0.0    | Evaluation      |
+| training v1.0.0      | Training        |
+| ci-automation v1.0.0 | CI & Automation |
+| code-health v1.0.0   | Code Health     |
 
 Every work stream has a milestone.
 
@@ -140,12 +140,12 @@ Every work stream has a milestone.
 
 Epics are umbrella issues that group related phases, steps, or sub-issues. Each has a corresponding design doc:
 
-| Epic | Title                                                      | Sub-issues | Project         | Design Doc                           |
-| ---- | ---------------------------------------------------------- | ---------- | --------------- | ------------------------------------ |
-| #74  | feat(pipeline): distributed data pipeline                  | 6 phases   | Data Pipeline   | `data-pipeline.md`                   |
-| #98  | feat(eval): evaluation pipeline — predict, render, metrics | 5 stages   | Evaluation      | `eval-pipeline.md` (PR #101)         |
-| #99  | feat(storage): R2 integration for datasets and checkpoints | 4 pieces   | Eval + Pipeline | `eval-pipeline.md` §6                |
-| #107 | feat(training): training pipeline & ops                    | TBD        | Training        | `training-ops-braindump.md` (PR #84) |
+| Epic | Title                                                      | Project         | Design Doc                           |
+| ---- | ---------------------------------------------------------- | --------------- | ------------------------------------ |
+| #74  | feat(pipeline): distributed data pipeline                  | Data Pipeline   | `data-pipeline.md`                   |
+| #98  | feat(eval): evaluation pipeline — predict, render, metrics | Evaluation      | `eval-pipeline.md` (PR #101)         |
+| #99  | feat(storage): R2 integration for datasets and checkpoints | Eval + Pipeline | `eval-pipeline.md` §6                |
+| #107 | feat(training): training pipeline & ops                    | Training        | `training-ops-braindump.md` (PR #84) |
 
 ### Hierarchy pattern
 
@@ -219,25 +219,14 @@ Issues carrying the `blocked` label span both the data pipeline and eval pipelin
 
 ## 9. Priority Tiers
 
-| Priority | Count | Typical usage                          |
-| -------- | ----- | -------------------------------------- |
-| P0 🔴    | 0     | Critical — not yet used                |
-| P1 🟠    | 15    | Foundation phases, core stages, rclone |
-| P2 🟡    | 12    | Docker, E2E, production, consolidation |
-| P3 🔵    | 2     | Nice-to-have (W&B metrics, seeding)    |
-| None     | ~77   | CI, code health, older issues          |
+| Priority | Typical usage                          |
+| -------- | -------------------------------------- |
+| P0 🔴    | Critical                               |
+| P1 🟠    | Foundation phases, core stages, rclone |
+| P2 🟡    | Docker, E2E, production, consolidation |
+| P3 🔵    | Nice-to-have (W&B metrics, seeding)    |
 
-### Priority by work stream
-
-| Work Stream   | P1  | P2  | P3  | None |
-| ------------- | --- | --- | --- | ---- |
-| Data Pipeline | 6   | 5   | 1   | 22   |
-| Evaluation    | 5   | 4   | 1   | 5    |
-| CI            | 0   | 0   | 0   | 29   |
-| Code Health   | 0   | 0   | 0   | 15   |
-| Training      | 0   | 0   | 0   | 1    |
-
-Priority labels are concentrated on pipeline/eval work. CI and Code Health issues have no priority assigned.
+Priority labels are concentrated on pipeline and eval work.
 
 ## 10. Cross-Project Issue Sharing
 
