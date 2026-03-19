@@ -550,10 +550,10 @@ ______________________________________________________________________
 
 - Worker lifecycle marker ordering — assert `.rendering` exists in storage before `.valid`
 - Quarantine path: validation failure → `.invalid` marker + shard in `quarantine/`
-- Process crash isolation: test `generate_fn` (module-level, picklable) that calls
-  `os.kill(os.getpid(), signal.SIGSEGV)` in the child process → parent sees `exitcode == -11`,
+- Process crash isolation: `LocalBackend` test with a `generate_fn` that calls
+  `os.kill(os.getpid(), signal.SIGSEGV)` → parent sees `exitcode == -11`,
   marks shard invalid, continues to next
-- Per-shard timeout: slow `generate_fn` → child killed after timeout, shard marked invalid
+- Per-shard timeout: slow `generate_fn` in `LocalBackend` → child killed after timeout, shard marked invalid
 - Failure isolation, report generation, content hashes
 - LocalBackend submit + metadata
 
@@ -882,7 +882,9 @@ ______________________________________________________________________
 05. W&B optional (`--skip-wandb`) — tests skip it; mock test for artifact structure
 06. Workers use ThreadPoolExecutor for parallel shard generation
 07. Each shard renders in a child process via `multiprocessing.get_context("spawn").Process(...)`.
-    Parent passes `generate_fn` + `shard_spec` as Python args, child calls
+    Child process imports `make_dataset` directly (`from pipeline.vst import make_dataset`).
+    Only `shard_spec` and `shard_path` cross the process boundary — no function objects.
+    `LocalBackend` accepts an optional `generate_fn` for tests (runs in-process, no spawn).
     For v1, no seeding (current behavior). Post-launch, dual-RNG seeding
     (`random.seed()` + `np.random.seed()`) for reproducibility (#100, P3). Provides
     OS-level crash isolation (SIGSEGV/OOM kill only one shard), per-shard timeout, and

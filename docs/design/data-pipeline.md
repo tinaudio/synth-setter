@@ -744,9 +744,11 @@ def _render_shard(shard_spec, shard_path):
     Under spawn, the child is a fresh Python interpreter with no inherited state.
     The import happens here, in the child, so the VST plugin loads cleanly.
     """
+    import numpy as np
     from pipeline.vst import make_dataset
-    random.seed(shard_spec.seed)
-    np.random.seed(shard_spec.seed)  # param_spec.py uses np.random too
+    # P3 (post-launch): seed both RNGs for reproducibility — see #100
+    # random.seed(shard_spec.seed)
+    # np.random.seed(shard_spec.seed)
     make_dataset(shard_path, shard_spec)
 
 # In the parent worker:
@@ -776,7 +778,7 @@ else:
 
 **Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also makes testing harder — you'd need to mock the subprocess, which couples tests to CLI argument construction. With `multiprocessing.Process`, the child imports `make_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
 
-**P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/ktinubu/synth-permutations/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). Post-launch, the child process should seed both RNGs from `shard_spec.seed`:
+**P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/ktinubu/synth-permutations/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). The seeding lines in `_render_shard` above are commented out until this is implemented. Post-launch, uncomment and seed both RNGs from `shard_spec.seed`:
 
 ```python
 random.seed(shard_spec.seed)
