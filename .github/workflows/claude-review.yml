@@ -1,24 +1,16 @@
 name: Claude Code Review
 
-# Runs automatically when a PR is opened, and on-demand via the
-# "needs-claude-review" label. Inline comments require pull_request
-# context — workflow_dispatch can't post them (actions/runner#662,
-# claude-code-action#635).
+# On-demand via the "needs-claude-review" label.
 on:
   pull_request:
-    types: [opened, labeled]
+    types: [labeled]
     branches: [main]
 
 jobs:
   claude-review:
-    # Run on open, or when the "needs-claude-review" label is added.
-    # The label guard prevents reviews firing on unrelated labels.
-    if: >
+    if: >-
       github.event.pull_request.head.repo.fork == false &&
-      (
-        github.event.action == 'opened' ||
-        (github.event.action == 'labeled' && github.event.label.name == 'needs-claude-review')
-      )
+      github.event.label.name == 'needs-claude-review'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -55,11 +47,13 @@ jobs:
                   "Bash(gh pr *)",
                   "Read",
                   "Glob",
-                  "Grep"
+                  "Grep",
+                  "mcp__github_inline_comment__create_inline_comment"
                 ]
               }
             }
           prompt: |
             Review this PR. Follow the Code Review section in CLAUDE.md — invoke all seven
             review skills and evaluate every checklist item against the changed code.
-            Prefix each comment with BLOCK: or WARN:.
+            Use `mcp__github_inline_comment__create_inline_comment` to post inline comments
+            on specific lines of changed code. Prefix each comment with BLOCK: or WARN:.
