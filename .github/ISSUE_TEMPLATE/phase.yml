@@ -44,13 +44,3 @@ body:
         - [ ] Step N.2: ...
     validations:
       required: true
-
-  - type: textarea
-    id: blocked-by
-    attributes:
-      label: Blocked by
-      description: Issues that must be completed before this phase can start
-      placeholder: |
-        - #68 (Phase 1)
-    validations:
-      required: false

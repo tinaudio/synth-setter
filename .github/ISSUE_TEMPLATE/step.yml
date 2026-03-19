@@ -24,7 +24,7 @@ body:
       description: Step number within the phase (e.g., 2.1)
       placeholder: "N.M"
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: goal
@@ -53,13 +53,5 @@ body:
       placeholder: |
         - Unit tests for ...
         - Integration test for ...
-    validations:
-      required: false
-
-  - type: textarea
-    id: blocked-by
-    attributes:
-      label: Blocked by
-      description: Issues that must be completed before this step can start
     validations:
       required: false
