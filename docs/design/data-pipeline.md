@@ -702,11 +702,15 @@ A worker from a previous `generate` invocation hangs for hours, then finally upl
 
 The pipeline handles three categories of failure, including crashes from data generation code we don't own (the Surge XT VST plugin can SIGSEGV, OOM, or produce corrupt output).
 
-**Layer 1 — Per-shard isolation in Python:**
-Each shard generation is wrapped in try/except. A crash or error in one shard is logged and the worker moves to the next shard. The worker report accumulates per-shard results. This isolates VST plugin crashes, rendering errors, and validation failures.
+**Layer 1 — Per-shard process isolation:**
+Each shard is rendered in a separate OS process (`multiprocessing.Process` with `start_method="spawn"`). This provides crash isolation at the OS level: a SIGSEGV or OOM kill in the VST plugin terminates only that child process — the parent worker catches the non-zero exit code, marks the shard as invalid, quarantines it, and moves to the next shard. The worker report accumulates per-shard results including exit codes for crashed shards.
+
+Per-shard process isolation is necessary because try/except only catches Python exceptions — it cannot intercept SIGSEGV, OOM kills, or other OS-level crashes from the VST plugin (native C++ code). Without process boundaries, a single shard crash would kill the entire worker and all its in-progress shards.
+
+See [§7.8.1](#781-per-shard-process-isolation) for the design decision, trade-offs, and alternatives considered.
 
 **Layer 2 — Entrypoint crash trap:**
-A bash EXIT trap uploads the debug log and a fallback error JSON to R2 if the Python process dies entirely (OOM kill, SIGSEGV, import error). The debug log captures everything up to the crash. Even if no worker report is written, the log survives.
+A bash EXIT trap uploads the debug log and a fallback error JSON to R2 if the Python worker process itself dies entirely (import error, uncaught exception that escapes Layer 1). The debug log captures everything up to the crash. Even if no worker report is written, the log survives. Note: Layer 1 process isolation handles most crash scenarios (SIGSEGV, OOM per shard). Layer 2 catches failures of the worker process itself.
 
 **Layer 3 — Reconciliation fills gaps:**
 Regardless of how a shard was lost (crash, timeout, upload failure, corrupt output), reconciliation detects it as missing. The next `generate` invocation launches workers for exactly the missing shards. No manual investigation of failure modes is required to resume.
@@ -719,6 +723,60 @@ Each worker invocation produces three artifacts, all with unique filenames keyed
 - **Debug log** (`workers/attempts/{worker_id}-{attempt}/debug.log`, JSONL) — append-only narrative, uploaded by EXIT trap, survives crashes
 
 All worker artifacts live under `metadata/workers/`. Unique filenames per attempt mean retries never overwrite previous artifacts. Missing worker metadata never blocks completion. A run is successful when all staged shard files exist and validate.
+
+#### 7.8.1 Per-Shard Process Isolation
+
+**Problem:** The VST plugin (Surge XT) is native C++ code loaded into the Python process. It can SIGSEGV, OOM, or corrupt global state — failures that Python's try/except cannot catch. Without process boundaries, a single shard crash kills the entire worker and all its in-progress shards.
+
+**Decision:** Each shard renders in a separate OS process via `multiprocessing.Process` with `start_method="spawn"`.
+
+```python
+import multiprocessing
+
+def _render_shard(shard_spec, shard_path, generate_fn):
+    """Runs in a child process — SIGSEGV here won't kill the parent."""
+    random.seed(shard_spec.seed)
+    generate_fn(shard_path, shard_spec)
+
+# In the parent worker:
+p = multiprocessing.Process(
+    target=_render_shard,
+    args=(shard_spec, local_path, generate_fn),
+)
+p.start()
+p.join(timeout=SHARD_TIMEOUT)
+
+if p.exitcode == 0:
+    # validate, upload, write .valid
+    ...
+elif p.exitcode is None:
+    # timed out
+    p.kill()
+    p.join()
+else:
+    # crashed: SIGSEGV = -11, OOM kill = -9
+    # write .invalid, quarantine
+    ...
+```
+
+**Why `spawn` and not `fork`:** The `fork` start method copies the parent's memory via copy-on-write. If the parent has loaded a VST plugin, the child inherits that plugin's global mutable state (internal buffers, audio engine state). VST plugins are not designed for this — shared mutable state across forked processes leads to undefined behavior. `spawn` starts a fresh Python interpreter with no inherited state: each child loads the plugin from scratch, with clean globals and its own memory space. This eliminates shared-state corruption between concurrent shard renders.
+
+**Why not direct function call (`make_dataset()` in-process):** A direct call is simpler and avoids per-shard process overhead, but a SIGSEGV in the plugin kills the entire worker process. Per-shard try/except cannot catch OS-level signals. The bash EXIT trap (Layer 2) would upload logs, and reconciliation (Layer 3) would detect the missing shards — but all in-progress shards on that worker are lost, not just the crashing one. For a 48-shard worker, losing all shards to one bad shard is unacceptable.
+
+**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also prevents injecting a fake `generate_fn` in tests — you'd need to mock the subprocess, which couples tests to CLI argument construction. `multiprocessing.Process` passes Python objects directly, keeping tests clean.
+
+**Trade-off summary:**
+
+| Approach                    | Crash isolation             | Seed passing             | Per-shard timeout   | Plugin state                       | Testability                   |
+| --------------------------- | --------------------------- | ------------------------ | ------------------- | ---------------------------------- | ----------------------------- |
+| Direct function call        | None (SIGSEGV kills worker) | `random.seed()`          | Manual timer        | Shared (unsafe if mutable)         | Inject fake `generate_fn`     |
+| `multiprocessing` fork      | OS process boundary         | Python arg               | `join(timeout)`     | Inherited via COW (unsafe for VST) | Inject fake `generate_fn`     |
+| **`multiprocessing` spawn** | **OS process boundary**     | **Python arg**           | **`join(timeout)`** | **Fresh load (clean)**             | **Inject fake `generate_fn`** |
+| `subprocess.run`            | OS process boundary         | Needs `--seed` CLI param | `timeout=` kwarg    | Fresh load (clean)                 | Must mock subprocess          |
+
+**Cost:** Per-shard process startup (~0.5-1s) plus fresh plugin load (~1-3s for Surge XT). Shard renders take minutes, so this is negligible — roughly 1-3% overhead.
+
+**Edge case — filesystem contention:** `spawn` eliminates shared memory state, but concurrent child processes could contend on shared filesystem resources if the VST plugin writes to global paths (lock files, temp directories, `~/.local` config). The `Xvfb` wrapper (`run-linux-vst-headless.sh`) should use per-process display numbers (`:N` where N is derived from the child's PID or shard ID) to avoid X11 socket contention. If Surge XT writes to other shared paths during headless rendering, those paths should be isolated per-child via environment variables or temp directories.
 
 ### 7.9 Compute Abstraction
 

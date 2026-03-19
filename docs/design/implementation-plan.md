@@ -496,21 +496,33 @@ ______________________________________________________________________
 
 **Key behaviors — Worker:**
 
-- `run_worker(task_spec, storage, generate_fn, max_workers=None)` — ThreadPoolExecutor
-- Per-shard lifecycle: write `.rendering` to **remote** storage FIRST → generate shard
-  **locally** → validate locally → upload `.h5` to storage → write `.valid` to storage.
-  `.rendering` in remote storage survives worker death (crash resilience).
-- Per-shard try/except isolation, concurrent execution
-- On validation failure: upload corrupt shard to `quarantine/`, write `.invalid` marker,
-  log failure details (design doc §7.2). `.rendering` marker remains (append-only, never deleted).
-- Skip-if-valid optimization: before generating, check staging directory for an existing
+- `run_worker(task_spec, storage, generate_fn, max_workers=None)` — manages concurrent
+  shard rendering with per-shard process isolation.
+- **Per-shard process isolation:** Each shard renders in a separate OS process via
+  `multiprocessing.Process(start_method="spawn")`. The parent worker spawns one child
+  per shard, catches exit codes (0 = success, -11 = SIGSEGV, -9 = OOM kill), and handles
+  failures without losing other in-progress shards. `spawn` starts a fresh Python
+  interpreter per child — no inherited VST plugin state, no shared mutable globals.
+  See design doc §7.8.1 for full trade-off analysis.
+- Per-shard lifecycle: write `.rendering` to **remote** storage FIRST → spawn child process
+  → child calls `generate_fn(shard_path, shard_spec)` with `random.seed(shard_spec.seed)` →
+  parent waits with `join(timeout=SHARD_TIMEOUT)` → on success: validate locally →
+  upload `.h5` to storage → write `.valid` to storage.
+  `.rendering` in remote storage survives worker/child death (crash resilience).
+- On validation failure or child crash: upload corrupt shard to `quarantine/`, write
+  `.invalid` marker, log failure details including exit code (design doc §7.2).
+  `.rendering` marker remains (append-only, never deleted).
+- Skip-if-valid optimization: before spawning, check staging directory for an existing
   `.valid` shard. If found, skip and move to next shard. Optimization, not correctness
   requirement (design doc §7.7).
-- Produces `WorkerReport` with per-shard results, content hashes (SHA-256), timing
+- Produces `WorkerReport` with per-shard results, content hashes (SHA-256), timing,
+  exit codes for crashed shards.
 - Creates JSONL debug log via structlog file handler to a known local path so the bash
-  EXIT trap can upload it on crash (design doc §7.8, Appendix E.1)
-- Worker calls `make_dataset()` as Python function with `random.seed(shard_spec.seed)`
-  set per-shard — avoids missing `--seed` CLI param issue.
+  EXIT trap can upload it on crash (design doc §7.8, Appendix E.1).
+- Per-shard timeout via `join(timeout=SHARD_TIMEOUT)` — timed-out children are killed
+  with `p.kill()`, shard marked invalid.
+- **Xvfb display isolation:** Each child process should use a per-process X11 display
+  number (`:N` derived from PID or shard ID) to avoid contention in headless VST rendering.
 
 **Key behaviors — Backend:**
 
@@ -524,6 +536,9 @@ ______________________________________________________________________
 
 - Worker lifecycle marker ordering — assert `.rendering` exists in storage before `.valid`
 - Quarantine path: validation failure → `.invalid` marker + shard in `quarantine/`
+- Process crash isolation: fake `generate_fn` that raises `SystemExit(-11)` (simulating
+  SIGSEGV) → parent catches exit code, marks shard invalid, continues to next shard
+- Per-shard timeout: slow `generate_fn` → child killed after timeout, shard marked invalid
 - Failure isolation, report generation, content hashes
 - LocalBackend submit + metadata
 
@@ -844,8 +859,11 @@ ______________________________________________________________________
 04. Integration tests use `LocalStorageBackend`, not real R2
 05. W&B optional (`--skip-wandb`) — tests skip it; mock test for artifact structure
 06. Workers use ThreadPoolExecutor for parallel shard generation
-07. Worker calls `make_dataset()` as Python function (not subprocess) with `random.seed()`
-    set per-shard — avoids missing `--seed` CLI param issue
+07. Each shard renders in a child process via `multiprocessing.Process(start_method="spawn")`.
+    Parent passes `generate_fn` + `shard_spec` as Python args, child calls
+    `random.seed(shard_spec.seed)` before rendering. Provides OS-level crash isolation
+    (SIGSEGV/OOM kill only one shard), per-shard timeout, and clean VST plugin state.
+    See design doc §7.8.1
 08. Entrypoint gets `MODE=pipeline-worker`, existing modes untouched
 09. Tests in `tests/pipeline/` with own conftest
 10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling
