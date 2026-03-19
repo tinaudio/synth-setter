@@ -52,27 +52,27 @@ All work streams use the same structure:
 ```
 Epic (type: Epic)
 ├── Phase 1 (type: Phase, sub-issue of Epic)
-│   ├── Step 1.1 (type: Step, sub-issue of Phase 1)
-│   └── Step 1.2
+│   ├── Task 1.1 (type: Task, sub-issue of Phase 1)
+│   └── Task 1.2
 ├── Phase 2
-│   └── Step 2.1
+│   └── Task 2.1
 └── Phase N
 ```
 
 - **Phase** — a large feature or functional area. Each phase is a sub-issue of its epic.
-- **Step** — a testable unit of work within a phase. Each step is a sub-issue of its phase.
-- **PR** — a shipping unit, orthogonal to the hierarchy. A PR may contain one step, multiple small steps, or part of a large step.
+- **Task** — a testable unit of work. A task under a phase is what was previously called a "step". Standalone tasks exist outside the hierarchy.
+- **PR** — a shipping unit, orthogonal to the hierarchy. A PR may contain one task, multiple tasks, or part of a large task.
 
 Hierarchy is tracked via native sub-issues (up to 8 levels). Projects render this as an expandable tree via **hierarchy view**.
 
 ### Naming
 
 - Phases: `Phase N: Name` (e.g., "Phase 2: Pipeline Core")
-- Steps: `Step N.M: Name` (e.g., "Step 2.1: Schemas")
+- Tasks under phases: `Task N.M: Name` (e.g., "Task 2.1: Schemas")
 
 ### Merge path
 
-All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs within a phase can land in any order as long as steps are independently testable.
+All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs within a phase can land in any order as long as tasks are independently testable.
 
 ### Current epics
 
@@ -90,7 +90,7 @@ Blocking is tracked via GitHub's **native dependency system**:
 - **Mark as blocked by** / **Mark as blocking** — set from the issue sidebar under "Relationships"
 - Blocked issues show a **Blocked icon** in project boards and issue lists
 - Dependencies are machine-readable via the GraphQL API (`blockedBy`, `blocking` fields)
-- **File-overlap sequencing** — within the same work stream, steps that modify the same files should be sequenced to avoid merge conflicts
+- **File-overlap sequencing** — within the same work stream, tasks that modify the same files should be sequenced to avoid merge conflicts
 
 ### Critical paths
 
@@ -185,7 +185,7 @@ Design docs also include dependency graphs, blocking matrices, and timeline visu
 
 ```
 ISSUE
-  ├── has one → ISSUE_TYPE (Epic | Phase | Step | Bug | Task)
+  ├── has one → ISSUE_TYPE (Epic | Phase | Task | Bug | Feature)
   ├── has one → PRIORITY (P0 | P1 | P2 | P3) — via Issue Fields
   ├── has one → MILESTONE
   ├── has one → PROJECT (via project membership)
@@ -199,7 +199,7 @@ ISSUE
 
 ## 11. Issue Lifecycle
 
-1. Set the **Issue Type** (Epic, Phase, Step, Bug, Task)
+1. Set the **Issue Type** (Epic, Phase, Task, Bug, Feature)
 2. Add **domain label** (data-pipeline, evaluation, etc.)
 3. Assign to a **milestone**
 4. Add to the relevant **project** (Status: **Todo**)
@@ -221,18 +221,19 @@ See `docs/org-migration-checklist.md` (PR #116) for the full pre/during/post che
 
 ### Native features to enable post-migration
 
-| Feature             | What to set up                                                             | What it replaces                                            |
-| ------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| **Issue Types**     | Create Epic, Phase, Step types in org settings (Bug and Task are defaults) | Title-prefix naming conventions, `bug`/`enhancement` labels |
-| **Native blocking** | Add `blockedBy`/`blocking` relationships on existing issues via sidebar    | `blocked` label, `## Blocked by` body text                  |
-| **Issue Fields**    | Priority field is preconfigured; pin to relevant issue types               | `P0`–`P3` priority labels, Priority project field           |
-| **Hierarchy view**  | Enable in project table views                                              | Manual expand/collapse                                      |
+| Feature             | What to set up                                                                | What it replaces                                     |
+| ------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------- |
+| **Issue Types**     | Create Epic and Phase types in org settings (Task, Bug, Feature are defaults) | Title-prefix naming conventions, `enhancement` label |
+| **Native blocking** | Add `blockedBy`/`blocking` relationships on existing issues via sidebar       | `blocked` label, `## Blocked by` body text           |
+| **Issue Fields**    | Priority field is preconfigured; pin to relevant issue types                  | `P0`–`P3` priority labels, Priority project field    |
+| **Hierarchy view**  | Enable in project table views                                                 | Manual expand/collapse                               |
 
 ### Cleanup commands (run after native features are set up)
 
-Delete labels replaced by native features (`bug` and `enhancement` kept — used by Dependabot and external tooling):
+Delete labels replaced by native features (`bug` kept — used by Dependabot):
 
 ```bash
+gh label delete "enhancement" --yes
 gh label delete "blocked" --yes
 gh label delete "P0 🔴" --yes
 gh label delete "P1 🟠" --yes
