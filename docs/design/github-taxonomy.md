@@ -49,13 +49,13 @@ Issue types replace naming conventions — the type is set on the issue itself, 
 
 Org-level GitHub Projects V2, linked to the repo:
 
-| #   | Project         | Custom Fields Beyond Defaults                     |
-| --- | --------------- | ------------------------------------------------- |
-| 1   | CI & Automation | Priority, Start Date, Target Date                 |
-| 2   | Data Pipeline   | Phase, Priority, v 1.0.0, Start Date, Target Date |
-| 3   | Code Health     | Priority, Start Date, Target Date                 |
-| 4   | Evaluation      | Phase, Priority, Start Date, Target Date          |
-| 5   | Training        | Priority                                          |
+| #   | Project         | Custom Fields Beyond Defaults            |
+| --- | --------------- | ---------------------------------------- |
+| 1   | CI & Automation | Priority, Start Date, Target Date        |
+| 2   | Data Pipeline   | Phase, Priority, Start Date, Target Date |
+| 3   | Code Health     | Priority, Start Date, Target Date        |
+| 4   | Evaluation      | Phase, Priority, Start Date, Target Date |
+| 5   | Training        | Priority                                 |
 
 ### Default fields (all projects)
 
@@ -274,7 +274,6 @@ ISSUE
 | Start Date          | ✅  | ✅            | ✅          | ✅         | —        |
 | Target Date         | ✅  | ✅            | ✅          | ✅         | —        |
 | Phase               | —   | ✅            | —           | ✅         | —        |
-| v 1.0.0             | —   | ✅            | —           | —          | —        |
 
 ### Issue lifecycle
 
