@@ -1,13 +1,24 @@
 name: Claude Code Review
 
+# Runs automatically when a PR is opened, and on-demand via the
+# "needs-claude-review" label. Inline comments require pull_request
+# context — workflow_dispatch can't post them (actions/runner#662,
+# claude-code-action#635).
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, labeled]
     branches: [main]
 
 jobs:
   claude-review:
-    if: github.event.pull_request.head.repo.fork == false
+    # Run on open, or when the "needs-claude-review" label is added.
+    # The label guard prevents reviews firing on unrelated labels.
+    if: >
+      github.event.pull_request.head.repo.fork == false &&
+      (
+        github.event.action == 'opened' ||
+        (github.event.action == 'labeled' && github.event.label.name == 'needs-claude-review')
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -15,9 +26,11 @@ jobs:
       id-token: write
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate API key is configured
         run: |
@@ -50,11 +63,3 @@ jobs:
             Review this PR. Follow the Code Review section in CLAUDE.md — invoke all seven
             review skills and evaluate every checklist item against the changed code.
             Prefix each comment with BLOCK: or WARN:.
-          show_full_output: true
-
-  skip-notice:
-    if: github.event.pull_request.head.repo.fork == true
-    runs-on: ubuntu-latest
-    steps:
-      - name: Post fork PR notice
-        run: echo "::notice::Claude review is skipped for fork PRs (secrets are unavailable)."

@@ -4,8 +4,14 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   pull_request:
     branches: [main, "release/*", "dev"]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
 
 jobs:
   run_tests_ubuntu:
