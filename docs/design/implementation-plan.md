@@ -30,14 +30,11 @@ ______________________________________________________________________
 
 **Priorities (in order):**
 
-1. Every step has integration + unit tests, written before implementation (TDD)
-2. Small PRs (one step = one PR)
-3. Always-working pipeline — CI validates every PR
+1. Implementation steps (2.1–2.3, 4.1–6.1) have integration + unit tests, written before implementation (TDD)
+2. Infrastructure steps (1.1–1.5, 3.1) are verified via CI green / Docker builds — not test-first TDD
+3. Small PRs (one step = one PR)
+4. Always-working pipeline — CI validates every PR
 
-**Conventions:**
-
-- Steps 1.1–1.4 and 3.1 are infrastructure — verification via CI green / Docker builds, not test-first TDD
-- TDD applies to Steps 2.1–2.3, 4.1–6.1
 - `pipeline/` at project root (not `src/`) — invoked via `python -m pipeline`
 - Tests in `tests/pipeline/` with own `conftest.py`
 
@@ -535,6 +532,11 @@ ______________________________________________________________________
   with `p.kill()`, shard marked invalid.
 - **Xvfb display isolation:** Each child process should use a per-process X11 display
   number (`:N` derived from PID or shard ID) to avoid contention in headless VST rendering.
+- **No `generate_fn` argument:** The child process imports `make_dataset` directly
+  (`from pipeline.vst import make_dataset`). Under `spawn`, the child is a fresh
+  interpreter, so the import is clean. No pickling concerns — only `shard_spec` and
+  `shard_path` cross the process boundary. For tests, `LocalBackend` calls
+  `run_worker()` in-process (no spawn), so test fixtures can inject a fake function.
 
 **Key behaviors — Backend:**
 
@@ -548,8 +550,9 @@ ______________________________________________________________________
 
 - Worker lifecycle marker ordering — assert `.rendering` exists in storage before `.valid`
 - Quarantine path: validation failure → `.invalid` marker + shard in `quarantine/`
-- Process crash isolation: fake `generate_fn` that calls `os.kill(os.getpid(), signal.SIGSEGV)`
-  in the child process → parent sees `exitcode == -11`, marks shard invalid, continues to next
+- Process crash isolation: test `generate_fn` (module-level, picklable) that calls
+  `os.kill(os.getpid(), signal.SIGSEGV)` in the child process → parent sees `exitcode == -11`,
+  marks shard invalid, continues to next
 - Per-shard timeout: slow `generate_fn` → child killed after timeout, shard marked invalid
 - Failure isolation, report generation, content hashes
 - LocalBackend submit + metadata
@@ -564,6 +567,8 @@ def test_local_backend_generates_shards_with_lifecycle(tmp_path):
     def fake_generate(shard_path, shard_spec):
         _make_fixture_shard(shard_path, n_samples=shard_spec.row_count)
 
+    # LocalBackend runs in-process (no spawn), so closures are fine here.
+    # Production worker uses _render_shard with direct import instead.
     backend = LocalBackend(storage=storage, generate_fn=fake_generate)
     backend.submit("unused", [TaskSpec(run_id=spec.run_id, shards=spec.shards, spec=spec)])
 
@@ -666,7 +671,7 @@ def test_status_after_partial_generate(tmp_path):
     spec = _make_test_spec(num_shards=5, shard_size=100)
     _upload_spec(storage, spec)
     for i in range(3):
-        _write_valid_shard(storage, spec.run_id, f"shard-{i:06d}", tmp_path)
+        _write_valid_shard(storage, spec.run_id, spec.shards[i].shard_id, tmp_path)
 
     result = CliRunner().invoke(cli, ["status", "--run-id", spec.run_id,
         "--storage-root", str(tmp_path / "storage")])
@@ -878,9 +883,10 @@ ______________________________________________________________________
 06. Workers use ThreadPoolExecutor for parallel shard generation
 07. Each shard renders in a child process via `multiprocessing.get_context("spawn").Process(...)`.
     Parent passes `generate_fn` + `shard_spec` as Python args, child calls
-    `random.seed(shard_spec.seed)` before rendering. Provides OS-level crash isolation
-    (SIGSEGV/OOM kill only one shard), per-shard timeout, and clean VST plugin state.
-    See design doc §7.8.1
+    For v1, no seeding (current behavior). Post-launch, dual-RNG seeding
+    (`random.seed()` + `np.random.seed()`) for reproducibility (#100, P3). Provides
+    OS-level crash isolation (SIGSEGV/OOM kill only one shard), per-shard timeout, and
+    clean VST plugin state. See design doc §7.8.1
 08. Entrypoint gets `MODE=pipeline-worker`, existing modes untouched
 09. Tests in `tests/pipeline/` with own conftest
 10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling

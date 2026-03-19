@@ -712,7 +712,7 @@ See [§7.8.1](#781-per-shard-process-isolation) for the design decision, trade-o
 **Layer 2 — Entrypoint crash trap:**
 A bash EXIT trap uploads the debug log and a fallback error JSON to R2 if the Python worker process itself dies entirely (import error, uncaught exception that escapes Layer 1). The debug log captures everything up to the crash. Even if no worker report is written, the log survives. Note: Layer 1 process isolation handles most crash scenarios (SIGSEGV, OOM per shard). Layer 2 catches failures of the worker process itself.
 
-**Limitation:** EXIT traps do not fire on SIGKILL (`kill -9`), which is how the Linux OOM-killer terminates processes. If the worker's parent process is OOM-killed, no logs are uploaded. Mitigation: (1) the entrypoint uses SIGTERM with a grace period before escalating to SIGKILL for timeouts, (2) Layer 3 reconciliation detects the missing shards regardless, and (3) RunPod pod logs provide a fallback audit trail for OOM events.
+**Limitation:** EXIT traps do not fire on SIGKILL (`kill -9`), which is how the Linux OOM-killer terminates processes. If the OOM-killer targets the worker process itself (the parent that spawns per-shard children), no logs are uploaded — the bash EXIT trap never runs. Per-shard child crashes (Layer 1) are unaffected since the parent catches their exit codes normally. Mitigation: (1) the entrypoint uses SIGTERM with a grace period before escalating to SIGKILL for timeouts, (2) Layer 3 reconciliation detects the missing shards regardless, and (3) RunPod pod logs provide a fallback audit trail for OOM events.
 
 **Layer 3 — Reconciliation fills gaps:**
 Regardless of how a shard was lost (crash, timeout, upload failure, corrupt output), reconciliation detects it as missing. The next `generate` invocation launches workers for exactly the missing shards. No manual investigation of failure modes is required to resume.
@@ -738,15 +738,21 @@ import random
 
 _spawn_ctx = multiprocessing.get_context("spawn")
 
-def _render_shard(shard_spec, shard_path, generate_fn):
-    """Runs in a child process — SIGSEGV here won't kill the parent."""
+def _render_shard(shard_spec, shard_path):
+    """Runs in a child process — SIGSEGV here won't kill the parent.
+
+    Under spawn, the child is a fresh Python interpreter with no inherited state.
+    The import happens here, in the child, so the VST plugin loads cleanly.
+    """
+    from pipeline.vst import make_dataset
     random.seed(shard_spec.seed)
-    generate_fn(shard_path, shard_spec)
+    np.random.seed(shard_spec.seed)  # param_spec.py uses np.random too
+    make_dataset(shard_path, shard_spec)
 
 # In the parent worker:
 p = _spawn_ctx.Process(
     target=_render_shard,
-    args=(shard_spec, local_path, generate_fn),
+    args=(shard_spec, local_path),
 )
 p.start()
 p.join(timeout=SHARD_TIMEOUT)
@@ -768,7 +774,16 @@ else:
 
 **Why not direct function call (`make_dataset()` in-process):** A direct call is simpler and avoids per-shard process overhead, but a SIGSEGV in the plugin kills the entire worker process. Per-shard try/except cannot catch OS-level signals. The bash EXIT trap (Layer 2) would upload logs, and reconciliation (Layer 3) would detect the missing shards — but all in-progress shards on that worker are lost, not just the crashing one. For a 48-shard worker, losing all shards to one bad shard is unacceptable.
 
-**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also prevents injecting a fake `generate_fn` in tests — you'd need to mock the subprocess, which couples tests to CLI argument construction. `multiprocessing.Process` passes Python objects directly, keeping tests clean.
+**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also makes testing harder — you'd need to mock the subprocess, which couples tests to CLI argument construction. With `multiprocessing.Process`, the child imports `make_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
+
+**P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/ktinubu/synth-permutations/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). Post-launch, the child process should seed both RNGs from `shard_spec.seed`:
+
+```python
+random.seed(shard_spec.seed)
+np.random.seed(shard_spec.seed)
+```
+
+Without dual seeding, parameters sampled via `np.random.choice` / `np.random.uniform` / `np.random.randint` in `param_spec.py` still use OS entropy. Required for debugging and exact dataset recreation, but not for generating a correct dataset.
 
 **Trade-off summary:**
 
@@ -1397,7 +1412,7 @@ Full implementation plan: [implementation-plan.md](implementation-plan.md) · Ep
 
 | Phase | Scope                                        | Steps   | GitHub issue |
 | ----- | -------------------------------------------- | ------- | ------------ |
-| 1     | Foundation — deps, shared code, CI           | 1.1–1.4 | #68          |
+| 1     | Foundation — deps, shared code, CI           | 1.1–1.5 | #68          |
 | 2     | Pipeline Core — schemas, storage, validation | 2.1–2.3 | #69          |
 | 3     | Docker — Dockerfile, entrypoint, headless    | 3.1     | #70          |
 | 4     | Pipeline Engine — reconciliation, compute    | 4.1–4.2 | #71          |
