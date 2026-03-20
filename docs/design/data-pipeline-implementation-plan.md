@@ -2,6 +2,7 @@
 
 > **Canonical design:** [data-pipeline.md](data-pipeline.md)
 > **Tracking:** [#74](https://github.com/tinaudio/synth-setter/issues/74)
+> **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
 > **Builds on:** Generation infrastructure by benhayes@ (see design doc §1)
 > **Last updated:** 2026-03-20
 
@@ -9,21 +10,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                       | GitHub issue               |
-| --- | ------------------------------------------------------------- | -------------------------- |
-| 1   | [Priorities & Conventions](#1-priorities--conventions)        | —                          |
-| 2   | [Merge Path](#2-merge-path)                                   | #74                        |
-| 3   | [Codebase Inventory](#3-codebase-inventory)                   | —                          |
-| 4   | [Pipeline Config Schema](#4-pipeline-config-schema)           | —                          |
-| 5   | [Phase 1: Foundation](#5-phase-1-foundation-68)             | #68                        |
-| 6   | [Phase 2: Pipeline Core](#6-phase-2-pipeline-core-69)       | #69                        |
+| §   | Section                                                               | GitHub issue               |
+| --- | --------------------------------------------------------------------- | -------------------------- |
+| 1   | [Priorities & Conventions](#1-priorities--conventions)                | —                          |
+| 2   | [Merge Path](#2-merge-path)                                           | #74                        |
+| 3   | [Codebase Inventory](#3-codebase-inventory)                           | —                          |
+| 4   | [Pipeline Config Schema](#4-pipeline-config-schema)                   | —                          |
+| 5   | [Phase 1: Foundation](#5-phase-1-foundation-68)                       | #68                        |
+| 6   | [Phase 2: Pipeline Core](#6-phase-2-pipeline-core-69)                 | #69                        |
 | 7   | [Phase 3: Docker Infrastructure](#7-phase-3-docker-infrastructure-70) | #70                        |
-| 8   | [Phase 4: Pipeline Engine](#8-phase-4-pipeline-engine-71)   | #71                        |
-| 9   | [Phase 5: Pipeline CLI](#9-phase-5-pipeline-cli-72)         | #72                        |
-| 10  | [Phase 6: Production & E2E](#10-phase-6-production--e2e-73) | #73                        |
-| 11  | [Cross-cutting work](#11-cross-cutting-work)                  | #76, #77, #120, #121, #122 |
-| 12  | [Verification Strategy](#12-verification-strategy)            | —                          |
-| 13  | [Assumptions](#13-assumptions)                                | —                          |
+| 8   | [Phase 4: Pipeline Engine](#8-phase-4-pipeline-engine-71)             | #71                        |
+| 9   | [Phase 5: Pipeline CLI](#9-phase-5-pipeline-cli-72)                   | #72                        |
+| 10  | [Phase 6: Production & E2E](#10-phase-6-production--e2e-73)           | #73                        |
+| 11  | [Cross-cutting work](#11-cross-cutting-work)                          | #76, #77, #120, #121, #122 |
+| 12  | [Verification Strategy](#12-verification-strategy)                    | —                          |
+| 13  | [Assumptions](#13-assumptions)                                        | —                          |
 
 ______________________________________________________________________
 
@@ -50,14 +51,14 @@ main ──●──────────●───────────
       #68        #69          #70        #71        #72        #73
 ```
 
-| Phase                                        | Tasks   | Contents                                 | CI gate                         |
-| -------------------------------------------- | ------- | ---------------------------------------- | ------------------------------- |
-| **Phase 1: Foundation** #68                  | 1.1–1.5 | Deps, uploader, design doc, CI setup     | `pytest` passes, ruff clean     |
-| **Phase 2: Pipeline Core** #69               | 2.1–2.3 | Schemas, storage, validation             | `pytest tests/pipeline/` passes |
-| **Phase 3: Docker Infrastructure** #70       | 3.1     | Dockerfile, entrypoint, headless, Make   | Docker build succeeds, BATS     |
-| **Phase 4: Pipeline Engine** #71             | 4.1–4.2 | Reconciliation, compute backend + worker | `pytest tests/pipeline/` passes |
-| **Phase 5: Pipeline CLI** #72                | 5.1–5.3 | Generate, status, finalize commands      | Full integration tests pass     |
-| **Phase 6: Production & E2E** #73           | 6.1     | RunPod backend, Docker updates, E2E      | E2E test + adhoc Docker test    |
+| Phase                                  | Tasks   | Contents                                 | CI gate                         |
+| -------------------------------------- | ------- | ---------------------------------------- | ------------------------------- |
+| **Phase 1: Foundation** #68            | 1.1–1.5 | Deps, uploader, design doc, CI setup     | `pytest` passes, ruff clean     |
+| **Phase 2: Pipeline Core** #69         | 2.1–2.3 | Schemas, storage, validation             | `pytest tests/pipeline/` passes |
+| **Phase 3: Docker Infrastructure** #70 | 3.1     | Dockerfile, entrypoint, headless, Make   | Docker build succeeds, BATS     |
+| **Phase 4: Pipeline Engine** #71       | 4.1–4.2 | Reconciliation, compute backend + worker | `pytest tests/pipeline/` passes |
+| **Phase 5: Pipeline CLI** #72          | 5.1–5.3 | Generate, status, finalize commands      | Full integration tests pass     |
+| **Phase 6: Production & E2E** #73      | 6.1     | RunPod backend, Docker updates, E2E      | E2E test + adhoc Docker test    |
 
 **6 phases, 15 tasks (one PR per task)**
 
@@ -881,7 +882,7 @@ ______________________________________________________________________
 ## 12. Verification Strategy
 
 1. **Per-PR:** CI runs `pytest` + `ruff` on every push
-2. **After all steps:** `pytest tests/pipeline/ -v`, `pytest tests/pipeline/test_e2e.py -v`
+2. **After all tasks:** `pytest tests/pipeline/ -v`, `pytest tests/pipeline/test_e2e.py -v`
 3. **Local dry run:** `python -m pipeline generate --config configs/pipeline/surge_simple_480k.yaml --backend local --workers 2`
 4. **Docker fidelity:** `bash scripts/test_local_docker.sh`
 5. **Mutation testing:** `mutmut run --paths-to-mutate=pipeline/`
