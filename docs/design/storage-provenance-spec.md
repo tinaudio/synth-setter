@@ -189,5 +189,5 @@ ______________________________________________________________________
 
 ## 11. References
 
-- [promotion-pipeline-reference.md](promotion-pipeline-reference.md) — W&B → GitHub Release workflow, promote script, GHA workflow
+- [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md) — W&B → GitHub Release workflow, promote script, GHA workflow
 - artifact-provenance-reference.md — TBD (#122): W&B artifact patterns, lineage DAG examples, API reference
