@@ -26,7 +26,6 @@ ______________________________________________________________________
 - `*_wandb_run_id` = the W&B run ID, set via `wandb.init(id=...)`. Default convention is `{*_config_id}-{timestamp}`, but the path format is agnostic to how the ID is generated.
 - Default timestamp format: `YYYYMMDDTHHMMSSZ` (seconds, UTC, filesystem-safe)
 - W&B run ID limit: 64 characters. Keep config filenames short.
-- Config filenames must be globally unique across all config directories.
 
 ______________________________________________________________________
 
