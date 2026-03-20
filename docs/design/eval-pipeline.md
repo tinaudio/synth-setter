@@ -65,27 +65,38 @@ Separately, the data pipeline (#74) already uses R2 as the source of truth for g
 
 ### Local development (target state)
 
+The experiment config pins everything needed to reproduce an eval — model, data, and checkpoint:
+
+```yaml
+# configs/experiment/surge/flow_simple.yaml
+defaults:
+  - override /data: surge_simple
+  - override /model: surge_flow
+  - override /callbacks: eval_surge
+
+experiment_name: flow_simple
+ckpt_path: ${wandb:synth-permutations/model-x118ylu9:best}
+model:
+  test_cfg_strength: 2.0
+  test_sample_steps: 100
+```
+
 ```bash
 # 1. Set up credentials (one-time) — .env is for secrets only
 cp .env.example .env
 # Edit .env: R2 credentials, WANDB_API_KEY
 
-# 2. Run prediction — checkpoint pinned in experiment config via ${wandb:...} resolver
+# 2. Run full eval — predict → render → metrics in one command
+make eval EXPERIMENT=surge/flow_simple
+# → Checkpoint auto-downloaded from W&B via ${wandb:...} resolver (cached after)
+# → Predictions, audio, and metrics written to logs/eval/flow_simple/{run}-{timestamp}/
+
+# Or run stages individually:
 make predict EXPERIMENT=surge/flow_simple
-# → Checkpoint auto-downloaded from W&B on first run (cached after)
-# → Or override: make predict EXPERIMENT=surge/flow_simple ckpt_path=./local/best.ckpt
-# → Predictions written to logs/eval/flow_simple/{run}-{timestamp}/predictions/
-
-# 3. Render audio — auto-detects display, launches Xvfb if headless
 make render PRED_DIR=logs/eval/flow_simple/{run}-{timestamp}/predictions/ OUTPUT_DIR=logs/eval/flow_simple/{run}-{timestamp}/audio/
-# → Audio written to logs/eval/flow_simple/{run}-{timestamp}/audio/sample_{0..N}/
-
-# 4. Compute metrics
 make metrics AUDIO_DIR=logs/eval/flow_simple/{run}-{timestamp}/audio/ OUTPUT_DIR=logs/eval/flow_simple/{run}-{timestamp}/metrics/
-# → logs/eval/flow_simple/{run}-{timestamp}/metrics/metrics.csv
-# → logs/eval/flow_simple/{run}-{timestamp}/metrics/aggregated_metrics.csv
 
-# 5. (Optional) Upload artifacts to R2
+# 3. (Optional) Upload artifacts to R2
 make upload-eval RUN_DIR=logs/eval/flow_simple/{run}-{timestamp}/
 # → r2:synth-data/eval/flow_simple/{run_id}/{predictions,audio,metrics}/
 ```
@@ -545,10 +556,11 @@ hands Lightning a resolved local path transparently.
 
 | Target             | Maps to                                       |
 | ------------------ | --------------------------------------------- |
+| `make eval`        | `make predict render metrics` (full pipeline) |
 | `make predict`     | `python src/eval.py mode=predict ...`         |
 | `make render`      | `./renderscript.sh` or direct Python on macOS |
 | `make metrics`     | `python scripts/compute_audio_metrics.py ...` |
-| `make docker-eval` | `docker run ... make predict render metrics`  |
+| `make docker-eval` | `docker run ... make eval`                    |
 | `make upload-eval` | `rclone sync ... --checksum`                  |
 
 **Rationale:** Make targets are discoverable (`make help`), composable, and already the project convention. They hide environment-specific complexity (display detection, R2 paths) behind a consistent interface.
