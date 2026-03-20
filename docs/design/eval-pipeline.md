@@ -9,21 +9,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                                       | What it covers                                                |
-| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why this matters            |
-| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end CLI example — local and Docker                     |
-| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics         |
-| 4   | [System Overview](#4-system-overview)                                         | Three-stage architecture, data flow, environment matrix       |
-| 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts         |
-| 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint sync, artifact upload            |
-| 7   | [Design Decisions](#7-design-decisions)                                       | Env-driven paths, rclone wrapper, headless rendering, Docker  |
-| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path |
-| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                   |
-| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                     |
-| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                        |
-| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy      |
-| A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions          |
+| §   | Section                                                                       | What it covers                                                        |
+| --- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why this matters                    |
+| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end CLI example — local and Docker                             |
+| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics                 |
+| 4   | [System Overview](#4-system-overview)                                         | Three-stage architecture, data flow, environment matrix               |
+| 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts                 |
+| 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint sync, artifact upload                    |
+| 7   | [Design Decisions](#7-design-decisions)                                       | Secrets vs paths, rclone wrapper, headless rendering, ckpt resolution |
+| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path         |
+| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                           |
+| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                             |
+| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                                |
+| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy              |
+| A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions                  |
 
 ______________________________________________________________________
 
@@ -73,7 +73,7 @@ cp .env.example .env
 # 2. Run prediction — dataset path and checkpoint are Hydra args, not env vars
 make predict EXPERIMENT=surge/flow_simple CKPT=r2:synth-data/checkpoints/flow-simple/best.ckpt
 # → Checkpoint downloaded to .cache/checkpoints/flow-simple/best.ckpt
-# → Predictions written to logs/eval/flow_simple/{run}/predictions/
+# → Predictions written to logs/eval/flow_simple/{run}-{timestamp}/predictions/
 
 # 3. Render audio — auto-detects display, launches Xvfb if headless
 make render PRED_DIR=logs/eval/flow_simple/{run}-{timestamp}/predictions/ OUTPUT_DIR=logs/eval/flow_simple/{run}-{timestamp}/audio/
@@ -785,7 +785,7 @@ main ──●──────────●───────────
 
 #### Phase 3: Portable Predict (#85)
 
-**Goal:** `make predict` works on local machines with env-driven config.
+**Goal:** `make predict` works on local machines with portable Hydra config.
 
 **Files to modify:**
 
@@ -838,7 +838,7 @@ main ──●──────────●───────────
 
 **Key behaviors:**
 
-- Output CSV schema enforced: `sample_idx, mss, wmfcc, sot, rms`
+- Output CSV: per-sample metrics indexed by directory name, aggregated means/stds
 - `ProcessPoolExecutor` parallelism preserved
 - Dead code (commented JTFS, unused f0) removed
 
@@ -899,7 +899,7 @@ main ──●──────────●───────────
 
 - Cache dir: `.cache/checkpoints/` (gitignored)
 - Checksum validation prevents redundant downloads
-- Upload is opt-in via `model_checkpoint.r2_upload_path` config
+- Upload is opt-in via `R2CheckpointUploader` callback with `r2_path` config
 
 ### PR #4: Docker + Artifacts (Phases 9–10)
 
