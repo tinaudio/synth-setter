@@ -4,75 +4,11 @@
 > **Last Updated**: 2026-03-20
 > **Tracking**: #122
 
-Everything you need to implement a promote-and-release workflow for `synth-setter`.
-Results live in W&B during development; GitHub Releases become the permanent record when you promote.
-
-______________________________________________________________________
-
-## Architecture Overview
-
-```
-Day-to-day development:
-  train.py → logs metrics + model artifact to W&B
-  eval.py  → logs eval metrics to W&B
-
-When a model is good enough:
-  You trigger: gh workflow run promote.yml -f run_id=abc123
-    →
-    ├─ 1. Pull run metrics + config from W&B API
-    ├─ 2. Download model artifact from W&B
-    ├─ 3. (Optional) Link artifact to W&B model registry
-    ├─ 4. Create GitHub Release with:
-    │      - Tag: model-v{N}
-    │      - Body: eval card (metrics, dataset, config, W&B link)
-    │      - Asset: model file (e.g. model.onnx, model.pt)
-    └─ 5. Update README badge or one-liner with current model version
-```
-
-______________________________________________________________________
-
-## Training Script Requirements
-
-Your training script needs to log two things for the pipeline to work:
-
-```python
-import wandb, os
-
-run = wandb.init(
-    project="synth-permutations",
-    config={
-        # your hyperparams
-        "lr": 3e-4,
-        "epochs": 100,
-        # git traceability
-        "github_sha": os.environ.get("GITHUB_SHA", "local"),
-    }
-)
-
-# ... train ...
-
-# Log final metrics to summary (these get pulled at promote time)
-wandb.summary["mse"] = final_mse
-wandb.summary["spectral_convergence"] = final_sc
-wandb.summary["param_accuracy"] = final_acc
-
-# Log the model as an artifact
-artifact = wandb.Artifact(f"model-{run.id}", type="model")
-artifact.add_file("model.pt")
-run.log_artifact(artifact)
-
-run.finish()
-```
-
-The key contract: whatever keys you put in `wandb.summary`, those are what
-the promote script will pull and put in the release body.
+Promote a W&B run to a GitHub Release. Secrets are documented in [storage-provenance-spec.md](storage-provenance-spec.md) §9.
 
 ______________________________________________________________________
 
 ## Promote Script (`scripts/promote.py`)
-
-This is the core script. It takes a W&B run ID, pulls everything it needs,
-and creates a GitHub Release.
 
 ````python
 #!/usr/bin/env python3
@@ -123,8 +59,6 @@ def get_previous_release_metrics(repo: str) -> dict | None:
         return None
     try:
         data = json.loads(result.stdout)
-        # Parse the metrics from the release body
-        # (This depends on your release body format - keep it parseable)
         return {"tag": data.get("tagName"), "body": data.get("body")}
     except (json.JSONDecodeError, KeyError):
         return None
@@ -135,10 +69,7 @@ def format_release_body(run, config: dict, previous: dict | None) -> str:
 
     TODO: use `previous` to show metric deltas vs last release.
     """
-
-    # Pull all summary metrics
     metrics = dict(run.summary)
-    # Remove wandb internal keys
     metrics = {k: v for k, v in metrics.items() if not k.startswith("_")}
 
     body = f"""## Eval Card
@@ -172,7 +103,6 @@ def format_release_body(run, config: dict, previous: dict | None) -> str:
 | Field | Value |
 |-------|-------|
 """
-    # Pull dataset artifact info if logged
     input_artifacts = run.used_artifacts()
     for art in input_artifacts:
         body += f"| {art.type} | `{art.name}` (v{art.version}) |\n"
@@ -195,13 +125,11 @@ def download_model_artifact(run) -> Path | None:
     art = artifacts[0]
     tmpdir = tempfile.mkdtemp()
     art.download(root=tmpdir)
-    # Find the model file
     model_files = list(Path(tmpdir).rglob("*.pt")) + \
                   list(Path(tmpdir).rglob("*.onnx")) + \
                   list(Path(tmpdir).rglob("*.pth"))
     if model_files:
         return model_files[0]
-    # If no known extension, just return the directory
     all_files = list(Path(tmpdir).rglob("*"))
     files_only = [f for f in all_files if f.is_file()]
     return files_only[0] if files_only else None
@@ -210,23 +138,19 @@ def download_model_artifact(run) -> Path | None:
 def promote(run_id: str, entity: str, project: str, repo: str,
             registry_path: str | None = None, dry_run: bool = False):
     """Main promotion logic."""
-
     api = wandb.Api()
     run = api.run(f"{entity}/{project}/{run_id}")
     config = run.config
 
-    # 1. Determine version
     tag = get_next_version_tag(repo)
     print(f"Promoting run {run_id} as {tag}")
 
-    # 2. Optional: link to W&B model registry
     if registry_path:
         artifacts = [a for a in run.logged_artifacts() if a.type == "model"]
         if artifacts:
             artifacts[0].link(registry_path, aliases=[tag, "latest"])
             print(f"Linked model to W&B registry: {registry_path}")
 
-    # 3. Format release body
     previous = get_previous_release_metrics(repo)
     body = format_release_body(run, config, previous)
 
@@ -235,10 +159,8 @@ def promote(run_id: str, entity: str, project: str, repo: str,
         print(body)
         return
 
-    # 4. Download model artifact
     model_path = download_model_artifact(run)
 
-    # 5. Create GitHub Release
     cmd = [
         "gh", "release", "create", tag,
         "--repo", repo,
@@ -255,7 +177,6 @@ def promote(run_id: str, entity: str, project: str, repo: str,
 
     print(f"Release created: {result.stdout.strip()}")
 
-    # 6. Write outputs for GitHub Actions
     if os.getenv("CI"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             print(f"RELEASE_TAG={tag}", file=f)
@@ -360,70 +281,8 @@ Actions tab → "Promote Model" → "Run workflow" → paste run ID → go
 gh workflow run promote.yml -f run_id=abc123
 ```
 
-### Dry run (local, no GitHub release created)
+### Dry run (local)
 
 ```bash
 WANDB_API_KEY=xxx python scripts/promote.py --run-id abc123 --dry-run
 ```
-
-______________________________________________________________________
-
-## What Gets Created
-
-A GitHub Release at `github.com/you/synth-permutations/releases/tag/model-v3` with:
-
-- **Title**: `model-v3: run-name-from-wandb`
-- **Tag**: `model-v3` (on the current default branch HEAD)
-- **Body**: Eval card with metrics table, config dump, dataset versions, W&B link
-- **Asset**: The model file (model.pt / model.onnx) downloadable via the release
-
-______________________________________________________________________
-
-## Downstream: CLI Model Download
-
-Your future CLI can pull the latest model without any W&B dependency:
-
-```python
-import subprocess, json
-
-result = subprocess.run(
-    ["gh", "release", "view", "--repo", "you/synth-permutations",
-     "--json", "assets,tagName"],
-    capture_output=True, text=True
-)
-release = json.loads(result.stdout)
-# download the model asset from release["assets"][0]["url"]
-```
-
-Or for end users who don't have `gh`:
-
-```
-https://github.com/you/synth-permutations/releases/latest/download/model.pt
-```
-
-This URL always resolves to the latest release's model file. No auth needed
-for public repos.
-
-______________________________________________________________________
-
-## Secrets Required
-
-| Secret          | Where to get it                                        |
-| --------------- | ------------------------------------------------------ |
-| `WANDB_API_KEY` | wandb.ai/settings → API Keys                           |
-| `GH_TOKEN`      | Set from `${{ secrets.GITHUB_TOKEN }}` in the workflow |
-
-______________________________________________________________________
-
-## What You Don't Need
-
-- `compare_runs.py` — solves a team review coordination problem you don't have.
-  You're already looking at W&B when deciding to promote.
-- `deploy.yaml` / `deployment.py` — GitHub Deployment objects are metadata for
-  multi-environment staging→production flows. Overkill for solo work.
-- ChatOps (`/promote` slash commands in PR comments) — `workflow_dispatch` with
-  the GitHub UI or `gh` CLI is simpler and less magic.
-- CML — useful if you want auto-generated PR comments with plots on every push.
-  Not needed for the promote flow.
-- `$GITHUB_STEP_SUMMARY` for eval results — the release body IS the permanent
-  record. The step summary is just a confirmation that the workflow ran.
