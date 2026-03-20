@@ -1,4 +1,4 @@
-# Design Doc: Training Pipeline & Durable Checkpointing
+# Design Doc: Training Pipeline
 
 > **Status**: Draft
 > **Author**: ktinubu@
@@ -11,21 +11,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                                       | What it covers                                                                 |
-| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why training needs different ops             |
-| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end local, Docker, and RunPod examples                                  |
-| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics                          |
-| 4   | [System Overview](#4-system-overview)                                         | Single-job architecture, checkpoint lifecycle, environment matrix              |
-| 5   | [Stage Definitions](#5-stage-definitions)                                     | Train, checkpoint persistence, resume, promotion handoff                       |
-| 6   | [R2 & W&B Integration](#6-r2--wb-integration)                                 | Dataset access, checkpoint upload, resume from R2, lineage, release handoff    |
-| 7   | [Design Decisions](#7-design-decisions)                                       | Single-job model, durable checkpoints, launcher shape, Docker split, W&B roles |
-| 8   | [Phase Plan](#8-phase-plan)                                                   | Epic → Phase → Task hierarchy, issue mapping, file lists, test strategy        |
-| 9   | [Dependency Overview](#9-dependency-overview)                                 | Issue dependencies, parallel execution windows, critical path                  |
-| 10  | [Alternatives Considered](#10-alternatives-considered)                        | Rejected approaches and why                                                    |
-| 11  | [Open Questions & Risks](#11-open-questions--risks)                           | Known gaps and trade-offs                                                      |
-| 12  | [Out of Scope](#12-out-of-scope)                                              | Future work — not referenced elsewhere                                         |
-| A–D | [Appendices](#appendix-a-glossary)                                            | Glossary, file inventory, checkpoint policy, implementation recipes            |
+| §   | Section                                                                       | What it covers                                                          |
+| --- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why training needs different ops      |
+| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end local, Docker, and RunPod examples                           |
+| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics                   |
+| 4   | [System Overview](#4-system-overview)                                         | Single-job architecture, checkpoint lifecycle, environment matrix       |
+| 5   | [Stage Definitions](#5-stage-definitions)                                     | Train, W&B checkpoint durability, resume, promotion handoff             |
+| 6   | [W&B Integration](#6-wb-integration)                                          | Dataset access, checkpoint durability, resume, lineage, release handoff |
+| 7   | [Design Decisions](#7-design-decisions)                                       | Single-job model, W&B checkpoints, launcher shape, Docker split         |
+| 8   | [Phase Plan](#8-phase-plan)                                                   | Epic → Phase → Task hierarchy, issue mapping, file lists, test strategy |
+| 9   | [Dependency Overview](#9-dependency-overview)                                 | Issue dependencies, parallel execution windows, critical path           |
+| 10  | [Alternatives Considered](#10-alternatives-considered)                        | Rejected approaches and why                                             |
+| 11  | [Open Questions & Risks](#11-open-questions--risks)                           | Known gaps and trade-offs                                               |
+| 12  | [Out of Scope](#12-out-of-scope)                                              | Future work — not referenced elsewhere                                  |
+| A–D | [Appendices](#appendix-a-glossary)                                            | Glossary, file inventory, checkpoint policy, RunPod launcher recipe     |
 
 ______________________________________________________________________
 
@@ -37,37 +37,37 @@ Topline goal: Run training portably on local machines, Docker, and RunPod, with 
 
 Training is operationally different from the data pipeline:
 
-| Concern          | Data pipeline                             | Training                                   |
-| ---------------- | ----------------------------------------- | ------------------------------------------ |
-| Job shape        | Many short parallel workers               | One long-running job                       |
-| Duration         | Minutes per worker                        | Hours to days                              |
-| Coordination     | Reconciliation (desired vs actual shards) | None — single job                          |
-| Failure recovery | Re-run missing shards                     | Resume from latest durable checkpoint      |
-| Monitoring       | Storage-based completion                  | W&B metrics + pod liveness                 |
-| Output           | Dataset shards → R2                       | Checkpoints → W&B and/or R2, metrics → W&B |
+| Concern          | Data pipeline                             | Training                              |
+| ---------------- | ----------------------------------------- | ------------------------------------- |
+| Job shape        | Many short parallel workers               | One long-running job                  |
+| Duration         | Minutes per worker                        | Hours to days                         |
+| Coordination     | Reconciliation (desired vs actual shards) | None — single job                     |
+| Failure recovery | Re-run missing shards                     | Resume from latest durable checkpoint |
+| Monitoring       | Storage-based completion                  | W&B metrics + pod liveness            |
+| Output           | Dataset shards → R2                       | Checkpoints → W&B, metrics → W&B      |
 
 **Key insight:** the data pipeline's reconciliation backend does not apply to training. Training on RunPod is just "launch one pod with `python src/train.py ...`". No shard partitioning, no worker graph, no storage-based coordination loop.
 
 ### Current Strengths
 
-| Already works today                          | Notes                                              |
-| -------------------------------------------- | -------------------------------------------------- |
-| `python src/train.py` with Hydra composition | Mature entry point                                 |
-| W&B logger                                   | Tracks training metrics and can upload checkpoints |
-| `ModelCheckpoint`                            | Saves every 5000 steps + best + last               |
-| CSV logger                                   | Local fallback                                     |
-| Lightning resume                             | `ckpt_path=` already supported                     |
-| `rootutils` / `PROJECT_ROOT`                 | Paths already resolve cleanly                      |
+| Already works today                          | Notes                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| `python src/train.py` with Hydra composition | Mature entry point                                                 |
+| W&B logger                                   | Tracks metrics; `log_model="all"` uploads checkpoints as artifacts |
+| `ModelCheckpoint`                            | Saves every 5000 steps + best + last                               |
+| CSV logger                                   | Local fallback                                                     |
+| Lightning resume                             | `ckpt_path=` already supported                                     |
+| `rootutils` / `PROJECT_ROOT`                 | Paths already resolve cleanly                                      |
 
 ### Current Gaps
 
-| Gap                                     | Impact                               |
-| --------------------------------------- | ------------------------------------ |
-| Hardcoded dataset paths in configs      | Fixed by shared config cleanup work  |
-| No durable cloud checkpoint persistence | Pod death loses progress             |
-| No RunPod training launcher             | Manual cloud startup                 |
-| No training-focused Docker image        | Hard to reproduce cloud/local parity |
-| Hardcoded W&B identity                  | Wrong defaults for new ownership     |
+| Gap                                     | Impact                                                 |
+| --------------------------------------- | ------------------------------------------------------ |
+| Hardcoded dataset paths in configs      | Fixed by shared config cleanup work                    |
+| No durable cloud checkpoint persistence | Pod death loses progress (W&B `log_model` not enabled) |
+| No RunPod training launcher             | Manual cloud startup                                   |
+| No training-focused Docker image        | Hard to reproduce cloud/local parity                   |
+| Hardcoded W&B identity                  | Wrong defaults for new ownership                       |
 
 ______________________________________________________________________
 
@@ -112,14 +112,13 @@ python src/train.py experiment=surge/flow_simple ckpt_path=logs/train/.../checkp
 # Launch a single long-running training pod
 make runpod-train EXPERIMENT=surge/flow_simple
 
-# If the pod dies after uploading last.ckpt to durable storage:
-# Use make resume to construct the full R2 path from the run ID:
+# If the pod dies, resume from the W&B model artifact:
 make resume EXPERIMENT=surge/flow_simple RUN_ID=<train_wandb_run_id>
 
-# Or specify the full path directly:
+# Or specify a W&B artifact alias directly:
 python src/train.py \
   experiment=surge/flow_simple \
-  ckpt_path=r2:synth-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/checkpoints/last.ckpt
+  ckpt_path=wandb:model-surge-flow-simple:latest
 ```
 
 ### Docker
@@ -155,7 +154,7 @@ ______________________________________________________________________
 - **Checkpoint durability is the recovery mechanism.** No reconciliation layer.
 - **Reuse Lightning semantics.** Resume behavior should stay native to Lightning.
 - **Storage conventions are shared.** Training uses the same storage / provenance rules as data and eval.
-- **W&B for metrics and lineage, R2 for bulk durability.**
+- **W&B for metrics, lineage, and checkpoint durability.**
 
 ### What This System Deliberately Avoids
 
@@ -167,13 +166,13 @@ ______________________________________________________________________
 
 ### Success Metrics
 
-| Metric            | Target                                                       | How to Measure                                          |
-| ----------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
-| Resume durability | Pod death loses at most one checkpoint interval              | Crash at step N, resume from latest uploaded checkpoint |
-| Portability       | Same experiment runs locally, in Docker, and on RunPod       | Smoke tests + manual parity run                         |
-| Provenance        | Every run records dataset, config, SHA, and artifact lineage | Inspect W&B run + storage path                          |
-| Local smoke test  | Tiny fixture reaches checkpoint and exits cleanly            | CI                                                      |
-| Crash recovery UX | One documented command to resume                             | Runbook                                                 |
+| Metric            | Target                                                       | How to Measure                                   |
+| ----------------- | ------------------------------------------------------------ | ------------------------------------------------ |
+| Resume durability | Pod death loses at most one checkpoint interval              | Crash at step N, resume from latest W&B artifact |
+| Portability       | Same experiment runs locally, in Docker, and on RunPod       | Smoke tests + manual parity run                  |
+| Provenance        | Every run records dataset, config, SHA, and artifact lineage | Inspect W&B run + storage path                   |
+| Local smoke test  | Tiny fixture reaches checkpoint and exits cleanly            | CI                                               |
+| Crash recovery UX | One documented command to resume                             | Runbook                                          |
 
 ### Non-Goals
 
@@ -187,27 +186,15 @@ ______________________________________________________________________
 
 ## 4. System Overview
 
-Training is a **single long-running job** with two durable output channels:
+Training is a **single long-running job**. All durable outputs flow through W&B:
 
-1. **Metrics and lineage → W&B**
-2. **Checkpoint files → local disk and optionally R2**
+1. **Metrics and lineage → W&B run**
+2. **Checkpoint files → W&B model artifact** (via `log_model="all"`)
+3. **Local checkpoints → local disk** (Lightning default, ephemeral on cloud pods)
 
 ```
-                  ┌──────────────────────────────────────────────┐
-                  │               R2 (synth-data)               │
-                  │                                              │
-                  │ data/{dataset_config_id}/{dataset_run_id}/   │
-                  │ train/{dataset_config_id}/{dataset_run_id}/  │
-                  │   {train_config_id}/{train_run_id}/          │
-                  │     checkpoints/                             │
-                  │     config.yaml                              │
-                  └───────────────┬──────────────────────────────┘
-                                  │
-                          upload / resume
-                                  │
-                                  ▼
 ┌──────────────┐     ┌────────────────────────┐      ┌────────────────────┐
-│ Dataset      │────►│       TRAIN JOB        │─────►│  Checkpoints       │
+│ Dataset      │────►│       TRAIN JOB        │─────►│  Local checkpoints │
 │ local or R2  │     │  python src/train.py   │      │  last.ckpt         │
 └──────────────┘     │                        │      │  best.ckpt         │
                      │  Lightning + Hydra     │      └────────────────────┘
@@ -216,18 +203,20 @@ Training is a **single long-running job** with two durable output channels:
                                 │
                                 ▼
                          W&B training run
-                         model artifact
+                         model artifact (log_model="all")
                          metrics / lineage
 ```
+
+R2 checkpoint upload is a future optimization if W&B artifact download becomes a bottleneck for large models. See §10.
 
 ### Environment Matrix
 
 | Environment | Dataset source  | Checkpoint durability | GPU          | Trigger             |
 | ----------- | --------------- | --------------------- | ------------ | ------------------- |
 | macOS dev   | Local or R2     | Local only            | MPS          | `make train`        |
-| Linux dev   | Local or R2     | Local or R2           | CUDA         | `make train`        |
-| Docker      | Local or R2     | Mounted volume or R2  | CUDA         | `make docker-train` |
-| RunPod      | R2-backed       | R2 + W&B              | CUDA         | `make runpod-train` |
+| Linux dev   | Local or R2     | Local + W&B           | CUDA         | `make train`        |
+| Docker      | Local or R2     | Local + W&B           | CUDA         | `make docker-train` |
+| RunPod      | R2-backed       | W&B                   | CUDA         | `make runpod-train` |
 | CI          | Fixture dataset | Ephemeral             | CPU/GPU-lite | PR trigger          |
 
 ______________________________________________________________________
@@ -244,22 +233,22 @@ ______________________________________________________________________
 | **Compute**  | GPU                                                                               |
 | **Contract** | Train until configured stopping condition; emit checkpoints on checkpoint cadence |
 
-### 5.2 Durable Checkpoint Upload
+### 5.2 W&B Checkpoint Durability
 
-| Property     | Value                                                             |
-| ------------ | ----------------------------------------------------------------- |
-| **Trigger**  | After local checkpoint save                                       |
-| **Input**    | `last.ckpt`, `best.ckpt` (and optionally other saved checkpoints) |
-| **Output**   | R2 checkpoint objects under canonical train path                  |
-| **Compute**  | CPU / network I/O                                                 |
-| **Contract** | Idempotent upload with `--checksum`; safe to re-run               |
+| Property     | Value                                                                    |
+| ------------ | ------------------------------------------------------------------------ |
+| **Trigger**  | Automatic — `WandbLogger(log_model="all")` uploads after each local save |
+| **Input**    | `last.ckpt`, `best.ckpt` (and any other saved checkpoints)               |
+| **Output**   | W&B model artifact with checkpoint files and run lineage                 |
+| **Compute**  | Background upload (non-blocking)                                         |
+| **Contract** | Zero custom code — Lightning's `WandbLogger` handles upload natively     |
 
 ### 5.3 Resume
 
 | Property     | Value                                                                |
 | ------------ | -------------------------------------------------------------------- |
-| **Command**  | `python src/train.py ... ckpt_path={local_or_r2_path}`               |
-| **Input**    | Local or R2 checkpoint                                               |
+| **Command**  | `python src/train.py ... ckpt_path={local_path_or_wandb_artifact}`   |
+| **Input**    | Local checkpoint or W&B artifact reference                           |
 | **Output**   | Continued training with restored optimizer / scheduler / epoch state |
 | **Compute**  | GPU                                                                  |
 | **Contract** | Reuse Lightning native resume semantics                              |
@@ -275,7 +264,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-## 6. R2 & W&B Integration
+## 6. W&B Integration
 
 > Authoritative storage and W&B conventions are defined in [storage-provenance-spec.md](storage-provenance-spec.md#4-wb-artifact-types). Repeated here for training context.
 
@@ -295,47 +284,36 @@ Behavior:
 - If `r2_path` is specified, sync dataset before training
 - No hidden default R2 fetch
 
-### 6.2 Durable Training Outputs
+### 6.2 Checkpoint Durability via W&B
 
-The canonical R2 training path follows [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout):
+Lightning's `WandbLogger` with `log_model="all"` uploads every checkpoint as a W&B artifact automatically. No custom callback needed.
 
-```text
-train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
+```yaml
+# configs/logger/wandb.yaml
+wandb:
+  _target_: lightning.pytorch.loggers.WandbLogger
+  project: synth-setter
+  log_model: "all"  # uploads every checkpoint as a model artifact
 ```
 
-Expected contents:
+This gives us:
 
-```text
-train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
-├── checkpoints/
-│   ├── last.ckpt
-│   └── best.ckpt
-└── config.yaml
-```
+- **Durability** — checkpoints survive pod death as W&B artifacts
+- **Lineage** — each artifact is linked to the run, dataset, config, and git SHA
+- **Resume** — download the artifact to resume from any machine
+- **Registry** — browsable in the W&B model registry
 
-### 6.3 Checkpoint Upload Policy
-
-Two options exist:
-
-- **W&B artifacts** for browsable model registry and lineage
-- **R2 checkpoint upload** for durable raw files and fast resume
-
-Selected approach: **keep both**
-
-- W&B remains the model registry / lineage system
-- R2 is the durable raw checkpoint store for resume and portability
-
-### 6.4 Resume From R2
+### 6.3 Resume From W&B
 
 Resume must work with the same `ckpt_path=` interface users already know.
 
 Resolution behavior:
 
 - local path → use directly
-- `r2:` path → download to local cache, then pass local path to Lightning
+- `wandb:` artifact reference → download to local cache, then pass local path to Lightning
 - resume semantics stay entirely inside Lightning
 
-A `make resume` target constructs the full R2 path from experiment and run ID to avoid manual path assembly.
+A `make resume` target resolves the W&B artifact from experiment and run ID to avoid manual path assembly.
 
 ### 6.5 W&B Lineage
 
@@ -382,11 +360,11 @@ ______________________________________________________________________
 
 **Rationale:** there is only one long-running job. Progress is recovered via checkpoints, not by recomputing missing work units.
 
-### 7.2 Durable Checkpoints as the Recovery Boundary
+### 7.2 W&B as the Checkpoint Durability Layer
 
-**Decision:** recovery boundary is the latest successfully uploaded checkpoint.
+**Decision:** checkpoint durability uses W&B artifacts via `log_model="all"`. No custom R2 upload callback.
 
-**Rationale:** simple mental model, native Lightning compatibility, and bounded loss on crash.
+**Rationale:** zero custom code — Lightning's `WandbLogger` handles upload natively. Lineage is automatic. Resume downloads the artifact. R2 checkpoint upload is deferred until W&B download speed becomes a bottleneck for large models.
 
 ### 7.3 Single-Pod RunPod Launcher
 
@@ -400,11 +378,11 @@ ______________________________________________________________________
 
 **Rationale:** training needs CUDA / torch / model deps; data generation needs VST / rclone / headless rendering. Overlap is limited.
 
-### 7.5 W&B + R2 Split
+### 7.5 W&B-Only Checkpoints (v1)
 
-**Decision:** W&B is the registry / lineage layer; R2 is the raw durable checkpoint store.
+**Decision:** W&B handles both checkpoint durability and lineage. R2 checkpoint upload deferred.
 
-**Rationale:** W&B is better for browsing and lineage; R2 is better for raw checkpoint persistence and resume.
+**Rationale:** `log_model="all"` provides durability, lineage, and resume with zero custom code. Adding an R2 mirror would require a custom callback (~100 lines), rclone in the training path, R2 credential plumbing in every environment, and three open design questions (which checkpoints to mirror, GC policy, dual-copy cost). Defer until needed.
 
 ### 7.6 No Automatic Promotion
 
@@ -422,22 +400,22 @@ ______________________________________________________________________
 
 ### Issue Mapping
 
-| Issue | Type  | Description                               | Parent  |
-| ----- | ----- | ----------------------------------------- | ------- |
-| #107  | Epic  | Training pipeline & ops                   | —       |
-| TBD   | Phase | Phase 1: Portable Training Foundation     | #107    |
-| TBD   | Phase | Phase 2: Checkpoint Durability            | #107    |
-| TBD   | Phase | Phase 3: RunPod Launcher                  | #107    |
-| TBD   | Phase | Phase 4: Docker & CI                      | #107    |
-| TBD   | Phase | Phase 5: Documentation                    | #107    |
-| TBD   | Task  | Task 1.1: Config Cleanup for Training     | Phase 1 |
-| TBD   | Task  | Task 1.2: W&B Config Cleanup              | Phase 1 |
-| TBD   | Task  | Task 2.1: R2 Checkpoint Uploader Callback | Phase 2 |
-| #92   | Task  | Task 2.2: Resume From R2 Checkpoint       | Phase 2 |
-| TBD   | Task  | Task 3.1: RunPod Training Launcher        | Phase 3 |
-| TBD   | Task  | Task 4.1: Training Docker Image           | Phase 4 |
-| TBD   | Task  | Task 4.2: Training Smoke CI               | Phase 4 |
-| TBD   | Task  | Task 5.1: Training Runbook                | Phase 5 |
+| Issue | Type  | Description                           | Parent  |
+| ----- | ----- | ------------------------------------- | ------- |
+| #107  | Epic  | Training pipeline & ops               | —       |
+| TBD   | Phase | Phase 1: Portable Training Foundation | #107    |
+| TBD   | Phase | Phase 2: W&B Checkpoint Durability    | #107    |
+| TBD   | Phase | Phase 3: RunPod Launcher              | #107    |
+| TBD   | Phase | Phase 4: Docker & CI                  | #107    |
+| TBD   | Phase | Phase 5: Documentation                | #107    |
+| TBD   | Task  | Task 1.1: Config Cleanup for Training | Phase 1 |
+| TBD   | Task  | Task 1.2: W&B Config Cleanup          | Phase 1 |
+| TBD   | Task  | Task 2.1: Enable W&B log_model="all"  | Phase 2 |
+| #92   | Task  | Task 2.2: Resume From W&B Artifact    | Phase 2 |
+| TBD   | Task  | Task 3.1: RunPod Training Launcher    | Phase 3 |
+| TBD   | Task  | Task 4.1: Training Docker Image       | Phase 4 |
+| TBD   | Task  | Task 4.2: Training Smoke CI           | Phase 4 |
+| TBD   | Task  | Task 5.1: Training Runbook            | Phase 5 |
 
 ### Per-Phase Metadata
 
@@ -454,7 +432,7 @@ ______________________________________________________________________
 Use the same linkage pattern as the eval and data pipeline docs:
 
 ```text
-### Task 2.1: R2 Checkpoint Uploader (TBD) ✅ — Completed in PR #XXX
+### Task 2.1: Enable W&B log_model="all" (TBD) ✅ — Completed in PR #XXX
 ```
 
 ### Estimated Change Size
@@ -462,15 +440,14 @@ Use the same linkage pattern as the eval and data pipeline docs:
 | Area                         | Actual change                        | Lines |
 | ---------------------------- | ------------------------------------ | ----- |
 | W&B config cleanup           | env-driven entity / project defaults | ~5    |
-| R2 checkpoint callback       | new callback + tests                 | ~80   |
-| R2 checkpoint resolver reuse | shared path resolution logic         | ~20   |
+| W&B `log_model` enable       | config change + validation test      | ~10   |
+| W&B artifact resume resolver | download artifact → local path       | ~40   |
 | RunPod launcher              | one script + tests                   | ~80   |
 | Docker train image           | new Dockerfile + Make targets        | ~120  |
 | Training smoke CI            | workflow + fixtures + tests          | ~150  |
 
-> A separate implementation plan document (like `data-pipeline-implementation-plan.md`)
-> with per-task file lists, key behaviors, and reference tests will be created when
-> implementation begins.
+> A separate implementation plan document, [`training-pipeline-implementation-plan.md`](training-pipeline-implementation-plan.md),
+> provides per-task file lists, key behaviors, and reference tests for this design.
 
 ______________________________________________________________________
 
@@ -481,43 +458,43 @@ ______________________________________________________________________
 
 ### Known Dependencies
 
-| Training work item               | Depends on                       |
-| -------------------------------- | -------------------------------- |
-| Task 2.1: R2 checkpoint uploader | #90 (rclone wrapper)             |
-| Task 2.2: Resume from R2         | #92                              |
-| Task 1.1: Config cleanup         | #94                              |
-| Task 3.1: RunPod launcher        | shared credential / rclone setup |
-| Task 4.1: Docker train image     | independent                      |
-| Task 1.2: W&B cleanup            | independent                      |
-| Task 4.2: Training CI            | independent                      |
+| Training work item           | Depends on                       |
+| ---------------------------- | -------------------------------- |
+| Task 2.1: W&B log_model      | independent (config change only) |
+| Task 2.2: Resume from W&B    | #92                              |
+| Task 1.1: Config cleanup     | #94                              |
+| Task 3.1: RunPod launcher    | shared credential / rclone setup |
+| Task 4.1: Docker train image | independent                      |
+| Task 1.2: W&B cleanup        | independent                      |
+| Task 4.2: Training CI        | independent                      |
 
 ### Critical Path
 
-`Task 1.1 (config cleanup) → Task 2.1 (checkpoint upload) → Task 2.2 (resume from R2) → Task 3.1 (RunPod training)`
+`Task 1.1 (config cleanup) → Task 2.1 (W&B log_model) → Task 2.2 (resume from W&B) → Task 3.1 (RunPod training)`
 
 ______________________________________________________________________
 
 ## 10. Alternatives Considered
 
-| Alternative                                   | Why rejected                                                        |
-| --------------------------------------------- | ------------------------------------------------------------------- |
-| Reuse data pipeline reconciliation backend    | Wrong job shape; adds complexity without value                      |
-| W&B-only checkpoint durability                | Good registry UX, but raw checkpoint resume path is weaker / slower |
-| R2-only checkpoint strategy                   | Simpler raw files, but loses W&B registry and lineage UX            |
-| Automatic promotion after training            | Blurs training and release responsibilities                         |
-| Single shared Docker image with data pipeline | Too many unrelated deps in one image                                |
+| Alternative                                   | Why rejected / deferred                                                                                                                         |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reuse data pipeline reconciliation backend    | Wrong job shape; adds complexity without value                                                                                                  |
+| R2 + W&B dual checkpoint strategy             | Custom callback (~100 lines), rclone in training path, credential plumbing in every env. Deferred until W&B download speed becomes a bottleneck |
+| R2-only checkpoint strategy                   | Simpler raw files, but loses W&B registry, lineage, and model browsing UX                                                                       |
+| Automatic promotion after training            | Blurs training and release responsibilities                                                                                                     |
+| Single shared Docker image with data pipeline | Too many unrelated deps in one image                                                                                                            |
 
 ______________________________________________________________________
 
 ## 11. Open Questions & Risks
 
-| #   | Question / Risk                                             | Impact                   | Status           |
-| --- | ----------------------------------------------------------- | ------------------------ | ---------------- |
-| 1   | Should RunPod pods auto-terminate after training exits?     | Cloud cost / orphan pods | Open             |
-| 2   | Should R2 mirror every checkpoint or only best + last?      | Storage growth           | Open             |
-| 3   | Is single-GPU sufficient for next-generation models?        | Future scaling           | Accepted for now |
-| 4   | How should stale checkpoints be garbage-collected in R2?    | Long-term storage cost   | Open             |
-| 5   | Do we keep both W&B and R2 checkpoint copies for every run? | Cost vs ergonomics       | Leaning yes      |
+| #   | Question / Risk                                              | Impact                   | Status                                   |
+| --- | ------------------------------------------------------------ | ------------------------ | ---------------------------------------- |
+| 1   | Should RunPod pods auto-terminate after training exits?      | Cloud cost / orphan pods | Open                                     |
+| 2   | ~~Should R2 mirror every checkpoint or only best + last?~~   | ~~Storage growth~~       | Resolved — W&B-only for v1; no R2 mirror |
+| 3   | Is single-GPU sufficient for next-generation models?         | Future scaling           | Accepted for now                         |
+| 4   | ~~How should stale checkpoints be garbage-collected in R2?~~ | ~~Storage cost~~         | Resolved — no R2 checkpoints in v1       |
+| 5   | ~~Do we keep both W&B and R2 checkpoint copies?~~            | ~~Cost~~                 | Resolved — W&B-only for v1               |
 
 ______________________________________________________________________
 
@@ -534,19 +511,19 @@ ______________________________________________________________________
 
 ## Appendix A: Glossary
 
-| Term                     | Definition                                                                                                                                                         |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`train_config_id`**    | Config filename stem for the training experiment. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                           |
-| **`train_wandb_run_id`** | W&B run ID for a specific training run. Format: `{train_config_id}-{YYYYMMDDTHHMMSSZ}`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).     |
-| **durable checkpoint**   | A checkpoint persisted outside the training pod (to R2 and/or W&B).                                                                                                |
-| **promotion**            | Converting a trained model artifact into a GitHub Release / production alias. See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md). |
-| **RunPod launcher**      | Thin script that creates one training pod — not a backend abstraction.                                                                                             |
+| Term                     | Definition                                                                                                                                                             |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`train_config_id`**    | Config filename stem for the training experiment. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                               |
+| **`train_wandb_run_id`** | W&B run ID for a specific training run. Default format: `{train_config_id}-{YYYYMMDDTHHMMSSZ}`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
+| **durable checkpoint**   | A checkpoint persisted outside the training pod as a W&B model artifact.                                                                                               |
+| **promotion**            | Converting a trained model artifact into a GitHub Release / production alias. See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md).     |
+| **RunPod launcher**      | Thin script that creates one training pod — not a backend abstraction.                                                                                                 |
 
 ## Appendix B: Current File Inventory
 
 | File                        | Current role                    | Gap                               |
 | --------------------------- | ------------------------------- | --------------------------------- |
-| `src/train.py`              | Main training entry point       | No durable checkpoint upload      |
+| `src/train.py`              | Main training entry point       | `log_model` not enabled           |
 | `configs/logger/wandb.yaml` | W&B config                      | Identity cleanup needed           |
 | `configs/data/*.yaml`       | Dataset paths                   | Shared portability cleanup needed |
 | `docker/*`                  | Existing container setup        | Training-specific image needed    |
@@ -554,47 +531,17 @@ ______________________________________________________________________
 
 ## Appendix C: Checkpoint Policy
 
-| Checkpoint              | Keep locally          | Upload to W&B            | Upload to R2                  |
-| ----------------------- | --------------------- | ------------------------ | ----------------------------- |
-| `last.ckpt`             | Yes                   | Yes                      | Yes                           |
-| `best.ckpt`             | Yes                   | Yes                      | Yes                           |
-| Intermediate step ckpts | Per checkpoint config | Yes if `log_model="all"` | Optional; policy-configurable |
+| Checkpoint              | Keep locally          | Upload to W&B           |
+| ----------------------- | --------------------- | ----------------------- |
+| `last.ckpt`             | Yes                   | Yes (`log_model="all"`) |
+| `best.ckpt`             | Yes                   | Yes (`log_model="all"`) |
+| Intermediate step ckpts | Per checkpoint config | Yes (`log_model="all"`) |
+
+> R2 checkpoint upload is deferred. If added later, only `best` + `last` would be mirrored.
 
 ## Appendix D: Implementation Recipes
 
-### D.1 R2 Checkpoint Uploader Callback
-
-```python
-class R2CheckpointUploader(Callback):
-    """Upload checkpoints to R2 after each save event.
-
-    Piggybacks on ModelCheckpoint's existing save events. Uploads happen at the
-    same cadence as local saves. --checksum prevents redundant uploads.
-    """
-
-    def __init__(self, r2_path: str):
-        self.r2_path = r2_path
-
-    def on_train_epoch_end(self, trainer, pl_module):
-        ckpt = trainer.checkpoint_callback
-        if ckpt is None:
-            return
-        for path in [ckpt.best_model_path, ckpt.last_model_path]:
-            if path and Path(path).exists():
-                rclone_copyto(path, f"{self.r2_path}/{Path(path).name}")
-```
-
-Config — **no default, must be explicitly specified**:
-
-```yaml
-r2_checkpoint:
-  _target_: src.callbacks.r2_checkpoint.R2CheckpointUploader
-  r2_path: ???  # required when included
-```
-
-Reuses: rclone wrapper from #90, `--checksum` always.
-
-### D.2 RunPod Training Launcher
+### D.1 RunPod Training Launcher
 
 ```python
 # scripts/runpod_train.py

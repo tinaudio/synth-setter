@@ -8,6 +8,20 @@
 
 ______________________________________________________________________
 
+### Index
+
+| Section                                          | Content                       |
+| ------------------------------------------------ | ----------------------------- |
+| [Branch Strategy](#branch-strategy)              | Merge path and phase overview |
+| [Phase 1](#phase-1-portable-training-foundation) | Config cleanup, smoke test    |
+| [Phase 2](#phase-2-wb-checkpoint-durability)     | W&B log_model, resume         |
+| [Phase 3](#phase-3-runpod-launcher)              | RunPod launcher, resume       |
+| [Phase 4](#phase-4-docker--ci)                   | Docker image, CI smoke test   |
+| [Phase 5](#phase-5-documentation)                | Training runbook              |
+| [Estimated Change Size](#estimated-change-size)  | Per-area line estimates       |
+
+______________________________________________________________________
+
 ## Branch Strategy
 
 ```
@@ -21,7 +35,7 @@ Each phase lands through one or more PRs. The unit of planning is the Phase issu
 | Phase   | Issue | Goal                         |
 | ------- | ----- | ---------------------------- |
 | Phase 1 | TBD   | Portable training foundation |
-| Phase 2 | TBD   | Durable checkpointing        |
+| Phase 2 | TBD   | W&B checkpoint durability    |
 | Phase 3 | TBD   | RunPod launcher              |
 | Phase 4 | TBD   | Docker + CI                  |
 | Phase 5 | TBD   | Documentation                |
@@ -65,39 +79,37 @@ tests/test_train_smoke.py
 
 ______________________________________________________________________
 
-## Phase 2: Durable Checkpointing
+## Phase 2: W&B Checkpoint Durability
 
 **Issue:** TBD
 **Epic:** #107
 
 ### Tasks
 
-| Task     | Description              |
-| -------- | ------------------------ |
-| Task 2.1 | R2 checkpoint uploader   |
-| Task 2.2 | Resume from R2 path      |
-| Task 2.3 | Checkpoint upload policy |
+| Task     | Description                  |
+| -------- | ---------------------------- |
+| Task 2.1 | Enable W&B `log_model="all"` |
+| Task 2.2 | Resume from W&B artifact     |
 
 ### Files to modify
 
 ```
+configs/logger/wandb.yaml
 src/train.py
-configs/callbacks/*.yaml
 Makefile
 ```
 
 ### Files to create
 
 ```
-src/utils/checkpoint_sync.py
-tests/test_checkpoint_upload.py
-tests/test_resume_from_r2.py
+src/utils/wandb_checkpoint.py
+tests/test_wandb_checkpoint.py
 ```
 
 ### Completion criteria
 
-- checkpoints uploaded to canonical train path per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)
-- resume works with `ckpt_path=r2:...`
+- `log_model="all"` enabled; checkpoints appear as W&B model artifacts
+- resume works with `ckpt_path=wandb:model-{train_config_id}:latest`
 - Lightning optimizer state restored correctly
 
 ______________________________________________________________________
@@ -184,8 +196,8 @@ ______________________________________________________________________
 | ----------------------- | ------------------------- | ----- |
 | Training config cleanup | remove cluster paths      | ~5    |
 | W&B config cleanup      | env-driven entity/project | ~5    |
-| R2 checkpoint uploader  | callback + tests          | ~80   |
-| Resume from R2          | path resolver             | ~20   |
+| W&B `log_model` enable  | config change + test      | ~10   |
+| Resume from W&B         | artifact resolver         | ~40   |
 | RunPod launcher         | new launcher script       | ~80   |
 | Docker train image      | Dockerfile + make targets | ~120  |
 | CI smoke test           | workflow + fixtures       | ~150  |
