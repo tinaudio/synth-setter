@@ -4,7 +4,7 @@
 > **Last Updated**: 2026-03-20
 > **Tracking**: #122
 
-Promote a W&B run to a GitHub Release. Secrets are documented in [storage-provenance-spec.md](storage-provenance-spec.md) §9.
+Promote a W&B run to a GitHub Release. Secrets are documented in [storage-provenance-spec.md](../design/storage-provenance-spec.md) §9.
 
 ______________________________________________________________________
 
@@ -103,11 +103,11 @@ def format_release_body(run, config: dict, previous: dict | None) -> str:
 | Field | Value |
 |-------|-------|
 """
-    input_artifacts = run.used_artifacts()
+    input_artifacts = list(run.used_artifacts())
     for art in input_artifacts:
         body += f"| {art.type} | `{art.name}` (v{art.version}) |\n"
 
-    if not list(input_artifacts):
+    if not input_artifacts:
         body += "| (none logged) | — |\n"
 
     return body
