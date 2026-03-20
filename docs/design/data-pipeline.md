@@ -3,7 +3,7 @@
 > **Status**: Draft
 > **Author**: ktinubu@
 > **Last Updated**: 2026-03-20
-> **Tracking**: [#74](https://github.com/tinaudio/synth-setter/issues/74)
+> **Tracking**: #74
 > **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 
 ______________________________________________________________________
@@ -264,7 +264,7 @@ Finalize output depends on `output_format` in the spec:
 
 ### R2 File Structure
 
-> R2 root path follows [storage-provenance-spec.md §2](storage-provenance-spec.md). Pipeline-specific internal structure (workers/, lifecycle markers) is additive detail.
+> R2 root path follows [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout). Pipeline-specific internal structure (workers/, lifecycle markers) is additive detail.
 
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/   # e.g. data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022Z/
@@ -878,7 +878,7 @@ Shard count is tuned for GPU worker count — one shard per GPU worker per epoch
 
 ## 8. Experiment Tracking (Weights & Biases)
 
-> Authoritative W&B conventions (artifact naming, metadata placement, lineage DAG, job_type values) are defined in [storage-provenance-spec.md](storage-provenance-spec.md). Repeated here for data-generation context.
+> Authoritative W&B conventions (artifact naming, metadata placement, lineage DAG, `job_type` values) are defined in [storage-provenance-spec.md §4–§7](storage-provenance-spec.md#4-wb-artifact-types). Repeated here for data-generation context.
 
 W&B serves as a lightweight observability layer for the pipeline — a few key metrics and the dataset as a first-class artifact. It is not a monitoring dashboard or a log aggregator. W&B is an index and lineage tracker, not the authoritative dataset store. R2 holds the data; `dataset.json` holds the metadata; W&B points to both.
 
@@ -1345,7 +1345,7 @@ On first `generate`:
 
 ### 14.6 Run ID Format
 
-> ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md).
+> ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
 
 | Pipeline concept          | Storage spec concept                               | Example                                                              |
 | ------------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
@@ -1403,8 +1403,8 @@ configs/
 | **W&B (Weights & Biases)** | [Weights & Biases](https://wandb.ai/), an experiment tracking platform. Used here as a lightweight observability layer: pipeline metrics, dataset artifact registry, and lineage tracking from dataset → training run.                                                                                             |
 | **Virtual dataset**        | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                                                                                                       |
 | **Input spec**             | JSON file (`input_spec.json`) defining the frozen input specification for a run — shard specs, seeds, shapes, splits, renderer version. Written once on first `generate`, never modified.                                                                                                                          |
-| **dataset_config_id**      | Stable identifier for a dataset configuration, derived from the config filename (without extension). Format: `{name}-{total_train_samples}-{shard_size}`. Example: `surge-simple-480k-10k`. See [storage-provenance-spec.md §1](storage-provenance-spec.md).                                                       |
-| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`. Example: `surge-simple-480k-10k-20260312T143022Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md).                                                                                                  |
+| **dataset_config_id**      | Stable identifier for a dataset configuration, derived from the config filename (without extension). Format: `{name}-{total_train_samples}-{shard_size}`. Example: `surge-simple-480k-10k`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                 |
+| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`. Example: `surge-simple-480k-10k-20260312T143022Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                                            |
 | **Shard ID**               | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                                                                                                       |
 | **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                          |
 | **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                       |

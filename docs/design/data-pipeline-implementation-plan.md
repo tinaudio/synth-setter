@@ -1,7 +1,7 @@
 # Implementation Plan: Distributed Data Pipeline
 
 > **Canonical design:** [data-pipeline.md](data-pipeline.md)
-> **Tracking:** [#74](https://github.com/tinaudio/synth-setter/issues/74)
+> **Tracking:** #74
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
 > **Storage conventions:** [storage-provenance-spec.md](storage-provenance-spec.md)
 > **Builds on:** Generation infrastructure by benhayes@ (see design doc §1)
@@ -89,7 +89,7 @@ ______________________________________________________________________
 ## 4. Pipeline Config Schema
 
 Matches design doc §14.5. Config filenames encode runtime parameters — the filename
-stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-provenance-spec.md)):
+stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)):
 
 ```yaml
 # configs/dataset/surge-simple-480k-10k.yaml
@@ -249,7 +249,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
   `shard_size`, `num_shards`, `base_seed`, `splits` (`{"train": N, "val": N, "test": N}`),
   `shards` (list of `ShardSpec`), plus generation params.
-  ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md).
+  ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
   Splits use explicit `{train: N, val: N, test: N}` matching design doc §14.4.
   Validation: `train + val + test == num_shards`.
 - `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed` (= `base_seed + shard_id`),
@@ -267,7 +267,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `splits` (sample counts, not shard counts), `stats`, `validation_summary`,
   `worker_architectures` (list of unique CPU archs), `shard_manifest: list[dict]`
   (per-shard `{shard_id, filename, content_hash}`), `input_spec_sha256`, `input_spec_path`.
-- Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md)).
+- Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
   `dataset_config_id` is the config filename stem, which encodes runtime params for readability.
 - `materialize_spec(config: RunConfig, timestamp=None, renderer_version=None) -> PipelineSpec`.
   Optional `renderer_version` override for testing; test fixtures pass `"test-1.0"` explicitly.
@@ -327,7 +327,7 @@ ______________________________________________________________________
 
 **Key behaviors:**
 
-- Path computation matching [storage-provenance-spec.md §2–§3](storage-provenance-spec.md) R2 layout.
+- Path computation matching [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)–[§3](storage-provenance-spec.md#3-r2-contents-per-workflow) R2 layout.
   Root: `data/{dataset_config_id}/{dataset_wandb_run_id}/`. Helpers for:
   - Shard lifecycle: `write_rendering_marker`, `write_valid_marker`, `write_invalid_marker`
   - Quarantine: `upload_to_quarantine(dataset_wandb_run_id, shard_id, worker_id, attempt, local_path)`
@@ -722,7 +722,7 @@ ______________________________________________________________________
   logs 7 metrics to `wandb.summary` (`pipeline/shards_total`, `pipeline/shards_valid`,
   `pipeline/shards_quarantined`, `pipeline/total_samples`, `pipeline/generation_time_seconds`,
   `pipeline/finalize_time_seconds`, `pipeline/errors_total`) + registers dataset artifact
-  as `data-{dataset_config_id}` (naming per [storage-provenance-spec.md §4](storage-provenance-spec.md))
+  as `data-{dataset_config_id}` (naming per [storage-provenance-spec.md §4](storage-provenance-spec.md#4-wb-artifact-types))
 
 **Unit tests:** Promotes, rejects missing/corrupt, idempotent, stale marker recovery,
 lexicographic shard selection with multiple attempts, `.promoted` markers written,
