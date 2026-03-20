@@ -1423,7 +1423,7 @@ configs/
 
 ## Appendix D: Implementation Roadmap
 
-Full implementation plan: [implementation-plan.md](implementation-plan.md) · Epic: [#74](https://github.com/ktinubu/synth-permutations/issues/74)
+Full implementation plan: [data-pipeline-implementation-plan.md](data-pipeline-implementation-plan.md) · Epic: [#74](https://github.com/ktinubu/synth-permutations/issues/74)
 
 | Phase | Scope                                        | Steps   | GitHub issue |
 | ----- | -------------------------------------------- | ------- | ------------ |
