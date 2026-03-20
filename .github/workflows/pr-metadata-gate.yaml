@@ -97,6 +97,7 @@ jobs:
 
           echo "::group::Checking taxonomy metadata on linked issues"
 
+          # Keep in sync with docs/design/github-taxonomy.md §2 and §6
           VALID_TYPES=("Epic" "Phase" "Task" "Bug" "Feature")
           DOMAIN_LABELS=("data-pipeline" "ci-automation" "code-health" "evaluation" "storage" "testing" "training")
           FAILURES=""
