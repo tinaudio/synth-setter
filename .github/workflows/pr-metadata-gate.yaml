@@ -116,8 +116,9 @@ jobs:
               }
             ' -f owner="${REPO%/*}" -f repo="${REPO#*/}" -F number="$ISSUE_NUM" \
               --jq '.data.repository.issue.issueType.name // ""') || {
-              echo "::warning::Failed to query issue type for #${ISSUE_NUM} via GraphQL, skipping type check"
-              ISSUE_TYPE=""
+              echo "::error::Failed to query issue type for #${ISSUE_NUM} via GraphQL"
+              FAILURES="${FAILURES}Issue #${ISSUE_NUM} is missing required taxonomy metadata:\n  - Could not verify issue type (GraphQL API error)\n\n"
+              continue
             }
 
             if [ -n "$ISSUE_TYPE" ]; then
@@ -139,10 +140,18 @@ jobs:
 
             # Check labels and milestone via REST
             ISSUE_JSON=$(gh api "repos/${REPO}/issues/${ISSUE_NUM}" \
-              --jq '{labels: [.labels[].name], milestone: .milestone.title}') || {
-              echo "::warning::Failed to fetch issue #${ISSUE_NUM} via REST, skipping label/milestone check"
+              --jq '{labels: [.labels[].name], milestone: .milestone.title, is_pr: has("pull_request")}') || {
+              echo "::error::Failed to fetch issue #${ISSUE_NUM} via REST"
+              FAILURES="${FAILURES}Issue #${ISSUE_NUM} is missing required taxonomy metadata:\n  - Could not verify labels/milestone (REST API error)\n\n"
               continue
             }
+
+            # Skip pull requests (PRs share the issue number space)
+            IS_PR=$(echo "$ISSUE_JSON" | jq -r '.is_pr') || IS_PR="false"
+            if [ "$IS_PR" = "true" ]; then
+              echo "  (skipping #${ISSUE_NUM} — pull request, not an issue)"
+              continue
+            fi
 
             LABELS=$(echo "$ISSUE_JSON" | jq -r '.labels[]' 2>/dev/null) || LABELS=""
             MILESTONE=$(echo "$ISSUE_JSON" | jq -r '.milestone // ""' 2>/dev/null) || MILESTONE=""
@@ -181,7 +190,7 @@ jobs:
             echo "========================================="
             echo "TAXONOMY METADATA FAILURES"
             echo "========================================="
-            printf "$FAILURES"
+            printf '%b' "$FAILURES"
             echo "========================================="
             echo ""
             echo "::error::Linked issues are missing required taxonomy metadata. See above for details."
