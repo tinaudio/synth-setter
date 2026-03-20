@@ -1,10 +1,7 @@
-name: Full Tests (including slow)
+name: GPU Tests
 
-# Intentionally no pull_request trigger — the full suite (including @slow tests)
-# takes too long for PR feedback loops.  Runs on manual dispatch and post-merge
-# to main only.  GPU-requiring tests (guarded by @RunIf(min_gpus=1)) are skipped
-# automatically on CPU runners.
-# TODO: add pull_request trigger once runtime is acceptable for PR CI (#35).
+# Runs only @pytest.mark.gpu tests on a GPU runner.
+# Manual dispatch and post-merge to main.
 on:
   workflow_dispatch:
   push:
@@ -15,7 +12,7 @@ on:
 
 jobs:
   run_tests:
-    runs-on: ubuntu-latest
+    runs-on: gpu-x64
 
     timeout-minutes: 120
 
@@ -38,8 +35,8 @@ jobs:
         run: |
           python -m pip list
 
-      - name: Run pytest
+      - name: Run GPU tests
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
-          pytest -vv -s
+          pytest -vv -s -m gpu
