@@ -9,21 +9,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                                       | What it covers                                                      |
-| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why this matters                  |
-| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end CLI example — local and Docker                           |
-| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics               |
-| 4   | [System Overview](#4-system-overview)                                         | Three-stage architecture, data flow, environment matrix             |
-| 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts               |
-| 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint sync, artifact upload, W&B lineage     |
-| 7   | [Design Decisions](#7-design-decisions)                                       | Secrets vs paths, rclone wrapper, headless rendering, storage split |
-| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path       |
-| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                         |
-| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                           |
-| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                              |
-| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy            |
-| A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions                |
+| §   | Section                                                                       | What it covers                                                     |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why this matters                 |
+| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end CLI example — local and Docker                          |
+| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics              |
+| 4   | [System Overview](#4-system-overview)                                         | Three-stage architecture, data flow, environment matrix            |
+| 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts              |
+| 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint sync, artifact upload, W&B lineage    |
+| 7   | [Design Decisions](#7-design-decisions)                                       | Headless rendering, checkpoint resolution, Makefile, storage split |
+| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path      |
+| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                        |
+| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                          |
+| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                             |
+| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy           |
+| A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions               |
 
 ______________________________________________________________________
 
@@ -121,27 +121,20 @@ portable `make` targets instead. No new code references SGE.
 ### Goals
 
 - **Run anywhere.** The evaluation pipeline must work on local macOS dev machines, local Linux machines, Docker containers, and CI runners. Environment differences are handled by config, not by code forks.
-- **R2 as the artifact backbone.** Datasets, checkpoints, and eval outputs are stored in R2. Any machine with credentials can pull what it needs and push what it produces. No more "the data is on the cluster."
-- **Zero manual data wrangling.** If a dataset or checkpoint isn't local, the pipeline fetches it from R2 automatically. If eval outputs should be archived, the pipeline uploads them. No `rclone sync` commands in READMEs.
-- **Idempotent and resumable.** Every `make` target is safe to re-run. `rclone --checksum` ensures no redundant transfers. Rendering only processes missing audio. Metrics only recompute when inputs change.
-- **SGE is deprecated.** The 19 SGE scripts stay as-is — no engineering effort to maintain or consolidate them. They may still work on the cluster but are not tested or supported going forward.
 - **Debuggable.** When a metric looks wrong, you can trace from the aggregated CSV → per-sample CSV → rendered audio → predicted parameters → checkpoint → training run → dataset. Every link in this chain is a file you can inspect.
+- **Idempotent and resumable.** Every `make` target is safe to re-run. `rclone --checksum` ensures no redundant transfers. Rendering only processes missing audio. Metrics only recompute when inputs change.
+
+> **Note:** The 19 SGE scripts in `jobs/predict/` stay as-is — deprecated, no engineering effort to maintain them.
 
 ### Design Principles
 
-- **Secrets in `.env`, paths in Hydra** — `.env` holds only credentials (R2, W&B). All paths use Hydra defaults with CLI overrides ([§7.1](#71-secrets-in-env-paths-in-hydra))
-- **Auto-detect, don't configure** — headless rendering detects the display server automatically ([§7.3](#73-headless-rendering))
-- **Storage before compute** — verify datasets/checkpoints exist before running inference ([§7.4](#74-storage-before-compute))
-- **Experiment configs pin models** — each model variant has its own experiment config with a pinned checkpoint ([§7.5](#75-checkpoint-resolution))
+- **Experiment configs pin models** — each model variant has its own experiment config with a pinned checkpoint ([§7.2](#72-checkpoint-resolution))
 - **`--checksum` always** — all rclone operations use checksum verification (project rule from CLAUDE.md)
 
 ### What This System Deliberately Avoids
 
 - **Automatic stage chaining** — predict, render, metrics are explicit `make` targets. At 1-2 evals/week, chaining adds complexity without value.
 - **Eval-specific orchestrator** — Makefile targets are sufficient. No Airflow, no Prefect, no custom DAG engine.
-- **Streaming metrics** — metrics are computed in batch after all audio is rendered, not incrementally.
-- **GPU scheduling** — prediction uses whatever GPU is available; scheduling is the cluster's job.
-- **Multi-model comparison framework** — comparing models is done by running the pipeline twice and diffing CSVs.
 
 ### Success Metrics
 
@@ -155,10 +148,7 @@ portable `make` targets instead. No new code references SGE.
 ### Non-Goals
 
 - **Training pipeline changes.** This doc covers eval and R2 integration only. Training orchestration is a separate concern.
-- **Real-time eval.** Batch eval, triggered manually or by CI.
 - **Custom metric development.** Existing metrics (MSS, wMFCC, SOT, RMS) are fixed. Adding new metrics is future work.
-- **Multi-user eval infrastructure.** Single-user research pipeline.
-- **Replacing W&B.** W&B remains the experiment tracker. R2 complements it for large artifacts.
 
 ## 4. System Overview
 
@@ -293,34 +283,11 @@ r2:synth-data/
                 └── config.yaml   # Hydra config snapshot (frozen provenance)
 ```
 
-Checkpoints are stored in **W&B artifacts** (via `log_model="all"`), not R2. See [§7.5](#75-checkpoint-resolution) for rationale.
+Checkpoints are stored in **W&B artifacts** (via `log_model="all"`), not R2. See [§7.2](#72-checkpoint-resolution) for rationale.
 
 ### 6.2 rclone Wrapper
 
-All R2 operations go through a shared utility function. This avoids scattered `subprocess.run(["rclone", ...])` calls and enforces the `--checksum` rule.
-
-```python
-def rclone_sync(
-    src: str,
-    dst: str,
-    *,
-    flags: list[str] | None = None,
-) -> subprocess.CompletedProcess:
-    """Sync src to dst via rclone. Always uses --checksum. Raises on non-zero exit."""
-```
-
-R2 credentials are the **only** values that belong in `.env` — they are secrets that must never be committed:
-
-```bash
-# .env — secrets only, nothing else
-RCLONE_CONFIG_R2_TYPE=s3
-RCLONE_CONFIG_R2_ACCESS_KEY_ID=...
-RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=...
-RCLONE_CONFIG_R2_ENDPOINT=https://{account_id}.r2.cloudflarestorage.com
-WANDB_API_KEY=...
-```
-
-Paths, dataset roots, checkpoint locations, and log directories are **not** in `.env` — they are Hydra config values with sensible defaults and CLI overrides.
+R2 operations use the shared rclone wrapper from the data pipeline (see `docs/design/data-pipeline.md` §6).
 
 ### 6.3 Dataset Download
 
@@ -397,7 +364,7 @@ OmegaConf.register_new_resolver("wandb", _wandb_resolver)
 - If cached copy exists → no-op (no W&B API call)
 - Zero changes to `src/eval.py` or `src/train.py`
 
-See [§7.5](#75-checkpoint-resolution) for the full resolution behavior.
+See [§7.2](#72-checkpoint-resolution) for the full resolution behavior.
 
 ### 6.5 Eval Artifact Upload
 
@@ -470,48 +437,7 @@ dataset-surge_simple-480k:v2 ──→ eval run (job_type=eval) ◄────�
 
 ## 7. Design Decisions
 
-### 7.1 Secrets in `.env`, Paths in Hydra
-
-**Decision:** `.env` holds only credentials (R2, W&B). All paths use plain Hydra defaults with CLI overrides — no `${oc.env:}` interpolation for paths.
-
-```yaml
-# Before — hardcoded cluster path
-dataset_root: /data/scratch/acw585/surge-simple/
-
-# After — uses existing paths convention, resolves to {PROJECT_ROOT}/data/surge-simple
-dataset_root: ${paths.data_dir}/surge-simple
-```
-
-```bash
-# On the cluster, override via CLI — explicit and visible
-python src/eval.py data.dataset_root=/data/scratch/acw585/surge-simple/ ...
-
-# R2 path — must be specified explicitly, no default
-python src/eval.py data.r2_path=r2:synth-data/data/surge-simple/ ...
-```
-
-**Rationale:** `.env` files are invisible state — you can't read a config and know what it does without also reading `.env`. Hydra already has a CLI override mechanism. Using `${oc.env:DATA_ROOT}` in configs adds a second override layer that can conflict with the first. Keeping paths as plain Hydra values means:
-
-- Configs are self-describing — read the YAML, know what happens
-- CLI overrides are visible in the command line and in Hydra's `overrides.yaml` log
-- No "what's in my `.env` again?" debugging
-- `.env` has a single purpose: secrets that must never be committed
-
-The only env vars in configs are `PROJECT_ROOT` (set automatically by `rootutils`) and credentials (`RCLONE_CONFIG_R2_*`, `WANDB_API_KEY`).
-
-### 7.2 rclone Over boto3/S3 SDK
-
-**Decision:** Use rclone (subprocess) for all R2 operations, not the AWS S3 SDK.
-
-**Rationale:**
-
-- The data pipeline already uses rclone — one tool, one set of docs, one failure mode
-- `--checksum` is a first-class rclone flag (CLAUDE.md rule)
-- rclone handles R2's S3 compatibility quirks transparently
-- No additional Python dependency
-- Trade-off: subprocess call is harder to unit test than a Python SDK. Mitigated by wrapping in a single function that can be mocked.
-
-### 7.3 Headless Rendering
+### 7.1 Headless Rendering
 
 **Decision:** Auto-detect display availability rather than requiring configuration.
 
@@ -537,13 +463,7 @@ fi
 
 **Rationale:** Requiring users to know whether they're headless and set `DISPLAY` manually is error-prone. Auto-detection handles all environments (macOS dev, Linux dev, Docker, CI) with zero configuration.
 
-### 7.4 Storage Before Compute
-
-**Decision:** Verify dataset and checkpoint availability before running any GPU inference.
-
-**Rationale:** A missing dataset or corrupt checkpoint discovered mid-inference wastes GPU time. `prepare_data()` runs before `setup()` in Lightning's lifecycle — the natural place for this check. For R2 downloads, we validate the rclone exit code and file existence before proceeding.
-
-### 7.5 Checkpoint Resolution
+### 7.2 Checkpoint Resolution
 
 #### Current behavior
 
@@ -609,7 +529,7 @@ hands Lightning a resolved local path transparently.
 
 **Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). It is either a required CLI arg (ad-hoc) or pinned in an experiment config (reproducible). The `${wandb:...}` OmegaConf resolver makes pinned values portable across machines — resolution is lazy and cached. Checkpoints are stored in W&B (Teams plan, $50/mo) — see [§9](#9-alternatives-considered) for the full cost/benefit analysis vs R2.
 
-### 7.6 Makefile as CLI Interface
+### 7.3 Makefile as CLI Interface
 
 **Decision:** All eval operations are `make` targets — consistent with the existing `make test`, `make format` pattern.
 
@@ -624,7 +544,23 @@ hands Lightning a resolved local path transparently.
 
 **Rationale:** Make targets are discoverable (`make help`), composable, and already the project convention. They hide environment-specific complexity (display detection, R2 paths) behind a consistent interface.
 
-### 7.7 Current vs Proposed: Full Comparison
+### 7.4 Storage Responsibility Split
+
+Each system handles what it's best at:
+
+| System                                 | What it stores                                                                                                                 | Why                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| **W&B**                                | Training metrics, checkpoints (`log_model="all"`), eval summary metrics, artifact lineage                                      | UI for browsing/comparing, lineage graphs, model registry |
+| **R2**                                 | Datasets (generated shards, train/val/test splits), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics) | Too large for W&B, cheaper per GB, fast rclone egress     |
+| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                       | Exact reproducibility without querying W&B                |
+
+**Provenance is recorded in three places:**
+
+- **R2 path** → human-readable: `eval/{train_data}/{run_id}/{eval_data}/` tells you what happened at a glance
+- **W&B lineage** → programmatic: `use_artifact()` connects dataset → model → eval with exact versions
+- **Hydra config** → complete: every parameter frozen, reproducible without any external system
+
+### 7.5 Current vs Proposed: Full Comparison
 
 This section consolidates every configuration and environment behavior change in one place.
 
@@ -680,7 +616,7 @@ This section consolidates every configuration and environment behavior change in
 
 #### Diff analysis
 
-**1. `.env` scope (§7.1)**
+**1. `.env` scope**
 
 |                      | Current              | Proposed                                                             |
 | -------------------- | -------------------- | -------------------------------------------------------------------- |
@@ -689,7 +625,7 @@ This section consolidates every configuration and environment behavior change in
 | **Risk eliminated**  | —                    | Invisible state: can't read YAML + `.env` and know what happens      |
 | **Trade-off**        | —                    | Cluster users must pass CLI overrides instead of setting one env var |
 
-**2. Checkpoint resolution (§7.5)**
+**2. Checkpoint resolution (§7.2)**
 
 |                            | Current                                     | Proposed                                                                                      |
 | -------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -709,7 +645,7 @@ This section consolidates every configuration and environment behavior change in
 | **Risk eliminated** | —                          | "Data is on the cluster" — R2 makes it available everywhere              |
 | **Trade-off**       | —                          | First download of a 100GB dataset takes time; cached after that          |
 
-**4. Display handling (§7.3)**
+**4. Display handling (§7.1)**
 
 |                     | Current       | Proposed                                 |
 | ------------------- | ------------- | ---------------------------------------- |
@@ -726,22 +662,6 @@ This section consolidates every configuration and environment behavior change in
 | **SGE scripts**  | 19 scripts, actively used          | Left as-is, not maintained                                                                       |
 | **Cluster eval** | `qsub jobs/predict/flow-simple.sh` | `make predict EXPERIMENT=surge/flow_simple CKPT=r2:...` (SSH to cluster, run make target)        |
 | **Risk**         | —                                  | If SGE scripts break, no fix is coming. Acceptable — cluster is not the primary dev environment. |
-
-### 7.8 Storage Responsibility Split
-
-Each system handles what it's best at:
-
-| System                                 | What it stores                                                                                                                 | Why                                                       |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| **W&B**                                | Training metrics, checkpoints (`log_model="all"`), eval summary metrics, artifact lineage                                      | UI for browsing/comparing, lineage graphs, model registry |
-| **R2**                                 | Datasets (generated shards, train/val/test splits), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics) | Too large for W&B, cheaper per GB, fast rclone egress     |
-| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                       | Exact reproducibility without querying W&B                |
-
-**Provenance is recorded in three places:**
-
-- **R2 path** → human-readable: `eval/{train_data}/{run_id}/{eval_data}/` tells you what happened at a glance
-- **W&B lineage** → programmatic: `use_artifact()` connects dataset → model → eval with exact versions
-- **Hydra config** → complete: every parameter frozen, reproducible without any external system
 
 ## 8. Dependency Graph & Parallelism
 
@@ -983,7 +903,7 @@ main ──●──────────────────●───
 **Key behaviors:**
 
 - `dataset_root` has a sensible Hydra default; override via CLI when needed
-- `ckpt_path` resolved per [§7.5](#75-checkpoint-resolution) — CLI arg or experiment config, supports `${wandb:...}` resolver
+- `ckpt_path` resolved per [§7.2](#72-checkpoint-resolution) — CLI arg or experiment config, supports `${wandb:...}` resolver
 - `paths.log_dir` keeps the existing default (`${paths.root_dir}/logs/`)
 - Fails fast with clear error if dataset not found
 
