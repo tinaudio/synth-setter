@@ -264,32 +264,7 @@ Four metrics are computed for each (predicted, target) audio pair:
 
 ## 6. R2 Integration
 
-### 6.1 R2 Layout
-
-```
-r2:synth-data/
-├── data/                         # Datasets (existing, from data pipeline)
-│   └── {dataset_name}/
-│       ├── shard-*.h5
-│       ├── train.h5, val.h5, test.h5
-│       └── stats.npz
-└── eval/                         # Eval artifacts (predictions, audio, metrics)
-    └── {train_data_config}/      # e.g. surge_simple — dataset model was trained on
-        └── {training_run_id}/    # e.g. x118ylu9 — W&B training run ID
-            └── {eval_data_config}/  # e.g. surge_simple, nsynth — dataset evaluated against
-                ├── predictions/
-                ├── audio/
-                ├── metrics/
-                └── config.yaml   # Hydra config snapshot (frozen provenance)
-```
-
-Checkpoints are stored in **W&B artifacts** (via `log_model="all"`), not R2. See [§9](#9-alternatives-considered) for rationale.
-
-### 6.2 rclone Wrapper
-
-R2 operations use the shared rclone wrapper from the data pipeline (see `docs/design/data-pipeline.md` §6).
-
-### 6.3 Dataset Download
+### 6.1 Dataset Download
 
 When `data.r2_path` is explicitly provided (via CLI override or experiment config), `SurgeDataModule.prepare_data()` syncs the dataset to `data.dataset_root` before the data loaders are created.
 
@@ -321,7 +296,7 @@ Behavior:
 - Otherwise → `rclone_sync(r2_path, dataset_root)`
 - **No default value for `r2_path`** — you opt in explicitly, never accidentally
 
-### 6.4 Checkpoint Storage (W&B Artifacts)
+### 6.2 Checkpoint Storage (W&B Artifacts)
 
 Checkpoints are stored in **W&B artifacts**, not R2. This is a deliberate decision — see [§9](#9-alternatives-considered) for the full R2-vs-W&B analysis.
 
@@ -367,7 +342,7 @@ if not OmegaConf.has_resolver("wandb"):
 
 See [§7.2](#72-checkpoint-resolution) for the full resolution behavior.
 
-### 6.5 Eval Artifact Upload
+### 6.3 Eval Artifact Upload
 
 After metrics, optionally upload all eval outputs to R2:
 
@@ -391,7 +366,7 @@ rclone ls r2:synth-data/eval/surge_simple/x118ylu9/
 rclone ls r2:synth-data/eval/surge_simple/x118ylu9/nsynth/
 ```
 
-### 6.6 W&B Eval Lineage
+### 6.4 W&B Eval Lineage
 
 W&B tracks the full provenance chain via artifact lineage. Each eval creates a lightweight
 W&B run that declares its inputs (model checkpoint + dataset) and logs summary metrics:
