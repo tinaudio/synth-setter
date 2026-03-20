@@ -73,21 +73,21 @@ cat configs/dataset/surge-simple-480k-10k.yaml
 # → num_shards: 48, shard_size: 10000, ...
 
 # 2. Launch generation — creates spec, launches workers, exits
-python -m pipeline.cli generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
+python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
 # → Created run surge-simple-480k-10k-20260313T100000Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
 
 # 3. Check progress (can run from any machine, any time)
-python -m pipeline.cli status --run-id surge-simple-480k-10k-20260313T100000Z
+python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
 # → Valid: 44/48  Missing: 2  Quarantined: 2
 
 # 4. Re-run generation for missing shards only
-python -m pipeline.cli generate --run-id surge-simple-480k-10k-20260313T100000Z
+python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000Z
 # → 4 shards missing, launching 1 worker
 
 # 5. Finalize — download, reshard, compute stats, register in W&B
-python -m pipeline.cli finalize --run-id surge-simple-480k-10k-20260313T100000Z
+python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000Z
 # → 48/48 valid. output_format: hdf5
 # → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
 # → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
@@ -228,9 +228,9 @@ Finalize output depends on `output_format` in the spec:
 │                                │        ┌──────────────────┐
 │  1. Validate auth (R2+RunPod)  │        │  Cloudflare R2   │
 │  2. Read/create spec     ◄─────┼───────►│                  │
-│  3. List staged shards   ◄─────┼────────┤  {run_id}/       │
-│  4. Validate staged shards     │        │   metadata/      │
-│  5. Compute missing set        │        │   workers/       │
+│  3. List staged shards   ◄─────┼────────┤  data/{cfg}/{id}/ │
+│  4. Validate staged shards     │        │   metadata/       │
+│  5. Compute missing set        │        │   workers/        │
 │  6. Partition across N workers │        │                  │
 │  7. Submit N tasks             │        │                  │
 │  8. Exit                       │        │                  │
@@ -557,7 +557,7 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 `make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for `.h5` + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
 
 ```
-$ python -m pipeline.cli status --run-id surge-simple-480k-10k-20260313T100000Z
+$ python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
 
 Run: surge-simple-480k-10k-20260313T100000Z
 Spec shards: 48
@@ -1541,7 +1541,7 @@ artifact.add_file(input_spec_path)        # input_spec.json
 artifact.add_file(card_path)        # dataset.json
 artifact.add_reference(
     f"s3://synth-data/data/{spec.dataset_config_id}/{spec.dataset_wandb_run_id}/"
-)  # R2 is S3-compatible; W&B resolves via S3 API (requires AWS_ENDPOINT_URL)
+)  # R2 is S3-compatible; W&B resolves via S3 API (uses AWS_ENDPOINT_URL or WANDB_S3_ENDPOINT_URL; see storage-provenance-spec.md §11)
 run.log_artifact(artifact)
 run.finish()
 ```
