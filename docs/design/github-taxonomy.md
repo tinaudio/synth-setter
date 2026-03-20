@@ -47,8 +47,6 @@ Types are set on the issue itself, filterable in issue lists, and show distinct 
 
 **Hierarchy types** (Epic, Phase) define structure. **Work types** (Task, Bug, Feature) are orthogonal — a Task under a Phase is what was previously called a "step".
 
-**Hierarchy types** (Epic, Phase) define structure. **Work types** (Task, Bug, Feature) are orthogonal — a Task under a Phase is what was previously called a "step".
-
 ## 3. Hierarchy
 
 All work streams use the same structure:
@@ -80,12 +78,12 @@ All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs wi
 
 ### Current epics
 
-| Epic | Title                                                      | Project         | Design Doc                           |
+| Epic | Title                                                      | Domain Label    | Design Doc                           |
 | ---- | ---------------------------------------------------------- | --------------- | ------------------------------------ |
-| #74  | feat(pipeline): distributed data pipeline                  | Data Pipeline   | `data-pipeline.md`                   |
-| #98  | feat(eval): evaluation pipeline — predict, render, metrics | Evaluation      | `eval-pipeline.md` (PR #101)         |
-| #99  | feat(storage): R2 integration for datasets and checkpoints | Eval + Pipeline | `eval-pipeline.md` §6                |
-| #107 | feat(training): training pipeline & ops                    | Training        | `training-ops-braindump.md` (PR #84) |
+| #74  | feat(pipeline): distributed data pipeline                  | `data-pipeline` | `data-pipeline.md`                   |
+| #98  | feat(eval): evaluation pipeline — predict, render, metrics | `evaluation`    | `eval-pipeline.md` (PR #101)         |
+| #99  | feat(storage): R2 integration for datasets and checkpoints | `evaluation`    | `eval-pipeline.md` §6                |
+| #107 | feat(training): training pipeline & ops                    | `training`      | `training-ops-braindump.md` (PR #84) |
 
 ## 4. Blocking & Dependencies
 
@@ -107,7 +105,7 @@ For detailed blocking matrices and parallel execution windows, see the respectiv
 
 ## 5. Priority
 
-Priority is tracked via a **Priority** single-select field on each project:
+Priority is tracked via a **Priority** single-select field on the project:
 
 | Priority | Typical usage                          |
 | -------- | -------------------------------------- |
@@ -120,14 +118,14 @@ Priority is tracked via a **Priority** single-select field on each project:
 
 Labels classify issues by **domain** only. Type and blocking are handled by native features; priority is a project field.
 
-| Label           | Color   | Description                                   | Project |
-| --------------- | ------- | --------------------------------------------- | ------- |
-| `data-pipeline` | #0e8a16 | Data Pipeline project                         | #2      |
-| `ci-automation` | #1d76db | CI & Automation project                       | #1      |
-| `code-health`   | #fbca04 | Code Health project                           | #3      |
-| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference   | #4      |
-| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config | #1      |
-| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure    | #5      |
+| Label           | Color   | Description                                   |
+| --------------- | ------- | --------------------------------------------- |
+| `data-pipeline` | #0e8a16 | Data pipeline work stream                     |
+| `ci-automation` | #1d76db | CI & automation work stream                   |
+| `code-health`   | #fbca04 | Code quality and tech debt                    |
+| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference   |
+| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config |
+| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure    |
 
 Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wanted`, `question`) are retained for their standard GitHub purposes.
 
@@ -143,32 +141,32 @@ Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wa
 
 Every work stream has a milestone. Sub-issues automatically inherit their parent's milestone.
 
-## 8. Projects
+## 8. Project
 
-Org-level GitHub Projects V2, linked to the repo:
+A single org-level GitHub Project contains all issues. Domain labels and saved views replace separate per-domain projects.
 
-| #   | Project         | Custom Fields                     |
-| --- | --------------- | --------------------------------- |
-| 1   | CI & Automation | Priority, Start Date, Target Date |
-| 2   | Data Pipeline   | Priority, Start Date, Target Date |
-| 3   | Code Health     | Priority, Start Date, Target Date |
-| 4   | Evaluation      | Priority, Start Date, Target Date |
-| 5   | Training        | Priority                          |
+### Custom fields
 
-### Built-in fields (all projects)
+Priority, Start Date, Target Date.
+
+### Built-in fields
 
 Title, Assignees, Status (`Todo` → `In Progress` → `Done`), Labels, Linked PRs, Milestone, Repository, Reviewers, Parent issue, Sub-issues progress.
 
 ### Views
 
-- **Table** — flat list, sortable/filterable by any field
-- **Board** — kanban grouped by Status
-- **Roadmap** — timeline using Start Date / Target Date
-- **Hierarchy** — expandable Epic → Phase → Task tree (up to 8 levels)
+Use saved views with domain label filters to switch between work streams:
 
-### Cross-project issue sharing
-
-Some issues appear in multiple projects for cross-cutting visibility (e.g., R2 integration issues in both Data Pipeline and Evaluation). GitHub Projects V2 shares a single status field across projects, so status drift is not a concern.
+| View            | Layout    | Filter                |
+| --------------- | --------- | --------------------- |
+| All Work        | Hierarchy | (none)                |
+| Data Pipeline   | Hierarchy | `label:data-pipeline` |
+| Evaluation      | Hierarchy | `label:evaluation`    |
+| CI & Automation | Board     | `label:ci-automation` |
+| Code Health     | Table     | `label:code-health`   |
+| Training        | Hierarchy | `label:training`      |
+| Roadmap         | Roadmap   | (none)                |
+| Blocked         | Table     | is:blocked            |
 
 ## 9. Design Doc ↔ Issue Linkage
 
@@ -190,7 +188,7 @@ ISSUE
   ├── has one → ISSUE_TYPE (Epic | Phase | Task | Bug | Feature)
   ├── has one → PRIORITY (P0 | P1 | P2 | P3) — via project field
   ├── has one → MILESTONE
-  ├── has one → PROJECT (via project membership)
+  ├── member of → PROJECT (single org-level project)
   ├── has many → LABELS (domain only)
   ├── has one → PARENT ISSUE (native sub-issue)
   ├── has many → SUB-ISSUES
@@ -219,22 +217,30 @@ See `docs/org-migration-checklist.md` (PR #116) for the full pre/during/post che
 
 - Create GitHub org and transfer repo
 - Re-create repo secrets (ANTHROPIC_API_KEY, APPROVAL_BOT_APP_ID, APPROVAL_BOT_PRIVATE_KEY, RUNPOD_API_KEY)
-- Verify Projects V2 still linked
 
-### Native features to enable post-migration
+### Post-migration setup
 
-| Feature             | What to set up                                                                | What it replaces                                     |
-| ------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------- |
-| **Issue Types**     | Create Epic and Phase types in org settings (Task, Bug, Feature are defaults) | Title-prefix naming conventions, `enhancement` label |
-| **Native blocking** | Add `blockedBy`/`blocking` relationships on existing issues via sidebar       | `blocked` label, `## Blocked by` body text           |
-| **Hierarchy view**  | Enable in project table views                                                 | Manual expand/collapse                               |
+**1. Create a single org-level project** with fields: Priority, Start Date, Target Date. Set up saved views per domain label (see §8).
 
-### Cleanup (run after native features are set up)
+**2. Add all issues to the project** — add the epic issues; sub-issues appear automatically via hierarchy view.
 
-**1. Migrate blocking relationships to native**, then remove `blocked` label and `## Blocked by` body text from issues:
+**3. Set issue types on all existing issues** — assign Epic, Phase, Task, Bug, Feature types via the sidebar or GraphQL:
 
 ```bash
-# Add native dependency
+# Get issue node ID and type ID, then update
+ISSUE_ID=$(gh issue view <num> --json id -q .id)
+gh api graphql -f query="
+mutation {
+  updateIssue(input: {
+    id: \"$ISSUE_ID\"
+    issueTypeId: \"<type_id>\"
+  }) { issue { number issueType { name } } }
+}"
+```
+
+**4. Migrate blocking relationships to native:**
+
+```bash
 BLOCKED=$(gh issue view <blocked_num> --json id -q .id)
 BLOCKER=$(gh issue view <blocker_num> --json id -q .id)
 gh api graphql -f query="
@@ -246,7 +252,9 @@ mutation {
 }"
 ```
 
-**2. Delete retired labels** (`bug` kept — used by Dependabot):
+**5. Set Priority** on all project items from existing label data.
+
+**6. Delete retired labels** (`bug` kept — used by Dependabot):
 
 ```bash
 gh label delete "enhancement" --yes
@@ -257,15 +265,4 @@ gh label delete "P2 🟡" --yes
 gh label delete "P3 🔵" --yes
 ```
 
-**3. Delete retired project fields:**
-
-```bash
-# Phase field — Data Pipeline and Evaluation
-for p in 2 4; do
-  gh project field-list $p --owner <org> --format json \
-    | jq -r '.fields[] | select(.name == "Phase") | .id' \
-    | xargs -I{} gh project field-delete --id {}
-done
-```
-
-**4. Set issue types on existing issues** — assign Epic, Phase, Task, Bug, Feature types to all open issues via the sidebar or GraphQL `updateIssue` mutation.
+**7. Delete old user-level projects** (ktinubu/projects #1–5) after verifying the new org project is set up.
