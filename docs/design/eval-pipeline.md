@@ -9,21 +9,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                                       | What it covers                                                        |
-| --- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why this matters                    |
-| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end CLI example — local and Docker                             |
-| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics                 |
-| 4   | [System Overview](#4-system-overview)                                         | Three-stage architecture, data flow, environment matrix               |
-| 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts                 |
-| 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint sync, artifact upload                    |
-| 7   | [Design Decisions](#7-design-decisions)                                       | Secrets vs paths, rclone wrapper, headless rendering, ckpt resolution |
-| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path         |
-| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                           |
-| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                             |
-| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                                |
-| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy              |
-| A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions                  |
+| §   | Section                                                                       | What it covers                                                      |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why this matters                  |
+| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end CLI example — local and Docker                           |
+| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics               |
+| 4   | [System Overview](#4-system-overview)                                         | Three-stage architecture, data flow, environment matrix             |
+| 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts               |
+| 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint sync, artifact upload, W&B lineage     |
+| 7   | [Design Decisions](#7-design-decisions)                                       | Secrets vs paths, rclone wrapper, headless rendering, storage split |
+| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path       |
+| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                         |
+| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                           |
+| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                              |
+| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy            |
+| A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions                |
 
 ______________________________________________________________________
 
@@ -89,16 +89,16 @@ cp .env.example .env
 # 2. Run full eval — predict → render → metrics in one command
 make eval EXPERIMENT=surge/flow_simple
 # → Checkpoint auto-downloaded from W&B via ${wandb:...} resolver (cached after)
-# → Predictions, audio, and metrics written to logs/eval/flow_simple/{run}-{timestamp}/
+# → Predictions, audio, and metrics written to logs/eval/surge_simple/x118ylu9/surge_simple/
 
 # Or run stages individually:
 make predict EXPERIMENT=surge/flow_simple
-make render PRED_DIR=logs/eval/flow_simple/{run}-{timestamp}/predictions/ OUTPUT_DIR=logs/eval/flow_simple/{run}-{timestamp}/audio/
-make metrics AUDIO_DIR=logs/eval/flow_simple/{run}-{timestamp}/audio/ OUTPUT_DIR=logs/eval/flow_simple/{run}-{timestamp}/metrics/
+make render PRED_DIR=logs/eval/surge_simple/x118ylu9/surge_simple/predictions/ OUTPUT_DIR=logs/eval/surge_simple/x118ylu9/surge_simple/audio/
+make metrics AUDIO_DIR=logs/eval/surge_simple/x118ylu9/surge_simple/audio/ OUTPUT_DIR=logs/eval/surge_simple/x118ylu9/surge_simple/metrics/
 
 # 3. (Optional) Upload artifacts to R2
-make upload-eval RUN_DIR=logs/eval/flow_simple/{run}-{timestamp}/
-# → r2:synth-data/eval/flow_simple/{run_id}/{predictions,audio,metrics}/
+make upload-eval
+# → rclone sync logs/eval/surge_simple/x118ylu9/surge_simple/ r2:synth-data/eval/surge_simple/x118ylu9/surge_simple/ --checksum
 ```
 
 ### Full pipeline (CI or Docker)
@@ -173,7 +173,7 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
                     │    surge-full/                                │
                     │                                              │
                     │  eval/                                       │
-                    │    {experiment}/{run_id}/                    │
+                    │    {train_data}/{run_id}/{eval_data}/        │
                     │      predictions/ audio/ metrics/            │
                     └──────┬─────────────────┬─────────────────────┘
                            │                 │
@@ -283,12 +283,14 @@ r2:synth-data/
 │       ├── shard-*.h5
 │       ├── train.h5, val.h5, test.h5
 │       └── stats.npz
-└── eval/                         # NEW: eval artifacts
-    └── {experiment}/
-        └── {run_id}/
-            ├── predictions/      # .pt files
-            ├── audio/            # sample_N/{pred,target}.wav
-            └── metrics/          # metrics.csv, aggregated_metrics.csv
+└── eval/                         # Eval artifacts (predictions, audio, metrics)
+    └── {train_data_config}/      # e.g. surge_simple — dataset model was trained on
+        └── {training_run_id}/    # e.g. x118ylu9 — W&B training run ID
+            └── {eval_data_config}/  # e.g. surge_simple, nsynth — dataset evaluated against
+                ├── predictions/
+                ├── audio/
+                ├── metrics/
+                └── config.yaml   # Hydra config snapshot (frozen provenance)
 ```
 
 Checkpoints are stored in **W&B artifacts** (via `log_model="all"`), not R2. See [§7.5](#75-checkpoint-resolution) for rationale.
@@ -402,12 +404,69 @@ See [§7.5](#75-checkpoint-resolution) for the full resolution behavior.
 After metrics, optionally upload all eval outputs to R2:
 
 ```bash
-make upload-eval RUN_DIR=logs/eval/flow_simple/{run}-{timestamp}/
-# Equivalent to:
-# rclone sync logs/eval/flow_simple/{run}-{timestamp}/ r2:synth-data/eval/flow_simple/{run}/ --checksum
+make upload-eval
+# rclone sync logs/eval/surge_simple/x118ylu9/surge_simple/ r2:synth-data/eval/surge_simple/x118ylu9/surge_simple/ --checksum
 ```
 
 Not automatic — explicit `make` target. Toggle via Hydra config or CLI flag.
+
+**Browsing eval results in R2:**
+
+```bash
+# All models trained on surge_simple
+rclone ls r2:synth-data/eval/surge_simple/
+
+# All evals of training run x118ylu9
+rclone ls r2:synth-data/eval/surge_simple/x118ylu9/
+
+# Cross-dataset eval: model trained on surge_simple, evaluated on nsynth
+rclone ls r2:synth-data/eval/surge_simple/x118ylu9/nsynth/
+```
+
+### 6.6 W&B Eval Lineage
+
+W&B tracks the full provenance chain via artifact lineage. Each eval creates a lightweight
+W&B run that declares its inputs (model checkpoint + dataset) and logs summary metrics:
+
+```python
+# Created automatically by the eval pipeline
+eval_run = wandb.init(
+    project="synth-permutations",
+    job_type="eval",
+    config={
+        "training_run_id": "x118ylu9",
+        "train_data": "surge_simple",
+        "eval_data": "surge_simple",
+    },
+)
+
+# Declare input artifacts — W&B builds the lineage graph
+model_artifact = eval_run.use_artifact("model-x118ylu9:best")
+dataset_artifact = eval_run.use_artifact("dataset-surge_simple-480k:latest")
+
+# Log summary metrics
+eval_run.log({"mss": 0.42, "wmfcc": 0.31, "sot": 0.18, "rms": 0.94})
+
+# Reference R2 location for bulk artifacts
+eval_artifact = wandb.Artifact(
+    "eval-surge_simple-x118ylu9-surge_simple", type="eval"
+)
+eval_artifact.add_reference(
+    "r2://synth-data/eval/surge_simple/x118ylu9/surge_simple/"
+)
+eval_run.log_artifact(eval_artifact)
+eval_run.finish()
+```
+
+This creates a lineage graph in W&B:
+
+```
+dataset-surge_simple-480k:v2 ──→ training run x118ylu9 ──→ model-x118ylu9:best
+                                                                    │
+dataset-surge_simple-480k:v2 ──→ eval run (job_type=eval) ◄────────┘
+                                        │
+                                        └──→ eval-surge_simple-x118ylu9-surge_simple (R2 ref)
+```
 
 ## 7. Design Decisions
 
@@ -605,17 +664,19 @@ This section consolidates every configuration and environment behavior change in
 | **Predict output**           | `${paths.output_dir}/predictions` (unchanged)                                           | `configs/callbacks/prediction_writer.yaml`    | Yes       | No change                                   |
 | **W&B entity**               | Configurable via env or CLI                                                             | `configs/logger/wandb.yaml`                   | Yes       | Hardcoded → configurable                    |
 | **SGE scripts**              | Deprecated — left as-is, not maintained                                                 | `jobs/predict/*.sh`                           | No        | Active → deprecated                         |
+| **R2 eval artifact upload**  | `make upload-eval` → `r2:synth-data/eval/{train_data}/{run_id}/{eval_data}/`            | `Makefile`                                    | Yes       | **New** — path encodes full provenance      |
+| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files  | `scripts/compute_audio_metrics.py`            | Yes       | **New** — programmatic provenance chain     |
 | **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                           | `Makefile`                                    | Yes       | **New** — discoverable, consistent          |
 
 #### What changes, what stays
 
-| Category       | Items that change                                                                                                                                                          | Items that stay |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| **Removed**    | Hardcoded cluster paths, `get-ckpt-from-wandb.sh` shell script, SGE as supported platform                                                                                  |                 |
-| **Deprecated** | 19 SGE scripts (left in repo, no maintenance)                                                                                                                              |                 |
-| **New**        | `${wandb:...}` OmegaConf resolver, `data.r2_path` opt-in, `make` targets, cross-platform display, `.env` for secrets, W&B Teams plan                                       |                 |
-| **Modified**   | `dataset_root` (hardcoded → paths convention), `renderscript.sh` (Linux-only → auto-detect), W&B entity (hardcoded → configurable), `log_model` (`true` → `"all"`)         |                 |
-| **Unchanged**  | `ckpt_path: ???` in eval.yaml, `ckpt_path: null` in train.yaml, `log_dir`, `output_dir`, prediction writer, W&B metric logging, CSV logger, `ModelCheckpoint` save cadence |                 |
+| Category       | Items that change                                                                                                                                                           | Items that stay |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| **Removed**    | Hardcoded cluster paths, `get-ckpt-from-wandb.sh` shell script, SGE as supported platform                                                                                   |                 |
+| **Deprecated** | 19 SGE scripts (left in repo, no maintenance)                                                                                                                               |                 |
+| **New**        | `${wandb:...}` OmegaConf resolver, `data.r2_path` opt-in, `make` targets, cross-platform display, `.env` for secrets, W&B Teams plan, W&B eval lineage, R2 provenance paths |                 |
+| **Modified**   | `dataset_root` (hardcoded → paths convention), `renderscript.sh` (Linux-only → auto-detect), W&B entity (hardcoded → configurable), `log_model` (`true` → `"all"`)          |                 |
+| **Unchanged**  | `ckpt_path: ???` in eval.yaml, `ckpt_path: null` in train.yaml, `log_dir`, `output_dir`, prediction writer, W&B metric logging, CSV logger, `ModelCheckpoint` save cadence  |                 |
 
 #### Diff analysis
 
@@ -665,6 +726,22 @@ This section consolidates every configuration and environment behavior change in
 | **SGE scripts**  | 19 scripts, actively used          | Left as-is, not maintained                                                                       |
 | **Cluster eval** | `qsub jobs/predict/flow-simple.sh` | `make predict EXPERIMENT=surge/flow_simple CKPT=r2:...` (SSH to cluster, run make target)        |
 | **Risk**         | —                                  | If SGE scripts break, no fix is coming. Acceptable — cluster is not the primary dev environment. |
+
+### 7.8 Storage Responsibility Split
+
+Each system handles what it's best at:
+
+| System                                 | What it stores                                                                                                                 | Why                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| **W&B**                                | Training metrics, checkpoints (`log_model="all"`), eval summary metrics, artifact lineage                                      | UI for browsing/comparing, lineage graphs, model registry |
+| **R2**                                 | Datasets (generated shards, train/val/test splits), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics) | Too large for W&B, cheaper per GB, fast rclone egress     |
+| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                       | Exact reproducibility without querying W&B                |
+
+**Provenance is recorded in three places:**
+
+- **R2 path** → human-readable: `eval/{train_data}/{run_id}/{eval_data}/` tells you what happened at a glance
+- **W&B lineage** → programmatic: `use_artifact()` connects dataset → model → eval with exact versions
+- **Hydra config** → complete: every parameter frozen, reproducible without any external system
 
 ## 8. Dependency Graph & Parallelism
 
