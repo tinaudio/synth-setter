@@ -1008,13 +1008,17 @@ main ──●──────────●───────────
 
 - `.github/workflows/eval-ci.yml` — matrix: Ubuntu (Xvfb)
 - `tests/test_eval_e2e.py` — fixture-based integration test (`@pytest.mark.slow`)
-- `tests/fixtures/eval/` — small checkpoint + dataset fixture
+- `tests/fixtures/eval/` — checked-in test fixtures:
+  - `tiny.ckpt` (~1 MB) — checkpoint trained for 2 epochs on a handful of samples
+  - `fixture-shard.h5` (~5 MB) — small HDF5 shard with 10-50 samples (enough for one predict batch)
+  - `audio/sample_0/{pred,target}.wav` (~1 MB) — pre-rendered audio for metrics-only testing without VST plugin
 
 **Key behaviors:**
 
 - Runs on PR (if `src/eval.py`, `scripts/`, or `configs/` changed)
-- Uses fixture dataset (not R2) to avoid credential dependency
+- Uses checked-in fixtures — no R2 credentials, no network dependency, no secrets in CI
 - Validates: predictions exist, audio renders, metrics CSV has expected schema
+- If fixtures grow past ~10 MB, migrate to Git LFS
 
 #### Phase 12: W&B Metrics Logging (#96)
 
