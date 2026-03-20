@@ -13,18 +13,19 @@ ______________________________________________________________________
 
 ## 1. IDs
 
-| ID                  | Construction                                 | Source                             | Example                            |
-| ------------------- | -------------------------------------------- | ---------------------------------- | ---------------------------------- |
-| `dataset_config_id` | Config filename (stem)                       | `configs/dataset/{id}.yaml`        | `diva-v1`                          |
-| `dataset_run_id`    | `{dataset_config_id}-{YYYYMMDDTHHMMSS.mmmZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022.123Z`     |
-| `train_config_id`   | Config filename (stem)                       | `configs/experiment/.../{id}.yaml` | `flow-simple`                      |
-| `train_run_id`      | `{train_config_id}-{YYYYMMDDTHHMMSS.mmmZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500.456Z` |
-| `eval_config_id`    | Eval dataset config filename (stem)          | `configs/dataset/{id}.yaml`        | `nsynth-v1`                        |
-| `eval_run_id`       | `{eval_config_id}-{YYYYMMDDTHHMMSS.mmmZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000.789Z`   |
+| ID                  | Construction                             | Source                             | Example                        |
+| ------------------- | ---------------------------------------- | ---------------------------------- | ------------------------------ |
+| `dataset_config_id` | Config filename (stem)                   | `configs/dataset/{id}.yaml`        | `diva-v1`                      |
+| `dataset_run_id`    | `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022Z`     |
+| `train_config_id`   | Config filename (stem)                   | `configs/experiment/.../{id}.yaml` | `flow-simple`                  |
+| `train_run_id`      | `{train_config_id}-{YYYYMMDDTHHMMSSZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500Z` |
+| `eval_config_id`    | Eval dataset config filename (stem)      | `configs/dataset/{id}.yaml`        | `nsynth-v1`                    |
+| `eval_run_id`       | `{eval_config_id}-{YYYYMMDDTHHMMSSZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000Z`   |
 
 - `*_config_id` = filename of the YAML config, without extension
 - `*_run_id` = `{*_config_id}-{timestamp}`, set as the W&B run ID via `wandb.init(id=...)`
-- Timestamp format: `YYYYMMDDTHHMMSS.mmmZ` (milliseconds, UTC, filesystem-safe)
+- Timestamp format: `YYYYMMDDTHHMMSSZ` (seconds, UTC, filesystem-safe)
+- W&B run ID limit: 64 characters. Keep config filenames short.
 
 ______________________________________________________________________
 
@@ -97,14 +98,15 @@ ______________________________________________________________________
 
 ## 4. W&B Artifact Types
 
-| Type           | Name Pattern                        | Logged By               | Example                                                                |
-| -------------- | ----------------------------------- | ----------------------- | ---------------------------------------------------------------------- |
-| `dataset`      | `dataset-{dataset_run_id}`          | `pipeline.cli finalize` | `dataset-diva-v1-20260312T143022.123Z`                                 |
-| `model`        | `model-{train_run_id}`              | `src/train.py`          | `model-flow-simple-20260315T091500.456Z`                               |
-| `eval-results` | `eval-{train_run_id}-{eval_run_id}` | eval script             | `eval-flow-simple-20260315T091500.456Z-nsynth-v1-20260320T160000.789Z` |
+| Type           | Name Pattern          | Logged By               | Example name  |
+| -------------- | --------------------- | ----------------------- | ------------- |
+| `dataset`      | `{dataset_config_id}` | `pipeline.cli finalize` | `diva-v1`     |
+| `model`        | `{train_config_id}`   | `src/train.py`          | `flow-simple` |
+| `eval-results` | `{eval_config_id}`    | eval script             | `nsynth-v1`   |
 
-- W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`)
+- W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
 - Use aliases for human-readable pointers: `:latest`, `:best`, `:production`
+- The `run_id` is stored in `artifact.metadata`, not the artifact name
 
 ______________________________________________________________________
 
