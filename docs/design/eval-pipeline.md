@@ -641,29 +641,6 @@ This section consolidates every configuration and environment behavior change in
 
 ## 8. Dependency Graph & Parallelism
 
-### Issue Dependencies
-
-```
-                    EVAL PIPELINE                              R2 INTEGRATION
-                    ─────────────                              ──────────────
-
-                ┌─── #86 Render ─────┐
-                │    (P1, no blocker) │
-                │                    │
- #94 Paths ──→ #85 Predict ─────────┼──→ #88 Docker ──→ #89 E2E CI
- (P1)       (P1)                    │    (P2)            (P2)
-                │                    │
-                ├─── #87 Metrics ────┤                     #90 rclone ──→ #91 R2 Dataset
-                │    (P1, no blocker)│                     (P1)       │    (P1)
-                │         │          │                                │
-                │         │                                          │
-                │         └──→ #93 R2 Artifacts ◄────────────────────┘
-                │              (P2)
-                │
-                └──→ #97 Runbook (P2)
-
-```
-
 ### Blocking Matrix
 
 | Issue | Title               | Blocked by    | Blocks                  |
@@ -677,7 +654,11 @@ This section consolidates every configuration and environment behavior change in
 | #89   | E2E CI              | #85–88        | —                       |
 | #91   | R2 dataset download | #90, #94      | —                       |
 | #93   | R2 artifact upload  | #90, #87      | —                       |
+| #92   | R2 checkpoint sync  | #90           | —                       |
+| #95   | Consolidate SGE     | —             | —                       |
+| #96   | W&B metrics logging | #87           | —                       |
 | #97   | Eval runbook        | #85, #86, #87 | —                       |
+| #128  | W&B resolver        | #94           | #88                     |
 
 ### Parallel Execution Windows
 
@@ -818,12 +799,12 @@ main ──●──────────────────●───
        PR#1               PR#2               PR#3               PR#4
 ```
 
-| PR                              | Issues             | Contents                                                                                          | Integration test                                                                     |
-| ------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| **#1: Portable Eval**           | #94, #85, #86, #87 | Config cleanup, portable predict/render/metrics, Makefile targets                                 | `make predict`, `make render`, `make metrics` on local fixture                       |
-| **#2: R2 + W&B**                | #90, #91, #96      | rclone wrapper, R2 dataset download, `log_model="all"`, `${wandb:...}` resolver, W&B eval metrics | `make predict` with `data.r2_path=...` auto-downloads; W&B checkpoint download works |
-| **#3: Docker + CI + Artifacts** | #88, #93, #89      | Docker eval, R2 eval artifact upload, E2E CI                                                      | `make docker-eval` runs full pipeline; GH Actions passes                             |
-| **#4: Documentation**           | #97                | Eval runbook                                                                                      | Follow runbook from scratch                                                          |
+| PR                              | Issues              | Contents                                                                                          | Integration test                                                                     |
+| ------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **#1: Portable Eval**           | #94, #85, #86, #87  | Config cleanup, portable predict/render/metrics, Makefile targets                                 | `make predict`, `make render`, `make metrics` on local fixture                       |
+| **#2: R2 + W&B**                | #90, #91, #96, #128 | rclone wrapper, R2 dataset download, `log_model="all"`, `${wandb:...}` resolver, W&B eval metrics | `make predict` with `data.r2_path=...` auto-downloads; W&B checkpoint download works |
+| **#3: Docker + CI + Artifacts** | #88, #93, #89       | Docker eval, R2 eval artifact upload, E2E CI                                                      | `make docker-eval` runs full pipeline; GH Actions passes                             |
+| **#4: Documentation**           | #97                 | Eval runbook                                                                                      | Follow runbook from scratch                                                          |
 
 ### Estimated change size
 
@@ -922,7 +903,7 @@ main ──●──────────────────●───
 - `ProcessPoolExecutor` parallelism preserved
 - JTFS and f0 code stays as-is — track reactivation as a separate issue (out of scope)
 
-### PR #2: R2 + W&B (#90, #91, #96)
+### PR #2: R2 + W&B (#90, #91, #96, #128)
 
 #### Phase 5: rclone Wrapper (#90)
 
@@ -961,7 +942,7 @@ main ──●──────────────────●───
 - Logs download progress via structlog
 - **No default value** — R2 download is always an explicit opt-in
 
-#### Phase 7: W&B Checkpoint Config + Resolver
+#### Phase 7: W&B Checkpoint Config + Resolver (#128)
 
 **Goal:** Enable crash-resilient checkpoint upload via W&B and lazy resolution via OmegaConf.
 

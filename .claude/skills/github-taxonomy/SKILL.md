@@ -25,7 +25,7 @@ This is a rigid process skill. Follow every step — do not skip steps or improv
 Follow the full lifecycle (taxonomy doc §11):
 
 1. **Set Issue Type** — one of: Epic, Phase, Task, Bug, Feature
-2. **Add domain label** — exactly one of: `data-pipeline`, `ci-automation`, `code-health`, `evaluation`, `testing`, `training`
+2. **Add domain label** — one of: `data-pipeline`, `ci-automation`, `code-health`, `evaluation`, `storage`, `testing`, `training`. Cross-cutting infrastructure may carry multiple domain labels (see taxonomy doc §6).
 3. **Assign milestone** — use the work stream's milestone (e.g., `data-pipeline v1.0.0`)
 4. **Add to the project** — set Status to `Todo`
 5. **Set Priority** via the project field:

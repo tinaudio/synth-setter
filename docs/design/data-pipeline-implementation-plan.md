@@ -9,21 +9,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                       | GitHub issue |
-| --- | ------------------------------------------------------------- | ------------ |
-| 1   | [Priorities & Conventions](#1-priorities--conventions)        | —            |
-| 2   | [Merge Path](#2-merge-path)                                   | #74          |
-| 3   | [Codebase Inventory](#3-codebase-inventory)                   | —            |
-| 4   | [Pipeline Config Schema](#4-pipeline-config-schema)           | —            |
-| 5   | [Phase 1 — Foundation](#5-phase-1--foundation-68)             | #68          |
-| 6   | [Phase 2 — Pipeline Core](#6-phase-2--pipeline-core-69)       | #69          |
-| 7   | [Phase 3 — Docker](#7-phase-3--docker-infrastructure-70)      | #70          |
-| 8   | [Phase 4 — Pipeline Engine](#8-phase-4--pipeline-engine-71)   | #71          |
-| 9   | [Phase 5 — Pipeline CLI](#9-phase-5--pipeline-cli-72)         | #72          |
-| 10  | [Phase 6 — Production & E2E](#10-phase-6--production--e2e-73) | #73          |
-| 11  | [Cross-cutting work](#11-cross-cutting-work)                  | #76, #77     |
-| 12  | [Verification Strategy](#12-verification-strategy)            | —            |
-| 13  | [Assumptions](#13-assumptions)                                | —            |
+| §   | Section                                                       | GitHub issue               |
+| --- | ------------------------------------------------------------- | -------------------------- |
+| 1   | [Priorities & Conventions](#1-priorities--conventions)        | —                          |
+| 2   | [Merge Path](#2-merge-path)                                   | #74                        |
+| 3   | [Codebase Inventory](#3-codebase-inventory)                   | —                          |
+| 4   | [Pipeline Config Schema](#4-pipeline-config-schema)           | —                          |
+| 5   | [Phase 1 — Foundation](#5-phase-1--foundation-68)             | #68                        |
+| 6   | [Phase 2 — Pipeline Core](#6-phase-2--pipeline-core-69)       | #69                        |
+| 7   | [Phase 3 — Docker](#7-phase-3--docker-infrastructure-70)      | #70                        |
+| 8   | [Phase 4 — Pipeline Engine](#8-phase-4--pipeline-engine-71)   | #71                        |
+| 9   | [Phase 5 — Pipeline CLI](#9-phase-5--pipeline-cli-72)         | #72                        |
+| 10  | [Phase 6 — Production & E2E](#10-phase-6--production--e2e-73) | #73                        |
+| 11  | [Cross-cutting work](#11-cross-cutting-work)                  | #76, #77, #120, #121, #122 |
+| 12  | [Verification Strategy](#12-verification-strategy)            | —                          |
+| 13  | [Assumptions](#13-assumptions)                                | —                          |
 
 ______________________________________________________________________
 
@@ -865,6 +865,18 @@ These tests are written incrementally as each PR lands.
 - RunPod `auto-stop` configuration in `RunPodBackend.submit()`
 - `--timeout` flag on `generate` command
 - BATS test: worker killed via SIGTERM after timeout still uploads debug log
+
+### Dataset ID & Run ID Conventions ([#120](https://github.com/tinaudio/synth-setter/issues/120))
+
+Define `dataset_id`, `run_id` naming conventions and W&B artifact provenance chain.
+
+### Align R2 Root Datapaths ([#121](https://github.com/tinaudio/synth-setter/issues/121))
+
+Ensure R2 root datapaths are consistent across data pipeline, eval pipeline, and training pipeline design docs.
+
+### Centralized Provenance & Storage Design Doc ([#122](https://github.com/tinaudio/synth-setter/issues/122))
+
+Write a design doc that unifies provenance and storage conventions across all pipelines.
 
 ______________________________________________________________________
 
