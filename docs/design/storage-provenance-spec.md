@@ -227,11 +227,12 @@ ______________________________________________________________________
 | `WANDB_API_KEY`                      | data-gen, training, eval, promotion | wandb.ai/settings       |
 | `GITHUB_TOKEN`                       | promotion                           | Automatic in GHA        |
 | `RUNPOD_API_KEY`                     | data-gen, training                  | runpod.io               |
-| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | data-gen, eval                      | Cloudflare R2 dashboard |
-| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | data-gen, eval                      | Cloudflare R2 dashboard |
-| `RCLONE_CONFIG_R2_ENDPOINT`          | data-gen, eval                      | Cloudflare R2 dashboard |
+| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | data-gen, training, eval            | Cloudflare R2 dashboard |
+| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | data-gen, training, eval            | Cloudflare R2 dashboard |
+| `RCLONE_CONFIG_R2_ENDPOINT`          | data-gen, training, eval            | Cloudflare R2 dashboard |
 
-- Secrets must only be available to workflows that require them (e.g., training does not need R2 write access).
+- Secrets must only be available to workflows that require them.
+- Training needs R2 read (download dataset shards) and write (upload checkpoints).
 
 ______________________________________________________________________
 
@@ -250,7 +251,7 @@ ______________________________________________________________________
 
 ## 11. Artifact → Storage Mapping
 
-- W&B artifacts reference R2 objects via `artifact.add_reference("r2://...")`
+- W&B artifacts reference R2 objects via `artifact.add_reference("s3://synth-data/...")` (R2 is S3-compatible; the R2 endpoint is configured via `RCLONE_CONFIG_R2_ENDPOINT` / AWS SDK endpoint override)
 - Artifacts do not duplicate large data files — they contain metadata, manifests, and statistics
 - Bulk data lives in R2; W&B provides the index and lineage graph
 
