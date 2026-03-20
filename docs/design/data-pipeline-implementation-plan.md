@@ -921,8 +921,7 @@ ______________________________________________________________________
     `reshard_data.py` — it hardcodes 10k shard size)
 11. `R2StorageBackend` wraps `src/data/uploader.RcloneUploader` (already has `--checksum`)
 12. `shard_id` is `int` in schema, formatted to string for paths/filenames
-13. Run ID uses `total_samples` not `total_train_samples` — design doc §14.6 text to be fixed
-14. Config splits use `{train: N, val: N, test: N}` matching design doc §14.4
+13. Config splits use `{train: N, val: N, test: N}` matching design doc §14.4
 
 ______________________________________________________________________
 
