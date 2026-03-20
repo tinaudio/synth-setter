@@ -117,9 +117,13 @@ ______________________________________________________________________
 ```
 dataset config
   → [data-generation run] → dataset artifact
-    → [training run] → model artifact
-      → [evaluation run] → eval-results artifact
-        → [promote workflow] → GitHub Release
+                               ├→ [training run] → model artifact
+                               │                      │
+eval dataset artifact ─────────┴→ [evaluation run] ←───┘
+                                        │
+                                   eval-results artifact
+                                        │
+                                  [promote workflow] → GitHub Release
 ```
 
 - Every run must call `run.use_artifact()` for inputs and `run.log_artifact()` for outputs
