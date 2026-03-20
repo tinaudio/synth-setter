@@ -1,0 +1,59 @@
+name: Epic
+description: Umbrella issue grouping phases for a work stream
+title: "feat(<domain>): "
+labels: []
+type: Epic
+body:
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain Label
+      description: Primary domain for this epic
+      options:
+        - data-pipeline
+        - ci-automation
+        - code-health
+        - evaluation
+        - storage
+        - testing
+        - training
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      options:
+        - data-pipeline v1.0.0
+        - evaluation v1.0.0
+        - training v1.0.0
+        - storage v1.0.0
+        - ci-automation v1.0.0
+        - code-health v1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What this epic delivers and why
+    validations:
+      required: true
+  - type: input
+    id: design-doc
+    attributes:
+      label: Design Doc
+      description: Path to the design doc (e.g., docs/design/eval-pipeline.md)
+      placeholder: "docs/design/"
+    validations:
+      required: true
+  - type: textarea
+    id: phases
+    attributes:
+      label: Phases
+      description: List the planned phases (add as sub-issues after creation)
+      placeholder: |
+        - Phase 1: ...
+        - Phase 2: ...
+    validations:
+      required: false

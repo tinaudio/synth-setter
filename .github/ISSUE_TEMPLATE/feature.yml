@@ -1,0 +1,54 @@
+name: Feature
+description: A request, idea, or new functionality
+title: "feat(<domain>): "
+labels: []
+type: Feature
+body:
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain Label
+      options:
+        - data-pipeline
+        - ci-automation
+        - code-health
+        - evaluation
+        - storage
+        - testing
+        - training
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      options:
+        - data-pipeline v1.0.0
+        - evaluation v1.0.0
+        - training v1.0.0
+        - storage v1.0.0
+        - ci-automation v1.0.0
+        - code-health v1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What this feature should do and why
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: input
+    id: parent
+    attributes:
+      label: Parent Issue
+      description: "If this feature belongs to a phase or epic (e.g., #137)"
+      placeholder: "#"
+    validations:
+      required: false

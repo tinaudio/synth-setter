@@ -1,0 +1,64 @@
+name: Task
+description: Unit of work (standalone or within a phase)
+title: "Task N.M: "
+labels: []
+type: Task
+body:
+  - type: input
+    id: parent
+    attributes:
+      label: Parent Issue
+      description: "Phase or epic this task belongs to (e.g., #137). Leave blank for standalone tasks."
+      placeholder: "#"
+    validations:
+      required: false
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain Label
+      options:
+        - data-pipeline
+        - ci-automation
+        - code-health
+        - evaluation
+        - storage
+        - testing
+        - training
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      options:
+        - data-pipeline v1.0.0
+        - evaluation v1.0.0
+        - training v1.0.0
+        - storage v1.0.0
+        - ci-automation v1.0.0
+        - code-health v1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What this task delivers and acceptance criteria
+    validations:
+      required: true
+  - type: input
+    id: design-doc-ref
+    attributes:
+      label: Design Doc Reference
+      description: "Section reference (e.g., eval-pipeline.md §6.2)"
+      placeholder: ""
+    validations:
+      required: false
+  - type: input
+    id: blocked-by
+    attributes:
+      label: Blocked By
+      description: "Issue numbers this task is blocked by (set via sidebar after creation)"
+      placeholder: "#94"
+    validations:
+      required: false
