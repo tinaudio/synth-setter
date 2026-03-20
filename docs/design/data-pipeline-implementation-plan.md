@@ -1,8 +1,9 @@
 # Implementation Plan: Distributed Data Pipeline
 
 > **Canonical design:** [data-pipeline.md](data-pipeline.md)
-> **Tracking:** [#74](https://github.com/tinaudio/synth-setter/issues/74)
+> **Tracking:** #74
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
+> **Storage conventions:** [storage-provenance-spec.md](storage-provenance-spec.md)
 > **Builds on:** Generation infrastructure by benhayes@ (see design doc §1)
 > **Last Updated:** 2026-03-20
 
@@ -39,6 +40,7 @@ ______________________________________________________________________
 
 - `pipeline/` at project root (not `src/`) — invoked via `python -m pipeline`
 - Tests in `tests/pipeline/` with own `conftest.py`
+- Storage layout, IDs, and W&B conventions follow [storage-provenance-spec.md](storage-provenance-spec.md)
 
 ______________________________________________________________________
 
@@ -86,11 +88,12 @@ ______________________________________________________________________
 
 ## 4. Pipeline Config Schema
 
-Matches design doc §14.5:
+Matches design doc §14.5. Config filenames encode runtime parameters — the filename
+stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)):
 
 ```yaml
-# configs/pipeline/surge_simple_480k.yaml
-experiment_name: surge_simple
+# configs/dataset/surge-simple-480k-10k.yaml
+# → dataset_config_id = surge-simple-480k-10k
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3    # renderer_version auto-extracted from bundle
 output_format: hdf5                   # "hdf5" (local training) or "wds" (multi-GPU streaming)
@@ -113,11 +116,13 @@ min_loudness: -55.0
 sample_batch_size: 32
 ```
 
+**Run ID derivation:** `dataset_wandb_run_id = {dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (e.g., `surge-simple-480k-10k-20260313T100000Z`). Maps to `run_id` in pipeline code.
+
 CLI (compute/storage are not in config):
 
 ```bash
 python -m pipeline generate \
-  --config configs/pipeline/surge_simple_480k.yaml \
+  --config configs/dataset/surge-simple-480k-10k.yaml \
   --workers 10 --backend runpod --image tinaudio/perm:dev-snapshot-abc1234
 ```
 
@@ -231,7 +236,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 
 - `pipeline/__init__.py`
 - `pipeline/schemas.py` — `RunConfig`, `PipelineSpec`, `ShardSpec`, `WorkerReport`, `ShardResult`, `DatasetCard`, `ValidationSummary`, `Sample`
-- `configs/pipeline/surge_simple_480k.yaml` — sample config
+- `configs/dataset/surge-simple-480k-10k.yaml` — sample config (filename = `dataset_config_id`)
 - `tests/pipeline/__init__.py`
 - `tests/pipeline/test_schemas.py`
 
@@ -239,10 +244,12 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 
 - `RunConfig` (Pydantic strict): validates raw YAML input. Fields match config schema (§4).
   `output_format` defaults to `"hdf5"` if missing from config.
-- `PipelineSpec` (frozen, strict): `run_id`, `created_at`, `code_version`, `is_repo_dirty`,
+- `PipelineSpec` (frozen, strict): `dataset_config_id`, `dataset_wandb_run_id` (maps to
+  `run_id` in code), `created_at`, `code_version`, `is_repo_dirty`,
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
   `shard_size`, `num_shards`, `base_seed`, `splits` (`{"train": N, "val": N, "test": N}`),
   `shards` (list of `ShardSpec`), plus generation params.
+  ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
   Splits use explicit `{train: N, val: N, test: N}` matching design doc §14.4.
   Validation: `train + val + test == num_shards`.
 - `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed` (= `base_seed + shard_id`),
@@ -255,13 +262,13 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `success: bool`, `content_hash: str | None` (SHA-256), `render_time_sec: float`, `error: str | None`.
 - `WorkerReport`: includes `cpu_arch`, `os_info`, `attempt_uuid`, `results: list[ShardResult]`.
 - `ValidationSummary`: `valid: int`, `quarantined: int`, `quarantined_shards: list[str]`.
-- `DatasetCard`: `schema_version`, `run_id`, `finalized_at`, `code_version`, `is_repo_dirty`,
+- `DatasetCard`: `schema_version`, `dataset_config_id`, `dataset_wandb_run_id`, `finalized_at`, `code_version`, `is_repo_dirty`,
   `param_spec`, `renderer_version`, `output_format`, `sample_rate`, `total_samples`,
   `splits` (sample counts, not shard counts), `stats`, `validation_summary`,
   `worker_architectures` (list of unique CPU archs), `shard_manifest: list[dict]`
   (per-shard `{shard_id, filename, content_hash}`), `input_spec_sha256`, `input_spec_path`.
-- Run ID format: `{experiment_name}-{total_samples}-{shard_size}-{YYYYMMDD-HHMMSS}` (human-friendly k/M).
-  Uses `total_samples` not `total_train_samples` — design doc §14.6 text is a bug (example is correct).
+- Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
+  `dataset_config_id` is the config filename stem, which encodes runtime params for readability.
 - `materialize_spec(config: RunConfig, timestamp=None, renderer_version=None) -> PipelineSpec`.
   Optional `renderer_version` override for testing; test fixtures pass `"test-1.0"` explicitly.
 
@@ -284,7 +291,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 def test_spec_materialization_end_to_end(tmp_path):
     """Config dict -> materialize -> serialize -> deserialize -> verify integrity."""
     config = {
-        "experiment_name": "test_run", "base_seed": 42,
+        "base_seed": 42,
         "num_shards": 10, "shard_size": 1000,
         "splits": {"train": 8, "val": 1, "test": 1},
         "param_spec": "surge_simple", "plugin_path": "plugins/Surge XT.vst3",
@@ -320,12 +327,13 @@ ______________________________________________________________________
 
 **Key behaviors:**
 
-- Path computation matching design doc §6 R2 layout, including helpers for:
+- Path computation matching [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)–[§3](storage-provenance-spec.md#3-r2-contents-per-workflow) R2 layout.
+  Root: `data/{dataset_config_id}/{dataset_wandb_run_id}/`. Helpers for:
   - Shard lifecycle: `write_rendering_marker`, `write_valid_marker`, `write_invalid_marker`
-  - Quarantine: `upload_to_quarantine(run_id, shard_id, worker_id, attempt, local_path)`
-  - Worker attempts: `upload_report(run_id, worker_id, attempt, report)`,
-    `upload_debug_log(run_id, worker_id, attempt, log_path)`
-  - Finalize outputs: paths for `data/shards/`, `data/train.h5`, `data/stats.npz`,
+  - Quarantine: `upload_to_quarantine(dataset_wandb_run_id, shard_id, worker_id, attempt, local_path)`
+  - Worker attempts: `upload_report(dataset_wandb_run_id, worker_id, attempt, report)`,
+    `upload_debug_log(dataset_wandb_run_id, worker_id, attempt, log_path)`
+  - Finalize outputs: paths for `shards/`, `train.h5`, `stats.npz`,
     `metadata/dataset.json`, `metadata/dataset.complete`
 - `StorageBackend` protocol: `list_shard_markers`, `write_marker`, `upload_file`,
   `download_file`, `list_prefix`, `exists`
@@ -336,7 +344,7 @@ ______________________________________________________________________
 
 **Unit tests (write first):**
 
-- Path generation matches design doc for all artifact types
+- Path generation matches storage-provenance-spec.md for all artifact types
 - Local: write → exists → list round-trip
 - R2: rclone command construction (mock subprocess) — verify `--checksum` in every command
 - R2: delegates to `RcloneUploader.upload()` for directory uploads
@@ -709,10 +717,12 @@ ______________________________________________________________________
 - Dataset card includes `output_format`, `worker_architectures` (logs warning if
   heterogeneous), content hashes, shard manifest
 - Upload finalized outputs to R2 storage
-- `dataset.complete` contains `run_id` + timestamp (written last)
-- W&B integration: logs 7 metrics (`pipeline/shards_total`, `pipeline/shards_valid`,
+- `dataset.complete` contains `dataset_wandb_run_id` + timestamp (written last)
+- W&B integration (`project="synth-setter"`, `job_type="data-generation"`):
+  logs 7 metrics to `wandb.summary` (`pipeline/shards_total`, `pipeline/shards_valid`,
   `pipeline/shards_quarantined`, `pipeline/total_samples`, `pipeline/generation_time_seconds`,
   `pipeline/finalize_time_seconds`, `pipeline/errors_total`) + registers dataset artifact
+  as `data-{dataset_config_id}` (naming per [storage-provenance-spec.md §4](storage-provenance-spec.md#4-wb-artifact-types))
 
 **Unit tests:** Promotes, rejects missing/corrupt, idempotent, stale marker recovery,
 lexicographic shard selection with multiple attempts, `.promoted` markers written,
@@ -883,7 +893,7 @@ ______________________________________________________________________
 
 1. **Per-PR:** CI runs `pytest` + `ruff` on every push
 2. **After all tasks:** `pytest tests/pipeline/ -v`, `pytest tests/pipeline/test_e2e.py -v`
-3. **Local dry run:** `python -m pipeline generate --config configs/pipeline/surge_simple_480k.yaml --backend local --workers 2`
+3. **Local dry run:** `python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --backend local --workers 2`
 4. **Docker fidelity:** `bash scripts/test_local_docker.sh`
 5. **Mutation testing:** `mutmut run --paths-to-mutate=pipeline/`
 
@@ -911,8 +921,7 @@ ______________________________________________________________________
     `reshard_data.py` — it hardcodes 10k shard size)
 11. `R2StorageBackend` wraps `src/data/uploader.RcloneUploader` (already has `--checksum`)
 12. `shard_id` is `int` in schema, formatted to string for paths/filenames
-13. Run ID uses `total_samples` not `total_train_samples` — design doc §14.6 text to be fixed
-14. Config splits use `{train: N, val: N, test: N}` matching design doc §14.4
+13. Config splits use `{train: N, val: N, test: N}` matching design doc §14.4
 
 ______________________________________________________________________
 

@@ -3,7 +3,8 @@
 > **Status**: Draft
 > **Author**: ktinubu@
 > **Last Updated**: 2026-03-20
-> **Tracking**: [#74](https://github.com/tinaudio/synth-setter/issues/74)
+> **Tracking**: #74
+> **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 
 ______________________________________________________________________
 
@@ -67,38 +68,38 @@ RunPod is used because it's the platform where GPUs are already available and co
 ## 2. Typical Workflow
 
 ```bash
-# 1. Create a dataset config
-cat configs/pipeline/surge_simple_480k.yaml
-# → experiment_name: surge_simple, num_shards: 48, shard_size: 10000, ...
+# 1. Create a dataset config (filename = dataset_config_id)
+cat configs/dataset/surge-simple-480k-10k.yaml
+# → num_shards: 48, shard_size: 10000, ...
 
 # 2. Launch generation — creates spec, launches workers, exits
-python -m pipeline.cli generate --config configs/pipeline/surge_simple_480k.yaml --workers 10
-# → Created run surge_simple-480k-10k-20260313-100000
+python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
+# → Created run surge-simple-480k-10k-20260313T100000Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
 
 # 3. Check progress (can run from any machine, any time)
-python -m pipeline.cli status --run-id surge_simple-480k-10k-20260313-100000
+python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
 # → Valid: 44/48  Missing: 2  Quarantined: 2
 
 # 4. Re-run generation for missing shards only
-python -m pipeline.cli generate --run-id surge_simple-480k-10k-20260313-100000
+python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000Z
 # → 4 shards missing, launching 1 worker
 
 # 5. Finalize — download, reshard, compute stats, register in W&B
-python -m pipeline.cli finalize --run-id surge_simple-480k-10k-20260313-100000
+python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000Z
 # → 48/48 valid. output_format: hdf5
 # → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
-# → Stats computed. Dataset registered in W&B.
+# → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
 # → dataset.complete written.
 ```
 
 Make targets are thin aliases for convenience:
 
 ```bash
-make generate ARGS="--config configs/pipeline/surge_simple_480k.yaml --workers 10"
-make status ARGS="--run-id surge_simple-480k-10k-20260313-100000"
-make finalize ARGS="--run-id surge_simple-480k-10k-20260313-100000"
+make generate ARGS="--config configs/dataset/surge-simple-480k-10k.yaml --workers 10"
+make status ARGS="--run-id surge-simple-480k-10k-20260313T100000Z"
+make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000Z"
 ```
 
 ## 3. Goals, Non-Goals & Design Principles
@@ -227,9 +228,9 @@ Finalize output depends on `output_format` in the spec:
 │                                │        ┌──────────────────┐
 │  1. Validate auth (R2+RunPod)  │        │  Cloudflare R2   │
 │  2. Read/create spec     ◄─────┼───────►│                  │
-│  3. List staged shards   ◄─────┼────────┤  {run_id}/       │
-│  4. Validate staged shards     │        │   metadata/      │
-│  5. Compute missing set        │        │   workers/       │
+│  3. List staged shards   ◄─────┼────────┤  data/{cfg}/{id}/ │
+│  4. Validate staged shards     │        │   metadata/       │
+│  5. Compute missing set        │        │   workers/        │
 │  6. Partition across N workers │        │                  │
 │  7. Submit N tasks             │        │                  │
 │  8. Exit                       │        │                  │
@@ -263,31 +264,32 @@ Finalize output depends on `output_format` in the spec:
 
 ### R2 File Structure
 
+> R2 root path follows [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout). Pipeline-specific internal structure (workers/, lifecycle markers) is additive detail.
+
 ```
-{run_id}/                              # e.g. surge_simple-480k-10k-20260312-143022
-  data/
-    shards/                              # Written ONLY by finalize (promoted from staging)
-      shard-000000.h5                    # Canonical finalized shards
-      shard-000001.h5
-      ...
-      shard-000479.h5
-    # output_format: hdf5
-    train.h5                             # Virtual dataset (written by finalize)
-    val.h5
-    test.h5
-    # output_format: wds
-    train-000000.tar                     # WebDataset archives (written by finalize)
-    train-000001.tar
+data/{dataset_config_id}/{dataset_wandb_run_id}/   # e.g. data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022Z/
+  shards/                              # Written ONLY by finalize (promoted from staging)
+    shard-000000.h5                    # Canonical finalized shards
+    shard-000001.h5
     ...
-    val-000000.tar
-    test-000000.tar
-    stats.npz                            # Normalization statistics
+    shard-000479.h5
+  # output_format: hdf5
+  train.h5                             # Virtual dataset (written by finalize)
+  val.h5
+  test.h5
+  # output_format: wds
+  train-000000.tar                     # WebDataset archives (written by finalize)
+  train-000001.tar
+  ...
+  val-000000.tar
+  test-000000.tar
+  stats.npz                            # Normalization statistics
   metadata/
     config.yaml                          # User recipe (provenance copy, not authoritative)
     input_spec.json                      # Frozen input specification (authoritative)
     dataset.json                         # Self-describing dataset card (written by finalize)
     dataset.complete                     # Completion marker (written by finalize)
-    workers/                             # Everything workers produce goes here
+    workers/                             # Workers may only write under metadata/workers/
       shards/                            # Per-shard staging area + lifecycle markers
         shard-000000/
           {worker_id}-{attempt_uuid}.h5          # Worker's validated shard output
@@ -303,6 +305,8 @@ Finalize output depends on `output_format` in the spec:
           report.json                    # Worker summary — per-shard results, content_hash, timing
           debug.log                      # Debug log (JSONL), uploaded by EXIT trap
 ```
+
+Datasets are immutable once metadata/dataset.complete exists. Creating a new dataset version requires a new dataset_wandb_run_id.
 
 ### Artifact Taxonomy
 
@@ -553,9 +557,9 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 `make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for `.h5` + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
 
 ```
-$ python -m pipeline.cli status --run-id surge_simple-480k-10k-20260313-100000
+$ python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
 
-Run: surge_simple-480k-10k-20260313-100000
+Run: surge-simple-480k-10k-20260313T100000Z
 Spec shards: 48
 Staged (valid):   44
 Missing:           2
@@ -874,11 +878,21 @@ Shard count is tuned for GPU worker count — one shard per GPU worker per epoch
 
 ## 8. Experiment Tracking (Weights & Biases)
 
+> Authoritative W&B conventions (artifact naming, metadata placement, lineage DAG, `job_type` values) are defined in [storage-provenance-spec.md §4–§7](storage-provenance-spec.md#4-wb-artifact-types). Repeated here for data-generation context.
+
 W&B serves as a lightweight observability layer for the pipeline — a few key metrics and the dataset as a first-class artifact. It is not a monitoring dashboard or a log aggregator. W&B is an index and lineage tracker, not the authoritative dataset store. R2 holds the data; `dataset.json` holds the metadata; W&B points to both.
 
-### What Goes in W&B
+The finalize stage initializes W&B with `wandb.init(project="synth-setter", job_type="data-generation")`.
 
-**Pipeline metrics** (logged by `finalize`):
+### Metadata Placement
+
+| Where             | What goes there                                                        | Why                                                  |
+| ----------------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |
+| `wandb.summary`   | Pipeline metrics (see table below)                                     | Final values, not time-series — summary is correct   |
+| Artifact metadata | `dataset_config_id`, `dataset_wandb_run_id`, `shard_count`, provenance | Travels with the artifact through the lineage DAG    |
+| `dataset.json`    | Full dataset card (structure, stats, validation)                       | Self-describing record in R2, referenced by artifact |
+
+**Pipeline metrics** (written to `wandb.summary` by `finalize`):
 
 | Metric                             | Type  | Description                                           |
 | ---------------------------------- | ----- | ----------------------------------------------------- |
@@ -892,13 +906,16 @@ W&B serves as a lightweight observability layer for the pipeline — a few key m
 
 **Dataset artifact** (logged by `finalize`):
 
-The finalized dataset is registered as a W&B Artifact of type `"dataset"`:
+The finalized dataset is registered as a W&B Artifact named `data-{dataset_config_id}` of type `"dataset"`:
 
 - **Files included:** `input_spec.json`, `dataset.json` (the card)
-- **Metadata:** run_id, param_spec, code_version, is_repo_dirty, total_samples, split sizes
+- **Metadata:** `dataset_config_id`, `dataset_wandb_run_id`, `shard_count`, `param_spec`, `code_version`, `is_repo_dirty`, `total_samples`, split sizes
 - **References:** R2 path to the actual HDF5 data (not uploaded to W&B — too large)
+- **Versioning:** W&B auto-versions artifacts: `data-{dataset_config_id}:v0`, `:v1`, etc. `:latest` always points to the most recent finalize.
 
-This creates a dataset entry in the W&B artifact registry that can be referenced by training runs, establishing **artifact lineage**: code version → dataset artifact → training run → model checkpoint. Training runs close the lineage loop by declaring the dataset as an input: `artifact = run.use_artifact(f"dataset-{run_id}:latest")`. See [Appendix E.3](#e3-wb-integration) for the full implementation.
+This creates a dataset entry in the W&B artifact registry that can be referenced by training runs, establishing **artifact lineage**: code version → dataset artifact → training run → model checkpoint. Training runs close the lineage loop by declaring the dataset as an input: `artifact = run.use_artifact(f"data-{dataset_config_id}:latest")`. See [Appendix E.3](#e3-wb-integration) for the full implementation.
+
+After finalize, datasets enter the training → evaluation → promotion pipeline. See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md).
 
 ## 9. Alternatives Considered
 
@@ -1300,8 +1317,7 @@ Pydantic is for trust boundaries — where data enters the system from an extern
 A run starts from a typed YAML config file:
 
 ```yaml
-# configs/pipeline/surge_simple_480k.yaml
-experiment_name: surge_simple
+# configs/dataset/surge-simple-480k-10k.yaml (filename = dataset_config_id)
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3
 output_format: hdf5       # "hdf5" (local training) or "wds" (multi-GPU streaming)
@@ -1318,7 +1334,7 @@ On first `generate`:
 
 1. Load YAML, validate against Pydantic `RunConfig` (strict mode)
 2. Extract `renderer_version` from the plugin bundle (`CFBundleShortVersionString` from `Info.plist` on macOS, `Version` from `moduleinfo.json` on Linux)
-3. Derive `run_id`: `{experiment_name}-{train_size}-{shard_size}-{YYYYMMDD-HHMMSS}`
+3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`
 4. Materialize `PipelineSpec` — expand config into shard-level spec (seeds, shapes, row ranges)
 5. Upload spec + source config to R2
 6. Proceed with reconciliation
@@ -1329,10 +1345,15 @@ On first `generate`:
 
 ### 14.6 Run ID Format
 
-```
-{experiment_name}-{total_train_samples}-{shard_size}-{YYYYMMDD-HHMMSS}
-Example: surge_simple-480k-10k-20260312-143022
-```
+> ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
+
+| Pipeline concept          | Storage spec concept                               | Example                                                              |
+| ------------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
+| Config filename (no ext)  | `dataset_config_id`                                | `surge-simple-480k-10k`                                              |
+| Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022Z`                             |
+| R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022Z/` |
+
+Config filenames live in `configs/dataset/` and use the pattern `{name}-{total_train_samples}-{shard_size}.yaml`. The filename without extension is the `dataset_config_id`.
 
 ### 14.7 CLI & Directory Structure
 
@@ -1357,13 +1378,13 @@ pipeline/
   logging_config.py     # structlog configuration
 ```
 
-Pipeline configs live in `configs/pipeline/` to distinguish them from training configs in `configs/data/` and `configs/trainer/`:
+Pipeline configs live in `configs/dataset/` (filename = `dataset_config_id`) to distinguish them from training configs in `configs/data/` and `configs/trainer/`:
 
 ```
 configs/
-  pipeline/            # Dataset generation recipes (YAML)
-    surge_simple_480k.yaml
-    surge_xt_1m.yaml
+  dataset/             # Dataset generation recipes (YAML); filename = dataset_config_id
+    surge-simple-480k-10k.yaml
+    surge-xt-1m-10k.yaml
   data/                # Training data module configs (Hydra)
     surge_simple.yaml
     surge.yaml
@@ -1382,7 +1403,8 @@ configs/
 | **W&B (Weights & Biases)** | [Weights & Biases](https://wandb.ai/), an experiment tracking platform. Used here as a lightweight observability layer: pipeline metrics, dataset artifact registry, and lineage tracking from dataset → training run.                                                                                             |
 | **Virtual dataset**        | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                                                                                                       |
 | **Input spec**             | JSON file (`input_spec.json`) defining the frozen input specification for a run — shard specs, seeds, shapes, splits, renderer version. Written once on first `generate`, never modified.                                                                                                                          |
-| **run_id**                 | Unique identifier for a pipeline execution. Format: `{experiment}-{size}-{shard_size}-{timestamp}`. Example: `surge_simple-480k-10k-20260312-143022`.                                                                                                                                                              |
+| **dataset_config_id**      | Stable identifier for a dataset configuration, derived from the config filename (without extension). Format: `{name}-{total_train_samples}-{shard_size}`. Example: `surge-simple-480k-10k`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                 |
+| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`. Example: `surge-simple-480k-10k-20260312T143022Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                                            |
 | **Shard ID**               | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                                                                                                       |
 | **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                          |
 | **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                       |
@@ -1488,23 +1510,27 @@ Implementation of experiment tracking ([§8](#8-experiment-tracking-weights--bia
 # In finalize, after resharding and stats:
 import wandb
 
-run = wandb.init(project="surge-data-pipeline", job_type="data-pipeline")
+run = wandb.init(
+    project="synth-setter",
+    job_type="data-generation",
+    id=spec.dataset_wandb_run_id,
+)
 
-# Log pipeline metrics
-run.log({
-    "pipeline/shards_total": spec.num_shards,
-    "pipeline/shards_valid": validation_summary.valid,
-    "pipeline/shards_quarantined": validation_summary.quarantined,
-    "pipeline/total_samples": total_samples,
-    "pipeline/errors_total": total_errors,
-})
+# Log pipeline metrics to summary (final values, not time-series)
+run.summary["pipeline/shards_total"] = spec.num_shards
+run.summary["pipeline/shards_valid"] = validation_summary.valid
+run.summary["pipeline/shards_quarantined"] = validation_summary.quarantined
+run.summary["pipeline/total_samples"] = total_samples
+run.summary["pipeline/errors_total"] = total_errors
 
 # Register dataset as artifact
 artifact = wandb.Artifact(
-    name=f"dataset-{spec.run_id}",
+    name=f"data-{spec.dataset_config_id}",  # name follows storage-provenance-spec.md §4
     type="dataset",
     metadata={
-        "run_id": spec.run_id,
+        "dataset_config_id": spec.dataset_config_id,
+        "dataset_wandb_run_id": spec.dataset_wandb_run_id,
+        "shard_count": spec.num_shards,
         "param_spec": spec.param_spec,
         "code_version": spec.code_version,
         "total_samples": total_samples,
@@ -1513,7 +1539,9 @@ artifact = wandb.Artifact(
 )
 artifact.add_file(input_spec_path)        # input_spec.json
 artifact.add_file(card_path)        # dataset.json
-artifact.add_reference(f"r2://{bucket}/{run_id}/data/")  # pointer to R2 data
+artifact.add_reference(
+    f"s3://synth-data/data/{spec.dataset_config_id}/{spec.dataset_wandb_run_id}/"
+)  # R2 is S3-compatible; W&B resolves via S3 API (uses AWS_ENDPOINT_URL or WANDB_S3_ENDPOINT_URL; see storage-provenance-spec.md §11)
 run.log_artifact(artifact)
 run.finish()
 ```
@@ -1521,7 +1549,7 @@ run.finish()
 Training runs declare the dataset as an input, closing the lineage loop:
 
 ```python
-artifact = run.use_artifact(f"dataset-{run_id}:latest")
+artifact = run.use_artifact(f"data-{dataset_config_id}:latest")
 ```
 
 ______________________________________________________________________
