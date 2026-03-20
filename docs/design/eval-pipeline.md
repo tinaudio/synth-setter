@@ -9,21 +9,21 @@ ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                                       | What it covers                                                     |
-| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why this matters                 |
-| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end CLI example — local and Docker                          |
-| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics              |
-| 4   | [System Overview](#4-system-overview)                                         | Three-stage architecture, data flow, environment matrix            |
-| 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts              |
-| 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint sync, artifact upload, W&B lineage    |
-| 7   | [Design Decisions](#7-design-decisions)                                       | Headless rendering, checkpoint resolution, Makefile, storage split |
-| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path      |
-| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                        |
-| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                          |
-| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                             |
-| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy           |
-| A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions               |
+| §   | Section                                                                       | What it covers                                                                                     |
+| --- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 1   | [Context & Motivation](#1-context--motivation)                                | Problem statement, current state, why this matters                                                 |
+| 2   | [Typical Workflow](#2-typical-workflow)                                       | End-to-end CLI example — local and Docker                                                          |
+| 3   | [Goals, Non-Goals & Design Principles](#3-goals-non-goals--design-principles) | Requirements, principles, anti-goals, success metrics                                              |
+| 4   | [System Overview](#4-system-overview)                                         | Three-stage architecture, data flow, environment matrix                                            |
+| 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts                                              |
+| 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint download, artifact upload, W&B lineage                                |
+| 7   | [Design Decisions](#7-design-decisions)                                       | Headless rendering, checkpoint resolution, Makefile, storage split, current vs proposed comparison |
+| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path                                      |
+| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                                                        |
+| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                                                          |
+| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                                                             |
+| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy                                           |
+| A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions                                               |
 
 ______________________________________________________________________
 
@@ -283,7 +283,7 @@ r2:synth-data/
                 └── config.yaml   # Hydra config snapshot (frozen provenance)
 ```
 
-Checkpoints are stored in **W&B artifacts** (via `log_model="all"`), not R2. See [§7.2](#72-checkpoint-resolution) for rationale.
+Checkpoints are stored in **W&B artifacts** (via `log_model="all"`), not R2. See [§9](#9-alternatives-considered) for rationale.
 
 ### 6.2 rclone Wrapper
 
@@ -887,7 +887,7 @@ main ──●──────────────────●───
 
 **Note:** The 19 SGE scripts in `jobs/predict/` are left as-is (deprecated, not consolidated).
 
-#### Phase 3: Portable Predict (#85)
+#### Phase 2: Portable Predict (#85)
 
 **Goal:** `make predict` works on local machines with portable Hydra config.
 
@@ -907,7 +907,7 @@ main ──●──────────────────●───
 - `paths.log_dir` keeps the existing default (`${paths.root_dir}/logs/`)
 - Fails fast with clear error if dataset not found
 
-#### Phase 4: Portable Render (#86)
+#### Phase 3: Portable Render (#86)
 
 **Goal:** `make render` works on macOS (native display) and Linux (Xvfb auto-detect).
 
@@ -927,7 +927,7 @@ main ──●──────────────────●───
 - Headless Linux: launch Xvfb on `:99`, export `DISPLAY`, clean up on exit
 - Plugin/preset paths default to `plugins/` and `presets/` (overridable)
 
-#### Phase 5: Portable Metrics (#87)
+#### Phase 4: Portable Metrics (#87)
 
 **Goal:** `make metrics` works with pinned dependencies and clean output schema.
 
@@ -948,7 +948,7 @@ main ──●──────────────────●───
 
 ### PR #2: R2 + W&B (#90, #91, #96)
 
-#### Phase 6: rclone Wrapper (#90)
+#### Phase 5: rclone Wrapper (#90)
 
 **Goal:** Shared `rclone_sync()` utility with `--checksum` enforcement.
 
@@ -964,7 +964,7 @@ main ──●──────────────────●───
 - Raises `subprocess.CalledProcessError` on failure
 - Dry-run mode for testing (`--dry-run` flag passthrough)
 
-#### Phase 7: R2 Dataset Download (#91)
+#### Phase 6: R2 Dataset Download (#91)
 
 **Goal:** When `data.r2_path` is explicitly specified, `prepare_data()` syncs from R2.
 
@@ -985,7 +985,7 @@ main ──●──────────────────●───
 - Logs download progress via structlog
 - **No default value** — R2 download is always an explicit opt-in
 
-#### W&B Checkpoint Config + Resolver
+#### Phase 7: W&B Checkpoint Config + Resolver
 
 **Goal:** Enable crash-resilient checkpoint upload via W&B and lazy resolution via OmegaConf.
 
@@ -1005,7 +1005,7 @@ main ──●──────────────────●───
 - Cache dir: `.cache/checkpoints/` (gitignored)
 - Zero new modules — resolver lives in existing `register_resolvers()`
 
-#### Phase 12: W&B Metrics Logging (#96)
+#### Phase 8: W&B Metrics Logging (#96)
 
 **Goal:** Optionally log metrics to W&B for cross-run comparison.
 
@@ -1072,7 +1072,7 @@ main ──●──────────────────●───
 
 ### PR #4: Documentation (#97)
 
-#### Phase 13: Eval Runbook (#97)
+#### Phase 12: Eval Runbook (#97)
 
 **Goal:** Document how to run the full eval pipeline locally and in Docker.
 
