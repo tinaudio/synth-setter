@@ -679,6 +679,7 @@ This section consolidates every configuration and environment behavior change in
 | #88   | Task  | Docker eval environment        | #140   |
 | #89   | Task  | E2E eval CI                    | #140   |
 | #97   | Task  | Eval runbook                   | #141   |
+| #95   | Task  | Consolidate SGE                | #141   |
 
 ### Per-Phase Metadata
 
@@ -965,13 +966,9 @@ ______________________________________________________________________
 
 - `docs/eval-runbook.md` — setup, credentials, make targets, Docker, troubleshooting
 
-______________________________________________________________________
+#### Task 5.2: Consolidate SGE (#95)
 
-### Standalone Tasks (not in phase hierarchy)
-
-| Issue | Title           | Type | Labels                      | Milestone           | Notes                                       |
-| ----- | --------------- | ---- | --------------------------- | ------------------- | ------------------------------------------- |
-| #95   | Consolidate SGE | Task | `evaluation`, `code-health` | `evaluation v1.0.0` | SGE deprecation is a design decision (§7.5) |
+**Goal:** Clean up the 19 deprecated SGE scripts in `jobs/predict/`. SGE deprecation is a design decision (§7.5) — this task handles the file cleanup.
 
 ______________________________________________________________________
 
