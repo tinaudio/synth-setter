@@ -107,12 +107,12 @@ For detailed blocking matrices and parallel execution windows, see the respectiv
 
 Priority is tracked via a **Priority** single-select field on the project:
 
-| Priority | Typical usage                          |
-| -------- | -------------------------------------- |
-| P0       | Critical                               |
-| P1       | Foundation phases, core stages, rclone |
-| P2       | Docker, E2E, production, consolidation |
-| P3       | Nice-to-have                           |
+| Priority | Definition                    |
+| -------- | ----------------------------- |
+| P0       | Blocks all progress           |
+| P1       | Needed before milestone ships |
+| P2       | Planned but not blocking      |
+| P3       | Nice-to-have                  |
 
 ## 6. Labels
 
@@ -139,7 +139,7 @@ Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wa
 | ci-automation v1.0.0 | CI & Automation |
 | code-health v1.0.0   | Code Health     |
 
-Every work stream has a milestone. Sub-issues automatically inherit their parent's milestone.
+Every work stream has a milestone. Set the milestone on each issue individually — GitHub does not auto-inherit milestones from parent issues.
 
 ## 8. Project
 
@@ -206,7 +206,14 @@ ISSUE
 5. Set **Priority** via the project field
 6. If blocked, add **native blocking** dependency via the sidebar
 7. When work starts, move to **In Progress**
-8. Link the PR
+8. Link the PR using the appropriate method:
+
+| Method                   | When to use                                   | Auto-closes? |
+| ------------------------ | --------------------------------------------- | ------------ |
+| `Fixes #N` / `Closes #N` | PR fully resolves the issue                   | Yes          |
+| `Refs #N`                | PR is related but doesn't resolve             | No           |
+| Development sidebar link | Manual non-closing connection from issue page | No           |
+
 9. When the PR merges, move to **Done** and close the issue
 
 ## 12. Changes Required
