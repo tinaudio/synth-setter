@@ -105,6 +105,21 @@ jobs:
             echo "--- Checking issue #${ISSUE_NUM} ---"
             MISSING=""
 
+            # Fetch via REST first — needed to detect PRs before GraphQL call
+            ISSUE_JSON=$(gh api "repos/${REPO}/issues/${ISSUE_NUM}" \
+              --jq '{labels: [.labels[].name], milestone: .milestone.title, is_pr: has("pull_request")}') || {
+              echo "::error::Failed to fetch issue #${ISSUE_NUM} via REST"
+              FAILURES="${FAILURES}Issue #${ISSUE_NUM} is missing required taxonomy metadata:\n  - Could not verify (REST API error)\n\n"
+              continue
+            }
+
+            # Skip pull requests (PRs share the issue number space)
+            IS_PR=$(echo "$ISSUE_JSON" | jq -r '.is_pr') || IS_PR="false"
+            if [ "$IS_PR" = "true" ]; then
+              echo "  (skipping #${ISSUE_NUM} — pull request, not an issue)"
+              continue
+            fi
+
             # Check issue type via GraphQL (issue types are only available in GraphQL)
             ISSUE_TYPE=$(gh api graphql -f query='
               query($owner: String!, $repo: String!, $number: Int!) {
@@ -136,21 +151,6 @@ jobs:
               fi
             else
               MISSING="${MISSING}  - No issue type set (must be one of: ${VALID_TYPES[*]})\n"
-            fi
-
-            # Check labels and milestone via REST
-            ISSUE_JSON=$(gh api "repos/${REPO}/issues/${ISSUE_NUM}" \
-              --jq '{labels: [.labels[].name], milestone: .milestone.title, is_pr: has("pull_request")}') || {
-              echo "::error::Failed to fetch issue #${ISSUE_NUM} via REST"
-              FAILURES="${FAILURES}Issue #${ISSUE_NUM} is missing required taxonomy metadata:\n  - Could not verify labels/milestone (REST API error)\n\n"
-              continue
-            }
-
-            # Skip pull requests (PRs share the issue number space)
-            IS_PR=$(echo "$ISSUE_JSON" | jq -r '.is_pr') || IS_PR="false"
-            if [ "$IS_PR" = "true" ]; then
-              echo "  (skipping #${ISSUE_NUM} — pull request, not an issue)"
-              continue
             fi
 
             LABELS=$(echo "$ISSUE_JSON" | jq -r '.labels[]' 2>/dev/null) || LABELS=""
