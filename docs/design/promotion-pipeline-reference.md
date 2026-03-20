@@ -1,6 +1,10 @@
 # Model Promotion Pipeline Reference
 
-Everything you need to implement a promote-and-release workflow for `synth-permutations`.
+> **Status**: Draft
+> **Last Updated**: 2026-03-20
+> **Tracking**: #122
+
+Everything you need to implement a promote-and-release workflow for `synth-setter`.
 Results live in W&B during development; GitHub Releases become the permanent record when you promote.
 
 ______________________________________________________________________
@@ -79,9 +83,10 @@ Usage:
 
 Environment variables:
     WANDB_API_KEY     - W&B authentication
-    GITHUB_TOKEN      - GitHub authentication (provided automatically in Actions)
-    WANDB_ENTITY      - W&B entity (default: your username)
-    WANDB_PROJECT     - W&B project (default: synth-permutations)
+    GH_TOKEN          - GitHub authentication for the `gh` CLI
+                         (in Actions, set via GH_TOKEN: ${{ secrets.GITHUB_TOKEN }})
+    WANDB_ENTITY      - W&B entity (default: tinaudio)
+    WANDB_PROJECT     - W&B project (default: synth-setter)
 """
 
 import argparse, json, os, subprocess, tempfile
@@ -126,7 +131,10 @@ def get_previous_release_metrics(repo: str) -> dict | None:
 
 
 def format_release_body(run, config: dict, previous: dict | None) -> str:
-    """Format the GitHub Release body with eval card."""
+    """Format the GitHub Release body with eval card.
+
+    TODO: use `previous` to show metric deltas vs last release.
+    """
 
     # Pull all summary metrics
     metrics = dict(run.summary)
@@ -257,9 +265,9 @@ def promote(run_id: str, entity: str, project: str, repo: str,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Promote a W&B run to GitHub Release")
     parser.add_argument("--run-id", required=True, help="W&B run ID to promote")
-    parser.add_argument("--entity", default=os.getenv("WANDB_ENTITY", "your-entity"))
-    parser.add_argument("--project", default=os.getenv("WANDB_PROJECT", "synth-permutations"))
-    parser.add_argument("--repo", default=os.getenv("GITHUB_REPOSITORY", "your-user/synth-permutations"))
+    parser.add_argument("--entity", default=os.getenv("WANDB_ENTITY", "tinaudio"))
+    parser.add_argument("--project", default=os.getenv("WANDB_PROJECT", "synth-setter"))
+    parser.add_argument("--repo", default=os.getenv("GITHUB_REPOSITORY", "tinaudio/synth-setter"))
     parser.add_argument("--registry", default=None, help="Optional W&B registry path")
     parser.add_argument("--dry-run", action="store_true", help="Print release body without creating")
     args = parser.parse_args()
@@ -306,12 +314,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
       - name: Install dependencies
         run: pip install wandb
@@ -400,10 +408,10 @@ ______________________________________________________________________
 
 ## Secrets Required
 
-| Secret          | Where to get it                          |
-| --------------- | ---------------------------------------- |
-| `WANDB_API_KEY` | wandb.ai/settings → API Keys             |
-| `GITHUB_TOKEN`  | Provided automatically by GitHub Actions |
+| Secret          | Where to get it                                        |
+| --------------- | ------------------------------------------------------ |
+| `WANDB_API_KEY` | wandb.ai/settings → API Keys                           |
+| `GH_TOKEN`      | Set from `${{ secrets.GITHUB_TOKEN }}` in the workflow |
 
 ______________________________________________________________________
 

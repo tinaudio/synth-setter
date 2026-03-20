@@ -3,10 +3,11 @@
 > Authoritative source of truth for R2 paths, W&B artifacts, and GitHub Actions workflows.
 > Individual design docs must not define their own storage or provenance conventions — point here instead.
 
-| Field    | Value |
-| -------- | ----- |
-| Status   | Draft |
-| Tracking | #122  |
+| Field        | Value      |
+| ------------ | ---------- |
+| Status       | Draft      |
+| Last Updated | 2026-03-20 |
+| Tracking     | #122       |
 
 ______________________________________________________________________
 
@@ -182,10 +183,11 @@ ______________________________________________________________________
 
 - Set via env vars: `WANDB_ENTITY`, `WANDB_PROJECT`
 - Configs use: `entity: ${oc.env:WANDB_ENTITY,tinaudio}`, `project: ${oc.env:WANDB_PROJECT,synth-setter}`
+- These are target values. Current config still references legacy values (`benhayes`/`synth-permutations`) pending migration.
 
 ______________________________________________________________________
 
 ## 11. References
 
 - [promotion-pipeline-reference.md](promotion-pipeline-reference.md) — W&B → GitHub Release workflow, promote script, GHA workflow
-- artifact-provenance-reference.md — W&B artifact patterns, lineage DAG examples, API reference
+- artifact-provenance-reference.md — TBD (#122): W&B artifact patterns, lineage DAG examples, API reference
