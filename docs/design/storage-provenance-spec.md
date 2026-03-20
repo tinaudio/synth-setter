@@ -13,18 +13,18 @@ ______________________________________________________________________
 
 ## 1. IDs
 
-| ID                  | Construction                             | Source                             | Example                        |
-| ------------------- | ---------------------------------------- | ---------------------------------- | ------------------------------ |
-| `dataset_config_id` | Config filename (stem)                   | `configs/dataset/{id}.yaml`        | `diva-v1`                      |
-| `dataset_run_id`    | `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022Z`     |
-| `train_config_id`   | Config filename (stem)                   | `configs/experiment/.../{id}.yaml` | `flow-simple`                  |
-| `train_run_id`      | `{train_config_id}-{YYYYMMDDTHHMMSSZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500Z` |
-| `eval_config_id`    | Eval dataset config filename (stem)      | `configs/dataset/{id}.yaml`        | `nsynth-v1`                    |
-| `eval_run_id`       | `{eval_config_id}-{YYYYMMDDTHHMMSSZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000Z`   |
+| ID                     | Construction                                                   | Source                             | Example                        |
+| ---------------------- | -------------------------------------------------------------- | ---------------------------------- | ------------------------------ |
+| `dataset_config_id`    | Config filename (stem)                                         | `configs/dataset/{id}.yaml`        | `diva-v1`                      |
+| `dataset_wandb_run_id` | Configurable, default `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022Z`     |
+| `train_config_id`      | Config filename (stem)                                         | `configs/experiment/.../{id}.yaml` | `flow-simple`                  |
+| `train_wandb_run_id`   | Configurable, default `{train_config_id}-{YYYYMMDDTHHMMSSZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500Z` |
+| `eval_config_id`       | Eval dataset config filename (stem)                            | `configs/dataset/{id}.yaml`        | `nsynth-v1`                    |
+| `eval_wandb_run_id`    | Configurable, default `{eval_config_id}-{YYYYMMDDTHHMMSSZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000Z`   |
 
 - `*_config_id` = filename of the YAML config, without extension
-- `*_run_id` = `{*_config_id}-{timestamp}`, set as the W&B run ID via `wandb.init(id=...)`
-- Timestamp format: `YYYYMMDDTHHMMSSZ` (seconds, UTC, filesystem-safe)
+- `*_wandb_run_id` = the W&B run ID, set via `wandb.init(id=...)`. Default convention is `{*_config_id}-{timestamp}`, but the path format is agnostic to how the ID is generated.
+- Default timestamp format: `YYYYMMDDTHHMMSSZ` (seconds, UTC, filesystem-safe)
 - W&B run ID limit: 64 characters. Keep config filenames short.
 - Config filenames must be globally unique across all config directories.
 
@@ -34,9 +34,9 @@ ______________________________________________________________________
 
 ```
 synth-data/
-├── data/{dataset_config_id}/{dataset_run_id}/
-├── train/{dataset_config_id}/{train_config_id}/{train_run_id}/
-└── eval/{dataset_config_id}/{train_config_id}/{train_run_id}/{eval_config_id}/{eval_run_id}/
+├── data/{dataset_config_id}/{dataset_wandb_run_id}/
+├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
+└── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
 ```
 
 ______________________________________________________________________
@@ -46,7 +46,7 @@ ______________________________________________________________________
 ### 3a. Data Generation
 
 ```
-data/{dataset_config_id}/{dataset_run_id}/
+data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── shards/
 │   ├── shard-000000.h5
 │   └── ...
@@ -65,12 +65,12 @@ data/{dataset_config_id}/{dataset_run_id}/
 - Workers may only write under `metadata/workers/`
 - `shards/` is written only by finalize
 - All `rclone` operations use `--checksum`
-- Datasets are immutable once `dataset.complete` exists. New versions require a new `dataset_run_id`.
+- Datasets are immutable once `dataset.complete` exists. New versions require a new `dataset_wandb_run_id`.
 
 ### 3b. Training
 
 ```
-train/{dataset_config_id}/{train_config_id}/{train_run_id}/
+train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
 ├── checkpoints/
 │   ├── last.ckpt
 │   └── best.ckpt
@@ -80,7 +80,7 @@ train/{dataset_config_id}/{train_config_id}/{train_run_id}/
 ### 3c. Evaluation
 
 ```
-eval/{dataset_config_id}/{train_config_id}/{train_run_id}/{eval_config_id}/{eval_run_id}/
+eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
 ├── predictions/
 │   ├── pred-{batch_idx}.pt
 │   ├── target-audio-{batch_idx}.pt
@@ -107,7 +107,7 @@ ______________________________________________________________________
 | `eval-results` | `{eval_config_id}`    | eval script             | `nsynth-v1`   |
 
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
-- The `run_id` is stored in `artifact.metadata`, not the artifact name
+- The `*_wandb_run_id` is stored in `artifact.metadata`, not the artifact name
 
 **Alias strategy:**
 
@@ -165,45 +165,57 @@ ______________________________________________________________________
 
 ## 8. GitHub Actions Workflows
 
-| Workflow        | File                 | Trigger              | Runner                          | Secrets             | Key Inputs                            |
-| --------------- | -------------------- | -------------------- | ------------------------------- | ------------------- | ------------------------------------- |
-| Tests           | `test.yml`           | push, PR             | `ubuntu-latest`, `macos-latest` | —                   | —                                     |
-| Full Tests      | `test-expensive.yml` | push(main), dispatch | `gpu-x64`                       | —                   | —                                     |
-| Data Generation | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | config, n_workers                     |
-| Training        | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | experiment, overrides                 |
-| Evaluation      | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B             | experiment                            |
-| Model Promotion | `promote.yml`        | `workflow_dispatch`  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_run_id`, `registry`, `dry_run` |
+| Workflow        | File                 | Trigger              | Runner                          | Secrets             | Key Inputs                                                       |
+| --------------- | -------------------- | -------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
+| Tests           | `test.yml`           | push, PR             | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
+| Full Tests      | `test-expensive.yml` | push(main), dispatch | `gpu-x64`                       | —                   | —                                                                |
+| Data Generation | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | config, n_workers                                                |
+| Training        | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
+| Evaluation      | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B             | experiment                                                       |
+| Model Promotion | `promote.yml`        | `workflow_dispatch`  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
 
 - All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
-- Promotion input `train_run_id` is the W&B training run ID (= our `train_run_id`). Promotion pulls the model artifact from this run.
+- Promotion requires both `train_wandb_run_id` and `eval_wandb_run_id`. It pulls the model artifact from the training run and eval metrics from the eval run.
 
 **GitHub Release body schema** (produced by promote workflow):
 
 ```
 ## Eval Card
 
-| Field       | Value                                  |
-|-------------|----------------------------------------|
-| W&B Run     | link to training run                   |
-| Date        | UTC timestamp                          |
-| Git SHA     | commit that produced the training run  |
+| Field       | Value                                        |
+|-------------|----------------------------------------------|
+| W&B Train   | link to training run                         |
+| W&B Eval    | link to evaluation run                       |
+| Date        | UTC timestamp                                |
+| Git SHA     | commit that produced the training run        |
 
-### Metrics
+### Training Metrics
 | Metric               | Value  |
 |----------------------|--------|
-| (all wandb.summary keys, excluding _ prefixed) |
+| (from training run's wandb.summary, excluding _ prefixed)  |
 
-### Config
+### Eval Metrics
+| Metric               | Value  |
+|----------------------|--------|
+| (from eval run's wandb.summary, excluding _ prefixed)      |
+
+### Training Config
 (full training config as JSON)
 
 ### Dataset
 | Type    | Artifact (version) |
 |---------|--------------------|
-| (each input artifact from run.used_artifacts()) |
+| (each input artifact from training run's used_artifacts())  |
+
+### Eval Dataset
+| Type    | Artifact (version) |
+|---------|--------------------|
+| (each input artifact from eval run's used_artifacts())      |
 ```
 
 - Tag format: `model-v{N}` (incrementing integer)
 - Asset: model file (`.pt` / `.onnx`) attached to the release
+- Promote also sets `:production` alias on the model artifact in W&B
 - See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md) for implementation.
 
 ______________________________________________________________________
@@ -246,7 +258,7 @@ ______________________________________________________________________
 
 ## 12. Invariants
 
-1. `*_run_id` uniquely identifies an immutable run output.
+1. `*_wandb_run_id` uniquely identifies an immutable run output.
 2. Every run must log and consume W&B artifacts for its inputs and outputs.
 3. Every run must record `github_sha` in `wandb.config`.
 4. All configs are frozen into the artifact or R2 storage path at run time.
