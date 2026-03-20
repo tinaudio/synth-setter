@@ -287,7 +287,7 @@ When `data.r2_path` is explicitly provided (via CLI override or experiment confi
 ```yaml
 # configs/data/surge_simple.yaml — no r2_path, no env vars for paths
 _target_: src.data.surge_datamodule.SurgeDataModule
-dataset_root: ${paths.data_dir}/surge-simple/surge-simple-20260312T143022Z  # {config_id}/{wandb_run_id}
+dataset_root: ${paths.data_dir}/surge-simple/surge-simple-20260312T143022Z  # {dataset_config_id}/{dataset_wandb_run_id}
 # r2_path: deliberately absent — must be specified explicitly when needed
 batch_size: 128
 num_workers: 11
@@ -360,6 +360,12 @@ if not OmegaConf.has_resolver("wandb"):
 See [§7.2](#72-checkpoint-resolution) for the full resolution behavior.
 
 ### 6.3 Eval Artifact Upload
+
+The R2 eval path follows the [storage-provenance-spec](storage-provenance-spec.md) §2 convention:
+
+```
+eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+```
 
 After metrics, optionally upload all eval outputs to R2:
 
@@ -761,7 +767,7 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `configs/data/surge_simple.yaml` — `dataset_root` → `${paths.data_dir}/surge-simple/{wandb_run_id}` (two-segment: config_id/run_id)
+- `configs/data/surge_simple.yaml` — `dataset_root` → `${paths.data_dir}/{dataset_config_id}/{dataset_wandb_run_id}` (matches [storage-provenance-spec](storage-provenance-spec.md) §2)
 - `configs/data/surge_mini.yaml` — same pattern
 - `configs/data/surge_simple_onehot.yaml` — same (if exists)
 - `.env.example` — R2 credentials and `WANDB_API_KEY` only (no path vars)
