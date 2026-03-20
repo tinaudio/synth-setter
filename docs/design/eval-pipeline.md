@@ -641,29 +641,6 @@ This section consolidates every configuration and environment behavior change in
 
 ## 8. Dependency Graph & Parallelism
 
-### Issue Dependencies
-
-```
-                    EVAL PIPELINE                              R2 INTEGRATION
-                    ─────────────                              ──────────────
-
-                ┌─── #86 Render ─────┐
-                │    (P1, no blocker) │
-                │                    │
- #94 Paths ──→ #85 Predict ─────────┼──→ #88 Docker ──→ #89 E2E CI
- (P1)       (P1)                    │    (P2)            (P2)
-                │                    │
-                ├─── #87 Metrics ────┤                     #90 rclone ──→ #91 R2 Dataset
-                │    (P1, no blocker)│                     (P1)       │    (P1)
-                │         │          │                                │
-                │         │                                          │
-                │         └──→ #93 R2 Artifacts ◄────────────────────┘
-                │              (P2)
-                │
-                └──→ #97 Runbook (P2)
-
-```
-
 ### Blocking Matrix
 
 | Issue | Title               | Blocked by    | Blocks                  |
@@ -677,7 +654,7 @@ This section consolidates every configuration and environment behavior change in
 | #89   | E2E CI              | #85–88        | —                       |
 | #91   | R2 dataset download | #90, #94      | —                       |
 | #93   | R2 artifact upload  | #90, #87      | —                       |
-| #92   | R2 checkpoint sync  | —             | —                       |
+| #92   | R2 checkpoint sync  | #90           | —                       |
 | #95   | Consolidate SGE     | —             | —                       |
 | #96   | W&B metrics logging | #87           | —                       |
 | #97   | Eval runbook        | #85, #86, #87 | —                       |
