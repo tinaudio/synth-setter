@@ -71,8 +71,8 @@ cp .env.example .env
 # Edit .env: R2 credentials, WANDB_API_KEY
 
 # 2. Run prediction — dataset path and checkpoint are Hydra args, not env vars
-make predict EXPERIMENT=surge/flow_simple CKPT=r2:synth-data/checkpoints/flow-simple/best.ckpt
-# → Checkpoint downloaded to .cache/checkpoints/flow-simple/best.ckpt
+make predict EXPERIMENT=surge/flow_simple CKPT=r2:synth-data/checkpoints/flow-simple/run-x118ylu9/best.ckpt
+# → Checkpoint downloaded to .cache/checkpoints/flow-simple/run-x118ylu9/best.ckpt
 # → Predictions written to logs/eval/flow_simple/{run}-{timestamp}/predictions/
 
 # 3. Render audio — auto-detects display, launches Xvfb if headless
@@ -86,14 +86,14 @@ make metrics AUDIO_DIR=logs/eval/flow_simple/{run}-{timestamp}/audio/ OUTPUT_DIR
 
 # 5. (Optional) Upload artifacts to R2
 make upload-eval RUN_DIR=logs/eval/flow_simple/{run}-{timestamp}/
-# → r2:synth-data/eval/flow_simple/{predictions,audio,metrics}/
+# → r2:synth-data/eval/flow_simple/{run_id}/{predictions,audio,metrics}/
 ```
 
 ### Full pipeline (CI or Docker)
 
 ```bash
 # Docker — everything in one container, headless rendering included
-make docker-eval EXPERIMENT=surge/flow_simple CKPT=r2:synth-data/checkpoints/flow-simple/best.ckpt
+make docker-eval EXPERIMENT=surge/flow_simple CKPT=r2:synth-data/checkpoints/flow-simple/run-x118ylu9/best.ckpt
 # → Runs predict → render → metrics inside container
 # → Copies metrics.csv to host
 ```
@@ -157,8 +157,8 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
                     │           R2 (synth-data bucket)             │
                     │                                              │
                     │  data/                checkpoints/           │
-                    │    surge-simple/         flow-simple/        │
-                    │    surge-full/           vae-simple/         │
+                    │    surge-simple/         {experiment}/       │
+                    │    surge-full/             {run_id}/         │
                     │                                              │
                     │  eval/                                       │
                     │    {experiment}/{run_id}/                    │
@@ -347,7 +347,7 @@ Behavior:
 
 See [§7.5](#75-checkpoint-resolution) for full `ckpt_path` resolution behavior.
 
-**Download** (eval): `ckpt_path=r2:synth-data/checkpoints/flow-simple/best.ckpt`
+**Download** (eval): `ckpt_path=r2:synth-data/checkpoints/flow-simple/run-x118ylu9/best.ckpt`
 resolves via rclone to `.cache/checkpoints/`, cached with checksum.
 
 **Upload** (training): An `R2CheckpointUploader` callback piggybacks on Lightning's
@@ -480,11 +480,11 @@ source jobs/predict/get-ckpt-from-wandb.sh x118ylu9   # always this run ID
 
 Three resolution patterns, each appropriate for a different use case:
 
-| Pattern                | Where specified                             | Use case                                                                   | Example                                                      |
-| ---------------------- | ------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| CLI arg                | Command line                                | Ad-hoc eval of a new/local checkpoint                                      | `python src/eval.py ckpt_path=./my-ckpt.ckpt`                |
-| Experiment config      | `configs/experiment/surge/flow_simple.yaml` | Reproducible eval of a known model — checkpoint is pinned, portable via R2 | `ckpt_path: r2:synth-data/checkpoints/flow-simple/best.ckpt` |
-| `null` (training only) | `configs/train.yaml`                        | Start training fresh                                                       | Already works                                                |
+| Pattern                | Where specified                             | Use case                                                                   | Example                                                                   |
+| ---------------------- | ------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| CLI arg                | Command line                                | Ad-hoc eval of a new/local checkpoint                                      | `python src/eval.py ckpt_path=./my-ckpt.ckpt`                             |
+| Experiment config      | `configs/experiment/surge/flow_simple.yaml` | Reproducible eval of a known model — checkpoint is pinned, portable via R2 | `ckpt_path: r2:synth-data/checkpoints/flow-simple/run-x118ylu9/best.ckpt` |
+| `null` (training only) | `configs/train.yaml`                        | Start training fresh                                                       | Already works                                                             |
 
 **Resolution order** (Hydra's standard override precedence):
 
