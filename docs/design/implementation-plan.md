@@ -2,6 +2,7 @@
 
 > **Canonical design:** [data-pipeline.md](data-pipeline.md)
 > **Epic:** [#74](https://github.com/ktinubu/synth-permutations/issues/74)
+> **Builds on:** Generation infrastructure by benhayes@ (see design doc §1)
 > **Last updated:** 2026-03-19
 
 ______________________________________________________________________

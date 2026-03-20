@@ -34,7 +34,17 @@ Topline goal: Get massive dataset generation working reliably enough, and know w
 
 **synth-setter** is a collection of tools for synthesizer inversion, sound matching and preset exploration.
 
-Training models for these tasks requires large-scale datasets: 500k–1M+ audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as an HDF5 shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
+Training models for these tasks requires large-scale datasets: 500k–15M audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as an HDF5 shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
+
+### Prior Work
+
+The generation infrastructure was built by benhayes@: sample-level VST rendering (`generate_vst_dataset.py`), parameter specification (`param_spec.py`, `surge_xt_param_spec.py`), plugin loading and audio/mel extraction (`core.py`), HDF5 virtual dataset resharding (`reshard_data.py`), Docker build system with generate/train/shell modes (`docker_entrypoint.sh`), rclone-based R2 upload with checksum verification (`uploader.py`), and the PyTorch Lightning DataModule for training (`surge_datamodule.py`). An orchestration script (`run_dataset_pipeline.py`) tied these together: generate train/val/test splits sequentially, compute normalization statistics, write provenance metadata (git SHA, dirty flag, generation params), and optionally upload to R2. This code remains the foundation — the distributed pipeline wraps it, not replaces it.
+
+At prototype scale (10–12k samples, 2–3 hours on a single machine), this pipeline works well. It resumes at the sample level by finding the first empty HDF5 row, tracks basic provenance, and produces correct datasets. A first parallelization attempt (`generate_shards.py`) added per-instance shard generation with metadata, but without reconciliation, validation tiers, or distributed coordination.
+
+At research scale (500k–15M samples), the single-machine approach breaks down. Generation takes days to weeks. The entire dataset must fit on local disk for both generation and training — at 15M samples this is potentially terabytes, a hard blocker on dataset size with no streaming or remote-access path in the repo. There is no crash resilience: a single failure loses the entire run. There is no per-shard validation, so corrupt data enters training silently. There is no way to regenerate only the failed shards without restarting everything.
+
+### Distributed Pipeline
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
