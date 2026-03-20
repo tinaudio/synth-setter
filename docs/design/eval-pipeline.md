@@ -2,8 +2,14 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-03-19
-> **Tracking**: #98 (eval epic), #99 (R2 epic)
+> **Last Updated**: 2026-03-20
+> **Tracking**:
+>
+> - #98 (Epic: evaluation pipeline)
+> - #99 (Epic: storage / R2 integration)
+>
+> **Milestone**: `evaluation v1.0.0`
+> **Domain Labels**: `evaluation`, `storage`
 
 ______________________________________________________________________
 
@@ -18,11 +24,11 @@ ______________________________________________________________________
 | 5   | [Stage Definitions](#5-stage-definitions)                                     | Predict, render, metrics — inputs, outputs, contracts                                              |
 | 6   | [R2 Integration](#6-r2-integration)                                           | Dataset download, checkpoint download, artifact upload, W&B lineage                                |
 | 7   | [Design Decisions](#7-design-decisions)                                       | Headless rendering, checkpoint resolution, Makefile, storage split, current vs proposed comparison |
-| 8   | [Dependency Graph & Parallelism](#8-dependency-graph--parallelism)            | Issue dependencies, parallel execution windows, critical path                                      |
-| 9   | [Alternatives Considered](#9-alternatives-considered)                         | Rejected approaches and why                                                                        |
-| 10  | [Open Questions & Risks](#10-open-questions--risks)                           | Known gaps and trade-offs                                                                          |
-| 11  | [Out of Scope](#11-out-of-scope)                                              | Future work — not referenced elsewhere                                                             |
-| 12  | [Implementation Plan](#12-implementation-plan)                                | Phase breakdown, PR groupings, file lists, test strategy                                           |
+| 8   | [Phase Plan](#8-phase-plan)                                                   | Epic → Phase → Task hierarchy, issue mapping, file lists, test strategy                            |
+| 9   | [Dependency Overview](#9-dependency-overview)                                 | Issue dependencies, parallel execution windows, critical path                                      |
+| 10  | [Alternatives Considered](#10-alternatives-considered)                        | Rejected approaches and why                                                                        |
+| 11  | [Open Questions & Risks](#11-open-questions--risks)                           | Known gaps and trade-offs                                                                          |
+| 12  | [Out of Scope](#12-out-of-scope)                                              | Future work — not referenced elsewhere                                                             |
 | A–C | [Appendices](#appendix-a-glossary)                                            | Glossary, current file inventory, metric definitions                                               |
 
 ______________________________________________________________________
@@ -298,7 +304,7 @@ Behavior:
 
 ### 6.2 Checkpoint Storage (W&B Artifacts)
 
-Checkpoints are stored in **W&B artifacts**, not R2. This is a deliberate decision — see [§9](#9-alternatives-considered) for the full R2-vs-W&B analysis.
+Checkpoints are stored in **W&B artifacts**, not R2. This is a deliberate decision — see [§10](#10-alternatives-considered) for the full R2-vs-W&B analysis.
 
 **Upload** (training): `log_model="all"` in `configs/logger/wandb.yaml` uploads every checkpoint
 saved by `ModelCheckpoint` (currently every 5000 steps + best + last). Zero new code — already
@@ -503,7 +509,7 @@ hands Lightning a resolved local path transparently.
 | `ckpt_path: null` (train.yaml)                                                     | Start training from scratch                                                        | Yes       | Yes                           |
 | `ckpt_path: ${wandb:synth-permutations/model-x118ylu9:latest}` (training resume)   | Resolves lazily → downloads latest checkpoint, resumes optimizer/epoch state       | Yes       | Yes                           |
 
-**Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). It is either a required CLI arg (ad-hoc) or pinned in an experiment config (reproducible). The `${wandb:...}` OmegaConf resolver makes pinned values portable across machines — resolution is lazy and cached. Checkpoints are stored in W&B (Teams plan, $50/mo) — see [§9](#9-alternatives-considered) for the full cost/benefit analysis vs R2.
+**Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). It is either a required CLI arg (ad-hoc) or pinned in an experiment config (reproducible). The `${wandb:...}` OmegaConf resolver makes pinned values portable across machines — resolution is lazy and cached. Checkpoints are stored in W&B (Teams plan, $50/mo) — see [§10](#10-alternatives-considered) for the full cost/benefit analysis vs R2.
 
 ### 7.3 Makefile as CLI Interface
 
@@ -603,14 +609,14 @@ This section consolidates every configuration and environment behavior change in
 
 **2. Checkpoint resolution (§7.2)**
 
-|                            | Current                                     | Proposed                                                                                      |
-| -------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| **Eval checkpoint**        | Shell script finds local file by W&B run ID | Pinned `${wandb:...}` resolver in experiment config or CLI arg                                |
-| **Training checkpoint**    | `ckpt_path: null` (start fresh)             | Same — no change                                                                              |
-| **Training resume**        | `ckpt_path=/local/path/last.ckpt`           | `ckpt_path=${wandb:synth-permutations/model-x118ylu9:latest}` (portable)                      |
-| **Upload during training** | W&B `log_model: true` (best only)           | W&B `log_model="all"` (every saved checkpoint — crash resilient)                              |
-| **Risk eliminated**        | —                                           | "Checkpoint is on the cluster" — W&B artifacts available everywhere                           |
-| **Trade-off**              | —                                           | W&B Teams at $50/mo; storage burns faster with `"all"` (see [§9](#9-alternatives-considered)) |
+|                            | Current                                     | Proposed                                                                                        |
+| -------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Eval checkpoint**        | Shell script finds local file by W&B run ID | Pinned `${wandb:...}` resolver in experiment config or CLI arg                                  |
+| **Training checkpoint**    | `ckpt_path: null` (start fresh)             | Same — no change                                                                                |
+| **Training resume**        | `ckpt_path=/local/path/last.ckpt`           | `ckpt_path=${wandb:synth-permutations/model-x118ylu9:latest}` (portable)                        |
+| **Upload during training** | W&B `log_model: true` (best only)           | W&B `log_model="all"` (every saved checkpoint — crash resilient)                                |
+| **Risk eliminated**        | —                                           | "Checkpoint is on the cluster" — W&B artifacts available everywhere                             |
+| **Trade-off**              | —                                           | W&B Teams at $50/mo; storage burns faster with `"all"` (see [§10](#10-alternatives-considered)) |
 
 **3. Dataset access (§6.3)**
 
@@ -639,11 +645,339 @@ This section consolidates every configuration and environment behavior change in
 | **Cluster eval** | `qsub jobs/predict/flow-simple.sh` | `make predict EXPERIMENT=surge/flow_simple CKPT=r2:...` (SSH to cluster, run make target)        |
 | **Risk**         | —                                  | If SGE scripts break, no fix is coming. Acceptable — cluster is not the primary dev environment. |
 
-## 8. Dependency Graph & Parallelism
+## 8. Phase Plan
+
+> This section follows the Epic → Phase → Task hierarchy defined in
+> [`github-taxonomy.md`](github-taxonomy.md) §3.
+> Issues follow the standard lifecycle ([`github-taxonomy.md`](github-taxonomy.md) §11): Todo → In Progress → Done.
+> Project fields required for all tasks: Priority, Start Date, Target Date.
+>
+> For issue tracking structure see [`github-taxonomy.md`](github-taxonomy.md).
+
+### Issue Mapping
+
+| Issue | Type  | Description                     | Parent  |
+| ----- | ----- | ------------------------------- | ------- |
+| #98   | Epic  | Evaluation pipeline             | —       |
+| #99   | Epic  | Storage / R2 integration        | —       |
+| TBD   | Phase | Portable eval (Phase 1)         | #98     |
+| TBD   | Phase | Storage integration (Phase 2)   | #99     |
+| TBD   | Phase | W&B integration (Phase 3)       | #98     |
+| TBD   | Phase | CI & containerization (Phase 4) | #98     |
+| TBD   | Phase | Documentation (Phase 5)         | #98     |
+| #94   | Task  | Config cleanup                  | Phase 1 |
+| #85   | Task  | Portable predict                | Phase 1 |
+| #86   | Task  | Portable render                 | Phase 1 |
+| #87   | Task  | Portable metrics                | Phase 1 |
+| #90   | Task  | rclone wrapper                  | Phase 2 |
+| #91   | Task  | R2 dataset download             | Phase 2 |
+| #93   | Task  | R2 artifact upload              | Phase 2 |
+| #128  | Task  | W&B checkpoint resolver         | Phase 3 |
+| #96   | Task  | W&B metrics logging             | Phase 3 |
+| #88   | Task  | Docker eval environment         | Phase 4 |
+| #89   | Task  | E2E eval CI                     | Phase 4 |
+| #97   | Task  | Eval runbook                    | Phase 5 |
+
+### Per-Phase Metadata
+
+| Phase | Label(s)                      | Milestone           | Epic |
+| ----- | ----------------------------- | ------------------- | ---- |
+| 1     | `evaluation`                  | `evaluation v1.0.0` | #98  |
+| 2     | `evaluation`, `storage`       | `storage v1.0.0`    | #99  |
+| 3     | `evaluation`                  | `evaluation v1.0.0` | #98  |
+| 4     | `evaluation`, `ci-automation` | `evaluation v1.0.0` | #98  |
+| 5     | `evaluation`                  | `evaluation v1.0.0` | #98  |
+
+### Completion Tracking
+
+When tasks are completed, update this section using the taxonomy's design doc linkage pattern:
+
+```
+### Task 1.1: Config Cleanup (#94) ✅ — Completed in PR #XXX
+```
+
+### Branch Strategy
+
+```
+main ──●──────────────●──────────────●──────────────●──────────────●──→
+       │              │              │              │              │
+       Phase 1        Phase 2        Phase 3        Phase 4        Phase 5
+```
+
+### Estimated Change Size
+
+| Task | Area                     | Already works                       | Actual change                      | Lines |
+| ---- | ------------------------ | ----------------------------------- | ---------------------------------- | ----- |
+| 1.1  | Data configs             | mnist.yaml uses `${paths.data_dir}` | Change 2 surge configs to match    | ~2    |
+| 1.2  | Predict                  | src/eval.py works, `ckpt_path: ???` | Add Makefile target                | ~10   |
+| 1.3  | Rendering                | Xvfb auto-launch in renderscript.sh | Add macOS `$OSTYPE` conditional    | ~5    |
+| 1.4  | Metrics                  | All 4 metrics working, portable     | Add Makefile target                | ~5    |
+| 2.1  | rclone wrapper           | —                                   | New utility `src/data/rclone.py`   | ~40   |
+| 2.2  | `prepare_data()` R2 sync | —                                   | Override in SurgeDataModule        | ~15   |
+| 3.1  | W&B resolver             | `register_resolvers()` exists       | Add wandb resolver (~15 lines)     | ~15   |
+| 3.1  | W&B config               | `log_model: true`                   | Change to `"all"`                  | 1     |
+| —    | Makefile targets         | help, test, format, train           | Add predict, render, metrics, etc. | ~40   |
+| —    | Tests                    | conftest.py fixtures exist          | New test files + fixtures          | ~400  |
+
+**Branch:** `dev/eval-pipeline` off `main`
+**Priorities:** TDD first, small commits, always-green CI.
+
+______________________________________________________________________
+
+### Phase 1: Portable Evaluation Pipeline (Epic #98)
+
+> **Label:** `evaluation` · **Milestone:** `evaluation v1.0.0`
+
+#### Task 1.1: Config Cleanup (#94)
+
+**Goal:** Replace all cluster-specific paths in committed configs with sensible Hydra defaults.
+
+**Files to modify:**
+
+- `configs/data/surge_simple.yaml` — `dataset_root` → `${paths.data_dir}/surge-simple` (matches `mnist.yaml` convention)
+- `configs/data/surge_mini.yaml` — same pattern
+- `configs/data/surge_simple_onehot.yaml` — same (if exists)
+- `.env.example` — R2 credentials and `WANDB_API_KEY` only (no path vars)
+
+**Tests:**
+
+- `test_no_hardcoded_paths_in_configs` — grep committed YAML for `/data/scratch`
+- `test_configs_have_sensible_defaults` — load each data config, verify `dataset_root` is a relative path
+
+**Note:** The 19 SGE scripts in `jobs/predict/` are left as-is (deprecated, not consolidated — see [§7.5](#75-current-vs-proposed-full-comparison) SGE deprecation).
+
+#### Task 1.2: Portable Predict (#85)
+
+**Goal:** `make predict` works on local machines with portable Hydra config.
+
+**Files to modify:**
+
+- `src/eval.py` — ensure `mode=predict` works without cluster deps
+- `Makefile` — add `predict` target
+
+**Files to create:**
+
+- `tests/test_eval_predict.py` — fixture-based predict test (`@pytest.mark.slow`)
+
+**Key behaviors:**
+
+- `dataset_root` has a sensible Hydra default; override via CLI when needed
+- `ckpt_path` resolved per [§7.2](#72-checkpoint-resolution) — CLI arg or experiment config, supports `${wandb:...}` resolver
+- `paths.log_dir` keeps the existing default (`${paths.root_dir}/logs/`)
+- Fails fast with clear error if dataset not found
+
+#### Task 1.3: Portable Render (#86)
+
+**Goal:** `make render` works on macOS (native display) and Linux (Xvfb auto-detect).
+
+**Files to modify:**
+
+- `renderscript.sh` — add macOS detection, Xvfb auto-launch
+- `scripts/predict_vst_audio.py` — make plugin/preset paths configurable via env
+- `Makefile` — add `render` target
+
+**Files to create:**
+
+- `tests/test_render.py` — test with fixture `.pt` files (`@pytest.mark.slow`)
+
+**Key behaviors:**
+
+- macOS: skip Xvfb, call Python directly
+- Headless Linux: launch Xvfb on `:99`, export `DISPLAY`, clean up on exit
+- Plugin/preset paths default to `plugins/` and `presets/` (overridable)
+
+#### Task 1.4: Portable Metrics (#87)
+
+**Goal:** `make metrics` works with pinned dependencies and clean output schema.
+
+**Files to modify:**
+
+- `scripts/compute_audio_metrics.py` — pin dep versions
+- `Makefile` — add `metrics` target
+
+**Files to create:**
+
+- `tests/test_metrics.py` — test with fixture `.wav` files, validate CSV schema
+
+**Key behaviors:**
+
+- Output CSV: per-sample metrics indexed by directory name, aggregated means/stds
+- `ProcessPoolExecutor` parallelism preserved
+- JTFS and f0 code stays as-is — track reactivation as a separate issue (out of scope)
+
+______________________________________________________________________
+
+### Phase 2: Storage Integration (Epic #99)
+
+> **Labels:** `evaluation`, `storage` · **Milestone:** `storage v1.0.0`
+
+#### Task 2.1: rclone Wrapper (#90)
+
+**Goal:** Shared `rclone_sync()` utility with `--checksum` enforcement.
+
+**Files to create:**
+
+- `src/data/rclone.py` — `rclone_sync()`, `rclone_ls()`, `rclone_copyto()`
+- `tests/test_rclone.py` — mock subprocess, verify flags
+
+**Key behaviors:**
+
+- All operations include `--checksum`
+- R2 config from env vars (`RCLONE_CONFIG_R2_*`)
+- Raises `subprocess.CalledProcessError` on failure
+- Dry-run mode for testing (`--dry-run` flag passthrough)
+
+#### Task 2.2: R2 Dataset Download (#91)
+
+**Goal:** When `data.r2_path` is explicitly specified, `prepare_data()` syncs from R2.
+
+**Files to modify:**
+
+- `src/data/surge_datamodule.py` — add optional `r2_path` field, call `rclone_sync` in `prepare_data()`
+- Data configs unchanged — `r2_path` is absent by default, specified via CLI or experiment config
+
+**Files to create:**
+
+- `tests/test_r2_dataset_download.py` — mock rclone, verify sync logic
+
+**Key behaviors:**
+
+- No-op if `r2_path` not specified (default — local-only mode)
+- No-op if local data matches (checksum)
+- Sync runs in `prepare_data()` (before `setup()`)
+- Logs download progress via structlog
+- **No default value** — R2 download is always an explicit opt-in
+
+#### Task 2.3: R2 Eval Artifact Upload (#93)
+
+**Goal:** `make upload-eval` pushes predictions + audio + metrics to R2.
+
+**Files to modify:**
+
+- `Makefile` — add `upload-eval` target
+
+**Files to create:**
+
+- `scripts/upload_eval_artifacts.py` — rclone sync wrapper for eval outputs
+- `tests/test_upload_eval.py` — mock rclone, verify R2 paths
+
+______________________________________________________________________
+
+### Phase 3: W&B Integration (Epic #98)
+
+> **Label:** `evaluation` · **Milestone:** `evaluation v1.0.0`
+
+#### Task 3.1: W&B Checkpoint Config + Resolver (#128)
+
+**Goal:** Enable crash-resilient checkpoint upload via W&B and lazy resolution via OmegaConf.
+
+**Files to modify:**
+
+- `configs/logger/wandb.yaml` — change `log_model: true` → `log_model: "all"`
+- `src/utils/utils.py` — add `_wandb_resolver` to `register_resolvers()` (~15 lines)
+
+**Files to create:**
+
+- `tests/test_wandb_resolver.py` — mock W&B API, verify download + cache logic
+
+**Key behaviors:**
+
+- `log_model="all"` uploads every saved checkpoint (every 5000 steps + best + last)
+- `${wandb:...}` OmegaConf resolver handles artifact download + cache
+- Cache dir: `$PROJECT_ROOT/.cache/checkpoints/` (gitignored)
+- Zero new modules — resolver lives in existing `register_resolvers()`
+
+#### Task 3.2: W&B Metrics Logging (#96)
+
+**Goal:** Optionally log metrics to W&B for cross-run comparison.
+
+**Files to modify:**
+
+- `scripts/compute_audio_metrics.py` — add `--wandb-run` flag
+
+**Files to create:**
+
+- `tests/test_metrics_wandb.py` — mock wandb, verify log calls
+
+______________________________________________________________________
+
+### Phase 4: CI & Containerization (Epic #98)
+
+> **Labels:** `evaluation`, `ci-automation` · **Milestone:** `evaluation v1.0.0`
+
+#### Task 4.1: Docker Eval Environment (#88)
+
+**Goal:** `make docker-eval` runs the full pipeline in a container.
+
+**Files to create:**
+
+- `docker/eval/Dockerfile` — multi-stage: base → deps → VST plugin → Xvfb
+- `docker/eval/docker-compose.yaml` — env var passthrough, volume mounts
+- `Makefile` — add `docker-eval`, `docker-eval-build` targets
+
+**Key behaviors:**
+
+- Xvfb baked into image (always headless in Docker)
+- Surge XT plugin installed in image
+- `.env` file mounted for credentials only (R2, W&B)
+- Output directory mounted as volume
+- Paths passed as `docker run` args, not env vars
+
+#### Task 4.2: E2E Eval CI (#89)
+
+**Goal:** GitHub Actions workflow runs predict → render → metrics on a small fixture.
+
+**Files to create:**
+
+- `.github/workflows/eval-ci.yml` — matrix: Ubuntu (Xvfb)
+- `tests/test_eval_e2e.py` — fixture-based integration test (`@pytest.mark.slow`)
+- `tests/fixtures/eval/` — checked-in test fixtures:
+  - `tiny.ckpt` (~1 MB) — checkpoint trained for 2 epochs on a handful of samples
+  - `fixture-shard.h5` (~5 MB) — small HDF5 shard with 10-50 samples (enough for one predict batch)
+  - `audio/sample_0/{pred,target}.wav` (~1 MB) — pre-rendered audio for metrics-only testing without VST plugin
+
+**Key behaviors:**
+
+- Runs on PR (if `src/eval.py`, `scripts/`, or `configs/` changed)
+- Uses checked-in fixtures — no R2 credentials, no network dependency, no secrets in CI
+- Validates: predictions exist, audio renders, metrics CSV has expected schema
+- If fixtures grow past ~10 MB, migrate to Git LFS
+
+______________________________________________________________________
+
+### Phase 5: Documentation (Epic #98)
+
+> **Label:** `evaluation` · **Milestone:** `evaluation v1.0.0`
+
+#### Task 5.1: Eval Runbook (#97)
+
+**Goal:** Document how to run the full eval pipeline locally and in Docker.
+
+**Files to create:**
+
+- `docs/eval-runbook.md` — setup, credentials, make targets, Docker, troubleshooting
+
+______________________________________________________________________
+
+### Standalone Tasks (not in phase hierarchy)
+
+| Issue | Title              | Type | Notes                                                    |
+| ----- | ------------------ | ---- | -------------------------------------------------------- |
+| #92   | R2 checkpoint sync | Task | Standalone — depends on #90; not part of eval phases     |
+| #95   | Consolidate SGE    | Task | Standalone — SGE deprecation is a design decision (§7.5) |
+
+______________________________________________________________________
+
+## 9. Dependency Overview
+
+> Dependencies are implemented using GitHub's native "Blocked by / Blocking"
+> relationships (issue sidebar → Relationships). The canonical dependency DAG
+> lives in GitHub; this section documents the critical path and parallel
+> execution windows for planning.
 
 ### Blocking Matrix
 
-| Issue | Title               | Blocked by    | Blocks                  |
+| Issue | Title               | Blocked by    | Blocking                |
 | ----- | ------------------- | ------------- | ----------------------- |
 | #94   | Config cleanup      | —             | #85, #91                |
 | #85   | Portable predict    | #94           | #88, #89, #97           |
@@ -676,18 +1010,20 @@ This section consolidates every configuration and environment behavior change in
 ```
 Mar 31 ─────────── Apr 07 ─────────── Apr 14 ── Apr 15
 │                  │                  │          │
-├── PR#1: Portable Eval ─────────────┤           │
+├── Phase 1: Portable Eval ──────────┤           │
 │   (#94, #85, #86, #87)             │           │
-│                  ├── PR#2: R2 + W&B ──────────┤│
-│                  │   (#90, #91, #96)           ││
-│                  │              ├── PR#3: Docker + CI ───┤
-│                  │              │   (#88, #93, #89)      │
-│                  │              │              ├── PR#4: Docs ┤
-│                  │              │              │   (#97)      │
-│                                                        milestone
+│                  ├── Phase 2: Storage ─────────┤│
+│                  │   (#90, #91, #93)            ││
+│                  ├── Phase 3: W&B ─────────────┤│
+│                  │   (#128, #96)                ││
+│                  │              ├── Phase 4: CI + Docker ──┤
+│                  │              │   (#88, #89)              │
+│                  │              │              ├── Phase 5 ─┤
+│                  │              │              │   (#97)    │
+│                                                      milestone
 ```
 
-## 9. Alternatives Considered
+## 10. Alternatives Considered
 
 ### Quick rejections
 
@@ -768,7 +1104,7 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 | **R2**              | Datasets (generated shards, train/val/test splits), eval artifacts (audio, predictions, metrics CSVs) | Too large for W&B, cheaper per GB, fast rclone egress, data pipeline already uses R2 |
 | **Local** (`logs/`) | Hydra output dirs, TensorBoard logs, CSV metrics, checkpoints (before W&B upload)                     | Working directory, ephemeral                                                         |
 
-## 10. Open Questions & Risks
+## 11. Open Questions & Risks
 
 | #   | Question / Risk                                                                             | Impact                                              | Status                   |
 | --- | ------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
@@ -779,7 +1115,7 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 | 5   | **Xvfb availability in Docker base image** — may need to install in Dockerfile              | Low risk, well-documented                           | Resolved by Docker stage |
 | 6   | **rclone version skew** — different rclone versions on dev machines vs CI                   | Pin rclone version in Dockerfile and CI workflow    | Open                     |
 
-## 11. Out of Scope
+## 12. Out of Scope
 
 - **Automated hyperparameter sweeps** — eval runs are manually triggered
 - **Multi-GPU distributed eval** — single-GPU is sufficient at current dataset sizes
@@ -788,256 +1124,6 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 - **Custom metric development** — existing 4 metrics are fixed for v1.0.0
 - **Training pipeline changes** — this doc covers eval and R2 only
 - **Data pipeline modifications** — covered by [data pipeline design doc](data-pipeline.md) and #74
-
-## 12. Implementation Plan
-
-### Branch Strategy
-
-```
-main ──●──────────────────●──────────────────●──────────────────●──→
-       │                  │                  │                  │
-       PR#1               PR#2               PR#3               PR#4
-```
-
-| PR                              | Issues              | Contents                                                                                          | Integration test                                                                     |
-| ------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| **#1: Portable Eval**           | #94, #85, #86, #87  | Config cleanup, portable predict/render/metrics, Makefile targets                                 | `make predict`, `make render`, `make metrics` on local fixture                       |
-| **#2: R2 + W&B**                | #90, #91, #96, #128 | rclone wrapper, R2 dataset download, `log_model="all"`, `${wandb:...}` resolver, W&B eval metrics | `make predict` with `data.r2_path=...` auto-downloads; W&B checkpoint download works |
-| **#3: Docker + CI + Artifacts** | #88, #93, #89       | Docker eval, R2 eval artifact upload, E2E CI                                                      | `make docker-eval` runs full pipeline; GH Actions passes                             |
-| **#4: Documentation**           | #97                 | Eval runbook                                                                                      | Follow runbook from scratch                                                          |
-
-### Estimated change size
-
-| Area                     | Already works                       | Actual change                      | Lines |
-| ------------------------ | ----------------------------------- | ---------------------------------- | ----- |
-| Rendering                | Xvfb auto-launch in renderscript.sh | Add macOS `$OSTYPE` conditional    | ~5    |
-| Metrics                  | All 4 metrics working, portable     | Add Makefile target                | ~5    |
-| Data configs             | mnist.yaml uses `${paths.data_dir}` | Change 2 surge configs to match    | ~2    |
-| Predict                  | src/eval.py works, `ckpt_path: ???` | Add Makefile target                | ~10   |
-| W&B resolver             | `register_resolvers()` exists       | Add wandb resolver (~15 lines)     | ~15   |
-| rclone wrapper           | —                                   | New utility `src/data/rclone.py`   | ~40   |
-| `prepare_data()` R2 sync | —                                   | Override in SurgeDataModule        | ~15   |
-| W&B config               | `log_model: true`                   | Change to `"all"`                  | 1     |
-| Makefile targets         | help, test, format, train           | Add predict, render, metrics, etc. | ~40   |
-| Tests                    | conftest.py fixtures exist          | New test files + fixtures          | ~400  |
-
-**Branch:** `dev/eval-pipeline` off `main`
-**Priorities:** TDD first, small commits, always-green CI.
-
-### PR #1: Portable Eval (#94, #85, #86, #87)
-
-#### Phase 1: Remove Hardcoded Paths (#94)
-
-**Goal:** Replace all cluster-specific paths in committed configs with sensible Hydra defaults.
-
-**Files to modify:**
-
-- `configs/data/surge_simple.yaml` — `dataset_root` → `${paths.data_dir}/surge-simple` (matches `mnist.yaml` convention)
-- `configs/data/surge_mini.yaml` — same pattern
-- `configs/data/surge_simple_onehot.yaml` — same (if exists)
-- `.env.example` — R2 credentials and `WANDB_API_KEY` only (no path vars)
-
-**Tests:**
-
-- `test_no_hardcoded_paths_in_configs` — grep committed YAML for `/data/scratch`
-- `test_configs_have_sensible_defaults` — load each data config, verify `dataset_root` is a relative path
-
-**Note:** The 19 SGE scripts in `jobs/predict/` are left as-is (deprecated, not consolidated).
-
-#### Phase 2: Portable Predict (#85)
-
-**Goal:** `make predict` works on local machines with portable Hydra config.
-
-**Files to modify:**
-
-- `src/eval.py` — ensure `mode=predict` works without cluster deps
-- `Makefile` — add `predict` target
-
-**Files to create:**
-
-- `tests/test_eval_predict.py` — fixture-based predict test (`@pytest.mark.slow`)
-
-**Key behaviors:**
-
-- `dataset_root` has a sensible Hydra default; override via CLI when needed
-- `ckpt_path` resolved per [§7.2](#72-checkpoint-resolution) — CLI arg or experiment config, supports `${wandb:...}` resolver
-- `paths.log_dir` keeps the existing default (`${paths.root_dir}/logs/`)
-- Fails fast with clear error if dataset not found
-
-#### Phase 3: Portable Render (#86)
-
-**Goal:** `make render` works on macOS (native display) and Linux (Xvfb auto-detect).
-
-**Files to modify:**
-
-- `renderscript.sh` — add macOS detection, Xvfb auto-launch
-- `scripts/predict_vst_audio.py` — make plugin/preset paths configurable via env
-- `Makefile` — add `render` target
-
-**Files to create:**
-
-- `tests/test_render.py` — test with fixture `.pt` files (`@pytest.mark.slow`)
-
-**Key behaviors:**
-
-- macOS: skip Xvfb, call Python directly
-- Headless Linux: launch Xvfb on `:99`, export `DISPLAY`, clean up on exit
-- Plugin/preset paths default to `plugins/` and `presets/` (overridable)
-
-#### Phase 4: Portable Metrics (#87)
-
-**Goal:** `make metrics` works with pinned dependencies and clean output schema.
-
-**Files to modify:**
-
-- `scripts/compute_audio_metrics.py` — pin dep versions
-- `Makefile` — add `metrics` target
-
-**Files to create:**
-
-- `tests/test_metrics.py` — test with fixture `.wav` files, validate CSV schema
-
-**Key behaviors:**
-
-- Output CSV: per-sample metrics indexed by directory name, aggregated means/stds
-- `ProcessPoolExecutor` parallelism preserved
-- JTFS and f0 code stays as-is — track reactivation as a separate issue (out of scope)
-
-### PR #2: R2 + W&B (#90, #91, #96, #128)
-
-#### Phase 5: rclone Wrapper (#90)
-
-**Goal:** Shared `rclone_sync()` utility with `--checksum` enforcement.
-
-**Files to create:**
-
-- `src/data/rclone.py` — `rclone_sync()`, `rclone_ls()`, `rclone_copyto()`
-- `tests/test_rclone.py` — mock subprocess, verify flags
-
-**Key behaviors:**
-
-- All operations include `--checksum`
-- R2 config from env vars (`RCLONE_CONFIG_R2_*`)
-- Raises `subprocess.CalledProcessError` on failure
-- Dry-run mode for testing (`--dry-run` flag passthrough)
-
-#### Phase 6: R2 Dataset Download (#91)
-
-**Goal:** When `data.r2_path` is explicitly specified, `prepare_data()` syncs from R2.
-
-**Files to modify:**
-
-- `src/data/surge_datamodule.py` — add optional `r2_path` field, call `rclone_sync` in `prepare_data()`
-- Data configs unchanged — `r2_path` is absent by default, specified via CLI or experiment config
-
-**Files to create:**
-
-- `tests/test_r2_dataset_download.py` — mock rclone, verify sync logic
-
-**Key behaviors:**
-
-- No-op if `r2_path` not specified (default — local-only mode)
-- No-op if local data matches (checksum)
-- Sync runs in `prepare_data()` (before `setup()`)
-- Logs download progress via structlog
-- **No default value** — R2 download is always an explicit opt-in
-
-#### Phase 7: W&B Checkpoint Config + Resolver (#128)
-
-**Goal:** Enable crash-resilient checkpoint upload via W&B and lazy resolution via OmegaConf.
-
-**Files to modify:**
-
-- `configs/logger/wandb.yaml` — change `log_model: true` → `log_model: "all"`
-- `src/utils/utils.py` — add `_wandb_resolver` to `register_resolvers()` (~15 lines)
-
-**Files to create:**
-
-- `tests/test_wandb_resolver.py` — mock W&B API, verify download + cache logic
-
-**Key behaviors:**
-
-- `log_model="all"` uploads every saved checkpoint (every 5000 steps + best + last)
-- `${wandb:...}` OmegaConf resolver handles artifact download + cache
-- Cache dir: `$PROJECT_ROOT/.cache/checkpoints/` (gitignored)
-- Zero new modules — resolver lives in existing `register_resolvers()`
-
-#### Phase 8: W&B Metrics Logging (#96)
-
-**Goal:** Optionally log metrics to W&B for cross-run comparison.
-
-**Files to modify:**
-
-- `scripts/compute_audio_metrics.py` — add `--wandb-run` flag
-
-**Files to create:**
-
-- `tests/test_metrics_wandb.py` — mock wandb, verify log calls
-
-### PR #3: Docker + CI + Artifacts (#88, #93, #89)
-
-#### Phase 9: Docker Eval Environment (#88)
-
-**Goal:** `make docker-eval` runs the full pipeline in a container.
-
-**Files to create:**
-
-- `docker/eval/Dockerfile` — multi-stage: base → deps → VST plugin → Xvfb
-- `docker/eval/docker-compose.yaml` — env var passthrough, volume mounts
-- `Makefile` — add `docker-eval`, `docker-eval-build` targets
-
-**Key behaviors:**
-
-- Xvfb baked into image (always headless in Docker)
-- Surge XT plugin installed in image
-- `.env` file mounted for credentials only (R2, W&B)
-- Output directory mounted as volume
-- Paths passed as `docker run` args, not env vars
-
-#### Phase 10: R2 Eval Artifact Upload (#93)
-
-**Goal:** `make upload-eval` pushes predictions + audio + metrics to R2.
-
-**Files to modify:**
-
-- `Makefile` — add `upload-eval` target
-
-**Files to create:**
-
-- `scripts/upload_eval_artifacts.py` — rclone sync wrapper for eval outputs
-- `tests/test_upload_eval.py` — mock rclone, verify R2 paths
-
-#### Phase 11: E2E Eval CI (#89)
-
-**Goal:** GitHub Actions workflow runs predict → render → metrics on a small fixture.
-
-**Files to create:**
-
-- `.github/workflows/eval-ci.yml` — matrix: Ubuntu (Xvfb)
-- `tests/test_eval_e2e.py` — fixture-based integration test (`@pytest.mark.slow`)
-- `tests/fixtures/eval/` — checked-in test fixtures:
-  - `tiny.ckpt` (~1 MB) — checkpoint trained for 2 epochs on a handful of samples
-  - `fixture-shard.h5` (~5 MB) — small HDF5 shard with 10-50 samples (enough for one predict batch)
-  - `audio/sample_0/{pred,target}.wav` (~1 MB) — pre-rendered audio for metrics-only testing without VST plugin
-
-**Key behaviors:**
-
-- Runs on PR (if `src/eval.py`, `scripts/`, or `configs/` changed)
-- Uses checked-in fixtures — no R2 credentials, no network dependency, no secrets in CI
-- Validates: predictions exist, audio renders, metrics CSV has expected schema
-- If fixtures grow past ~10 MB, migrate to Git LFS
-
-### PR #4: Documentation (#97)
-
-#### Phase 12: Eval Runbook (#97)
-
-**Goal:** Document how to run the full eval pipeline locally and in Docker.
-
-**Files to create:**
-
-- `docs/eval-runbook.md` — setup, credentials, make targets, Docker, troubleshooting
-
-______________________________________________________________________
 
 ## Appendix A: Glossary
 
