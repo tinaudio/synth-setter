@@ -107,8 +107,15 @@ ______________________________________________________________________
 | `eval-results` | `{eval_config_id}`    | eval script             | `nsynth-v1`   |
 
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
-- Use aliases for human-readable pointers: `:latest`, `:best`, `:production`
 - The `run_id` is stored in `artifact.metadata`, not the artifact name
+
+**Alias strategy:**
+
+| Alias         | Set by           | When                                                                 |
+| ------------- | ---------------- | -------------------------------------------------------------------- |
+| `:latest`     | W&B (automatic)  | Every `log_artifact` call                                            |
+| `:best`       | Training script  | When val metric improves (`run.log_artifact(art, aliases=["best"])`) |
+| `:production` | Promote workflow | When model is promoted to GitHub Release                             |
 
 ______________________________________________________________________
 
@@ -158,16 +165,46 @@ ______________________________________________________________________
 
 ## 8. GitHub Actions Workflows
 
-| Workflow        | File                 | Trigger              | Runner                          | Secrets             | Key Inputs                      |
-| --------------- | -------------------- | -------------------- | ------------------------------- | ------------------- | ------------------------------- |
-| Tests           | `test.yml`           | push, PR             | `ubuntu-latest`, `macos-latest` | —                   | —                               |
-| Full Tests      | `test-expensive.yml` | push(main), dispatch | `gpu-x64`                       | —                   | —                               |
-| Data Generation | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | config, n_workers               |
-| Training        | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | experiment, overrides           |
-| Evaluation      | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B             | experiment                      |
-| Model Promotion | `promote.yml`        | `workflow_dispatch`  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `run_id`, `registry`, `dry_run` |
+| Workflow        | File                 | Trigger              | Runner                          | Secrets             | Key Inputs                            |
+| --------------- | -------------------- | -------------------- | ------------------------------- | ------------------- | ------------------------------------- |
+| Tests           | `test.yml`           | push, PR             | `ubuntu-latest`, `macos-latest` | —                   | —                                     |
+| Full Tests      | `test-expensive.yml` | push(main), dispatch | `gpu-x64`                       | —                   | —                                     |
+| Data Generation | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | config, n_workers                     |
+| Training        | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | experiment, overrides                 |
+| Evaluation      | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B             | experiment                            |
+| Model Promotion | `promote.yml`        | `workflow_dispatch`  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_run_id`, `registry`, `dry_run` |
 
 - All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
+- Promotion input `train_run_id` is the W&B training run ID (= our `train_run_id`). Promotion pulls the model artifact from this run.
+
+**GitHub Release body schema** (produced by promote workflow):
+
+```
+## Eval Card
+
+| Field       | Value                                  |
+|-------------|----------------------------------------|
+| W&B Run     | link to training run                   |
+| Date        | UTC timestamp                          |
+| Git SHA     | commit that produced the training run  |
+
+### Metrics
+| Metric               | Value  |
+|----------------------|--------|
+| (all wandb.summary keys, excluding _ prefixed) |
+
+### Config
+(full training config as JSON)
+
+### Dataset
+| Type    | Artifact (version) |
+|---------|--------------------|
+| (each input artifact from run.used_artifacts()) |
+```
+
+- Tag format: `model-v{N}` (incrementing integer)
+- Asset: model file (`.pt` / `.onnx`) attached to the release
+- See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md) for implementation.
 
 ______________________________________________________________________
 
