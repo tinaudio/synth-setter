@@ -251,7 +251,8 @@ ______________________________________________________________________
 
 ## 11. Artifact → Storage Mapping
 
-- W&B artifacts reference R2 objects via `artifact.add_reference("s3://synth-data/...")` (R2 is S3-compatible; the R2 endpoint is configured via `RCLONE_CONFIG_R2_ENDPOINT` / AWS SDK endpoint override)
+- W&B artifacts reference R2 objects via `artifact.add_reference("s3://synth-data/...")` (R2 is S3-compatible)
+- Requires `AWS_ENDPOINT_URL` (or `WANDB_S3_ENDPOINT_URL`) set to the R2 endpoint in any environment that calls `add_reference` or downloads reference artifacts. Without this, W&B will attempt to resolve against AWS S3.
 - Artifacts do not duplicate large data files — they contain metadata, manifests, and statistics
 - Bulk data lives in R2; W&B provides the index and lineage graph
 
@@ -264,6 +265,7 @@ ______________________________________________________________________
 3. Every run must record `github_sha` in `wandb.config`.
 4. All configs are frozen into the artifact or R2 storage path at run time.
 5. R2 paths are append-only after completion markers exist.
+6. Runs must not consume data from R2 paths that lack their completion marker.
 
 ______________________________________________________________________
 
