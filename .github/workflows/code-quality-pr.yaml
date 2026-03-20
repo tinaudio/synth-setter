@@ -28,16 +28,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Find modified files
-        id: file_changes
-        uses: trilom/file-changes-action@v1.2.4
+      - name: Find changed files
+        id: changed_files
+        uses: tj-actions/changed-files@v45
         with:
-          output: " "
+          separator: " "
 
-      - name: List modified files
-        run: echo '${{ steps.file_changes.outputs.files}}'
+      - name: List changed files
+        run: echo '${{ steps.changed_files.outputs.all_changed_files }}'
 
       - name: Run pre-commits
         uses: pre-commit/action@v3.0.1
         with:
-          extra_args: --files ${{ steps.file_changes.outputs.files}}
+          extra_args: --files ${{ steps.changed_files.outputs.all_changed_files }}
