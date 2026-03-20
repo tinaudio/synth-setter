@@ -34,7 +34,19 @@ Topline goal: Get massive dataset generation working reliably enough, and know w
 
 **synth-setter** is a collection of tools for synthesizer inversion, sound matching and preset exploration.
 
-Training models for these tasks requires large-scale datasets: 500k–1M+ audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as an HDF5 shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
+Training models for these tasks requires large-scale datasets: 500k–15M audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as an HDF5 shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
+
+### Prior Work
+
+The core generation and training infrastructure was built by benhayes@: the VST rendering engine (`generate_vst_dataset.py`), a comprehensive parameter specification system covering Surge XT's full parameter space (`param_spec.py`, `surge_xt_param_spec.py` — ~1300 lines of sampling, encoding, and semantic representation), plugin loading with audio and mel extraction (`core.py`), HDF5 resharding (`reshard_data.py`), and the PyTorch Lightning DataModule (`surge_datamodule.py`). Beyond the generation code, benhayes@ built an extensive Hydra configuration system — 40+ composable experiment configs across multiple datasets (Surge, k-osc, k-sin, FM, FSD, NSynth), multi-logger support (W&B, TensorBoard, MLflow), Optuna integration for hyperparameter search, and SGE job scripts for QMUL's HPC cluster with proper resource management, array jobs, and W&B checkpoint retrieval. This is a well-structured research codebase with strong configuration practices, and it remains the foundation the distributed pipeline builds on.
+
+On top of this, ktinubu@ added sequential orchestration (`run_dataset_pipeline.py`), cloud storage integration via rclone (`uploader.py`), a containerized execution environment with Docker (`docker_entrypoint.sh`), a first parallelization attempt with per-instance shards (`generate_shards.py`), RunPod scaling (`runpod_launch.py`), and post-generation finalization (`finalize_shards.py`).
+
+At scales up to hundreds of thousands of samples, this pipeline works well. It resumes at the sample level by finding the first empty HDF5 row, tracks basic provenance, and produces correct datasets.
+
+At research scale (500k–15M samples), the single-machine approach breaks down. Generation takes days to weeks. The entire dataset must fit on local disk for both generation and training — at 15M samples this is potentially terabytes, a hard blocker on dataset size with no streaming or remote-access path in the repo. There is no crash resilience: a single failure loses the entire run. There is no per-shard validation, so corrupt data enters training silently. There is no way to regenerate only the failed shards without restarting everything.
+
+### Distributed Pipeline
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
@@ -702,11 +714,17 @@ A worker from a previous `generate` invocation hangs for hours, then finally upl
 
 The pipeline handles three categories of failure, including crashes from data generation code we don't own (the Surge XT VST plugin can SIGSEGV, OOM, or produce corrupt output).
 
-**Layer 1 — Per-shard isolation in Python:**
-Each shard generation is wrapped in try/except. A crash or error in one shard is logged and the worker moves to the next shard. The worker report accumulates per-shard results. This isolates VST plugin crashes, rendering errors, and validation failures.
+**Layer 1 — Per-shard process isolation:**
+Each shard is rendered in a separate OS process using a spawn context (`multiprocessing.get_context("spawn").Process(...)`). This provides crash isolation at the OS level: a SIGSEGV or OOM kill in the VST plugin terminates only that child process — the parent worker catches the non-zero exit code, marks the shard as invalid, quarantines it, and moves to the next shard. The worker report accumulates per-shard results including exit codes for crashed shards.
+
+Per-shard process isolation is necessary because try/except only catches Python exceptions — it cannot intercept SIGSEGV, OOM kills, or other OS-level crashes from the VST plugin (native C++ code). Without process boundaries, a single shard crash would kill the entire worker and all its in-progress shards.
+
+See [§7.8.1](#781-per-shard-process-isolation) for the design decision, trade-offs, and alternatives considered.
 
 **Layer 2 — Entrypoint crash trap:**
-A bash EXIT trap uploads the debug log and a fallback error JSON to R2 if the Python process dies entirely (OOM kill, SIGSEGV, import error). The debug log captures everything up to the crash. Even if no worker report is written, the log survives.
+A bash EXIT trap uploads the debug log and a fallback error JSON to R2 if the Python worker process itself dies entirely (import error, uncaught exception that escapes Layer 1). The debug log captures everything up to the crash. Even if no worker report is written, the log survives. Note: Layer 1 process isolation handles most crash scenarios (SIGSEGV, OOM per shard). Layer 2 catches failures of the worker process itself.
+
+**Limitation:** EXIT traps do not fire on SIGKILL (`kill -9`), which is how the Linux OOM-killer terminates processes. If the OOM-killer targets the worker process itself (the parent that spawns per-shard children), no logs are uploaded — the bash EXIT trap never runs. Per-shard child crashes (Layer 1) are unaffected since the parent catches their exit codes normally. Mitigation: (1) the entrypoint uses SIGTERM with a grace period before escalating to SIGKILL for timeouts, (2) Layer 3 reconciliation detects the missing shards regardless, and (3) RunPod pod logs provide a fallback audit trail for OOM events.
 
 **Layer 3 — Reconciliation fills gaps:**
 Regardless of how a shard was lost (crash, timeout, upload failure, corrupt output), reconciliation detects it as missing. The next `generate` invocation launches workers for exactly the missing shards. No manual investigation of failure modes is required to resume.
@@ -719,6 +737,81 @@ Each worker invocation produces three artifacts, all with unique filenames keyed
 - **Debug log** (`workers/attempts/{worker_id}-{attempt}/debug.log`, JSONL) — append-only narrative, uploaded by EXIT trap, survives crashes
 
 All worker artifacts live under `metadata/workers/`. Unique filenames per attempt mean retries never overwrite previous artifacts. Missing worker metadata never blocks completion. A run is successful when all staged shard files exist and validate.
+
+#### 7.8.1 Per-Shard Process Isolation
+
+**Problem:** The VST plugin (Surge XT) is native C++ code loaded into the Python process. It can SIGSEGV, OOM, or corrupt global state — failures that Python's try/except cannot catch. Without process boundaries, a single shard crash kills the entire worker and all its in-progress shards.
+
+**Decision:** Each shard renders in a separate OS process via a spawn context (`ctx = multiprocessing.get_context("spawn"); ctx.Process(...)`).
+
+```python
+import multiprocessing
+import random
+
+_spawn_ctx = multiprocessing.get_context("spawn")
+
+def _render_shard(shard_spec, shard_path):
+    """Runs in a child process — SIGSEGV here won't kill the parent.
+
+    Under spawn, the child is a fresh Python interpreter with no inherited state.
+    The import happens here, in the child, so the VST plugin loads cleanly.
+    """
+    import numpy as np
+    from pipeline.vst import make_dataset
+    # P3 (post-launch): seed both RNGs for reproducibility — see #100
+    # random.seed(shard_spec.seed)
+    # np.random.seed(shard_spec.seed)
+    make_dataset(shard_path, shard_spec)
+
+# In the parent worker:
+p = _spawn_ctx.Process(
+    target=_render_shard,
+    args=(shard_spec, local_path),
+)
+p.start()
+p.join(timeout=SHARD_TIMEOUT)
+
+if p.exitcode == 0:
+    # validate, upload, write .valid
+    ...
+elif p.exitcode is None:
+    # timed out
+    p.kill()
+    p.join()
+else:
+    # crashed: SIGSEGV = -11, OOM kill = -9
+    # write .invalid, quarantine
+    ...
+```
+
+**Why `spawn` and not `fork`:** The `fork` start method copies the parent's memory via copy-on-write. If the parent has loaded a VST plugin, the child inherits that plugin's global mutable state (internal buffers, audio engine state). VST plugins are not designed for this — shared mutable state across forked processes leads to undefined behavior. `spawn` starts a fresh Python interpreter with no inherited state: each child loads the plugin from scratch, with clean globals and its own memory space. This eliminates shared-state corruption between concurrent shard renders.
+
+**Why not direct function call (`make_dataset()` in-process):** A direct call is simpler and avoids per-shard process overhead, but a SIGSEGV in the plugin kills the entire worker process. Per-shard try/except cannot catch OS-level signals. The bash EXIT trap (Layer 2) would upload logs, and reconciliation (Layer 3) would detect the missing shards — but all in-progress shards on that worker are lost, not just the crashing one. For a 48-shard worker, losing all shards to one bad shard is unacceptable.
+
+**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also makes testing harder — you'd need to mock the subprocess, which couples tests to CLI argument construction. With `multiprocessing.Process`, the child imports `make_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
+
+**P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/ktinubu/synth-permutations/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). The seeding lines in `_render_shard` above are commented out until this is implemented. Post-launch, uncomment and seed both RNGs from `shard_spec.seed`:
+
+```python
+import numpy as np
+random.seed(shard_spec.seed)
+np.random.seed(shard_spec.seed)
+```
+
+Without dual seeding, parameters sampled via `np.random.choice` / `np.random.uniform` / `np.random.randint` in `param_spec.py` still use OS entropy. Required for debugging and exact dataset recreation, but not for generating a correct dataset.
+
+**Trade-off summary:**
+
+| Approach                    | Crash isolation             | Seed passing             | Per-shard timeout   | Plugin state                       | Testability                        |
+| --------------------------- | --------------------------- | ------------------------ | ------------------- | ---------------------------------- | ---------------------------------- |
+| Direct function call        | None (SIGSEGV kills worker) | `random.seed()`          | Manual timer        | Shared (unsafe if mutable)         | Inject fake `generate_fn`          |
+| `multiprocessing` fork      | OS process boundary         | Python arg               | `join(timeout)`     | Inherited via COW (unsafe for VST) | Inject fake `generate_fn`          |
+| **`multiprocessing` spawn** | **OS process boundary**     | **Python arg**           | **`join(timeout)`** | **Fresh load (clean)**             | **LocalBackend in-process inject** |
+| `subprocess.run`            | OS process boundary         | Needs `--seed` CLI param | `timeout=` kwarg    | Fresh load (clean)                 | Must mock subprocess               |
+
+**Cost:** Per-shard process startup (~0.5-1s) plus fresh plugin load (~1-3s for Surge XT). Shard renders take minutes, so this is negligible — roughly 1-3% overhead.
+
+**Edge case — filesystem contention:** `spawn` eliminates shared memory state, but concurrent child processes could contend on shared filesystem resources if the VST plugin writes to global paths (lock files, temp directories, `~/.local` config). The `Xvfb` wrapper (`run-linux-vst-headless.sh`) should use per-process display numbers (`:N` where N is derived from the child's PID or shard ID) to avoid X11 socket contention. If Surge XT writes to other shared paths during headless rendering, those paths should be isolated per-child via environment variables or temp directories.
 
 ### 7.9 Compute Abstraction
 
@@ -734,7 +827,7 @@ class ComputeBackend(Protocol):
 **Two implementations:**
 
 - **RunPodBackend**: Production. Wraps the `runpod` Python SDK. Maps tasks to workers (RunPod calls these "pods").
-- **LocalBackend**: Development and testing. Launches Docker containers locally. Uses local filesystem as the "R2" equivalent — same directory structure, same spec format, same validation logic.
+- **LocalBackend**: Development and testing. Runs the worker loop in-process (no Docker, no spawn) with a local filesystem as the "R2" equivalent — same directory structure, same spec format, same validation logic. Accepts an optional `generate_fn` callable for test injection. Docker container fidelity is validated separately via `test_local_docker.sh`.
 
 No `check_tasks` method exists. Provider APIs answer the wrong question ("is the worker running?") when the right question is "are the shards done?" Storage answers that definitively.
 
@@ -1085,6 +1178,7 @@ class ShardSpec(BaseModel):
     row_count: int
     expected_datasets: list[str]  # ["audio", "mel_spec", "param_array"]
     audio_shape: tuple[int, int]
+    mel_shape: tuple[int, int]    # per-row shape of mel_spec dataset: (mels, frames)
     param_shape: tuple[int, int]
 
 class PipelineSpec(BaseModel):
@@ -1329,19 +1423,16 @@ configs/
 
 ## Appendix D: Implementation Roadmap
 
-Full staged implementation plan: [greedy-tickling-harbor.md](greedy-tickling-harbor.md)
+Full implementation plan: [data-pipeline-implementation-plan.md](data-pipeline-implementation-plan.md) · Epic: [#74](https://github.com/ktinubu/synth-permutations/issues/74)
 
-| Stage | Scope                                    | Dependencies |
-| ----- | ---------------------------------------- | ------------ |
-| 0     | Mutation testing + presubmit             | None         |
-| 1     | Constants module + naming overhaul       | Stage 0      |
-| 2     | Auth checks                              | Stage 1      |
-| 3     | Structured logging + worker reports      | Stage 1      |
-| 4     | R2 operations + shard validation         | Stage 1      |
-| 5     | Reconciliation-based generate + finalize | Stages 1-4   |
-| 6     | End-to-end integration test              | Stage 5      |
-| 7     | Credential management (Docker)           | Stage 5      |
-| 8     | ComputeBackend protocol + LocalBackend   | Stage 5      |
+| Phase | Scope                                        | Steps   | GitHub issue |
+| ----- | -------------------------------------------- | ------- | ------------ |
+| 1     | Foundation — deps, shared code, CI           | 1.1–1.5 | #68          |
+| 2     | Pipeline Core — schemas, storage, validation | 2.1–2.3 | #69          |
+| 3     | Docker — Dockerfile, entrypoint, headless    | 3.1     | #70          |
+| 4     | Pipeline Engine — reconciliation, compute    | 4.1–4.2 | #71          |
+| 5     | Pipeline CLI — generate, status, finalize    | 5.1–5.3 | #72          |
+| 6     | Production — RunPod backend, E2E             | 6.1     | #73          |
 
 ## Appendix E: Implementation Recipes
 
