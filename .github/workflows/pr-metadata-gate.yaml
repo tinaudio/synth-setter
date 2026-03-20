@@ -66,4 +66,127 @@ jobs:
           fi
 
           echo "✓ Linked issue found"
+
+          # --- Collect linked issue numbers ---
+          # Extract unique issue numbers from timeline connected events and PR body refs
+          ISSUE_NUMBERS=()
+
+          # From timeline: get issue numbers for currently-connected issues
+          TIMELINE_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" \
+            --paginate --jq '[.[] | select(.event == "connected") | .source.issue.number // empty] | unique | .[]') || true
+          for num in $TIMELINE_ISSUES; do
+            ISSUE_NUMBERS+=("$num")
+          done
+
+          # From PR body: extract #N references (exclude the PR's own number)
+          BODY_ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' | sort -un) || true
+          for num in $BODY_ISSUE_NUMS; do
+            if [ "$num" != "$PR_NUMBER" ]; then
+              ISSUE_NUMBERS+=("$num")
+            fi
+          done
+
+          # Deduplicate
+          ISSUE_NUMBERS=($(printf '%s\n' "${ISSUE_NUMBERS[@]}" | sort -un))
+
+          if [ "${#ISSUE_NUMBERS[@]}" -eq 0 ]; then
+            echo "::warning::Could not extract specific issue numbers to validate taxonomy metadata."
+            echo "All PR metadata checks passed (linked issue present, taxonomy skipped)."
+            exit 0
+          fi
+
+          echo "::group::Checking taxonomy metadata on linked issues"
+
+          VALID_TYPES=("Epic" "Phase" "Task" "Bug" "Feature")
+          DOMAIN_LABELS=("data-pipeline" "ci-automation" "code-health" "evaluation" "storage" "testing" "training")
+          FAILURES=""
+
+          for ISSUE_NUM in "${ISSUE_NUMBERS[@]}"; do
+            echo "--- Checking issue #${ISSUE_NUM} ---"
+            MISSING=""
+
+            # Check issue type via GraphQL (issue types are only available in GraphQL)
+            ISSUE_TYPE=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $number) {
+                    issueType { name }
+                  }
+                }
+              }
+            ' -f owner="${REPO%/*}" -f repo="${REPO#*/}" -F number="$ISSUE_NUM" \
+              --jq '.data.repository.issue.issueType.name // ""') || {
+              echo "::warning::Failed to query issue type for #${ISSUE_NUM} via GraphQL, skipping type check"
+              ISSUE_TYPE=""
+            }
+
+            if [ -n "$ISSUE_TYPE" ]; then
+              TYPE_VALID=false
+              for vt in "${VALID_TYPES[@]}"; do
+                if [ "$ISSUE_TYPE" = "$vt" ]; then
+                  TYPE_VALID=true
+                  break
+                fi
+              done
+              if [ "$TYPE_VALID" = true ]; then
+                echo "  ✓ Issue type: ${ISSUE_TYPE}"
+              else
+                MISSING="${MISSING}  - Issue type '${ISSUE_TYPE}' is not one of: ${VALID_TYPES[*]}\n"
+              fi
+            else
+              MISSING="${MISSING}  - No issue type set (must be one of: ${VALID_TYPES[*]})\n"
+            fi
+
+            # Check labels and milestone via REST
+            ISSUE_JSON=$(gh api "repos/${REPO}/issues/${ISSUE_NUM}" \
+              --jq '{labels: [.labels[].name], milestone: .milestone.title}') || {
+              echo "::warning::Failed to fetch issue #${ISSUE_NUM} via REST, skipping label/milestone check"
+              continue
+            }
+
+            LABELS=$(echo "$ISSUE_JSON" | jq -r '.labels[]' 2>/dev/null) || LABELS=""
+            MILESTONE=$(echo "$ISSUE_JSON" | jq -r '.milestone // ""' 2>/dev/null) || MILESTONE=""
+
+            # Check for at least one domain label
+            HAS_DOMAIN=false
+            for label in $LABELS; do
+              for domain in "${DOMAIN_LABELS[@]}"; do
+                if [ "$label" = "$domain" ]; then
+                  HAS_DOMAIN=true
+                  echo "  ✓ Domain label: ${label}"
+                  break 2
+                fi
+              done
+            done
+            if [ "$HAS_DOMAIN" = false ]; then
+              MISSING="${MISSING}  - No domain label (must have one of: ${DOMAIN_LABELS[*]})\n"
+            fi
+
+            # Check milestone
+            if [ -n "$MILESTONE" ] && [ "$MILESTONE" != "null" ]; then
+              echo "  ✓ Milestone: ${MILESTONE}"
+            else
+              MISSING="${MISSING}  - No milestone assigned\n"
+            fi
+
+            if [ -n "$MISSING" ]; then
+              FAILURES="${FAILURES}Issue #${ISSUE_NUM} is missing required taxonomy metadata:\n${MISSING}\n"
+            fi
+          done
+
+          echo "::endgroup::"
+
+          if [ -n "$FAILURES" ]; then
+            echo ""
+            echo "========================================="
+            echo "TAXONOMY METADATA FAILURES"
+            echo "========================================="
+            printf "$FAILURES"
+            echo "========================================="
+            echo ""
+            echo "::error::Linked issues are missing required taxonomy metadata. See above for details."
+            exit 1
+          fi
+
+          echo "✓ All linked issues have required taxonomy metadata"
           echo "All PR metadata checks passed."
