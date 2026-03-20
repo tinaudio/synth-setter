@@ -2,7 +2,8 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-03-15
+> **Last Updated**: 2026-03-20
+> **Tracking**: [#74](https://github.com/tinaudio/synth-setter/issues/74)
 
 ______________________________________________________________________
 
@@ -790,7 +791,7 @@ else:
 
 **Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also makes testing harder — you'd need to mock the subprocess, which couples tests to CLI argument construction. With `multiprocessing.Process`, the child imports `make_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
 
-**P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/ktinubu/synth-permutations/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). The seeding lines in `_render_shard` above are commented out until this is implemented. Post-launch, uncomment and seed both RNGs from `shard_spec.seed`:
+**P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/tinaudio/synth-setter/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). The seeding lines in `_render_shard` above are commented out until this is implemented. Post-launch, uncomment and seed both RNGs from `shard_spec.seed`:
 
 ```python
 import numpy as np
@@ -1423,9 +1424,9 @@ configs/
 
 ## Appendix D: Implementation Roadmap
 
-Full implementation plan: [data-pipeline-implementation-plan.md](data-pipeline-implementation-plan.md) · Epic: [#74](https://github.com/ktinubu/synth-permutations/issues/74)
+Full implementation plan: [data-pipeline-implementation-plan.md](data-pipeline-implementation-plan.md) · Epic: [#74](https://github.com/tinaudio/synth-setter/issues/74)
 
-| Phase | Scope                                        | Steps   | GitHub issue |
+| Phase | Scope                                        | Tasks   | GitHub issue |
 | ----- | -------------------------------------------- | ------- | ------------ |
 | 1     | Foundation — deps, shared code, CI           | 1.1–1.5 | #68          |
 | 2     | Pipeline Core — schemas, storage, validation | 2.1–2.3 | #69          |

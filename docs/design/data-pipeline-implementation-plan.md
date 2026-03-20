@@ -1,29 +1,30 @@
 # Implementation Plan: Distributed Data Pipeline
 
 > **Canonical design:** [data-pipeline.md](data-pipeline.md)
-> **Epic:** [#74](https://github.com/ktinubu/synth-permutations/issues/74)
+> **Tracking:** [#74](https://github.com/tinaudio/synth-setter/issues/74)
+> **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
 > **Builds on:** Generation infrastructure by benhayes@ (see design doc §1)
-> **Last updated:** 2026-03-19
+> **Last Updated:** 2026-03-20
 
 ______________________________________________________________________
 
 ### Index
 
-| §   | Section                                                       | GitHub issue               |
-| --- | ------------------------------------------------------------- | -------------------------- |
-| 1   | [Priorities & Conventions](#1-priorities--conventions)        | —                          |
-| 2   | [Merge Path](#2-merge-path)                                   | #74                        |
-| 3   | [Codebase Inventory](#3-codebase-inventory)                   | —                          |
-| 4   | [Pipeline Config Schema](#4-pipeline-config-schema)           | —                          |
-| 5   | [Phase 1 — Foundation](#5-phase-1--foundation-68)             | #68                        |
-| 6   | [Phase 2 — Pipeline Core](#6-phase-2--pipeline-core-69)       | #69                        |
-| 7   | [Phase 3 — Docker](#7-phase-3--docker-infrastructure-70)      | #70                        |
-| 8   | [Phase 4 — Pipeline Engine](#8-phase-4--pipeline-engine-71)   | #71                        |
-| 9   | [Phase 5 — Pipeline CLI](#9-phase-5--pipeline-cli-72)         | #72                        |
-| 10  | [Phase 6 — Production & E2E](#10-phase-6--production--e2e-73) | #73                        |
-| 11  | [Cross-cutting work](#11-cross-cutting-work)                  | #76, #77, #120, #121, #122 |
-| 12  | [Verification Strategy](#12-verification-strategy)            | —                          |
-| 13  | [Assumptions](#13-assumptions)                                | —                          |
+| §   | Section                                                               | GitHub issue               |
+| --- | --------------------------------------------------------------------- | -------------------------- |
+| 1   | [Priorities & Conventions](#1-priorities--conventions)                | —                          |
+| 2   | [Merge Path](#2-merge-path)                                           | #74                        |
+| 3   | [Codebase Inventory](#3-codebase-inventory)                           | —                          |
+| 4   | [Pipeline Config Schema](#4-pipeline-config-schema)                   | —                          |
+| 5   | [Phase 1: Foundation](#5-phase-1-foundation-68)                       | #68                        |
+| 6   | [Phase 2: Pipeline Core](#6-phase-2-pipeline-core-69)                 | #69                        |
+| 7   | [Phase 3: Docker Infrastructure](#7-phase-3-docker-infrastructure-70) | #70                        |
+| 8   | [Phase 4: Pipeline Engine](#8-phase-4-pipeline-engine-71)             | #71                        |
+| 9   | [Phase 5: Pipeline CLI](#9-phase-5-pipeline-cli-72)                   | #72                        |
+| 10  | [Phase 6: Production & E2E](#10-phase-6-production--e2e-73)           | #73                        |
+| 11  | [Cross-cutting work](#11-cross-cutting-work)                          | #76, #77, #120, #121, #122 |
+| 12  | [Verification Strategy](#12-verification-strategy)                    | —                          |
+| 13  | [Assumptions](#13-assumptions)                                        | —                          |
 
 ______________________________________________________________________
 
@@ -31,9 +32,9 @@ ______________________________________________________________________
 
 **Priorities (in order):**
 
-1. Implementation steps (2.1–2.3, 4.1–6.1) have integration + unit tests, written before implementation (TDD)
-2. Infrastructure steps (1.1–1.5, 3.1) are verified via CI green / Docker builds — not test-first TDD
-3. Small PRs (one step = one PR)
+1. Implementation tasks (2.1–2.3, 4.1–6.1) have integration + unit tests, written before implementation (TDD)
+2. Infrastructure tasks (1.1–1.5, 3.1) are verified via CI green / Docker builds — not test-first TDD
+3. Small PRs (one task = one PR)
 4. Always-working pipeline — CI validates every PR
 
 - `pipeline/` at project root (not `src/`) — invoked via `python -m pipeline`
@@ -50,16 +51,16 @@ main ──●──────────●───────────
       #68        #69          #70        #71        #72        #73
 ```
 
-| Phase                             | Steps   | Contents                                 | CI gate                         |
-| --------------------------------- | ------- | ---------------------------------------- | ------------------------------- |
-| **Phase 1: Foundation** #68       | 1.1–1.5 | Deps, uploader, design doc, CI setup     | `pytest` passes, ruff clean     |
-| **Phase 2: Pipeline Core** #69    | 2.1–2.3 | Schemas, storage, validation             | `pytest tests/pipeline/` passes |
-| **Phase 3: Docker** #70           | 3.1     | Dockerfile, entrypoint, headless, Make   | Docker build succeeds, BATS     |
-| **Phase 4: Pipeline Engine** #71  | 4.1–4.2 | Reconciliation, compute backend + worker | `pytest tests/pipeline/` passes |
-| **Phase 5: Pipeline CLI** #72     | 5.1–5.3 | Generate, status, finalize commands      | Full integration tests pass     |
-| **Phase 6: Production + E2E** #73 | 6.1     | RunPod backend, Docker updates, E2E      | E2E test + adhoc Docker test    |
+| Phase                                  | Tasks   | Contents                                 | CI gate                         |
+| -------------------------------------- | ------- | ---------------------------------------- | ------------------------------- |
+| **Phase 1: Foundation** #68            | 1.1–1.5 | Deps, uploader, design doc, CI setup     | `pytest` passes, ruff clean     |
+| **Phase 2: Pipeline Core** #69         | 2.1–2.3 | Schemas, storage, validation             | `pytest tests/pipeline/` passes |
+| **Phase 3: Docker Infrastructure** #70 | 3.1     | Dockerfile, entrypoint, headless, Make   | Docker build succeeds, BATS     |
+| **Phase 4: Pipeline Engine** #71       | 4.1–4.2 | Reconciliation, compute backend + worker | `pytest tests/pipeline/` passes |
+| **Phase 5: Pipeline CLI** #72          | 5.1–5.3 | Generate, status, finalize commands      | Full integration tests pass     |
+| **Phase 6: Production & E2E** #73      | 6.1     | RunPod backend, Docker updates, E2E      | E2E test + adhoc Docker test    |
 
-**6 phases, 15 steps (one PR per step)**
+**6 phases, 15 tasks (one PR per task)**
 
 ______________________________________________________________________
 
@@ -131,9 +132,9 @@ transcoding step.
 
 ______________________________________________________________________
 
-## 5. Phase 1 — Foundation ([#68](https://github.com/ktinubu/synth-permutations/issues/68))
+## 5. Phase 1: Foundation ([#68](https://github.com/tinaudio/synth-setter/issues/68))
 
-### Step 1.1: Dependencies & Tooling ([#78](https://github.com/ktinubu/synth-permutations/issues/78)) ✅
+### Task 1.1: Dependencies & Tooling ([#78](https://github.com/tinaudio/synth-setter/issues/78)) ✅ — Completed in PR [#75](https://github.com/tinaudio/synth-setter/pull/75)
 
 **Goal:** Port build dependencies and code quality tooling from `experiment`.
 
@@ -145,21 +146,19 @@ ______________________________________________________________________
 - `pyproject.toml` — added `pipeline` pytest marker
 - `checkmake.ini` (new)
 
-**Completed in PR [#75](https://github.com/ktinubu/synth-permutations/pull/75).**
-
 **Verification:** `pip install -r requirements.txt && ruff check . && pytest tests/ -x`
 
 **Design notes:**
 
 - `hdf5plugin` included in deps — required at read time for Blosc2-compressed virtual
-  datasets (B6). Step 5.3 finalize and all HDF5 tests must `import hdf5plugin`.
+  datasets (B6). Task 5.3 finalize and all HDF5 tests must `import hdf5plugin`.
 - `pydantic`, `structlog`, `tenacity`, `click`, `pyyaml`, `webdataset` added beyond what
   `experiment` has (R13).
 - `mutmut` added to dev dependencies — required for verification strategy (§12).
 
 ______________________________________________________________________
 
-### Step 1.2: Core Shared Code ([#79](https://github.com/ktinubu/synth-permutations/issues/79))
+### Task 1.2: Core Shared Code ([#79](https://github.com/tinaudio/synth-setter/issues/79))
 
 **Goal:** Port `uploader.py` and minor fixes that the pipeline depends on.
 
@@ -178,16 +177,16 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-### Step 1.3: Design Doc & Config ([#80](https://github.com/ktinubu/synth-permutations/issues/80))
+### Task 1.3: Design Doc & Config ([#80](https://github.com/tinaudio/synth-setter/issues/80))
 
 **Goal:** Ensure design doc and environment config are on `main`.
 
 - `docs/design/data-pipeline.md` — ✅ already on main
-- `.env.example` — moved to standalone issue [#82](https://github.com/ktinubu/synth-permutations/issues/82)
+- `.env.example` — moved to standalone issue [#82](https://github.com/tinaudio/synth-setter/issues/82)
 
 ______________________________________________________________________
 
-### Step 1.4: CI Setup ([#81](https://github.com/ktinubu/synth-permutations/issues/81))
+### Task 1.4: CI Setup ([#81](https://github.com/tinaudio/synth-setter/issues/81))
 
 **Goal:** Ensure every subsequent PR is validated by CI.
 
@@ -206,7 +205,7 @@ ______________________________________________________________________
 
 **Verification:** Push to dev branch → CI runs → green
 
-### Step 1.5: .env.example ([#82](https://github.com/ktinubu/synth-permutations/issues/82))
+### Task 1.5: .env.example ([#82](https://github.com/tinaudio/synth-setter/issues/82))
 
 **Goal:** Add `.env.example` with R2, W&B, RunPod env var template so new contributors
 know which credentials are needed without exposing real values.
@@ -220,11 +219,11 @@ know which credentials are needed without exposing real values.
 
 ______________________________________________________________________
 
-## 6. Phase 2 — Pipeline Core ([#69](https://github.com/ktinubu/synth-permutations/issues/69))
+## 6. Phase 2: Pipeline Core ([#69](https://github.com/tinaudio/synth-setter/issues/69))
 
-Sub-issues: [#18](https://github.com/ktinubu/synth-permutations/issues/18) (config-driven runs), [#20](https://github.com/ktinubu/synth-permutations/issues/20) (schema versioning), [#22](https://github.com/ktinubu/synth-permutations/issues/22) (deterministic shard assignment)
+Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-driven runs), [#20](https://github.com/tinaudio/synth-setter/issues/20) (schema versioning), [#22](https://github.com/tinaudio/synth-setter/issues/22) (deterministic shard assignment)
 
-### Step 2.1: Pydantic Schemas ([#18](https://github.com/ktinubu/synth-permutations/issues/18), [#20](https://github.com/ktinubu/synth-permutations/issues/20), [#22](https://github.com/ktinubu/synth-permutations/issues/22))
+### Task 2.1: Pydantic Schemas ([#18](https://github.com/tinaudio/synth-setter/issues/18), [#20](https://github.com/tinaudio/synth-setter/issues/20), [#22](https://github.com/tinaudio/synth-setter/issues/22))
 
 **Goal:** Define the data models that everything else depends on.
 
@@ -266,7 +265,7 @@ Sub-issues: [#18](https://github.com/ktinubu/synth-permutations/issues/18) (conf
 - `materialize_spec(config: RunConfig, timestamp=None, renderer_version=None) -> PipelineSpec`.
   Optional `renderer_version` override for testing; test fixtures pass `"test-1.0"` explicitly.
 
-**Design doc schema gaps to fix alongside this step:**
+**Design doc schema gaps to fix alongside this task:**
 
 - `ValidationSummary` class not defined in design doc (referenced in `DatasetCard` §14.2)
 - `base_seed` not in `PipelineSpec` schema §14.1 (referenced in text)
@@ -310,7 +309,7 @@ def test_spec_materialization_end_to_end(tmp_path):
 
 ______________________________________________________________________
 
-### Step 2.2: Storage Layer ([#102](https://github.com/ktinubu/synth-permutations/issues/102))
+### Task 2.2: Storage Layer ([#102](https://github.com/tinaudio/synth-setter/issues/102))
 
 **Goal:** Abstract R2/local filesystem with design doc's path layout. Wraps `src/data/uploader.py`.
 
@@ -367,7 +366,7 @@ def test_storage_shard_lifecycle(tmp_path):
 
 ______________________________________________________________________
 
-### Step 2.3: Shard Validation ([#103](https://github.com/ktinubu/synth-permutations/issues/103))
+### Task 2.3: Shard Validation ([#103](https://github.com/tinaudio/synth-setter/issues/103))
 
 **Goal:** 3-tier validation from design doc §7.5.
 
@@ -424,11 +423,11 @@ def test_tiered_validation_catches_correct_failures(tmp_path):
 
 ______________________________________________________________________
 
-## 7. Phase 3 — Docker Infrastructure ([#70](https://github.com/ktinubu/synth-permutations/issues/70))
+## 7. Phase 3: Docker Infrastructure ([#70](https://github.com/tinaudio/synth-setter/issues/70))
 
-Sub-issue: [#7](https://github.com/ktinubu/synth-permutations/issues/7) (buildx TARGET_ARCH)
+Sub-issue: [#7](https://github.com/tinaudio/synth-setter/issues/7) (buildx TARGET_ARCH)
 
-### Step 3.1: Docker Infrastructure ([#70](https://github.com/ktinubu/synth-permutations/issues/70), [#7](https://github.com/ktinubu/synth-permutations/issues/7))
+### Task 3.1: Docker Infrastructure ([#70](https://github.com/tinaudio/synth-setter/issues/70), [#7](https://github.com/tinaudio/synth-setter/issues/7))
 
 **Goal:** Port Docker build system from `experiment`. Needed for worker containers.
 
@@ -446,11 +445,11 @@ Sub-issue: [#7](https://github.com/ktinubu/synth-permutations/issues/7) (buildx 
 
 ______________________________________________________________________
 
-## 8. Phase 4 — Pipeline Engine ([#71](https://github.com/ktinubu/synth-permutations/issues/71))
+## 8. Phase 4: Pipeline Engine ([#71](https://github.com/tinaudio/synth-setter/issues/71))
 
-Sub-issues: [#3](https://github.com/ktinubu/synth-permutations/issues/3) (vst/core.py throughput), [#23](https://github.com/ktinubu/synth-permutations/issues/23) (VST generation throughput)
+Sub-issues: [#3](https://github.com/tinaudio/synth-setter/issues/3) (vst/core.py throughput), [#23](https://github.com/tinaudio/synth-setter/issues/23) (VST generation throughput)
 
-### Step 4.1: Reconciliation Engine ([#104](https://github.com/ktinubu/synth-permutations/issues/104))
+### Task 4.1: Reconciliation Engine ([#104](https://github.com/tinaudio/synth-setter/issues/104))
 
 **Goal:** Compare spec against storage state to determine remaining work.
 
@@ -495,7 +494,7 @@ def test_reconciliation_mixed_state(tmp_path):
 
 ______________________________________________________________________
 
-### Step 4.2: ComputeBackend + Worker ([#105](https://github.com/ktinubu/synth-permutations/issues/105))
+### Task 4.2: ComputeBackend + Worker ([#105](https://github.com/tinaudio/synth-setter/issues/105))
 
 **Goal:** Compute abstraction + worker-side shard generation with lifecycle markers.
 
@@ -589,11 +588,11 @@ def test_local_backend_generates_shards_with_lifecycle(tmp_path):
 
 ______________________________________________________________________
 
-## 9. Phase 5 — Pipeline CLI ([#72](https://github.com/ktinubu/synth-permutations/issues/72))
+## 9. Phase 5: Pipeline CLI ([#72](https://github.com/tinaudio/synth-setter/issues/72))
 
-Sub-issues: [#17](https://github.com/ktinubu/synth-permutations/issues/17) (modular CLI), [#19](https://github.com/ktinubu/synth-permutations/issues/19) (WebDataset output), [#21](https://github.com/ktinubu/synth-permutations/issues/21) (reconciliation status)
+Sub-issues: [#17](https://github.com/tinaudio/synth-setter/issues/17) (modular CLI), [#19](https://github.com/tinaudio/synth-setter/issues/19) (WebDataset output), [#21](https://github.com/tinaudio/synth-setter/issues/21) (reconciliation status)
 
-### Step 5.1: CLI — `generate` ([#17](https://github.com/ktinubu/synth-permutations/issues/17))
+### Task 5.1: CLI — `generate` ([#17](https://github.com/tinaudio/synth-setter/issues/17))
 
 **Goal:** Unified CLI entry point via `python -m pipeline` (via `__main__.py` importing
 Click group from `cli.py`).
@@ -651,7 +650,7 @@ def test_generate_cli_end_to_end(tmp_path):
 
 ______________________________________________________________________
 
-### Step 5.2: CLI — `status` ([#21](https://github.com/ktinubu/synth-permutations/issues/21))
+### Task 5.2: CLI — `status` ([#21](https://github.com/tinaudio/synth-setter/issues/21))
 
 **Goal:** Read-only reconciliation report.
 
@@ -686,7 +685,7 @@ def test_status_after_partial_generate(tmp_path):
 
 ______________________________________________________________________
 
-### Step 5.3: CLI — `finalize` ([#19](https://github.com/ktinubu/synth-permutations/issues/19))
+### Task 5.3: CLI — `finalize` ([#19](https://github.com/tinaudio/synth-setter/issues/19))
 
 **Goal:** Validate staged → promote → download → stats → training outputs → dataset card.
 
@@ -774,9 +773,9 @@ def test_finalize_wds_output_format(tmp_path):
 
 ______________________________________________________________________
 
-## 10. Phase 6 — Production & E2E ([#73](https://github.com/ktinubu/synth-permutations/issues/73))
+## 10. Phase 6: Production & E2E ([#73](https://github.com/tinaudio/synth-setter/issues/73))
 
-### Step 6.1: RunPodBackend + Docker Updates + E2E ([#106](https://github.com/ktinubu/synth-permutations/issues/106))
+### Task 6.1: RunPodBackend + Docker Updates + E2E ([#106](https://github.com/tinaudio/synth-setter/issues/106))
 
 **Goal:** Production backend, Docker integration, full E2E.
 
@@ -842,7 +841,7 @@ ______________________________________________________________________
 
 ## 11. Cross-cutting Work
 
-### Design Doc Invariant Tests ([#76](https://github.com/ktinubu/synth-permutations/issues/76))
+### Design Doc Invariant Tests ([#76](https://github.com/tinaudio/synth-setter/issues/76))
 
 Test scenarios from design doc §7 and §11.2 that span multiple PRs:
 
@@ -853,7 +852,7 @@ Test scenarios from design doc §7 and §11.2 that span multiple PRs:
 
 These tests are written incrementally as each PR lands.
 
-### Worker Hard Timeout & RunPod Auto-stop ([#77](https://github.com/ktinubu/synth-permutations/issues/77))
+### Worker Hard Timeout & RunPod Auto-stop ([#77](https://github.com/tinaudio/synth-setter/issues/77))
 
 - Hard timeout in `scripts/docker_entrypoint.sh` — kill worker process after
   configurable max duration (`WORKER_TIMEOUT_SECONDS`)
@@ -883,7 +882,7 @@ ______________________________________________________________________
 ## 12. Verification Strategy
 
 1. **Per-PR:** CI runs `pytest` + `ruff` on every push
-2. **After all steps:** `pytest tests/pipeline/ -v`, `pytest tests/pipeline/test_e2e.py -v`
+2. **After all tasks:** `pytest tests/pipeline/ -v`, `pytest tests/pipeline/test_e2e.py -v`
 3. **Local dry run:** `python -m pipeline generate --config configs/pipeline/surge_simple_480k.yaml --backend local --workers 2`
 4. **Docker fidelity:** `bash scripts/test_local_docker.sh`
 5. **Mutation testing:** `mutmut run --paths-to-mutate=pipeline/`
@@ -919,19 +918,19 @@ ______________________________________________________________________
 
 ## Appendix: New Gaps Found During Plan Port
 
-All gaps below have been folded into their relevant steps above. This appendix
+All gaps below have been folded into their relevant tasks above. This appendix
 serves as a changelog of what was added beyond the original implementation plan.
 
 **GP1. `generate --dry-run` not tested in reference tests.**
-Step 5.1 lists `--dry-run` as a behavior but the reference test doesn't exercise it.
+Task 5.1 lists `--dry-run` as a behavior but the reference test doesn't exercise it.
 Add a unit test: `--dry-run` prints shard assignments, creates no spec, submits no work.
 
 **GP2. `status` command JSON output not specified.**
 Issue #21 deliverables include "Output as table (terminal) and JSON (machine-readable)"
-but Step 5.2 only describes table output. Add `--json` flag to `status` command.
+but Task 5.2 only describes table output. Add `--json` flag to `status` command.
 
 **GP3. No test for auth validation failure.**
-Step 5.1 specifies auth validation before compute but no reference test covers the
+Task 5.1 specifies auth validation before compute but no reference test covers the
 failure case. Add unit test: missing R2 credentials → clear error message, exit 1,
 no workers launched.
 
@@ -944,25 +943,25 @@ actionable message if not.
 Design doc Appendix E.1 shows structured logging config but no CLI flag controls
 verbosity. Add `--log-level` flag (default: `INFO`, options: `DEBUG`, `INFO`, `WARNING`).
 
-**GP6. Worker quarantine path not in Step 4.2.**
+**GP6. Worker quarantine path not in Task 4.2.**
 Design doc §7.2 describes `rendering → invalid`: worker uploads corrupt shard to
-`quarantine/` and writes `.invalid` marker. Step 4.2 worker description covers only the
+`quarantine/` and writes `.invalid` marker. Task 4.2 worker description covers only the
 happy path. Add quarantine behavior + reference test for validation-failure shard.
 
-**GP7. Skip-if-valid optimization missing from Step 4.2.**
+**GP7. Skip-if-valid optimization missing from Task 4.2.**
 Design doc §7.7: "Workers check the staging directory for an existing valid shard
-before uploading. If one exists, the worker skips the upload." Not in Step 4.2.
+before uploading. If one exists, the worker skips the upload." Not in Task 4.2.
 Add as optimization (not correctness requirement).
 
 **GP8. Storage layer missing path helpers for quarantine, attempts, and finalize outputs.**
-Step 2.2 storage layer should expose path helpers for `quarantine/` subdirectory,
+Task 2.2 storage layer should expose path helpers for `quarantine/` subdirectory,
 `metadata/workers/attempts/{w}-{a}/` (report.json, debug.log), and `data/` finalize
 outputs (train.h5, stats.npz, dataset.json, dataset.complete). Currently only
 shard lifecycle paths are described.
 
 **GP9. `status` command should overlay worker errors from reports.**
 Design doc §7.4 shows `status` output including "Recent worker errors (from metadata)"
-overlaid from worker reports. Step 5.2 only describes shard counts and missing IDs.
+overlaid from worker reports. Task 5.2 only describes shard counts and missing IDs.
 
 **GP10. Design doc schema gaps to fix.**
 Several fields in the design doc §14 schemas need updating to match the implementation:
