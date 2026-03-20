@@ -651,42 +651,44 @@ This section consolidates every configuration and environment behavior change in
 > [`github-taxonomy.md`](github-taxonomy.md) §3.
 > Issues follow the standard lifecycle ([`github-taxonomy.md`](github-taxonomy.md) §11): Todo → In Progress → Done.
 > Project fields required for all tasks: Priority, Start Date, Target Date.
+> Per-task priority tracked via the project Priority field ([`github-taxonomy.md`](github-taxonomy.md) §5).
 >
 > For issue tracking structure see [`github-taxonomy.md`](github-taxonomy.md).
 
 ### Issue Mapping
 
-| Issue | Type  | Description                     | Parent  |
-| ----- | ----- | ------------------------------- | ------- |
-| #98   | Epic  | Evaluation pipeline             | —       |
-| #99   | Epic  | Storage / R2 integration        | —       |
-| TBD   | Phase | Portable eval (Phase 1)         | #98     |
-| TBD   | Phase | Storage integration (Phase 2)   | #99     |
-| TBD   | Phase | W&B integration (Phase 3)       | #98     |
-| TBD   | Phase | CI & containerization (Phase 4) | #98     |
-| TBD   | Phase | Documentation (Phase 5)         | #98     |
-| #94   | Task  | Config cleanup                  | Phase 1 |
-| #85   | Task  | Portable predict                | Phase 1 |
-| #86   | Task  | Portable render                 | Phase 1 |
-| #87   | Task  | Portable metrics                | Phase 1 |
-| #90   | Task  | rclone wrapper                  | Phase 2 |
-| #91   | Task  | R2 dataset download             | Phase 2 |
-| #93   | Task  | R2 artifact upload              | Phase 2 |
-| #128  | Task  | W&B checkpoint resolver         | Phase 3 |
-| #96   | Task  | W&B metrics logging             | Phase 3 |
-| #88   | Task  | Docker eval environment         | Phase 4 |
-| #89   | Task  | E2E eval CI                     | Phase 4 |
-| #97   | Task  | Eval runbook                    | Phase 5 |
+| Issue | Type  | Description                    | Parent |
+| ----- | ----- | ------------------------------ | ------ |
+| #98   | Epic  | Evaluation pipeline            | —      |
+| #99   | Epic  | Storage / R2 integration       | —      |
+| #137  | Phase | Phase 1: Portable eval         | #98    |
+| #138  | Phase | Phase 2: Storage integration   | #99    |
+| #139  | Phase | Phase 3: W&B integration       | #98    |
+| #140  | Phase | Phase 4: CI & containerization | #98    |
+| #141  | Phase | Phase 5: Documentation         | #98    |
+| #94   | Task  | Config cleanup                 | #137   |
+| #85   | Task  | Portable predict               | #137   |
+| #86   | Task  | Portable render                | #137   |
+| #87   | Task  | Portable metrics               | #137   |
+| #90   | Task  | rclone wrapper                 | #138   |
+| #91   | Task  | R2 dataset download            | #138   |
+| #93   | Task  | R2 artifact upload             | #138   |
+| #92   | Task  | R2 checkpoint sync             | #138   |
+| #128  | Task  | W&B checkpoint resolver        | #139   |
+| #96   | Task  | W&B metrics logging            | #139   |
+| #88   | Task  | Docker eval environment        | #140   |
+| #89   | Task  | E2E eval CI                    | #140   |
+| #97   | Task  | Eval runbook                   | #141   |
 
 ### Per-Phase Metadata
 
-| Phase | Label(s)                      | Milestone           | Epic |
-| ----- | ----------------------------- | ------------------- | ---- |
-| 1     | `evaluation`                  | `evaluation v1.0.0` | #98  |
-| 2     | `evaluation`, `storage`       | `storage v1.0.0`    | #99  |
-| 3     | `evaluation`                  | `evaluation v1.0.0` | #98  |
-| 4     | `evaluation`, `ci-automation` | `evaluation v1.0.0` | #98  |
-| 5     | `evaluation`                  | `evaluation v1.0.0` | #98  |
+| Phase | Issue | Label(s)                      | Milestone           | Epic |
+| ----- | ----- | ----------------------------- | ------------------- | ---- |
+| 1     | #137  | `evaluation`                  | `evaluation v1.0.0` | #98  |
+| 2     | #138  | `evaluation`, `storage`       | `storage v1.0.0`    | #99  |
+| 3     | #139  | `evaluation`                  | `evaluation v1.0.0` | #98  |
+| 4     | #140  | `evaluation`, `ci-automation` | `evaluation v1.0.0` | #98  |
+| 5     | #141  | `evaluation`                  | `evaluation v1.0.0` | #98  |
 
 ### Completion Tracking
 
@@ -724,7 +726,7 @@ main ──●──────────────●───────
 
 ______________________________________________________________________
 
-### Phase 1: Portable Evaluation Pipeline (Epic #98)
+### Phase 1: Portable Evaluation Pipeline (#137, Epic #98)
 
 > **Label:** `evaluation` · **Milestone:** `evaluation v1.0.0`
 
@@ -807,7 +809,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-### Phase 2: Storage Integration (Epic #99)
+### Phase 2: Storage Integration (#138, Epic #99)
 
 > **Labels:** `evaluation`, `storage` · **Milestone:** `storage v1.0.0`
 
@@ -861,9 +863,15 @@ ______________________________________________________________________
 - `scripts/upload_eval_artifacts.py` — rclone sync wrapper for eval outputs
 - `tests/test_upload_eval.py` — mock rclone, verify R2 paths
 
+#### Task 2.4: R2 Checkpoint Sync (#92)
+
+**Goal:** Sync checkpoints to R2 as a secondary backup alongside W&B.
+
+**Depends on:** #90 (rclone wrapper)
+
 ______________________________________________________________________
 
-### Phase 3: W&B Integration (Epic #98)
+### Phase 3: W&B Integration (#139, Epic #98)
 
 > **Label:** `evaluation` · **Milestone:** `evaluation v1.0.0`
 
@@ -901,7 +909,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-### Phase 4: CI & Containerization (Epic #98)
+### Phase 4: CI & Containerization (#140, Epic #98)
 
 > **Labels:** `evaluation`, `ci-automation` · **Milestone:** `evaluation v1.0.0`
 
@@ -945,7 +953,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-### Phase 5: Documentation (Epic #98)
+### Phase 5: Documentation (#141, Epic #98)
 
 > **Label:** `evaluation` · **Milestone:** `evaluation v1.0.0`
 
@@ -961,10 +969,9 @@ ______________________________________________________________________
 
 ### Standalone Tasks (not in phase hierarchy)
 
-| Issue | Title              | Type | Notes                                                    |
-| ----- | ------------------ | ---- | -------------------------------------------------------- |
-| #92   | R2 checkpoint sync | Task | Standalone — depends on #90; not part of eval phases     |
-| #95   | Consolidate SGE    | Task | Standalone — SGE deprecation is a design decision (§7.5) |
+| Issue | Title           | Type | Labels                      | Milestone           | Notes                                       |
+| ----- | --------------- | ---- | --------------------------- | ------------------- | ------------------------------------------- |
+| #95   | Consolidate SGE | Task | `evaluation`, `code-health` | `evaluation v1.0.0` | SGE deprecation is a design decision (§7.5) |
 
 ______________________________________________________________________
 
