@@ -4,7 +4,7 @@
 > **Tracking:** [#74](https://github.com/tinaudio/synth-setter/issues/74)
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
 > **Builds on:** Generation infrastructure by benhayes@ (see design doc §1)
-> **Last updated:** 2026-03-20
+> **Last Updated:** 2026-03-20
 
 ______________________________________________________________________
 
