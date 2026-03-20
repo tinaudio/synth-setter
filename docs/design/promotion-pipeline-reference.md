@@ -3,7 +3,7 @@
 Everything you need to implement a promote-and-release workflow for `synth-permutations`.
 Results live in W&B during development; GitHub Releases become the permanent record when you promote.
 
----
+______________________________________________________________________
 
 ## Architecture Overview
 
@@ -25,7 +25,7 @@ When a model is good enough:
     └─ 5. Update README badge or one-liner with current model version
 ```
 
----
+______________________________________________________________________
 
 ## Training Script Requirements
 
@@ -63,14 +63,14 @@ run.finish()
 The key contract: whatever keys you put in `wandb.summary`, those are what
 the promote script will pull and put in the release body.
 
----
+______________________________________________________________________
 
 ## Promote Script (`scripts/promote.py`)
 
 This is the core script. It takes a W&B run ID, pulls everything it needs,
 and creates a GitHub Release.
 
-```python
+````python
 #!/usr/bin/env python3
 """Promote a W&B run to a GitHub Release.
 
@@ -272,9 +272,9 @@ if __name__ == "__main__":
         registry_path=args.registry,
         dry_run=args.dry_run,
     )
-```
+````
 
----
+______________________________________________________________________
 
 ## GitHub Actions Workflow (`.github/workflows/promote.yml`)
 
@@ -338,7 +338,7 @@ jobs:
           echo "- **W&B Run**: ${{ inputs.run_id }}" >> $GITHUB_STEP_SUMMARY
 ```
 
----
+______________________________________________________________________
 
 ## Usage
 
@@ -358,7 +358,7 @@ gh workflow run promote.yml -f run_id=abc123
 WANDB_API_KEY=xxx python scripts/promote.py --run-id abc123 --dry-run
 ```
 
----
+______________________________________________________________________
 
 ## What Gets Created
 
@@ -369,7 +369,7 @@ A GitHub Release at `github.com/you/synth-permutations/releases/tag/model-v3` wi
 - **Body**: Eval card with metrics table, config dump, dataset versions, W&B link
 - **Asset**: The model file (model.pt / model.onnx) downloadable via the release
 
----
+______________________________________________________________________
 
 ## Downstream: CLI Model Download
 
@@ -396,16 +396,16 @@ https://github.com/you/synth-permutations/releases/latest/download/model.pt
 This URL always resolves to the latest release's model file. No auth needed
 for public repos.
 
----
+______________________________________________________________________
 
 ## Secrets Required
 
-| Secret | Where to get it |
-|--------|-----------------|
-| `WANDB_API_KEY` | wandb.ai/settings → API Keys |
-| `GITHUB_TOKEN` | Provided automatically by GitHub Actions |
+| Secret          | Where to get it                          |
+| --------------- | ---------------------------------------- |
+| `WANDB_API_KEY` | wandb.ai/settings → API Keys             |
+| `GITHUB_TOKEN`  | Provided automatically by GitHub Actions |
 
----
+______________________________________________________________________
 
 ## What You Don't Need
 

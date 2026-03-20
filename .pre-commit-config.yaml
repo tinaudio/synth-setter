@@ -220,8 +220,7 @@ repos:
         exclude: >-
           (?x)^(
             README\.md|
-            \.claude/.*|
-            docs/design/promotion-pipeline-reference\.md
+            \.claude/.*
           )$
         additional_dependencies:
           - mdformat-gfm==1.0.0
