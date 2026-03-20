@@ -1,0 +1,67 @@
+name: Phase
+description: Large feature area within an epic
+title: "Phase N: "
+labels: []
+type: Phase
+body:
+  - type: input
+    id: parent-epic
+    attributes:
+      label: Parent Epic
+      description: "Issue number of the parent epic (e.g., #98)"
+      placeholder: "#"
+    validations:
+      required: true
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain Label
+      description: Primary domain for this phase
+      options:
+        - data-pipeline
+        - ci-automation
+        - code-health
+        - evaluation
+        - storage
+        - testing
+        - training
+    validations:
+      required: true
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      options:
+        - data-pipeline v1.0.0
+        - evaluation v1.0.0
+        - training v1.0.0
+        - storage v1.0.0
+        - ci-automation v1.0.0
+        - code-health v1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What this phase delivers
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks
+      description: List the planned tasks (add as sub-issues after creation)
+      placeholder: |
+        - Task N.1: ...
+        - Task N.2: ...
+    validations:
+      required: false
+  - type: input
+    id: blocked-by
+    attributes:
+      label: Blocked By
+      description: "Issue numbers this phase is blocked by (set via sidebar after creation)"
+      placeholder: "#94, #85"
+    validations:
+      required: false
