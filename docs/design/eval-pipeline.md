@@ -11,6 +11,8 @@
 > **Milestone**: `evaluation v1.0.0`
 > **Domain Labels**: `evaluation`, `storage`
 
+> **Storage & provenance conventions**: [storage-provenance-spec.md](storage-provenance-spec.md) (authoritative)
+
 ______________________________________________________________________
 
 ### Index
@@ -81,7 +83,7 @@ defaults:
   - override /callbacks: eval_surge
 
 experiment_name: flow_simple
-ckpt_path: ${wandb:synth-permutations/model-x118ylu9:latest}
+ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
 model:
   test_cfg_strength: 2.0
   test_sample_steps: 100
@@ -91,20 +93,29 @@ model:
 # 1. Set up credentials (one-time) — .env is for secrets only
 cp .env.example .env
 # Edit .env: R2 credentials, WANDB_API_KEY
+# Secrets are documented in storage-provenance-spec.md §9.
 
 # 2. Run full eval — predict → render → metrics in one command
 make eval EXPERIMENT=surge/flow_simple
 # → Checkpoint auto-downloaded from W&B via ${wandb:...} resolver (cached after)
-# → Predictions, audio, and metrics written to logs/eval/surge_simple/x118ylu9/surge_simple/
+# → Predictions, audio, and metrics written to
+#   logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/
 
 # Or run stages individually:
 make predict EXPERIMENT=surge/flow_simple
-make render PRED_DIR=logs/eval/surge_simple/x118ylu9/surge_simple/predictions/ OUTPUT_DIR=logs/eval/surge_simple/x118ylu9/surge_simple/audio/
-make metrics AUDIO_DIR=logs/eval/surge_simple/x118ylu9/surge_simple/audio/ OUTPUT_DIR=logs/eval/surge_simple/x118ylu9/surge_simple/metrics/
+make render \
+  PRED_DIR=logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/predictions/ \
+  OUTPUT_DIR=logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/audio/
+make metrics \
+  AUDIO_DIR=logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/audio/ \
+  OUTPUT_DIR=logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/metrics/
 
 # 3. (Optional) Upload artifacts to R2
 make upload-eval
-# → rclone sync logs/eval/surge_simple/x118ylu9/surge_simple/ r2:synth-data/eval/surge_simple/x118ylu9/surge_simple/ --checksum
+# → rclone sync \
+#     logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/ \
+#     r2:synth-data/eval/surge_simple/surge_simple-20260312T143022Z/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/ \
+#     --checksum
 ```
 
 ### Full pipeline (CI or Docker)
@@ -165,11 +176,10 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
                     │           R2 (synth-data bucket)             │
                     │                                              │
                     │  data/                                       │
-                    │    surge-simple/                              │
-                    │    surge-full/                                │
+                    │    {dataset_config_id}/{dataset_wandb_run_id}/│
                     │                                              │
                     │  eval/                                       │
-                    │    {train_data}/{run_id}/{eval_data}/        │
+                    │    {dataset_config_id}/.../{eval_wandb_run_id}│
                     │      predictions/ audio/ metrics/            │
                     └──────┬─────────────────┬─────────────────────┘
                            │                 │
@@ -217,7 +227,7 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 **Key behaviors:**
 
-- Dataset path resolved from `data.dataset_root` (default: `${paths.data_dir}/surge-simple`, CLI override for cluster)
+- Dataset path resolved from `data.dataset_root` (default: `${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z`, CLI override for cluster)
 - If `data.r2_path` is explicitly set, `SurgeDataModule.prepare_data()` syncs from R2 before loading
 - Checkpoint path supports `${wandb:...}` resolver — auto-downloads from W&B artifacts to local cache
 - Output directory: `${paths.output_dir}/predictions` (see `configs/callbacks/prediction_writer.yaml`)
@@ -277,7 +287,7 @@ When `data.r2_path` is explicitly provided (via CLI override or experiment confi
 ```yaml
 # configs/data/surge_simple.yaml — no r2_path, no env vars for paths
 _target_: src.data.surge_datamodule.SurgeDataModule
-dataset_root: ${paths.data_dir}/surge-simple        # matches existing paths convention
+dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z  # {dataset_config_id}/{dataset_wandb_run_id}
 # r2_path: deliberately absent — must be specified explicitly when needed
 batch_size: 128
 num_workers: 11
@@ -287,12 +297,12 @@ To use R2, pass it explicitly:
 
 ```bash
 # CLI override — explicit, visible, no hidden state
-python src/eval.py data.r2_path=r2:synth-data/data/surge-simple/ ...
+python src/eval.py data.r2_path=r2:synth-data/data/surge_simple/surge_simple-20260312T143022Z/ ...
 
 # Or in an experiment config that opts in
 # configs/experiment/surge/flow_simple.yaml
 data:
-  r2_path: r2:synth-data/data/surge-simple/
+  r2_path: r2:synth-data/data/surge_simple/surge_simple-20260312T143022Z/
 ```
 
 Behavior:
@@ -315,17 +325,17 @@ experiment config pins a W&B artifact reference using resolver syntax:
 
 ```yaml
 # configs/experiment/surge/flow_simple.yaml
-ckpt_path: ${wandb:synth-permutations/model-x118ylu9:latest}
+ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
 ```
 
-The resolver is registered in `src/utils/utils.py` alongside existing `mul` and `div` resolvers
-(already called via `register_resolvers()` at startup):
+The resolver will be added to `src/utils/utils.py` alongside existing `mul` and `div` resolvers
+(called via `register_resolvers()` at startup). Proposed implementation (Task 3.1, #128):
 
 ```python
 def _wandb_resolver(artifact_ref: str) -> str:
     """Resolve a W&B artifact reference to a local path.
 
-    Usage in config: ${wandb:synth-permutations/model-x118ylu9:latest}
+    Usage in config: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}
     """
     cache_dir = Path(os.environ["PROJECT_ROOT"]) / ".cache" / "checkpoints"
     safe_name = artifact_ref.replace("/", "_").replace(":", "_")
@@ -334,6 +344,7 @@ def _wandb_resolver(artifact_ref: str) -> str:
         return str(cached / "model.ckpt")
     cached.mkdir(parents=True, exist_ok=True)
     import wandb
+    # Uses Api().artifact() (no lineage) — resolver runs outside a W&B run context.
     artifact = wandb.Api().artifact(artifact_ref, type="model")
     artifact.download(root=str(cached))
     return str(cached / "model.ckpt")
@@ -350,11 +361,20 @@ See [§7.2](#72-checkpoint-resolution) for the full resolution behavior.
 
 ### 6.3 Eval Artifact Upload
 
+The R2 eval path follows the [storage-provenance-spec](storage-provenance-spec.md) §2 convention:
+
+```
+eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+```
+
 After metrics, optionally upload all eval outputs to R2:
 
 ```bash
 make upload-eval
-# rclone sync logs/eval/surge_simple/x118ylu9/surge_simple/ r2:synth-data/eval/surge_simple/x118ylu9/surge_simple/ --checksum
+# rclone sync \
+#   logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/ \
+#   r2:synth-data/eval/surge_simple/surge_simple-20260312T143022Z/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/ \
+#   --checksum
 ```
 
 Not automatic — explicit `make` target. Toggle via Hydra config or CLI flag.
@@ -362,14 +382,14 @@ Not automatic — explicit `make` target. Toggle via Hydra config or CLI flag.
 **Browsing eval results in R2:**
 
 ```bash
-# All models trained on surge_simple
-rclone ls r2:synth-data/eval/surge_simple/
+# All evals for a given training dataset generation run
+rclone ls r2:synth-data/eval/surge_simple/surge_simple-20260312T143022Z/
 
-# All evals of training run x118ylu9
-rclone ls r2:synth-data/eval/surge_simple/x118ylu9/
+# All evals of a specific training run
+rclone ls r2:synth-data/eval/surge_simple/surge_simple-20260312T143022Z/flow_simple/flow_simple-20260315T091500Z/
 
-# Cross-dataset eval: model trained on surge_simple, evaluated on nsynth
-rclone ls r2:synth-data/eval/surge_simple/x118ylu9/nsynth/
+# A specific eval run (fully qualified 6-segment path)
+rclone ls r2:synth-data/eval/surge_simple/surge_simple-20260312T143022Z/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/
 ```
 
 ### 6.4 W&B Eval Lineage
@@ -380,28 +400,35 @@ W&B run that declares its inputs (model checkpoint + dataset) and logs summary m
 ```python
 # Created automatically by the eval pipeline
 eval_run = wandb.init(
-    project="synth-permutations",
-    job_type="eval",
+    project="synth-setter",
+    entity="tinaudio",
+    job_type="evaluation",
     config={
-        "training_run_id": "x118ylu9",
-        "train_data": "surge_simple",
-        "eval_data": "surge_simple",
+        "dataset_config_id": "surge_simple",
+        "dataset_wandb_run_id": "surge_simple-20260312T143022Z",
+        "train_config_id": "flow_simple",
+        "train_wandb_run_id": "flow_simple-20260315T091500Z",
+        "eval_config_id": "surge_simple",
+        "eval_wandb_run_id": "surge_simple-20260320T160000Z",
+        "github_sha": os.environ.get("GITHUB_SHA", "local"),
     },
 )
 
 # Declare input artifacts — W&B builds the lineage graph
-model_artifact = eval_run.use_artifact("model-x118ylu9:latest")
-dataset_artifact = eval_run.use_artifact("dataset-surge_simple-480k:latest")
+model_artifact = eval_run.use_artifact("model-flow_simple:latest")
+dataset_artifact = eval_run.use_artifact("data-surge_simple:latest")
 
 # Log summary metrics
 eval_run.log({"mss": 0.42, "wmfcc": 0.31, "sot": 0.18, "rms": 0.94})
 
-# Reference R2 location for bulk artifacts
+# Reference R2 location for bulk artifacts (s3:// protocol — requires AWS_ENDPOINT_URL)
 eval_artifact = wandb.Artifact(
-    "eval-surge_simple-x118ylu9-surge_simple", type="eval"
+    "eval-surge_simple", type="eval-results"
 )
 eval_artifact.add_reference(
-    "r2://synth-data/eval/surge_simple/x118ylu9/surge_simple/"
+    "s3://synth-data/eval/surge_simple/surge_simple-20260312T143022Z/"
+    "flow_simple/flow_simple-20260315T091500Z/"
+    "surge_simple/surge_simple-20260320T160000Z/"
 )
 eval_run.log_artifact(eval_artifact)
 eval_run.finish()
@@ -410,12 +437,15 @@ eval_run.finish()
 This creates a lineage graph in W&B:
 
 ```
-dataset-surge_simple-480k:v2 ──→ training run x118ylu9 ──→ model-x118ylu9:latest
-                                                                    │
-dataset-surge_simple-480k:v2 ──→ eval run (job_type=eval) ◄────────┘
-                                        │
-                                        └──→ eval-surge_simple-x118ylu9-surge_simple (R2 ref)
+data-surge_simple:v2 ──→ training run flow_simple-20260315T091500Z ──→ model-flow_simple:latest
+                                                                               │
+data-surge_simple:v2 ──→ eval run (job_type=evaluation) ◄─────────────────────┘
+                                  │
+                                  └──→ eval-surge_simple (R2 ref)
 ```
+
+> Alias promotion (e.g., `model-flow_simple:latest` to `:production`) follows the
+> strategy in [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md).
 
 ## 7. Design Decisions
 
@@ -464,7 +494,7 @@ Each script hardcodes a specific W&B run ID — the checkpoint is **stable per m
 not changing every run:
 
 ```bash
-# jobs/predict/flow-simple.sh
+# jobs/predict/flow_simple.sh
 source jobs/predict/get-ckpt-from-wandb.sh x118ylu9   # always this run ID
 ```
 
@@ -472,11 +502,11 @@ source jobs/predict/get-ckpt-from-wandb.sh x118ylu9   # always this run ID
 
 Three resolution patterns, each appropriate for a different use case:
 
-| Pattern                | Where specified                             | Use case                                                               | Example                                                        |
-| ---------------------- | ------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
-| CLI arg                | Command line                                | Ad-hoc eval of a new/local checkpoint                                  | `python src/eval.py ckpt_path=./my-ckpt.ckpt`                  |
-| Experiment config      | `configs/experiment/surge/flow_simple.yaml` | Reproducible eval of a known model — checkpoint pinned as W&B artifact | `ckpt_path: ${wandb:synth-permutations/model-x118ylu9:latest}` |
-| `null` (training only) | `configs/train.yaml`                        | Start training fresh                                                   | Already works                                                  |
+| Pattern                | Where specified                             | Use case                                                               | Example                                                              |
+| ---------------------- | ------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| CLI arg                | Command line                                | Ad-hoc eval of a new/local checkpoint                                  | `python src/eval.py ckpt_path=./my-ckpt.ckpt`                        |
+| Experiment config      | `configs/experiment/surge/flow_simple.yaml` | Reproducible eval of a known model — checkpoint pinned as W&B artifact | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` |
+| `null` (training only) | `configs/train.yaml`                        | Start training fresh                                                   | Already works                                                        |
 
 **Resolution order** (Hydra's standard override precedence):
 
@@ -500,14 +530,14 @@ hands Lightning a resolved local path transparently.
 
 #### Proposed design outcomes
 
-| Config value                                                                       | What happens                                                                       | Portable? | Reproducible?                 |
-| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------- | ----------------------------- |
-| `ckpt_path: ???` (base eval.yaml)                                                  | Hydra errors — forces user to specify                                              | —         | —                             |
-| `ckpt_path: ./local/best.ckpt` (CLI)                                               | Uses local file directly                                                           | No        | No (path is machine-specific) |
-| `ckpt_path: ${wandb:synth-permutations/model-x118ylu9:latest}` (experiment config) | OmegaConf resolves lazily → downloads from W&B, caches locally, returns local path | Yes       | Yes (artifact ref is stable)  |
-| `ckpt_path: ${wandb:synth-permutations/model-x118ylu9:latest}` (CLI override)      | Same as above, but ad-hoc                                                          | Yes       | No (not pinned in config)     |
-| `ckpt_path: null` (train.yaml)                                                     | Start training from scratch                                                        | Yes       | Yes                           |
-| `ckpt_path: ${wandb:synth-permutations/model-x118ylu9:latest}` (training resume)   | Resolves lazily → downloads latest checkpoint, resumes optimizer/epoch state       | Yes       | Yes                           |
+| Config value                                                                             | What happens                                                                       | Portable? | Reproducible?                 |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------- | ----------------------------- |
+| `ckpt_path: ???` (base eval.yaml)                                                        | Hydra errors — forces user to specify                                              | —         | —                             |
+| `ckpt_path: ./local/best.ckpt` (CLI)                                                     | Uses local file directly                                                           | No        | No (path is machine-specific) |
+| `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (experiment config) | OmegaConf resolves lazily → downloads from W&B, caches locally, returns local path | Yes       | Yes (artifact ref is stable)  |
+| `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (CLI override)      | Same as above, but ad-hoc                                                          | Yes       | No (not pinned in config)     |
+| `ckpt_path: null` (train.yaml)                                                           | Start training from scratch                                                        | Yes       | Yes                           |
+| `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (training resume)   | Resolves lazily → downloads latest checkpoint, resumes optimizer/epoch state       | Yes       | Yes                           |
 
 **Decision:** `ckpt_path` is not in `.env` (not a secret, not machine infrastructure). It is either a required CLI arg (ad-hoc) or pinned in an experiment config (reproducible). The `${wandb:...}` OmegaConf resolver makes pinned values portable across machines — resolution is lazy and cached. Checkpoints are stored in W&B (Teams plan, $50/mo) — see [§10](#10-alternatives-considered) for the full cost/benefit analysis vs R2.
 
@@ -538,7 +568,7 @@ Each system handles what it's best at:
 
 **Provenance is recorded in three places:**
 
-- **R2 path** → human-readable: `eval/{train_data}/{run_id}/{eval_data}/` tells you what happened at a glance
+- **R2 path** → human-readable: `eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/` encodes full provenance at a glance
 - **W&B lineage** → programmatic: `use_artifact()` connects dataset → model → eval with exact versions
 - **Hydra config** → complete: every parameter frozen, reproducible without any external system
 
@@ -550,7 +580,7 @@ This section consolidates every configuration and environment behavior change in
 
 | Concern                   | Current mechanism                                                   | Where defined                              | Portable? | Problem                                            |
 | ------------------------- | ------------------------------------------------------------------- | ------------------------------------------ | --------- | -------------------------------------------------- |
-| **Dataset path**          | Hardcoded `/data/scratch/acw585/surge-simple/`                      | `configs/data/surge_simple.yaml`           | No        | Only works on university cluster                   |
+| **Dataset path**          | Hardcoded `/data/scratch/acw585/surge_simple/`                      | `configs/data/surge_simple.yaml`           | No        | Only works on university cluster                   |
 | **Checkpoint resolution** | `get-ckpt-from-wandb.sh` searches local `logs/train/` by W&B run ID | `jobs/predict/*.sh` (19 scripts)           | No        | Requires training logs on same machine             |
 | **Checkpoint path**       | `ckpt_path: ???` in eval, resolved by shell script to local path    | `configs/eval.yaml` + shell                | No        | Local filesystem dependency                        |
 | **R2 dataset access**     | Not supported                                                       | —                                          | —         | Must manually copy data to machine                 |
@@ -566,25 +596,25 @@ This section consolidates every configuration and environment behavior change in
 
 #### Proposed behavior (to-be)
 
-| Concern                      | Proposed mechanism                                                                                    | Where defined                                 | Portable? | Change from current                         |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------- | --------- | ------------------------------------------- |
-| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge-simple` (paths convention)                                     | `configs/data/surge_simple.yaml`              | Yes       | Hardcoded → paths convention                |
-| **Dataset path override**    | CLI: `data.dataset_root=/cluster/path/`                                                               | Command line                                  | Yes       | Implicit → explicit                         |
-| **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in experiment configs                                                 | `configs/eval.yaml` + `configs/experiment/`   | Yes       | Shell script → Hydra config                 |
-| **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                                                    | Command line                                  | No        | Same as today but without shell wrapper     |
-| **Checkpoint: reproducible** | `ckpt_path: ${wandb:synth-permutations/model-x118ylu9:latest}` in experiment config                   | `configs/experiment/surge/flow_simple.yaml`   | Yes       | **New** — portable, pinned                  |
-| **R2 dataset access**        | `data.r2_path=r2:synth-data/...` triggers auto-download in `prepare_data()`                           | CLI or experiment config (no default)         | Yes       | **New** — explicit opt-in                   |
-| **Checkpoint download**      | `${wandb:...}` OmegaConf resolver → lazy W&B artifact download to `$PROJECT_ROOT/.cache/checkpoints/` | `src/utils/utils.py` (`register_resolvers()`) | Yes       | **New** — replaces `get-ckpt-from-wandb.sh` |
-| **Checkpoint upload**        | W&B `log_model="all"` — uploads every saved checkpoint automatically                                  | `configs/logger/wandb.yaml`                   | Yes       | Config change only — `true` → `"all"`       |
-| **Credentials**              | `.env` for R2 + W&B secrets only                                                                      | `.env` / `.env.example`                       | Yes       | **New** — secrets only, no paths            |
-| **Display handling**         | Auto-detect: macOS native / Linux Xvfb / Docker baked                                                 | `renderscript.sh`                             | Yes       | Linux-only → cross-platform                 |
-| **Log directory**            | `${paths.root_dir}/logs/` (unchanged)                                                                 | `configs/paths/default.yaml`                  | Yes       | No change                                   |
-| **Predict output**           | `${paths.output_dir}/predictions` (unchanged)                                                         | `configs/callbacks/prediction_writer.yaml`    | Yes       | No change                                   |
-| **W&B entity**               | Configurable via env or CLI                                                                           | `configs/logger/wandb.yaml`                   | Yes       | Hardcoded → configurable                    |
-| **SGE scripts**              | Deprecated — left as-is, not maintained                                                               | `jobs/predict/*.sh`                           | No        | Active → deprecated                         |
-| **R2 eval artifact upload**  | `make upload-eval` → `r2:synth-data/eval/{train_data}/{run_id}/{eval_data}/`                          | `Makefile`                                    | Yes       | **New** — path encodes full provenance      |
-| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                | `scripts/compute_audio_metrics.py`            | Yes       | **New** — programmatic provenance chain     |
-| **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                                         | `Makefile`                                    | Yes       | **New** — discoverable, consistent          |
+| Concern                      | Proposed mechanism                                                                                                                                                | Where defined                                 | Portable? | Change from current                              |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | --------- | ------------------------------------------------ |
+| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z` (paths convention + run ID)                                                          | `configs/data/surge_simple.yaml`              | Yes       | Hardcoded → paths convention + run ID            |
+| **Dataset path override**    | CLI: `data.dataset_root=/cluster/path/surge_simple-20260312T143022Z/`                                                                                             | Command line                                  | Yes       | Implicit → explicit                              |
+| **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in experiment configs                                                                                                             | `configs/eval.yaml` + `configs/experiment/`   | Yes       | Shell script → Hydra config                      |
+| **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                                                                                                                | Command line                                  | No        | Same as today but without shell wrapper          |
+| **Checkpoint: reproducible** | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` in experiment config                                                                         | `configs/experiment/surge/flow_simple.yaml`   | Yes       | **New** — portable, pinned                       |
+| **R2 dataset access**        | `data.r2_path=r2:synth-data/...` triggers auto-download in `prepare_data()`                                                                                       | CLI or experiment config (no default)         | Yes       | **New** — explicit opt-in                        |
+| **Checkpoint download**      | `${wandb:...}` OmegaConf resolver → lazy W&B artifact download to `$PROJECT_ROOT/.cache/checkpoints/`                                                             | `src/utils/utils.py` (`register_resolvers()`) | Yes       | **New** — replaces `get-ckpt-from-wandb.sh`      |
+| **Checkpoint upload**        | W&B `log_model="all"` — uploads every saved checkpoint automatically                                                                                              | `configs/logger/wandb.yaml`                   | Yes       | Config change only — `true` → `"all"`            |
+| **Credentials**              | `.env` for R2 + W&B secrets only                                                                                                                                  | `.env` / `.env.example`                       | Yes       | **New** — secrets only, no paths                 |
+| **Display handling**         | Auto-detect: macOS native / Linux Xvfb / Docker baked                                                                                                             | `renderscript.sh`                             | Yes       | Linux-only → cross-platform                      |
+| **Log directory**            | `${paths.root_dir}/logs/` (unchanged)                                                                                                                             | `configs/paths/default.yaml`                  | Yes       | No change                                        |
+| **Predict output**           | `${paths.output_dir}/predictions` (unchanged)                                                                                                                     | `configs/callbacks/prediction_writer.yaml`    | Yes       | No change                                        |
+| **W&B entity**               | `entity: ${oc.env:WANDB_ENTITY,tinaudio}`, `project: ${oc.env:WANDB_PROJECT,synth-setter}`                                                                        | `configs/logger/wandb.yaml`                   | Yes       | Hardcoded → configurable                         |
+| **SGE scripts**              | Deprecated — left as-is, not maintained                                                                                                                           | `jobs/predict/*.sh`                           | No        | Active → deprecated                              |
+| **R2 eval artifact upload**  | `make upload-eval` → `r2:synth-data/eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/` | `Makefile`                                    | Yes       | **New** — 6-segment path encodes full provenance |
+| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                                                                            | `scripts/compute_audio_metrics.py`            | Yes       | **New** — programmatic provenance chain          |
+| **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                                                                                                     | `Makefile`                                    | Yes       | **New** — discoverable, consistent               |
 
 #### What changes, what stays
 
@@ -600,12 +630,12 @@ This section consolidates every configuration and environment behavior change in
 
 **1. `.env` scope**
 
-|                      | Current              | Proposed                                                             |
-| -------------------- | -------------------- | -------------------------------------------------------------------- |
-| **What's in `.env`** | Nothing standardized | R2 credentials + `WANDB_API_KEY`                                     |
-| **Paths**            | Hardcoded in YAML    | Hydra defaults + CLI overrides                                       |
-| **Risk eliminated**  | —                    | Invisible state: can't read YAML + `.env` and know what happens      |
-| **Trade-off**        | —                    | Cluster users must pass CLI overrides instead of setting one env var |
+|                      | Current              | Proposed                                                                                                     |
+| -------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **What's in `.env`** | Nothing standardized | R2 credentials + `WANDB_API_KEY` (see [storage-provenance-spec.md §9](storage-provenance-spec.md#9-secrets)) |
+| **Paths**            | Hardcoded in YAML    | Hydra defaults + CLI overrides                                                                               |
+| **Risk eliminated**  | —                    | Invisible state: can't read YAML + `.env` and know what happens                                              |
+| **Trade-off**        | —                    | Cluster users must pass CLI overrides instead of setting one env var                                         |
 
 **2. Checkpoint resolution (§7.2)**
 
@@ -613,19 +643,19 @@ This section consolidates every configuration and environment behavior change in
 | -------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | **Eval checkpoint**        | Shell script finds local file by W&B run ID | Pinned `${wandb:...}` resolver in experiment config or CLI arg                                  |
 | **Training checkpoint**    | `ckpt_path: null` (start fresh)             | Same — no change                                                                                |
-| **Training resume**        | `ckpt_path=/local/path/last.ckpt`           | `ckpt_path=${wandb:synth-permutations/model-x118ylu9:latest}` (portable)                        |
+| **Training resume**        | `ckpt_path=/local/path/last.ckpt`           | `ckpt_path=${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (portable)                  |
 | **Upload during training** | W&B `log_model: true` (best only)           | W&B `log_model="all"` (every saved checkpoint — crash resilient)                                |
 | **Risk eliminated**        | —                                           | "Checkpoint is on the cluster" — W&B artifacts available everywhere                             |
 | **Trade-off**              | —                                           | W&B Teams at $50/mo; storage burns faster with `"all"` (see [§10](#10-alternatives-considered)) |
 
 **3. Dataset access (§6.3)**
 
-|                     | Current                    | Proposed                                                                 |
-| ------------------- | -------------------------- | ------------------------------------------------------------------------ |
-| **Local data**      | Hardcoded path, must exist | `${paths.data_dir}/surge-simple` (existing convention), override via CLI |
-| **Remote data**     | Not supported              | `r2_path` opt-in triggers auto-download                                  |
-| **Risk eliminated** | —                          | "Data is on the cluster" — R2 makes it available everywhere              |
-| **Trade-off**       | —                          | First download of a 100GB dataset takes time; cached after that          |
+|                     | Current                    | Proposed                                                                                                      |
+| ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Local data**      | Hardcoded path, must exist | `${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z` ({config_id}/{wandb_run_id}), override via CLI |
+| **Remote data**     | Not supported              | `r2_path` opt-in triggers auto-download                                                                       |
+| **Risk eliminated** | —                          | "Data is on the cluster" — R2 makes it available everywhere                                                   |
+| **Trade-off**       | —                          | First download of a 100GB dataset takes time; cached after that                                               |
 
 **4. Display handling (§7.1)**
 
@@ -642,7 +672,7 @@ This section consolidates every configuration and environment behavior change in
 |                  | Current                            | Proposed                                                                                         |
 | ---------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------ |
 | **SGE scripts**  | 19 scripts, actively used          | Left as-is, not maintained                                                                       |
-| **Cluster eval** | `qsub jobs/predict/flow-simple.sh` | `make predict EXPERIMENT=surge/flow_simple CKPT=r2:...` (SSH to cluster, run make target)        |
+| **Cluster eval** | `qsub jobs/predict/flow_simple.sh` | `make predict EXPERIMENT=surge/flow_simple CKPT=r2:...` (SSH to cluster, run make target)        |
 | **Risk**         | —                                  | If SGE scripts break, no fix is coming. Acceptable — cluster is not the primary dev environment. |
 
 ## 8. Phase Plan
@@ -737,7 +767,7 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `configs/data/surge_simple.yaml` — `dataset_root` → `${paths.data_dir}/surge-simple` (matches `mnist.yaml` convention)
+- `configs/data/surge_simple.yaml` — `dataset_root` → `${paths.data_dir}/{dataset_config_id}/{dataset_wandb_run_id}` (matches [storage-provenance-spec](storage-provenance-spec.md) §2)
 - `configs/data/surge_mini.yaml` — same pattern
 - `configs/data/surge_simple_onehot.yaml` — same (if exists)
 - `.env.example` — R2 credentials and `WANDB_API_KEY` only (no path vars)
@@ -1159,7 +1189,7 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 
 | File                             | Hardcoded path                       |
 | -------------------------------- | ------------------------------------ |
-| `configs/data/surge_simple.yaml` | `/data/scratch/acw585/surge-simple/` |
+| `configs/data/surge_simple.yaml` | `/data/scratch/acw585/surge_simple/` |
 | `configs/data/surge_mini.yaml`   | `/data/scratch/acw585/surge-mini/`   |
 
 ### Audio Dir Manifests
