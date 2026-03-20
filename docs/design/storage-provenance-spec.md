@@ -26,6 +26,7 @@ ______________________________________________________________________
 - `*_run_id` = `{*_config_id}-{timestamp}`, set as the W&B run ID via `wandb.init(id=...)`
 - Timestamp format: `YYYYMMDDTHHMMSSZ` (seconds, UTC, filesystem-safe)
 - W&B run ID limit: 64 characters. Keep config filenames short.
+- Config filenames must be globally unique across all config directories.
 
 ______________________________________________________________________
 
@@ -61,9 +62,10 @@ data/{dataset_config_id}/{dataset_run_id}/
 └── stats.npz                   # Normalization statistics
 ```
 
-- Workers write only under `metadata/workers/`
+- Workers may only write under `metadata/workers/`
 - `shards/` is written only by finalize
 - All `rclone` operations use `--checksum`
+- Datasets are immutable once `dataset.complete` exists. New versions require a new `dataset_run_id`.
 
 ### 3b. Training
 
@@ -161,6 +163,8 @@ ______________________________________________________________________
 | Evaluation      | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B             | experiment                      |
 | Model Promotion | `promote.yml`        | `workflow_dispatch`  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `run_id`, `registry`, `dry_run` |
 
+- All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
+
 ______________________________________________________________________
 
 ## 9. Secrets
@@ -174,6 +178,8 @@ ______________________________________________________________________
 | `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | data-gen, eval                      | Cloudflare R2 dashboard |
 | `RCLONE_CONFIG_R2_ENDPOINT`          | data-gen, eval                      | Cloudflare R2 dashboard |
 
+- Secrets must only be available to workflows that require them (e.g., training does not need R2 write access).
+
 ______________________________________________________________________
 
 ## 10. W&B Identity
@@ -185,11 +191,29 @@ ______________________________________________________________________
 
 - Set via env vars: `WANDB_ENTITY`, `WANDB_PROJECT`
 - Configs use: `entity: ${oc.env:WANDB_ENTITY,tinaudio}`, `project: ${oc.env:WANDB_PROJECT,synth-setter}`
-- These are target values. Current config still references legacy values (`benhayes`/`synth-permutations`) pending migration.
+- Legacy runs under `benhayes`/`synth-permutations` remain read-only. New runs must use `tinaudio`/`synth-setter`.
 
 ______________________________________________________________________
 
-## 11. References
+## 11. Artifact → Storage Mapping
+
+- W&B artifacts reference R2 objects via `artifact.add_reference("r2://...")`
+- Artifacts do not duplicate large data files — they contain metadata, manifests, and statistics
+- Bulk data lives in R2; W&B provides the index and lineage graph
+
+______________________________________________________________________
+
+## 12. Invariants
+
+1. `*_run_id` uniquely identifies an immutable run output.
+2. Every run must log and consume W&B artifacts for its inputs and outputs.
+3. Every run must record `github_sha` in `wandb.config`.
+4. All configs are frozen into the artifact or R2 storage path at run time.
+5. R2 paths are append-only after completion markers exist.
+
+______________________________________________________________________
+
+## 13. References
 
 - [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md) — W&B → GitHub Release workflow, promote script, GHA workflow
 - artifact-provenance-reference.md — TBD (#122): W&B artifact patterns, lineage DAG examples, API reference
