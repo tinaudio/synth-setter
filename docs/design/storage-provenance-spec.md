@@ -100,11 +100,11 @@ ______________________________________________________________________
 
 ## 4. W&B Artifact Types
 
-| Type           | Name Pattern            | Logged By               | Example name     |
-| -------------- | ----------------------- | ----------------------- | ---------------- |
-| `dataset`      | `{dataset_config_id}`   | `pipeline.cli finalize` | `diva-v1`        |
-| `model`        | `{train_config_id}`     | `src/train.py`          | `flow-simple`    |
-| `eval-results` | `eval-{eval_config_id}` | eval script             | `eval-nsynth-v1` |
+| Type           | Name Pattern               | Logged By               | Example name        |
+| -------------- | -------------------------- | ----------------------- | ------------------- |
+| `dataset`      | `data-{dataset_config_id}` | `pipeline.cli finalize` | `data-diva-v1`      |
+| `model`        | `model-{train_config_id}`  | `src/train.py`          | `model-flow-simple` |
+| `eval-results` | `eval-{eval_config_id}`    | eval script             | `eval-nsynth-v1`    |
 
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
 - The `*_wandb_run_id` is stored in `artifact.metadata`, not the artifact name
