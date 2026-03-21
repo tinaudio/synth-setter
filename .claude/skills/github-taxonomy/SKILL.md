@@ -1,6 +1,6 @@
 ---
 name: github-taxonomy
-description: Rigid process skill for all GitHub metadata operations in synth-setter. Use this skill whenever creating or updating issues, PRs, milestones, labels, priorities, blocking relationships, project fields, or any GitHub project management. Also trigger when assigning issue types (Epic, Phase, Task, Bug, Feature), setting up sub-issue hierarchy, linking PRs to issues, or managing the GitHub Project board. If the task touches GitHub metadata in any way — even tangentially — use this skill.
+description: Rigid process skill for all GitHub metadata operations in synth-setter. Use this skill whenever creating or updating issues, PRs, milestones, labels, priorities, blocking relationships, project fields, or any GitHub project management. Also trigger when assigning issue types (Epic, Phase, Task, Bug, Feature), setting up sub-issue hierarchy, linking PRs to issues, or managing the GitHub Project board. If the task touches GitHub metadata in any way — even tangentially — use this skill. IMPORTANT — this skill MUST also trigger whenever Claude creates a PR, to ensure a taxonomy-compliant issue is linked so the CI metadata gate passes.
 ---
 
 # GitHub Taxonomy Skill
@@ -10,7 +10,7 @@ This skill enforces the project's GitHub metadata conventions. The full referenc
 ## When This Triggers
 
 - Creating or updating issues (any type)
-- Creating or updating PRs
+- **Creating or updating PRs** (MUST ensure a compliant linked issue — see §Ensuring PRs Pass the Metadata Gate below)
 - Setting labels, milestones, priorities, or issue types
 - Establishing hierarchy (sub-issues) or blocking relationships
 - Managing the GitHub Project board (adding items, setting fields, creating views)
@@ -19,6 +19,123 @@ This skill enforces the project's GitHub metadata conventions. The full referenc
 ## Process
 
 This is a rigid process skill. Follow every step — do not skip steps or improvise alternatives.
+
+### Ensuring PRs Pass the Metadata Gate
+
+**This section is REQUIRED before every `gh pr create`.** The CI workflow `pr-metadata-gate.yaml` will fail if the PR does not link to at least one issue that has all three: issue type, domain label, and milestone.
+
+#### Step 1: Determine the correct issue to link
+
+Ask: does an existing issue already describe this work?
+
+- **If yes** — use that issue number. Proceed to Step 2.
+- **If no** — create a new issue (follow "Creating an Issue" below), then use its number.
+
+#### Step 2: Verify the linked issue is taxonomy-compliant
+
+Check all three required fields on the issue:
+
+```bash
+# Check issue type (GraphQL — not available via REST)
+gh api graphql -f query='
+  query($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $number) {
+        issueType { name }
+      }
+    }
+  }
+' -f owner="tinaudio" -f repo="synth-setter" -F number=ISSUE_NUMBER \
+  --jq '.data.repository.issue.issueType.name'
+
+# Check labels and milestone (REST)
+gh api repos/tinaudio/synth-setter/issues/ISSUE_NUMBER \
+  --jq '{type: "check below", labels: [.labels[].name], milestone: .milestone.title}'
+```
+
+The issue MUST have:
+
+1. **Issue type** — one of: `Epic`, `Phase`, `Task`, `Bug`, `Feature`
+2. **Domain label** — at least one of: `data-pipeline`, `ci-automation`, `code-health`, `evaluation`, `storage`, `testing`, `training`
+3. **Milestone** — assigned (e.g., `data-pipeline v1.0.0`, `training v1.0.0`)
+
+#### Step 3: Fix any missing metadata before creating the PR
+
+If any field is missing, set it now:
+
+```bash
+# Set issue type via GraphQL (get issue node ID first)
+ISSUE_NODE_ID=$(gh api graphql -f query='
+  query($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $number) { id }
+    }
+  }
+' -f owner="tinaudio" -f repo="synth-setter" -F number=ISSUE_NUMBER \
+  --jq '.data.repository.issue.id')
+
+# Find the issue type ID — replace ISSUE_TYPE with the correct type
+# (one of: Epic, Phase, Task, Bug, Feature)
+ISSUE_TYPE_ID=$(gh api graphql -f query='
+  query($owner: String!, $repo: String!) {
+    repository(owner: $owner, name: $repo) {
+      issueTypes(first: 20) {
+        nodes { id name }
+      }
+    }
+  }
+' -f owner="tinaudio" -f repo="synth-setter" \
+  --jq '.data.repository.issueTypes.nodes[] | select(.name == "ISSUE_TYPE") | .id')
+
+# Set the issue type
+gh api graphql -f query='
+  mutation($issueId: ID!, $issueTypeId: ID!) {
+    updateIssue(input: {id: $issueId, issueTypeId: $issueTypeId}) {
+      issue { title }
+    }
+  }
+' -f issueId="$ISSUE_NODE_ID" -f issueTypeId="$ISSUE_TYPE_ID"
+
+# Add domain label
+gh issue edit ISSUE_NUMBER --repo tinaudio/synth-setter --add-label "DOMAIN_LABEL"
+
+# Set milestone
+gh issue edit ISSUE_NUMBER --repo tinaudio/synth-setter --milestone "MILESTONE_NAME"
+```
+
+#### Step 4: Create the PR with the issue reference
+
+Include the issue reference in the PR body:
+
+- Use `Fixes #N` or `Closes #N` if the PR fully resolves the issue (auto-closes on merge)
+- Use `Refs #N` if the PR is related but doesn't fully resolve it
+- Bare `#N` also passes the gate but won't auto-close
+
+#### Domain-to-milestone mapping
+
+| Domain label | Milestone |
+| --- | --- |
+| `data-pipeline` | `data-pipeline v1.0.0` |
+| `ci-automation` | `ci-automation v1.0.0` |
+| `code-health` | `code-health v1.0.0` |
+| `evaluation` | `evaluation v1.0.0` |
+| `storage` | `storage v1.0.0` |
+| `testing` | `testing v1.0.0` |
+| `training` | `training v1.0.0` |
+
+#### Quick-create a compliant issue (when no existing issue fits)
+
+```bash
+# One-shot: create a taxonomy-compliant Task issue
+gh issue create \
+  --repo tinaudio/synth-setter \
+  --title "feat(DOMAIN): DESCRIPTION" \
+  --body "Created to track PR work." \
+  --label "DOMAIN_LABEL" \
+  --milestone "MILESTONE_NAME"
+
+# Then set issue type via GraphQL (see Step 3 above)
+```
 
 ### Creating an Issue
 
@@ -92,7 +209,8 @@ Verify you have set all required fields. Missing metadata creates tracking gaps 
 - [ ] Blocking relationships set (if applicable)
 
 **PR checklist:**
-- [ ] Correct linking method used (`Fixes` vs `Refs`)
+- [ ] Linked issue is taxonomy-compliant (issue type + domain label + milestone)
+- [ ] Correct linking method used (`Fixes`/`Closes` vs `Refs` vs bare `#N`)
 - [ ] Domain label applied
 - [ ] Milestone assigned
 - [ ] Added to project
