@@ -30,6 +30,8 @@ test-full: ## Run all tests
 install: ## Install project in editable mode with dev deps
 	pip install -r requirements.txt -e .
 
+# coverage runs serially (no -n auto): GPU tests require exclusive device
+# access and VRAM contention causes flaky failures with xdist parallelism.
 coverage: ## Run tests with coverage report
 	pip install pytest-cov[toml]
 	pytest --cov=src --cov-report=term-missing --cov-report=html -m "not slow"
