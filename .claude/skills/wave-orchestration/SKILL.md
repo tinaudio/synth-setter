@@ -33,7 +33,7 @@ You have N improvements/fixes/features. Each needs its own PR. Some depend on ot
    CONFLICT: PR-A and PR-B both modify pyproject.toml
    → Move PR-B to Wave 2 (PR-A has higher priority / fewer dependencies)
    ```
-   This prevents merge conflicts between parallel worktrees. Check all file types — config files like `pyproject.toml`, `Makefile`, `conftest.py`, and workflow YAMLs are the most common sources of overlap.
+   This reduces the risk of merge conflicts when parallel PR branches are merged (the worktrees are just local checkouts used to implement those branches). Check all file types — config files like `pyproject.toml`, `Makefile`, `conftest.py`, and workflow YAMLs are the most common sources of overlap.
 5. Identify the maximum parallelism per wave (recommend 6 agents max)
 
 ### Phase 2: Issue creation
@@ -48,7 +48,7 @@ For each item:
 
 For each wave:
 1. **Pre-flight**: Verify all blocking PRs from previous wave are merged. Pull latest main.
-2. **Dispatch**: Launch N parallel sub-agents, each in an isolated git worktree created via `git worktree add ../worktrees/<wave>-<task> main` (e.g., `../worktrees/wave1-ci-add-codeowners`).
+2. **Dispatch**: Launch N parallel sub-agents, each in an isolated git worktree created via `git worktree add --detach ../worktrees/<wave>-<task> origin/main` (e.g., `../worktrees/wave1-ci-add-codeowners`).
 3. Each sub-agent:
    - Creates a human-readable branch (e.g., `ci/add-codeowners`, `test/add-pytest-xdist`)
    - Makes the change
