@@ -29,3 +29,6 @@ test-full: ## Run all tests
 
 train: ## Train the model
 	python src/train.py
+
+eval-skills: ## Run skill evals (dry run by default, use EVAL_RUN=1 for real)
+	python scripts/eval_skills.py --skill all $(if $(EVAL_RUN),--run,--dry-run) --verbose

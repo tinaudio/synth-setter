@@ -1,0 +1,30 @@
+name: pretrain_sanity_checks
+skill: ml-test
+description: Verify Claude includes pre-train sanity checks for a new model
+prompt: |
+  Write tests for a new `SynthEncoder` model (PyTorch nn.Module) that takes
+  mel spectrograms (batch, n_mels, time) and outputs embeddings (batch, embed_dim).
+  The model has:
+  - __init__(n_mels: int = 128, embed_dim: int = 256)
+  - forward(x: torch.Tensor) -> torch.Tensor
+  Focus on pre-training validation tests.
+context_files:
+  - src/models/__init__.py
+success_criteria:
+  - Output shape test (correct batch size and embed_dim)
+  - Output range test (no NaN/Inf in outputs)
+  - Loss at initialization test (close to expected random loss)
+  - Single-batch overfit test (loss decreases over N steps)
+  - Parameter count or gradient flow test
+failure_criteria:
+  - Only tests forward pass shape, nothing else
+  - No test for NaN/Inf detection
+  - No overfit-single-batch test
+  - Tests use random seeds without fixing them
+comparator_focus: |
+  Count how many of the 5 pre-train check categories are covered.
+  The overfit-single-batch test and loss-at-init test are the most
+  important signals of ML testing competence.
+tags:
+  - ml-testing
+  - pre-train

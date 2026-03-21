@@ -1,0 +1,29 @@
+name: behavior_not_implementation_testing
+skill: tdd-implementation
+description: Verify tests check behavior (outputs/effects) not implementation details
+prompt: |
+  Implement a `ShardNamer` class in `src/data/shard_namer.py` that generates
+  deterministic shard names from a base index. It should have:
+  - `name(index: int) -> str` returning `shard-{index:06d}`
+  - `parse(name: str) -> int` returning the index from a shard name
+  Write tests for this class.
+context_files:
+  - src/data/__init__.py
+success_criteria:
+  - Tests verify return values and observable outputs, not internal state
+  - Tests would survive an internal refactor that preserves the same API
+  - No mocking of internal methods or private attributes
+  - Tests read as specifications -- given X, when Y, then Z
+  - State testing preferred over interaction testing
+failure_criteria:
+  - Tests assert on private attributes or internal method calls
+  - Tests mock internal collaborators unnecessarily
+  - Tests mirror production code logic (e.g. f-string in test matches f-string in impl)
+  - Tests break on renaming private methods
+comparator_focus: |
+  Evaluate whether tests are behavior-focused or implementation-focused.
+  Key signal: would the tests still pass after a complete internal rewrite
+  that preserves the same public API?
+tags:
+  - tdd
+  - behavior-testing

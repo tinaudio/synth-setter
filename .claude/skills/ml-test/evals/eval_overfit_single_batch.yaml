@@ -1,0 +1,31 @@
+name: overfit_single_batch_quality
+skill: ml-test
+description: Verify the overfit-single-batch test is well-constructed
+prompt: |
+  Write a test that verifies a `SynthDecoder` model can overfit a single batch.
+  The model takes embeddings (batch, embed_dim=256) and outputs mel spectrograms
+  (batch, n_mels=128, time=64). Use MSE loss and Adam optimizer.
+  This is a pre-train sanity check -- if the model can't memorize one batch,
+  something is wrong with the architecture or training loop.
+context_files:
+  - src/models/__init__.py
+success_criteria:
+  - Uses a fixed random seed for reproducibility
+  - Creates a single batch of synthetic data
+  - Runs multiple optimization steps (not just 1)
+  - Asserts final loss is significantly lower than initial loss
+  - Uses model.train() mode
+  - Does not use real data -- synthetic tensors only
+failure_criteria:
+  - Only runs 1 optimization step
+  - No assertion on loss decrease
+  - Uses model.eval() mode for training
+  - No fixed seed (test is non-deterministic)
+  - Compares loss to an arbitrary threshold instead of initial loss
+comparator_focus: |
+  Quality of the overfit test: is it deterministic (seeded)? Does it run
+  enough steps? Does it compare final loss to initial loss (not an arbitrary
+  number)? Is synthetic data used correctly?
+tags:
+  - ml-testing
+  - overfit-single-batch

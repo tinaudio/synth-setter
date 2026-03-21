@@ -162,6 +162,9 @@ checkpoints/
 # VST3
 plugins/
 
+# Skill eval results (generated, not committed)
+eval-results/
+
 # Claude Code (keep skills only)
 .claude/
 !.claude/skills/

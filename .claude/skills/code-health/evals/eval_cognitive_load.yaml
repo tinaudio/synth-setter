@@ -1,0 +1,40 @@
+name: cognitive_load_reduction
+skill: code-health
+description: Verify Claude identifies high cognitive load and simplifies
+prompt: |
+  Review this function:
+
+  ```python
+  def finalize_dataset(shards, metadata, config, workers, dry_run=False):
+      valid = [s for s in shards if s["status"] == "valid" and s["id"] not in
+               [w["failed"] for w in workers if "failed" in w] and
+               s["num_samples"] >= config.get("min_samples", 100)]
+      if not dry_run:
+          for s in valid:
+              path = Path(config["output_dir"]) / f"data/shards/{s['id']}.h5"
+              if not path.parent.exists():
+                  path.parent.mkdir(parents=True, exist_ok=True)
+              write_hdf5(path, s["data"], attrs={"id": s["id"], "n": s["num_samples"],
+                         "src": s.get("worker_id", "unknown"), "ts": datetime.now().isoformat(),
+                         "cfg": json.dumps({k: v for k, v in config.items() if k != "secret"})})
+              metadata["written"].append({"id": s["id"], "path": str(path), "n": s["num_samples"]})
+      return valid, metadata
+  ```
+context_files: []
+success_criteria:
+  - Identifies the dense list comprehension as hard to read
+  - Flags the long write_hdf5 call with inline dict construction
+  - Suggests extracting the filtering logic into a named function or variable
+  - Suggests extracting HDF5 attribute building into a helper
+  - Notes single-character variable names reduce readability
+failure_criteria:
+  - Approves the code as-is
+  - Only flags style issues (line length, formatting)
+  - Suggests major architectural changes instead of targeted simplification
+comparator_focus: |
+  Does the review identify the TWO main cognitive load sources: the dense
+  list comprehension and the inline HDF5 attrs dict? Are suggestions
+  practical and proportional?
+tags:
+  - code-health
+  - cognitive-load

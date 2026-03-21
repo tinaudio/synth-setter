@@ -1,0 +1,46 @@
+name: all_checklists_invoked
+skill: review
+description: Verify the review skill invokes all 7 sub-checklists before reviewing
+prompt: |
+  Review this diff that touches both Python and shell code:
+
+  ```python
+  # src/pipeline/launcher.py
+  + def launch_workers(config: dict, num_workers: int) -> list[str]:
+  +     worker_ids = []
+  +     for i in range(num_workers):
+  +         wid = f"worker-{i:04d}"
+  +         subprocess.run(["bash", "scripts/launch.sh", wid, json.dumps(config)])
+  +         worker_ids.append(wid)
+  +     return worker_ids
+  ```
+
+  ```bash
+  # scripts/launch.sh
+  + #!/bin/bash
+  + WORKER_ID=$1
+  + CONFIG=$2
+  + echo "Launching $WORKER_ID"
+  + python -c "import json; c=json.loads('$CONFIG'); print(c)"
+  ```
+context_files: []
+success_criteria:
+  - All 7 skill invocations attempted (tdd, code-health, ml-pipeline, project, python-style, shell-style, ml-test)
+  - Findings use BLOCK/WARN format with file:line and category
+  - Categories map to the 7 checklist names
+  - Shell injection vulnerability detected (json.loads with unquoted $CONFIG)
+  - Summary line with X BLOCK, Y WARN count
+failure_criteria:
+  - Fewer than 5 checklists invoked
+  - shell-style checklist skipped despite .sh file in diff
+  - Shell injection vulnerability missed
+  - No BLOCK/WARN format used
+  - No summary line
+comparator_focus: |
+  Count how many of the 7 checklists are represented in the output. The shell
+  injection vulnerability ($CONFIG unquoted in python -c) is the most critical
+  finding -- it should be BLOCK severity. Also verify the BLOCK/WARN format.
+tags:
+  - review
+  - orchestration
+  - completeness

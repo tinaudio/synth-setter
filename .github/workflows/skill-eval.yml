@@ -1,0 +1,82 @@
+name: Skill Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      skill:
+        description: "Skill to evaluate ('all' for Tier 1, or specific skill name)"
+        required: true
+        default: "all"
+        type: string
+      max_evals:
+        description: "Max eval cases per skill"
+        required: false
+        default: "5"
+        type: string
+      model:
+        description: "Claude model for evals"
+        required: false
+        default: "claude-sonnet-4-20250514"
+        type: string
+  pull_request:
+    paths:
+      - ".claude/skills/**/SKILL.md"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install anthropic pyyaml
+
+      - name: Determine skill to evaluate
+        id: skill
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ inputs.skill }}" >> "$GITHUB_OUTPUT"
+            echo "max_evals=${{ inputs.max_evals }}" >> "$GITHUB_OUTPUT"
+            echo "model=${{ inputs.model }}" >> "$GITHUB_OUTPUT"
+          else
+            # Auto-detect which skills changed in the PR
+            CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" \
+              "${{ github.event.pull_request.head.sha }}" \
+              -- '.claude/skills/*/SKILL.md' | \
+              sed 's|.claude/skills/\(.*\)/SKILL.md|\1|' | tr '\n' ',')
+            if [ -z "$CHANGED" ]; then
+              echo "name=all" >> "$GITHUB_OUTPUT"
+            else
+              echo "name=${CHANGED%,}" >> "$GITHUB_OUTPUT"
+            fi
+            echo "max_evals=5" >> "$GITHUB_OUTPUT"
+            echo "model=claude-sonnet-4-20250514" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run skill evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          IFS=',' read -ra SKILLS <<< "${{ steps.skill.outputs.name }}"
+          for skill in "${SKILLS[@]}"; do
+            python scripts/eval_skills.py \
+              --skill "$skill" \
+              --max-evals "${{ steps.skill.outputs.max_evals }}" \
+              --model "${{ steps.skill.outputs.model }}" \
+              --run \
+              --verbose
+          done
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: eval-results/
+          retention-days: 30

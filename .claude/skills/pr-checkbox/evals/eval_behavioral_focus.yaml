@@ -1,0 +1,39 @@
+name: behavioral_testing_emphasis
+skill: pr-checkbox
+description: Verify PR verification emphasizes behavioral testing over implementation checking
+prompt: |
+  Verify this PR that refactors the shard validation logic. The internal implementation
+  changed completely but the public API is identical.
+
+  Old implementation used regex, new uses string slicing:
+  ```python
+  # Before:
+  - import re
+  - def validate_shard_id(sid: str) -> bool:
+  -     return bool(re.match(r'^shard-\d{6}$', sid))
+
+  # After:
+  + def validate_shard_id(sid: str) -> bool:
+  +     if len(sid) != 12 or not sid.startswith('shard-'):
+  +         return False
+  +     return sid[6:].isdigit()
+  ```
+
+  Tests are unchanged and all pass.
+context_files: []
+success_criteria:
+  - Recognizes this is a pure refactor with preserved behavior
+  - Focuses on whether existing tests still pass (behavioral)
+  - Does NOT flag the implementation change as a concern
+  - Acknowledges that passing tests validate the refactor
+failure_criteria:
+  - Flags the implementation change as problematic
+  - Requests new tests for the new implementation details
+  - Focuses on HOW the code works rather than WHAT it does
+  - Misses that this is a behavior-preserving refactor
+comparator_focus: |
+  Key test: does the verification recognize a behavior-preserving refactor?
+  It should focus on whether tests pass, not on implementation changes.
+tags:
+  - pr-verification
+  - behavioral-testing

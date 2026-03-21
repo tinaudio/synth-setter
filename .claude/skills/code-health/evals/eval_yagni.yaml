@@ -1,0 +1,38 @@
+name: yagni_violation_detection
+skill: code-health
+description: Verify Claude catches YAGNI violations in code review
+prompt: |
+  Review this PR diff:
+
+  ```python
+  # src/data/shard_writer.py
+  + class ShardWriter:
+  +     def __init__(self, output_dir: Path, format: str = "hdf5",
+  +                  compression: str = "gzip", compression_level: int = 4,
+  +                  chunk_size: int = 1024, enable_checksums: bool = True,
+  +                  enable_encryption: bool = False, encryption_key: str | None = None,
+  +                  enable_dedup: bool = False, dedup_algorithm: str = "xxhash",
+  +                  max_retries: int = 3, retry_delay: float = 1.0,
+  +                  callback: Callable | None = None):
+  ```
+
+  PR description says: "Add shard writer for the pipeline. Currently we only
+  write HDF5 shards to local disk."
+context_files: []
+success_criteria:
+  - Flags YAGNI violation -- encryption, dedup, callbacks are not needed yet
+  - Notes the mismatch between PR description (simple HDF5 writing) and interface (14 params)
+  - Suggests starting with only the parameters needed now
+  - Uses WARN or BLOCK severity appropriately
+  - Does not flag format/compression params (those are reasonable)
+failure_criteria:
+  - Approves all parameters as "good forward-thinking design"
+  - Misses the YAGNI violation entirely
+  - Flags compression/chunk_size as unnecessary (they're reasonable)
+comparator_focus: |
+  Does the review catch the YAGNI violation? The encryption, dedup, and callback
+  params are clearly premature. The PR description confirms only HDF5-to-disk
+  is needed. Weight this detection heavily.
+tags:
+  - code-health
+  - yagni

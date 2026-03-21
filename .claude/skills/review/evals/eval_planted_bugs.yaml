@@ -1,0 +1,66 @@
+name: planted_bug_detection
+skill: review
+description: Verify the review skill catches planted violations across multiple checklists
+prompt: |
+  Review this diff:
+
+  ```python
+  # src/data/processor.py
+  + import os
+  + from pathlib import Path
+  +
+  + def process_audio_batch(audio_files, output_dir, config):
+  +     """Process a batch of audio files."""
+  +     results = []
+  +     for f in audio_files:
+  +         try:
+  +             data = load_audio(f)
+  +             if data is not None:
+  +                 if len(data) > 0:
+  +                     if config.get("normalize"):
+  +                         data = normalize(data)
+  +                         if config.get("trim"):
+  +                             data = trim_silence(data)
+  +                             result = {"file": f, "samples": len(data), "processed": True}
+  +                             results.append(result)
+  +             path = Path(output_dir) / "data" / "shards" / f"{os.path.basename(f)}.h5"
+  +             path.parent.mkdir(parents=True, exist_ok=True)
+  +             save_hdf5(path, data)
+  +         except:
+  +             pass
+  +     MAGIC_THRESHOLD = 42
+  +     return [r for r in results if r["samples"] > MAGIC_THRESHOLD]
+  ```
+
+  No tests were included in this PR.
+
+  Planted violations:
+  - [code-health] Deep nesting (5 levels)
+  - [code-health] Magic number (42)
+  - [python-style] Bare except
+  - [python-style] Missing type annotations
+  - [project] Writing to data/shards/ outside finalize
+  - [project] No type annotations on function signature
+  - [tdd] No tests included
+context_files: []
+success_criteria:
+  - Catches bare except (BLOCK)
+  - Catches deep nesting (WARN or BLOCK)
+  - Catches magic number 42 (WARN)
+  - Catches missing type annotations (WARN)
+  - Catches writing to data/shards/ outside finalize (BLOCK -- pipeline rule)
+  - Catches missing tests (BLOCK or WARN)
+  - At least 5 of 7 planted violations detected
+failure_criteria:
+  - Fewer than 3 planted violations detected
+  - Bare except not flagged
+  - Pipeline rule violation (data/shards/) not flagged
+  - Output not in BLOCK/WARN format
+comparator_focus: |
+  This is a planted-bug test. Count how many of the 7 known violations are
+  detected. The bare except and data/shards/ pipeline violation are the most
+  critical. Score = violations detected / 7.
+tags:
+  - review
+  - false-negative-rate
+  - planted-bugs

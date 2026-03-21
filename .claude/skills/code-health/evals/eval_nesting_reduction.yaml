@@ -1,0 +1,41 @@
+name: nesting_reduction
+skill: code-health
+description: Verify Claude reduces nesting depth when reviewing deeply nested code
+prompt: |
+  Review this function and suggest improvements:
+
+  ```python
+  def process_shards(shards, config):
+      results = []
+      for shard in shards:
+          if shard is not None:
+              if shard.get("status") == "ready":
+                  if shard.get("num_samples", 0) > 0:
+                      if config.get("validate", True):
+                          if validate_shard(shard):
+                              results.append(transform(shard))
+                          else:
+                              logger.warning(f"Invalid shard: {shard['id']}")
+                      else:
+                          results.append(transform(shard))
+      return results
+  ```
+context_files: []
+success_criteria:
+  - Identifies excessive nesting as the primary issue
+  - Suggests guard clauses / early continues to flatten the loop
+  - Refactored version has max 2-3 levels of nesting
+  - Preserves the original behavior (same filtering logic)
+  - Does not over-engineer (no new classes or abstractions for this)
+failure_criteria:
+  - Doesn't mention nesting depth
+  - Suggests adding more nesting
+  - Creates unnecessary abstractions (helper classes, strategy pattern)
+  - Refactored code changes the behavior
+comparator_focus: |
+  Does the review identify nesting as the core issue? Is the suggested
+  refactoring practical (guard clauses, not over-abstraction)?
+tags:
+  - code-health
+  - nesting
+  - readability

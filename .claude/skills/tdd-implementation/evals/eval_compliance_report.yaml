@@ -1,0 +1,26 @@
+name: tdd_compliance_report
+skill: tdd-implementation
+description: Verify Claude produces a TDD compliance report after implementation
+prompt: |
+  Implement a function `merge_shard_metadata(shards: list[dict]) -> dict` in
+  `src/utils/metadata.py` that merges metadata from multiple shards into a single
+  summary dict with keys: total_samples, total_bytes, shard_ids.
+  Each input dict has: shard_id (str), num_samples (int), size_bytes (int).
+context_files:
+  - src/utils/__init__.py
+success_criteria:
+  - A TDD compliance report table is produced after implementation
+  - Report covers all 16 checklist items
+  - Each item has Applied status (checkmark, warning, or X) and evidence
+  - Narrative summary follows the table
+  - Report is honest about which principles were/weren't applied
+failure_criteria:
+  - No compliance report produced
+  - Report claims all items applied without evidence
+  - Report omits items or is incomplete
+comparator_focus: |
+  Does Claude produce the 16-item TDD compliance report table after finishing?
+  Is it honest and evidence-based, or is it a rubber-stamp?
+tags:
+  - tdd
+  - compliance-report

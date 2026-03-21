@@ -1,0 +1,26 @@
+name: red_green_refactor_ordering
+skill: tdd-implementation
+description: Verify Claude writes tests before implementation code (Red-Green-Refactor)
+prompt: |
+  Implement a function `validate_shard_id(shard_id: str) -> bool` in `src/utils/validation.py`
+  that returns True if shard_id matches the pattern `shard-NNNNNN` (exactly 6 digits).
+  Invalid inputs should return False, not raise exceptions.
+context_files:
+  - src/utils/__init__.py
+success_criteria:
+  - Test file created before or simultaneously with implementation
+  - At least one test is written and run before the implementation exists
+  - Test contains both valid and invalid shard ID scenarios
+  - Implementation is minimal -- validates pattern only, no extras
+  - Test names follow test_<what>_<condition>_<expected> pattern
+failure_criteria:
+  - Implementation written without any test file
+  - All tests written after implementation is complete
+  - Test only covers the happy path (valid shard IDs)
+comparator_focus: |
+  Focus on TDD cycle adherence: were tests written FIRST? Was the implementation
+  minimal (just enough to pass)? Did Claude explicitly run a failing test before
+  writing implementation code?
+tags:
+  - tdd
+  - red-green-refactor

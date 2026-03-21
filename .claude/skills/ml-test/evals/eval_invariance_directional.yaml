@@ -1,0 +1,32 @@
+name: invariance_and_directional_tests
+skill: ml-test
+description: Verify Claude writes post-train behavioral tests (invariance + directional)
+prompt: |
+  Write post-train behavioral tests for an audio classifier that predicts
+  instrument type from mel spectrograms. The model is already trained.
+  Write tests that verify the model's behavior is robust and sensible:
+  - Invariance: predictions shouldn't change for certain input transformations
+  - Directional: certain input changes should predictably affect outputs
+
+  Assume the model has a `predict(mel: torch.Tensor) -> str` method.
+context_files:
+  - src/models/__init__.py
+success_criteria:
+  - At least one invariance test (e.g., time-shift, small noise, gain change)
+  - At least one directional test (e.g., silence -> low confidence)
+  - Tests use real-ish synthetic audio patterns, not pure random noise
+  - Tests are deterministic (seeded)
+  - Tests document what behavioral property they verify
+failure_criteria:
+  - Only tests output shape or type
+  - No invariance tests
+  - No directional tests
+  - Uses pure random noise as input (not meaningful)
+comparator_focus: |
+  Does Claude understand the invariance/directional testing paradigm?
+  Quality matters: are the transformations musically/acoustically meaningful
+  (e.g., time-shift invariance for instrument classification)?
+tags:
+  - ml-testing
+  - behavioral-tests
+  - post-train

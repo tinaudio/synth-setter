@@ -1,0 +1,30 @@
+name: appropriate_mock_usage
+skill: tdd-implementation
+description: Verify mocks are used sparingly and only at architectural boundaries
+prompt: |
+  Implement a `ShardUploader` class in `src/pipeline/uploader.py` that:
+  - Takes an rclone binary path and R2 bucket URL
+  - Has an `upload(local_path: Path, remote_key: str) -> bool` method
+  - Uses subprocess to call rclone with --checksum flag
+  - Retries once on CalledProcessError
+  Write tests for this class.
+context_files:
+  - src/pipeline/__init__.py
+success_criteria:
+  - subprocess.run is mocked (it's an external boundary)
+  - pytest-mock (mocker fixture) used instead of unittest.mock decorators
+  - Mock is at the architectural boundary (subprocess), not between internal classes
+  - Retry behavior tested by simulating failure then success
+  - No mocking of ShardUploader's own internal methods
+failure_criteria:
+  - Real subprocess.run called in tests (would hit filesystem/network)
+  - unittest.mock.patch decorators used instead of pytest-mock
+  - Internal methods of ShardUploader mocked
+  - Mock used where a real object or fake would work
+comparator_focus: |
+  Focus on mock placement: is subprocess.run mocked at the boundary?
+  Is pytest-mock used? Are internal methods left unmocked?
+  The retry behavior test is the key scenario.
+tags:
+  - tdd
+  - mocking

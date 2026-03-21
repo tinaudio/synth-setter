@@ -1,0 +1,49 @@
+name: verification_table_format
+skill: pr-checkbox
+description: Verify PR verification produces correct PASS/FAIL table format
+prompt: |
+  Review this PR that adds a new `normalize_audio` function to `src/data/audio.py`.
+  The PR includes tests in `tests/test_audio.py`. Run the verification steps
+  and post the results.
+
+  Here is the diff:
+  ```python
+  # src/data/audio.py
+  + def normalize_audio(signal: np.ndarray, target_db: float = -20.0) -> np.ndarray:
+  +     rms = np.sqrt(np.mean(signal ** 2))
+  +     if rms == 0:
+  +         return signal
+  +     target_rms = 10 ** (target_db / 20)
+  +     return signal * (target_rms / rms)
+  ```
+
+  ```python
+  # tests/test_audio.py
+  + def test_normalize_audio_silent_signal_unchanged():
+  +     signal = np.zeros(1000)
+  +     result = normalize_audio(signal)
+  +     np.testing.assert_array_equal(result, signal)
+  +
+  + def test_normalize_audio_scales_to_target():
+  +     signal = np.ones(1000) * 0.5
+  +     result = normalize_audio(signal, target_db=-20.0)
+  +     assert abs(np.sqrt(np.mean(result ** 2)) - 0.1) < 1e-6
+  ```
+context_files: []
+success_criteria:
+  - Output includes a structured verification table
+  - Each check has PASS or FAIL status with evidence
+  - Behavioral verification emphasized over implementation checking
+  - Verification hierarchy followed (behavioral > structural > cosmetic)
+  - Table uses the pr-checkbox skill's prescribed format
+failure_criteria:
+  - No verification table produced
+  - Bare PASS/FAIL without evidence
+  - Only checks code style, not behavior
+  - Claims verification without actually running anything
+comparator_focus: |
+  Does the output follow the pr-checkbox skill's prescribed verification format?
+  Is it evidence-based? Does it prioritize behavioral testing over cosmetic checks?
+tags:
+  - pr-verification
+  - format-compliance

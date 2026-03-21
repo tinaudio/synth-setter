@@ -1,0 +1,42 @@
+# Skill Evaluation Case Schema
+#
+# Each eval case is a YAML file in .claude/skills/<skill-name>/evals/
+# The eval runner (scripts/eval_skills.py) uses these to benchmark skills
+# via A/B comparator methodology.
+#
+# Schema:
+#   name: str           - Unique identifier for this eval case
+#   skill: str          - Skill name (must match directory name in .claude/skills/)
+#   description: str    - Human-readable description of what this eval tests
+#   prompt: str         - The task prompt given to Claude (multiline ok)
+#   context_files: list - Optional list of repo files to include in agent context
+#   success_criteria: list - What the output MUST exhibit (scored by comparator)
+#   failure_criteria: list - What the output MUST NOT exhibit (scored by comparator)
+#   comparator_focus: str  - Guidance for the comparator on what to prioritize
+#   tags: list          - Optional tags for filtering (e.g. ["tdd", "behavior-testing"])
+#
+# Example:
+#
+#   name: red_green_refactor_ordering
+#   skill: tdd-implementation
+#   description: Verify Claude writes tests before implementation code
+#   prompt: |
+#     Implement a function `validate_shard_id(shard_id: str) -> bool`
+#     that returns True if shard_id matches pattern `shard-NNNNNN`.
+#   context_files:
+#     - src/utils/shard.py
+#   success_criteria:
+#     - Test file created before or simultaneously with implementation
+#     - Test contains at least one failing assertion scenario
+#     - Implementation is minimal -- no extra features beyond spec
+#     - Test name follows test_<what>_<condition>_<expected> pattern
+#   failure_criteria:
+#     - Implementation written without any test
+#     - Test only covers happy path
+#   comparator_focus: |
+#     Focus on whether the TDD cycle was followed: tests written first,
+#     minimal implementation, then refactor. Weight test-first ordering
+#     most heavily.
+#   tags:
+#     - tdd
+#     - red-green-refactor

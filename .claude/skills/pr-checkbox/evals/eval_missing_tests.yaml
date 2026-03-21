@@ -1,0 +1,41 @@
+name: detect_missing_test_coverage
+skill: pr-checkbox
+description: Verify PR verification catches missing edge case tests
+prompt: |
+  Verify this PR that adds audio clipping detection:
+
+  ```python
+  # src/data/audio.py
+  + def detect_clipping(signal: np.ndarray, threshold: float = 0.99) -> dict:
+  +     clipped_samples = np.sum(np.abs(signal) >= threshold)
+  +     return {
+  +         "is_clipped": clipped_samples > 0,
+  +         "clipped_ratio": clipped_samples / len(signal),
+  +         "max_amplitude": float(np.max(np.abs(signal))),
+  +     }
+  ```
+
+  ```python
+  # tests/test_audio.py
+  + def test_detect_clipping_clean_signal():
+  +     signal = np.sin(np.linspace(0, 2*np.pi, 1000)) * 0.5
+  +     result = detect_clipping(signal)
+  +     assert result["is_clipped"] is False
+  ```
+context_files: []
+success_criteria:
+  - Identifies that edge cases are not tested (empty signal, all-clipped signal)
+  - Notes the division-by-zero risk with empty signal (len(signal) = 0)
+  - Flags missing test for the clipped case (is_clipped=True)
+  - Uses WARN or BLOCK appropriately for severity
+failure_criteria:
+  - Marks all checks as PASS without noticing missing tests
+  - Misses the division-by-zero edge case
+  - Only checks cosmetic issues (naming, formatting)
+comparator_focus: |
+  Does the verification catch the missing edge case tests? The empty-signal
+  division-by-zero is the most critical finding. Missing clipped-case test
+  is also important.
+tags:
+  - pr-verification
+  - edge-cases
