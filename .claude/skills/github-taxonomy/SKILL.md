@@ -74,7 +74,8 @@ ISSUE_NODE_ID=$(gh api graphql -f query='
 ' -f owner="tinaudio" -f repo="synth-setter" -F number=ISSUE_NUMBER \
   --jq '.data.repository.issue.id')
 
-# Find the issue type ID (e.g., "Task")
+# Find the issue type ID — replace ISSUE_TYPE with the correct type
+# (one of: Epic, Phase, Task, Bug, Feature)
 ISSUE_TYPE_ID=$(gh api graphql -f query='
   query($owner: String!, $repo: String!) {
     repository(owner: $owner, name: $repo) {
@@ -84,7 +85,7 @@ ISSUE_TYPE_ID=$(gh api graphql -f query='
     }
   }
 ' -f owner="tinaudio" -f repo="synth-setter" \
-  --jq '.data.repository.issueTypes.nodes[] | select(.name == "Task") | .id')
+  --jq '.data.repository.issueTypes.nodes[] | select(.name == "ISSUE_TYPE") | .id')
 
 # Set the issue type
 gh api graphql -f query='
@@ -106,8 +107,9 @@ gh issue edit ISSUE_NUMBER --repo tinaudio/synth-setter --milestone "MILESTONE_N
 
 Include the issue reference in the PR body:
 
-- Use `Closes #N` if the PR fully resolves the issue
+- Use `Fixes #N` or `Closes #N` if the PR fully resolves the issue (auto-closes on merge)
 - Use `Refs #N` if the PR is related but doesn't fully resolve it
+- Bare `#N` also passes the gate but won't auto-close
 
 #### Domain-to-milestone mapping
 
@@ -208,7 +210,7 @@ Verify you have set all required fields. Missing metadata creates tracking gaps 
 
 **PR checklist:**
 - [ ] Linked issue is taxonomy-compliant (issue type + domain label + milestone)
-- [ ] Correct linking method used (`Fixes` vs `Refs`)
+- [ ] Correct linking method used (`Fixes`/`Closes` vs `Refs` vs bare `#N`)
 - [ ] Domain label applied
 - [ ] Milestone assigned
 - [ ] Added to project
