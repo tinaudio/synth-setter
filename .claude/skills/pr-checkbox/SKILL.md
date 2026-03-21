@@ -5,212 +5,143 @@ description: Rigid process skill for posting PR verification results. Use this s
 
 # PR Verification Checkbox Skill
 
-This is a **rigid** process skill. Follow every step exactly — no shortcuts, no "PASS" assertions without evidence.
+This is a **rigid** process skill. No shortcuts. No "PASS" assertions without evidence.
 
-## Verify behavior, not implementation
+## VERIFY BEHAVIOR, NOT IMPLEMENTATION
 
-This is the single most important principle in this skill. Read it twice.
+This is the foundation of this entire skill. Everything else is formatting. If you get this wrong, perfect checkboxes are worthless.
 
-**Grepping a diff is not verification.** Checking that a line exists in a diff proves someone typed it — it does not prove the system works. A config file can have the right content and still be ignored. A workflow can have the right YAML and still fail at runtime. A dependency can be listed and still not install.
+### What this means
 
-When verifying a PR, you must test what the change **does**, not what it **says**. Every verification step should answer: "does the system behave correctly after this change?" — not "does the diff contain the expected string?"
+Treat the system as a **black box**. You put something in, you check what comes out. You do not care how the inside works. You care whether the *promise* was kept.
 
-### The hierarchy of verification (strongest to weakest)
+**The restaurant test:** You order a medium-rare steak. When the plate arrives, you check if the steak is medium-rare. You do NOT go into the kitchen and check if the chef used a cast-iron skillet, flipped it three times, or seasoned it with kosher salt. If the chef switches to a better grill tomorrow, the steak is still medium-rare — your test should still pass.
 
-1. **Run the actual tool and observe output** — `pyright --project pyrightconfig.json` proves type checking works. `pytest -n auto` proves parallel execution works. `python3 -c "import yaml; yaml.safe_load(open('codecov.yml'))"` proves YAML is valid. This is real verification.
+**The contract:** Every change makes a promise. "This config will make pyright check types in basic mode." "This workflow will run tests every night at 6am UTC." "This Makefile target will run tests in parallel." The verification tests the *promise*, not the *wiring* that fulfills it.
 
-2. **Query the live system** — `gh pr view --json labels` to confirm metadata is set. `gh api repos/.../contents/FILE` to confirm a file exists on the branch. These test actual state, not diff content.
+**The litmus test:** If someone rewrote the internals from scratch but kept the same inputs and outputs, would your verification still pass? If not, you're testing implementation.
 
-3. **Parse and validate file content** — Read the actual file (not the diff), parse it programmatically, and assert properties. `python3 -c "import json; c=json.load(open('config.json')); assert c['mode'] == 'basic'"` is better than `grep 'basic' config.json`.
+### The hierarchy (strongest → weakest)
 
-4. **Grep the diff** — This is the weakest form. It only confirms a string is present in the change. Use this ONLY for "does the PR body contain `Closes #N`" checks or when no stronger method is possible. Never use `gh pr diff | grep` as the sole verification for functional behavior.
+| Level | What you do | Example | Tests |
+|-------|------------|---------|-------|
+| **1. Exercise the code path** | Actually invoke the tool/system and observe the result | `pyright --project pyrightconfig.json` | Does type checking actually work? |
+| **2. Trigger the behavior end-to-end** | Create a real input and check the real output | Create an issue with `gh issue create`, then verify it has correct metadata | Does the workflow actually produce the right result? |
+| **3. Parse the actual file and assert properties** | Read the deployed file, parse it, assert | `python3 -c "import yaml; cfg=yaml.safe_load(open('codecov.yml')); assert cfg[...] == '1%'"` | Does the file contain valid, correct values? |
+| **4. Query live system state** | Ask GitHub/CI what the current state is | `gh pr view --json labels` | Is the metadata actually set? |
+| **5. Grep the diff** | Check if a string exists in the change | `gh pr diff \| grep 'Closes #123'` | Was a specific string typed? |
 
-### Examples: bad vs. good
+**Level 5 is almost always wrong for functional checks.** It only confirms someone typed a string. Use it exclusively for PR body content checks ("does it reference the issue?") where the text IS the behavior.
 
-**Bad** (verifying implementation):
-```bash
-$ gh pr diff 191 | grep 'threshold: 1%'
-+        threshold: 1% # fail if coverage drops by more than 1%
+### Concrete DO / DON'T
+
 ```
-This proves someone wrote "1%" in the diff. It doesn't prove codecov will enforce it.
+DO:   Run the tool         →  pyright --project pyrightconfig.json
+DO:   Exercise the path    →  gh issue create ... && gh api .../issues/N to verify metadata
+DO:   Assert on output     →  assert result.exit_code == 0
+DO:   Check side effects   →  ls output_file.json && python3 -c "assert valid"
 
-**Good** (verifying behavior):
-```bash
-$ python3 -c "
-import yaml
-cfg = yaml.safe_load(open('.github/codecov.yml'))
-threshold = cfg['coverage']['status']['project']['default']['threshold']
-print(f'Project threshold: {threshold}')
-assert threshold == '1%', f'Expected 1%, got {threshold}'
-"
-Project threshold: 1%
-```
-This parses the actual file and asserts the value programmatically.
-
-**Bad** (verifying implementation):
-```bash
-$ gh pr diff 195 | grep 'typeCheckingMode'
-+  "typeCheckingMode": "basic",
+DON'T: Grep the diff       →  gh pr diff | grep 'typeCheckingMode'
+DON'T: Check internal state →  assert len(obj._internal_list) == 3
+DON'T: Verify wiring       →  "did the function call parseInput()?"
+DON'T: Read instead of run  →  parse config to check a value when you could run the tool
 ```
 
-**Good** (verifying behavior):
-```bash
-$ pyright --project pyrightconfig.json 2>&1 | tail -1
-0 errors, 0 warnings, 0 informations
-```
-This runs the actual type checker with the actual config and proves it works.
+### If verification steps test implementation, rewrite them
 
-### When to check out the PR branch
+When you encounter verification steps (in a PR description or issue) that test implementation instead of behavior, **rewrite them**. Show what you changed:
 
-To verify behavior, you often need the PR's code locally. Check out the branch or use an existing worktree:
-
-```bash
-# Option 1: Use existing worktree if available
-cd /path/to/worktree
-
-# Option 2: Create a temporary worktree
-git worktree add /tmp/verify-pr-NNN origin/branch-name
-cd /tmp/verify-pr-NNN
-# ... run verification ...
-git worktree remove /tmp/verify-pr-NNN
+```markdown
+- [x] **Pyright config works** *(rewritten: original checked `gh pr diff | grep typeCheckingMode` → now exercises pyright directly)*
+  ```bash
+  $ pyright --project pyrightconfig.json 2>&1 | tail -1
+  0 errors, 0 warnings, 0 informations
+  ```
 ```
 
-Diff-grepping should be reserved for metadata checks (labels, milestones, issue references) where the "behavior" IS the text content.
+Always include `(rewritten: original checked X → now checks Y)` so reviewers can see what changed and why.
 
-## Why this matters
+### Spend time understanding what each check is meant to prove
 
-Verification without evidence is just opinion. When someone reads a PR months later, they need to see exactly what was run and what came back — not a table of "PASS" labels. Checkboxes with commands and output make verification auditable, reproducible, and trustworthy.
+Before writing a verification command, ask: **what is this check actually trying to prove?**
+
+- "CODEOWNERS exists" → The real question is: will GitHub auto-assign reviewers? Exercise it: push a change to a covered path and check if a reviewer is requested, or at minimum verify GitHub's API recognizes the file on the branch.
+- "pytest-xdist in requirements" → The real question is: do tests run in parallel? Exercise it: run `pytest -n auto` and check for `[gw0]` worker prefixes in the output.
+- "Nightly workflow has cron trigger" → The real question is: will this workflow fire on schedule? Exercise it: trigger the workflow manually via `gh workflow run` and check it starts, or at minimum validate the cron expression with a parser.
+- "Skill has frontmatter" → The real question is: does the skill trigger and produce the right output? Exercise it: invoke the skill with a test input and check the output shape.
 
 ## The Rule
 
-Every verification step gets a checkbox. Every checkbox shows the command and its output. The checkbox is only ticked if the result is unambiguous.
+Every verification step gets a checkbox. Every checkbox shows the command run and its console output. The checkbox is only ticked if the result is unambiguous.
 
 ## Process
 
-### Step 1: Run each verification step and capture output
+### Step 1: Check out the PR branch
 
-For every verification step defined in the PR:
+You need the actual files to exercise actual behavior. Diff-grepping is not acceptable.
 
-1. Check out the PR branch or use an existing worktree — you need the actual files, not just the diff
-2. Run commands that test **behavior** (run the tool, parse the file, execute the config)
-3. Capture the full console output
-4. Determine: does this **unambiguously** pass, fail, or is it ambiguous?
+```bash
+git worktree add /tmp/verify-pr-NNN origin/branch-name
+cd /tmp/verify-pr-NNN
+```
 
-### Step 2: Format results with checkboxes
+### Step 2: Design behavioral checks
 
-Each verification step becomes a checkbox item. The format depends on output size:
+For each verification step, ask: "what promise does this change make?" Then design a command that tests whether the promise was kept by exercising the actual code path.
 
-#### Small output (< ~20 lines) — inline in PR description
+If the original verification steps test implementation (grep the diff, check if a line is present), **rewrite them** to test behavior. Show the before → after.
 
-Put the command and output directly next to the checkbox:
+### Step 3: Run and capture output
+
+Run each command and capture the full console output. Every check must show:
+1. The exact command run (prefixed with `$`)
+2. The actual console output
+3. Your determination: unambiguous pass, fail, or ambiguous
+
+### Step 4: Format with checkboxes
+
+Size-based placement:
+
+#### Small output (< ~20 lines) — inline
 
 ```markdown
-- [x] **JSON syntax valid**
+- [x] **Pyright runs clean with this config**
   ```bash
-  $ python3 -c "import json; json.load(open('pyrightconfig.json'))"
-  # (no output — exit code 0)
+  $ pyright --project pyrightconfig.json 2>&1 | tail -1
+  0 errors, 0 warnings, 0 informations
   ```
-
-- [x] **Threshold is 1% not 100%**
-  ```bash
-  $ grep threshold .github/codecov.yml
-  threshold: 1%  # fail if coverage drops by more than 1%
-  threshold: 1%  # fail if new code has >1% less coverage than target
-  ```
-
-- [ ] **Type checking passes** *(ambiguous — see comment)*
-  ```bash
-  $ pyright --project pyrightconfig.json
-  0 errors, 3 warnings, 0 informations
-  ```
-  > Warnings present — needs review to determine if these are expected.
 ```
 
 #### Medium output (20-100 lines) — PR comment with link
 
-1. Post a PR comment containing the command and full output
-2. In the PR description checkbox, link to that comment:
-
 ```markdown
-- [x] **All tests pass in parallel mode** — [verification output](#issuecomment-12345)
+- [x] **Tests run in parallel** — [verification output](#issuecomment-12345)
 ```
 
-The comment itself should contain:
-
-```markdown
-## Verification: All tests pass in parallel mode
-
-```bash
-$ pytest -n auto -m "not slow" -vv
-========================= test session starts ==========================
-platform darwin -- Python 3.10.12, pytest-7.4.0, pluggy-1.2.0
-...
-========================= 42 passed in 12.34s ==========================
-```
-```
-
-#### Large output (100+ lines) — GitHub Gist with summary
-
-1. Create a GitHub Gist with the full console output
-2. Post a PR comment with a summary, key lines, and link to the gist
-3. In the PR description checkbox, link to the comment:
+#### Large output (100+ lines) — Gist with summary
 
 ```markdown
 - [x] **Full test suite passes** — [summary + gist](#issuecomment-67890)
 ```
 
-The comment should contain:
+### Step 5: Tick or leave unchecked
 
-```markdown
-## Verification: Full test suite passes
+- **`[x]`** — Output unambiguously confirms the promise was kept. Zero doubt.
+- **`[ ]`** — Any ambiguity. Explain what's unclear.
 
-**Result:** 142 passed, 0 failed, 3 skipped
+A false `[x]` is worse than a cautious `[ ]`.
 
-Key output:
-```bash
-$ pytest -n auto
-...
-========================= 142 passed, 3 skipped in 45.12s =============
-```
+### Step 6: Post to the PR
 
-Full output: https://gist.github.com/user/abc123
-```
+Post as a comment with header `## Verification Results`.
 
-### Step 3: Tick or leave unchecked
+## Anti-patterns
 
-- **`[x]` (ticked):** The output unambiguously confirms the check passes. Zero doubt.
-- **`[ ]` (unchecked):** Any ambiguity at all. Add a brief explanation of what's unclear:
-  - Warnings present that might or might not matter
-  - Output doesn't cleanly confirm the expected result
-  - Exit code 0 but output contains error-like text
-  - Test passed but with unexpected side effects in the output
+- **Grepping the diff as verification** — `gh pr diff | grep 'expected line'` proves a line was typed. It does not prove the system works. This is the #1 failure mode.
+- **Parsing a file when you could run the tool** — If you can exercise the code path, do that instead of reading the config. Running `pyright` beats reading `pyrightconfig.json`.
+- **Checking that a file exists instead of checking that it works** — `ls SKILL.md` proves a file is there. Invoking the skill proves it works.
+- **Writing PASS/FAIL tables without commands or output**
+- **Ticking `[x]` when output contains warnings you haven't investigated**
+- **Saying "all checks pass" without showing evidence**
 
-When in doubt, leave unchecked. A false `[x]` is worse than a cautious `[ ]`.
-
-### Step 4: Post to the PR
-
-Place the verification checklist in the PR description (if writing it for the first time) or as a comment (if verifying after the PR was created). Use a clear header:
-
-```markdown
-## Verification Results
-```
-
-## Creating Gists for large output
-
-When output exceeds ~100 lines, create a gist:
-
-```bash
-gh gist create --public -f "verification-<step-name>.log" /path/to/output.log
-```
-
-Include the gist URL in your PR comment alongside the summary.
-
-## Anti-patterns — do NOT do these
-
-- **Grepping the diff as your primary verification** — `gh pr diff | grep 'expected line'` proves a line was typed, not that it works. Always prefer running the tool, parsing the file, or querying live state.
-- Writing a table with "PASS" / "FAIL" columns but no commands or output
-- Ticking `[x]` when output contains warnings you haven't investigated
-- Saying "all checks pass" without showing what was run
-- Posting verification results without the actual console output
-- Summarizing output as "looks good" instead of showing it
-- Using `gh pr diff | grep` for anything other than metadata checks (issue refs, PR body content)
+## Tests should be documentation of the requirements, not a transcript of the code.
