@@ -79,9 +79,11 @@ black = true
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
 build_command = ""
-commit_message = "chore(release): {version}"
+commit_message = "chore(release): {version} [skip ci]"
 changelog_file = "CHANGELOG.md"
 
+# Major bumps: handled by default via "feat!:" prefix or "BREAKING CHANGE:" footer
+# Pre-1.0: breaking changes bump minor (standard semver pre-1.0 behavior)
 [tool.semantic_release.commit_parser_options]
 allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "style", "test"]
 minor_tags = ["feat"]

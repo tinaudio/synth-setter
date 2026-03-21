@@ -1,3 +1,6 @@
+# Coexists with release-drafter.yml:
+# - Release Drafter maintains a rolling draft release from PR labels (preview)
+# - This workflow creates published releases from conventional commits (official)
 name: Semantic Release
 
 on:
@@ -10,12 +13,16 @@ permissions:
 
 jobs:
   release:
+    if: "!contains(github.event.head_commit.message, 'chore(release)')"
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
