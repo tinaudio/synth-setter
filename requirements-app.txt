@@ -19,6 +19,7 @@ webdataset
 dask[distributed]
 einops
 h5py
+hypothesis
 hdf5plugin
 librosa
 loguru
