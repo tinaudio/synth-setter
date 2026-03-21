@@ -98,7 +98,7 @@ jobs:
           # re-triggered check permanently blocks auto-approve.
           # See: PR #142 — check-pr-metadata passed on re-run but auto-approve
           # still saw "1 check(s) failed" from the original run.
-          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --paginate --jq '
+          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '
             [.check_runs[]
               | select(.name != "auto-approve" and .name != "Auto-approve status" and .name != "claude-review")
             ]
