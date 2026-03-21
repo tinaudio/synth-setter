@@ -23,8 +23,9 @@ sync: ## Merge changes from main branch to your current branch
 test: ## Run not slow tests
 	pytest -n auto -m "not slow"
 
+# test-full runs serially: GPU and DDP tests require exclusive device access
 test-full: ## Run all tests
-	pytest -n auto
+	pytest
 
 train: ## Train the model
 	python src/train.py
