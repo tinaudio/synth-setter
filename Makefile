@@ -36,8 +36,6 @@ coverage: ## Run tests with coverage report
 	pip install pytest-cov[toml]
 	pytest --cov=src --cov-report=term-missing --cov-report=html -m "not slow"
 
-ci-local: ## Run the full CI suite locally (pre-commit + tests)
-	$(MAKE) format test
 benchmark: ## Run performance benchmarks
 	pytest --benchmark-only -m "benchmark" -v
 
