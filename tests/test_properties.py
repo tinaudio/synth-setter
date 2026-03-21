@@ -3,6 +3,8 @@
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from omegaconf import OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 
 
 @pytest.mark.hypothesis
@@ -16,14 +18,14 @@ from hypothesis import strategies as st
     )
 )
 @settings(max_examples=50)
-def test_arbitrary_dict_does_not_crash_omegaconf(random_dict):
+def test_arbitrary_dict_does_not_crash_omegaconf(
+    random_dict: dict[str, int | str | None | float],
+) -> None:
     """OmegaConf.create should handle or reject arbitrary dicts without crashing."""
-    from omegaconf import OmegaConf
-
     try:
         cfg = OmegaConf.create(random_dict)
-        # If it accepts the dict, it should be convertible back
-        OmegaConf.to_container(cfg)
-    except Exception:  # noqa: S110
-        # Rejection is fine — crashing is not
-        pass
+    except OmegaConfBaseException:
+        return
+
+    # If it accepts the dict, it should be convertible back without errors
+    OmegaConf.to_container(cfg)
