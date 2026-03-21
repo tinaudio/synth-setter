@@ -21,10 +21,10 @@ sync: ## Merge changes from main branch to your current branch
 	git pull origin main
 
 test: ## Run not slow tests
-	pytest -m "not slow"
+	pytest -n auto -m "not slow"
 
 test-full: ## Run all tests
-	pytest
+	pytest -n auto
 
 train: ## Train the model
 	python src/train.py
