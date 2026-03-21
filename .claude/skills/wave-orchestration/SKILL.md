@@ -21,13 +21,20 @@ You have N improvements/fixes/features. Each needs its own PR. Some depend on ot
 ### Phase 1: Inventory and dependency graph
 
 1. List all items with their dependencies
-2. Build a dependency graph:
+2. For each item, list the files it will create or modify
+3. Build a dependency graph:
    ```
    Independent (no blockers):  → Wave 1
    Depends on Wave 1 items:    → Wave 2
    Depends on Wave 2 items:    → Wave 3
    ```
-3. Identify the maximum parallelism per wave (recommend 6 agents max)
+4. **File-overlap check**: Before finalizing waves, check that no two PRs in the same wave touch the same file. If they do, bump one to the next wave and note the reason:
+   ```
+   CONFLICT: PR-A and PR-B both modify pyproject.toml
+   → Move PR-B to Wave 2 (PR-A has higher priority / fewer dependencies)
+   ```
+   This prevents merge conflicts between parallel worktrees. Check all file types — config files like `pyproject.toml`, `Makefile`, `conftest.py`, and workflow YAMLs are the most common sources of overlap.
+5. Identify the maximum parallelism per wave (recommend 6 agents max)
 
 ### Phase 2: Issue creation
 
@@ -102,3 +109,4 @@ Between waves:
 - Dispatching agents without tracking issues — issues first, PRs second
 - Skipping verification — every PR gets pr-checkbox verification
 - Using `main` worktree for sub-agent work — always isolate in worktrees
+- Putting PRs that touch the same file in the same wave — file overlap causes merge conflicts; bump one to the next wave
