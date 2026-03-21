@@ -31,10 +31,11 @@ install: ## Install project in editable mode with dev deps
 	pip install -r requirements.txt -e .
 
 coverage: ## Run tests with coverage report
+	pip install pytest-cov[toml]
 	pytest --cov=src --cov-report=term-missing --cov-report=html -m "not slow"
 
 ci-local: ## Run the full CI suite locally (pre-commit + tests)
-	pre-commit run -a && pytest -n auto -m "not slow"
+	$(MAKE) format test
 
 train: ## Train the model
 	python src/train.py
