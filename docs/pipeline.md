@@ -32,7 +32,7 @@ ______________________________________________________________________
 
 ```
 ╔══════════════════════════════════════════════════════════════════╗
-║                   synth-permutations pipeline                    ║
+║                   synth-setter pipeline                    ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━ BUILD ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -48,10 +48,10 @@ ______________________________________________________________________
     ├── builder-base           gcc-12, ninja, flex
     ├── builder-install-surge-from-source   ┐ pick one via
     ├── builder-install-surge-from-prebuilt ┘ BUILD_MODE=source|prebuilt
-    ├── synth-permutations-src  GitHub tarball download
+    ├── synth-setter-src  GitHub tarball download
     ├── python-base            Python 3.10 + venv
     ├── wheels                 pip wheel cache (torch + app deps)
-    ├── builder-install-synth-permutations-deps   Python + X11 + rclone
+    ├── builder-install-synth-setter-deps   Python + X11 + rclone
     ├── r2-config-base         bakes rclone.conf with R2 credentials ⚠️
     ├── dev-live               ← make docker-build-dev-live
     ├── dev-snapshot           ← make docker-build-dev-snapshot

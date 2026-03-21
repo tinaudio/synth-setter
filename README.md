@@ -191,7 +191,7 @@ make docker-run-dev
 The image is tagged `tinaudio/perm:dev` (latest) and
 `tinaudio/perm:...-dev-live-<short-sha>` (pinned to the commit whose dep manifests were used).
 
-Your local code is mounted into the container at `/home/build/synth-permutations`.
+Your local code is mounted into the container at `/home/build/synth-setter`.
 To use a GPU, add `--gpus all` to the `docker run` command (or override `DOCKER_BUILD_FLAGS`).
 
 ### Dataset generation and training on vast.ai

@@ -1,6 +1,6 @@
 program: src/train.py
 entity: benhayes
-project: synth-permutations
+project: synth-setter
 command:
   - python
   - src/train.py
@@ -19,7 +19,7 @@ parameters:
       # - fm/flow_asym
       - fm/flow_fixed
       - fm/flow_fixed_asym
-  'experiment/fm/algorithm':
+  "experiment/fm/algorithm":
     values:
       - conditional
       - mixed

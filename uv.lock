@@ -2,6 +2,6 @@ version = 1
 requires-python = ">=3.10"
 
 [[package]]
-name = "synth-permutations"
+name = "synth-setter"
 version = "0.1.0"
 source = { virtual = "." }

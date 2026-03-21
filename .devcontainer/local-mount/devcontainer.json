@@ -1,6 +1,6 @@
 {
-	"name": "synth-permutations (local mount)",
+	"name": "synth-setter (local mount)",
 	"image": "tinaudio/perm:dev-live",
-	"workspaceMount": "source=${localWorkspaceFolder},target=/home/build/synth-permutations,type=bind,consistency=cached",
-	"workspaceFolder": "/home/build/synth-permutations"
+	"workspaceMount": "source=${localWorkspaceFolder},target=/home/build/synth-setter,type=bind,consistency=cached",
+	"workspaceFolder": "/home/build/synth-setter"
 }

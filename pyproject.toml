@@ -1,5 +1,5 @@
 [project]
-name = "synth-permutations"
+name = "synth-setter"
 version = "0.1.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 readme = "README.md"

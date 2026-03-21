@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Docker entrypoint for synth-permutations images.
+# Docker entrypoint for synth-setter images.
 #
 # Dispatches based on the MODE environment variable (REQUIRED, no default):
 #
@@ -70,7 +70,7 @@
 # =============================================================================
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/home/build/synth-permutations}"
+APP_DIR="${APP_DIR:-/home/build/synth-setter}"
 cd "$APP_DIR"
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ case "$MODE" in
       DRY_RUN_FLAG="--dry-run-upload"
     fi
 
-    echo "=== synth-permutations: shard generation ==="
+    echo "=== synth-setter: shard generation ==="
     echo "  num_shards    : $NUM_SHARDS"
     echo "  shard_size    : $SHARD_SIZE"
     echo "  param_spec    : $PARAM_SPEC"
@@ -227,7 +227,7 @@ case "$MODE" in
       exit 1
     fi
 
-    echo "=== synth-permutations: finalize shards ==="
+    echo "=== synth-setter: finalize shards ==="
     echo "  r2_prefix     : $R2_PREFIX"
     echo "  r2_bucket     : $R2_BUCKET"
     echo "  output_dir    : $OUTPUT_DIR"
@@ -294,7 +294,7 @@ case "$MODE" in
       WANDB_AUTH="netrc"
     fi
 
-    echo "=== synth-permutations: download dataset + train ==="
+    echo "=== synth-setter: download dataset + train ==="
     echo "  param_spec      : $PARAM_SPEC"
     echo "  data_config     : $DATA_CONFIG"
     echo "  r2_prefix       : $R2_PREFIX"
@@ -356,7 +356,7 @@ case "$MODE" in
 
   # ---------------------------------------------------------------------------
   shell)
-    echo "=== synth-permutations: shell mode ==="
+    echo "=== synth-setter: shell mode ==="
     exec bash
     ;;
 

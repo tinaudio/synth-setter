@@ -233,10 +233,10 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     && rm surge-xt-linux-x64-1.3.4.deb
 
 # ==========================================
-# Source stage: download synth-permutations at a specific git ref via tarball.
+# Source stage: download synth-setter at a specific git ref via tarball.
 # Uses GitHub archive endpoint — no full clone, no .git metadata.
 # ==========================================
-FROM builder-base AS synth-permutations-src
+FROM builder-base AS synth-setter-src
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
@@ -244,7 +244,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl
-WORKDIR /home/build/synth-permutations
+WORKDIR /home/build/synth-setter
 # Best practice: use a commit SHA for SYNTH_PERMUTATIONS_GIT_REF for deterministic builds.
 RUN --mount=type=secret,id=git_pat \
     set +x; \
@@ -293,7 +293,7 @@ RUN python --version && \
 # independent of app (changing requirements-app.txt won't re-download torch wheels.
 # ==========================================
 FROM python-base AS wheels
-COPY --from=synth-permutations-src /home/build/synth-permutations/requirements*.txt /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
 ARG TORCH_INDEX_URL
 RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
     pip wheel \
@@ -305,11 +305,11 @@ RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
 # Shared runtime base: Python + runtime deps on top of python-base.
 # Both dev and final-stage inherit from this stage.
 # ==========================================
-FROM python-base AS builder-install-synth-permutations-deps
+FROM python-base AS builder-install-synth-setter-deps
 # Install Python dependencies from pre-built wheels (offline, deterministic).
 # Use --mount=from=wheels to bind the wheels stage's /wheels dir during the RUN
 # without copying it into a layer (avoids the COPY+rm layer bloat anti-pattern).
-COPY --from=synth-permutations-src /home/build/synth-permutations/requirements*.txt /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
 RUN --mount=from=wheels,source=/wheels,target=/wheels \
     pip install \
         --no-index \
@@ -337,14 +337,14 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /artifacts
-COPY --from=synth-permutations-src /home/build/synth-permutations/scripts/run-linux-vst-headless.sh /artifacts/
-COPY --from=synth-permutations-src /home/build/synth-permutations/src/data/vst/core.py /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/scripts/run-linux-vst-headless.sh /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/src/data/vst/core.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
 # Validate that Surge XT loads correctly under headless X11
 RUN ./run-linux-vst-headless.sh \
     python -X faulthandler -c "from core import load_plugin; load_plugin('/usr/lib/vst3/Surge XT.vst3')"
 
-WORKDIR /home/build/synth-permutations
+WORKDIR /home/build/synth-setter
 
 # ==========================================
 # R2 config: bake Cloudflare R2 credentials into rclone config using BuildKit
@@ -357,7 +357,7 @@ WORKDIR /home/build/synth-permutations
 #     - Rotate R2 API tokens after each build campaign (tokens can't be revoked per-image)
 #     - See future hardening TODOs in the project README
 # ==========================================
-FROM builder-install-synth-permutations-deps AS r2-config-base
+FROM builder-install-synth-setter-deps AS r2-config-base
 ARG R2_BUCKET
 ENV R2_BUCKET=${R2_BUCKET}
 RUN --mount=type=secret,id=r2_access_key_id \
@@ -410,7 +410,7 @@ RUN --mount=type=secret,id=wandb_api_key \
 FROM r2-config-base AS dev-live
 # No COPY of entrypoint — it comes from the runtime mount in docker-run-dev.
 # Bake a fallback that prints a helpful error if run without a mount.
-RUN printf '#!/bin/bash\necho "ERROR: dev-live requires a volume mount at /home/build/synth-permutations" >&2\nexit 1\n' \
+RUN printf '#!/bin/bash\necho "ERROR: dev-live requires a volume mount at /home/build/synth-setter" >&2\nexit 1\n' \
       > /usr/local/bin/entrypoint-fallback.sh && \
     chmod +x /usr/local/bin/entrypoint-fallback.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint-fallback.sh"]
@@ -427,7 +427,7 @@ ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
 # Copy full source (after deps for caching)
-COPY --from=synth-permutations-src /home/build/synth-permutations /home/build/synth-permutations
+COPY --from=synth-setter-src /home/build/synth-setter /home/build/synth-setter
 
 # Install the project package so `import src` works from any working directory.
 # --no-deps: all runtime deps already installed from requirements*.txt wheels.
@@ -456,7 +456,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends git ca-certificates
 
-WORKDIR /home/build/synth-permutations
+WORKDIR /home/build/synth-setter
 
 RUN --mount=type=secret,id=git_pat \
     set +x; \

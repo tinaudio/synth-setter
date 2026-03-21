@@ -1,6 +1,6 @@
 program: src/train.py
 entity: benhayes
-project: synth-permutations
+project: synth-setter
 command:
   - python
   - src/train.py

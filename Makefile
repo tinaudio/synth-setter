@@ -133,7 +133,7 @@ DOCKER_BUILD_FLAGS ?=
 DOCKER_RUN_FLAGS ?=
 _INTERNAL_BUILD_FLAGS :=
 _INTERNAL_RUN_FLAGS :=
-APP_PATH          := /home/build/synth-permutations
+APP_PATH          := /home/build/synth-setter
 CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse --short HEAD))
 USE_CLOUD_BUILDER ?= 0
 
@@ -222,7 +222,7 @@ ifeq ($(USE_LOCAL_WORKSPACE),1)
 _INTERNAL_RUN_FLAGS += \
 	-v "$(PWD):$(APP_PATH)" \
 	-w $(APP_PATH) \
-	--entrypoint /home/build/synth-permutations/scripts/docker_entrypoint.sh
+	--entrypoint /home/build/synth-setter/scripts/docker_entrypoint.sh
 endif
 # Run the dev image with your local working tree mounted.
 # Edits to files on your host are reflected immediately inside the container.

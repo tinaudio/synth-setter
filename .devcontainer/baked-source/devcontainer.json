@@ -1,5 +1,5 @@
 {
-	"name": "synth-permutations (baked source)",
+	"name": "synth-setter (baked source)",
 	"image": "tinaudio/perm:dev-snapshot",
-	"workspaceFolder": "/home/build/synth-permutations"
+	"workspaceFolder": "/home/build/synth-setter"
 }
