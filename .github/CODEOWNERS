@@ -1,0 +1,14 @@
+# Default owner for everything
+* @ktinubu
+
+# CI/CD workflows
+.github/ @ktinubu
+
+# ML code
+src/ @ktinubu
+
+# Pipeline orchestration
+scripts/ @ktinubu
+
+# Configuration
+configs/ @ktinubu
