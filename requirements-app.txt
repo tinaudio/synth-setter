@@ -19,6 +19,7 @@ webdataset
 dask[distributed]
 einops
 h5py
+hypothesis
 hdf5plugin
 librosa
 loguru
@@ -30,6 +31,7 @@ pre-commit
 pyloudnorm
 pyright
 pytest
+pytest-benchmark
 pytest-xdist
 rich
 rootutils

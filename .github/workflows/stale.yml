@@ -1,0 +1,28 @@
+name: Stale Issues and PRs
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Weekly on Monday at 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-stale: 120
+          days-before-close: -1 # Never auto-close
+          stale-issue-label: "stale"
+          stale-pr-label: "stale"
+          stale-issue-message: >-
+            This issue has been inactive for 120 days. It has been labeled as
+            `stale`. If this issue is still relevant, please comment to remove
+            the stale label.
+          stale-pr-message: >-
+            This PR has been inactive for 120 days. It has been labeled as
+            `stale`. If this PR is still relevant, please comment to remove
+            the stale label.

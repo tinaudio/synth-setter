@@ -38,6 +38,8 @@ coverage: ## Run tests with coverage report
 
 ci-local: ## Run the full CI suite locally (pre-commit + tests)
 	$(MAKE) format test
+benchmark: ## Run performance benchmarks
+	pytest --benchmark-only -m "benchmark" -v
 
 train: ## Train the model
 	python src/train.py
