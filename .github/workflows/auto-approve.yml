@@ -90,7 +90,23 @@ jobs:
             exit 0
           fi
           # --- Condition 2: All CI checks pass ---
-          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '.check_runs[] | select(.name != "auto-approve" and .name != "Auto-approve status" and .name != "claude-review") | "\(.status) \(.conclusion // "none") \(.name)"')
+          # BUG FIX: The check-runs API returns ALL runs for a commit, including
+          # superseded re-runs of the same check. If check-pr-metadata failed on
+          # the first trigger but passed on re-run, the old failure still appears.
+          # We must deduplicate by check name and only consider the LATEST run per
+          # name (highest ID = most recent). Without this, a stale failure from a
+          # re-triggered check permanently blocks auto-approve.
+          # See: PR #142 — check-pr-metadata passed on re-run but auto-approve
+          # still saw "1 check(s) failed" from the original run.
+          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '
+            [.check_runs[]
+              | select(.name != "auto-approve" and .name != "Auto-approve status" and .name != "claude-review")
+            ]
+            | group_by(.name)
+            | map(sort_by(.id) | last)
+            | .[]
+            | "\(.status) \(.conclusion // "none") \(.name)"
+          ')
           PENDING=$(echo "$CHECK_DATA" | grep -c "^queued\|^in_progress" || true)
           FAILED=$(echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" | grep -c . || true)
           if [ "$PENDING" -gt 0 ]; then
