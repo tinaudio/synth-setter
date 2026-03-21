@@ -7,6 +7,76 @@ description: Rigid process skill for posting PR verification results. Use this s
 
 This is a **rigid** process skill. Follow every step exactly — no shortcuts, no "PASS" assertions without evidence.
 
+## Verify behavior, not implementation
+
+This is the single most important principle in this skill. Read it twice.
+
+**Grepping a diff is not verification.** Checking that a line exists in a diff proves someone typed it — it does not prove the system works. A config file can have the right content and still be ignored. A workflow can have the right YAML and still fail at runtime. A dependency can be listed and still not install.
+
+When verifying a PR, you must test what the change **does**, not what it **says**. Every verification step should answer: "does the system behave correctly after this change?" — not "does the diff contain the expected string?"
+
+### The hierarchy of verification (strongest to weakest)
+
+1. **Run the actual tool and observe output** — `pyright --project pyrightconfig.json` proves type checking works. `pytest -n auto` proves parallel execution works. `python3 -c "import yaml; yaml.safe_load(open('codecov.yml'))"` proves YAML is valid. This is real verification.
+
+2. **Query the live system** — `gh pr view --json labels` to confirm metadata is set. `gh api repos/.../contents/FILE` to confirm a file exists on the branch. These test actual state, not diff content.
+
+3. **Parse and validate file content** — Read the actual file (not the diff), parse it programmatically, and assert properties. `python3 -c "import json; c=json.load(open('config.json')); assert c['mode'] == 'basic'"` is better than `grep 'basic' config.json`.
+
+4. **Grep the diff** — This is the weakest form. It only confirms a string is present in the change. Use this ONLY for "does the PR body contain `Closes #N`" checks or when no stronger method is possible. Never use `gh pr diff | grep` as the sole verification for functional behavior.
+
+### Examples: bad vs. good
+
+**Bad** (verifying implementation):
+```bash
+$ gh pr diff 191 | grep 'threshold: 1%'
++        threshold: 1% # fail if coverage drops by more than 1%
+```
+This proves someone wrote "1%" in the diff. It doesn't prove codecov will enforce it.
+
+**Good** (verifying behavior):
+```bash
+$ python3 -c "
+import yaml
+cfg = yaml.safe_load(open('.github/codecov.yml'))
+threshold = cfg['coverage']['status']['project']['default']['threshold']
+print(f'Project threshold: {threshold}')
+assert threshold == '1%', f'Expected 1%, got {threshold}'
+"
+Project threshold: 1%
+```
+This parses the actual file and asserts the value programmatically.
+
+**Bad** (verifying implementation):
+```bash
+$ gh pr diff 195 | grep 'typeCheckingMode'
++  "typeCheckingMode": "basic",
+```
+
+**Good** (verifying behavior):
+```bash
+$ pyright --project pyrightconfig.json 2>&1 | tail -1
+0 errors, 0 warnings, 0 informations
+```
+This runs the actual type checker with the actual config and proves it works.
+
+### When to check out the PR branch
+
+To verify behavior, you often need the PR's code locally. Check out the branch or use an existing worktree:
+
+```bash
+# Option 1: Use existing worktree if available
+cd /path/to/worktree
+
+# Option 2: Create a temporary worktree
+git worktree add /tmp/verify-pr-NNN origin/branch-name
+cd /tmp/verify-pr-NNN
+# ... run verification ...
+git worktree remove /tmp/verify-pr-NNN
+```
+
+Diff-grepping should be reserved for metadata checks (labels, milestones, issue references) where the "behavior" IS the text content.
+
 ## Why this matters
 
 Verification without evidence is just opinion. When someone reads a PR months later, they need to see exactly what was run and what came back — not a table of "PASS" labels. Checkboxes with commands and output make verification auditable, reproducible, and trustworthy.
@@ -21,9 +91,10 @@ Every verification step gets a checkbox. Every checkbox shows the command and it
 
 For every verification step defined in the PR:
 
-1. Run the exact command
-2. Capture the full console output
-3. Determine: does this **unambiguously** pass, fail, or is it ambiguous?
+1. Check out the PR branch or use an existing worktree — you need the actual files, not just the diff
+2. Run commands that test **behavior** (run the tool, parse the file, execute the config)
+3. Capture the full console output
+4. Determine: does this **unambiguously** pass, fail, or is it ambiguous?
 
 ### Step 2: Format results with checkboxes
 
@@ -136,8 +207,10 @@ Include the gist URL in your PR comment alongside the summary.
 
 ## Anti-patterns — do NOT do these
 
+- **Grepping the diff as your primary verification** — `gh pr diff | grep 'expected line'` proves a line was typed, not that it works. Always prefer running the tool, parsing the file, or querying live state.
 - Writing a table with "PASS" / "FAIL" columns but no commands or output
 - Ticking `[x]` when output contains warnings you haven't investigated
 - Saying "all checks pass" without showing what was run
 - Posting verification results without the actual console output
 - Summarizing output as "looks good" instead of showing it
+- Using `gh pr diff | grep` for anything other than metadata checks (issue refs, PR body content)
