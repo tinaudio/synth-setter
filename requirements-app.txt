@@ -30,6 +30,7 @@ pre-commit
 pyloudnorm
 pyright
 pytest
+pytest-xdist
 rich
 rootutils
 runpod==1.8.1
