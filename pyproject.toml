@@ -21,6 +21,7 @@ log_cli = "True"
 markers = [
   "slow: slow tests",
   "gpu: tests requiring a GPU",
+  "hypothesis: property-based tests (hypothesis)",
   "pipeline: pipeline integration tests",
 ]
 minversion = "6.0"
