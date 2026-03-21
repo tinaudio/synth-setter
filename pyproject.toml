@@ -75,6 +75,18 @@ wrap-descriptions = 99
 style = "sphinx"
 black = true
 
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"
+build_command = ""
+commit_message = "chore(release): {version}"
+changelog_file = "CHANGELOG.md"
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "style", "test"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+
 [tool.coverage.report]
 exclude_lines = [
     "pragma: nocover",
