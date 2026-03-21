@@ -251,7 +251,7 @@ RUN --mount=type=secret,id=git_pat \
     token="$(cat /run/secrets/git_pat)"; \
     curl -fsSL \
       -H "Authorization: Bearer ${token}" \
-      "https://api.github.com/repos/ktinubu/synth-permutations/tarball/${SYNTH_PERMUTATIONS_GIT_REF}" \
+      "https://api.github.com/repos/tinaudio/synth-setter/tarball/${SYNTH_PERMUTATIONS_GIT_REF}" \
       -o /tmp/src.tgz && \
     tar -xzf /tmp/src.tgz --strip-components=1 && \
     rm /tmp/src.tgz
@@ -461,7 +461,7 @@ WORKDIR /home/build/synth-permutations
 RUN --mount=type=secret,id=git_pat \
     set +x; \
     token="$(cat /run/secrets/git_pat)"; \
-    git clone https://${token}@github.com/ktinubu/synth-permutations.git . && \
+    git clone https://${token}@github.com/tinaudio/synth-setter.git . && \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.

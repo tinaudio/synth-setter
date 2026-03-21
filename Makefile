@@ -74,7 +74,7 @@ train: ## Train the model
 #
 # Required variables (pass on the command line):
 #   GIT_PAT             GitHub personal access token with repo read access.
-#                       Required because ktinubu/synth-permutations is private.
+#                       Required because tinaudio/synth-setter is private.
 #   GIT_REF             Commit SHA, tag, or branch to bake. Prefer full SHA.
 #   R2_ACCESS_KEY_ID    Cloudflare R2 API token access key.
 #   R2_SECRET_ACCESS_KEY Cloudflare R2 API token secret.
