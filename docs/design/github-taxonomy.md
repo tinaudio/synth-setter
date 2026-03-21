@@ -141,6 +141,7 @@ Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wa
 | training v1.0.0      | Training        |
 | ci-automation v1.0.0 | CI & Automation |
 | code-health v1.0.0   | Code Health     |
+| storage v1.0.0       | Storage         |
 
 Every work stream has a milestone. Set the milestone on each issue individually — GitHub does not auto-inherit milestones from parent issues.
 
