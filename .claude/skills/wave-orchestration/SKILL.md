@@ -48,7 +48,7 @@ For each item:
 
 For each wave:
 1. **Pre-flight**: Verify all blocking PRs from previous wave are merged. Pull latest main.
-2. **Dispatch**: Launch N parallel sub-agents, each in an isolated git worktree (`isolation: "worktree"`).
+2. **Dispatch**: Launch N parallel sub-agents, each in an isolated git worktree created via `git worktree add ../worktrees/<wave>-<task> main` (e.g., `../worktrees/wave1-ci-add-codeowners`).
 3. Each sub-agent:
    - Creates a human-readable branch (e.g., `ci/add-codeowners`, `test/add-pytest-xdist`)
    - Makes the change
@@ -104,7 +104,7 @@ Between waves:
 
 ## Anti-patterns
 
-- Batching multiple tools into one PR — 1 tool per PR, always
+- Batching multiple unrelated changes/items into one PR — keep each independent change in its own PR
 - Starting Wave N+1 before Wave N is merged — gate on merge
 - Dispatching agents without tracking issues — issues first, PRs second
 - Skipping verification — every PR gets pr-checkbox verification
