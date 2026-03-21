@@ -22,6 +22,7 @@ markers = [
   "slow: slow tests",
   "gpu: tests requiring a GPU",
   "pipeline: pipeline integration tests",
+  "benchmark: performance benchmarks",
 ]
 minversion = "6.0"
 testpaths = "tests/"

@@ -27,5 +27,8 @@ test: ## Run not slow tests
 test-full: ## Run all tests
 	pytest
 
+benchmark: ## Run performance benchmarks
+	pytest --benchmark-only -m "benchmark" -v
+
 train: ## Train the model
 	python src/train.py

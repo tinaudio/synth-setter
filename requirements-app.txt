@@ -30,6 +30,7 @@ pre-commit
 pyloudnorm
 pyright
 pytest
+pytest-benchmark
 pytest-xdist
 rich
 rootutils
