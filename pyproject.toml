@@ -20,6 +20,7 @@ filterwarnings = [
 log_cli = "True"
 markers = [
   "slow: slow tests",
+  "requires_vst: requires a VST plugin binary (Surge XT) — skipped unless plugin is present",
 ]
 minversion = "6.0"
 testpaths = "tests/"

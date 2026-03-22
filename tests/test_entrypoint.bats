@@ -78,6 +78,13 @@ exit 0
 STUB
   chmod +x "$FAKE_BIN/bash"
 
+  # Stub tail so that 'tail -f /dev/null' (MODE=shell) exits cleanly in tests.
+  cat > "$FAKE_BIN/tail" << 'STUB'
+#!/bin/bash
+exit 0
+STUB
+  chmod +x "$FAKE_BIN/tail"
+
   # Put stubs first on PATH
   export PATH="$FAKE_BIN:$PATH"
 

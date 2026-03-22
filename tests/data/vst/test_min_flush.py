@@ -1,8 +1,7 @@
 """Tests for the full_flush flag in render_params.
 
-Default behavior (full_flush=False) skips pre-render flush+reset cycles
-for faster generation. Set FULL_FLUSH=1 or full_flush=True for the
-conservative 3-cycle flush+reset behavior.
+Default behavior (full_flush=False) skips pre-render flush+reset cycles for faster generation. Set
+FULL_FLUSH=1 or full_flush=True for the conservative 3-cycle flush+reset behavior.
 """
 
 from unittest.mock import MagicMock
@@ -26,7 +25,9 @@ def _make_mock_plugin():
 
 def test_render_params_default_only_renders():
     """Default (fast mode) should only call process for the render itself.
-    pedalboard's process(reset=True) handles state clearing internally."""
+
+    pedalboard's process(reset=True) handles state clearing internally.
+    """
     plugin = _make_mock_plugin()
 
     render_params(
@@ -47,7 +48,7 @@ def test_render_params_default_only_renders():
 
 
 def test_render_params_full_flush_calls_all_cycles():
-    """full_flush=True should call all 3 flush+reset cycles."""
+    """full_flush=True (no preset) should call post-param flush, render, post-render flush."""
     plugin = _make_mock_plugin()
 
     render_params(
@@ -62,14 +63,15 @@ def test_render_params_full_flush_calls_all_cycles():
         full_flush=True,
     )
 
-    # 4 process calls: post-load flush, post-param flush, render, post-render flush
-    assert plugin.process.call_count == 4
-    # 3 reset calls: post-load, post-param, post-render
-    assert plugin.reset.call_count == 3
+    # 3 process calls: post-param flush, render, post-render flush
+    # (post-load flush only runs when preset_path is provided)
+    assert plugin.process.call_count == 3
+    # 2 reset calls: post-param, post-render
+    assert plugin.reset.call_count == 2
 
 
 def test_render_params_full_flush_reads_from_env(monkeypatch):
-    """FULL_FLUSH=1 env var should enable all flush+reset cycles."""
+    """FULL_FLUSH=1 env var should enable post-param and post-render flush+reset."""
     monkeypatch.setenv("FULL_FLUSH", "1")
     plugin = _make_mock_plugin()
 
@@ -84,8 +86,10 @@ def test_render_params_full_flush_reads_from_env(monkeypatch):
         channels=CHANNELS,
     )
 
-    assert plugin.process.call_count == 4
-    assert plugin.reset.call_count == 3
+    # 3 process calls: post-param flush, render, post-render flush
+    assert plugin.process.call_count == 3
+    # 2 reset calls: post-param, post-render
+    assert plugin.reset.call_count == 2
 
 
 def test_render_params_explicit_flag_overrides_env(monkeypatch):
@@ -115,11 +119,54 @@ def test_render_params_returns_audio_in_both_modes():
     plugin = _make_mock_plugin()
 
     result_fast = render_params(
-        plugin, {}, 60, 100, (0.0, 0.5), DURATION, SAMPLE_RATE, CHANNELS,
+        plugin,
+        {},
+        60,
+        100,
+        (0.0, 0.5),
+        DURATION,
+        SAMPLE_RATE,
+        CHANNELS,
     )
     result_full = render_params(
-        plugin, {}, 60, 100, (0.0, 0.5), DURATION, SAMPLE_RATE, CHANNELS, full_flush=True,
+        plugin,
+        {},
+        60,
+        100,
+        (0.0, 0.5),
+        DURATION,
+        SAMPLE_RATE,
+        CHANNELS,
+        full_flush=True,
     )
 
     assert isinstance(result_fast, np.ndarray)
     assert isinstance(result_full, np.ndarray)
+
+
+def test_render_params_preset_path_always_flushes_after_load():
+    """Post-load flush+reset must always run when preset_path is provided.
+
+    Regression: 8ae2f85 gated the post-load flush behind FULL_FLUSH,
+    breaking preset-dependent parameters (e.g. a_osc_1_sawtooth).
+    See https://github.com/tinaudio/synth-setter/issues/225
+    """
+    plugin = _make_mock_plugin()
+
+    render_params(
+        plugin,
+        params={},
+        midi_note=60,
+        velocity=100,
+        note_start_and_end=(0.0, 0.5),
+        signal_duration_seconds=DURATION,
+        sample_rate=SAMPLE_RATE,
+        channels=CHANNELS,
+        preset_path="presets/surge-base.vstpreset",
+        full_flush=False,
+    )
+
+    # 2 process calls: post-load flush (always) + render
+    assert plugin.process.call_count == 2
+    # 1 reset call: post-load (always)
+    assert plugin.reset.call_count == 1

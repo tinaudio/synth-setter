@@ -41,8 +41,8 @@ setup-ci: ## Install shell lint/test tools only (for CI)
 setup-rclone: ## Configure rclone for Cloudflare R2 (requires .env sourced)
 	bash scripts/setup-rclone.sh
 
-test: ## Run not slow tests
-	pytest -k "not slow"
+test: ## Run quick tests (excludes slow, requires_vst)
+	pytest -k "not slow and not requires_vst"
 
 test-full: ## Run all tests
 	pytest
