@@ -357,7 +357,7 @@ case "$MODE" in
   # ---------------------------------------------------------------------------
   shell)
     echo "=== synth-setter: shell mode ==="
-    exec bash
+    exec bash -c "echo 'Shell ready. Sleeping to keep container alive.'; sleep infinity"
     ;;
 
   # ---------------------------------------------------------------------------
