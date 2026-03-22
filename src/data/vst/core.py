@@ -1,7 +1,10 @@
 import _thread
+import os
 import threading
 import time
 from typing import Callable, Optional, Tuple
+
+
 
 import mido
 import numpy as np
@@ -73,32 +76,43 @@ def render_params(
     sample_rate: float,
     channels: int,
     preset_path: Optional[str] = None,
+    full_flush: bool | None = None,
 ) -> np.ndarray:
+    if full_flush is None:
+        full_flush = os.environ.get("FULL_FLUSH", "0") == "1"
+
     if preset_path is not None:
         load_preset(plugin, preset_path)
 
-    logger.debug("post-load flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
-    plugin.reset()
+    if full_flush:
+        logger.debug("post-load flush")
+        plugin.process([], 32.0, sample_rate, channels, 2048, True)
+        plugin.reset()
 
     logger.debug("setting params")
     set_params(plugin, params)
-    # plugin.reset()
 
-    logger.debug("post-param flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
-    plugin.reset()
+    if full_flush:
+        logger.debug("post-param flush")
+        plugin.process([], 32.0, sample_rate, channels, 2048, True)
+        plugin.reset()
 
     midi_events = make_midi_events(midi_note, velocity, *note_start_and_end)
 
+    # reset=True (the last arg) clears plugin state before rendering.
+    # This is pedalboard's default — no manual post-render flush needed.
     logger.debug("rendering audio")
     output = plugin.process(
         midi_events, signal_duration_seconds, sample_rate, channels, 2048, True
     )
 
-    logger.debug("post-render flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
-    plugin.reset()
+    if full_flush:
+        # Explicit post-render flush for conservative mode. Redundant when
+        # the next process() call uses reset=True (default), but ensures
+        # clean state if plugin is inspected between renders.
+        logger.debug("post-render flush")
+        plugin.process([], 32.0, sample_rate, channels, 2048, True)
+        plugin.reset()
 
     return output
 
