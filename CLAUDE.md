@@ -20,12 +20,24 @@ synth-setter: Synth inversion, sound matching and preset exploration tools
 
 Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters for semantic versioning:
 
-- `feat:` → **minor** version bump. Reserve for genuinely new user-facing capabilities (new model, new pipeline stage, new CLI command).
-- `fix:` / `perf:` → **patch** version bump. Bug fixes and performance improvements.
-- `feat!:` or `BREAKING CHANGE:` footer → **major** version bump. Coordinate with a maintainer.
-- `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `style:`, `build:` → **no version bump**.
+**Version-bumping prefixes:**
 
-Most CI improvements, doc updates, config cleanups, and infra work should use `ci:`, `docs:`, or `chore:` — not `feat:`.
+- `feat:` → **minor** bump. New user-facing capability (new model, new pipeline stage, new CLI command). The feature must be usable after this commit.
+- `fix:` / `perf:` → **patch** bump. Bug fixes and performance improvements.
+- `feat!:` or `BREAKING CHANGE:` footer → **major** bump. Coordinate with a maintainer.
+
+**No-bump prefixes:**
+
+- `internal-feat:` → new code building toward a feature not yet exposed to users (new internal API, new module, new config schema). Use this when a feature is being built across multiple PRs and this PR adds real, tested code — but the feature isn't user-facing yet. No version bump.
+- `internal-fix:` → fix to internal code not yet exposed to users. No version bump.
+- `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `style:`, `build:` → no version bump.
+
+**When to use which:**
+
+- Each PR should leave main in a valid state — no dead code, no unhooked partial implementations.
+- If the PR adds new tested code that will be consumed later, use `internal-feat:`.
+- The PR that wires everything together and makes the feature user-facing uses `feat:`.
+- Don't contort prefixes to avoid bumps. If it's user-facing, it's `feat:`.
 
 ### Writing Code
 

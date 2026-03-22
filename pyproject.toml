@@ -87,7 +87,7 @@ changelog_file = "CHANGELOG.md"
 # Major bumps: handled by default via "feat!:" prefix or "BREAKING CHANGE:" footer
 # Pre-1.0: breaking changes bump minor (standard semver pre-1.0 behavior)
 [tool.semantic_release.commit_parser_options]
-allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "style", "test"]
+allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "internal-feat", "internal-fix", "perf", "refactor", "style", "test"]
 minor_tags = ["feat"]
 patch_tags = ["fix", "perf"]
 
