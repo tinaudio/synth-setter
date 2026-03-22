@@ -18,10 +18,11 @@ synth-setter: Synth inversion, sound matching and preset exploration tools
 
 ### Commit Messages
 
-Conventional commits, enforced by gitlint. Prefix matters for semantic versioning:
+Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters for semantic versioning:
 
 - `feat:` → **minor** version bump. Reserve for genuinely new user-facing capabilities (new model, new pipeline stage, new CLI command).
 - `fix:` / `perf:` → **patch** version bump. Bug fixes and performance improvements.
+- `feat!:` or `BREAKING CHANGE:` footer → **major** version bump. Coordinate with a maintainer.
 - `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `style:`, `build:` → **no version bump**.
 
 Most CI improvements, doc updates, config cleanups, and infra work should use `ci:`, `docs:`, or `chore:` — not `feat:`.
