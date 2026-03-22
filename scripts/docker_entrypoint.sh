@@ -84,6 +84,7 @@ if [ -n "${PULL_LATEST:-}" ]; then
   echo "[hotpatch] Pulling latest from origin/${PULL_LATEST}..."
   git -C "$APP_DIR" pull origin "$PULL_LATEST"
   pip install -e . --quiet
+  cp "$APP_DIR/scripts/docker_entrypoint.sh" /usr/local/bin/entrypoint.sh
   unset PULL_LATEST
   exec "$0" "$@"
 fi
