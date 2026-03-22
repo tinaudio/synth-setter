@@ -357,7 +357,12 @@ case "$MODE" in
   # ---------------------------------------------------------------------------
   shell)
     echo "=== synth-setter: shell mode ==="
-    exec bash -c "echo 'Shell ready. Sleeping to keep container alive.'; sleep infinity"
+    if [ -t 0 ]; then
+      exec bash
+    else
+      echo "No TTY detected. Sleeping to keep container alive."
+      sleep infinity
+    fi
     ;;
 
   # ---------------------------------------------------------------------------
