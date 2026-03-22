@@ -38,10 +38,9 @@ class VSTDataSample:
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Values hardcoded to be roughly like those used by the audio spectrogram transformer.
-
-    i.e. 100 frames per second, 128 mels, ~25ms window, hamming window.
-    """
+    """Values hardcoded to be roughly like those used by the audio spectrogram
+    transformer. i.e. 100 frames per second, 128 mels, ~25ms window, hamming
+    window."""
 
     n_fft = int(0.025 * sample_rate)
     hop_length = int(sample_rate / 100.0)
@@ -68,7 +67,6 @@ def generate_sample(
     min_loudness: float,
     param_spec: ParamSpec,
     preset_path: str,
-    min_flush: bool = False,
 ) -> VSTDataSample:
     while True:
         logger.debug("sampling params")
@@ -86,7 +84,6 @@ def generate_sample(
             sample_rate,
             channels,
             preset_path=preset_path,
-            min_flush=min_flush,
         )
 
         meter = Meter(sample_rate)
@@ -127,7 +124,7 @@ def save_sample(
 
 
 def save_samples(
-    samples: list[VSTDataSample],
+    samples: List[VSTDataSample],
     audio_dataset: h5py.Dataset,
     mel_dataset: h5py.Dataset,
     param_dataset: h5py.Dataset,
@@ -159,17 +156,19 @@ def get_first_unwritten_idx(dataset: h5py.Dataset) -> int:
 def create_dataset_and_get_first_unwritten_idx(
     h5py_file: h5py.File,
     name: str,
-    shape: tuple[int, ...],
+    shape: Tuple[int, ...],
     dtype: np.dtype,
     compression: Any,
-) -> tuple[h5py.Dataset, int]:
+) -> Tuple[h5py.Dataset, int]:
     logger.info(f"Looking for dataset {name}...")
     if name in h5py_file:
         logger.info(f"Found dataset {name}, looking for first unwritten row.")
         dataset = h5py_file[name]
         return dataset, get_first_unwritten_idx(dataset)
 
-    dataset = h5py_file.create_dataset(name, shape=shape, dtype=dtype, compression=compression)
+    dataset = h5py_file.create_dataset(
+        name, shape=shape, dtype=dtype, compression=compression
+    )
     return dataset, 0
 
 
@@ -223,15 +222,17 @@ def make_dataset(
     min_loudness: float,
     param_spec: ParamSpec,
     sample_batch_size: int,
-    min_flush: bool = False,
 ) -> None:
-    audio_dataset, mel_dataset, param_dataset, start_idx = create_datasets_and_get_start_idx(
-        hdf5_file=hdf5_file,
-        num_samples=num_samples,
-        channels=channels,
-        sample_rate=sample_rate,
-        signal_duration_seconds=signal_duration_seconds,
-        num_params=len(param_spec),
+
+    audio_dataset, mel_dataset, param_dataset, start_idx = (
+        create_datasets_and_get_start_idx(
+            hdf5_file=hdf5_file,
+            num_samples=num_samples,
+            channels=channels,
+            sample_rate=sample_rate,
+            signal_duration_seconds=signal_duration_seconds,
+            num_params=len(param_spec),
+        )
     )
 
     audio_dataset.attrs["velocity"] = velocity
@@ -256,7 +257,6 @@ def make_dataset(
             min_loudness=min_loudness,
             param_spec=param_spec,
             preset_path=preset_path,
-            min_flush=min_flush,
         )
 
         sample_batch.append(sample)
@@ -293,12 +293,6 @@ def make_dataset(
 @click.option("--min_loudness", "-l", type=float, default=-55.0)
 @click.option("--param_spec", "-t", type=str, default="surge_xt")
 @click.option("--sample_batch_size", "-b", type=int, default=32)
-@click.option(
-    "--min_flush",
-    is_flag=True,
-    default=False,
-    help="Skip pre-render flush+reset cycles (faster, may have artifacts)",
-)
 def main(
     data_file: str,
     num_samples: int,
@@ -311,7 +305,6 @@ def main(
     min_loudness: float = -50.0,
     param_spec: str = "surge_xt",
     sample_batch_size: int = 32,
-    min_flush: bool = False,
 ):
     param_spec = param_specs[param_spec]
     with h5py.File(data_file, "a") as f:
@@ -327,7 +320,6 @@ def main(
             min_loudness,
             param_spec,
             sample_batch_size,
-            min_flush=min_flush,
         )
 
 
