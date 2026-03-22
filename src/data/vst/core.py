@@ -1,7 +1,8 @@
 import _thread
 import threading
 import time
-from typing import Callable, Optional, Tuple
+from collections.abc import Callable
+from typing import Optional, Tuple
 
 import mido
 import numpy as np
@@ -11,10 +12,8 @@ from pedalboard.io import AudioFile
 
 
 def _call_with_interrupt(fn: Callable, sleep_time: float = 2.0):
-    """
-    Calls the function fn on the main thread, while another thread
-    sends a KeyboardInterrupt (SIGINT) to the main thread.
-    """
+    """Calls the function fn on the main thread, while another thread sends a KeyboardInterrupt
+    (SIGINT) to the main thread."""
 
     def send_interrupt():
         # Brief sleep so that fn starts before we send the interrupt
@@ -68,26 +67,28 @@ def render_params(
     params: dict[str, float],
     midi_note: int,
     velocity: int,
-    note_start_and_end: Tuple[float, float],
+    note_start_and_end: tuple[float, float],
     signal_duration_seconds: float,
     sample_rate: float,
     channels: int,
-    preset_path: Optional[str] = None,
+    preset_path: str | None = None,
+    min_flush: bool = False,
 ) -> np.ndarray:
     if preset_path is not None:
         load_preset(plugin, preset_path)
 
-    logger.debug("post-load flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
-    plugin.reset()
+    if not min_flush:
+        logger.debug("post-load flush")
+        plugin.process([], 32.0, sample_rate, channels, 2048, True)
+        plugin.reset()
 
     logger.debug("setting params")
     set_params(plugin, params)
-    # plugin.reset()
 
-    logger.debug("post-param flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
-    plugin.reset()
+    if not min_flush:
+        logger.debug("post-param flush")
+        plugin.process([], 32.0, sample_rate, channels, 2048, True)
+        plugin.reset()
 
     midi_events = make_midi_events(midi_note, velocity, *note_start_and_end)
 
@@ -97,7 +98,7 @@ def render_params(
     )
 
     logger.debug("post-render flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
+    plugin.process([], 32.0, sample_rate, channels, 2048, True)
     plugin.reset()
 
     return output
