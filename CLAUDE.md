@@ -23,7 +23,7 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 **Version-bumping prefixes:**
 
 - `feat:` → **minor** bump. New user-facing capability (new model, new pipeline stage, new CLI command). The feature must be usable after this commit.
-- `fix:` / `perf:` → **patch** bump. Bug fixes and performance improvements.
+- `fix:` / `perf:` / `revert:` → **patch** bump. Bug fixes, performance improvements, and reverts (reverts are roll-forwards on an append-only main).
 - `feat!:` or `BREAKING CHANGE:` footer → **major** bump. Coordinate with a maintainer.
 
 **No-bump prefixes:**
