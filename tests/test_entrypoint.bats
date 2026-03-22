@@ -442,8 +442,8 @@ STUB
 # PULL_LATEST validation
 # ---------------------------------------------------------------------------
 
-@test "PULL_LATEST=1 without GIT_PAT exits with error" {
-  export PULL_LATEST=1
+@test "PULL_LATEST=main without GIT_PAT exits with error" {
+  export PULL_LATEST=main
   export MODE="shell"
   unset GIT_PAT
   run_entrypoint
