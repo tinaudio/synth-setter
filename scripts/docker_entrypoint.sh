@@ -357,12 +357,8 @@ case "$MODE" in
   # ---------------------------------------------------------------------------
   shell)
     echo "=== synth-setter: shell mode ==="
-    if [ -t 0 ]; then
-      exec bash
-    else
-      echo "No TTY detected. Sleeping to keep container alive."
-      sleep infinity
-    fi
+    echo "Connect via web terminal or: docker exec -it <container> bash"
+    tail -f /dev/null
     ;;
 
   # ---------------------------------------------------------------------------
