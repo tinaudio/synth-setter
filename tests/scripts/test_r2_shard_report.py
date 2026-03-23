@@ -64,31 +64,37 @@ class TestAnalyzeShardsCounts:
     """analyze_shards returns correct file counts, totals, and logical shard counts."""
 
     def test_h5_count_equals_six(self) -> None:
+        """Sample data has 6 h5 files."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         assert report["h5_count"] == 6
 
     def test_json_count_equals_two(self) -> None:
+        """Sample data has 2 json metadata files."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         assert report["json_count"] == 2
 
     def test_logical_shard_count_equals_three(self) -> None:
+        """Sample data has 3 unique shard IDs (6 chunks / 2 chunks per shard)."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         assert report["logical_shard_count"] == 3
 
     def test_other_count_equals_zero(self) -> None:
+        """Sample data contains only h5 and json — no other extensions."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         assert report["other_count"] == 0
 
     def test_total_h5_bytes(self) -> None:
+        """Sum of all 6 h5 file sizes in bytes."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         assert report["total_h5_bytes"] == 18_546_015_026
 
     def test_total_h5_human(self) -> None:
+        """Human-readable total matches expected GiB value."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         assert report["total_h5_human"] == "17.27 GiB"
@@ -103,11 +109,13 @@ class TestAnalyzeShardsSuspect:
     """analyze_shards correctly identifies suspect files below the threshold."""
 
     def test_suspect_count_with_default_threshold(self) -> None:
+        """Two 2296-byte h5 files are below the 1 GiB threshold."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         assert len(report["suspect_files"]) == 2
 
     def test_suspect_filenames_are_the_small_ones(self) -> None:
+        """Only the 9iwsm829v7a92z-14ce64ee chunks are flagged."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         suspect_names = {f["filename"] for f in report["suspect_files"]}
@@ -117,18 +125,21 @@ class TestAnalyzeShardsSuspect:
         }
 
     def test_suspect_files_have_is_suspect_true(self) -> None:
+        """Every entry in suspect_files has is_suspect=True."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         for suspect in report["suspect_files"]:
             assert suspect["is_suspect"] is True
 
     def test_suspect_files_have_correct_size_bytes(self) -> None:
+        """Both suspect files are exactly 2296 bytes."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
         for suspect in report["suspect_files"]:
             assert suspect["size_bytes"] == 2296
 
     def test_all_big_files_no_suspects(self) -> None:
+        """No suspects when all files exceed the threshold."""
         all_big: list[RcloneFile] = [
             RcloneFile(4_650_191_447, "shard-aaa-111-0000.h5"),
             RcloneFile(4_622_813_770, "shard-aaa-111-0001.h5"),
@@ -138,6 +149,7 @@ class TestAnalyzeShardsSuspect:
         assert len(report["suspect_files"]) == 0
 
     def test_custom_threshold_flags_medium_file(self) -> None:
+        """A 4.33 GiB file is suspect when threshold is 5.0 GiB."""
         files: list[RcloneFile] = [
             RcloneFile(4_650_191_447, "shard-aaa-111-0000.h5"),  # 4.33 GiB
         ]
@@ -156,6 +168,7 @@ class TestAnalyzeShardsLogicalShards:
     """analyze_shards correctly counts logical shards from chunk filenames."""
 
     def test_single_chunk_counts_as_one_logical_shard(self) -> None:
+        """One chunk file means one logical shard."""
         files: list[RcloneFile] = [
             RcloneFile(4_650_191_447, "shard-aaa-111-0000.h5"),
         ]
@@ -164,6 +177,7 @@ class TestAnalyzeShardsLogicalShards:
         assert report["logical_shard_count"] == 1
 
     def test_two_chunks_same_id_count_as_one_logical_shard(self) -> None:
+        """Two chunks with the same shard ID count as one logical shard."""
         files: list[RcloneFile] = [
             RcloneFile(4_650_191_447, "shard-aaa-111-0000.h5"),
             RcloneFile(4_622_813_770, "shard-aaa-111-0001.h5"),
@@ -173,6 +187,7 @@ class TestAnalyzeShardsLogicalShards:
         assert report["logical_shard_count"] == 1
 
     def test_empty_input_all_counts_zero(self) -> None:
+        """Empty file list produces all-zero report."""
         report: ShardReport = analyze_shards([], threshold_gib=DEFAULT_THRESHOLD)
 
         assert report["h5_count"] == 0
@@ -193,18 +208,21 @@ class TestFormatReport:
     """format_report produces a human-readable string from a ShardReport."""
 
     def test_output_contains_prefix(self) -> None:
+        """Report text includes the R2 prefix."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
         text = format_report(report, prefix=DEFAULT_PREFIX)
 
         assert DEFAULT_PREFIX in text
 
     def test_output_contains_title(self) -> None:
+        """Report text includes the title header."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
         text = format_report(report, prefix=DEFAULT_PREFIX)
 
         assert "R2 Shard Report" in text
 
     def test_output_contains_suspect_when_suspects_present(self) -> None:
+        """Report text flags suspect files when present."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
         text = format_report(report, prefix=DEFAULT_PREFIX)
 
@@ -220,6 +238,7 @@ class TestParseRcloneLsOutput:
     """Smoke test: parse_rclone_ls_output produces RcloneFile list from raw output."""
 
     def test_parses_sample_output_into_rclone_files(self) -> None:
+        """Raw rclone ls output is parsed into 8 RcloneFile entries."""
         files = parse_rclone_ls_output(SAMPLE_RCLONE_OUTPUT)
 
         assert len(files) == 8
@@ -234,19 +253,26 @@ class TestParseRcloneLsOutput:
 
 
 class TestFormatSize:
+    """format_size converts byte counts to human-readable strings."""
+
     def test_format_size_bytes_small_value(self) -> None:
+        """Values under 1024 display as bytes."""
         assert format_size(500) == "500 B"
 
     def test_format_size_kib(self) -> None:
+        """Values in the KiB range show 2 decimal places."""
         assert format_size(2296) == "2.24 KiB"
 
     def test_format_size_mib(self) -> None:
+        """Values in the MiB range show 2 decimal places."""
         assert format_size(5_242_880) == "5.00 MiB"
 
     def test_format_size_gib(self) -> None:
+        """Values in the GiB range show 2 decimal places."""
         assert format_size(4_650_191_447) == "4.33 GiB"
 
     def test_format_size_zero(self) -> None:
+        """Zero bytes displays as '0 B'."""
         assert format_size(0) == "0 B"
 
 
@@ -279,6 +305,7 @@ class TestRunRcloneLsIntegration:
     """Integration test: write real files to r2:test-bucket, run report, clean up."""
 
     def test_end_to_end_report_against_r2(self) -> None:
+        """Upload fake shards to r2:test-bucket, analyze, verify, clean up."""
         if not _r2_reachable():
             pytest.skip("R2 not reachable")
         test_prefix = f"r2:test-bucket/test-{uuid.uuid4().hex[:8]}/"

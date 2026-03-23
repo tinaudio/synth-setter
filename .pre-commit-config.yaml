@@ -124,7 +124,6 @@ repos:
       - id: interrogate
         exclude: >-
           (?x)^(
-            tests/.*|
             scripts/add_music2latent\.py|
             scripts/compute_audio_metrics\.py|
             scripts/generate_surge_xt_data\.py|
