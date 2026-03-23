@@ -1,0 +1,79 @@
+name: Flush Investigation Notebook
+
+# Runs the flush-investigation notebook inside Docker (requires Surge XT VST),
+# converts to HTML with embedded audio, and uploads as an artifact with provenance.
+#
+# Trigger: manual dispatch or weekly schedule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Git ref to test (branch, tag, or SHA)"
+        required: false
+        default: "main"
+  schedule:
+    # Weekly: Sunday 06:00 UTC
+    - cron: "0 6 * * 0"
+
+jobs:
+  run-notebook:
+    name: Run flush investigation notebook
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.git_ref || 'main' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (dev-live target)
+        env:
+          GIT_PAT: ${{ secrets.GIT_PAT }}
+          DOCKER_BUILDKIT: "1"
+        run: |
+          make docker-build-dev-live \
+            GIT_REF=${{ github.sha }} \
+            GIT_PAT=${{ secrets.GIT_PAT }} \
+            DOCKER_BUILD_FLAGS="--load"
+
+      - name: Run notebook inside Docker
+        run: |
+          docker run --rm \
+            --entrypoint bash \
+            -v "${{ github.workspace }}/reports:/reports" \
+            synth-setter:dev-live \
+            -c "
+              pip install -q jupyter nbconvert auraloss librosa &&
+              cd /home/build/synth-setter &&
+              jupyter nbconvert \
+                --to html \
+                --execute \
+                --ExecutePreprocessor.timeout=600 \
+                --output-dir=/reports \
+                notebooks/flush-investigation.ipynb
+            "
+
+      - name: Add provenance metadata to report
+        run: |
+          cat >> reports/flush-investigation.html <<EOF
+          <!-- Provenance
+            workflow: ${{ github.workflow }}
+            run_id: ${{ github.run_id }}
+            run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            git_sha: ${{ github.sha }}
+            git_ref: ${{ github.event.inputs.git_ref || 'main' }}
+            triggered_by: ${{ github.actor }}
+            timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          -->
+          EOF
+
+      - name: Upload notebook HTML artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flush-investigation-${{ github.sha }}
+          path: reports/flush-investigation.html
+          retention-days: 90
