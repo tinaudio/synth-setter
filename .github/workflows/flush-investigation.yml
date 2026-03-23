@@ -28,6 +28,10 @@ jobs:
         with:
           ref: ${{ github.event.inputs.git_ref || 'main' }}
 
+      - name: Capture checked-out SHA
+        id: meta
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -37,28 +41,31 @@ jobs:
           DOCKER_BUILDKIT: "1"
         run: |
           make docker-build-dev-live \
-            GIT_REF=${{ github.sha }} \
+            GIT_REF=${{ steps.meta.outputs.sha }} \
             GIT_PAT=${{ secrets.GIT_PAT }} \
             DOCKER_BUILD_FLAGS="--load"
 
       - name: Run notebook inside Docker
+        env:
+          SURGE_VST3_PATH: /usr/lib/vst3/Surge XT.vst3
         run: |
           mkdir -p reports
           docker run --rm \
             --entrypoint bash \
-            -v "${{ github.workspace }}:/workspace" \
+            -v "${{ github.workspace }}/notebooks:/workspace/notebooks" \
             -v "${{ github.workspace }}/reports:/reports" \
+            -e SURGE_VST3_PATH="${SURGE_VST3_PATH}" \
             synth-setter:dev-live \
             -c "
               pip install -q jupyter nbconvert auraloss librosa &&
-              cd /workspace &&
+              cd /home/build/synth-setter &&
               scripts/run-linux-vst-headless.sh \
                 jupyter nbconvert \
                   --to html \
                   --execute \
                   --ExecutePreprocessor.timeout=600 \
                   --output-dir=/reports \
-                  notebooks/flush-investigation.ipynb
+                  /workspace/notebooks/flush-investigation.ipynb
             "
 
       - name: Add provenance metadata to report
@@ -68,7 +75,7 @@ jobs:
             workflow: ${{ github.workflow }}
             run_id: ${{ github.run_id }}
             run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            git_sha: ${{ github.sha }}
+            git_sha: ${{ steps.meta.outputs.sha }}
             git_ref: ${{ github.event.inputs.git_ref || 'main' }}
             triggered_by: ${{ github.actor }}
             timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -78,6 +85,6 @@ jobs:
       - name: Upload notebook HTML artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flush-investigation-${{ github.sha }}
+          name: flush-investigation-${{ steps.meta.outputs.sha }}
           path: reports/flush-investigation.html
           retention-days: 90
