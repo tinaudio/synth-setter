@@ -41,3 +41,92 @@ benchmark: ## Run performance benchmarks
 
 train: ## Train the model
 	python src/train.py
+
+# =====================================================================
+# Docker targets
+# =====================================================================
+#
+# Two build modes:
+#   1. docker-build-dev-snapshot — self-contained image. Clones repo at GIT_REF,
+#                                  bakes source + deps + Surge XT + rclone/R2 config.
+#                                  Run it anywhere (CI, cloud, vast.ai).
+#
+#   2. docker-build-dev-live     — DEV image. Same base (Surge + deps + R2 config)
+#                                  but does NOT bake source code. Mount your local
+#                                  working tree at runtime with docker-run-dev.
+#                                  Rebuild only when deps or Surge version change.
+#
+# Required variables (pass on the command line):
+#   GIT_PAT             GitHub personal access token with repo read access.
+#   GIT_REF             Commit SHA, tag, or branch to bake. Prefer full SHA.
+#
+# Optional overrides:
+#   DOCKER_FILE         Path to Dockerfile          (default: docker/ubuntu22_04/Dockerfile)
+#   DOCKER_IMAGE        Image name                  (default: tinaudio/perm)
+#   DOCKER_BUILD_MODE   "source" or "prebuilt"       (default: prebuilt)
+#   DOCKER_TARGETPLATFORM   "linux/amd64" or "linux/arm64" (default: linux/amd64)
+#   DOCKER_TORCH_IDX    PyTorch wheel index URL      (default: cu128 wheels)
+#   DOCKER_BUILD_FLAGS  Extra flags passed verbatim to docker buildx build.
+# =====================================================================
+DOCKER_FILE       ?= docker/ubuntu22_04/Dockerfile
+DOCKER_IMAGE      ?= synth-setter
+DOCKER_BASE_IMAGE ?= ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751
+DOCKER_BASE_IMAGE_TAG ?= ubuntu22_04
+DOCKER_BUILD_MODE ?= prebuilt
+DOCKER_TARGETPLATFORM ?= linux/amd64
+TARGETARCH ?= amd64
+DOCKER_TORCH_IDX  ?= https://download.pytorch.org/whl/cu128
+DOCKER_BUILD_FLAGS ?=
+_INTERNAL_BUILD_FLAGS :=
+CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse HEAD))
+
+# R2 / rclone configuration — passed as BuildKit secrets + build-arg.
+R2_ACCESS_KEY_ID     ?=
+R2_SECRET_ACCESS_KEY ?=
+R2_ENDPOINT          ?=
+R2_BUCKET            ?=
+WANDB_API_KEY        ?=
+
+DOCKER_SECRETS = \
+	--secret id=r2_access_key_id,env=R2_ACCESS_KEY_ID \
+	--secret id=r2_secret_access_key,env=R2_SECRET_ACCESS_KEY \
+	--secret id=r2_endpoint,env=R2_ENDPOINT \
+	--secret id=wandb_api_key,env=WANDB_API_KEY \
+	--build-arg R2_BUCKET=$(R2_BUCKET)
+
+docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_PAT)
+	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi
+	DOCKER_BUILDKIT=1 docker buildx build \
+		-f $(DOCKER_FILE) \
+		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
+		--secret id=git_pat,env=GIT_PAT \
+		$(DOCKER_SECRETS) \
+		--platform $(DOCKER_TARGETPLATFORM) \
+		--build-arg IMAGE="dev-snapshot" \
+		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
+		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
+		--build-arg TARGETARCH=$(TARGETARCH) \
+		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
+		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
+		-t $(DOCKER_IMAGE):dev-snapshot \
+		.
+
+docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
+	DOCKER_BUILDKIT=1 docker buildx build \
+		-f $(DOCKER_FILE) \
+		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
+		--secret id=git_pat,env=GIT_PAT \
+		$(DOCKER_SECRETS) \
+		--platform $(DOCKER_TARGETPLATFORM) \
+		--build-arg IMAGE="dev-live" \
+		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(CURRENT_LOCAL_GIT_REF) \
+		--build-arg TARGETARCH=$(TARGETARCH) \
+		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
+		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
+		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-live-$(CURRENT_LOCAL_GIT_REF) \
+		-t $(DOCKER_IMAGE):dev-live \
+		.
