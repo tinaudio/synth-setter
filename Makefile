@@ -20,8 +20,8 @@ sync: ## Merge changes from main branch to your current branch
 	git pull
 	git pull origin main
 
-test: ## Run not slow tests
-	pytest -n auto -m "not slow"
+test: ## Run quick tests (excludes slow, requires_vst)
+	pytest -n auto -m "not slow and not requires_vst"
 
 # test-full runs serially: GPU and DDP tests require exclusive device access
 test-full: ## Run all tests
