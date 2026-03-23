@@ -54,9 +54,12 @@ ignore = ["E501", "S101"]
 "scripts/paramspec_to_table.py" = ["E402", "T201"]
 "scripts/plot_param2tok.py" = ["E402", "E741", "F841", "T201"]
 "scripts/predict_vst_audio.py" = ["E402", "F841"]
+# S603/S607: rclone subprocess calls use CLI args (user-controlled, not untrusted input).
+# T201: click.echo used for CLI output.
 "scripts/r2_shard_report.py" = ["S603", "S607", "T201"]
 "scripts/reshard_data.py" = ["T201"]
 "scripts/subdir_funtime.py" = ["F841"]
+# S603/S607: rclone subprocess calls in R2 integration test fixtures.
 "tests/scripts/test_r2_shard_report.py" = ["S603", "S607"]
 "src/eval.py" = ["E402", "F841"]
 "src/models/components/transformer.py" = ["F841"]
