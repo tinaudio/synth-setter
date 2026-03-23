@@ -24,6 +24,7 @@ markers = [
   "hypothesis: property-based tests (hypothesis)",
   "pipeline: pipeline integration tests",
   "benchmark: performance benchmarks",
+  "requires_vst: requires a VST plugin binary (Surge XT) — skipped unless plugin is present",
 ]
 minversion = "6.0"
 testpaths = "tests/"
