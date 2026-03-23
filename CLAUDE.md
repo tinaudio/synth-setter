@@ -69,7 +69,7 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 - **Always use isolated git worktrees** for feature work, bug fixes, and PRs. Never edit files directly on a development branch in the main working tree — branch switching and stash conflicts cause lost work and accidental commits to wrong branches.
 - Use `isolation: "worktree"` when spawning subagents that write code or create commits.
 - The main working tree should only be used for read-only operations (exploration, `git log`, `rclone ls`, etc.).
-- Worktrees are automatically cleaned up if no changes are made. If changes are made, the worktree path and branch are returned for review.
+- When using Claude Code's Agent tool with `isolation: "worktree"`, the worktree is automatically cleaned up if the agent makes no changes. If changes are made, the worktree path and branch are returned for review. For manually created worktrees, clean up with `git worktree remove` when done.
 
 ### Pipeline-Specific Rules
 
