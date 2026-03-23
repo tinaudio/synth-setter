@@ -309,7 +309,7 @@ case "$MODE" in
 
     echo "[download] rclone copy r2:${R2_BUCKET}/${R2_PREFIX} ${OUTPUT_DIR}"
     mkdir -p "$OUTPUT_DIR"
-    rclone copy "r2:${R2_BUCKET}/${R2_PREFIX}" "$OUTPUT_DIR" --progress --checksum --transfers 200 --checkers 200
+    rclone copy "r2:${R2_BUCKET}/${R2_PREFIX}" "$OUTPUT_DIR" --stats-one-line --stats 60s --checksum --transfers 200 --checkers 200
 
     echo ""
     echo "[train] python src/train.py data=${DATA_CONFIG} data.dataset_root=${OUTPUT_DIR} hydra.run.dir=${TRAIN_OUTPUT_DIR} ${TRAIN_ARGS}"
@@ -343,7 +343,7 @@ case "$MODE" in
       # shellcheck disable=SC2086
       rclone copy "$TRAIN_OUTPUT_DIR" \
         "r2:${R2_BUCKET}/${R2_PREFIX}/${UPLOAD_SUFFIX}" \
-        --progress --checksum --transfers 200 --checkers 200 \
+        --stats-one-line --stats 60s --checksum --transfers 200 --checkers 200 \
         $DRY_RUN_FLAG
     fi
 
