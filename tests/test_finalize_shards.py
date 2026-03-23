@@ -138,6 +138,7 @@ class TestFinalizeShards:
             r2_prefix="runs/batch42",
             val_shards=1,
             test_shards=1,
+            shard_size=10,
         )
         assert (output_dir / "train.h5").exists()
         assert (output_dir / "val.h5").exists()
@@ -152,6 +153,7 @@ class TestFinalizeShards:
             r2_prefix="runs/batch42",
             val_shards=1,
             test_shards=1,
+            shard_size=10,
         )
         # 5 shards × 10 samples each: train=3 shards (30), val=1 (10), test=1 (10)
         with h5py.File(output_dir / "train.h5", "r") as f:
@@ -170,6 +172,7 @@ class TestFinalizeShards:
             r2_prefix="runs/batch42",
             val_shards=1,
             test_shards=1,
+            shard_size=10,
         )
         assert (output_dir / "stats.npz").exists()
 
@@ -182,6 +185,7 @@ class TestFinalizeShards:
             r2_prefix="runs/batch42",
             val_shards=1,
             test_shards=1,
+            shard_size=10,
         )
         stats_calls = [c for c in fake_stats_subprocess if "get_dataset_stats.py" in " ".join(c)]
         assert len(stats_calls) == 1
@@ -199,6 +203,7 @@ class TestFinalizeShards:
             val_shards=1,
             test_shards=1,
             uploader=uploader,
+            shard_size=10,
         )
         dest = fake_r2 / "runs/batch42"
         uploaded_names = {f.name for f in dest.iterdir()}
@@ -220,6 +225,7 @@ class TestFinalizeShards:
             val_shards=1,
             test_shards=1,
             uploader=None,
+            shard_size=10,
         )
         assert not fake_r2.exists()
 
@@ -233,6 +239,7 @@ class TestFinalizeShards:
                 r2_prefix="runs/batch42",
                 val_shards=1,
                 test_shards=1,
+                shard_size=10,
             )
 
     def test_not_enough_shards_exits(self, tmp_path, fake_stats_subprocess):
@@ -254,6 +261,7 @@ class TestFinalizeShards:
                 r2_prefix="runs/batch42",
                 val_shards=1,
                 test_shards=2,
+                shard_size=10,
             )
 
 

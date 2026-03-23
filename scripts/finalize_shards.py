@@ -16,6 +16,13 @@ Usage:
         --r2-bucket my-bucket \\
         --output-dir data/surge_simple \\
         --skip-upload
+
+    # Use dynamic resharding (reads per-shard sizes from HDF5 metadata)
+    python scripts/finalize_shards.py \\
+        --r2-prefix runs/surge_simple/batch42 \\
+        --r2-bucket my-bucket \\
+        --output-dir data/surge_simple \\
+        --dynamic-reshard
 """
 
 import subprocess  # nosec B404
@@ -25,14 +32,81 @@ from functools import partial
 from pathlib import Path
 
 import click
+import h5py
+import numpy as np
 import rootutils
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from scripts.reshard_data_dynamic_shard import reshard_split
+from scripts.reshard_data_dynamic_shard import reshard_split as reshard_split_dynamic
 from src.data.uploader import DatasetUploader, RcloneUploader
 
 _STATS_SCRIPT = "scripts/get_dataset_stats.py"
+
+
+def reshard_split_fixed(
+    shard_files: list[Path],
+    output_file: Path,
+    shard_size: int = 10_000,
+) -> None:
+    """Create a virtual HDF5 dataset assuming fixed-size shards.
+
+    Unlike the dynamic variant, this does NOT open each shard to read its size.
+    It assumes every shard has exactly ``shard_size`` samples, which avoids
+    the O(N) memory growth from HDF5 metadata accumulation when opening many
+    shards (see #235).
+
+    Args:
+        shard_files: Ordered list of shard HDF5 file paths. Each must contain
+            datasets named 'audio', 'mel_spec', and 'param_array'.
+        output_file: Path for the output virtual HDF5 file.
+        shard_size: Number of samples per shard (default 10 000).
+
+    Raises:
+        ValueError: If shard_files is empty.
+    """
+    if not shard_files:
+        raise ValueError("No shard files provided")
+
+    output_dir = output_file.parent
+    split_len = len(shard_files) * shard_size
+
+    # Read shapes from the first shard only.
+    with h5py.File(shard_files[0], "r") as f:
+        audio_shape = f["audio"].shape[1:]
+        mel_shape = f["mel_spec"].shape[1:]
+        param_shape = f["param_array"].shape[1:]
+
+    vl_audio = h5py.VirtualLayout(shape=(split_len, *audio_shape), dtype=np.float32)
+    vl_mel = h5py.VirtualLayout(shape=(split_len, *mel_shape), dtype=np.float32)
+    vl_param = h5py.VirtualLayout(shape=(split_len, *param_shape), dtype=np.float32)
+
+    for i, file in enumerate(shard_files):
+        # Use path relative to the output file's directory for portability.
+        rel_path = file.resolve().relative_to(output_dir.resolve())
+        rel_str = str(rel_path)
+
+        vs_audio = h5py.VirtualSource(
+            rel_str, "audio", dtype=np.float32, shape=(shard_size, *audio_shape)
+        )
+        vs_mel = h5py.VirtualSource(
+            rel_str, "mel_spec", dtype=np.float32, shape=(shard_size, *mel_shape)
+        )
+        vs_param = h5py.VirtualSource(
+            rel_str, "param_array", dtype=np.float32, shape=(shard_size, *param_shape)
+        )
+
+        range_start = i * shard_size
+        range_end = (i + 1) * shard_size
+
+        vl_audio[range_start:range_end] = vs_audio
+        vl_mel[range_start:range_end] = vs_mel
+        vl_param[range_start:range_end] = vs_param
+
+    with h5py.File(output_file, "w") as f:
+        f.create_virtual_dataset("audio", vl_audio)
+        f.create_virtual_dataset("mel_spec", vl_mel)
+        f.create_virtual_dataset("param_array", vl_param)
 
 
 def _rclone_download(
@@ -66,6 +140,8 @@ def finalize_shards(
     val_shards: int = 1,
     test_shards: int = 1,
     uploader: DatasetUploader | None = None,
+    dynamic_reshard: bool = False,
+    shard_size: int = 10_000,
 ) -> Path:
     """Download shards from R2, reshard into splits, compute stats, and upload."""
     output_dir = Path(output_dir)
@@ -92,6 +168,14 @@ def finalize_shards(
         sys.exit(1)
 
     # 3. Reshard
+    if dynamic_reshard:
+        reshard_fn = reshard_split_dynamic
+        mode_label = "dynamic"
+    else:
+        reshard_fn = partial(reshard_split_fixed, shard_size=shard_size)
+        mode_label = f"fixed (shard_size={shard_size})"
+    print(f"[reshard] mode: {mode_label}", flush=True)
+
     splits = {
         "train": files[:train_shards],
         "val": files[train_shards : train_shards + val_shards],
@@ -103,7 +187,7 @@ def finalize_shards(
             continue
         out_path = output_dir / f"{split_name}.h5"
         print(f"[reshard] {split_name}: {len(split_files)} shards -> {out_path}", flush=True)
-        reshard_split(split_files, out_path)
+        reshard_fn(split_files, out_path)
 
     # 4. Compute stats
     train_h5 = output_dir / "train.h5"
@@ -137,6 +221,19 @@ def finalize_shards(
     "--dry-run-upload", is_flag=True, default=False, help="Pass --dry-run to rclone upload."
 )
 @click.option("--skip-upload", is_flag=True, default=False, help="Skip uploading results to R2.")
+@click.option(
+    "--dynamic-reshard",
+    is_flag=True,
+    default=False,
+    help="Use dynamic resharding (reads per-shard HDF5 sizes). Default: fixed-size.",
+)
+@click.option(
+    "--shard-size",
+    type=int,
+    default=10_000,
+    show_default=True,
+    help="Samples per shard for fixed-size resharding (ignored with --dynamic-reshard).",
+)
 def main(
     r2_prefix: str,
     r2_bucket: str | None,
@@ -145,6 +242,8 @@ def main(
     test_shards: int,
     dry_run_upload: bool,
     skip_upload: bool,
+    dynamic_reshard: bool,
+    shard_size: int,
 ) -> None:
     """Download shards from R2, reshard, compute stats, and upload results."""
     if not r2_bucket:
@@ -167,6 +266,8 @@ def main(
         val_shards=val_shards,
         test_shards=test_shards,
         uploader=uploader,
+        dynamic_reshard=dynamic_reshard,
+        shard_size=shard_size,
     )
 
 
