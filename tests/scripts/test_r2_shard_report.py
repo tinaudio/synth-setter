@@ -349,7 +349,7 @@ class TestRunRcloneLsIntegration:
 
                 msg = (
                     f"Failed to clean up test prefix: {test_prefix}\n"
-                    f"stdout:\n{exc.stdout}\n"
-                    f"stderr:\n{exc.stderr}"
+                    f"stdout: {exc.stdout}\n"
+                    f"stderr: {exc.stderr}"
                 )
                 warnings.warn(msg, stacklevel=2)

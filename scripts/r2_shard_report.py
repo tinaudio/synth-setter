@@ -65,9 +65,7 @@ def parse_rclone_ls_output(output: str) -> list[RcloneFile]:
             continue
         parts = stripped.split(maxsplit=1)
         if len(parts) != 2:
-            raise ValueError(
-                f"Malformed rclone ls line (expected 'SIZE FILENAME'): {line!r}"
-            )
+            raise ValueError(f"Malformed rclone ls line (expected 'SIZE FILENAME'): {line!r}")
         size_str, filename = parts
         try:
             size_bytes = int(size_str)
