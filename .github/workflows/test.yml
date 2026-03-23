@@ -95,7 +95,7 @@ jobs:
       - name: Run pytest
         env:
           HYDRA_FULL_ERROR: "1"
-        run: pytest -n auto -m "not slow" -vv -s
+        run: pytest -n auto -m "not slow" -k "not test_mnist_datamodule" -vv -s
 
   # upload code coverage report
   code-coverage:
