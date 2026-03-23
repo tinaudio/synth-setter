@@ -36,7 +36,7 @@ jobs:
           DOCKER_BUILDKIT: "1"
         run: |
           make docker-build-dev-live \
-            GIT_REF=${{ github.sha }} \
+            GIT_REF=$(git rev-parse HEAD) \
             GIT_PAT=${{ secrets.GIT_PAT }} \
             DOCKER_BUILD_FLAGS="--load"
 
