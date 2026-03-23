@@ -78,7 +78,7 @@ TARGETARCH ?= amd64
 DOCKER_TORCH_IDX  ?= https://download.pytorch.org/whl/cu128
 DOCKER_BUILD_FLAGS ?=
 _INTERNAL_BUILD_FLAGS :=
-CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse --short HEAD))
+CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse HEAD))
 
 # R2 / rclone configuration — passed as BuildKit secrets + build-arg.
 R2_ACCESS_KEY_ID     ?=
@@ -111,8 +111,7 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
 		-t $(DOCKER_IMAGE):dev-snapshot \
-		. \
-		-- 2>&1 | tee data/docker_build_log.txt
+		.
 
 docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
 	DOCKER_BUILDKIT=1 docker buildx build \
@@ -130,5 +129,4 @@ docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
 		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-live-$(CURRENT_LOCAL_GIT_REF) \
 		-t $(DOCKER_IMAGE):dev-live \
-		. \
-		-- 2>&1 | tee data/docker_build_log.txt
+		.

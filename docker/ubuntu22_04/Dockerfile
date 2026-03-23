@@ -229,8 +229,10 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     libjack-jackd2-dev
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends ./surge-xt-linux-x64-1.3.4.deb \
-    && rm surge-xt-linux-x64-1.3.4.deb
+    pkg="$(cat /tmp-artifacts/surge-package-filepath.txt)" && \
+    fname="${pkg##*/}" && \
+    apt-get update && apt-get install -y --no-install-recommends "./${fname}" && \
+    rm "./${fname}"
 
 # ==========================================
 # Source stage: download synth-setter at a specific git ref via tarball.

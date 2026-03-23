@@ -2,7 +2,7 @@
 #
 # Headless VST3 bootstrap for Linux CI
 #
-# Some VST3 pluginsn query X11 desktop
+# Some VST3 plugins query X11 desktop
 # settings during editor initialization. In minimal headless
 # environments, no XSettings manager owns the _XSETTINGS_S0 selection.
 # This can lead to XGetProperty() being called on window ID 0,
@@ -30,9 +30,18 @@ TMP_DIR=$(mktemp -d)
 DISPLAY_FILE="$TMP_DIR/display_num"
 
 cleanup() {
-  # Fix: Use :- syntax to avoid "unbound variable" errors if processes aren't started yet
-  kill "${OPENBOX_PID:-}" "${XSETTINGS_PID:-}" "${XVFB_PID:-}" 2>/dev/null || true
-  rm -rf "${TMP_DIR:-}"
+  if [ -n "${OPENBOX_PID-}" ]; then
+    kill "${OPENBOX_PID}" 2>/dev/null || true
+  fi
+  if [ -n "${XSETTINGS_PID-}" ]; then
+    kill "${XSETTINGS_PID}" 2>/dev/null || true
+  fi
+  if [ -n "${XVFB_PID-}" ]; then
+    kill "${XVFB_PID}" 2>/dev/null || true
+  fi
+  if [ -n "${TMP_DIR-}" ]; then
+    rm -rf "${TMP_DIR}" || true
+  fi
 }
 trap cleanup EXIT
 
