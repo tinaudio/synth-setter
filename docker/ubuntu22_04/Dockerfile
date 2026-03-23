@@ -229,7 +229,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     libjack-jackd2-dev
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    pkg="$(cat /tmp-artifacts/surge-package-filepath.txt)" && \
+    pkg="$(cat /surge-package-filepath.txt)" && \
     fname="${pkg##*/}" && \
     apt-get update && apt-get install -y --no-install-recommends "./${fname}" && \
     rm "./${fname}"
