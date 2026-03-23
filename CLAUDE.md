@@ -30,7 +30,7 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 
 - `internal-feat:` → new code building toward a feature not yet exposed to users (new internal API, new module, new config schema). Use this when a feature is being built across multiple PRs and this PR adds real, tested code — but the feature isn't user-facing yet. No version bump.
 - `internal-fix:` → fix to internal code not yet exposed to users. No version bump.
-- `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `style:`, `build:` → no version bump.
+- `monitoring:`, `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `style:`, `build:` → no version bump.
 
 **When to use which:**
 
@@ -63,6 +63,13 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 - `configs/` — Hydra YAML configs (pipeline, data, trainer)
 - `tests/` — mirrors `src/` and `scripts/` structure
 - `docs/design/` — design documents
+
+### Git Workflow
+
+- **Always use isolated git worktrees** for feature work, bug fixes, and PRs. Never edit files directly on a development branch in the main working tree — branch switching and stash conflicts cause lost work and accidental commits to wrong branches.
+- Use `isolation: "worktree"` when spawning subagents that write code or create commits.
+- The main working tree should only be used for read-only operations (exploration, `git log`, `rclone ls`, etc.).
+- When using Claude Code's Agent tool with `isolation: "worktree"`, the worktree is automatically cleaned up if the agent makes no changes. If changes are made, the worktree path and branch are returned for review. For manually created worktrees, clean up with `git worktree remove` when done.
 
 ### Pipeline-Specific Rules
 
