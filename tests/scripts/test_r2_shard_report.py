@@ -344,9 +344,12 @@ class TestRunRcloneLsIntegration:
                     text=True,
                     check=True,
                 )
-            except subprocess.CalledProcessError:
+            except subprocess.CalledProcessError as exc:
                 import warnings
 
-                warnings.warn(
-                    f"Failed to clean up test prefix: {test_prefix}", stacklevel=1
+                msg = (
+                    f"Failed to clean up test prefix: {test_prefix}\n"
+                    f"stdout:\n{exc.stdout}\n"
+                    f"stderr:\n{exc.stderr}"
                 )
+                warnings.warn(msg, stacklevel=2)
