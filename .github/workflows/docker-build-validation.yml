@@ -35,8 +35,9 @@ jobs:
           GIT_PAT: ${{ secrets.GIT_PAT }}
           DOCKER_BUILDKIT: "1"
         run: |
+          # dev-live uses CURRENT_LOCAL_GIT_REF (git rev-parse HEAD) internally
+          # in the Makefile — no need to pass GIT_REF explicitly.
           make docker-build-dev-live \
-            GIT_REF=${{ github.sha }} \
             GIT_PAT=${{ secrets.GIT_PAT }} \
             DOCKER_BUILD_FLAGS="--load"
 
