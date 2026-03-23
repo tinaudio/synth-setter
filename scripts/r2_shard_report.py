@@ -185,7 +185,7 @@ def run_rclone_ls(prefix: str) -> str:
 
 @click.command()
 @click.argument("prefix")
-@click.option("--size-threshold-gib", "-t", type=float, default=1.0)
+@click.option("--size-threshold-gib", "-t", type=click.FloatRange(min=0), default=1.0)
 def main(prefix: str, size_threshold_gib: float) -> None:
     """Generate a report of shards in an R2 bucket."""
     output = run_rclone_ls(prefix)

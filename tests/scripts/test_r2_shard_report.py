@@ -212,6 +212,23 @@ class TestFormatReport:
 
 
 # ---------------------------------------------------------------------------
+# parse_rclone_ls_output — smoke test with raw rclone output
+# ---------------------------------------------------------------------------
+
+
+class TestParseRcloneLsOutput:
+    """Smoke test: parse_rclone_ls_output produces RcloneFile list from raw output."""
+
+    def test_parses_sample_output_into_rclone_files(self) -> None:
+        files = parse_rclone_ls_output(SAMPLE_RCLONE_OUTPUT)
+
+        assert len(files) == 8
+        assert all(isinstance(f, RcloneFile) for f in files)
+        assert files[0].size_bytes == 4650191447
+        assert files[0].filename == "shard-0t7qvi3i3wyzfb-de99e3c2-0000.h5"
+
+
+# ---------------------------------------------------------------------------
 # format_size — stable utility with well-defined contract
 # ---------------------------------------------------------------------------
 
@@ -256,16 +273,14 @@ def _r2_reachable() -> bool:
     return True
 
 
-_skip_no_r2 = pytest.mark.skipif(not _r2_reachable(), reason="R2 not reachable")
-
-
-@_skip_no_r2
 @pytest.mark.r2
 @pytest.mark.slow
 class TestRunRcloneLsIntegration:
     """Integration test: write real files to r2:test-bucket, run report, clean up."""
 
     def test_end_to_end_report_against_r2(self) -> None:
+        if not _r2_reachable():
+            pytest.skip("R2 not reachable")
         test_prefix = f"r2:test-bucket/test-{uuid.uuid4().hex[:8]}/"
         test_content = b"fake shard data"
 
@@ -295,7 +310,16 @@ class TestRunRcloneLsIntegration:
 
         finally:
             # Clean up: delete the test prefix
-            subprocess.run(
-                ["rclone", "purge", test_prefix],
-                capture_output=True,
-            )
+            try:
+                subprocess.run(
+                    ["rclone", "purge", test_prefix],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError:
+                import warnings
+
+                warnings.warn(
+                    f"Failed to clean up test prefix: {test_prefix}", stacklevel=1
+                )
