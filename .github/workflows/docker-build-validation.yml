@@ -30,13 +30,17 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Capture checked-out SHA
+        id: meta
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build Docker image (dev-live target)
         env:
           GIT_PAT: ${{ secrets.GIT_PAT }}
           DOCKER_BUILDKIT: "1"
         run: |
           make docker-build-dev-live \
-            GIT_REF=${{ github.sha }} \
+            GIT_REF=${{ steps.meta.outputs.sha }} \
             GIT_PAT=${{ secrets.GIT_PAT }} \
             DOCKER_BUILD_FLAGS="--load"
 
