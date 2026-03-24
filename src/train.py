@@ -33,6 +33,7 @@ from src.utils import (
     instantiate_callbacks,
     instantiate_loggers,
     log_hyperparameters,
+    log_wandb_provenance,
     register_resolvers,
     task_wrapper,
     watch_gradients,
@@ -85,6 +86,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if logger:
         log.info("Logging hyperparameters!")
         log_hyperparameters(object_dict)
+        log_wandb_provenance()
 
     if cfg.get("watch_gradients"):
         log.info("Watching gradients!")
