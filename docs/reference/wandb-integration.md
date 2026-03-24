@@ -1,7 +1,7 @@
 # W&B Integration Reference
 
 > **Code version**: `8af7575` (2026-03-24, `main`)
-> **PyTorch**: 2.10.0 · **Lightning**: see `requirements.txt`
+> **PyTorch**: see `requirements.txt` · **Lightning**: see `requirements.txt`
 > **Tracking**: #252, #263
 
 ______________________________________________________________________
@@ -105,7 +105,7 @@ Logged via `self.log()` in each LightningModule:
 
 If `cfg.watch_gradients` is set, `watch_gradients()` calls
 `WandbLogger.watch(model, log="gradients")` — logs gradient histograms per
-layer each step.
+layer according to the WandbLogger / W&B logging defaults.
 
 Source: `src/utils/utils.py:138-149`, called from `src/train.py:89-91`.
 
@@ -122,10 +122,10 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact          | Source                                | When                           |
-| ----------------- | ------------------------------------- | ------------------------------ |
-| Model checkpoints | `ModelCheckpoint` + `log_model: true` | Every 5000 steps + best + last |
-| Source code       | `wandb.Settings(code_dir=".")`        | Run start                      |
+| Artifact          | Source                                | When                                                   |
+| ----------------- | ------------------------------------- | ------------------------------------------------------ |
+| Model checkpoints | `ModelCheckpoint` + `log_model: true` | Every 5000 steps (with `default_surge` callbacks) + best + last |
+| Source code       | `wandb.Settings(code_dir=".")`        | Run start                                              |
 
 ______________________________________________________________________
 
