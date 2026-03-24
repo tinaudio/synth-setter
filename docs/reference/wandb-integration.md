@@ -122,10 +122,10 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact          | Source                                | When                                                   |
-| ----------------- | ------------------------------------- | ------------------------------------------------------ |
+| Artifact          | Source                                | When                                                            |
+| ----------------- | ------------------------------------- | --------------------------------------------------------------- |
 | Model checkpoints | `ModelCheckpoint` + `log_model: true` | Every 5000 steps (with `default_surge` callbacks) + best + last |
-| Source code       | `wandb.Settings(code_dir=".")`        | Run start                                              |
+| Source code       | `wandb.Settings(code_dir=".")`        | Run start                                                       |
 
 ______________________________________________________________________
 
