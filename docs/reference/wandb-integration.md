@@ -71,9 +71,12 @@ Logged via `self.log()` in each LightningModule:
 |                           | `test/param_mse`, `test/lsd`, `test/chamfer`, `test/lad` | —    | yes   |
 |                           | `vector_field/*_norm`, `encoder/*_norm`                  | yes  | yes   |
 | `SurgeFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`      | yes  | yes   |
+|                           | `train/{reconstruction,latent,param}_loss`               | yes  | yes   |
 |                           | `train/beta`                                             | yes  | —     |
-|                           | `val/*` losses                                           | —    | yes   |
-|                           | `test/*` losses                                          | —    | yes   |
+|                           | `val/{reconstruction,latent,param}_loss`                 | —    | yes   |
+|                           | `val/param_mean`, `val/param_std`                        | —    | yes   |
+|                           | `test/{reconstruction,latent,param}_loss`                | —    | yes   |
+|                           | `net/*` gradient norms                                   | yes  | —     |
 | `SurgeFeedForwardModule`  | `train/loss`                                             | yes  | yes   |
 |                           | `val/param_mse`, `test/param_mse`                        | —    | yes   |
 | `KSinFeedForwardModule`   | `train/loss`                                             | yes  | yes   |
