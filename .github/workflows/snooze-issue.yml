@@ -9,7 +9,9 @@ jobs:
   snooze_issue:
     runs-on: ubuntu-latest
     name: snooze issue
+    if: ${{ !github.event.issue.pull_request }}
     permissions:
+      contents: read
       issues: write
     steps:
       - name: Checkout
