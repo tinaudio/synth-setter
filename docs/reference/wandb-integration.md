@@ -8,11 +8,11 @@ ______________________________________________________________________
 
 ## Overview
 
-W&B is used exclusively through Lightning's `WandbLogger` — there are no direct
+W&B runs are created via Lightning's `WandbLogger` — there are no direct
 `wandb.init()` calls in training or eval code. The logger is instantiated via
-Hydra config and passed to the `Trainer`. All metric logging goes through
+Hydra config and passed to the `Trainer`. Most metric logging goes through
 Lightning's `self.log()` / `self.log_dict()` API; a handful of visualization
-callbacks call `wandb.log()` directly for image uploads.
+callbacks additionally call `wandb.log()` directly for image uploads.
 
 ______________________________________________________________________
 
