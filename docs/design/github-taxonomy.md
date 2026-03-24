@@ -155,7 +155,11 @@ Priority, Start Date, Target Date.
 
 ### Built-in fields
 
-Title, Assignees, Status (`Todo` → `In Progress` → `Done`), Labels, Linked PRs, Milestone, Repository, Reviewers, Parent issue, Sub-issues progress.
+Title, Assignees, Status (`Todo` → `In Progress` → `Done` → `Verified` / `Won't Fix`), Labels, Linked PRs, Milestone, Repository, Reviewers, Parent issue, Sub-issues progress.
+
+`Verified` — done and verified working as expected. The final status for completed work.
+
+`Won't Fix` — issue intentionally closed without resolution (not a bug, out of scope, or superseded by other work). Can be set from any prior status.
 
 ### Views
 
@@ -219,7 +223,9 @@ ISSUE
 | `Refs #N`                | PR is related but doesn't resolve             | No           |
 | Development sidebar link | Manual non-closing connection from issue page | No           |
 
-9. When the PR merges, move to **Done** and close the issue
+09. When the PR merges, move to **Done** and close the issue
+10. After verifying the change works as expected, move to **Verified**
+11. If the issue is intentionally declined, move to **Won't Fix** and close the issue with a reason comment
 
 ## 12. Changes Required
 
