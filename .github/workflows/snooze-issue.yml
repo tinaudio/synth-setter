@@ -1,0 +1,22 @@
+name: snooze issue
+
+on:
+  issue_comment:
+    types:
+      - created
+
+jobs:
+  snooze_issue:
+    runs-on: ubuntu-latest
+    name: snooze issue
+    if: ${{ !github.event.issue.pull_request }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: snooze issue
+        uses: multilocale/snooze-issue-action/snooze@v1.0.0
+        with:
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
