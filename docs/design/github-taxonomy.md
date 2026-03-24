@@ -223,8 +223,8 @@ ISSUE
 | `Refs #N`                | PR is related but doesn't resolve             | No           |
 | Development sidebar link | Manual non-closing connection from issue page | No           |
 
-09. When the PR merges, move to **Done** and close the issue
-10. After verifying the change works as expected, move to **Verified**
+09. When the PR merges, move to **Done**
+10. After verifying the change works as expected, move to **Verified** and close the issue
 11. If the issue is intentionally declined, move to **Won't Fix** and close the issue with a reason comment
 
 ## 12. Changes Required
