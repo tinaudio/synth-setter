@@ -27,7 +27,7 @@ ______________________________________________________________________
 | Code saving       | `wandb.Settings(code_dir=".")`                                   | `configs/logger/wandb.yaml:17-19` |
 | Run teardown      | `wandb.finish()` in `task_wrapper` finally block                 | `src/utils/utils.py:102-107`      |
 
-**No direct `wandb.init()` or `wandb.config.update()` calls exist anywhere in the codebase.**
+**No direct `wandb.init()` or `wandb.config.update()` calls exist in runtime code (`src/`, `scripts/`, entrypoints).**
 
 ______________________________________________________________________
 
@@ -57,30 +57,31 @@ to all loggers via `logger.log_hyperparams()`:
 
 Logged via `self.log()` in each LightningModule:
 
-| Module                    | Metric                                                            | Step | Epoch |
-| ------------------------- | ----------------------------------------------------------------- | ---- | ----- |
-| `SurgeFlowMatchingModule` | `train/loss`                                                      | yes  | yes   |
-|                           | `train/penalty`                                                   | yes  | yes   |
-|                           | `val/param_mse`                                                   | —    | yes   |
-|                           | `test/param_mse`                                                  | —    | yes   |
-|                           | `vector_field/*_norm`                                             | yes  | —     |
-|                           | `encoder/*_norm`                                                  | yes  | —     |
-| `KSinFlowMatchingModule`  | `train/loss`                                                      | yes  | yes   |
-|                           | `train/penalty`                                                   | yes  | yes   |
-|                           | `val/lsd`, `val/chamfer`                                          | —    | yes   |
-|                           | `test/param_mse`, `test/lsd`, `test/chamfer`, `test/lad`          | —    | yes   |
-|                           | `vector_field/*_norm`, `encoder/*_norm`                           | yes  | yes   |
-| `SurgeFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`, `train/beta` | yes  | yes   |
-|                           | `val/*` losses                                                    | —    | yes   |
-|                           | `test/*` losses                                                   | —    | yes   |
-| `SurgeFeedForwardModule`  | `train/loss`                                                      | yes  | yes   |
-|                           | `val/param_mse`, `test/param_mse`                                 | —    | yes   |
-| `KSinFeedForwardModule`   | `train/loss`                                                      | yes  | yes   |
-|                           | `val/lsd`, `val/chamfer`, `val/loss`                              | —    | yes   |
-|                           | `test/*` metrics                                                  | —    | yes   |
-| `MNISTLitModule`          | `train/loss`, `train/acc`                                         | —    | yes   |
-|                           | `val/loss`, `val/acc`, `val/acc_best`                             | —    | yes   |
-|                           | `test/loss`, `test/acc`                                           | —    | yes   |
+| Module                    | Metric                                                   | Step | Epoch |
+| ------------------------- | -------------------------------------------------------- | ---- | ----- |
+| `SurgeFlowMatchingModule` | `train/loss`                                             | yes  | yes   |
+|                           | `train/penalty`                                          | yes  | yes   |
+|                           | `val/param_mse`                                          | —    | yes   |
+|                           | `test/param_mse`                                         | —    | yes   |
+|                           | `vector_field/*_norm`                                    | yes  | —     |
+|                           | `encoder/*_norm`                                         | yes  | —     |
+| `KSinFlowMatchingModule`  | `train/loss`                                             | yes  | yes   |
+|                           | `train/penalty`                                          | yes  | yes   |
+|                           | `val/lsd`, `val/chamfer`                                 | —    | yes   |
+|                           | `test/param_mse`, `test/lsd`, `test/chamfer`, `test/lad` | —    | yes   |
+|                           | `vector_field/*_norm`, `encoder/*_norm`                  | yes  | yes   |
+| `SurgeFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`      | yes  | yes   |
+|                           | `train/beta`                                             | yes  | —     |
+|                           | `val/*` losses                                           | —    | yes   |
+|                           | `test/*` losses                                          | —    | yes   |
+| `SurgeFeedForwardModule`  | `train/loss`                                             | yes  | yes   |
+|                           | `val/param_mse`, `test/param_mse`                        | —    | yes   |
+| `KSinFeedForwardModule`   | `train/loss`                                             | yes  | yes   |
+|                           | `val/lsd`, `val/chamfer`, `val/loss`                     | —    | yes   |
+|                           | `test/*` metrics                                         | —    | yes   |
+| `MNISTLitModule`          | `train/loss`, `train/acc`                                | —    | yes   |
+|                           | `val/loss`, `val/acc`, `val/acc_best`                    | —    | yes   |
+|                           | `test/loss`, `test/acc`                                  | —    | yes   |
 
 ### 2c. Callbacks — Visualization (direct `wandb.log()`)
 
@@ -131,10 +132,10 @@ ______________________________________________________________________
 
 ## 4. Entry Points
 
-| Entry point    | W&B usage                                                             | File           |
-| -------------- | --------------------------------------------------------------------- | -------------- |
-| `src/train.py` | Full: logger init → hparams → train metrics → test metrics → teardown | `src/train.py` |
-| `src/eval.py`  | Full: logger init → hparams → test/val/predict metrics → teardown     | `src/eval.py`  |
+| Entry point    | W&B usage                                                                          | File           |
+| -------------- | ---------------------------------------------------------------------------------- | -------------- |
+| `src/train.py` | Full: logger init → hparams → train metrics → test metrics → teardown              | `src/train.py` |
+| `src/eval.py`  | Full: logger init → hparams → test/val metrics (+ optional predictions) → teardown | `src/eval.py`  |
 
 Both use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
 
