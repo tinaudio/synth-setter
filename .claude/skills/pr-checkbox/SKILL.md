@@ -29,23 +29,44 @@ Treat the system as a **black box**. You put something in, you check what comes 
 
 | Level | What you do | Example |
 |-------|------------|---------|
-| **1. Run the tool** | Invoke the actual tool/system, observe the result | `pyright --project pyrightconfig.json` |
-| **2. Trigger end-to-end** | Create a real input, check the real output | `gh issue create ...` then verify metadata via API |
-| **3. Query live system state** | Ask the live platform what it sees | `gh api repos/.../codeowners/errors` |
-| **4. Parse file and assert** | Read a config, parse it, check values | `python3 -c "import yaml; ..."` |
-| **5. Grep the diff** | Check if a string exists in the change | `gh pr diff \| grep '...'` |
+| **1. Full integration** | Run a pipeline or workflow that exercises the change end-to-end in a realistic context | Run the full training pipeline; run the complete ingestion + shard write + validation cycle |
+| **2. Run the specific tool** | Invoke the exact tool the change configures or affects, observe its output | `pyright --project pyrightconfig.json`; `pytest -n auto` |
+| **3. Trigger with real input** | Create a real input, exercise the real system, check the real output | `gh issue create ...` then verify metadata via API |
+| **4. Query live system state** | Ask the live platform what it sees | `gh api repos/.../codeowners/errors` |
+| **5. Parse file and assert** | Read a config, parse it, check values | `python3 -c "import yaml; ..."` |
+| **6. Grep the diff** | Check if a string exists in the change | `gh pr diff \| grep '...'` |
 
-### The escalation rule
+### The scope-matching rule
 
-**You MUST use the highest level available.** If Level 1 is possible, Levels 2–5 are not acceptable. If Level 2 is possible, Levels 3–5 are not acceptable. You only descend when a higher level is genuinely impossible (tool not installed, no test fixtures, external service unreachable).
+**You MUST use the lowest level number available.** If Level 1 is possible, Levels 2–5 are not acceptable. If Level 2 is possible, Levels 3–5 are not acceptable. You only descend when a higher level is genuinely impossible (tool not installed, no test fixtures, external service unreachable).
 
-When you descend, you MUST state why:
+This has two failure modes, not one:
+
+- **Descending too far (laziness):** Falling to Level 5 or 6 because parsing is easier than running the tool. This gives you false confidence. The config looks right but the tool rejects it.
+- **Ascending too far (over-specification):** Running a 20-minute training pipeline to verify a pyright config value. This gives you noisy signal and slow feedback. If the pipeline fails for an unrelated reason, you've lost the connection to the change.
+
+**Match the level to the promise:**
+
+| The promise | Correct level |
+|-------------|---------------|
+| "The data pipeline produces valid shards after this refactor" | Level 1 — the promise is end-to-end |
+| "Pyright runs in basic mode with this config" | Level 2 — the promise is tool behavior |
+| "GitHub auto-assigns reviewers from CODEOWNERS" | Level 3 or 4 — the promise is platform behavior |
+| "The codecov threshold is set to 1%" | Level 5 only if the CLI is unavailable; Level 2 otherwise |
+
+**When you descend**, you MUST state why:
 
 ```markdown
-- [x] **Config values are correct** *(Level 4 — codecov CLI not available in this environment; fell back to YAML parse)*
+- [x] **Config values are correct** *(Level 5 — codecov CLI not available in this environment)*
 ```
 
-If you do not state a reason, the check is invalid.
+**When you ascend beyond what the promise requires**, you MUST note it:
+
+```markdown
+- [x] **Pipeline produces valid shards** *(Level 1 — promise is end-to-end, full pipeline run required)*
+```
+
+If you do not state the level and justify your choice, the check is invalid.
 
 ---
 
@@ -79,6 +100,7 @@ Before writing a verification command, ask: **what is this check actually trying
 - "Nightly workflow has cron trigger" → Real question: will this fire on schedule? Exercise: `gh workflow run` and check it starts.
 - "Codecov threshold is 1%" → Real question: will Codecov enforce 1%? Exercise: `codecov validate codecov.yml` or trigger a coverage run.
 - "Makefile has `-n auto`" → Real question: does `make test` run tests in parallel? Exercise: run `make test` and observe parallel workers.
+- "Pipeline refactor preserves output format" → Real question: does end-to-end execution still produce valid shards? Exercise: run the full pipeline on a test fixture and validate output.
 
 ---
 
@@ -96,21 +118,24 @@ cd /tmp/verify-pr-NNN
 
 ### Step 2: Design behavioral checks
 
-For each verification step, ask: **"what promise does this change make?"** Then design a command that tests whether the promise was kept by **invoking the actual system**.
+For each verification step, ask: **"what promise does this change make?"** Then:
 
-Start at Level 1. Only descend if Level 1 is impossible, and state why.
+1. State the promise explicitly
+2. Determine what level fully exercises that promise — no higher, no lower
+3. Design a command at that level
 
 If the original verification steps (from a PR description, issue, or task) test implementation, **rewrite them**. Show the before → after.
 
 ### Step 3: Self-audit (MANDATORY)
 
-Before running anything, review every check you designed and answer these three questions:
+Before running anything, review every check you designed and answer these questions:
 
 1. **Does this command INVOKE the system, or READ/PARSE a file?**
 2. **If someone rewrote the internals, would this check still pass?**
 3. **Is there a higher-level check I skipped because parsing felt easier?**
+4. **Is the level appropriate to the promise, or am I running a 20-minute pipeline to check a config value?**
 
-If any answer is "it parses a file" and a higher-level option exists, rewrite it now. Do not proceed until every check is at the highest feasible level.
+If any answer is "it parses a file" and a higher-level option exists, rewrite it now. If any answer is "I'm running the full integration when the promise is narrower," consider whether Level 2 or 3 is sufficient.
 
 **Hard gate:** If more than half your checks parse/read files instead of running tools, STOP and redesign. You are testing implementation.
 
@@ -128,7 +153,7 @@ Size-based placement:
 #### Small output (< ~20 lines) — inline
 
 ```markdown
-- [x] **Pyright runs clean with this config** *(Level 1 — invoked pyright directly)*
+- [x] **Pyright runs clean with this config** *(Level 2 — invoked pyright directly; promise is tool behavior, not end-to-end)*
   ```bash
   $ pyright --project pyrightconfig.json 2>&1 | tail -1
   0 errors, 0 warnings, 0 informations
@@ -144,7 +169,7 @@ Size-based placement:
 #### Large output (100+ lines) — Gist with summary
 
 ```markdown
-- [x] **Full test suite passes** — [summary + gist](#issuecomment-67890)
+- [x] **Full pipeline produces valid shards** *(Level 1 — promise is end-to-end)* — [summary + gist](#issuecomment-67890)
 ```
 
 ### Step 6: Tick or leave unchecked
@@ -162,17 +187,17 @@ Post as a comment with header `## Verification Results`.
 
 ## Rewriting Implementation Checks
 
-When you encounter verification steps that test implementation instead of behavior, **rewrite them**. Always include the annotation showing what changed and why:
+When you encounter verification steps that test implementation instead of behavior, **rewrite them**. Always include the annotation showing what changed and why.
 
 ### Example: YAML parsing → tool invocation
 
 ```markdown
-BEFORE (Level 4 — parses input):
+BEFORE (Level 5 — parses input):
 - [x] **Codecov threshold is 1%**
   $ python3 -c "import yaml; c=yaml.safe_load(open('codecov.yml'));
     assert c['coverage']['status']['project']['default']['threshold'] == '1%'"
 
-AFTER (Level 1 — runs the tool):
+AFTER (Level 2 — runs the tool; promise is tool validation, not end-to-end):
 - [x] **Codecov config is valid and accepted** *(rewritten: original parsed YAML asserting threshold value → now validates config through codecov CLI)*
   $ codecov validate codecov.yml
   Valid!
@@ -181,12 +206,12 @@ AFTER (Level 1 — runs the tool):
 ### Example: Makefile dry-run → actual execution
 
 ```markdown
-BEFORE (Level 4 — reads the recipe):
+BEFORE (Level 5 — reads the recipe):
 - [x] **make test invokes parallel**
   $ make -n test
   pytest -n auto -m "not slow"
 
-AFTER (Level 1 — runs the recipe):
+AFTER (Level 2 — runs the recipe; promise is parallel execution, not config value):
 - [x] **make test runs tests in parallel** *(rewritten: original used `make -n` dry run → now runs `make test` and checks for worker prefixes)*
   $ make test 2>&1 | head -20 | grep -E 'gw[0-9]'
   [gw0] PASSED tests/test_basic.py::test_init
@@ -196,7 +221,7 @@ AFTER (Level 1 — runs the recipe):
 ### Example: Workflow YAML parsing → workflow trigger
 
 ```markdown
-BEFORE (Level 4 — parses the workflow file):
+BEFORE (Level 5 — parses the workflow file):
 - [x] **CI uses parallel**
   $ python3 -c "import yaml; wf=yaml.safe_load(open('.github/workflows/test.yml'));
     assert '-n auto' in wf['jobs']['test']['steps'][2]['run']"
@@ -205,6 +230,22 @@ AFTER (Level 2 — triggers the workflow):
 - [x] **CI workflow runs and succeeds** *(rewritten: original parsed workflow YAML for flags → now triggers workflow and checks result)*
   $ gh workflow run test.yml --ref ci/branch && sleep 30 && gh run list -w test.yml -L 1 --json status --jq '.[0].status'
   completed
+```
+
+### Example: Unit check → full integration (promise is end-to-end)
+
+```markdown
+BEFORE (Level 2 — runs the tool in isolation):
+- [x] **Shards write correctly**
+  $ python3 -c "from pipeline.shards import write_shard; write_shard(test_fixture)"
+  OK
+
+AFTER (Level 1 — runs the full pipeline; promise is that the refactor preserves end-to-end correctness):
+- [x] **Full pipeline produces valid shards after refactor** *(rewritten: original invoked write_shard in isolation → promise is end-to-end correctness, so now runs full pipeline on test fixture)*
+  $ python3 -m pipeline.run --config configs/test.yaml 2>&1 | tail -5
+  [INFO] Shard 0: 1024 frames, mel_shape=(128, 1024), checksum OK
+  [INFO] Shard 1: 1024 frames, mel_shape=(128, 1024), checksum OK
+  [INFO] Pipeline complete. 2 shards written. 0 errors.
 ```
 
 ### Annotation format
@@ -221,6 +262,12 @@ or when descending:
 *(Level N — reason higher level is not feasible)*
 ```
 
+or when Level 1 is correct:
+
+```
+*(Level 1 — promise is end-to-end; lower levels would not exercise the full contract)*
+```
+
 ---
 
 ## Anti-Patterns
@@ -229,21 +276,23 @@ or when descending:
 2. **Parsing a config when you could run the tool** — `yaml.safe_load` is not behavioral. If the tool exists, run it.
 3. **Dry-running instead of running** — `make -n test` reads the recipe. `make test` runs it. These prove different things.
 4. **Checking that a file exists instead of checking that it works** — `ls SKILL.md` proves a file is there. Invoking the skill proves it works.
-5. **Writing PASS/FAIL tables without commands or output**
-6. **Ticking `[x]` when output contains warnings you haven't investigated**
-7. **Saying "all checks pass" without showing evidence**
+5. **Writing PASS/FAIL tables without commands or output.**
+6. **Ticking `[x]` when output contains warnings you haven't investigated.**
+7. **Saying "all checks pass" without showing evidence.**
 8. **Calling `yaml.safe_load` or `toml.load` "behavioral"** — It is not. It is reading an input, not running a system.
+9. **Running the full integration pipeline to verify a narrow config value** — If the promise is "pyright runs in basic mode," Level 2 is correct. A full pipeline run adds noise, not confidence. Save Level 1 for promises that are genuinely end-to-end.
 
 ---
 
 ## Quick Reference
 
 ```
-ALWAYS: Run the tool, trigger the behavior, observe the output.
-NEVER:  Read the config, parse the file, grep the diff — unless forced.
+ALWAYS: Match the level to the promise — no higher, no lower.
+NEVER:  Fall to Level 5/6 out of laziness.
+NEVER:  Run a 20-minute pipeline to verify a config value.
 
-ALWAYS: State the hierarchy level and justify descent.
-NEVER:  Silently drop to Level 4 because it's easier.
+ALWAYS: State the hierarchy level and justify your choice.
+NEVER:  Silently drop to Level 5 because it's easier.
 
 ALWAYS: Show the command and its output.
 NEVER:  Assert PASS without evidence.
