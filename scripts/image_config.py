@@ -67,7 +67,7 @@ def load_image_config(
         FileNotFoundError: config_path doesn't exist.
         pydantic.ValidationError: invalid github_sha or issue_number.
     """
-    if not config_path.exists():
+    if not config_path.is_file():
         raise FileNotFoundError(config_path)
 
     yaml.safe_load(config_path.read_text())
