@@ -111,4 +111,4 @@ exclude_lines = [
 # assumes src-layout, but this project imports `src` as a package).
 paths_to_mutate = ["scripts/"]
 tests_dir = ["tests/scripts/"]
-pytest_add_cli_args = ["-o", "addopts=--color=yes --durations=0 --strict-markers", "-m", "not slow and not requires_vst and not r2 and not gpu and not benchmark"]
+pytest_add_cli_args = ["-m", "not slow and not requires_vst and not r2 and not gpu and not benchmark"]
