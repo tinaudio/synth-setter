@@ -1,4 +1,6 @@
 program: src/train.py
+# Hardcoded — wandb sweep CLI does not support OmegaConf resolvers.
+# WANDB_ENTITY / WANDB_PROJECT env vars override these at runtime.
 entity: tinaudio
 project: synth-setter
 command:
