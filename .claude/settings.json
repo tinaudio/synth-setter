@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "description": "Credential protection: blocks edits to .env, .pem, and .key files. Fires on every Edit/Write tool call. Goal: prevent secrets from being modified or leaked into commits.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in *.env|*.env.*|*.pem|*.key) echo 'BLOCKED: Cannot edit credential/secret files (.env, .pem, .key)' >&2; exit 1;; *) exit 0;; esac"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "description": "Auto-format: runs ruff check --fix and ruff format on Python files after every edit. Goal: catch lint and formatting errors immediately rather than waiting for pre-commit.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in *.py) ruff check --fix --quiet \"$file_path\" 2>/dev/null; ruff format --quiet \"$file_path\" 2>/dev/null;; esac; exit 0"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "description": "Auto-test: runs the matching pytest file when src/, scripts/, or tests/ Python files are edited. For src/foo.py, runs tests/test_foo.py if it exists. For test files, runs the file directly. Goal: catch regressions immediately after code changes.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in */src/*|*/scripts/*) base=$(basename \"$file_path\" .py); test_file=\"tests/test_${base}.py\"; if [ -f \"$test_file\" ]; then echo \"Running $test_file\" >&2; pytest \"$test_file\" -x -q --no-header --tb=short 2>&1 | tail -5 >&2; fi;; */tests/*) echo \"Running $file_path\" >&2; pytest \"$file_path\" -x -q --no-header --tb=short 2>&1 | tail -5 >&2;; esac; exit 0"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "description": "Taxonomy verification: validates GitHub metadata after gh issue create, gh pr create, and addSubIssue mutations. Checks issue type, domain label, milestone, project board, and hierarchy. Goal: enforce the project's GitHub taxonomy conventions (docs/design/github-taxonomy.md) before metadata gaps compound.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/verify-gh-taxonomy.sh",
+            "timeout": 30,
+            "statusMessage": "Verifying GitHub taxonomy compliance..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "description": "PR checkbox trigger: detects gh pr create commands and prompts Claude to invoke the /pr-checkbox skill for verification checkboxes. Goal: ensure every PR gets behavioral verification results before review.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command // \"\"' | grep -q 'gh pr create' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"A PR was just created. You MUST now invoke the /pr-checkbox skill to add verification checkboxes to this PR.\"}}' || true",
+            "statusMessage": "Checking for PR creation..."
+          }
+        ]
+      }
+    ]
+  }
+}
