@@ -5,9 +5,8 @@ mode="${MODE:-}"
 
 case "${mode}" in
   idle)
-    trap 'exit 0' TERM INT
     echo "Idle mode — sleeping indefinitely. Attach with: docker exec -it <container> bash"
-    while true; do sleep 86400 & wait $!; done
+    exec sleep infinity
     ;;
   passthrough)
     if [ "$#" -gt 0 ]; then

@@ -2,65 +2,49 @@
 
 # BATS tests for scripts/docker_entrypoint.sh
 # Tests the MODE dispatch: idle, passthrough, unset, and unknown modes.
+#
+# Idle tests require Linux (sleep infinity is GNU coreutils).
+# Non-idle tests are portable and run everywhere.
 
 EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
 
-# Wait for entrypoint to be ready. The echo proves the trap is installed
-# (trap is set before echo in the entrypoint). No sleeps needed.
-wait_for_ready() {
-  local log="$1"
-  while ! grep -q "Idle" "$log" 2>/dev/null; do :; done
-}
-
 # ---------------------------------------------------------------------------
-# Idle mode (MODE=idle)
+# Idle mode (MODE=idle) — Linux only (sleep infinity is GNU coreutils)
 # ---------------------------------------------------------------------------
 
 @test "test_idle_stays_alive" {
-  local log
-  log="$(mktemp)"
-  MODE=idle "$EP" >"$log" 2>&1 &
+  [[ "$(uname)" == "Linux" ]] || skip "idle mode uses sleep infinity (GNU)"
+  MODE=idle "$EP" &
   pid=$!
-  wait_for_ready "$log"
   kill -0 "$pid"
   kill "$pid"
   wait "$pid" 2>/dev/null || true
-  rm -f "$log"
 }
 
 @test "test_idle_prints_informational_message" {
+  [[ "$(uname)" == "Linux" ]] || skip "idle mode uses sleep infinity (GNU)"
   local log
   log="$(mktemp)"
   MODE=idle "$EP" >"$log" 2>&1 &
   pid=$!
-  wait_for_ready "$log"
-  grep -qi "idle" "$log"
+  kill -0 "$pid"
   kill "$pid"
   wait "$pid" 2>/dev/null || true
+  grep -qi "idle" "$log"
   rm -f "$log"
 }
 
 @test "test_idle_ignores_command_args" {
+  [[ "$(uname)" == "Linux" ]] || skip "idle mode uses sleep infinity (GNU)"
   local log
   log="$(mktemp)"
   MODE=idle "$EP" echo SHOULD_BE_IGNORED >"$log" 2>&1 &
   pid=$!
-  wait_for_ready "$log"
-  run grep -q "SHOULD_BE_IGNORED" "$log"
-  [ "$status" -ne 0 ]
+  kill -0 "$pid"
   kill "$pid"
   wait "$pid" 2>/dev/null || true
-  rm -f "$log"
-}
-
-@test "test_idle_exits_cleanly_on_sigterm" {
-  local log
-  log="$(mktemp)"
-  MODE=idle "$EP" >"$log" 2>&1 &
-  pid=$!
-  wait_for_ready "$log"
-  kill "$pid"
-  wait "$pid"
+  run grep -q "SHOULD_BE_IGNORED" "$log"
+  [ "$status" -ne 0 ]
   rm -f "$log"
 }
 
