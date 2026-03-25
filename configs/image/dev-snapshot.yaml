@@ -1,0 +1,6 @@
+# Image type: dev-snapshot (mutable tag for iteration).
+#
+# Runtime inputs (github_sha, issue_number) are provided by the caller,
+# not stored in this file. See scripts/image_config.py for the schema.
+#
+# Future: static fields like base_image, apt_packages, python_version.
