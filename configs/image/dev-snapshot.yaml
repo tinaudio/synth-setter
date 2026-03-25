@@ -1,0 +1,12 @@
+# Image type: dev-snapshot (mutable tag for iteration).
+#
+# Runtime inputs (github_sha, issue_number) are provided by the caller,
+# not stored in this file. See scripts/image_config.py for the schema.
+
+dockerfile: docker/ubuntu22_04/Dockerfile
+image: tinaudio/perm
+base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
+base_image_tag: ubuntu22_04
+build_mode: prebuilt
+target_platform: linux/amd64
+torch_index_url: "https://download.pytorch.org/whl/cu128"
