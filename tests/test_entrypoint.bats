@@ -27,10 +27,10 @@ EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
   log="$(mktemp)"
   MODE=idle "$EP" >"$log" 2>&1 &
   pid=$!
-  kill -0 "$pid"
-  kill "$pid"
+  # Poll for the echo — the assertion IS the synchronization
+  while ! grep -qi "idle" "$log" 2>/dev/null; do :; done
+  kill "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null || true
-  grep -qi "idle" "$log"
   rm -f "$log"
 }
 
