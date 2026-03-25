@@ -30,6 +30,7 @@ from src.utils import (
     instantiate_callbacks,
     instantiate_loggers,
     log_hyperparameters,
+    log_wandb_provenance,
     register_resolvers,
     task_wrapper,
 )
@@ -78,6 +79,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if logger:
         log.info("Logging hyperparameters!")
         log_hyperparameters(object_dict)
+        log_wandb_provenance()
 
     mode = cfg.get("mode", "test")
 
