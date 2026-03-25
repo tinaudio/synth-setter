@@ -9,46 +9,48 @@ EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
 # Idle mode (MODE=idle)
 # ---------------------------------------------------------------------------
 
-@test "test_idle_starts_sleep_process" {
-  # Create a mock sleep that records it was called then exits.
-  local mock_dir
-  mock_dir="$(mktemp -d)"
-  cat > "$mock_dir/sleep" <<'MOCK'
-#!/usr/bin/env bash
-echo "sleep called with: $*" > "$MOCK_LOG"
-exit 0
-MOCK
-  chmod +x "$mock_dir/sleep"
-
-  local mock_log
-  mock_log="$(mktemp)"
-  MOCK_LOG="$mock_log" PATH="$mock_dir:$PATH" MODE=idle "$EP" || true
-  grep -q "sleep" "$mock_log"
-  rm -rf "$mock_dir" "$mock_log"
+@test "test_idle_stays_alive" {
+  MODE=idle "$EP" >/dev/null 2>&1 &
+  pid=$!
+  sleep 0.5
+  # Process should still be running
+  kill -0 "$pid"
+  kill "$pid"
+  wait "$pid" 2>/dev/null
 }
 
 @test "test_idle_prints_informational_message" {
-  # exec replaces the process so we can't capture its stdout directly.
-  # Instead, run in a subshell that captures the echo before exec.
-  local out
-  out=$(MODE=idle "$EP" 2>&1 &
-    pid=$!
-    sleep 0.5
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-  )
-  [[ "$out" =~ [Ii]dle ]]
+  local log
+  log="$(mktemp)"
+  MODE=idle "$EP" >"$log" 2>&1 &
+  pid=$!
+  sleep 0.2
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  grep -qi "idle" "$log"
+  rm -f "$log"
 }
 
 @test "test_idle_ignores_command_args" {
-  local out
-  out=$(MODE=idle "$EP" echo hello 2>&1 &
-    pid=$!
-    sleep 0.5
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-  )
-  [[ ! "$out" =~ "hello" ]]
+  local log
+  log="$(mktemp)"
+  MODE=idle "$EP" echo SHOULD_BE_IGNORED >"$log" 2>&1 &
+  pid=$!
+  sleep 0.2
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  run grep -q "SHOULD_BE_IGNORED" "$log"
+  [ "$status" -ne 0 ]
+  rm -f "$log"
+}
+
+@test "test_idle_exits_cleanly_on_sigterm" {
+  MODE=idle "$EP" >/dev/null 2>&1 &
+  pid=$!
+  sleep 0.2
+  kill "$pid"
+  # wait returns the exit status of the process; non-zero fails the test.
+  wait "$pid"
 }
 
 # ---------------------------------------------------------------------------
@@ -98,8 +100,8 @@ MOCK
 }
 
 @test "test_no_mode_does_not_execute_args" {
-  run env -u MODE "$EP" echo hello
-  [[ ! "$output" =~ "hello" ]]
+  run env -u MODE "$EP" echo SHOULD_NOT_RUN
+  [[ ! "$output" =~ "SHOULD_NOT_RUN" ]]
 }
 
 @test "test_empty_mode_behaves_same_as_unset" {
@@ -122,6 +124,6 @@ MOCK
 }
 
 @test "test_unknown_mode_does_not_execute_args" {
-  run env MODE=bogus "$EP" echo hello
-  [[ ! "$output" =~ "hello" ]]
+  run env MODE=bogus "$EP" echo SHOULD_NOT_RUN
+  [[ ! "$output" =~ "SHOULD_NOT_RUN" ]]
 }
