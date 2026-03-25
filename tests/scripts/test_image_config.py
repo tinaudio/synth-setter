@@ -149,3 +149,91 @@ class TestLoadImageConfigErrors:
 
         with pytest.raises(FileNotFoundError):
             load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_is_file_rejects_directory(self, tmp_path: Path) -> None:
+        """Directory path raises FileNotFoundError, not IsADirectoryError."""
+        dir_path = tmp_path / "not-a-file"
+        dir_path.mkdir()
+
+        with pytest.raises(FileNotFoundError):
+            load_image_config(dir_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_yaml_non_mapping_raises(self, tmp_path: Path) -> None:
+        """YAML with a list instead of a mapping raises ValueError."""
+        config_path = tmp_path / "bad.yaml"
+        config_path.write_text("[1, 2, 3]\n")
+
+        with pytest.raises(ValueError, match="must be a mapping"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_yaml_unknown_key_rejected(self, tmp_path: Path) -> None:
+        """Unknown YAML key is rejected by Pydantic strict mode."""
+        config_path = tmp_path / "unknown.yaml"
+        config_path.write_text("bogus_key: value\n")
+
+        with pytest.raises(ValidationError):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+
+# ---------------------------------------------------------------------------
+# load_image_config — static fields and YAML merge
+# ---------------------------------------------------------------------------
+
+
+class TestStaticFieldsAndYamlMerge:
+    """Static fields are loaded from YAML and merged with runtime inputs."""
+
+    def test_yaml_static_fields_override_defaults(self, tmp_path: Path) -> None:
+        """YAML value overrides the model default."""
+        config_path = tmp_path / "custom.yaml"
+        config_path.write_text("build_mode: source\n")
+
+        result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+        assert result.build_mode == "source"
+
+    def test_yaml_empty_file_uses_defaults(self, tmp_path: Path) -> None:
+        """Empty YAML (comment-only) uses all model defaults for static fields."""
+        config_path = tmp_path / "empty.yaml"
+        config_path.write_text("# just a comment\n")
+
+        result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+        assert result.dockerfile == "docker/ubuntu22_04/Dockerfile"
+        assert result.image == "tinaudio/perm"
+        assert result.base_image_tag == "ubuntu22_04"
+        assert result.build_mode == "prebuilt"
+        assert result.target_platform == "linux/amd64"
+
+    def test_build_mode_rejects_invalid_literal(self, tmp_path: Path) -> None:
+        """build_mode only accepts 'source' or 'prebuilt'."""
+        config_path = tmp_path / "bad-mode.yaml"
+        config_path.write_text("build_mode: invalid\n")
+
+        with pytest.raises(ValidationError, match="build_mode"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_target_platform_rejects_invalid_literal(self, tmp_path: Path) -> None:
+        """target_platform only accepts 'linux/amd64' or 'linux/arm64'."""
+        config_path = tmp_path / "bad-platform.yaml"
+        config_path.write_text("target_platform: windows/amd64\n")
+
+        with pytest.raises(ValidationError, match="target_platform"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_static_field_values_match_dev_snapshot_yaml(self) -> None:
+        """Real dev-snapshot.yaml fields match expected defaults (catches drift)."""
+        config_path = Path("configs/image/dev-snapshot.yaml")
+
+        result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+        assert result.dockerfile == "docker/ubuntu22_04/Dockerfile"
+        assert result.image == "tinaudio/perm"
+        assert result.base_image == (
+            "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
+        )
+        assert result.base_image_tag == "ubuntu22_04"
+        assert result.build_mode == "prebuilt"
+        assert result.target_platform == "linux/amd64"
+        assert result.torch_index_url == "https://download.pytorch.org/whl/cu128"
+        assert result.image_config_id == "dev-snapshot"

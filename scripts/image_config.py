@@ -7,6 +7,7 @@ Pydantic.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, field_validator
@@ -14,7 +15,7 @@ from pydantic import BaseModel, field_validator
 _HEX_CHARS = frozenset("0123456789abcdef")
 
 
-class ImageConfig(BaseModel, strict=True):
+class ImageConfig(BaseModel, strict=True, extra="forbid"):
     """Validated image creation config: static settings + runtime build inputs.
 
     Static fields come from the YAML config file.
@@ -22,6 +23,18 @@ class ImageConfig(BaseModel, strict=True):
     image_config_id is derived from the config filename stem.
     """
 
+    # --- Static fields (from YAML config, with defaults) ---
+    dockerfile: str = "docker/ubuntu22_04/Dockerfile"
+    image: str = "tinaudio/perm"
+    base_image: str = (
+        "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
+    )
+    base_image_tag: str = "ubuntu22_04"
+    build_mode: Literal["source", "prebuilt"] = "prebuilt"
+    target_platform: Literal["linux/amd64", "linux/arm64"] = "linux/amd64"
+    torch_index_url: str = "https://download.pytorch.org/whl/cu128"
+
+    # --- Runtime fields (from caller, no defaults) ---
     github_sha: str
     issue_number: int
     image_config_id: str
@@ -51,9 +64,9 @@ def load_image_config(
 ) -> ImageConfig:
     """Load image config from YAML and merge with runtime inputs.
 
-    Reads static fields from the YAML config file (currently empty),
-    merges with runtime inputs, validates via Pydantic, and derives
-    image_config_id from the config filename stem.
+    Reads static fields from the YAML config file, merges with runtime
+    inputs, validates via Pydantic, and derives image_config_id from
+    the config filename stem.
 
     Args:
         config_path: Path to YAML config under configs/image/.
@@ -64,16 +77,29 @@ def load_image_config(
         Validated ImageConfig with all fields populated.
 
     Raises:
-        FileNotFoundError: config_path doesn't exist.
-        pydantic.ValidationError: invalid github_sha or issue_number.
+        FileNotFoundError: config_path doesn't exist or isn't a file.
+        ValueError: top-level YAML is not a mapping.
+        pydantic.ValidationError: invalid field values.
     """
     if not config_path.is_file():
         raise FileNotFoundError(config_path)
 
-    yaml.safe_load(config_path.read_text())
+    raw = yaml.safe_load(config_path.read_text())
 
-    return ImageConfig(
-        github_sha=github_sha,
-        issue_number=issue_number,
-        image_config_id=config_path.stem,
+    if raw is None:
+        raw = {}
+
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"Top-level YAML in {config_path} must be a mapping, got {type(raw).__name__}"
+        )
+
+    raw.update(
+        {
+            "github_sha": github_sha,
+            "issue_number": issue_number,
+            "image_config_id": config_path.stem,
+        }
     )
+
+    return ImageConfig(**raw)
