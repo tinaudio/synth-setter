@@ -1,108 +1,147 @@
-"""Tests for log_wandb_provenance() in src/utils/logging_utils.py."""
+"""Tests for log_wandb_provenance() in src/utils/logging_utils.py.
+
+Uses fakes (not mocks) for wandb, real subprocess where possible, and state assertions throughout.
+See python-testing.md §Fakes.
+"""
 
 import os
 import subprocess
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from src.utils.logging_utils import log_wandb_provenance
+
+# ---------------------------------------------------------------------------
+# Fake wandb module — captures config updates as inspectable state
+# ---------------------------------------------------------------------------
 
 
-class TestLogWandbProvenance:
-    """Tests for log_wandb_provenance — wandb config helper."""
+class FakeWandbConfig:
+    """Fake wandb.config that stores updates for state testing."""
 
-    def test_log_wandb_provenance_logs_all_fields(self):
-        """All three provenance fields are written to wandb.config."""
-        mock_wandb = MagicMock()
-        mock_wandb.run = MagicMock()  # truthy = active run
+    def __init__(self) -> None:
+        self.data: dict[str, str] = {}
 
-        mock_sp = MagicMock()
-        mock_sp.check_output.return_value = b"abc123def\n"
-        mock_sp.CalledProcessError = subprocess.CalledProcessError
-        mock_sp.DEVNULL = subprocess.DEVNULL
+    def update(self, d: dict, **kwargs: object) -> None:
+        self.data.update(d)
+
+
+def make_fake_wandb(*, has_run: bool = True) -> SimpleNamespace:
+    """Factory for a fake wandb module with inspectable config state."""
+    return SimpleNamespace(
+        run=object() if has_run else None,
+        config=FakeWandbConfig(),
+        __spec__=object(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Happy-path behavior tests (real subprocess, fake wandb only)
+# ---------------------------------------------------------------------------
+
+
+class TestLogWandbProvenanceHappyPath:
+    """Provenance fields are logged correctly when all dependencies are available."""
+
+    def test_logs_git_sha_as_valid_hex(self) -> None:
+        """github_sha is the real 40-char hex SHA from the current git repo."""
+        fake = make_fake_wandb()
+
+        with patch.dict("sys.modules", {"wandb": fake}):
+            log_wandb_provenance()
+
+        sha = fake.config.data["github_sha"]
+        assert len(sha) == 40
+        assert all(c in "0123456789abcdef" for c in sha)
+
+    def test_logs_image_tag_from_env(self) -> None:
+        """image_tag matches the IMAGE_TAG environment variable."""
+        fake = make_fake_wandb()
 
         with (
-            patch("src.utils.logging_utils.find_spec", return_value=True),
-            patch.dict("sys.modules", {"wandb": mock_wandb}),
-            patch("src.utils.logging_utils.subprocess", mock_sp),
-            patch.dict(os.environ, {"IMAGE_TAG": "v1.2.3"}, clear=False),
+            patch.dict("sys.modules", {"wandb": fake}),
+            patch.dict(os.environ, {"IMAGE_TAG": "v1.2.3"}),
         ):
-            from src.utils.logging_utils import log_wandb_provenance
-
             log_wandb_provenance()
 
-        mock_wandb.config.update.assert_called_once()
-        call_args = mock_wandb.config.update.call_args[0][0]
-        assert call_args["github_sha"] == "abc123def"
-        assert call_args["image_tag"] == "v1.2.3"
-        assert isinstance(call_args["command"], str)
+        assert fake.config.data["image_tag"] == "v1.2.3"
 
-    def test_log_wandb_provenance_no_wandb_is_noop(self):
-        """When wandb is not installed, function returns without error."""
-        with patch("src.utils.logging_utils.find_spec", return_value=None):
-            from src.utils.logging_utils import log_wandb_provenance
+    def test_logs_command_from_argv(self) -> None:
+        """Command is a non-empty string derived from sys.argv."""
+        fake = make_fake_wandb()
 
-            # Should not raise
+        with patch.dict("sys.modules", {"wandb": fake}):
             log_wandb_provenance()
 
-    def test_log_wandb_provenance_no_active_run_is_noop(self):
-        """When wandb.run is None, config.update is not called."""
-        mock_wandb = MagicMock()
-        mock_wandb.run = None  # no active run
+        assert isinstance(fake.config.data["command"], str)
+        assert len(fake.config.data["command"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Fallback behavior tests
+# ---------------------------------------------------------------------------
+
+
+class TestLogWandbProvenanceFallbacks:
+    """Graceful fallbacks when git or IMAGE_TAG are unavailable."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            FileNotFoundError("git not found"),
+            subprocess.CalledProcessError(128, "git"),
+        ],
+        ids=["git_not_installed", "not_a_git_repo"],
+    )
+    def test_git_sha_unknown_on_subprocess_error(self, error: Exception) -> None:
+        """github_sha falls back to 'unknown' when git rev-parse fails."""
+        fake = make_fake_wandb()
 
         with (
-            patch("src.utils.logging_utils.find_spec", return_value=True),
-            patch.dict("sys.modules", {"wandb": mock_wandb}),
+            patch.dict("sys.modules", {"wandb": fake}),
+            patch(
+                "src.utils.logging_utils.subprocess.check_output",
+                side_effect=error,
+            ),
         ):
-            from src.utils.logging_utils import log_wandb_provenance
-
             log_wandb_provenance()
 
-        mock_wandb.config.update.assert_not_called()
+        assert fake.config.data["github_sha"] == "unknown"
 
-    def test_log_wandb_provenance_git_failure_uses_unknown(self):
-        """When git rev-parse fails, github_sha falls back to 'unknown'."""
-        mock_wandb = MagicMock()
-        mock_wandb.run = MagicMock()
-
-        mock_sp = MagicMock()
-        mock_sp.check_output.side_effect = subprocess.CalledProcessError(1, "git")
-        mock_sp.CalledProcessError = subprocess.CalledProcessError
-        mock_sp.FileNotFoundError = FileNotFoundError
-        mock_sp.DEVNULL = subprocess.DEVNULL
+    def test_image_tag_unknown_when_env_unset(self) -> None:
+        """image_tag falls back to 'unknown' when IMAGE_TAG is absent."""
+        fake = make_fake_wandb()
+        env_without_image_tag = {k: v for k, v in os.environ.items() if k != "IMAGE_TAG"}
 
         with (
-            patch("src.utils.logging_utils.find_spec", return_value=True),
-            patch.dict("sys.modules", {"wandb": mock_wandb}),
-            patch("src.utils.logging_utils.subprocess", mock_sp),
-            patch.dict(os.environ, {"IMAGE_TAG": "v1.0.0"}, clear=False),
+            patch.dict("sys.modules", {"wandb": fake}),
+            patch.dict(os.environ, env_without_image_tag, clear=True),
         ):
-            from src.utils.logging_utils import log_wandb_provenance
-
             log_wandb_provenance()
 
-        call_args = mock_wandb.config.update.call_args[0][0]
-        assert call_args["github_sha"] == "unknown"
+        assert fake.config.data["image_tag"] == "unknown"
 
-    def test_log_wandb_provenance_missing_image_tag_uses_unknown(self):
-        """When IMAGE_TAG env var is not set, image_tag falls back to 'unknown'."""
-        mock_wandb = MagicMock()
-        mock_wandb.run = MagicMock()
 
-        mock_sp = MagicMock()
-        mock_sp.check_output.return_value = b"deadbeef\n"
-        mock_sp.CalledProcessError = subprocess.CalledProcessError
-        mock_sp.DEVNULL = subprocess.DEVNULL
+# ---------------------------------------------------------------------------
+# Guard clause tests
+# ---------------------------------------------------------------------------
 
-        # Ensure IMAGE_TAG is not in the environment
-        env_copy = {k: v for k, v in os.environ.items() if k != "IMAGE_TAG"}
 
-        with (
-            patch("src.utils.logging_utils.find_spec", return_value=True),
-            patch.dict("sys.modules", {"wandb": mock_wandb}),
-            patch("src.utils.logging_utils.subprocess", mock_sp),
-            patch.dict(os.environ, env_copy, clear=True),
-        ):
-            from src.utils.logging_utils import log_wandb_provenance
+class TestLogWandbProvenanceGuards:
+    """Safe noop when wandb is unavailable or no run is active."""
 
+    def test_noop_when_wandb_not_installed(self) -> None:
+        """No crash when wandb is not installed."""
+        with patch.dict("sys.modules", {"wandb": None}):
             log_wandb_provenance()
 
-        call_args = mock_wandb.config.update.call_args[0][0]
-        assert call_args["image_tag"] == "unknown"
+    def test_noop_when_no_active_run(self) -> None:
+        """No config update when wandb.run is None."""
+        fake = make_fake_wandb(has_run=False)
+
+        with patch.dict("sys.modules", {"wandb": fake}):
+            log_wandb_provenance()
+
+        assert fake.config.data == {}
