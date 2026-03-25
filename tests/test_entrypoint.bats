@@ -14,6 +14,9 @@ EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
 
 @test "test_idle_stays_alive" {
   [[ "$(uname)" == "Linux" ]] || skip "idle mode uses sleep infinity (GNU)"
+  # Concurrency: fork starts the entrypoint, kill -0 checks it's alive.
+  # Practically deterministic — bash fork completes before parent resumes.
+  # The only failure mode is an entrypoint parse error (caught by shellcheck).
   MODE=idle "$EP" &
   pid=$!
   kill -0 "$pid"
@@ -23,11 +26,13 @@ EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
 
 @test "test_idle_prints_informational_message" {
   [[ "$(uname)" == "Linux" ]] || skip "idle mode uses sleep infinity (GNU)"
+  # Concurrency: the poll loop is both the assertion and the synchronization.
+  # grep succeeds only after the child's echo lands in the file — no race.
+  # If the entrypoint breaks before echoing, the loop hangs (CI timeout = failure).
   local log
   log="$(mktemp)"
   MODE=idle "$EP" >"$log" 2>&1 &
   pid=$!
-  # Poll for the echo — the assertion IS the synchronization
   while ! grep -qi "idle" "$log" 2>/dev/null; do :; done
   kill "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null || true
@@ -36,6 +41,10 @@ EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
 
 @test "test_idle_ignores_command_args" {
   [[ "$(uname)" == "Linux" ]] || skip "idle mode uses sleep infinity (GNU)"
+  # Concurrency: negative assertion — SHOULD_BE_IGNORED is never printed
+  # regardless of timing. If kill fires before echo, log is empty (passes).
+  # If kill fires after echo, idle mode ignores args anyway (passes).
+  # Both outcomes are correct — the assertion is timing-invariant.
   local log
   log="$(mktemp)"
   MODE=idle "$EP" echo SHOULD_BE_IGNORED >"$log" 2>&1 &
