@@ -9,7 +9,7 @@ wandb
 # --------- pipeline --------- #
 click
 numpy
-pydantic
+pydantic>=2
 pyyaml
 structlog
 tenacity
@@ -24,6 +24,7 @@ hdf5plugin
 librosa
 loguru
 matplotlib
+mutmut==3.5.*
 mido
 pedalboard
 POT
