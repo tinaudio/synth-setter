@@ -40,6 +40,9 @@ coverage: ## Run tests with coverage report
 benchmark: ## Run performance benchmarks
 	pytest --benchmark-only -m "benchmark" -v
 
+mutmut: ## Run mutation testing
+	mutmut run
+
 train: ## Train the model
 	python src/train.py
 
