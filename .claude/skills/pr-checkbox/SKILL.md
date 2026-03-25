@@ -38,7 +38,7 @@ Treat the system as a **black box**. You put something in, you check what comes 
 
 ### The scope-matching rule
 
-**Pick the lowest level that fully exercises the promise — no higher, no lower.**
+**You MUST use the lowest level number available.** If Level 1 is possible, Levels 2–5 are not acceptable. If Level 2 is possible, Levels 3–5 are not acceptable. You only descend when a higher level is genuinely impossible (tool not installed, no test fixtures, external service unreachable).
 
 This has two failure modes, not one:
 
