@@ -1,7 +1,18 @@
 # Docker Specification Reference
 
-> **Code version**: `2a3a020` (2026-03-25, `main`)
+> **Status**: Spec — describes target behavior; see § Current vs. Planned for delta from `main`
 > **Tracking**: #265, #272, #273, #287, #288
+
+______________________________________________________________________
+
+## Current vs. Planned
+
+The entrypoint on `main` today (`scripts/docker_entrypoint.sh`) is a passthrough stub:
+`exec "$@"` if args are given, error if not. It has no MODE dispatch.
+
+Everything in this spec that differs from that behavior — MODE dispatch, `idle` mode,
+`passthrough` with no args exiting 0 — is **planned work** tracked in #265.
+The spec documents the target contract, not the current implementation.
 
 ______________________________________________________________________
 
@@ -32,7 +43,7 @@ ______________________________________________________________________
 | `dev-snapshot` | `docker_entrypoint.sh`          | Git clone at `GIT_REF`       | CI, cloud runs |
 | `dev-live`     | fallback (errors without mount) | Volume-mounted               | Local dev      |
 
-All targets inherit from `r2-config-base`, which bakes rclone R2 credentials and W&B auth into the image.
+All targets inherit from `r2-config-base`. R2 credentials are baked only when BuildKit secrets are provided at build time (placeholder rclone config otherwise). W&B auth is not baked — `WANDB_API_KEY` is required at runtime.
 
 ______________________________________________________________________
 
