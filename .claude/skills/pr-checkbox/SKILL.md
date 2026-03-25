@@ -242,7 +242,7 @@ BEFORE (Level 2 — runs the tool in isolation):
 
 AFTER (Level 1 — runs the full pipeline; promise is that the refactor preserves end-to-end correctness):
 - [x] **Full pipeline produces valid shards after refactor** *(rewritten: original invoked write_shard in isolation → promise is end-to-end correctness, so now runs full pipeline on test fixture)*
-  $ python3 -m pipeline.run --config configs/test.yaml --dry-run 2>&1 | tail -5
+  $ python3 -m pipeline.run --config configs/test.yaml 2>&1 | tail -5
   [INFO] Shard 0: 1024 frames, mel_shape=(128, 1024), checksum OK
   [INFO] Shard 1: 1024 frames, mel_shape=(128, 1024), checksum OK
   [INFO] Pipeline complete. 2 shards written. 0 errors.
