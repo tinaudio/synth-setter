@@ -5,18 +5,27 @@
 
 EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
 
+# Wait for entrypoint to be ready. The echo proves the trap is installed
+# (trap is set before echo in the entrypoint). No sleeps needed.
+wait_for_ready() {
+  local log="$1"
+  while ! grep -q "Idle" "$log" 2>/dev/null; do :; done
+}
+
 # ---------------------------------------------------------------------------
 # Idle mode (MODE=idle)
 # ---------------------------------------------------------------------------
 
 @test "test_idle_stays_alive" {
-  MODE=idle "$EP" >/dev/null 2>&1 &
+  local log
+  log="$(mktemp)"
+  MODE=idle "$EP" >"$log" 2>&1 &
   pid=$!
-  sleep 0.5
-  # Process should still be running
+  wait_for_ready "$log"
   kill -0 "$pid"
   kill "$pid"
-  wait "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null || true
+  rm -f "$log"
 }
 
 @test "test_idle_prints_informational_message" {
@@ -24,10 +33,10 @@ EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
   log="$(mktemp)"
   MODE=idle "$EP" >"$log" 2>&1 &
   pid=$!
-  sleep 0.2
-  kill "$pid" 2>/dev/null
-  wait "$pid" 2>/dev/null
+  wait_for_ready "$log"
   grep -qi "idle" "$log"
+  kill "$pid"
+  wait "$pid" 2>/dev/null || true
   rm -f "$log"
 }
 
@@ -36,21 +45,23 @@ EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
   log="$(mktemp)"
   MODE=idle "$EP" echo SHOULD_BE_IGNORED >"$log" 2>&1 &
   pid=$!
-  sleep 0.2
-  kill "$pid" 2>/dev/null
-  wait "$pid" 2>/dev/null
+  wait_for_ready "$log"
   run grep -q "SHOULD_BE_IGNORED" "$log"
   [ "$status" -ne 0 ]
+  kill "$pid"
+  wait "$pid" 2>/dev/null || true
   rm -f "$log"
 }
 
 @test "test_idle_exits_cleanly_on_sigterm" {
-  MODE=idle "$EP" >/dev/null 2>&1 &
+  local log
+  log="$(mktemp)"
+  MODE=idle "$EP" >"$log" 2>&1 &
   pid=$!
-  sleep 0.2
+  wait_for_ready "$log"
   kill "$pid"
-  # wait returns the exit status of the process; non-zero fails the test.
   wait "$pid"
+  rm -f "$log"
 }
 
 # ---------------------------------------------------------------------------
