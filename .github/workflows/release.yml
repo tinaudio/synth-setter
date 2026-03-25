@@ -25,8 +25,8 @@ jobs:
       - uses: actions/create-github-app-token@v2
         id: app-token
         with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.APPROVAL_BOT_APP_ID }}
+          private-key: ${{ secrets.APPROVAL_BOT_PRIVATE_KEY }}
 
       - uses: actions/checkout@v6
         with:
