@@ -105,3 +105,10 @@ exclude_lines = [
     "raise NotImplementedError()",
     "if __name__ == .__main__.:",
 ]
+
+[tool.mutmut]
+# src/ excluded: mutmut v3 asserts module names don't start with "src." (it
+# assumes src-layout, but this project imports `src` as a package).
+paths_to_mutate = ["scripts/"]
+tests_dir = ["tests/scripts/"]
+pytest_add_cli_args = ["-m", "not slow and not requires_vst and not r2 and not gpu and not benchmark"]
