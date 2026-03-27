@@ -1,7 +1,7 @@
-name: Docker Build Validation
+name: Docker Image Build and Push
 
-# Validates that the Docker dev-live image builds successfully and the
-# VST plugin loads under headless X11.
+# Builds a dev-snapshot Docker image, pushes to Docker Hub, and runs smoke
+# tests against the pushed image.
 #
 # Trigger: manual dispatch or weekly schedule.
 
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       git_ref:
-        description: "Git ref to test (branch, tag, or SHA)"
+        description: "Git ref to build (branch, tag, or SHA). Builds and pushes to Docker Hub."
         required: false
         default: "main"
   schedule:
@@ -18,44 +18,98 @@ on:
 
 jobs:
   docker-build:
-    name: Build and validate Docker image
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: Build and push Docker image
+    runs-on: ubuntu-latest-4core
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.git_ref || 'main' }}
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install config dependencies
+        run: pip install pyyaml pydantic
+
+      - name: Load image config
+        id: config
+        run: |
+          python -c "
+          from scripts.image_config import load_image_config
+          from pathlib import Path
+          import os
+
+          cfg = load_image_config(
+              Path('configs/image/dev-snapshot.yaml'),
+              github_sha='${{ github.sha }}',
+              issue_number=311,
+          )
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              for field in ['dockerfile', 'image', 'base_image', 'base_image_tag',
+                             'build_mode', 'target_platform', 'torch_index_url']:
+                  f.write(f'{field}={getattr(cfg, field)}\n')
+          "
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image (dev-live target)
-        env:
-          GIT_PAT: ${{ secrets.GIT_PAT }}
-          DOCKER_BUILDKIT: "1"
-        run: |
-          # dev-live uses CURRENT_LOCAL_GIT_REF (git rev-parse HEAD) internally
-          # in the Makefile — no need to pass GIT_REF explicitly.
-          make docker-build-dev-live \
-            GIT_PAT=${{ secrets.GIT_PAT }} \
-            DOCKER_BUILD_FLAGS="--load"
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.config.outputs.image }}
+          tags: |
+            type=raw,value=dev-snapshot
+            type=sha,prefix=dev-snapshot-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: dev-snapshot
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_INDEX_URL=${{ steps.config.outputs.torch_index_url }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ github.sha }}
+          secrets: |
+            git_pat=${{ secrets.GIT_PAT }}
+            r2_access_key_id=${{ secrets.R2_ACCESS_KEY_ID }}
+            r2_secret_access_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
+            r2_endpoint=${{ secrets.R2_ENDPOINT }}
+            wandb_api_key=${{ secrets.WANDB_API_KEY }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Smoke test — container starts and Python imports work
         run: |
+          docker pull ${{ steps.config.outputs.image }}:dev-snapshot
           docker run --rm \
             --entrypoint bash \
-            synth-setter:dev-live \
+            ${{ steps.config.outputs.image }}:dev-snapshot \
             -c "python -c 'from pedalboard import VST3Plugin; print(\"pedalboard OK\")'"
 
       - name: Smoke test — VST loads under headless X11
         run: |
           docker run --rm \
             --entrypoint bash \
-            -v "${{ github.workspace }}:/workspace" \
-            synth-setter:dev-live \
+            ${{ steps.config.outputs.image }}:dev-snapshot \
             -c "
-              cd /workspace &&
               scripts/run-linux-vst-headless.sh python -c \"
                 from pedalboard import VST3Plugin
                 p = VST3Plugin('/usr/lib/vst3/Surge XT.vst3')
