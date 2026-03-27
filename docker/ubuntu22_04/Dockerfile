@@ -1,6 +1,4 @@
 # syntax=docker/dockerfile:1.6
-ARG TARGETARCH
-ARG TARGETPLATFORM
 ARG BUILD_MODE=source
 
 # release-xt/1.3.4 SHA

@@ -50,7 +50,8 @@ jobs:
           )
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               for field in ['dockerfile', 'image', 'base_image', 'base_image_tag',
-                             'build_mode', 'target_platform', 'torch_index_url']:
+                             'build_mode', 'target_platform', 'torch_index_url',
+                             'r2_endpoint', 'r2_bucket']:
                   f.write(f'{field}={getattr(cfg, field)}\n')
           "
 
@@ -87,11 +88,12 @@ jobs:
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
             TORCH_INDEX_URL=${{ steps.config.outputs.torch_index_url }}
             SYNTH_PERMUTATIONS_GIT_REF=${{ github.sha }}
+            R2_BUCKET=${{ steps.config.outputs.r2_bucket }}
           secrets: |
             git_pat=${{ secrets.GIT_PAT }}
             r2_access_key_id=${{ secrets.R2_ACCESS_KEY_ID }}
             r2_secret_access_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
-            r2_endpoint=${{ secrets.R2_ENDPOINT }}
+            r2_endpoint=${{ steps.config.outputs.r2_endpoint }}
             wandb_api_key=${{ secrets.WANDB_API_KEY }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
