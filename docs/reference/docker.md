@@ -2,9 +2,11 @@
 
 > **Last verified:** 2026-03-27
 
-Practical guide for building, running, and debugging synth-setter Docker images.
+How to build, run, and debug Docker images for the synth-setter training
+pipeline. Intended for developers working locally or in CI environments.
+
 For the image target contract, entrypoint modes, and env var spec, see
-`docs/reference/docker-spec.md`.
+[docker-spec.md](docker-spec.md).
 
 ______________________________________________________________________
 
@@ -12,14 +14,39 @@ ______________________________________________________________________
 
 ### Prerequisites
 
-- Docker with BuildKit (Docker Desktop 23+ or `DOCKER_BUILDKIT=1`)
+- Docker with [BuildKit](https://docs.docker.com/build/buildkit/) enabled
+  (Docker Desktop 23+ or `DOCKER_BUILDKIT=1`). BuildKit adds secret mounts
+  and multi-stage caching — both used heavily in this project.
 - Secrets in `.env`: `GIT_PAT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
   `R2_ENDPOINT`, `R2_BUCKET`, `WANDB_API_KEY`
 
 ```bash
-# Source credentials
+# Source credentials into current shell
 set -a && source .env && set +a
 ```
+
+### BuildKit secrets
+
+Credentials are injected at build time via `--mount=type=secret`. The secret
+data is available only during the `RUN` instruction and never appears in
+`docker history`. However, the build writes some secrets into config files
+that persist in the final image:
+
+| Secret                 | Source env var         | Persisted to                       | Purpose                              |
+| ---------------------- | ---------------------- | ---------------------------------- | ------------------------------------ |
+| `git_pat`              | `GIT_PAT`              | *(not persisted)*                  | GitHub API access for source tarball |
+| `r2_access_key_id`     | `R2_ACCESS_KEY_ID`     | `/root/.config/rclone/rclone.conf` | R2 rclone config                     |
+| `r2_secret_access_key` | `R2_SECRET_ACCESS_KEY` | `/root/.config/rclone/rclone.conf` | R2 rclone config                     |
+| `r2_endpoint`          | `R2_ENDPOINT`          | `/root/.config/rclone/rclone.conf` | R2 rclone config                     |
+| `wandb_api_key`        | `WANDB_API_KEY`        | `/root/.netrc`                     | W&B auth                             |
+
+> [!WARNING]
+> R2 and W&B credentials persist in the final image filesystem (`rclone.conf`,
+> `.netrc`). The secrets are injected securely at build time (never in
+> `docker history`), but the resulting config files **are baked into the image**.
+> Push only to private registries. Rotate R2 tokens after each build campaign.
+
+See [rclone.md](rclone.md) § Docker for the full R2 credential flow.
 
 ### First build (dev-live)
 
@@ -30,6 +57,17 @@ Mount your local working tree at runtime.
 make docker-build-dev-live \
   GIT_PAT="$GIT_PAT" \
   DOCKER_BUILD_FLAGS="--load"
+  # --load: imports the built image into your local Docker daemon
+  # --push: pushes directly to a registry (for CI/multi-platform)
+```
+
+### Smoke test
+
+After building, verify the image works:
+
+```bash
+docker run --rm -e MODE=passthrough synth-setter:dev-live \
+  python -c "import torch; print('torch', torch.__version__)"
 ```
 
 Rebuild only when Python deps or Surge version change.
@@ -40,10 +78,10 @@ ______________________________________________________________________
 
 ### Make targets
 
-| Target         | Command                          | Source code            | Use case  |
-| -------------- | -------------------------------- | ---------------------- | --------- |
-| `dev-live`     | `make docker-build-dev-live`     | Volume-mounted         | Local dev |
-| `dev-snapshot` | `make docker-build-dev-snapshot` | Git clone at `GIT_REF` | CI, cloud |
+| Target         | Source code            | Typical use           |
+| -------------- | ---------------------- | --------------------- |
+| `dev-live`     | Volume-mounted         | Local development     |
+| `dev-snapshot` | Git clone at `GIT_REF` | CI, cloud, evaluation |
 
 Both targets require `GIT_PAT`. `dev-snapshot` additionally requires `GIT_REF`:
 
@@ -57,38 +95,25 @@ make docker-build-dev-snapshot \
 
 ### Build variables
 
-| Variable                | Default                         | Purpose                                |
-| ----------------------- | ------------------------------- | -------------------------------------- |
-| `DOCKER_FILE`           | `docker/ubuntu22_04/Dockerfile` | Dockerfile path                        |
-| `DOCKER_IMAGE`          | `synth-setter`                  | Image name (local builds)              |
-| `DOCKER_BUILD_MODE`     | `prebuilt`                      | Surge install: `source` or `prebuilt`  |
-| `DOCKER_TARGETPLATFORM` | `linux/amd64`                   | Target platform                        |
-| `DOCKER_TORCH_IDX`      | CUDA 12.8 wheels                | PyTorch wheel index URL                |
-| `DOCKER_BUILD_FLAGS`    | *(empty)*                       | Extra flags (e.g., `--load`, `--push`) |
+| Variable                | Default                         | Purpose                               | Override via |
+| ----------------------- | ------------------------------- | ------------------------------------- | ------------ |
+| `DOCKER_FILE`           | `docker/ubuntu22_04/Dockerfile` | Dockerfile path                       | CLI only     |
+| `DOCKER_IMAGE`          | `synth-setter`                  | Image name (local builds)             | CLI only     |
+| `DOCKER_BUILD_MODE`     | `prebuilt`                      | Surge install: `source` or `prebuilt` | CLI only     |
+| `DOCKER_TARGETPLATFORM` | `linux/amd64`                   | Target platform                       | CLI only     |
+| `DOCKER_TORCH_IDX`      | CUDA 12.8 wheels                | PyTorch wheel index URL               | CLI or YAML  |
+| `DOCKER_BUILD_FLAGS`    | *(empty)*                       | `--load` (local) or `--push` (remote) | CLI only     |
 
-### BuildKit secrets
-
-Credentials are injected via BuildKit secret mounts — they never appear in
-image layers or `docker history`. See `docs/reference/rclone.md` § Docker for
-the R2 credential flow.
-
-| Secret                 | Source env var         | Purpose                              |
-| ---------------------- | ---------------------- | ------------------------------------ |
-| `git_pat`              | `GIT_PAT`              | GitHub API access for source tarball |
-| `r2_access_key_id`     | `R2_ACCESS_KEY_ID`     | R2 rclone config                     |
-| `r2_secret_access_key` | `R2_SECRET_ACCESS_KEY` | R2 rclone config                     |
-| `r2_endpoint`          | `R2_ENDPOINT`          | R2 rclone config                     |
-| `wandb_api_key`        | `WANDB_API_KEY`        | W&B netrc                            |
-
-> **Security:** R2 and W&B credentials are baked into the image filesystem
-> (rclone.conf, .netrc). Push only to private registries.
+`DOCKER_TORCH_IDX` can also be set via `torch_index_url` in the image config
+YAML (see Image config below). CLI takes precedence.
 
 ### Image config (CI)
 
 For CI builds, image parameters are defined in YAML config files under
-`configs/image/` and validated by `scripts/image_config.py` — a Pydantic
-`BaseModel` with `strict=True` and `extra="forbid"`. The config loader rejects
-unknown keys, invalid types, and malformed values at load time.
+`configs/image/` and validated by
+[image_config.py](../../scripts/image_config.py) — a Pydantic `BaseModel`
+with `strict=True` and `extra="forbid"`. The config loader rejects unknown
+keys, invalid types, and malformed values at load time.
 
 ```yaml
 # configs/image/dev-snapshot.yaml
@@ -102,27 +127,32 @@ torch_index_url: "https://download.pytorch.org/whl/cu128"
 ```
 
 Runtime inputs (`github_sha`, `issue_number`) are provided by the caller, not
-stored in the YAML. The schema is defined in `scripts/image_config.py` and
-tested in `tests/scripts/test_image_config.py` (18 tests covering validation,
-defaults, and drift detection against the real YAML).
+stored in the YAML. The schema is tested in
+[test_image_config.py](../../tests/scripts/test_image_config.py) (18 tests
+covering validation, defaults, and drift detection against the real YAML).
 
 ______________________________________________________________________
 
 ## 3. Running Containers
 
-The entrypoint (`scripts/docker_entrypoint.sh`) dispatches on the `MODE`
-environment variable. MODE is required — the container errors if unset.
+The entrypoint ([docker_entrypoint.sh](../../scripts/docker_entrypoint.sh))
+dispatches on the `MODE` environment variable. MODE is required — the
+container exits with an error if unset. There is no default to avoid
+silent misconfiguration.
+
+Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
+polluting your host shell:
+
+```bash
+docker run --rm --env-file .env -e MODE=passthrough synth-setter:dev-snapshot ...
+```
 
 ### MODE=idle — debug shell
 
 ```bash
-# Start in background
 docker run -d --name debug -e MODE=idle synth-setter:dev-live
-
-# Attach
 docker exec -it debug bash
-
-# Clean up
+# Clean up when done
 docker stop debug && docker rm debug
 ```
 
@@ -152,40 +182,36 @@ docker run --rm \
 
 ### Headless VST
 
-VST3 plugins require an X11 display. Use the headless bootstrap script:
+VST3 plugins (Surge XT) require an X11 display. The headless bootstrap script
+starts Xvfb automatically:
 
 ```bash
 docker run --rm \
   -e MODE=passthrough \
   synth-setter:dev-snapshot \
-  scripts/run-linux-vst-headless.sh python -c "
-    from pedalboard import VST3Plugin
-    p = VST3Plugin('/usr/lib/vst3/Surge XT.vst3')
-    print(f'Surge XT loaded, {len(p.parameters)} parameters')
-  "
+  scripts/run-linux-vst-headless.sh \
+    python -c "
+      from pedalboard import VST3Plugin
+      p = VST3Plugin('/usr/lib/vst3/Surge XT.vst3')
+      print(f'Surge XT loaded, {len(p.parameters)} parameters')
+    "
 ```
 
 ______________________________________________________________________
 
 ## 4. CI Workflow
 
-### Overview
-
 The GHA workflow `.github/workflows/docker-build-validation.yml` builds a
 dev-snapshot image, pushes to Docker Hub, and runs smoke tests.
 
-### Steps
+### What it does
 
-1. Checkout at specified git ref
-2. **Load image config** — runs `image_config.py` to load and validate
-   `configs/image/dev-snapshot.yaml` via Pydantic. Exports field values as step
-   outputs for subsequent steps. If the YAML violates the schema, the workflow
-   fails here before any build starts.
-3. Set up Docker Buildx
-4. Log in to Docker Hub (`docker/login-action`)
-5. Generate tags and labels (`docker/metadata-action`)
-6. Build and push (`docker/build-push-action`)
-7. Smoke tests against the SHA-pinned tag (`dev-snapshot-<full-sha>`)
+1. Validates the image config (`configs/image/dev-snapshot.yaml` via Pydantic)
+2. Builds the image using Docker Buildx
+3. Pushes tagged images to Docker Hub
+4. Runs smoke tests against the SHA-pinned tag
+
+If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
@@ -200,6 +226,7 @@ workflow runs.
 ### Manual trigger
 
 ```bash
+# Manually trigger the CI docker build workflow
 gh workflow run docker-build-validation.yml --ref main
 ```
 
@@ -233,19 +260,20 @@ docker exec -it <container> bash
 
 ### OOM during builds
 
-The multi-stage Dockerfile build can exceed 7 GiB RAM. If the build is killed
-with no output:
+> [!WARNING]
+> The multi-stage Dockerfile build can exceed 7 GiB RAM. If the build is
+> killed with no output, increase memory allocation.
 
-- **Local:** Increase Docker Desktop memory allocation (16 GiB recommended)
+- **Local:** Docker Desktop settings → 16 GiB recommended
 - **GitHub Actions:** Use `ubuntu-latest-4core` (16 GiB) or larger runner
 
 ### VST fails to load
 
-Headless X11 issues — check:
+Headless X11 issues — check in order:
 
-1. Is Xvfb running? `scripts/run-linux-vst-headless.sh` starts it automatically
-2. Missing libraries: `ldd /usr/lib/vst3/Surge\ XT.vst3/Contents/*/libSurge\ XT.so`
-3. `LIBGL_ALWAYS_SOFTWARE=1` is set (no GPU in CI)
+1. **Xvfb running?** `scripts/run-linux-vst-headless.sh` starts it automatically
+2. **Missing libraries?** `ldd /usr/lib/vst3/Surge\ XT.vst3/Contents/*/libSurge\ XT.so`
+3. **Software rendering?** Verify `LIBGL_ALWAYS_SOFTWARE=1` is set (no GPU in CI)
 
 ### BuildKit cache
 
@@ -266,9 +294,9 @@ ______________________________________________________________________
 
 ## 6. Cross-references
 
-- `docs/reference/docker-spec.md` — image target contract, entrypoint spec, env vars
-- `docs/reference/rclone.md` — R2 setup, Docker credential baking
-- `docs/reference/wandb-integration.md` — W&B logging and auth
-- `docs/design/data-pipeline.md` — pipeline architecture, worker provisioning
-- `scripts/image_config.py` — image config schema (Pydantic model)
-- `tests/scripts/test_image_config.py` — config validation tests
+- [docker-spec.md](docker-spec.md) — image target contract, entrypoint spec, env vars
+- [rclone.md](rclone.md) — R2 setup, Docker credential baking
+- [wandb-integration.md](wandb-integration.md) — W&B logging and auth
+- [data-pipeline.md](../design/data-pipeline.md) — pipeline architecture, worker provisioning
+- [image_config.py](../../scripts/image_config.py) — image config schema (Pydantic model)
+- [test_image_config.py](../../tests/scripts/test_image_config.py) — config validation tests
