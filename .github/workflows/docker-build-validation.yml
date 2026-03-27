@@ -108,22 +108,12 @@ jobs:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
           docker pull "$SMOKE_IMAGE"
-          docker run --rm \
-            --entrypoint bash \
-            "$SMOKE_IMAGE" \
-            -c "python -c 'from pedalboard import VST3Plugin; print(\"pedalboard OK\")'"
+          docker run --rm --entrypoint bash "$SMOKE_IMAGE" \
+            -c "pytest tests/docker/test_smoke.py::test_pedalboard_importable -v"
 
       - name: Smoke test — VST loads under headless X11
         env:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
-          docker run --rm \
-            --entrypoint bash \
-            "$SMOKE_IMAGE" \
-            -c "
-              scripts/run-linux-vst-headless.sh python -c \"
-                from pedalboard import VST3Plugin
-                p = VST3Plugin('/usr/lib/vst3/Surge XT.vst3')
-                print('Surge XT loaded, {} parameters'.format(len(p.parameters)))
-              \"
-            "
+          docker run --rm --entrypoint bash "$SMOKE_IMAGE" \
+            -c "scripts/run-linux-vst-headless.sh pytest tests/docker/test_smoke.py::test_surge_xt_loads -v"
