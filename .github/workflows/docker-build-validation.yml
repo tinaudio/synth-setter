@@ -37,12 +37,12 @@ jobs:
           python-version: "3.10"
 
       - name: Install config dependencies
-        run: pip install pyyaml pydantic
+        run: pip install pyyaml pydantic && pip install --no-deps -e .
 
       - name: Load image config
         id: config
         run: |
-          PYTHONPATH=. python scripts/ci/load_image_config.py \
+          python scripts/ci/load_image_config.py \
             --config configs/image/dev-snapshot.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
             --issue-number 311
