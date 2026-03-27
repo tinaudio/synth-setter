@@ -63,11 +63,12 @@ make docker-build-dev-live \
 
 ### Smoke test
 
-After building, verify the image works:
+After building, verify the image works. dev-live uses a fallback entrypoint
+(not `docker_entrypoint.sh`), so override it with `--entrypoint bash`:
 
 ```bash
-docker run --rm -e MODE=passthrough synth-setter:dev-live \
-  python -c "import torch; print('torch', torch.__version__)"
+docker run --rm --entrypoint bash synth-setter:dev-live \
+  -c "python -c \"import torch; print('torch', torch.__version__)\""
 ```
 
 Rebuild only when Python deps or Surge version change.
@@ -135,10 +136,21 @@ ______________________________________________________________________
 
 ## 3. Running Containers
 
-The entrypoint ([docker_entrypoint.sh](../../scripts/docker_entrypoint.sh))
-dispatches on the `MODE` environment variable. MODE is required — the
-container exits with an error if unset. There is no default to avoid
-silent misconfiguration.
+### Entrypoint differences
+
+Only `prod` and `dev-snapshot` include `docker_entrypoint.sh` with MODE
+dispatch. `dev-live` has a fallback entrypoint that errors unless the repo
+is mounted at `/home/build/synth-setter` — use `--entrypoint bash` to bypass
+it for ad-hoc commands.
+
+| Target         | Entrypoint                | MODE support | Typical invocation           |
+| -------------- | ------------------------- | ------------ | ---------------------------- |
+| `dev-snapshot` | `docker_entrypoint.sh`    | Yes          | `-e MODE=idle`               |
+| `prod`         | `docker_entrypoint.sh`    | Yes          | `-e MODE=idle`               |
+| `dev-live`     | Fallback (requires mount) | No           | `--entrypoint bash` or mount |
+
+For `dev-snapshot` / `prod`, MODE is required — the container exits with an
+error if unset. There is no default to avoid silent misconfiguration.
 
 Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
 polluting your host shell:
@@ -150,7 +162,7 @@ docker run --rm --env-file .env -e MODE=passthrough synth-setter:dev-snapshot ..
 ### MODE=idle — debug shell
 
 ```bash
-docker run -d --name debug -e MODE=idle synth-setter:dev-live
+docker run -d --name debug -e MODE=idle synth-setter:dev-snapshot
 docker exec -it debug bash
 # Clean up when done
 docker stop debug && docker rm debug
@@ -169,15 +181,16 @@ docker run --rm -e MODE=passthrough synth-setter:dev-snapshot
 
 ### Volume mounting (dev-live)
 
-dev-live has no baked source — mount your working tree:
+dev-live has no baked source or `docker_entrypoint.sh`. Mount your working
+tree at `/home/build/synth-setter` and override the entrypoint:
 
 ```bash
 docker run --rm \
-  -e MODE=passthrough \
-  -v "$(pwd):/workspace" \
-  -w /workspace \
+  --entrypoint bash \
+  -v "$(pwd):/home/build/synth-setter" \
+  -w /home/build/synth-setter \
   synth-setter:dev-live \
-  python -m pytest tests/ -m "not slow"
+  -c "python -m pytest tests/ -m 'not slow'"
 ```
 
 ### Headless VST
@@ -208,8 +221,11 @@ dev-snapshot image, pushes to Docker Hub, and runs smoke tests.
 
 1. Validates the image config (`configs/image/dev-snapshot.yaml` via Pydantic)
 2. Builds the image using Docker Buildx
-3. Pushes tagged images to Docker Hub
-4. Runs smoke tests against the SHA-pinned tag
+3. Pushes tagged images to Docker Hub (dispatch/schedule only)
+4. Runs smoke tests against the SHA-pinned tag (dispatch/schedule only)
+
+On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
+as build validation — no push, no smoke tests.
 
 If the YAML violates the schema, the workflow fails before any build starts.
 
@@ -222,6 +238,9 @@ If the YAML violates the schema, the workflow fails before any build starts.
 
 Smoke tests pull the SHA-pinned tag to avoid race conditions with concurrent
 workflow runs.
+
+Local `make` builds use a different tag format:
+`<base_image_tag>-dev-snapshot-<GIT_REF>` (e.g., `ubuntu22_04-dev-snapshot-abc1234`).
 
 ### Manual trigger
 
@@ -292,7 +311,20 @@ docker buildx prune
 
 ______________________________________________________________________
 
-## 6. Cross-references
+## 6. Future plans
+
+- **dev-live MODE support** — currently dev-live uses a fallback entrypoint
+  that requires a volume mount at `/home/build/synth-setter`. A future change
+  would add `docker_entrypoint.sh` to dev-live so it supports MODE dispatch
+  like dev-snapshot/prod, removing the need for `--entrypoint bash` overrides.
+- **MODE=train** — dedicated training mode in the entrypoint that downloads
+  data from R2, runs training, and uploads results. Currently handled manually.
+- **MODE=pipeline-worker** — for distributed shard generation on RunPod.
+  See [data-pipeline.md](../design/data-pipeline.md) § Generate stage.
+
+______________________________________________________________________
+
+## 7. Cross-references
 
 - [docker-spec.md](docker-spec.md) — image target contract, entrypoint spec, env vars
 - [rclone.md](rclone.md) — R2 setup, Docker credential baking
