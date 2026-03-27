@@ -14,6 +14,10 @@ on:
         description: "Git ref to build (branch, tag, or SHA). Builds and pushes to Docker Hub."
         required: false
         default: "main"
+      issue_number:
+        description: "GitHub issue number for config metadata."
+        required: false
+        default: "311"
   schedule:
     # Weekly: Sunday 06:00 UTC
     - cron: "0 6 * * 0"
@@ -58,7 +62,7 @@ jobs:
           PYTHONPATH=. python scripts/ci/load_image_config.py \
             --config configs/image/dev-snapshot.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
-            --issue-number 311
+            --issue-number '${{ github.event.pull_request.number || github.event.inputs.issue_number || 311 }}'
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -71,13 +75,17 @@ jobs:
 
       - name: Verify Docker Hub push access
         if: github.event_name != 'pull_request'
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DH_IMAGE: ${{ steps.config.outputs.image }}
         run: |
           TOKEN=$(curl -sf \
-            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${{ steps.config.outputs.image }}:pull,push" \
-            -u '${{ secrets.DOCKERHUB_USERNAME }}:${{ secrets.DOCKERHUB_TOKEN }}' \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${DH_IMAGE}:pull,push" \
+            -u "${DH_USER}:${DH_TOKEN}" \
             | jq -r '.token // empty')
           if [ -z "$TOKEN" ]; then
-            echo "::error::Docker Hub token lacks push scope for ${{ steps.config.outputs.image }}. Regenerate with Read & Write permissions."
+            echo "::error::Docker Hub token lacks push scope for ${DH_IMAGE}. Regenerate with Read & Write permissions."
             exit 1
           fi
           echo "Docker Hub push access verified."
