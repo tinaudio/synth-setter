@@ -23,16 +23,16 @@ class ImageConfig(BaseModel, strict=True, extra="forbid"):
     image_config_id is derived from the config filename stem.
     """
 
-    # --- Static fields (from YAML config, with defaults) ---
-    dockerfile: str = "docker/ubuntu22_04/Dockerfile"
-    image: str = "tinaudio/perm"
-    base_image: str = (
-        "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
-    )
-    base_image_tag: str = "ubuntu22_04"
-    build_mode: Literal["source", "prebuilt"] = "prebuilt"
-    target_platform: Literal["linux/amd64", "linux/arm64"] = "linux/amd64"
-    torch_index_url: str = "https://download.pytorch.org/whl/cu128"
+    # --- Static fields (from YAML config, all required) ---
+    dockerfile: str
+    image: str
+    base_image: str
+    base_image_tag: str
+    build_mode: Literal["source", "prebuilt"]
+    target_platform: Literal["linux/amd64", "linux/arm64"]
+    torch_index_url: str
+    r2_endpoint: str
+    r2_bucket: str
 
     # --- Runtime fields (from caller, no defaults) ---
     github_sha: str
