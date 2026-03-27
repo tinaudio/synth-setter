@@ -226,7 +226,7 @@ class TestLoadImageConfigErrors:
 class TestStaticFieldsAndYamlMerge:
     """Static fields are loaded from YAML and merged with runtime inputs."""
 
-    def test_yaml_static_fields_override_defaults(self, tmp_path: Path) -> None:
+    def test_yaml_last_key_wins_for_build_mode(self, tmp_path: Path) -> None:
         """YAML value for build_mode is loaded correctly."""
         config_path = _write_config(tmp_path, overrides="build_mode: source\n")
 
