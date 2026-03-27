@@ -36,7 +36,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.git_ref || 'main' }}
+          # pull_request: use PR head; dispatch: use input; schedule: main
+          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.git_ref || 'main' }}
 
       - name: Resolve checked-out commit SHA
         id: source
