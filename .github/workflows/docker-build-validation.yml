@@ -27,6 +27,10 @@ jobs:
         with:
           ref: ${{ github.event.inputs.git_ref || 'main' }}
 
+      - name: Resolve checked-out commit SHA
+        id: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -45,7 +49,7 @@ jobs:
 
           cfg = load_image_config(
               Path('configs/image/dev-snapshot.yaml'),
-              github_sha='${{ github.sha }}',
+              github_sha='${{ steps.ref.outputs.sha }}',
               issue_number=311,
           )
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
@@ -71,7 +75,7 @@ jobs:
           images: ${{ steps.config.outputs.image }}
           tags: |
             type=raw,value=dev-snapshot
-            type=raw,value=dev-snapshot-${{ github.sha }}
+            type=raw,value=dev-snapshot-${{ steps.ref.outputs.sha }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -87,7 +91,7 @@ jobs:
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
             TORCH_INDEX_URL=${{ steps.config.outputs.torch_index_url }}
-            SYNTH_PERMUTATIONS_GIT_REF=${{ github.sha }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.ref.outputs.sha }}
             R2_BUCKET=${{ steps.config.outputs.r2_bucket }}
             R2_ENDPOINT=${{ steps.config.outputs.r2_endpoint }}
           secrets: |
@@ -100,7 +104,7 @@ jobs:
 
       - name: Smoke test — container starts and Python imports work
         env:
-          SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ github.sha }}
+          SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.ref.outputs.sha }}
         run: |
           docker pull "$SMOKE_IMAGE"
           docker run --rm \
@@ -110,7 +114,7 @@ jobs:
 
       - name: Smoke test — VST loads under headless X11
         env:
-          SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ github.sha }}
+          SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.ref.outputs.sha }}
         run: |
           docker run --rm \
             --entrypoint bash \
