@@ -1,6 +1,4 @@
 # syntax=docker/dockerfile:1.6
-ARG TARGETARCH
-ARG TARGETPLATFORM
 ARG BUILD_MODE=source
 
 # release-xt/1.3.4 SHA
@@ -27,6 +25,7 @@ RUN echo "1.3.4/surge-xt-linux-x64-1.3.4.deb" > /tmp-artifacts/surge-package-fil
 FROM ${BASE_IMAGE} AS arm64-vars
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
+ARG TARGETPLATFORM
 ARG BUILD_MODE
 RUN echo "TARGETARCH=${TARGETARCH:-<unset>}" >&2
 RUN echo "TARGETPLATFORM=${TARGETPLATFORM:-<unset>}" >&2
@@ -466,7 +465,9 @@ WORKDIR /home/build/synth-setter
 RUN --mount=type=secret,id=git_pat \
     set +x; \
     token="$(cat /run/secrets/git_pat)"; \
-    git clone https://${token}@github.com/tinaudio/synth-setter.git . && \
+    git init && \
+    git remote add origin "https://${token}@github.com/tinaudio/synth-setter.git" && \
+    git fetch origin && \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.

@@ -26,6 +26,7 @@ markers = [
   "benchmark: performance benchmarks",
   "requires_vst: requires a VST plugin binary (Surge XT) — skipped unless plugin is present",
   "r2: tests requiring R2/rclone access",
+  "docker_smoke: smoke tests that run inside the built Docker image",
 ]
 minversion = "6.0"
 testpaths = "tests/"
