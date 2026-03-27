@@ -3,7 +3,9 @@
 These tests verify the built Docker image works correctly. They are designed
 to run INSIDE the container via the CI workflow, not on the host.
 
-Usage from workflow:
+CI runs individual tests by node ID (see docker-build-validation.yml).
+To run all smoke tests manually inside a container:
+
     docker run --rm "$IMAGE" pytest tests/docker/test_smoke.py -m docker_smoke -v
     docker run --rm "$IMAGE" scripts/run-linux-vst-headless.sh \
         pytest tests/docker/test_smoke.py -m "docker_smoke and requires_vst" -v
