@@ -25,6 +25,7 @@ RUN echo "1.3.4/surge-xt-linux-x64-1.3.4.deb" > /tmp-artifacts/surge-package-fil
 FROM ${BASE_IMAGE} AS arm64-vars
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 ARG TARGETARCH
+ARG TARGETPLATFORM
 ARG BUILD_MODE
 RUN echo "TARGETARCH=${TARGETARCH:-<unset>}" >&2
 RUN echo "TARGETPLATFORM=${TARGETPLATFORM:-<unset>}" >&2
