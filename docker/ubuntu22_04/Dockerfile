@@ -466,8 +466,8 @@ RUN --mount=type=secret,id=git_pat \
     token="$(cat /run/secrets/git_pat)"; \
     git init && \
     git remote add origin "https://${token}@github.com/tinaudio/synth-setter.git" && \
-    git fetch origin "${SYNTH_PERMUTATIONS_GIT_REF}" && \
-    git checkout FETCH_HEAD
+    git fetch origin && \
+    git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.
 # --no-deps: all runtime deps already installed from requirements*.txt wheels.
