@@ -364,13 +364,13 @@ WORKDIR /home/build/synth-setter
 # ==========================================
 FROM builder-install-synth-setter-deps AS r2-config-base
 ARG R2_BUCKET
+ARG R2_ENDPOINT
 ENV R2_BUCKET=${R2_BUCKET}
 RUN --mount=type=secret,id=r2_access_key_id \
     --mount=type=secret,id=r2_secret_access_key \
-    --mount=type=secret,id=r2_endpoint \
     set -eu; \
-    if [ ! -s /run/secrets/r2_access_key_id ] || [ ! -s /run/secrets/r2_secret_access_key ] || [ ! -s /run/secrets/r2_endpoint ]; then \
-        echo "WARNING: One or more R2 secrets (r2_access_key_id, r2_secret_access_key, r2_endpoint) are missing or empty." >&2; \
+    if [ ! -s /run/secrets/r2_access_key_id ] || [ ! -s /run/secrets/r2_secret_access_key ] || [ -z "${R2_ENDPOINT}" ]; then \
+        echo "WARNING: R2_ENDPOINT build-arg or R2 secrets (r2_access_key_id, r2_secret_access_key) are missing or empty." >&2; \
         echo "         R2 upload/download will not be available in this image." >&2; \
         mkdir -p /root/.config/rclone; \
         printf '[r2]\ntype = s3\nprovider = Cloudflare\n# credentials not configured\n' \
@@ -380,7 +380,7 @@ RUN --mount=type=secret,id=r2_access_key_id \
         printf '[r2]\ntype = s3\nprovider = Cloudflare\naccess_key_id = %s\nsecret_access_key = %s\nendpoint = %s\n' \
             "$(cat /run/secrets/r2_access_key_id)" \
             "$(cat /run/secrets/r2_secret_access_key)" \
-            "$(cat /run/secrets/r2_endpoint)" \
+            "${R2_ENDPOINT}" \
             > /root/.config/rclone/rclone.conf; \
         echo "R2 rclone config written." >&2; \
     fi; \

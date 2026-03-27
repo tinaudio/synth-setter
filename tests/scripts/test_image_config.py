@@ -17,6 +17,29 @@ from scripts.image_config import load_image_config
 VALID_SHA = "a" * 40
 VALID_ISSUE = 266
 
+_COMPLETE_YAML = """\
+dockerfile: docker/ubuntu22_04/Dockerfile
+image: tinaudio/perm
+base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
+base_image_tag: ubuntu22_04
+build_mode: prebuilt
+target_platform: linux/amd64
+torch_index_url: "https://download.pytorch.org/whl/cu128"
+r2_endpoint: "https://example.r2.cloudflarestorage.com"
+r2_bucket: test-bucket
+"""
+
+
+def _write_config(tmp_path: Path, overrides: str = "") -> Path:
+    """Write a complete YAML config and return its path.
+
+    If *overrides* is provided it is appended after the base config, allowing individual tests to
+    add or shadow fields.
+    """
+    config_path = tmp_path / "dev-snapshot.yaml"
+    config_path.write_text(_COMPLETE_YAML + overrides)
+    return config_path
+
 
 # ---------------------------------------------------------------------------
 # load_image_config — valid inputs
@@ -28,8 +51,7 @@ class TestLoadImageConfigValid:
 
     def test_all_fields_populated(self, tmp_path: Path) -> None:
         """Valid YAML + runtime inputs produce ImageConfig with all fields set."""
-        config_path = tmp_path / "dev-snapshot.yaml"
-        config_path.write_text("# minimal config\n")
+        config_path = _write_config(tmp_path)
 
         result = load_image_config(
             config_path,
@@ -40,6 +62,8 @@ class TestLoadImageConfigValid:
         assert result.github_sha == VALID_SHA
         assert result.issue_number == VALID_ISSUE
         assert result.image_config_id == "dev-snapshot"
+        assert result.r2_endpoint == "https://example.r2.cloudflarestorage.com"
+        assert result.r2_bucket == "test-bucket"
 
 
 # ---------------------------------------------------------------------------
@@ -52,32 +76,28 @@ class TestGithubShaValidation:
 
     def test_short_sha_rejected(self, tmp_path: Path) -> None:
         """SHA shorter than 40 chars is rejected."""
-        config_path = tmp_path / "dev-snapshot.yaml"
-        config_path.write_text("")
+        config_path = _write_config(tmp_path)
 
         with pytest.raises(ValidationError, match="github_sha"):
             load_image_config(config_path, github_sha="abc123", issue_number=VALID_ISSUE)
 
     def test_uppercase_sha_rejected(self, tmp_path: Path) -> None:
         """Uppercase hex chars are rejected — must be lowercase."""
-        config_path = tmp_path / "dev-snapshot.yaml"
-        config_path.write_text("")
+        config_path = _write_config(tmp_path)
 
         with pytest.raises(ValidationError, match="github_sha"):
             load_image_config(config_path, github_sha="A" * 40, issue_number=VALID_ISSUE)
 
     def test_non_hex_sha_rejected(self, tmp_path: Path) -> None:
         """Non-hex characters are rejected."""
-        config_path = tmp_path / "dev-snapshot.yaml"
-        config_path.write_text("")
+        config_path = _write_config(tmp_path)
 
         with pytest.raises(ValidationError, match="github_sha"):
             load_image_config(config_path, github_sha="g" * 40, issue_number=VALID_ISSUE)
 
     def test_empty_sha_rejected(self, tmp_path: Path) -> None:
         """Empty string is rejected."""
-        config_path = tmp_path / "dev-snapshot.yaml"
-        config_path.write_text("")
+        config_path = _write_config(tmp_path)
 
         with pytest.raises(ValidationError, match="github_sha"):
             load_image_config(config_path, github_sha="", issue_number=VALID_ISSUE)
@@ -93,19 +113,47 @@ class TestIssueNumberValidation:
 
     def test_zero_rejected(self, tmp_path: Path) -> None:
         """Zero is not a valid issue number."""
-        config_path = tmp_path / "dev-snapshot.yaml"
-        config_path.write_text("")
+        config_path = _write_config(tmp_path)
 
         with pytest.raises(ValidationError, match="issue_number"):
             load_image_config(config_path, github_sha=VALID_SHA, issue_number=0)
 
     def test_negative_rejected(self, tmp_path: Path) -> None:
         """Negative numbers are not valid issue numbers."""
-        config_path = tmp_path / "dev-snapshot.yaml"
-        config_path.write_text("")
+        config_path = _write_config(tmp_path)
 
         with pytest.raises(ValidationError, match="issue_number"):
             load_image_config(config_path, github_sha=VALID_SHA, issue_number=-1)
+
+
+# ---------------------------------------------------------------------------
+# load_image_config — r2 field validation
+# ---------------------------------------------------------------------------
+
+
+class TestR2FieldValidation:
+    """r2_endpoint and r2_bucket must not be empty or whitespace-only."""
+
+    def test_empty_r2_endpoint_rejected(self, tmp_path: Path) -> None:
+        """Empty r2_endpoint is rejected."""
+        config_path = _write_config(tmp_path, overrides='r2_endpoint: ""\n')
+
+        with pytest.raises(ValidationError, match="must not be blank"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_whitespace_r2_endpoint_rejected(self, tmp_path: Path) -> None:
+        """Whitespace-only r2_endpoint is rejected."""
+        config_path = _write_config(tmp_path, overrides='r2_endpoint: "  "\n')
+
+        with pytest.raises(ValidationError, match="must not be blank"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_empty_r2_bucket_rejected(self, tmp_path: Path) -> None:
+        """Empty r2_bucket is rejected."""
+        config_path = _write_config(tmp_path, overrides='r2_bucket: ""\n')
+
+        with pytest.raises(ValidationError, match="must not be blank"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +166,7 @@ class TestImageConfigIdDerivation:
 
     def test_dev_snapshot_yaml_gives_dev_snapshot_id(self, tmp_path: Path) -> None:
         """dev-snapshot.yaml produces image_config_id 'dev-snapshot'."""
-        config_path = tmp_path / "dev-snapshot.yaml"
-        config_path.write_text("")
+        config_path = _write_config(tmp_path)
 
         result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
@@ -128,7 +175,7 @@ class TestImageConfigIdDerivation:
     def test_custom_name_gives_matching_id(self, tmp_path: Path) -> None:
         """Arbitrary filename stem becomes image_config_id."""
         config_path = tmp_path / "my-custom-image.yaml"
-        config_path.write_text("")
+        config_path.write_text(_COMPLETE_YAML)
 
         result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
@@ -169,7 +216,33 @@ class TestLoadImageConfigErrors:
     def test_yaml_unknown_key_rejected(self, tmp_path: Path) -> None:
         """Unknown YAML key is rejected by Pydantic strict mode."""
         config_path = tmp_path / "unknown.yaml"
-        config_path.write_text("bogus_key: value\n")
+        config_path.write_text(_COMPLETE_YAML + "bogus_key: value\n")
+
+        with pytest.raises(ValidationError):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_yaml_empty_file_raises_validation_error(self, tmp_path: Path) -> None:
+        """Empty YAML (comment-only) raises ValidationError since no fields have defaults."""
+        config_path = tmp_path / "empty.yaml"
+        config_path.write_text("# just a comment\n")
+
+        with pytest.raises(ValidationError):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_missing_field_rejected(self, tmp_path: Path) -> None:
+        """YAML missing a required field raises ValidationError."""
+        config_path = tmp_path / "incomplete.yaml"
+        # Write config missing r2_bucket
+        config_path.write_text(
+            "dockerfile: docker/ubuntu22_04/Dockerfile\n"
+            "image: tinaudio/perm\n"
+            'base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"\n'
+            "base_image_tag: ubuntu22_04\n"
+            "build_mode: prebuilt\n"
+            "target_platform: linux/amd64\n"
+            'torch_index_url: "https://download.pytorch.org/whl/cu128"\n'
+            'r2_endpoint: "https://example.r2.cloudflarestorage.com"\n'
+        )
 
         with pytest.raises(ValidationError):
             load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
@@ -183,40 +256,24 @@ class TestLoadImageConfigErrors:
 class TestStaticFieldsAndYamlMerge:
     """Static fields are loaded from YAML and merged with runtime inputs."""
 
-    def test_yaml_static_fields_override_defaults(self, tmp_path: Path) -> None:
-        """YAML value overrides the model default."""
-        config_path = tmp_path / "custom.yaml"
-        config_path.write_text("build_mode: source\n")
+    def test_yaml_last_key_wins_for_build_mode(self, tmp_path: Path) -> None:
+        """YAML value for build_mode is loaded correctly."""
+        config_path = _write_config(tmp_path, overrides="build_mode: source\n")
 
         result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
         assert result.build_mode == "source"
 
-    def test_yaml_empty_file_uses_defaults(self, tmp_path: Path) -> None:
-        """Empty YAML (comment-only) uses all model defaults for static fields."""
-        config_path = tmp_path / "empty.yaml"
-        config_path.write_text("# just a comment\n")
-
-        result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
-
-        assert result.dockerfile == "docker/ubuntu22_04/Dockerfile"
-        assert result.image == "tinaudio/perm"
-        assert result.base_image_tag == "ubuntu22_04"
-        assert result.build_mode == "prebuilt"
-        assert result.target_platform == "linux/amd64"
-
     def test_build_mode_rejects_invalid_literal(self, tmp_path: Path) -> None:
         """build_mode only accepts 'source' or 'prebuilt'."""
-        config_path = tmp_path / "bad-mode.yaml"
-        config_path.write_text("build_mode: invalid\n")
+        config_path = _write_config(tmp_path, overrides="build_mode: invalid\n")
 
         with pytest.raises(ValidationError, match="build_mode"):
             load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
     def test_target_platform_rejects_invalid_literal(self, tmp_path: Path) -> None:
         """target_platform only accepts 'linux/amd64' or 'linux/arm64'."""
-        config_path = tmp_path / "bad-platform.yaml"
-        config_path.write_text("target_platform: windows/amd64\n")
+        config_path = _write_config(tmp_path, overrides="target_platform: windows/amd64\n")
 
         with pytest.raises(ValidationError, match="target_platform"):
             load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
@@ -236,4 +293,8 @@ class TestStaticFieldsAndYamlMerge:
         assert result.build_mode == "prebuilt"
         assert result.target_platform == "linux/amd64"
         assert result.torch_index_url == "https://download.pytorch.org/whl/cu128"
+        assert result.r2_endpoint == (
+            "https://efb9275d571811db929e83eb710b74a7.r2.cloudflarestorage.com"
+        )
+        assert result.r2_bucket == "intermediate-data"
         assert result.image_config_id == "dev-snapshot"
