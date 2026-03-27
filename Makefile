@@ -97,9 +97,9 @@ WANDB_API_KEY        ?=
 DOCKER_SECRETS = \
 	--secret id=r2_access_key_id,env=R2_ACCESS_KEY_ID \
 	--secret id=r2_secret_access_key,env=R2_SECRET_ACCESS_KEY \
-	--secret id=r2_endpoint,env=R2_ENDPOINT \
 	--secret id=wandb_api_key,env=WANDB_API_KEY \
-	--build-arg R2_BUCKET=$(R2_BUCKET)
+	--build-arg R2_BUCKET=$(R2_BUCKET) \
+	--build-arg R2_ENDPOINT=$(R2_ENDPOINT)
 
 docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_PAT)
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi

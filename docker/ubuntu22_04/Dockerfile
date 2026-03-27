@@ -370,7 +370,7 @@ RUN --mount=type=secret,id=r2_access_key_id \
     --mount=type=secret,id=r2_secret_access_key \
     set -eu; \
     if [ ! -s /run/secrets/r2_access_key_id ] || [ ! -s /run/secrets/r2_secret_access_key ] || [ -z "${R2_ENDPOINT}" ]; then \
-        echo "WARNING: One or more R2 secrets (r2_access_key_id, r2_secret_access_key, r2_endpoint) are missing or empty." >&2; \
+        echo "WARNING: R2_ENDPOINT build-arg or R2 secrets (r2_access_key_id, r2_secret_access_key) are missing or empty." >&2; \
         echo "         R2 upload/download will not be available in this image." >&2; \
         mkdir -p /root/.config/rclone; \
         printf '[r2]\ntype = s3\nprovider = Cloudflare\n# credentials not configured\n' \
