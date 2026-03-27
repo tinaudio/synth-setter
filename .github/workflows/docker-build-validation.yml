@@ -42,6 +42,7 @@ jobs:
       - name: Load image config
         id: config
         run: |
+          # TODO(#323): PYTHONPATH=. needed because scripts/ is not an installable package
           PYTHONPATH=. python scripts/ci/load_image_config.py \
             --config configs/image/dev-snapshot.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
