@@ -42,22 +42,10 @@ jobs:
       - name: Load image config
         id: config
         run: |
-          python -c "
-          from scripts.image_config import load_image_config
-          from pathlib import Path
-          import os
-
-          cfg = load_image_config(
-              Path('configs/image/dev-snapshot.yaml'),
-              github_sha='${{ steps.source.outputs.sha }}',
-              issue_number=311,
-          )
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              for field in ['dockerfile', 'image', 'base_image', 'base_image_tag',
-                             'build_mode', 'target_platform', 'torch_index_url',
-                             'r2_endpoint', 'r2_bucket']:
-                  f.write(f'{field}={getattr(cfg, field)}\n')
-          "
+          PYTHONPATH=. python scripts/ci/load_image_config.py \
+            --config configs/image/dev-snapshot.yaml \
+            --github-sha '${{ steps.source.outputs.sha }}' \
+            --issue-number 311
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
