@@ -1,14 +1,11 @@
 name: GPU Tests
 
 # Runs only @pytest.mark.gpu tests on a GPU runner.
-# Manual dispatch and post-merge to main.
+# Twice-weekly schedule (Mon + Thu) and manual dispatch.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
+  schedule:
+    - cron: "0 6 * * 1,4" # Mon + Thu 06:00 UTC
 
 jobs:
   run_tests:
