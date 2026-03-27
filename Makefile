@@ -28,8 +28,8 @@ test: ## Run quick tests (excludes slow, requires_vst)
 test-full: ## Run all tests
 	pytest
 
-test-entrypoint: ## Run entrypoint BATS tests
-	bats tests/test_entrypoint.bats
+test-bats: ## Run BATS shell tests
+	bats --recursive tests/
 
 install: ## Install project in editable mode with dev deps
 	pip install -r requirements.txt -e .
