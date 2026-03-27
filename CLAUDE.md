@@ -70,6 +70,7 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 - Use `isolation: "worktree"` when spawning subagents that write code or create commits.
 - The main working tree should only be used for read-only operations (exploration, `git log`, `rclone ls`, etc.).
 - When using Claude Code's Agent tool with `isolation: "worktree"`, the worktree is automatically cleaned up if the agent makes no changes. If changes are made, the worktree path and branch are returned for review. For manually created worktrees, clean up with `git worktree remove` when done.
+- **Submodules:** Skills live in a git submodule at `.claude/skills/` (from `tinaudio/skills`). Clone with `--recurse-submodules`. In new worktrees, run `git submodule update --init`.
 
 ### Pipeline-Specific Rules
 
