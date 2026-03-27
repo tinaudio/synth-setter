@@ -70,7 +70,7 @@ jobs:
           images: ${{ steps.config.outputs.image }}
           tags: |
             type=raw,value=dev-snapshot
-            type=sha,prefix=dev-snapshot-
+            type=raw,value=dev-snapshot-${{ github.sha }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -97,18 +97,22 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke test — container starts and Python imports work
+        env:
+          SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ github.sha }}
         run: |
-          docker pull ${{ steps.config.outputs.image }}:dev-snapshot
+          docker pull "$SMOKE_IMAGE"
           docker run --rm \
             --entrypoint bash \
-            ${{ steps.config.outputs.image }}:dev-snapshot \
+            "$SMOKE_IMAGE" \
             -c "python -c 'from pedalboard import VST3Plugin; print(\"pedalboard OK\")'"
 
       - name: Smoke test — VST loads under headless X11
+        env:
+          SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ github.sha }}
         run: |
           docker run --rm \
             --entrypoint bash \
-            ${{ steps.config.outputs.image }}:dev-snapshot \
+            "$SMOKE_IMAGE" \
             -c "
               scripts/run-linux-vst-headless.sh python -c \"
                 from pedalboard import VST3Plugin
