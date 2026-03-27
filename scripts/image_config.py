@@ -55,6 +55,14 @@ class ImageConfig(BaseModel, strict=True, extra="forbid"):
             raise ValueError("issue_number must be a positive integer")
         return v
 
+    @field_validator("r2_endpoint", "r2_bucket")
+    @classmethod
+    def must_not_be_blank(cls, v: str) -> str:
+        """Reject empty or whitespace-only strings."""
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v
+
 
 def load_image_config(
     config_path: Path,

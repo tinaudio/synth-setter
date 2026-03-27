@@ -127,6 +127,36 @@ class TestIssueNumberValidation:
 
 
 # ---------------------------------------------------------------------------
+# load_image_config — r2 field validation
+# ---------------------------------------------------------------------------
+
+
+class TestR2FieldValidation:
+    """r2_endpoint and r2_bucket must not be empty or whitespace-only."""
+
+    def test_empty_r2_endpoint_rejected(self, tmp_path: Path) -> None:
+        """Empty r2_endpoint is rejected."""
+        config_path = _write_config(tmp_path, overrides='r2_endpoint: ""\n')
+
+        with pytest.raises(ValidationError, match="must not be blank"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_whitespace_r2_endpoint_rejected(self, tmp_path: Path) -> None:
+        """Whitespace-only r2_endpoint is rejected."""
+        config_path = _write_config(tmp_path, overrides='r2_endpoint: "  "\n')
+
+        with pytest.raises(ValidationError, match="must not be blank"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+    def test_empty_r2_bucket_rejected(self, tmp_path: Path) -> None:
+        """Empty r2_bucket is rejected."""
+        config_path = _write_config(tmp_path, overrides='r2_bucket: ""\n')
+
+        with pytest.raises(ValidationError, match="must not be blank"):
+            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+
+
+# ---------------------------------------------------------------------------
 # load_image_config — image_config_id derivation
 # ---------------------------------------------------------------------------
 
