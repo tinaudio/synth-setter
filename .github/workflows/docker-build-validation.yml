@@ -57,6 +57,18 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Verify Docker Hub push access
+        run: |
+          TOKEN=$(curl -sf \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${{ steps.config.outputs.image }}:pull,push" \
+            -u '${{ secrets.DOCKERHUB_USERNAME }}:${{ secrets.DOCKERHUB_TOKEN }}' \
+            | jq -r '.token // empty')
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Docker Hub token lacks push scope for ${{ steps.config.outputs.image }}. Regenerate with Read & Write permissions."
+            exit 1
+          fi
+          echo "Docker Hub push access verified."
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
