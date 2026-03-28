@@ -290,16 +290,24 @@ RUN python --version && \
 
 # ==========================================
 # Wheels stage: build wheels for all Python deps (online, with index access).
-# TODO(khaled): Consider  separate RUN layers so the torch download cache is
-# independent of app (changing requirements-app.txt won't re-download torch wheels.
+# Split into torch (rarely changes, ~2.5 GB) and app (changes often, smaller)
+# so that requirements-app.txt edits don't re-download torch wheels.
 # ==========================================
-FROM python-base AS wheels
-COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
+FROM python-base AS wheels-torch
+COPY --from=synth-setter-src /home/build/synth-setter/requirements-torch.txt /artifacts/
 ARG TORCH_INDEX_URL
 RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
     pip wheel \
         --wheel-dir /wheels \
         --extra-index-url ${TORCH_INDEX_URL} \
+        -r /artifacts/requirements-torch.txt
+
+FROM wheels-torch AS wheels
+COPY --from=synth-setter-src /home/build/synth-setter/requirements-app.txt /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/requirements.txt /artifacts/
+RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
+    pip wheel \
+        --wheel-dir /wheels \
         -r /artifacts/requirements.txt
 
 # ==========================================
