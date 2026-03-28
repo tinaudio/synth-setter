@@ -6,6 +6,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from pipeline.prefix import DatasetConfigId
+
 
 class SplitsConfig(BaseModel):
     """Train/val/test shard counts."""
@@ -78,6 +80,6 @@ def load_dataset_config(config_path: Path) -> DatasetConfig:
     return DatasetConfig(**raw)
 
 
-def dataset_config_id_from_path(config_path: Path) -> str:
+def dataset_config_id_from_path(config_path: Path) -> DatasetConfigId:
     """Extract the dataset config ID (filename stem) from a config path."""
-    return config_path.stem
+    return DatasetConfigId(config_path.stem)

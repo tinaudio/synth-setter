@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import NewType
+
+DatasetConfigId = NewType("DatasetConfigId", str)
+DatasetRunId = NewType("DatasetRunId", str)
 
 
 def make_dataset_wandb_run_id(
-    dataset_config_id: str,
+    dataset_config_id: DatasetConfigId,
     timestamp: datetime | None = None,
-) -> str:
+) -> DatasetRunId:
     """Build a unique run ID from a config ID and a UTC timestamp.
 
     :param dataset_config_id: The dataset config identifier (e.g. filename stem).
@@ -21,10 +25,10 @@ def make_dataset_wandb_run_id(
     if offset is None or offset.total_seconds() != 0:
         raise ValueError("timestamp must be UTC")
     formatted = timestamp.strftime("%Y%m%dT%H%M%SZ")
-    return f"{dataset_config_id}-{formatted}"
+    return DatasetRunId(f"{dataset_config_id}-{formatted}")
 
 
-def make_r2_prefix(dataset_config_id: str, dataset_wandb_run_id: str) -> str:
+def make_r2_prefix(dataset_config_id: DatasetConfigId, dataset_wandb_run_id: DatasetRunId) -> str:
     """Build the R2 object prefix for a dataset generation run.
 
     :param dataset_config_id: The dataset config identifier.
