@@ -5,6 +5,7 @@ from typing import NewType
 
 DatasetConfigId = NewType("DatasetConfigId", str)
 DatasetRunId = NewType("DatasetRunId", str)
+R2Prefix = NewType("R2Prefix", str)
 
 
 def make_dataset_wandb_run_id(
@@ -28,11 +29,13 @@ def make_dataset_wandb_run_id(
     return DatasetRunId(f"{dataset_config_id}-{formatted}")
 
 
-def make_r2_prefix(dataset_config_id: DatasetConfigId, dataset_wandb_run_id: DatasetRunId) -> str:
+def make_r2_prefix(
+    dataset_config_id: DatasetConfigId, dataset_wandb_run_id: DatasetRunId
+) -> R2Prefix:
     """Build the R2 object prefix for a dataset generation run.
 
     :param dataset_config_id: The dataset config identifier.
     :param dataset_wandb_run_id: The W&B run ID for this generation run.
     :returns: A prefix string like ``data/<config_id>/<run_id>/``.
     """
-    return f"data/{dataset_config_id}/{dataset_wandb_run_id}/"
+    return R2Prefix(f"data/{dataset_config_id}/{dataset_wandb_run_id}/")
