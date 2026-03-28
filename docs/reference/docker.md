@@ -268,13 +268,11 @@ ______________________________________________________________________
 ### Shell into a running container
 
 ```bash
-# If the container is already running
+# If a container is already running
 docker exec -it <container> bash
 
-# Start a fresh debug session
-docker run --rm -it -e MODE=idle synth-setter:dev-snapshot
-# Then from another terminal:
-docker exec -it <container> bash
+# Start a fresh interactive debug session (drops into a shell)
+docker run --rm -it -e MODE=idle synth-setter:dev-snapshot bash
 ```
 
 ### OOM during builds
