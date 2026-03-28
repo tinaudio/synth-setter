@@ -1,0 +1,70 @@
+# doc-map.yaml — Structural mapping for doc-drift detection
+#
+# This file encodes which source files SHOULD be documented where.
+# Grep-based detection catches drift when docs reference changed files.
+# This mapping catches drift by OMISSION — when code adds something
+# new and no doc mentions it.
+#
+# Review after each major refactor. The doc-drift skill checks this
+# file for staleness (dead patterns, orphan sources) automatically.
+
+version: 1
+
+docs:
+  # ── Docker reference ────────────────────────────────────────────
+  - doc: docs/reference/docker.md
+    description: Docker build, run, debug reference
+    sources:
+      - pattern: "docker/**"
+        covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts"
+      - pattern: "scripts/docker_entrypoint.sh"
+        covers: "All MODE values (idle, passthrough, train, …), env var dispatch, error messages"
+      - pattern: "pipeline/schemas/image_config.py"
+        covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
+      - pattern: "configs/image/**"
+        covers: "YAML field names and values, build parameters, defaults"
+      - pattern: "Makefile"
+        covers: "docker-build-* targets, DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
+        scope: "docker"
+      - pattern: "scripts/run-linux-vst-headless.sh"
+        covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
+      - pattern: ".github/workflows/docker-build-validation.yml"
+        covers: "CI steps, required secrets, tag scheme, smoke test flow"
+
+  # ── rclone reference (placeholder — uncomment when doc exists) ──
+  # - doc: docs/reference/rclone.md
+  #   description: rclone R2 operations reference
+  #   sources:
+  #     - pattern: "scripts/docker_entrypoint.sh"
+  #       covers: "MODE=train download/upload, --stats-one-line, SKIP_UPLOAD"
+  #       scope: "rclone"
+  #     - pattern: "scripts/r2_shard_report.py"
+  #       covers: "rclone ls command, --size-threshold-gib, CLI usage"
+  #     - pattern: "scripts/entrypoint_generate_shards.py"
+  #       covers: "Post-shard-validation upload trigger"
+  #     - pattern: "tests/scripts/test_r2_shard_report.py"
+  #       covers: "rclone lsd reachability check, rcat fixture upload, purge cleanup"
+  #     - pattern: "docs/design/storage-provenance-spec.md"
+  #       covers: "R2 bucket layout, path conventions, --checksum rule"
+  #       scope: "rclone-rules"
+
+  # ── W&B integration (placeholder — expand when doc exists) ──────
+  # - doc: docs/reference/wandb-integration.md
+  #   description: W&B logging and auth reference
+  #   sources:
+  #     - pattern: "src/training/**"
+  #       covers: "W&B logging calls, metric names, run config, artifact logging"
+  #     - pattern: "scripts/docker_entrypoint.sh"
+  #       covers: "W&B netrc setup, WANDB_API_KEY injection"
+  #       scope: "wandb"
+
+  # ── Docker spec (the contract doc) ──────────────────────────────
+  - doc: docs/reference/docker-spec.md
+    description: Image target contract, entrypoint modes, env var spec
+    sources:
+      - pattern: "scripts/docker_entrypoint.sh"
+        covers: "All MODE values, env var contract, exit codes, error handling"
+      - pattern: "docker/**"
+        covers: "Target names, stage dependencies, what each target produces"
+      - pattern: "pipeline/schemas/image_config.py"
+        covers: "ImageConfig fields that define the target contract"
