@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import DatasetConfigId, make_dataset_wandb_run_id
@@ -44,7 +44,7 @@ class ShardSpec(BaseModel):
     param_shape: tuple[int]
 
 
-class PipelineSpec(BaseModel):
+class DatasetPipelineSpec(BaseModel):
     """Frozen runtime specification materialized from DatasetConfig."""
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -61,7 +61,21 @@ class PipelineSpec(BaseModel):
     num_shards: int
     base_seed: int
     splits: SplitsConfig
+    plugin_path: str  # VST3 plugin to render through
+    preset_path: str  # VST preset to load
+    velocity: int  # MIDI velocity for note rendering
+    signal_duration_seconds: float  # audio length per sample (seconds)
+    min_loudness: float  # loudness floor — retry if below
+    sample_batch_size: int  # batch size for generation efficiency
     shards: tuple[ShardSpec, ...]
+
+    @model_validator(mode="after")
+    def _plugin_path_exists(self) -> DatasetPipelineSpec:
+        """Validate that the plugin path exists on disk."""
+        plugin = Path(self.plugin_path)
+        if not plugin.exists():
+            raise ValueError(f"Plugin path does not exist: {self.plugin_path}")
+        return self
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -106,8 +120,8 @@ def _is_repo_dirty() -> bool:
 def materialize_spec(
     config: DatasetConfig,
     config_id: DatasetConfigId,
-) -> PipelineSpec:
-    """Materialize a frozen PipelineSpec from config and environment.
+) -> DatasetPipelineSpec:
+    """Materialize a frozen DatasetPipelineSpec from config and environment.
 
     Derives all runtime state internally: git SHA, repo dirty status,
     renderer version from plugin path, current UTC timestamp.
@@ -131,8 +145,8 @@ def _build_pipeline_spec(
     is_repo_dirty: bool,
     renderer_version: str,
     created_at: datetime,
-) -> PipelineSpec:
-    """Build a PipelineSpec from config and pre-resolved runtime values.
+) -> DatasetPipelineSpec:
+    """Build a DatasetPipelineSpec from config and pre-resolved runtime values.
 
     This is the pure functional core — no I/O, no side effects.
     """
@@ -158,7 +172,7 @@ def _build_pipeline_spec(
         for i in range(config.num_shards)
     )
 
-    return PipelineSpec(
+    return DatasetPipelineSpec(
         run_id=run_id,
         created_at=created_at,
         code_version=code_version,
@@ -171,5 +185,11 @@ def _build_pipeline_spec(
         num_shards=config.num_shards,
         base_seed=config.base_seed,
         splits=config.splits,
+        plugin_path=config.plugin_path,
+        preset_path=config.preset_path,
+        velocity=config.velocity,
+        signal_duration_seconds=config.signal_duration_seconds,
+        min_loudness=config.min_loudness,
+        sample_batch_size=config.sample_batch_size,
         shards=shards,
     )

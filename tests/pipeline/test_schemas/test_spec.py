@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import DatasetConfigId
 from pipeline.schemas.spec import (
-    PipelineSpec,
+    DatasetPipelineSpec,
     ShardSpec,
     extract_renderer_version,
     materialize_spec,
@@ -85,13 +85,13 @@ class TestShardSpec:
             ShardSpec(**kwargs)
 
 
-class TestPipelineSpec:
-    """Behavioral contracts for PipelineSpec frozen model."""
+class TestDatasetPipelineSpec:
+    """Behavioral contracts for DatasetPipelineSpec frozen model."""
 
     def test_pipeline_spec_is_frozen(
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
-        """Assigning to a frozen PipelineSpec field raises ValidationError."""
+        """Assigning to a frozen DatasetPipelineSpec field raises ValidationError."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
         valid_config_dict["num_shards"] = 1
         valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
@@ -101,8 +101,8 @@ class TestPipelineSpec:
         with pytest.raises(ValidationError):
             spec.num_shards = 99  # type: ignore[misc]
 
-    def test_pipeline_spec_rejects_extra_fields(self) -> None:
-        """Extra fields on PipelineSpec raise ValidationError."""
+    def test_pipeline_spec_rejects_extra_fields(self, patch_materialize_io: Path) -> None:
+        """Extra fields on DatasetPipelineSpec raise ValidationError."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
             "created_at": FIXED_NOW,
@@ -116,13 +116,21 @@ class TestPipelineSpec:
             "num_shards": 1,
             "base_seed": 42,
             "splits": SplitsConfig(train=1, val=0, test=0),
+            "plugin_path": str(patch_materialize_io),
+            "preset_path": "presets/test.vstpreset",
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
             "shards": (),
             "extra_field": "oops",
         }
         with pytest.raises(ValidationError):
-            PipelineSpec(**kwargs)
+            DatasetPipelineSpec(**kwargs)
 
-    def test_pipeline_spec_output_format_rejects_invalid_literal(self) -> None:
+    def test_pipeline_spec_output_format_rejects_invalid_literal(
+        self, patch_materialize_io: Path
+    ) -> None:
         """Invalid output_format literal raises ValidationError."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
@@ -137,10 +145,42 @@ class TestPipelineSpec:
             "num_shards": 1,
             "base_seed": 42,
             "splits": SplitsConfig(train=1, val=0, test=0),
+            "plugin_path": str(patch_materialize_io),
+            "preset_path": "presets/test.vstpreset",
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
             "shards": (),
         }
         with pytest.raises(ValidationError):
-            PipelineSpec(**kwargs)
+            DatasetPipelineSpec(**kwargs)
+
+    def test_direct_construction_with_bad_plugin_path_raises_validation_error(self) -> None:
+        """Constructing DatasetPipelineSpec with nonexistent plugin_path raises ValidationError."""
+        kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "created_at": datetime(2026, 3, 28, tzinfo=timezone.utc),
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "hdf5",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "num_shards": 1,
+            "base_seed": 42,
+            "plugin_path": "/nonexistent/plugin.vst3",
+            "preset_path": "presets/test.vstpreset",
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "shards": (),
+        }
+        with pytest.raises(ValidationError, match="Plugin path does not exist"):
+            DatasetPipelineSpec(**kwargs)
 
 
 class TestExtractRendererVersion:
@@ -217,6 +257,12 @@ class TestMaterializeSpec:
         assert spec.base_seed == 42
         assert spec.param_spec == "surge_simple"
         assert spec.splits == SplitsConfig(train=1, val=0, test=0)
+        assert spec.plugin_path == str(patch_materialize_io)
+        assert spec.preset_path == "presets/surge-base.vstpreset"
+        assert spec.velocity == 100
+        assert spec.signal_duration_seconds == 4.0
+        assert spec.min_loudness == -55.0
+        assert spec.sample_batch_size == 32
         assert len(spec.shards) == 1
 
         shard = spec.shards[0]
@@ -329,7 +375,7 @@ class TestMaterializeSpec:
     def test_json_round_trip_preserves_all_fields(
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
-        """JSON serialize then deserialize produces an equal PipelineSpec."""
+        """JSON serialize then deserialize produces an equal DatasetPipelineSpec."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
         valid_config_dict["num_shards"] = 1
         valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
@@ -338,7 +384,7 @@ class TestMaterializeSpec:
         spec = materialize_spec(config, config_id)
 
         json_str = spec.model_dump_json()
-        restored = PipelineSpec.model_validate_json(json_str)
+        restored = DatasetPipelineSpec.model_validate_json(json_str)
         assert restored == spec
 
     def test_run_id_format_from_config_id_and_timestamp(
