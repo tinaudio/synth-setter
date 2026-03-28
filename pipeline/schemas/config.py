@@ -6,7 +6,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from pipeline.prefix import DatasetConfigId
+from pipeline.schemas.prefix import DatasetConfigId
 
 
 class SplitsConfig(BaseModel):

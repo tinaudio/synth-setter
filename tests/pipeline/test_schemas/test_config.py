@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from pipeline.config import DatasetConfig, dataset_config_id_from_path, load_dataset_config
+from pipeline.schemas.config import DatasetConfig, dataset_config_id_from_path, load_dataset_config
 
 
 class TestLoadDatasetConfig:
