@@ -18,7 +18,7 @@ docs:
       - pattern: "docker/**"
         covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts"
       - pattern: "scripts/docker_entrypoint.sh"
-        covers: "All MODE values (idle, passthrough, generate_shards), env var dispatch, error messages"
+        covers: "Supported MODE values (idle, passthrough), env var dispatch, error messages"
       - pattern: "pipeline/schemas/image_config.py"
         covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
       - pattern: "configs/image/**"
