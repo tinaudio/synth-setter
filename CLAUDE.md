@@ -59,9 +59,13 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 ### Architecture
 
 - `src/` — ML code (models, data modules, training, evaluation)
-- `scripts/` — pipeline orchestration (generate, finalize, RunPod launch)
-- `configs/` — Hydra YAML configs (pipeline, data, trainer)
-- `tests/` — mirrors `src/` and `scripts/` structure
+- `pipeline/` — distributed data pipeline (`python -m pipeline`)
+  - `schemas/` — Pydantic models (config, spec, report, card, sample)
+  - `stages/` — generate and finalize stage logic
+  - `backends/` — compute providers (local, RunPod)
+- `scripts/` — standalone scripts
+- `configs/` — Hydra YAML configs (`data/`, `trainer/`) and pipeline configs (`dataset/`)
+- `tests/` — mirrors `src/` and `pipeline/` structure
 - `docs/design/` — design documents
 
 ### Git Workflow
