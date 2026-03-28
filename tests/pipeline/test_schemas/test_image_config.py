@@ -1,4 +1,4 @@
-"""Tests for scripts/image_config.py — image creation config schema and loader.
+"""Tests for pipeline/schemas/image_config.py — image creation config schema and loader.
 
 Tests are organized around the PUBLIC typed API:
 - load_image_config(): loads YAML config, merges runtime inputs, validates via Pydantic

@@ -112,7 +112,7 @@ YAML (see Image config below). CLI takes precedence.
 
 For CI builds, image parameters are defined in YAML config files under
 `configs/image/` and validated by
-[image_config.py](../../scripts/image_config.py) — a Pydantic `BaseModel`
+[image_config.py](../../pipeline/schemas/image_config.py) — a Pydantic `BaseModel`
 with `strict=True` and `extra="forbid"`. The config loader rejects unknown
 keys, invalid types, and malformed values at load time.
 
@@ -328,5 +328,5 @@ ______________________________________________________________________
 - [rclone.md](rclone.md) — R2 setup, Docker credential baking
 - [wandb-integration.md](wandb-integration.md) — W&B logging and auth
 - [data-pipeline.md](../design/data-pipeline.md) — pipeline architecture, worker provisioning
-- [image_config.py](../../scripts/image_config.py) — image config schema (Pydantic model)
-- [test_image_config.py](../../tests/scripts/test_image_config.py) — config validation tests
+- [image_config.py](../../pipeline/schemas/image_config.py) — image config schema (Pydantic model)
+- [test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) — config validation tests
