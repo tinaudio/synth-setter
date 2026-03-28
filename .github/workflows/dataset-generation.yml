@@ -1,11 +1,11 @@
 name: Dataset Generation
 
-# Generates a VST dataset shard inside the Docker container using
+# Generates a single VST dataset shard inside the Docker container using
 # generate_vst_dataset.py, then optionally uploads to R2.
 #
 # Triggers:
 # - Manual dispatch: full generation from config, optional R2 upload
-# - Pull request (dataset-related paths): smoke test (one sample_batch_size from config)
+# - Pull request (dataset-related paths): smoke test using ci-smoke-test.yaml
 
 on:
   workflow_dispatch:
@@ -31,8 +31,9 @@ on:
       - "configs/dataset/**"
       - "scripts/ci/load_dataset_config.py"
       - "scripts/ci/resolve_dataset_run_params.py"
-      - "scripts/entrypoint_generate_shards.py"
+      - "scripts/entrypoint_generate_dataset.py"
       - "scripts/docker_entrypoint.sh"
+      - "requirements*.txt"
       - ".github/workflows/dataset-generation.yml"
 
 jobs:
@@ -61,11 +62,16 @@ jobs:
       - name: Resolve run parameters
         id: params
         run: |
-          PYTHONPATH=. python scripts/ci/resolve_dataset_run_params.py \
-            --event-name "${{ github.event_name }}" \
-            --dataset-config "${{ github.event.inputs.dataset_config || '' }}" \
-            --docker-tag "${{ github.event.inputs.docker_image_tag || '' }}" \
-            --upload-to-r2 "${{ github.event.inputs.upload_to_r2 || '' }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PYTHONPATH=. python scripts/ci/resolve_dataset_run_params.py \
+              --dataset-config "configs/dataset/ci-smoke-test.yaml" \
+              --upload-to-r2 "false"
+          else
+            PYTHONPATH=. python scripts/ci/resolve_dataset_run_params.py \
+              --dataset-config "${{ github.event.inputs.dataset_config || '' }}" \
+              --docker-tag "${{ github.event.inputs.docker_image_tag || '' }}" \
+              --upload-to-r2 "${{ github.event.inputs.upload_to_r2 || '' }}"
+          fi
 
       - name: Load dataset config
         id: config
@@ -95,7 +101,7 @@ jobs:
           mkdir -p "$OUTPUT_DIR"
 
           docker run --rm \
-            -e MODE=generate_shards \
+            -e MODE=generate_dataset \
             -e DATASET_CONFIG="${{ steps.params.outputs.dataset_config }}" \
             -e OUTPUT_DIR=/output \
             -v "${OUTPUT_DIR}:/output" \
@@ -106,10 +112,8 @@ jobs:
 
       - name: Validate output file
         id: validate
-        env:
-          CONFIG_ID: ${{ steps.config.outputs.dataset_config_id }}
         run: |
-          OUTPUT="${{ steps.generate.outputs.output_dir }}/${CONFIG_ID}.hdf5"
+          OUTPUT="${{ steps.generate.outputs.output_dir }}/shard-000000.hdf5"
           if [ ! -f "$OUTPUT" ]; then
             echo "::error::Output HDF5 file not found at ${OUTPUT}"
             exit 1
@@ -140,7 +144,8 @@ jobs:
           CONFIG_ID: ${{ steps.config.outputs.dataset_config_id }}
           RUN_ID: ${{ steps.config.outputs.run_id }}
           R2_PREFIX: ${{ steps.config.outputs.r2_prefix }}
-          NUM_SAMPLES: ${{ steps.config.outputs.num_samples }}
+          SHARD_SIZE: ${{ steps.config.outputs.shard_size }}
+          NUM_SHARDS: ${{ steps.config.outputs.num_shards }}
           SHA: ${{ steps.source.outputs.sha }}
         run: |
           MANIFEST_DIR="/tmp/run-manifest"
@@ -155,7 +160,8 @@ jobs:
             "dataset_config_id": "${CONFIG_ID}",
             "run_id": "${RUN_ID}",
             "r2_prefix": "${R2_PREFIX}",
-            "num_samples": ${NUM_SAMPLES},
+            "shard_size": ${SHARD_SIZE},
+            "num_shards": ${NUM_SHARDS},
             "commit_sha": "${SHA}",
             "docker_image": "tinaudio/perm:${{ steps.params.outputs.docker_tag }}",
             "event": "${{ github.event_name }}",
