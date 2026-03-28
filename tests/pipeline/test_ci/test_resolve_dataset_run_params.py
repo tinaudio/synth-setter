@@ -145,15 +145,15 @@ class TestPrMode:
 
 
 class TestDispatchMode:
-    """Workflow dispatch uses provided CLI values."""
+    """Workflow dispatch uses provided CLI values and config-derived num_samples."""
 
-    def test_uses_provided_num_samples(
+    def test_num_samples_from_config(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Dispatch mode uses explicitly provided num_samples."""
+        """Dispatch mode derives num_samples from shard_size * num_shards."""
         config_path = _write_config(tmp_path)
         monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
         _set_argv(
@@ -163,8 +163,6 @@ class TestDispatchMode:
                 "workflow_dispatch",
                 "--dataset-config",
                 str(config_path),
-                "--num-samples",
-                "500",
                 "--docker-tag",
                 "dev-snapshot-abc123",
                 "--upload-to-r2",
@@ -175,7 +173,7 @@ class TestDispatchMode:
         main()
 
         fields = _parse_output(capsys.readouterr().out)
-        assert fields["num_samples"] == "500"
+        assert fields["num_samples"] == "480000"
 
     def test_uses_provided_docker_tag(
         self,
@@ -193,8 +191,6 @@ class TestDispatchMode:
                 "workflow_dispatch",
                 "--dataset-config",
                 str(config_path),
-                "--num-samples",
-                "500",
                 "--docker-tag",
                 "dev-snapshot-abc123",
                 "--upload-to-r2",
@@ -223,8 +219,6 @@ class TestDispatchMode:
                 "workflow_dispatch",
                 "--dataset-config",
                 str(config_path),
-                "--num-samples",
-                "500",
                 "--docker-tag",
                 "dev-snapshot-abc123",
                 "--upload-to-r2",
@@ -253,8 +247,6 @@ class TestDispatchMode:
                 "workflow_dispatch",
                 "--dataset-config",
                 str(config_path),
-                "--num-samples",
-                "500",
                 "--docker-tag",
                 "dev-snapshot-abc123",
                 "--upload-to-r2",

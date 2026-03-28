@@ -74,11 +74,12 @@ ______________________________________________________________________
 
 ### MODE=generate_shards env vars
 
-| Variable         | Required | Default         | Purpose                                  |
-| ---------------- | -------- | --------------- | ---------------------------------------- |
-| `DATASET_CONFIG` | Yes      | —               | Path to dataset config YAML in container |
-| `NUM_SAMPLES`    | No       | *(from config)* | Override total sample count              |
-| `OUTPUT_DIR`     | No       | `/output`       | Output directory for generated shards    |
+| Variable         | Required | Default   | Purpose                                  |
+| ---------------- | -------- | --------- | ---------------------------------------- |
+| `DATASET_CONFIG` | Yes      | —         | Path to dataset config YAML in container |
+| `OUTPUT_DIR`     | No       | `/output` | Output directory for generated shards    |
+
+`num_samples` is derived from `shard_size * num_shards` in the dataset config.
 
 ______________________________________________________________________
 

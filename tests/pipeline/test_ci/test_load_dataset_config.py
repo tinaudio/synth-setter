@@ -93,6 +93,7 @@ class TestMainGithubOutput:
         for key, expected in _STATIC_FIELDS.items():
             assert fields[key] == expected, f"Field {key}: {fields[key]!r} != {expected!r}"
 
+        # num_samples = shard_size * num_shards = 10000 * 48
         assert fields["num_samples"] == "480000"
         assert "run_id" in fields
         assert "r2_prefix" in fields
@@ -161,37 +162,20 @@ class TestMainMissingArgs:
 
 
 # ---------------------------------------------------------------------------
-# main — num_samples override
+# main — derived fields
 # ---------------------------------------------------------------------------
 
 
-class TestMainNumSamplesOverride:
-    """--num-samples-override controls the num_samples output field."""
+class TestDerivedFields:
+    """num_samples, run ID, and R2 prefix are derived from config."""
 
-    def test_override_takes_precedence(
+    def test_num_samples_is_shard_size_times_num_shards(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Explicit --num-samples-override replaces shard_size * num_shards."""
-        config_path = _write_config(tmp_path)
-
-        monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-        _set_argv(monkeypatch, ["--config", str(config_path), "--num-samples-override", "42"])
-
-        main()
-
-        fields = _parse_output(capsys.readouterr().out)
-        assert fields["num_samples"] == "42"
-
-    def test_default_computes_shard_size_times_num_shards(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Without override, num_samples = shard_size * num_shards from config."""
+        """num_samples = shard_size * num_shards from config."""
         config_path = _write_config(tmp_path)
 
         monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
@@ -200,17 +184,7 @@ class TestMainNumSamplesOverride:
         main()
 
         fields = _parse_output(capsys.readouterr().out)
-        # 10000 * 48 = 480000
         assert fields["num_samples"] == "480000"
-
-
-# ---------------------------------------------------------------------------
-# main — derived fields
-# ---------------------------------------------------------------------------
-
-
-class TestDerivedFields:
-    """Run ID and R2 prefix are generated correctly."""
 
     def test_run_id_contains_config_id_and_timestamp(
         self,

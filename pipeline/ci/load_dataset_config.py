@@ -15,19 +15,11 @@ def main() -> None:
     """Load dataset config from YAML and write fields to GITHUB_OUTPUT."""
     parser = argparse.ArgumentParser(description="Load dataset config and emit to GITHUB_OUTPUT")
     parser.add_argument("--config", required=True, help="Path to dataset YAML config file")
-    parser.add_argument(
-        "--num-samples-override",
-        type=int,
-        default=None,
-        help="Override total sample count (default: shard_size * num_shards)",
-    )
     args = parser.parse_args()
 
     config_path = Path(args.config)
     cfg = load_dataset_config(config_path)
     config_id = dataset_config_id_from_path(config_path)
-
-    num_samples = args.num_samples_override or (cfg.shard_size * cfg.num_shards)
 
     run_id = make_dataset_wandb_run_id(config_id)
     r2_prefix = make_r2_prefix(config_id, run_id)
@@ -43,7 +35,7 @@ def main() -> None:
         "signal_duration_seconds": cfg.signal_duration_seconds,
         "min_loudness": cfg.min_loudness,
         "sample_batch_size": cfg.sample_batch_size,
-        "num_samples": num_samples,
+        "num_samples": cfg.shard_size * cfg.num_shards,
         "run_id": run_id,
         "r2_prefix": r2_prefix,
     }

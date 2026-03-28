@@ -1,7 +1,8 @@
 """Resolve dataset generation run parameters and write to GITHUB_OUTPUT.
 
-Replaces the shell echo block in the dataset-generation workflow with a testable Python script. All
-values are derived from CLI input or the dataset config — no hardcoded magic numbers.
+All values are derived from CLI input or the dataset config — no hardcoded magic numbers. PR mode
+uses sample_batch_size for num_samples (one batch = minimum smoke test). Dispatch mode uses
+shard_size * num_shards from the config.
 """
 
 from __future__ import annotations
@@ -33,11 +34,6 @@ def _parse_args() -> argparse.Namespace:
         help="Path to dataset config YAML (empty = use default)",
     )
     parser.add_argument(
-        "--num-samples",
-        default="",
-        help="Number of samples override (empty = derive from config)",
-    )
-    parser.add_argument(
         "--docker-tag",
         default="",
         help="Docker image tag (empty = use default)",
@@ -45,7 +41,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--upload-to-r2",
         default="",
-        help="Whether to upload to R2 (empty = derive from event type)",
+        help="Whether to upload to R2: 'true' or 'false' (empty = derive from event type)",
     )
     return parser.parse_args()
 
@@ -53,7 +49,6 @@ def _parse_args() -> argparse.Namespace:
 def resolve_params(
     event_name: str,
     dataset_config: str,
-    num_samples: str,
     docker_tag: str,
     upload_to_r2: str,
 ) -> dict[str, str]:
@@ -62,11 +57,16 @@ def resolve_params(
     For pull_request events: uses sample_batch_size as num_samples (one batch =
     minimum meaningful smoke test), disables R2 upload.
 
-    For workflow_dispatch events: uses provided values with config-derived
-    fallbacks (num_samples = shard_size * num_shards).
+    For workflow_dispatch events: uses shard_size * num_shards from config.
+
+    Raises:
+        ValueError: If upload_to_r2 is not empty, 'true', or 'false'.
     """
     resolved_config = dataset_config or _DEFAULT_DATASET_CONFIG
     cfg = load_dataset_config(Path(resolved_config))
+
+    if upload_to_r2 and upload_to_r2.lower() not in ("true", "false"):
+        raise ValueError(f"upload_to_r2 must be 'true' or 'false', got: {upload_to_r2!r}")
 
     if event_name == "pull_request":
         return {
@@ -76,13 +76,12 @@ def resolve_params(
             "upload_to_r2": "false",
         }
 
-    resolved_num_samples = num_samples or str(cfg.shard_size * cfg.num_shards)
     resolved_docker_tag = docker_tag or _DEFAULT_DOCKER_TAG
-    resolved_upload = upload_to_r2 or "true"
+    resolved_upload = upload_to_r2.lower() if upload_to_r2 else "true"
 
     return {
         "dataset_config": resolved_config,
-        "num_samples": resolved_num_samples,
+        "num_samples": str(cfg.shard_size * cfg.num_shards),
         "docker_tag": resolved_docker_tag,
         "upload_to_r2": resolved_upload,
     }
@@ -95,7 +94,6 @@ def main() -> None:
     fields = resolve_params(
         event_name=args.event_name,
         dataset_config=args.dataset_config,
-        num_samples=args.num_samples,
         docker_tag=args.docker_tag,
         upload_to_r2=args.upload_to_r2,
     )

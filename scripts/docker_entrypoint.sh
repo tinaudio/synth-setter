@@ -21,10 +21,11 @@
 #   MODE=generate_shards
 #     Generates a VST dataset shard via generate_vst_dataset.py under headless X11.
 #     Reads config from DATASET_CONFIG env var (required, path to YAML).
-#     Optional: NUM_SAMPLES (override), OUTPUT_DIR (default: /output).
+#     num_samples is derived from shard_size * num_shards in the config.
+#     Optional: OUTPUT_DIR (default: /output).
 #       docker run -e MODE=generate_shards \
 #         -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
-#         -e NUM_SAMPLES=10 -e OUTPUT_DIR=/output \
+#         -e OUTPUT_DIR=/output \
 #         -v /tmp/output:/output <image>
 #
 # Examples:

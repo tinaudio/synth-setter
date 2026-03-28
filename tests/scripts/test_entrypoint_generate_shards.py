@@ -32,10 +32,11 @@ _COMPLETE_CONFIG = {
 }
 
 
-def _write_config(tmp_path: Path) -> Path:
+def _write_config(tmp_path: Path, overrides: dict | None = None) -> Path:
     """Write a complete dataset config YAML and return its path."""
+    data = {**_COMPLETE_CONFIG, **(overrides or {})}
     config_path = tmp_path / "test-dataset.yaml"
-    config_path.write_text(yaml.safe_dump(_COMPLETE_CONFIG, sort_keys=False))
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False))
     return config_path
 
 
@@ -54,26 +55,16 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(config_path, output_dir=output_dir)
 
-        # Second arg (after python executable) is the script, third is output file
         output_file = args[2]
         assert output_file == str(output_dir / "test-dataset.hdf5")
 
     def test_num_samples_from_config(self, tmp_path: Path) -> None:
-        """Without override, num_samples = shard_size * num_shards."""
+        """num_samples = shard_size * num_shards from config."""
         config_path = _write_config(tmp_path)
 
         args = build_generate_args(config_path, output_dir=tmp_path)
 
-        # Fourth arg is num_samples
         assert args[3] == "480000"
-
-    def test_num_samples_override(self, tmp_path: Path) -> None:
-        """Explicit override replaces computed num_samples."""
-        config_path = _write_config(tmp_path)
-
-        args = build_generate_args(config_path, num_samples_override=42, output_dir=tmp_path)
-
-        assert args[3] == "42"
 
     def test_config_fields_passed_as_options(self, tmp_path: Path) -> None:
         """All config fields are passed as CLI options."""
@@ -81,7 +72,6 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(config_path, output_dir=tmp_path)
 
-        # Convert to dict of --flag value pairs for easier assertion
         option_args = {}
         i = 4  # Skip: python, script, output_file, num_samples
         while i < len(args):
@@ -112,17 +102,32 @@ class TestBuildGenerateArgs:
 
 
 # ---------------------------------------------------------------------------
+# build_generate_args — output_format validation
+# ---------------------------------------------------------------------------
+
+
+class TestOutputFormatValidation:
+    """build_generate_args() rejects non-hdf5 output formats."""
+
+    def test_wds_output_format_raises(self, tmp_path: Path) -> None:
+        """output_format 'wds' raises ValueError since only hdf5 is supported."""
+        config_path = _write_config(tmp_path, overrides={"output_format": "wds"})
+
+        with pytest.raises(ValueError, match="only supports hdf5"):
+            build_generate_args(config_path, output_dir=tmp_path)
+
+
+# ---------------------------------------------------------------------------
 # main — env var reading
 # ---------------------------------------------------------------------------
 
 
 class TestMainEnvVars:
-    """Main() reads DATASET_CONFIG, NUM_SAMPLES, OUTPUT_DIR from environment."""
+    """Main() reads DATASET_CONFIG and OUTPUT_DIR from environment."""
 
     def test_missing_dataset_config_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Missing DATASET_CONFIG env var raises KeyError."""
         monkeypatch.delenv("DATASET_CONFIG", raising=False)
-        monkeypatch.delenv("NUM_SAMPLES", raising=False)
         monkeypatch.delenv("OUTPUT_DIR", raising=False)
 
         from scripts.entrypoint_generate_shards import main

@@ -182,20 +182,21 @@ docker run --rm -e MODE=passthrough synth-setter:dev-snapshot
 ### MODE=generate_shards — VST dataset generation
 
 Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
-(Xvfb). The helper script `scripts/entrypoint_generate_shards.py` handles
-X11 setup and dataset config loading.
+(Xvfb). X11 bootstrapping (Xvfb/dbus/xsettings) is handled by
+`scripts/run-linux-vst-headless.sh` (invoked from the Docker entrypoint);
+the helper script `scripts/entrypoint_generate_shards.py` reads env/config
+and invokes `generate_vst_dataset.py` with the resolved dataset config.
+`num_samples` is derived from `shard_size * num_shards` in the config.
 
-| Env var          | Required | Default         | Purpose                                  |
-| ---------------- | -------- | --------------- | ---------------------------------------- |
-| `DATASET_CONFIG` | Yes      | —               | Path to dataset config YAML in container |
-| `NUM_SAMPLES`    | No       | *(from config)* | Override total sample count              |
-| `OUTPUT_DIR`     | No       | `/output`       | Output directory for generated shards    |
+| Env var          | Required | Default   | Purpose                                  |
+| ---------------- | -------- | --------- | ---------------------------------------- |
+| `DATASET_CONFIG` | Yes      | —         | Path to dataset config YAML in container |
+| `OUTPUT_DIR`     | No       | `/output` | Output directory for generated shards    |
 
 ```bash
 docker run --rm \
   -e MODE=generate_shards \
-  -e DATASET_CONFIG=/home/build/synth-setter/configs/dataset/my_dataset.yaml \
-  -e NUM_SAMPLES=1000 \
+  -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
   -v "$(pwd)/output:/output" \
   synth-setter:dev-snapshot
 ```

@@ -4,8 +4,8 @@ name: Dataset Generation
 # generate_vst_dataset.py, then optionally uploads to R2.
 #
 # Triggers:
-# - Manual dispatch: configurable generation with sample count override
-# - Pull request (dataset-related paths): small validation run (one sample_batch_size)
+# - Manual dispatch: full generation from config, optional R2 upload
+# - Pull request (dataset-related paths): smoke test (one sample_batch_size from config)
 
 on:
   workflow_dispatch:
@@ -14,10 +14,6 @@ on:
         description: "Path to dataset config YAML (under configs/dataset/)"
         required: true
         default: "configs/dataset/surge-simple-480k-10k.yaml"
-      num_samples:
-        description: "Number of samples to generate (overrides config's shard_size * num_shards)"
-        required: false
-        default: ""
       docker_image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -68,20 +64,15 @@ jobs:
           PYTHONPATH=. python scripts/ci/resolve_dataset_run_params.py \
             --event-name "${{ github.event_name }}" \
             --dataset-config "${{ github.event.inputs.dataset_config || '' }}" \
-            --num-samples "${{ github.event.inputs.num_samples || '' }}" \
             --docker-tag "${{ github.event.inputs.docker_image_tag || '' }}" \
             --upload-to-r2 "${{ github.event.inputs.upload_to_r2 || '' }}"
 
       - name: Load dataset config
         id: config
         run: |
-          ARGS="--config ${{ steps.params.outputs.dataset_config }}"
-          OVERRIDE="${{ steps.params.outputs.num_samples }}"
-          if [ -n "$OVERRIDE" ]; then
-            ARGS="$ARGS --num-samples-override $OVERRIDE"
-          fi
           # TODO(#323): PYTHONPATH=. needed because scripts/ is not an installable package
-          PYTHONPATH=. python scripts/ci/load_dataset_config.py $ARGS
+          PYTHONPATH=. python scripts/ci/load_dataset_config.py \
+            --config "${{ steps.params.outputs.dataset_config }}"
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -99,13 +90,13 @@ jobs:
         env:
           IMAGE: tinaudio/perm:${{ steps.params.outputs.docker_tag }}
         run: |
+          set -o pipefail
           OUTPUT_DIR="/tmp/dataset-output"
           mkdir -p "$OUTPUT_DIR"
 
           docker run --rm \
             -e MODE=generate_shards \
             -e DATASET_CONFIG="${{ steps.params.outputs.dataset_config }}" \
-            -e NUM_SAMPLES="${{ steps.config.outputs.num_samples }}" \
             -e OUTPUT_DIR=/output \
             -v "${OUTPUT_DIR}:/output" \
             "$IMAGE" \
