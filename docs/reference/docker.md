@@ -179,14 +179,15 @@ docker run --rm -e MODE=passthrough synth-setter:dev-snapshot \
 docker run --rm -e MODE=passthrough synth-setter:dev-snapshot
 ```
 
-### MODE=generate_shards — VST dataset generation
+### MODE=generate_dataset — VST dataset generation
 
 Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
 (Xvfb). X11 bootstrapping (Xvfb/dbus/xsettings) is handled by
 `scripts/run-linux-vst-headless.sh` (invoked from the Docker entrypoint);
-the helper script `scripts/entrypoint_generate_shards.py` reads env/config
+the helper script `scripts/entrypoint_generate_dataset.py` reads env/config
 and invokes `generate_vst_dataset.py` with the resolved dataset config.
-`num_samples` is derived from `shard_size * num_shards` in the config.
+The entrypoint generates `shard_size` samples (one shard per invocation).
+Multi-shard generation (`num_shards > 1`) raises `NotImplementedError`.
 
 | Env var          | Required | Default   | Purpose                                  |
 | ---------------- | -------- | --------- | ---------------------------------------- |
@@ -195,23 +196,23 @@ and invokes `generate_vst_dataset.py` with the resolved dataset config.
 
 ```bash
 docker run --rm \
-  -e MODE=generate_shards \
+  -e MODE=generate_dataset \
   -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
   -v "$(pwd)/output:/output" \
   synth-setter:dev-snapshot
 ```
 
-### Workflow artifact bundle (generate_shards)
+### Workflow artifact bundle (generate_dataset)
 
 When the dataset generation workflow runs, it uploads an artifact bundle named
 `run-manifest-{config_id}` (e.g., `run-manifest-surge-simple-480k-10k`). The
 bundle contains three files:
 
-| File                | Contents                                                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `<config_id>.yaml`  | Copy of the dataset config YAML used for the run                                                                                |
-| `run-manifest.json` | Run metadata: `dataset_config_id`, `run_id`, `r2_prefix`, `num_samples`, `commit_sha`, `docker_image`, `event`, `upload_status` |
-| `generate.log`      | Full container stdout/stderr from generation                                                                                    |
+| File                | Contents                                                                                                                                     |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<config_id>.yaml`  | Copy of the dataset config YAML used for the run                                                                                             |
+| `run-manifest.json` | Run metadata: `dataset_config_id`, `run_id`, `r2_prefix`, `shard_size`, `num_shards`, `commit_sha`, `docker_image`, `event`, `upload_status` |
+| `generate.log`      | Full container stdout/stderr from generation                                                                                                 |
 
 **Download:**
 
@@ -363,10 +364,10 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 
 ### Entrypoint errors
 
-| Error              | Cause                | Fix                                                                     |
-| ------------------ | -------------------- | ----------------------------------------------------------------------- |
-| `MODE is required` | MODE env var not set | Add `-e MODE=idle`, `-e MODE=passthrough`, or `-e MODE=generate_shards` |
-| `unknown MODE 'X'` | Typo in MODE value   | Use `idle`, `passthrough`, or `generate_shards`                         |
+| Error              | Cause                | Fix                                                                      |
+| ------------------ | -------------------- | ------------------------------------------------------------------------ |
+| `MODE is required` | MODE env var not set | Add `-e MODE=idle`, `-e MODE=passthrough`, or `-e MODE=generate_dataset` |
+| `unknown MODE 'X'` | Typo in MODE value   | Use `idle`, `passthrough`, or `generate_dataset`                         |
 
 ______________________________________________________________________
 
