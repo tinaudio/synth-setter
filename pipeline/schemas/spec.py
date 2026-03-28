@@ -19,7 +19,7 @@ from src.data.vst import param_specs
 _MEL_BINS = 128
 _MEL_FRAMES = 401
 
-_EXPECTED_HDF5_DATASETS = ["audio", "mel_spec", "param_array"]
+_EXPECTED_HDF5_DATASETS = ("audio", "mel_spec", "param_array")
 
 
 class ShardSpec(BaseModel):
@@ -38,7 +38,7 @@ class ShardSpec(BaseModel):
     seed: int
     row_start: int
     row_count: int
-    expected_datasets: list[str]
+    expected_datasets: tuple[str, ...]
     audio_shape: tuple[int, int]
     mel_shape: tuple[int, int]
     param_shape: tuple[int]
@@ -50,7 +50,7 @@ class PipelineSpec(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     run_id: str
-    created_at: str  # ISO 8601 UTC
+    created_at: datetime  # UTC, timezone-aware
     code_version: str  # git commit SHA
     is_repo_dirty: bool
     param_spec: str
@@ -61,7 +61,7 @@ class PipelineSpec(BaseModel):
     num_shards: int
     base_seed: int
     splits: SplitsConfig
-    shards: list[ShardSpec]
+    shards: tuple[ShardSpec, ...]
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -136,28 +136,31 @@ def _build_pipeline_spec(
 
     This is the pure functional core — no I/O, no side effects.
     """
+    if config.output_format != "hdf5":
+        raise NotImplementedError(f"Output format {config.output_format!r} not yet supported")
+
     run_id = make_dataset_wandb_run_id(config_id, timestamp=created_at)
     num_params = len(param_specs[config.param_spec])
     audio_shape = (config.channels, int(config.sample_rate * config.signal_duration_seconds))
 
-    shards = [
+    shards = tuple(
         ShardSpec(
             shard_id=i,
             filename=f"shard-{i:06d}.h5",
             seed=config.base_seed + i,
             row_start=i * config.shard_size,
             row_count=config.shard_size,
-            expected_datasets=list(_EXPECTED_HDF5_DATASETS),
+            expected_datasets=tuple(_EXPECTED_HDF5_DATASETS),
             audio_shape=audio_shape,
             mel_shape=(_MEL_BINS, _MEL_FRAMES),
             param_shape=(num_params,),
         )
         for i in range(config.num_shards)
-    ]
+    )
 
     return PipelineSpec(
         run_id=run_id,
-        created_at=created_at.isoformat(),
+        created_at=created_at,
         code_version=code_version,
         is_repo_dirty=is_repo_dirty,
         param_spec=config.param_spec,

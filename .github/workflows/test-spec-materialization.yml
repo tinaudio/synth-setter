@@ -12,6 +12,10 @@ on:
     branches: [main]
     paths:
       - "pipeline/schemas/spec.py"
+      - "pipeline/schemas/config.py"
+      - "pipeline/schemas/prefix.py"
+      - "tests/pipeline/test_schemas/test_spec.py"
+      - "tests/pipeline/fixtures/**"
 
 jobs:
   test-spec-linux:

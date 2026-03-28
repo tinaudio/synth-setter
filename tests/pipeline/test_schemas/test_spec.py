@@ -59,7 +59,7 @@ class TestShardSpec:
             seed=42,
             row_start=0,
             row_count=100,
-            expected_datasets=["audio", "mel_spec", "param_array"],
+            expected_datasets=("audio", "mel_spec", "param_array"),
             audio_shape=(2, 64000),
             mel_shape=(128, 401),
             param_shape=(92,),
@@ -105,7 +105,7 @@ class TestPipelineSpec:
         """Extra fields on PipelineSpec raise ValidationError."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
-            "created_at": "2026-03-28T12:00:00+00:00",
+            "created_at": FIXED_NOW,
             "code_version": "abc123",
             "is_repo_dirty": False,
             "param_spec": "surge_simple",
@@ -116,7 +116,7 @@ class TestPipelineSpec:
             "num_shards": 1,
             "base_seed": 42,
             "splits": SplitsConfig(train=1, val=0, test=0),
-            "shards": [],
+            "shards": (),
             "extra_field": "oops",
         }
         with pytest.raises(ValidationError):
@@ -126,7 +126,7 @@ class TestPipelineSpec:
         """Invalid output_format literal raises ValidationError."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
-            "created_at": "2026-03-28T12:00:00+00:00",
+            "created_at": FIXED_NOW,
             "code_version": "abc123",
             "is_repo_dirty": False,
             "param_spec": "surge_simple",
@@ -137,7 +137,7 @@ class TestPipelineSpec:
             "num_shards": 1,
             "base_seed": 42,
             "splits": SplitsConfig(train=1, val=0, test=0),
-            "shards": [],
+            "shards": (),
         }
         with pytest.raises(ValidationError):
             PipelineSpec(**kwargs)
@@ -206,7 +206,7 @@ class TestMaterializeSpec:
         spec = materialize_spec(config, config_id)
 
         assert spec.run_id == "ci-smoke-test-20260328T120000Z"
-        assert spec.created_at == "2026-03-28T12:00:00+00:00"
+        assert spec.created_at == FIXED_NOW
         assert spec.code_version == "abc123def456"
         assert spec.is_repo_dirty is False
         assert spec.renderer_version == "1.3.4"
@@ -227,7 +227,7 @@ class TestMaterializeSpec:
         assert shard.row_count == 10000
         assert shard.audio_shape == (2, 64000)
         assert shard.mel_shape == (128, 401)
-        assert shard.expected_datasets == ["audio", "mel_spec", "param_array"]
+        assert shard.expected_datasets == ("audio", "mel_spec", "param_array")
 
     def test_multi_shard_seeds_are_base_plus_shard_id(
         self, patch_materialize_io: Path, valid_config_dict: dict
@@ -324,7 +324,7 @@ class TestMaterializeSpec:
         spec = materialize_spec(config, config_id)
 
         for shard in spec.shards:
-            assert shard.expected_datasets == ["audio", "mel_spec", "param_array"]
+            assert shard.expected_datasets == ("audio", "mel_spec", "param_array")
 
     def test_json_round_trip_preserves_all_fields(
         self, patch_materialize_io: Path, valid_config_dict: dict
@@ -357,7 +357,7 @@ class TestMaterializeSpec:
     def test_created_at_is_utc_iso_format(
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
-        """created_at is ISO 8601 UTC with zero offset."""
+        """created_at is a timezone-aware UTC datetime."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
         valid_config_dict["num_shards"] = 1
         valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
@@ -365,9 +365,8 @@ class TestMaterializeSpec:
         config_id = DatasetConfigId("ci-smoke-test")
         spec = materialize_spec(config, config_id)
 
-        parsed = datetime.fromisoformat(spec.created_at)
-        assert parsed.tzinfo is not None
-        offset = parsed.utcoffset()
+        assert spec.created_at.tzinfo is not None
+        offset = spec.created_at.utcoffset()
         assert offset is not None
         assert offset.total_seconds() == 0
 
@@ -443,6 +442,19 @@ class TestMaterializeSpec:
         with pytest.raises(FileNotFoundError):
             materialize_spec(config, config_id)
 
+    def test_wds_output_format_raises_not_implemented(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """WDS output format is not yet supported."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["output_format"] = "wds"
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        with pytest.raises(NotImplementedError, match="wds"):
+            materialize_spec(config, config_id)
+
 
 class TestMaterializeSpecIntegration:
     """Integration test with real I/O, no mocks."""
@@ -462,7 +474,7 @@ class TestMaterializeSpecIntegration:
         assert re.fullmatch(r"[0-9a-f]{40}", spec.code_version)
         assert isinstance(spec.is_repo_dirty, bool)
         assert spec.renderer_version == "1.0.0-test"
-        datetime.fromisoformat(spec.created_at)
+        assert spec.created_at.tzinfo is not None
         assert spec.run_id.startswith("integration-test-")
         assert spec.num_shards == 1
         assert len(spec.shards) == 1
