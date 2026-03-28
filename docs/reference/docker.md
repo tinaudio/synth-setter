@@ -201,6 +201,39 @@ docker run --rm \
   synth-setter:dev-snapshot
 ```
 
+### Workflow artifact bundle (generate_shards)
+
+When the dataset generation workflow runs, it uploads an artifact bundle named
+`run-manifest-{config_id}` (e.g., `run-manifest-surge-simple-480k-10k`). The
+bundle contains three files:
+
+| File                | Contents                                                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `<config_id>.yaml`  | Copy of the dataset config YAML used for the run                                                                                |
+| `run-manifest.json` | Run metadata: `dataset_config_id`, `run_id`, `r2_prefix`, `num_samples`, `commit_sha`, `docker_image`, `event`, `upload_status` |
+| `generate.log`      | Full container stdout/stderr from generation                                                                                    |
+
+**Download:**
+
+```bash
+gh run download <run_id> -n run-manifest-surge-simple-480k-10k
+```
+
+**Inspect:**
+
+```bash
+# View all metadata
+jq . run-manifest.json
+
+# Check how many samples were generated
+grep -c "Saving sample" generate.log
+
+# Find the R2 location for this run
+jq .r2_prefix run-manifest.json
+```
+
+**Retention:** 7 days (GitHub Actions default).
+
 ### Volume mounting (dev-live)
 
 dev-live has no baked source or `docker_entrypoint.sh`. Mount your working
