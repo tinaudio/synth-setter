@@ -34,8 +34,9 @@ def main() -> None:
         "velocity": cfg.velocity,
         "signal_duration_seconds": cfg.signal_duration_seconds,
         "min_loudness": cfg.min_loudness,
+        "shard_size": cfg.shard_size,
+        "num_shards": cfg.num_shards,
         "sample_batch_size": cfg.sample_batch_size,
-        "num_samples": cfg.shard_size * cfg.num_shards,
         "run_id": run_id,
         "r2_prefix": r2_prefix,
     }

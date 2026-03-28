@@ -43,6 +43,8 @@ _STATIC_FIELDS = {
     "velocity": "100",
     "signal_duration_seconds": "4.0",
     "min_loudness": "-55.0",
+    "shard_size": "10000",
+    "num_shards": "48",
     "sample_batch_size": "32",
 }
 
@@ -93,8 +95,7 @@ class TestMainGithubOutput:
         for key, expected in _STATIC_FIELDS.items():
             assert fields[key] == expected, f"Field {key}: {fields[key]!r} != {expected!r}"
 
-        # num_samples = shard_size * num_shards = 10000 * 48
-        assert fields["num_samples"] == "480000"
+        assert "num_samples" not in fields
         assert "run_id" in fields
         assert "r2_prefix" in fields
         assert fields["r2_prefix"].startswith("data/test-dataset/")
@@ -169,13 +170,13 @@ class TestMainMissingArgs:
 class TestDerivedFields:
     """num_samples, run ID, and R2 prefix are derived from config."""
 
-    def test_num_samples_is_shard_size_times_num_shards(
+    def test_shard_size_and_num_shards_emitted(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """num_samples = shard_size * num_shards from config."""
+        """shard_size and num_shards are emitted as separate fields."""
         config_path = _write_config(tmp_path)
 
         monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
@@ -184,7 +185,9 @@ class TestDerivedFields:
         main()
 
         fields = _parse_output(capsys.readouterr().out)
-        assert fields["num_samples"] == "480000"
+        assert fields["shard_size"] == "10000"
+        assert fields["num_shards"] == "48"
+        assert "num_samples" not in fields
 
     def test_run_id_contains_config_id_and_timestamp(
         self,
