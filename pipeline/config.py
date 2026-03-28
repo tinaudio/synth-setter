@@ -69,10 +69,12 @@ class DatasetConfig(BaseModel):
 
 def load_dataset_config(config_path: Path) -> DatasetConfig:
     """Load and validate a dataset generation config from a YAML file."""
-    if not config_path.exists():
+    if not config_path.is_file():
         raise FileNotFoundError(f"Config file not found: {config_path}")
     with open(config_path) as f:
         raw = yaml.safe_load(f)
+    if not isinstance(raw, dict):
+        raise TypeError(f"Expected a YAML mapping in {config_path}, got {type(raw).__name__}")
     return DatasetConfig(**raw)
 
 

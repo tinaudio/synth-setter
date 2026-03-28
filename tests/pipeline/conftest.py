@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,7 @@ VALID_CONFIG = {
 @pytest.fixture()
 def valid_config_dict() -> dict:
     """Return a fresh copy of the valid config dict for mutation in tests."""
-    return VALID_CONFIG.copy()
+    return copy.deepcopy(VALID_CONFIG)
 
 
 @pytest.fixture()
@@ -38,7 +39,7 @@ def write_config_yaml(tmp_path: Path):
         if overrides:
             data.update(overrides)
         path = tmp_path / "test-config.yaml"
-        path.write_text(yaml.dump(data))
+        path.write_text(yaml.safe_dump(data, sort_keys=False))
         return path
 
     return _write

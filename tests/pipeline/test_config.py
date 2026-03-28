@@ -40,6 +40,25 @@ class TestLoadDatasetConfig:
         with pytest.raises(FileNotFoundError, match="Config file not found"):
             load_dataset_config(missing)
 
+    def test_load_dataset_config_directory_path_raises_file_not_found(self, tmp_path):
+        """Passing a directory (not a file) raises FileNotFoundError, not IsADirectoryError."""
+        with pytest.raises(FileNotFoundError, match="Config file not found"):
+            load_dataset_config(tmp_path)
+
+    def test_load_dataset_config_empty_yaml_raises_type_error(self, tmp_path):
+        """Empty YAML file raises TypeError mentioning the file path."""
+        empty = tmp_path / "empty.yaml"
+        empty.write_text("")
+        with pytest.raises(TypeError, match=str(empty)):
+            load_dataset_config(empty)
+
+    def test_load_dataset_config_non_mapping_yaml_raises_type_error(self, tmp_path):
+        """YAML containing a list (not a mapping) raises TypeError mentioning the file path."""
+        list_yaml = tmp_path / "list.yaml"
+        list_yaml.write_text("- item1\n- item2\n")
+        with pytest.raises(TypeError, match=str(tmp_path)):
+            load_dataset_config(list_yaml)
+
     def test_load_dataset_config_invalid_yaml_raises(self, tmp_path):
         """Malformed YAML raises an exception during parsing."""
         bad_yaml = tmp_path / "bad.yaml"
@@ -122,3 +141,20 @@ class TestDatasetConfigRoundTrip:
         json_str = original.model_dump_json()
         restored = DatasetConfig.model_validate_json(json_str)
         assert original == restored
+
+
+class TestConftestFixtureIsolation:
+    """Tests verifying that conftest fixtures provide isolated copies."""
+
+    def test_valid_config_dict_fixture_isolates_nested_mutations(self, valid_config_dict):
+        """Mutating nested 'splits' in fixture copy must not corrupt the module-level
+        VALID_CONFIG."""
+        from tests.pipeline.conftest import VALID_CONFIG
+
+        # Mutate the nested splits dict in-place
+        valid_config_dict["splits"]["train"] = 9999
+
+        # The module-level constant should be unaffected
+        assert VALID_CONFIG["splits"]["train"] == 44, (
+            "Shallow copy leaked: mutating fixture's nested dict corrupted VALID_CONFIG"
+        )

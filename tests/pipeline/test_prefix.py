@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from pipeline.prefix import make_dataset_wandb_run_id, make_r2_prefix
+
+FIXED_NOW = datetime(2026, 6, 15, 12, 30, 45, tzinfo=timezone.utc)
 
 
 class TestMakeDatasetWandbRunId:
@@ -14,12 +17,14 @@ class TestMakeDatasetWandbRunId:
         result = make_dataset_wandb_run_id("surge-simple-480k-10k", timestamp=ts)
         assert result == "surge-simple-480k-10k-20260313T100000Z"
 
-    def test_make_run_id_default_timestamp_is_utc(self):
-        """Default (no timestamp) produces an ID ending with Z containing today's date."""
+    @patch("pipeline.prefix.datetime")
+    def test_make_run_id_default_timestamp_is_utc(self, mock_datetime):
+        """Default (no timestamp) uses datetime.now(UTC) and produces the expected ID."""
+        mock_datetime.now.return_value = FIXED_NOW
+        mock_datetime.side_effect = lambda *a, **kw: datetime(*a, **kw)
         result = make_dataset_wandb_run_id("test-config")
-        assert result.endswith("Z")
-        today = datetime.now(timezone.utc).strftime("%Y%m%d")
-        assert today in result
+        mock_datetime.now.assert_called_once_with(timezone.utc)
+        assert result == "test-config-20260615T123045Z"
 
     def test_make_run_id_rejects_naive_timestamp(self):
         """Naive datetime (no tzinfo) raises ValueError."""
