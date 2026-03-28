@@ -219,6 +219,7 @@ repos:
         args: ["--number"]
         exclude: >-
           (?x)^(
+            CHANGELOG\.md|
             README\.md|
             \.claude/.*
           )$
@@ -233,6 +234,7 @@ repos:
       - id: codespell
         exclude: >-
           (?x)^(
+            CHANGELOG\.md|
             src/models/ksin_flow_matching_module\.py|
             \.claude/.*
           )$
