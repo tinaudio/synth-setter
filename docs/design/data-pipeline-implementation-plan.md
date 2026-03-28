@@ -235,14 +235,14 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 **Files to create:**
 
 - `pipeline/__init__.py`
-- `pipeline/schemas.py` — `RunConfig`, `PipelineSpec`, `ShardSpec`, `WorkerReport`, `ShardResult`, `DatasetCard`, `ValidationSummary`, `Sample`
+- `pipeline/schemas/` — Pydantic models split across submodules: `config.py` (`DatasetConfig`, `SplitsConfig`, load/ID helpers), `spec.py` (`PipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass)
 - `configs/dataset/surge-simple-480k-10k.yaml` — sample config (filename = `dataset_config_id`)
 - `tests/pipeline/__init__.py`
-- `tests/pipeline/test_schemas.py`
+- `tests/pipeline/test_schemas/`
 
 **Key behaviors:**
 
-- `RunConfig` (Pydantic strict): validates raw YAML input. Fields match config schema (§4).
+- `DatasetConfig` (Pydantic strict): validates raw YAML input. Fields match config schema (§4).
   `output_format` defaults to `"hdf5"` if missing from config.
 - `PipelineSpec` (frozen, strict): `dataset_config_id`, `dataset_wandb_run_id` (maps to
   `run_id` in code), `created_at`, `code_version`, `is_repo_dirty`,
@@ -269,7 +269,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   (per-shard `{shard_id, filename, content_hash}`), `input_spec_sha256`, `input_spec_path`.
 - Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
   `dataset_config_id` is the config filename stem, which encodes runtime params for readability.
-- `materialize_spec(config: RunConfig, timestamp=None, renderer_version=None) -> PipelineSpec`.
+- `materialize_spec(config: DatasetConfig, timestamp=None, renderer_version=None) -> PipelineSpec`.
   Optional `renderer_version` override for testing; test fixtures pass `"test-1.0"` explicitly.
 
 **Design doc schema gaps to fix alongside this task:**
@@ -301,7 +301,7 @@ def test_spec_materialization_end_to_end(tmp_path):
         "min_loudness": -55.0, "sample_batch_size": 32,
     }
     fixed_ts = datetime(2026, 3, 15, 12, 0, 0, tzinfo=timezone.utc)
-    spec = materialize_spec(RunConfig(**config), timestamp=fixed_ts)
+    spec = materialize_spec(DatasetConfig(**config), timestamp=fixed_ts)
     spec2 = PipelineSpec.model_validate_json(spec.model_dump_json())
 
     assert len(spec2.shards) == 10
@@ -311,7 +311,7 @@ def test_spec_materialization_end_to_end(tmp_path):
     assert spec2.shards[5].seed == 47
     assert spec2.output_format == "hdf5"
     assert sum(s.row_count for s in spec2.shards) == 10_000
-    assert materialize_spec(RunConfig(**config), timestamp=fixed_ts).model_dump() == spec2.model_dump()
+    assert materialize_spec(DatasetConfig(**config), timestamp=fixed_ts).model_dump() == spec2.model_dump()
 ```
 
 ______________________________________________________________________

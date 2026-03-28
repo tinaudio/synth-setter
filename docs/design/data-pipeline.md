@@ -1186,6 +1186,14 @@ This section covers how the design is realized — specific libraries, configura
 Schema for the frozen input specification described in [§7.1](#71-storage-as-the-source-of-truth) and [§6 artifact taxonomy](#artifact-taxonomy).
 
 ```python
+class SplitsConfig(BaseModel):
+    """Train/val/test shard counts."""
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    train: int
+    val: int
+    test: int
+
 class ShardSpec(BaseModel):
     model_config = ConfigDict(strict=True)
 
@@ -1212,7 +1220,7 @@ class PipelineSpec(BaseModel):
     sample_rate: int
     shard_size: int
     num_shards: int
-    splits: dict[str, int]  # {"train": 44, "val": 2, "test": 2} (shard counts, not sample counts)
+    splits: SplitsConfig  # shard counts per split
     shards: list[ShardSpec]
 ```
 
@@ -1242,7 +1250,7 @@ class DatasetCard(BaseModel):
 
     # Structure
     total_samples: int
-    splits: dict[str, int]  # {"train": 440000, "val": 20000, "test": 20000}
+    splits: SplitsConfig  # sample counts per split
     stats: dict[str, float]
 
     # Integrity
@@ -1332,7 +1340,7 @@ splits:
 
 On first `generate`:
 
-1. Load YAML, validate against Pydantic `RunConfig` (strict mode)
+1. Load YAML, validate against Pydantic `DatasetConfig` (strict mode)
 2. Extract `renderer_version` from the plugin bundle (`CFBundleShortVersionString` from `Info.plist` on macOS, `Version` from `moduleinfo.json` on Linux)
 3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`
 4. Materialize `PipelineSpec` — expand config into shard-level spec (seeds, shapes, row ranges)
@@ -1372,7 +1380,13 @@ pipeline/
 
   storage.py            # R2 operations (list, upload, download, quarantine)
   reconcile.py          # Read spec, validate shards, compute missing set
-  schemas.py            # Pydantic models (PipelineSpec, WorkerReport, DatasetCard)
+  schemas/              # Pydantic models
+    __init__.py
+    config.py           # DatasetConfig, SplitsConfig, load/ID helpers
+    spec.py             # PipelineSpec, ShardSpec, materialize_spec
+    report.py           # WorkerReport, ShardResult
+    card.py             # DatasetCard, ValidationSummary
+    sample.py           # Sample dataclass (HDF5→WDS transcoding)
   validation.py         # Shard validation (structural, shape, value, row count)
   retry.py              # Centralized tenacity retry policy
   logging_config.py     # structlog configuration
