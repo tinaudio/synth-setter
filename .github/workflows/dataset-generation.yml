@@ -1,0 +1,194 @@
+name: Dataset Generation
+
+# Generates a VST dataset shard inside the Docker container using
+# generate_vst_dataset.py, then optionally uploads to R2.
+#
+# Triggers:
+# - Manual dispatch: configurable generation with sample count override
+# - Pull request (dataset-related paths): small 10-sample validation run
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_config:
+        description: "Path to dataset config YAML (under configs/dataset/)"
+        required: true
+        default: "configs/dataset/surge-simple-480k-10k.yaml"
+      num_samples:
+        description: "Number of samples to generate (overrides config's shard_size * num_shards)"
+        required: false
+        default: ""
+      docker_image_tag:
+        description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+      upload_to_r2:
+        description: "Upload generated HDF5 to R2 after generation"
+        required: true
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - "src/data/vst/**"
+      - "pipeline/schemas/config.py"
+      - "pipeline/schemas/prefix.py"
+      - "configs/dataset/**"
+      - "scripts/ci/load_dataset_config.py"
+      - "scripts/entrypoint_generate_shards.py"
+      - "scripts/docker_entrypoint.sh"
+      - ".github/workflows/dataset-generation.yml"
+
+jobs:
+  generate-dataset:
+    name: Generate VST dataset
+    runs-on: ubuntu-latest-4core
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Resolve checked-out commit SHA
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install config dependencies
+        run: pip install pyyaml pydantic
+
+      - name: Determine run parameters
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "num_samples_override=10" >> "$GITHUB_OUTPUT"
+            echo "upload_to_r2=false" >> "$GITHUB_OUTPUT"
+            echo "docker_tag=dev-snapshot" >> "$GITHUB_OUTPUT"
+            echo "dataset_config=configs/dataset/surge-simple-480k-10k.yaml" >> "$GITHUB_OUTPUT"
+          else
+            echo "num_samples_override=${{ github.event.inputs.num_samples }}" >> "$GITHUB_OUTPUT"
+            echo "upload_to_r2=${{ github.event.inputs.upload_to_r2 }}" >> "$GITHUB_OUTPUT"
+            echo "docker_tag=${{ github.event.inputs.docker_image_tag }}" >> "$GITHUB_OUTPUT"
+            echo "dataset_config=${{ github.event.inputs.dataset_config }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Load dataset config
+        id: config
+        run: |
+          ARGS="--config ${{ steps.params.outputs.dataset_config }}"
+          OVERRIDE="${{ steps.params.outputs.num_samples_override }}"
+          if [ -n "$OVERRIDE" ]; then
+            ARGS="$ARGS --num-samples-override $OVERRIDE"
+          fi
+          # TODO(#323): PYTHONPATH=. needed because scripts/ is not an installable package
+          PYTHONPATH=. python scripts/ci/load_dataset_config.py $ARGS
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull Docker image
+        env:
+          IMAGE: tinaudio/perm:${{ steps.params.outputs.docker_tag }}
+        run: docker pull "$IMAGE"
+
+      - name: Generate dataset
+        id: generate
+        env:
+          IMAGE: tinaudio/perm:${{ steps.params.outputs.docker_tag }}
+        run: |
+          OUTPUT_DIR="/tmp/dataset-output"
+          mkdir -p "$OUTPUT_DIR"
+
+          docker run --rm \
+            -e MODE=generate_shards \
+            -e DATASET_CONFIG="${{ steps.params.outputs.dataset_config }}" \
+            -e NUM_SAMPLES="${{ steps.config.outputs.num_samples }}" \
+            -e OUTPUT_DIR=/output \
+            -v "${OUTPUT_DIR}:/output" \
+            "$IMAGE" \
+            2>&1 | tee /tmp/generate.log
+
+          echo "output_dir=${OUTPUT_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate output file
+        id: validate
+        env:
+          CONFIG_ID: ${{ steps.config.outputs.dataset_config_id }}
+        run: |
+          OUTPUT="${{ steps.generate.outputs.output_dir }}/${CONFIG_ID}.hdf5"
+          if [ ! -f "$OUTPUT" ]; then
+            echo "::error::Output HDF5 file not found at ${OUTPUT}"
+            exit 1
+          fi
+          FILE_SIZE=$(stat --printf="%s" "$OUTPUT" 2>/dev/null || stat -f "%z" "$OUTPUT")
+          echo "Generated file: ${OUTPUT} (${FILE_SIZE} bytes)"
+          echo "output_file=${OUTPUT}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to R2
+        if: steps.params.outputs.upload_to_r2 == 'true'
+        env:
+          IMAGE: tinaudio/perm:${{ steps.params.outputs.docker_tag }}
+          R2_PREFIX: ${{ steps.config.outputs.r2_prefix }}
+        run: |
+          docker run --rm \
+            -e MODE=passthrough \
+            -v "${{ steps.generate.outputs.output_dir }}:/output:ro" \
+            "$IMAGE" \
+            rclone copy --checksum \
+              "/output/" \
+              "r2:intermediate-data/${R2_PREFIX}"
+
+          echo "Uploaded to r2:intermediate-data/${R2_PREFIX}"
+
+      - name: Collect run manifest
+        if: always()
+        env:
+          CONFIG_ID: ${{ steps.config.outputs.dataset_config_id }}
+          RUN_ID: ${{ steps.config.outputs.run_id }}
+          R2_PREFIX: ${{ steps.config.outputs.r2_prefix }}
+          NUM_SAMPLES: ${{ steps.config.outputs.num_samples }}
+          SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          MANIFEST_DIR="/tmp/run-manifest"
+          mkdir -p "$MANIFEST_DIR"
+
+          # Copy the dataset config YAML
+          cp "${{ steps.params.outputs.dataset_config }}" "$MANIFEST_DIR/"
+
+          # Write run metadata
+          cat > "$MANIFEST_DIR/run-manifest.json" <<MANIFEST_EOF
+          {
+            "dataset_config_id": "${CONFIG_ID}",
+            "run_id": "${RUN_ID}",
+            "r2_prefix": "${R2_PREFIX}",
+            "num_samples": ${NUM_SAMPLES},
+            "commit_sha": "${SHA}",
+            "docker_image": "tinaudio/perm:${{ steps.params.outputs.docker_tag }}",
+            "event": "${{ github.event_name }}",
+            "uploaded_to_r2": ${{ steps.params.outputs.upload_to_r2 }}
+          }
+          MANIFEST_EOF
+
+          # Copy generation logs if available
+          if [ -f /tmp/generate.log ]; then
+            cp /tmp/generate.log "$MANIFEST_DIR/"
+          fi
+
+          echo "manifest_dir=${MANIFEST_DIR}" >> "$GITHUB_OUTPUT"
+        id: manifest
+
+      - name: Upload run manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-manifest-${{ steps.config.outputs.dataset_config_id }}
+          path: ${{ steps.manifest.outputs.manifest_dir }}/
+          retention-days: 7
+          if-no-files-found: warn

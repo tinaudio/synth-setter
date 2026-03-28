@@ -18,6 +18,15 @@
 #       docker run -e MODE=passthrough <image> python train.py --lr 0.01
 #       docker run -e MODE=passthrough <image>   # no-op, exits 0
 #
+#   MODE=generate_shards
+#     Generates a VST dataset shard via generate_vst_dataset.py under headless X11.
+#     Reads config from DATASET_CONFIG env var (required, path to YAML).
+#     Optional: NUM_SAMPLES (override), OUTPUT_DIR (default: /output).
+#       docker run -e MODE=generate_shards \
+#         -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
+#         -e NUM_SAMPLES=10 -e OUTPUT_DIR=/output \
+#         -v /tmp/output:/output <image>
+#
 # Examples:
 #
 #   # Debug a container interactively
@@ -33,7 +42,7 @@
 #
 #   # Forgot to set MODE — fails fast with a helpful error
 #   docker run --rm myimage:latest
-#   # => Error: MODE is required. Set MODE=idle or MODE=passthrough.
+#   # => Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_shards.
 #
 # See also:
 #   docs/reference/docker-spec.md — full spec for modes, image targets, env vars
@@ -55,14 +64,19 @@ case "${mode}" in
     echo "Passthrough mode — no command provided, exiting cleanly."
     exit 0
     ;;
+  generate_shards)
+    : "${DATASET_CONFIG:?DATASET_CONFIG is required (path to dataset config YAML)}"
+    exec scripts/run-linux-vst-headless.sh \
+        python scripts/entrypoint_generate_shards.py
+    ;;
   "")
-    echo "Error: MODE is required. Set MODE=idle or MODE=passthrough." >&2
-    echo "Available modes: idle, passthrough" >&2
+    echo "Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_shards." >&2
+    echo "Available modes: idle, passthrough, generate_shards" >&2
     exit 1
     ;;
   *)
     echo "Error: unknown MODE '${mode}'." >&2
-    echo "Available modes: idle, passthrough" >&2
+    echo "Available modes: idle, passthrough, generate_shards" >&2
     exit 1
     ;;
 esac

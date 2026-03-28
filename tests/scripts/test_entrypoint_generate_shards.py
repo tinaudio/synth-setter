@@ -1,0 +1,131 @@
+"""Tests for scripts/entrypoint_generate_shards.py — generate_shards entrypoint helper.
+
+Tests are organized around the PUBLIC typed API:
+- build_generate_args(): builds CLI args from a dataset config path
+- main(): reads env vars and dispatches to generate_vst_dataset.py
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+from scripts.entrypoint_generate_shards import build_generate_args
+
+_COMPLETE_CONFIG = {
+    "param_spec": "surge_simple",
+    "plugin_path": "plugins/Surge XT.vst3",
+    "output_format": "hdf5",
+    "sample_rate": 16000,
+    "shard_size": 10000,
+    "num_shards": 48,
+    "base_seed": 42,
+    "splits": {"train": 44, "val": 2, "test": 2},
+    "preset_path": "presets/surge-base.vstpreset",
+    "channels": 2,
+    "velocity": 100,
+    "signal_duration_seconds": 4.0,
+    "min_loudness": -55.0,
+    "sample_batch_size": 32,
+}
+
+
+def _write_config(tmp_path: Path) -> Path:
+    """Write a complete dataset config YAML and return its path."""
+    config_path = tmp_path / "test-dataset.yaml"
+    config_path.write_text(yaml.safe_dump(_COMPLETE_CONFIG, sort_keys=False))
+    return config_path
+
+
+# ---------------------------------------------------------------------------
+# build_generate_args — arg construction
+# ---------------------------------------------------------------------------
+
+
+class TestBuildGenerateArgs:
+    """build_generate_args() produces correct CLI arg lists."""
+
+    def test_output_file_uses_config_id_and_output_dir(self, tmp_path: Path) -> None:
+        """Output path is {output_dir}/{config_id}.hdf5."""
+        config_path = _write_config(tmp_path)
+        output_dir = tmp_path / "out"
+
+        args = build_generate_args(config_path, output_dir=output_dir)
+
+        # Second arg (after python executable) is the script, third is output file
+        output_file = args[2]
+        assert output_file == str(output_dir / "test-dataset.hdf5")
+
+    def test_num_samples_from_config(self, tmp_path: Path) -> None:
+        """Without override, num_samples = shard_size * num_shards."""
+        config_path = _write_config(tmp_path)
+
+        args = build_generate_args(config_path, output_dir=tmp_path)
+
+        # Fourth arg is num_samples
+        assert args[3] == "480000"
+
+    def test_num_samples_override(self, tmp_path: Path) -> None:
+        """Explicit override replaces computed num_samples."""
+        config_path = _write_config(tmp_path)
+
+        args = build_generate_args(config_path, num_samples_override=42, output_dir=tmp_path)
+
+        assert args[3] == "42"
+
+    def test_config_fields_passed_as_options(self, tmp_path: Path) -> None:
+        """All config fields are passed as CLI options."""
+        config_path = _write_config(tmp_path)
+
+        args = build_generate_args(config_path, output_dir=tmp_path)
+
+        # Convert to dict of --flag value pairs for easier assertion
+        option_args = {}
+        i = 4  # Skip: python, script, output_file, num_samples
+        while i < len(args):
+            if args[i].startswith("--"):
+                option_args[args[i]] = args[i + 1]
+                i += 2
+            else:
+                i += 1
+
+        assert option_args["--plugin_path"] == "plugins/Surge XT.vst3"
+        assert option_args["--preset_path"] == "presets/surge-base.vstpreset"
+        assert option_args["--sample_rate"] == "16000"
+        assert option_args["--channels"] == "2"
+        assert option_args["--velocity"] == "100"
+        assert option_args["--signal_duration_seconds"] == "4.0"
+        assert option_args["--min_loudness"] == "-55.0"
+        assert option_args["--param_spec"] == "surge_simple"
+        assert option_args["--sample_batch_size"] == "32"
+
+    def test_args_start_with_python_and_script(self, tmp_path: Path) -> None:
+        """First arg is the Python executable, second is the generation script."""
+        config_path = _write_config(tmp_path)
+
+        args = build_generate_args(config_path, output_dir=tmp_path)
+
+        assert "python" in args[0].lower() or args[0].endswith("/python3.10")
+        assert args[1] == "src/data/vst/generate_vst_dataset.py"
+
+
+# ---------------------------------------------------------------------------
+# main — env var reading
+# ---------------------------------------------------------------------------
+
+
+class TestMainEnvVars:
+    """Main() reads DATASET_CONFIG, NUM_SAMPLES, OUTPUT_DIR from environment."""
+
+    def test_missing_dataset_config_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Missing DATASET_CONFIG env var raises KeyError."""
+        monkeypatch.delenv("DATASET_CONFIG", raising=False)
+        monkeypatch.delenv("NUM_SAMPLES", raising=False)
+        monkeypatch.delenv("OUTPUT_DIR", raising=False)
+
+        from scripts.entrypoint_generate_shards import main
+
+        with pytest.raises(KeyError, match="DATASET_CONFIG"):
+            main()
