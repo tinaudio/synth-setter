@@ -179,6 +179,27 @@ docker run --rm -e MODE=passthrough synth-setter:dev-snapshot \
 docker run --rm -e MODE=passthrough synth-setter:dev-snapshot
 ```
 
+### MODE=generate_shards — VST dataset generation
+
+Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
+(Xvfb). The helper script `scripts/entrypoint_generate_shards.py` handles
+X11 setup and dataset config loading.
+
+| Env var          | Required | Default         | Purpose                                  |
+| ---------------- | -------- | --------------- | ---------------------------------------- |
+| `DATASET_CONFIG` | Yes      | —               | Path to dataset config YAML in container |
+| `NUM_SAMPLES`    | No       | *(from config)* | Override total sample count              |
+| `OUTPUT_DIR`     | No       | `/output`       | Output directory for generated shards    |
+
+```bash
+docker run --rm \
+  -e MODE=generate_shards \
+  -e DATASET_CONFIG=/home/build/synth-setter/configs/dataset/my_dataset.yaml \
+  -e NUM_SAMPLES=1000 \
+  -v "$(pwd)/output:/output" \
+  synth-setter:dev-snapshot
+```
+
 ### Volume mounting (dev-live)
 
 dev-live has no baked source or `docker_entrypoint.sh`. Mount your working
@@ -308,10 +329,10 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 
 ### Entrypoint errors
 
-| Error              | Cause                | Fix                                         |
-| ------------------ | -------------------- | ------------------------------------------- |
-| `MODE is required` | MODE env var not set | Add `-e MODE=idle` or `-e MODE=passthrough` |
-| `unknown MODE 'X'` | Typo in MODE value   | Use `idle` or `passthrough`                 |
+| Error              | Cause                | Fix                                                                     |
+| ------------------ | -------------------- | ----------------------------------------------------------------------- |
+| `MODE is required` | MODE env var not set | Add `-e MODE=idle`, `-e MODE=passthrough`, or `-e MODE=generate_shards` |
+| `unknown MODE 'X'` | Typo in MODE value   | Use `idle`, `passthrough`, or `generate_shards`                         |
 
 ______________________________________________________________________
 

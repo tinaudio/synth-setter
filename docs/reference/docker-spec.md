@@ -21,13 +21,16 @@ ______________________________________________________________________
 The entrypoint (`scripts/docker_entrypoint.sh`) dispatches on the `MODE` env var.
 MODE is required -- container errors if unset.
 
-| MODE          | Args    | Behavior              | Use case                                       |
-| ------------- | ------- | --------------------- | ---------------------------------------------- |
-| `idle`        | ignored | `exec sleep infinity` | Attach bash to debug container                 |
-| `passthrough` | given   | `exec "$@"`           | CI smoke tests, ad-hoc commands, training/eval |
-| `passthrough` | none    | exit 0                | CI steps that just need success                |
-| *(unset)*     | any     | error                 | Footgun prevention                             |
-| *(unknown)*   | any     | error                 | Typo prevention                                |
+| MODE              | Args    | Behavior                                                                           | Use case                                       |
+| ----------------- | ------- | ---------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `idle`            | ignored | `exec sleep infinity`                                                              | Attach bash to debug container                 |
+| `passthrough`     | given   | `exec "$@"`                                                                        | CI smoke tests, ad-hoc commands, training/eval |
+| `passthrough`     | none    | exit 0                                                                             | CI steps that just need success                |
+| `generate_shards` | none    | Runs VST dataset generation via `entrypoint_generate_shards.py` under headless X11 | CI dataset generation workflow                 |
+| *(unset)*         | any     | error                                                                              | Footgun prevention                             |
+| *(unknown)*       | any     | error                                                                              | Typo prevention                                |
+
+`generate_shards` uses env vars instead of CLI args — see § MODE=generate_shards env vars below.
 
 Future modes: `pipeline-worker` (see `docs/design/data-pipeline-implementation-plan.md`).
 
@@ -68,6 +71,14 @@ ______________________________________________________________________
 | `R2_BUCKET`                  | all (via `r2-config-base`) | Cloudflare R2 bucket name            |
 | `VIRTUAL_ENV`                | all                        | `/venv/main`                         |
 | `PATH`                       | all                        | `$VIRTUAL_ENV/bin:$PATH`             |
+
+### MODE=generate_shards env vars
+
+| Variable         | Required | Default         | Purpose                                  |
+| ---------------- | -------- | --------------- | ---------------------------------------- |
+| `DATASET_CONFIG` | Yes      | —               | Path to dataset config YAML in container |
+| `NUM_SAMPLES`    | No       | *(from config)* | Override total sample count              |
+| `OUTPUT_DIR`     | No       | `/output`       | Output directory for generated shards    |
 
 ______________________________________________________________________
 
