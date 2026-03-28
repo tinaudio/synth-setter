@@ -1,0 +1,108 @@
+# doc-map.yaml — Structural mapping for doc-drift detection
+#
+# This file encodes which source files SHOULD be documented where.
+# Grep-based detection catches drift when docs reference changed files.
+# This mapping catches drift by OMISSION — when code adds something
+# new and no doc mentions it.
+#
+# Review after each major refactor. The doc-drift skill checks this
+# file for staleness (dead patterns, orphan sources) automatically.
+
+version: 1
+
+docs:
+  # ── Docker reference ────────────────────────────────────────────
+  - doc: docs/reference/docker.md
+    description: Docker build, run, debug reference
+    sources:
+      - pattern: "docker/**"
+        covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts"
+      - pattern: "scripts/docker_entrypoint.sh"
+        covers: "All MODE values (idle, passthrough, generate_dataset), env var dispatch, error messages"
+      - pattern: "pipeline/schemas/image_config.py"
+        covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
+      - pattern: "configs/image/**"
+        covers: "YAML field names and values, build parameters, defaults"
+      - pattern: "Makefile"
+        covers: "docker-build-* targets, DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
+        scope: "docker"
+      - pattern: "scripts/run-linux-vst-headless.sh"
+        covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
+      - pattern: ".github/workflows/docker-build-validation.yml"
+        covers: "CI steps, required secrets, tag scheme, smoke test flow"
+
+  # ── Docker spec (the contract doc) ──────────────────────────────
+  - doc: docs/reference/docker-spec.md
+    description: Image target contract, entrypoint modes, env var spec
+    sources:
+      - pattern: "scripts/docker_entrypoint.sh"
+        covers: "All MODE values, env var contract, exit codes, error handling"
+      - pattern: "docker/**"
+        covers: "Target names, stage dependencies, what each target produces"
+      - pattern: "pipeline/schemas/image_config.py"
+        covers: "ImageConfig fields that define the target contract"
+
+  # ── W&B integration reference ───────────────────────────────────
+  - doc: docs/reference/wandb-integration.md
+    description: W&B logging, auth, metrics, and artifact reference
+    sources:
+      - pattern: "configs/logger/wandb.yaml"
+        covers: "Entity, project, log_model setting, offline mode"
+      - pattern: "src/train.py"
+        covers: "WandbLogger instantiation, trainer integration, run lifecycle"
+      - pattern: "src/eval.py"
+        covers: "Checkpoint resolution from W&B, evaluation logging"
+      - pattern: "src/utils/logging_utils.py"
+        covers: "Metric logging helpers, hyperparameter logging, log_hyperparameters"
+      - pattern: "src/utils/callbacks.py"
+        covers: "W&B callback integrations, visualization uploads"
+      - pattern: "scripts/get-ckpt-from-wandb.sh"
+        covers: "CLI checkpoint download from W&B, artifact resolution"
+
+  # ── Data pipeline design doc ────────────────────────────────────
+  - doc: docs/design/data-pipeline.md
+    description: Distributed data pipeline design (RunPod + R2)
+    sources:
+      - pattern: "pipeline/schemas/config.py"
+        covers: "Pipeline config schema, dataset config fields, validation rules"
+      - pattern: "pipeline/schemas/prefix.py"
+        covers: "Run ID prefix generation, shard ID scheme, deterministic naming"
+      - pattern: "scripts/entrypoint_generate_dataset.py"
+        covers: "Dataset generation entrypoint, single-shard MVP, CLI interface"
+      - pattern: "scripts/ci/load_dataset_config.py"
+        covers: "Dataset config loading from YAML, CI integration"
+      - pattern: "scripts/ci/resolve_dataset_run_params.py"
+        covers: "Run parameter resolution, shard count, worker allocation"
+      - pattern: "configs/dataset/**"
+        covers: "Dataset generation configs, shard counts, sample counts, synth params"
+      - pattern: ".github/workflows/dataset-generation.yml"
+        covers: "CI workflow steps, trigger conditions, artifact handling"
+
+  # ── Storage provenance spec ─────────────────────────────────────
+  - doc: docs/design/storage-provenance-spec.md
+    description: R2 bucket layout, path conventions, ID schemes
+    sources:
+      - pattern: "pipeline/schemas/prefix.py"
+        covers: "Run ID format, shard ID format, prefix construction rules"
+      - pattern: "scripts/r2_shard_report.py"
+        covers: "R2 listing commands, shard status reporting, path parsing"
+      - pattern: "configs/image/dev-snapshot.yaml"
+        covers: "r2_endpoint, r2_bucket values, storage configuration"
+      - pattern: "scripts/docker_entrypoint.sh"
+        covers: "rclone download/upload paths, R2 credentials, --checksum usage"
+        scope: "rclone"
+
+  # ── rclone reference (placeholder — doc does not exist yet) ─────
+  # - doc: docs/reference/rclone.md
+  #   description: rclone R2 operations reference
+  #   sources:
+  #     - pattern: "scripts/docker_entrypoint.sh"
+  #       covers: "rclone download/upload commands, --stats-one-line, SKIP_UPLOAD"
+  #       scope: "rclone"
+  #     - pattern: "scripts/r2_shard_report.py"
+  #       covers: "rclone ls command, --size-threshold-gib, CLI usage"
+  #     - pattern: "scripts/entrypoint_generate_dataset.py"
+  #       covers: "Post-shard-validation upload trigger"
+  #     - pattern: "docs/design/storage-provenance-spec.md"
+  #       covers: "R2 bucket layout, path conventions, --checksum rule"
+  #       scope: "rclone-rules"
