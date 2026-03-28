@@ -1,4 +1,4 @@
-"""Tests for scripts/entrypoint_generate_shards.py — generate_shards entrypoint helper.
+"""Tests for scripts/entrypoint_generate_dataset.py — generate_dataset entrypoint helper.
 
 Tests are organized around the PUBLIC typed API:
 - build_generate_args(): builds CLI args from a dataset config path
@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.entrypoint_generate_shards import build_generate_args
+from scripts.entrypoint_generate_dataset import build_generate_args
 
 _COMPLETE_CONFIG = {
     "param_spec": "surge_simple",
@@ -20,9 +20,9 @@ _COMPLETE_CONFIG = {
     "output_format": "hdf5",
     "sample_rate": 16000,
     "shard_size": 10000,
-    "num_shards": 48,
+    "num_shards": 1,
     "base_seed": 42,
-    "splits": {"train": 44, "val": 2, "test": 2},
+    "splits": {"train": 1, "val": 0, "test": 0},
     "preset_path": "presets/surge-base.vstpreset",
     "channels": 2,
     "velocity": 100,
@@ -48,23 +48,23 @@ def _write_config(tmp_path: Path, overrides: dict | None = None) -> Path:
 class TestBuildGenerateArgs:
     """build_generate_args() produces correct CLI arg lists."""
 
-    def test_output_file_uses_config_id_and_output_dir(self, tmp_path: Path) -> None:
-        """Output path is {output_dir}/{config_id}.hdf5."""
+    def test_output_file_uses_shard_id(self, tmp_path: Path) -> None:
+        """Output path is {output_dir}/shard-000000.hdf5."""
         config_path = _write_config(tmp_path)
         output_dir = tmp_path / "out"
 
         args = build_generate_args(config_path, output_dir=output_dir)
 
         output_file = args[2]
-        assert output_file == str(output_dir / "test-dataset.hdf5")
+        assert output_file == str(output_dir / "shard-000000.hdf5")
 
-    def test_num_samples_from_config(self, tmp_path: Path) -> None:
-        """num_samples = shard_size * num_shards from config."""
+    def test_num_samples_is_shard_size(self, tmp_path: Path) -> None:
+        """num_samples equals shard_size (not shard_size * num_shards)."""
         config_path = _write_config(tmp_path)
 
         args = build_generate_args(config_path, output_dir=tmp_path)
 
-        assert args[3] == "480000"
+        assert args[3] == "10000"
 
     def test_config_fields_passed_as_options(self, tmp_path: Path) -> None:
         """All config fields are passed as CLI options."""
@@ -73,7 +73,7 @@ class TestBuildGenerateArgs:
         args = build_generate_args(config_path, output_dir=tmp_path)
 
         option_args = {}
-        i = 4  # Skip: python, script, output_file, num_samples
+        i = 4  # Skip: python, script, output_file, shard_size
         while i < len(args):
             if args[i].startswith("--"):
                 option_args[args[i]] = args[i + 1]
@@ -118,6 +118,33 @@ class TestOutputFormatValidation:
 
 
 # ---------------------------------------------------------------------------
+# build_generate_args — multi-shard guard
+# ---------------------------------------------------------------------------
+
+
+class TestMultiShardGuard:
+    """build_generate_args() enforces single-shard MVP."""
+
+    def test_num_shards_greater_than_one_raises(self, tmp_path: Path) -> None:
+        """num_shards > 1 raises NotImplementedError."""
+        config_path = _write_config(
+            tmp_path,
+            overrides={"num_shards": 48, "splits": {"train": 44, "val": 2, "test": 2}},
+        )
+
+        with pytest.raises(NotImplementedError, match="num_shards > 1"):
+            build_generate_args(config_path, output_dir=tmp_path)
+
+    def test_num_shards_one_succeeds(self, tmp_path: Path) -> None:
+        """num_shards=1 succeeds and passes shard_size as num_samples."""
+        config_path = _write_config(tmp_path, overrides={"num_shards": 1})
+
+        args = build_generate_args(config_path, output_dir=tmp_path)
+
+        assert args[3] == str(_COMPLETE_CONFIG["shard_size"])
+
+
+# ---------------------------------------------------------------------------
 # main — env var reading
 # ---------------------------------------------------------------------------
 
@@ -130,7 +157,7 @@ class TestMainEnvVars:
         monkeypatch.delenv("DATASET_CONFIG", raising=False)
         monkeypatch.delenv("OUTPUT_DIR", raising=False)
 
-        from scripts.entrypoint_generate_shards import main
+        from scripts.entrypoint_generate_dataset import main
 
         with pytest.raises(KeyError, match="DATASET_CONFIG"):
             main()

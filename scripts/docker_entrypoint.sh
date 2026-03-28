@@ -18,12 +18,12 @@
 #       docker run -e MODE=passthrough <image> python train.py --lr 0.01
 #       docker run -e MODE=passthrough <image>   # no-op, exits 0
 #
-#   MODE=generate_shards
+#   MODE=generate_dataset
 #     Generates a VST dataset shard via generate_vst_dataset.py under headless X11.
 #     Reads config from DATASET_CONFIG env var (required, path to YAML).
-#     num_samples is derived from shard_size * num_shards in the config.
+#     The entrypoint generates shard_size samples (one shard per invocation).
 #     Optional: OUTPUT_DIR (default: /output).
-#       docker run -e MODE=generate_shards \
+#       docker run -e MODE=generate_dataset \
 #         -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
 #         -e OUTPUT_DIR=/output \
 #         -v /tmp/output:/output <image>
@@ -43,7 +43,7 @@
 #
 #   # Forgot to set MODE — fails fast with a helpful error
 #   docker run --rm myimage:latest
-#   # => Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_shards.
+#   # => Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_dataset.
 #
 # See also:
 #   docs/reference/docker-spec.md — full spec for modes, image targets, env vars
@@ -65,19 +65,19 @@ case "${mode}" in
     echo "Passthrough mode — no command provided, exiting cleanly."
     exit 0
     ;;
-  generate_shards)
+  generate_dataset)
     : "${DATASET_CONFIG:?DATASET_CONFIG is required (path to dataset config YAML)}"
     exec scripts/run-linux-vst-headless.sh \
-        python scripts/entrypoint_generate_shards.py
+        python scripts/entrypoint_generate_dataset.py
     ;;
   "")
-    echo "Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_shards." >&2
-    echo "Available modes: idle, passthrough, generate_shards" >&2
+    echo "Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_dataset." >&2
+    echo "Available modes: idle, passthrough, generate_dataset" >&2
     exit 1
     ;;
   *)
     echo "Error: unknown MODE '${mode}'." >&2
-    echo "Available modes: idle, passthrough, generate_shards" >&2
+    echo "Available modes: idle, passthrough, generate_dataset" >&2
     exit 1
     ;;
 esac

@@ -1,4 +1,4 @@
-"""Entrypoint helper for MODE=generate_shards.
+"""Entrypoint helper for MODE=generate_dataset.
 
 Reads dataset generation parameters from environment variables, loads the
 dataset config YAML, and invokes generate_vst_dataset.py as a subprocess.
@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
+from pipeline.schemas.config import load_dataset_config
 
 
 def build_generate_args(
@@ -24,6 +24,10 @@ def build_generate_args(
     output_dir: Path = Path("/output"),
 ) -> list[str]:
     """Build the CLI args for generate_vst_dataset.py from a dataset config.
+
+    Generates a single shard (shard_size samples) per invocation. The output
+    file is always named shard-000000.hdf5 in the given output_dir. Multi-shard
+    generation is not yet supported — pass num_shards=1 in the config.
 
     Args:
         config_path: Path to dataset config YAML.
@@ -34,6 +38,7 @@ def build_generate_args(
 
     Raises:
         ValueError: If config output_format is not 'hdf5'.
+        NotImplementedError: If config num_shards > 1.
     """
     cfg = load_dataset_config(config_path)
 
@@ -42,15 +47,19 @@ def build_generate_args(
             f"generate_vst_dataset.py only supports hdf5 output, got: {cfg.output_format}"
         )
 
-    config_id = dataset_config_id_from_path(config_path)
-    num_samples = cfg.shard_size * cfg.num_shards
-    output_file = output_dir / f"{config_id}.hdf5"
+    if cfg.num_shards > 1:
+        raise NotImplementedError(
+            f"num_shards > 1 not yet supported (got {cfg.num_shards}). "
+            "Multi-shard generation requires the distributed pipeline."
+        )
+
+    output_file = output_dir / "shard-000000.hdf5"
 
     return [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
         str(output_file),
-        str(num_samples),
+        str(cfg.shard_size),
         "--plugin_path",
         cfg.plugin_path,
         "--preset_path",
