@@ -304,11 +304,11 @@ RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
 
 FROM wheels-torch AS wheels
 COPY --from=synth-setter-src /home/build/synth-setter/requirements-app.txt /artifacts/
-COPY --from=synth-setter-src /home/build/synth-setter/requirements.txt /artifacts/
 RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
     pip wheel \
         --wheel-dir /wheels \
-        -r /artifacts/requirements.txt
+        --find-links /wheels \
+        -r /artifacts/requirements-app.txt
 
 # ==========================================
 # Shared runtime base: Python + runtime deps on top of python-base.
