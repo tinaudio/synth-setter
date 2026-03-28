@@ -21,12 +21,13 @@
 #   MODE=generate_dataset
 #     Generates a VST dataset shard via generate_vst_dataset.py under headless X11.
 #     Reads config from DATASET_CONFIG env var (required, path to YAML).
-#     The entrypoint generates shard_size samples (one shard per invocation).
-#     Optional: OUTPUT_DIR (default: /output).
+#     The container materializes a DataPipelineSpec, uploads spec and shard to R2.
+#     spec.json is written to RUN_METADATA_DIR.
+#     Optional: RUN_METADATA_DIR (default: /run-metadata).
 #       docker run -e MODE=generate_dataset \
 #         -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
-#         -e OUTPUT_DIR=/output \
-#         -v /tmp/output:/output <image>
+#         -e RUN_METADATA_DIR=/run-metadata \
+#         -v /tmp/run-metadata:/run-metadata <image>
 #
 # Examples:
 #

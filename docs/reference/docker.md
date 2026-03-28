@@ -186,19 +186,19 @@ Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
 `scripts/run-linux-vst-headless.sh` (invoked from the Docker entrypoint);
 the helper script `scripts/entrypoint_generate_dataset.py` reads env/config
 and invokes `generate_vst_dataset.py` with the resolved dataset config.
-The entrypoint generates `shard_size` samples (one shard per invocation).
-Multi-shard generation (`num_shards > 1`) raises `NotImplementedError`.
+The container materializes a DataPipelineSpec, uploads spec and shard to R2.
+`spec.json` is written to `RUN_METADATA_DIR`.
 
-| Env var          | Required | Default   | Purpose                                  |
-| ---------------- | -------- | --------- | ---------------------------------------- |
-| `DATASET_CONFIG` | Yes      | —         | Path to dataset config YAML in container |
-| `OUTPUT_DIR`     | No       | `/output` | Output directory for generated shards    |
+| Env var            | Required | Default         | Purpose                                  |
+| ------------------ | -------- | --------------- | ---------------------------------------- |
+| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container |
+| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where spec.json is written     |
 
 ```bash
 docker run --rm \
   -e MODE=generate_dataset \
   -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
-  -v "$(pwd)/output:/output" \
+  -v "$(pwd)/run-metadata:/run-metadata" \
   synth-setter:dev-snapshot
 ```
 
@@ -208,11 +208,11 @@ When the dataset generation workflow runs, it uploads an artifact bundle named
 `run-manifest-{config_id}` (e.g., `run-manifest-surge-simple-480k-10k`). The
 bundle contains three files:
 
-| File                | Contents                                                                                                                                     |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<config_id>.yaml`  | Copy of the dataset config YAML used for the run                                                                                             |
-| `run-manifest.json` | Run metadata: `dataset_config_id`, `run_id`, `r2_prefix`, `shard_size`, `num_shards`, `commit_sha`, `docker_image`, `event`, `upload_status` |
-| `generate.log`      | Full container stdout/stderr from generation                                                                                                 |
+| File               | Contents                                                        |
+| ------------------ | --------------------------------------------------------------- |
+| `<config_id>.yaml` | Copy of the dataset config YAML used for the run                |
+| `spec.json`        | DataPipelineSpec written by the container to `RUN_METADATA_DIR` |
+| `generate.log`     | Full container stdout/stderr from generation                    |
 
 **Download:**
 
@@ -223,14 +223,14 @@ gh run download <run_id> -n run-manifest-surge-simple-480k-10k
 **Inspect:**
 
 ```bash
-# View all metadata
-jq . run-manifest.json
+# View the pipeline spec
+jq . spec.json
 
 # Check how many samples were generated
 grep -c "Saving sample" generate.log
 
 # Find the R2 location for this run
-jq .r2_prefix run-manifest.json
+jq .r2_prefix spec.json
 ```
 
 **Retention:** 7 days (GitHub Actions default).
