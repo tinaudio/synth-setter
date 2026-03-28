@@ -78,12 +78,13 @@ All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs wi
 
 ### Current epics
 
-| Epic | Title                                                      | Domain Label    | Design Doc                           |
-| ---- | ---------------------------------------------------------- | --------------- | ------------------------------------ |
-| #74  | feat(pipeline): distributed data pipeline                  | `data-pipeline` | `data-pipeline.md`                   |
-| #98  | feat(eval): evaluation pipeline — predict, render, metrics | `evaluation`    | `eval-pipeline.md` (PR #101)         |
-| #99  | feat(storage): R2 integration for datasets and checkpoints | `evaluation`    | `eval-pipeline.md` §6                |
-| #107 | feat(training): training pipeline & ops                    | `training`      | `training-ops-braindump.md` (PR #84) |
+| Epic | Title                                                          | Domain Label    | Design Doc                           |
+| ---- | -------------------------------------------------------------- | --------------- | ------------------------------------ |
+| #74  | feat(pipeline): distributed data pipeline                      | `data-pipeline` | `data-pipeline.md`                   |
+| #98  | feat(eval): evaluation pipeline — predict, render, metrics     | `evaluation`    | `eval-pipeline.md` (PR #101)         |
+| #99  | feat(storage): R2 integration for datasets and checkpoints     | `evaluation`    | `eval-pipeline.md` §6                |
+| #107 | feat(training): training pipeline & ops                        | `training`      | `training-ops-braindump.md` (PR #84) |
+| #351 | feat(documentation): documentation quality and drift detection | `documentation` | —                                    |
 
 ## 4. Blocking & Dependencies
 
@@ -118,15 +119,16 @@ Priority is tracked via a **Priority** single-select field on the project:
 
 Labels classify issues by **domain**. Type and blocking are handled by native features; priority is a project field.
 
-| Label           | Color   | Description                                   |
-| --------------- | ------- | --------------------------------------------- |
-| `data-pipeline` | #0e8a16 | Data pipeline work stream                     |
-| `ci-automation` | #1d76db | CI & automation work stream                   |
-| `code-health`   | #fbca04 | Code quality and tech debt                    |
-| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference   |
-| `storage`       | #D4C5F9 | Storage infrastructure (R2, rclone)           |
-| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config |
-| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure    |
+| Label           | Color   | Description                                                     |
+| --------------- | ------- | --------------------------------------------------------------- |
+| `data-pipeline` | #0e8a16 | Data pipeline work stream                                       |
+| `ci-automation` | #1d76db | CI & automation work stream                                     |
+| `code-health`   | #fbca04 | Code quality and tech debt                                      |
+| `documentation` | #0075ca | Documentation quality, drift detection, and doc-map maintenance |
+| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference                     |
+| `storage`       | #D4C5F9 | Storage infrastructure (R2, rclone)                             |
+| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config                   |
+| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure                      |
 
 **Multi-label policy:** Most issues carry a single domain label. Cross-cutting infrastructure (e.g., R2/rclone work that serves both data pipeline and eval pipeline) may carry multiple domain labels to appear in all relevant filtered views. Use multiple labels only when the work genuinely spans work streams — not as a default.
 
@@ -141,6 +143,7 @@ Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wa
 | training v1.0.0      | Training        |
 | ci-automation v1.0.0 | CI & Automation |
 | code-health v1.0.0   | Code Health     |
+| documentation v1.0.0 | Documentation   |
 | storage v1.0.0       | Storage         |
 
 Every work stream has a milestone. Set the milestone on each issue individually — GitHub does not auto-inherit milestones from parent issues.
@@ -175,6 +178,7 @@ Use saved views with domain label filters to switch between work streams:
 | Storage         | Hierarchy | `label:storage`       |
 | CI & Automation | Board     | `label:ci-automation` |
 | Code Health     | Table     | `label:code-health`   |
+| Documentation   | Table     | `label:documentation` |
 | Training        | Hierarchy | `label:training`      |
 | Roadmap         | Roadmap   | (none)                |
 | Blocked         | Table     | is:blocked            |
