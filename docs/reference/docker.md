@@ -295,11 +295,16 @@ Headless X11 issues — check in order:
 ### BuildKit cache
 
 The GHA workflow uses Docker Hub registry cache (`type=registry`). Cache layers
-are stored as `tinaudio/perm:buildcache`. To clear locally:
+are stored as `tinaudio/perm:buildcache`.
+
+To clear local builder cache:
 
 ```bash
 docker buildx prune
 ```
+
+To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
+(Settings → Tags → `buildcache` → Delete).
 
 ### Entrypoint errors
 

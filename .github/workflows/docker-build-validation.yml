@@ -123,7 +123,7 @@ jobs:
             r2_secret_access_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
             wandb_api_key=${{ secrets.WANDB_API_KEY }}
           cache-from: type=registry,ref=tinaudio/perm:buildcache
-          cache-to: type=registry,ref=tinaudio/perm:buildcache,mode=max
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=tinaudio/perm:buildcache,mode=max' || '' }}
 
       - name: Smoke test — container starts and Python imports work
         if: github.event_name != 'pull_request'
