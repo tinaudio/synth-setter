@@ -5,7 +5,7 @@ name: Dataset Generation
 #
 # Triggers:
 # - Manual dispatch: configurable generation with sample count override
-# - Pull request (dataset-related paths): small 10-sample validation run
+# - Pull request (dataset-related paths): small validation run (one sample_batch_size)
 
 on:
   workflow_dispatch:
@@ -34,6 +34,7 @@ on:
       - "pipeline/schemas/prefix.py"
       - "configs/dataset/**"
       - "scripts/ci/load_dataset_config.py"
+      - "scripts/ci/resolve_dataset_run_params.py"
       - "scripts/entrypoint_generate_shards.py"
       - "scripts/docker_entrypoint.sh"
       - ".github/workflows/dataset-generation.yml"
@@ -61,26 +62,21 @@ jobs:
       - name: Install config dependencies
         run: pip install pyyaml pydantic
 
-      - name: Determine run parameters
+      - name: Resolve run parameters
         id: params
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "num_samples_override=10" >> "$GITHUB_OUTPUT"
-            echo "upload_to_r2=false" >> "$GITHUB_OUTPUT"
-            echo "docker_tag=dev-snapshot" >> "$GITHUB_OUTPUT"
-            echo "dataset_config=configs/dataset/surge-simple-480k-10k.yaml" >> "$GITHUB_OUTPUT"
-          else
-            echo "num_samples_override=${{ github.event.inputs.num_samples }}" >> "$GITHUB_OUTPUT"
-            echo "upload_to_r2=${{ github.event.inputs.upload_to_r2 }}" >> "$GITHUB_OUTPUT"
-            echo "docker_tag=${{ github.event.inputs.docker_image_tag }}" >> "$GITHUB_OUTPUT"
-            echo "dataset_config=${{ github.event.inputs.dataset_config }}" >> "$GITHUB_OUTPUT"
-          fi
+          PYTHONPATH=. python scripts/ci/resolve_dataset_run_params.py \
+            --event-name "${{ github.event_name }}" \
+            --dataset-config "${{ github.event.inputs.dataset_config || '' }}" \
+            --num-samples "${{ github.event.inputs.num_samples || '' }}" \
+            --docker-tag "${{ github.event.inputs.docker_image_tag || '' }}" \
+            --upload-to-r2 "${{ github.event.inputs.upload_to_r2 || '' }}"
 
       - name: Load dataset config
         id: config
         run: |
           ARGS="--config ${{ steps.params.outputs.dataset_config }}"
-          OVERRIDE="${{ steps.params.outputs.num_samples_override }}"
+          OVERRIDE="${{ steps.params.outputs.num_samples }}"
           if [ -n "$OVERRIDE" ]; then
             ARGS="$ARGS --num-samples-override $OVERRIDE"
           fi
