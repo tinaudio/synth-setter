@@ -107,6 +107,7 @@ jobs:
           target: dev-snapshot
           platforms: ${{ steps.config.outputs.target_platform }}
           push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -121,15 +122,14 @@ jobs:
             r2_access_key_id=${{ secrets.R2_ACCESS_KEY_ID }}
             r2_secret_access_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
             wandb_api_key=${{ secrets.WANDB_API_KEY }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=registry,ref=tinaudio/perm:buildcache
+          cache-to: type=registry,ref=tinaudio/perm:buildcache,mode=max
 
       - name: Smoke test — container starts and Python imports work
         if: github.event_name != 'pull_request'
         env:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
-          docker pull "$SMOKE_IMAGE"
           docker run --rm --entrypoint bash "$SMOKE_IMAGE" \
             -c "pytest tests/docker/test_smoke.py::test_pedalboard_importable -v"
 

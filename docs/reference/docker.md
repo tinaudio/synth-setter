@@ -294,7 +294,8 @@ Headless X11 issues — check in order:
 
 ### BuildKit cache
 
-The GHA workflow uses GitHub Actions cache (`type=gha`). To clear locally:
+The GHA workflow uses Docker Hub registry cache (`type=registry`). Cache layers
+are stored as `tinaudio/perm:buildcache`. To clear locally:
 
 ```bash
 docker buildx prune
