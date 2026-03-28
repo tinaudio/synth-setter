@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from pipeline.prefix import (
+from pipeline.schemas.prefix import (
     DatasetConfigId,
     DatasetRunId,
     make_dataset_wandb_run_id,
@@ -22,7 +22,7 @@ class TestMakeDatasetWandbRunId:
         result = make_dataset_wandb_run_id(DatasetConfigId("surge-simple-480k-10k"), timestamp=ts)
         assert result == "surge-simple-480k-10k-20260313T100000Z"
 
-    @patch("pipeline.prefix.datetime")
+    @patch("pipeline.schemas.prefix.datetime")
     def test_make_run_id_default_timestamp_is_utc(self, mock_datetime):
         """Default (no timestamp) uses datetime.now(UTC) and produces the expected ID."""
         mock_datetime.now.return_value = FIXED_NOW

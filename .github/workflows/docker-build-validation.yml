@@ -25,7 +25,7 @@ on:
     paths:
       - "docker/**"
       - "configs/image/**"
-      - "scripts/image_config.py"
+      - "pipeline/schemas/image_config.py"
       - "scripts/ci/load_image_config.py"
       - ".github/workflows/docker-build-validation.yml"
       - "requirements*.txt"
