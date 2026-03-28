@@ -1,0 +1,470 @@
+from __future__ import annotations
+
+import copy
+import plistlib
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from pipeline.schemas.config import DatasetConfig, SplitsConfig
+from pipeline.schemas.prefix import DatasetConfigId
+from pipeline.schemas.spec import (
+    PipelineSpec,
+    ShardSpec,
+    extract_renderer_version,
+    materialize_spec,
+)
+from src.data.vst import param_specs
+
+FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture()
+def patch_materialize_io(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Patch all I/O for materialize_spec tests.
+
+    Returns plugin_path.
+    """
+    monkeypatch.setattr("pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
+    monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr(
+        "pipeline.schemas.spec.datetime",
+        type(
+            "FakeDatetime",
+            (),
+            {
+                "now": staticmethod(lambda tz: FIXED_NOW),
+                "fromisoformat": datetime.fromisoformat,
+            },
+        )(),
+    )
+    contents = tmp_path / "FakePlugin.vst3" / "Contents"
+    contents.mkdir(parents=True)
+    (contents / "moduleinfo.json").write_text('{"Version": "1.3.4"}')
+    return tmp_path / "FakePlugin.vst3"
+
+
+class TestShardSpec:
+    """Behavioral contracts for ShardSpec frozen model."""
+
+    def test_shard_spec_is_frozen(self) -> None:
+        """Assigning to a frozen ShardSpec field raises ValidationError."""
+        shard = ShardSpec(
+            shard_id=0,
+            filename="shard-000000.h5",
+            seed=42,
+            row_start=0,
+            row_count=100,
+            expected_datasets=["audio", "mel_spec", "param_array"],
+            audio_shape=(2, 64000),
+            mel_shape=(128, 401),
+            param_shape=(92,),
+        )
+        with pytest.raises(ValidationError):
+            shard.shard_id = 99  # type: ignore[misc]
+
+    def test_shard_spec_rejects_extra_fields(self) -> None:
+        """Extra fields on ShardSpec raise ValidationError."""
+        kwargs: dict[str, Any] = {
+            "shard_id": 0,
+            "filename": "shard-000000.h5",
+            "seed": 42,
+            "row_start": 0,
+            "row_count": 100,
+            "expected_datasets": ["audio", "mel_spec", "param_array"],
+            "audio_shape": (2, 64000),
+            "mel_shape": (128, 401),
+            "param_shape": (92,),
+            "extra_field": "oops",
+        }
+        with pytest.raises(ValidationError):
+            ShardSpec(**kwargs)
+
+
+class TestPipelineSpec:
+    """Behavioral contracts for PipelineSpec frozen model."""
+
+    def test_pipeline_spec_is_frozen(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Assigning to a frozen PipelineSpec field raises ValidationError."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+        with pytest.raises(ValidationError):
+            spec.num_shards = 99  # type: ignore[misc]
+
+    def test_pipeline_spec_rejects_extra_fields(self) -> None:
+        """Extra fields on PipelineSpec raise ValidationError."""
+        kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "created_at": "2026-03-28T12:00:00+00:00",
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "hdf5",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "num_shards": 1,
+            "base_seed": 42,
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "shards": [],
+            "extra_field": "oops",
+        }
+        with pytest.raises(ValidationError):
+            PipelineSpec(**kwargs)
+
+    def test_pipeline_spec_output_format_rejects_invalid_literal(self) -> None:
+        """Invalid output_format literal raises ValidationError."""
+        kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "created_at": "2026-03-28T12:00:00+00:00",
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "parquet",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "num_shards": 1,
+            "base_seed": 42,
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "shards": [],
+        }
+        with pytest.raises(ValidationError):
+            PipelineSpec(**kwargs)
+
+
+class TestExtractRendererVersion:
+    """Platform-specific VST3 plugin version extraction."""
+
+    def test_extracts_version_from_linux_moduleinfo_json(self, tmp_path: Path) -> None:
+        """Linux moduleinfo.json with Version key returns the version string."""
+        plugin = tmp_path / "Plugin.vst3"
+        contents = plugin / "Contents"
+        contents.mkdir(parents=True)
+        (contents / "moduleinfo.json").write_text('{"Version": "1.3.4"}')
+        assert extract_renderer_version(plugin) == "1.3.4"
+
+    def test_extracts_version_from_macos_info_plist(self, tmp_path: Path) -> None:
+        """MacOS Info.plist with CFBundleShortVersionString returns the version."""
+        plugin = tmp_path / "Plugin.vst3"
+        contents = plugin / "Contents"
+        contents.mkdir(parents=True)
+        plist_data = {"CFBundleShortVersionString": "1.3.4"}
+        (contents / "Info.plist").write_bytes(plistlib.dumps(plist_data))
+        assert extract_renderer_version(plugin) == "1.3.4"
+
+    def test_prefers_moduleinfo_json_when_both_exist(self, tmp_path: Path) -> None:
+        """When both version files exist, moduleinfo.json takes precedence."""
+        plugin = tmp_path / "Plugin.vst3"
+        contents = plugin / "Contents"
+        contents.mkdir(parents=True)
+        (contents / "moduleinfo.json").write_text('{"Version": "2.0.0"}')
+        plist_data = {"CFBundleShortVersionString": "1.0.0"}
+        (contents / "Info.plist").write_bytes(plistlib.dumps(plist_data))
+        assert extract_renderer_version(plugin) == "2.0.0"
+
+    def test_raises_file_not_found_when_no_version_file(self, tmp_path: Path) -> None:
+        """Empty Contents directory raises FileNotFoundError."""
+        plugin = tmp_path / "Plugin.vst3"
+        contents = plugin / "Contents"
+        contents.mkdir(parents=True)
+        with pytest.raises(FileNotFoundError):
+            extract_renderer_version(plugin)
+
+    def test_raises_key_error_when_version_field_missing(self, tmp_path: Path) -> None:
+        """moduleinfo.json without Version key raises KeyError."""
+        plugin = tmp_path / "Plugin.vst3"
+        contents = plugin / "Contents"
+        contents.mkdir(parents=True)
+        (contents / "moduleinfo.json").write_text('{"Name": "TestPlugin"}')
+        with pytest.raises(KeyError):
+            extract_renderer_version(plugin)
+
+
+class TestMaterializeSpec:
+    """Behavioral tests for materialize_spec."""
+
+    def test_single_shard_all_fields_populated(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Single-shard spec has all fields set to expected values."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.run_id == "ci-smoke-test-20260328T120000Z"
+        assert spec.created_at == "2026-03-28T12:00:00+00:00"
+        assert spec.code_version == "abc123def456"
+        assert spec.is_repo_dirty is False
+        assert spec.renderer_version == "1.3.4"
+        assert spec.output_format == "hdf5"
+        assert spec.sample_rate == 16000
+        assert spec.shard_size == 10000
+        assert spec.num_shards == 1
+        assert spec.base_seed == 42
+        assert spec.param_spec == "surge_simple"
+        assert spec.splits == SplitsConfig(train=1, val=0, test=0)
+        assert len(spec.shards) == 1
+
+        shard = spec.shards[0]
+        assert shard.shard_id == 0
+        assert shard.filename == "shard-000000.h5"
+        assert shard.seed == 42
+        assert shard.row_start == 0
+        assert shard.row_count == 10000
+        assert shard.audio_shape == (2, 64000)
+        assert shard.mel_shape == (128, 401)
+        assert shard.expected_datasets == ["audio", "mel_spec", "param_array"]
+
+    def test_multi_shard_seeds_are_base_plus_shard_id(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Per-shard seeds are base_seed + shard_id."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 3
+        valid_config_dict["splits"] = {"train": 1, "val": 1, "test": 1}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        seeds = [s.seed for s in spec.shards]
+        assert seeds == [42, 43, 44]
+
+    def test_multi_shard_row_ranges_are_contiguous(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Row ranges across shards are contiguous with no gaps or overlaps."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 3
+        valid_config_dict["shard_size"] = 100
+        valid_config_dict["splits"] = {"train": 1, "val": 1, "test": 1}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        row_starts = [s.row_start for s in spec.shards]
+        row_counts = [s.row_count for s in spec.shards]
+        assert row_starts == [0, 100, 200]
+        assert all(c == 100 for c in row_counts)
+
+    def test_filenames_are_zero_padded_six_digits(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Shard filenames use six-digit zero-padded IDs."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.shards[0].filename == "shard-000000.h5"
+        assert spec.shards[-1].filename == "shard-000047.h5"
+
+    def test_audio_shape_derived_from_config_fields(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Audio shape is (channels, sample_rate * duration)."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.shards[0].audio_shape == (2, 64000)
+
+    def test_mel_shape_is_fixed_constant(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Mel shape is (128, 401) regardless of sample rate."""
+        for sr in [16000, 44100]:
+            d = copy.deepcopy(valid_config_dict)
+            d["plugin_path"] = str(patch_materialize_io)
+            d["sample_rate"] = sr
+            d["num_shards"] = 1
+            d["splits"] = {"train": 1, "val": 0, "test": 0}
+            config = DatasetConfig(**d)
+            config_id = DatasetConfigId("ci-smoke-test")
+            spec = materialize_spec(config, config_id)
+            assert spec.shards[0].mel_shape == (128, 401)
+
+    def test_param_shape_resolved_from_registry(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Param shape matches the length of the param_specs registry entry."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        expected_num_params = len(param_specs["surge_simple"])
+        assert spec.shards[0].param_shape == (expected_num_params,)
+
+    def test_expected_datasets_are_hdf5_standard(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Every shard lists the standard HDF5 datasets."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        for shard in spec.shards:
+            assert shard.expected_datasets == ["audio", "mel_spec", "param_array"]
+
+    def test_json_round_trip_preserves_all_fields(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """JSON serialize then deserialize produces an equal PipelineSpec."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        json_str = spec.model_dump_json()
+        restored = PipelineSpec.model_validate_json(json_str)
+        assert restored == spec
+
+    def test_run_id_format_from_config_id_and_timestamp(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Run ID combines config_id and UTC timestamp."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.run_id == "ci-smoke-test-20260328T120000Z"
+
+    def test_created_at_is_utc_iso_format(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """created_at is ISO 8601 UTC with zero offset."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        parsed = datetime.fromisoformat(spec.created_at)
+        assert parsed.tzinfo is not None
+        offset = parsed.utcoffset()
+        assert offset is not None
+        assert offset.total_seconds() == 0
+
+    def test_code_version_from_git(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """code_version is the mocked git SHA."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.code_version == "abc123def456"
+
+    @pytest.mark.parametrize("dirty_value", [True, False])
+    def test_is_repo_dirty_reflects_git_state(
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict,
+        monkeypatch: pytest.MonkeyPatch,
+        dirty_value: bool,
+    ) -> None:
+        """is_repo_dirty matches the git dirty state."""
+        monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: dirty_value)
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.is_repo_dirty is dirty_value
+
+    def test_renderer_version_from_plugin(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """renderer_version comes from the plugin's moduleinfo.json."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.renderer_version == "1.3.4"
+
+    def test_unknown_param_spec_raises_key_error(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Unknown param_spec name raises KeyError."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["param_spec"] = "nonexistent_synth"
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+
+        with pytest.raises(KeyError):
+            materialize_spec(config, config_id)
+
+    def test_missing_plugin_raises_file_not_found(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Nonexistent plugin_path raises FileNotFoundError."""
+        valid_config_dict["plugin_path"] = "/nonexistent/path"
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+
+        with pytest.raises(FileNotFoundError):
+            materialize_spec(config, config_id)
+
+
+class TestMaterializeSpecIntegration:
+    """Integration test with real I/O, no mocks."""
+
+    def test_materialize_spec_end_to_end_with_real_git_and_fixture_plugin(
+        self, valid_config_dict: dict
+    ) -> None:
+        """Real git + fixture plugin produces a valid spec with expected fields."""
+        fixture_plugin = Path(__file__).parent.parent / "fixtures" / "TestPlugin.vst3"
+        valid_config_dict["plugin_path"] = str(fixture_plugin)
+        valid_config_dict["num_shards"] = 1
+        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("integration-test")
+        spec = materialize_spec(config, config_id)
+
+        assert re.fullmatch(r"[0-9a-f]{40}", spec.code_version)
+        assert isinstance(spec.is_repo_dirty, bool)
+        assert spec.renderer_version == "1.0.0-test"
+        datetime.fromisoformat(spec.created_at)
+        assert spec.run_id.startswith("integration-test-")
+        assert spec.num_shards == 1
+        assert len(spec.shards) == 1
+        assert spec.shards[0].seed == 42
+        assert spec.shards[0].audio_shape == (2, 64000)
