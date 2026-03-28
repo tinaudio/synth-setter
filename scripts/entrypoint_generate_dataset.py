@@ -1,6 +1,6 @@
 """Entrypoint helper for MODE=generate_dataset.
 
-Materializes a DataPipelineSpec from config, uploads spec to R2, generates a
+Materializes a DatasetPipelineSpec from config, uploads spec to R2, generates a
 single shard, and uploads the shard to R2.
 
 Expected env vars:
@@ -16,7 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from pipeline.schemas.spec import DataPipelineSpec, materialize_spec
+from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.prefix import make_r2_prefix
@@ -27,7 +27,7 @@ def _rclone_copy(src: str, dest: str) -> None:
     subprocess.check_call(["rclone", "copy", "--checksum", src, dest])  # noqa: S603, S607
 
 
-def _build_generate_args(spec: DataPipelineSpec, output_file: Path) -> list[str]:
+def _build_generate_args(spec: DatasetPipelineSpec, output_file: Path) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a materialized spec.
 
     Args:

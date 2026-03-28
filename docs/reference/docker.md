@@ -186,7 +186,7 @@ Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
 `scripts/run-linux-vst-headless.sh` (invoked from the Docker entrypoint);
 the helper script `scripts/entrypoint_generate_dataset.py` reads env/config
 and invokes `generate_vst_dataset.py` with the resolved dataset config.
-The container materializes a DataPipelineSpec, uploads spec and shard to R2.
+The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
 `spec.json` is written to `RUN_METADATA_DIR`.
 
 | Env var            | Required | Default         | Purpose                                  |
@@ -208,11 +208,11 @@ When the dataset generation workflow runs, it uploads an artifact bundle named
 `run-manifest-{config_id}` (e.g., `run-manifest-surge-simple-480k-10k`). The
 bundle contains three files:
 
-| File               | Contents                                                        |
-| ------------------ | --------------------------------------------------------------- |
-| `<config_id>.yaml` | Copy of the dataset config YAML used for the run                |
-| `spec.json`        | DataPipelineSpec written by the container to `RUN_METADATA_DIR` |
-| `generate.log`     | Full container stdout/stderr from generation                    |
+| File               | Contents                                                           |
+| ------------------ | ------------------------------------------------------------------ |
+| `<config_id>.yaml` | Copy of the dataset config YAML used for the run                   |
+| `spec.json`        | DatasetPipelineSpec written by the container to `RUN_METADATA_DIR` |
+| `generate.log`     | Full container stdout/stderr from generation                       |
 
 **Download:**
 

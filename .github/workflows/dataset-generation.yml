@@ -1,7 +1,7 @@
 name: Dataset Generation
 
 # Generates a single VST dataset shard inside Docker. The container
-# materializes a DataPipelineSpec, uploads spec to R2, generates the
+# materializes a DatasetPipelineSpec, uploads spec to R2, generates the
 # shard, and uploads the shard to R2.
 #
 # Triggers:

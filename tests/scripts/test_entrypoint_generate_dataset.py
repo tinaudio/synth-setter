@@ -197,7 +197,7 @@ class TestBuildGenerateArgs:
     """_build_generate_args() produces correct CLI arg lists from a spec."""
 
     def _make_mock_spec(self) -> MagicMock:
-        """Create a mock DataPipelineSpec with all fields needed for arg building."""
+        """Create a mock DatasetPipelineSpec with all fields needed for arg building."""
         mock_shard = MagicMock()
         mock_shard.filename = "shard-000000.h5"
         mock_shard.row_count = 10000

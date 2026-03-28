@@ -21,7 +21,7 @@
 #   MODE=generate_dataset
 #     Generates a VST dataset shard via generate_vst_dataset.py under headless X11.
 #     Reads config from DATASET_CONFIG env var (required, path to YAML).
-#     The container materializes a DataPipelineSpec, uploads spec and shard to R2.
+#     The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
 #     spec.json is written to RUN_METADATA_DIR.
 #     Optional: RUN_METADATA_DIR (default: /run-metadata).
 #       docker run -e MODE=generate_dataset \
