@@ -1,0 +1,22 @@
+# CI smoke-test config — minimum viable generation run.
+# Used by the dataset-generation workflow on pull_request events.
+# 32 samples (one batch), single shard.
+param_spec: surge_simple
+plugin_path: plugins/Surge XT.vst3
+output_format: hdf5
+sample_rate: 16000
+shard_size: 32
+num_shards: 1
+base_seed: 42
+
+splits:
+  train: 1
+  val: 0
+  test: 0
+
+preset_path: presets/surge-base.vstpreset
+channels: 2
+velocity: 100
+signal_duration_seconds: 4.0
+min_loudness: -55.0
+sample_batch_size: 32
