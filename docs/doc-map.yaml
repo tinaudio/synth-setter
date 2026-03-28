@@ -18,7 +18,7 @@ docs:
       - pattern: "docker/**"
         covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts"
       - pattern: "scripts/docker_entrypoint.sh"
-        covers: "Supported MODE values (idle, passthrough), env var dispatch, error messages"
+        covers: "All MODE values (idle, passthrough, train, …), env var dispatch, error messages"
       - pattern: "pipeline/schemas/image_config.py"
         covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
       - pattern: "configs/image/**"
@@ -182,3 +182,23 @@ docs:
   #       covers: "Promotion script, W&B artifact download, GitHub Release creation"
   #     - pattern: ".github/workflows/promote.yml"
   #       covers: "Promotion workflow, manual trigger, dry-run mode"
+  # ── W&B integration (placeholder — expand when doc exists) ──────
+  # - doc: docs/reference/wandb-integration.md
+  #   description: W&B logging and auth reference
+  #   sources:
+  #     - pattern: "src/training/**"
+  #       covers: "W&B logging calls, metric names, run config, artifact logging"
+  #     - pattern: "scripts/docker_entrypoint.sh"
+  #       covers: "W&B netrc setup, WANDB_API_KEY injection"
+  #       scope: "wandb"
+
+  # ── Docker spec (the contract doc) ──────────────────────────────
+  - doc: docs/reference/docker-spec.md
+    description: Image target contract, entrypoint modes, env var spec
+    sources:
+      - pattern: "scripts/docker_entrypoint.sh"
+        covers: "All MODE values, env var contract, exit codes, error handling"
+      - pattern: "docker/**"
+        covers: "Target names, stage dependencies, what each target produces"
+      - pattern: "pipeline/schemas/image_config.py"
+        covers: "ImageConfig fields that define the target contract"
