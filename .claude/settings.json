@@ -13,7 +13,7 @@
       },
       {
         "matcher": "Bash",
-        "if": "Bash(git commit:*)",
+        "if": "Bash(git commit *)",
         "description": "Branch safety: echoes the current branch name before any git commit. Prints DETACHED HEAD when not on a branch. Goal: catch accidental commits to the wrong branch.",
         "hooks": [
           {
