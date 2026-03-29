@@ -26,7 +26,7 @@ on:
       - "docker/**"
       - "configs/image/**"
       - "pipeline/schemas/image_config.py"
-      - "scripts/ci/load_image_config.py"
+      - "pipeline/ci/load_image_config.py"
       - ".github/workflows/docker-build-validation.yml"
       - "requirements*.txt"
       - "tests/docker/**"
@@ -58,8 +58,7 @@ jobs:
       - name: Load image config
         id: config
         run: |
-          # TODO(#323): PYTHONPATH=. needed because scripts/ is not an installable package
-          PYTHONPATH=. python scripts/ci/load_image_config.py \
+          python -m pipeline.ci.load_image_config \
             --config configs/image/dev-snapshot.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
             --issue-number '${{ github.event.pull_request.number || github.event.inputs.issue_number || 311 }}'
