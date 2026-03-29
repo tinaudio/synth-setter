@@ -1,0 +1,75 @@
+name: Spec Materialization
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot)"
+        required: true
+        type: string
+      config_path:
+        description: "Path to dataset config YAML (relative to repo root)"
+        required: true
+        type: string
+      artifact_name:
+        description: "Name for the uploaded spec artifact"
+        required: false
+        type: string
+        default: "materialized-spec"
+
+jobs:
+  materialize-spec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull tinaudio/perm:${{ inputs.image_tag }}
+
+      - name: Materialize spec in Docker
+        # Mount the PR's code into the container so we test THIS branch's code
+        # against the image's environment (Surge XT, Python, pedalboard, etc.).
+        # The image was built earlier and has dependencies but stale code — the
+        # volume mount overlays fresh code from the checkout.
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v /tmp/spec-output:/spec-output \
+            --entrypoint bash \
+            tinaudio/perm:${{ inputs.image_tag }} \
+            -c "
+              cd /home/build/synth-setter && \
+              # Runner UID != container UID; git refuses to run in untrusted dirs
+              git config --global --add safe.directory /home/build/synth-setter && \
+              # Volume mount hides the image's plugins/ symlink — recreate it
+              mkdir -p plugins && \
+              ln -sf '/usr/lib/vst3/Surge XT.vst3' 'plugins/Surge XT.vst3' && \
+              # Headless X11 needed because importing pedalboard (via param_specs) requires it
+              scripts/run-linux-vst-headless.sh \
+                python -m pipeline.ci.materialize_spec \
+                  ${{ inputs.config_path }} \
+                  /spec-output
+            "
+
+      - name: Validate spec structure
+        run: |
+          echo "=== Materialized Spec ==="
+          cat /tmp/spec-output/input_spec.json
+          echo ""
+          echo "=== Structural Validation ==="
+          python3 -m pipeline.ci.validate_spec /tmp/spec-output/input_spec.json
+
+      - name: Upload spec artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: /tmp/spec-output/input_spec.json
+          retention-days: 30
