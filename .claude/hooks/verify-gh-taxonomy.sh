@@ -64,16 +64,18 @@
 #     - Issue type (Bug, Task, Feature, Phase, Epic)
 #     - Domain label (data-pipeline, ci-automation, etc.)
 #     - Milestone
-#   Result: WARN if missing (not block — the agent still needs to set
-#   issue type via GraphQL, which is a separate Bash call).
-#   Also warns that project board, priority, and hierarchy are still needed.
+#   Result: BLOCK if missing. Also BLOCKs with a reminder to add the issue
+#   to the sub-issue hierarchy, project board, and set priority — ensuring
+#   these steps are never skipped.
 #
 # MODE=pr (after `gh pr create`):
 #   1. Checks the PR body for issue references (Fixes/Closes/Refs #N).
 #      Result: BLOCK if no linked issue — the pr-metadata-gate CI will fail.
 #   2. For each linked issue, checks the "CI minimum three" (type, label, milestone).
 #      Result: BLOCK if any are missing.
-#   3. For each linked issue, checks project board membership and priority.
+#   3. For each linked issue, checks epic lineage (walks parent chain for Epic).
+#      Result: BLOCK if no Epic ancestor — the pr-metadata-gate will fail.
+#   4. For each linked issue, checks project board membership and priority.
 #      Result: WARN if missing — these don't fail CI but are required by the
 #      taxonomy lifecycle.
 #
@@ -248,6 +250,54 @@ check_project_fields() {
 }
 
 
+# ---------------------------------------------------------------------------
+# Helper: walk the sub-issue parent chain to find an Epic ancestor.
+# Usage: check_epic_lineage <issue_number>
+# Returns: "ok" if the issue traces to an Epic, "no-epic" otherwise.
+# ---------------------------------------------------------------------------
+check_epic_lineage() {
+  local issue_num="$1"
+  local current="$issue_num"
+  local depth=0
+
+  while [ "$depth" -lt 4 ]; do
+    local result
+    # shellcheck disable=SC2016
+    result=$(gh api graphql -f query='
+      query($owner: String!, $repo: String!, $number: Int!) {
+        repository(owner: $owner, name: $repo) {
+          issue(number: $number) {
+            issueType { name }
+            parent { number issueType { name } }
+          }
+        }
+      }
+    ' -f owner="$OWNER" -f repo="$REPO" -F number="$current" \
+      --jq '.data.repository.issue' 2>/dev/null) || {
+      echo "no-epic"
+      return
+    }
+
+    local type
+    type=$(echo "$result" | jq -r '.issueType.name // empty' 2>/dev/null) || type=""
+    if [ "$type" = "Epic" ]; then
+      echo "ok"
+      return
+    fi
+
+    local parent_num
+    parent_num=$(echo "$result" | jq -r '.parent.number // empty' 2>/dev/null) || parent_num=""
+    if [ -z "$parent_num" ] || [ "$parent_num" = "null" ]; then
+      break
+    fi
+    current="$parent_num"
+    depth=$((depth + 1))
+  done
+
+  echo "no-epic"
+}
+
+
 # ===========================================================================
 # MODE: pr — runs after `gh pr create`
 # ===========================================================================
@@ -279,6 +329,13 @@ if [ "$MODE" = "pr" ]; then
       exit 0
     fi
 
+    # Check epic lineage — the pr-metadata-gate CI workflow requires it.
+    LINEAGE=$(check_epic_lineage "$ISSUE_NUM")
+    if [ "$LINEAGE" != "ok" ]; then
+      echo "{\"decision\":\"block\",\"reason\":\"Issue #${ISSUE_NUM} does not trace to any Epic. Add it as a sub-issue of the appropriate Phase/Epic — the pr-metadata-gate epic lineage check will fail.\"}"
+      exit 0
+    fi
+
     # CI gate will pass, but check the full taxonomy lifecycle too.
     PROJECT_MISSING=$(check_project_fields "$ISSUE_NUM")
     if [ -n "$PROJECT_MISSING" ]; then
@@ -304,16 +361,16 @@ elif [ "$MODE" = "issue" ]; then
 
   # Check the CI minimum three. At this point, issue type is often not yet
   # set because `gh issue create` can't set it — it requires a separate
-  # GraphQL mutation. So this is a WARN, not a BLOCK.
+  # GraphQL mutation. BLOCK either way to force completing all taxonomy steps.
   query_issue_metadata "$ISSUE_NUM"
   CI_MISSING=$(check_ci_minimum)
 
   if [ -n "$CI_MISSING" ]; then
-    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"WARNING: Issue #${ISSUE_NUM} is missing taxonomy metadata:${CI_MISSING}. Set these now before creating a PR. Also remember: add to project board, set priority, and establish hierarchy.\"}}"
+    echo "{\"decision\":\"block\",\"reason\":\"Issue #${ISSUE_NUM} is missing taxonomy metadata:${CI_MISSING}. Set these now before proceeding. Then add to sub-issue hierarchy, project board, and set priority.\"}"
     exit 0
   fi
 
-  echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Taxonomy check passed: issue has type, domain label, and milestone. Remember: add to project board, set priority, and establish hierarchy.\"}}"
+  echo "{\"decision\":\"block\",\"reason\":\"Issue #${ISSUE_NUM} created with type, label, and milestone. You MUST now add it to the sub-issue hierarchy (addSubIssue to the appropriate Phase/Epic), add to project board, and set priority before proceeding.\"}"
 
 
 # ===========================================================================
