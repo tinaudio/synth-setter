@@ -44,17 +44,30 @@ jobs:
         run: docker pull tinaudio/perm:${{ inputs.image_tag }}
 
       - name: Generate dataset
+        # Mount the PR's code into the container so we test THIS branch's code
+        # against the image's environment (Surge XT, Python, pedalboard, etc.).
+        # The image was built earlier and has dependencies but stale code — the
+        # volume mount overlays fresh code from the checkout.
         run: |
           set -o pipefail
           METADATA_DIR="/tmp/run-metadata"
           mkdir -p "$METADATA_DIR"
 
           docker run --rm \
-            -e MODE=generate_dataset \
-            -e DATASET_CONFIG="${{ inputs.config_path }}" \
+            -v ${{ github.workspace }}:/home/build/synth-setter \
             -v "${METADATA_DIR}:/run-metadata" \
+            --entrypoint bash \
             tinaudio/perm:${{ inputs.image_tag }} \
-            2>&1 | tee "${METADATA_DIR}/generate.log"
+            -c "
+              cd /home/build/synth-setter && \
+              git config --global --add safe.directory /home/build/synth-setter && \
+              mkdir -p plugins && \
+              ln -sf '/usr/lib/vst3/Surge XT.vst3' 'plugins/Surge XT.vst3' && \
+              export DATASET_CONFIG='${{ inputs.config_path }}' && \
+              export RUN_METADATA_DIR=/run-metadata && \
+              scripts/run-linux-vst-headless.sh \
+                python scripts/entrypoint_generate_dataset.py
+            " 2>&1 | tee "${METADATA_DIR}/generate.log"
 
       - name: Validate spec exists
         run: |
