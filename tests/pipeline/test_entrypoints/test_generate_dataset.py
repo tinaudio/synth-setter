@@ -1,4 +1,4 @@
-"""Tests for scripts/entrypoint_generate_dataset.py — generate_dataset entrypoint helper.
+"""Tests for pipeline/entrypoints/generate_dataset.py — generate_dataset entrypoint helper.
 
 Tests are organized around the PUBLIC typed API:
 - run(): full flow — materialize spec, upload, generate, upload shard
@@ -18,7 +18,7 @@ import pytest
 import yaml
 
 from pipeline.constants import R2_BUCKET
-from scripts.entrypoint_generate_dataset import build_generate_args, main, run
+from pipeline.entrypoints.generate_dataset import build_generate_args, main, run
 
 _COMPLETE_CONFIG = {
     "param_spec": "surge_simple",
@@ -99,9 +99,9 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[
 class TestRun:
     """Run() orchestrates: materialize → upload spec → generate → upload shard."""
 
-    @patch("scripts.entrypoint_generate_dataset.subprocess.check_call")
-    @patch("scripts.entrypoint_generate_dataset._rclone_copy")
-    @patch("scripts.entrypoint_generate_dataset.materialize_spec")
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_writes_spec_json_to_metadata_dir(
         self,
         mock_materialize: MagicMock,
@@ -122,9 +122,9 @@ class TestRun:
         data = json.loads(spec_path.read_text())
         assert "run_id" in data
 
-    @patch("scripts.entrypoint_generate_dataset.subprocess.check_call")
-    @patch("scripts.entrypoint_generate_dataset._rclone_copy")
-    @patch("scripts.entrypoint_generate_dataset.materialize_spec")
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_uploads_spec_to_r2_before_generation(
         self,
         mock_materialize: MagicMock,
@@ -155,9 +155,9 @@ class TestRun:
         call_names = [c[0] for c in manager.mock_calls]
         assert call_names.index("rclone") < call_names.index("check_call")
 
-    @patch("scripts.entrypoint_generate_dataset.subprocess.check_call")
-    @patch("scripts.entrypoint_generate_dataset._rclone_copy")
-    @patch("scripts.entrypoint_generate_dataset.materialize_spec")
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_calls_generate_vst_dataset(
         self,
         mock_materialize: MagicMock,
@@ -178,9 +178,9 @@ class TestRun:
         assert "generate_vst_dataset.py" in args[1]
         assert "10000" in args  # shard_size from real_spec.shard_size
 
-    @patch("scripts.entrypoint_generate_dataset.subprocess.check_call")
-    @patch("scripts.entrypoint_generate_dataset._rclone_copy")
-    @patch("scripts.entrypoint_generate_dataset.materialize_spec")
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_uploads_shard_to_r2_after_generation(
         self,
         mock_materialize: MagicMock,
@@ -201,9 +201,9 @@ class TestRun:
         shard_upload = rclone_calls[1]
         assert "shard-000000.h5" in shard_upload[0][0]
 
-    @patch("scripts.entrypoint_generate_dataset.subprocess.check_call")
-    @patch("scripts.entrypoint_generate_dataset._rclone_copy")
-    @patch("scripts.entrypoint_generate_dataset.materialize_spec")
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_subprocess_failure_propagates(
         self,
         mock_materialize: MagicMock,
@@ -221,9 +221,9 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             run(config_path, metadata_dir)
 
-    @patch("scripts.entrypoint_generate_dataset.subprocess.check_call")
-    @patch("scripts.entrypoint_generate_dataset._rclone_copy")
-    @patch("scripts.entrypoint_generate_dataset.materialize_spec")
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_rclone_failure_propagates(
         self,
         mock_materialize: MagicMock,
@@ -340,7 +340,7 @@ class TestMainEnvVars:
         with pytest.raises(KeyError, match="DATASET_CONFIG"):
             main()
 
-    @patch("scripts.entrypoint_generate_dataset.run")
+    @patch("pipeline.entrypoints.generate_dataset.run")
     def test_default_metadata_dir(
         self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -353,7 +353,7 @@ class TestMainEnvVars:
 
         mock_run.assert_called_once_with(config_path, Path("/run-metadata"))
 
-    @patch("scripts.entrypoint_generate_dataset.run")
+    @patch("pipeline.entrypoints.generate_dataset.run")
     def test_custom_metadata_dir(
         self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

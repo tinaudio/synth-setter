@@ -23,7 +23,7 @@ on:
       - "src/data/vst/**"
       - "pipeline/schemas/**"
       - "configs/dataset/**"
-      - "scripts/entrypoint_generate_dataset.py"
+      - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.sh"
       - ".github/workflows/dataset-generation.yml"
       - ".github/workflows/test-dataset-generation.yml"

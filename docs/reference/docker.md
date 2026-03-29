@@ -184,7 +184,7 @@ docker run --rm -e MODE=passthrough synth-setter:dev-snapshot
 Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
 (Xvfb). X11 bootstrapping (Xvfb/dbus/xsettings) is handled by
 `scripts/run-linux-vst-headless.sh` (invoked from the Docker entrypoint);
-the helper script `scripts/entrypoint_generate_dataset.py` reads env/config
+the entrypoint module `pipeline/entrypoints/generate_dataset.py` reads env/config
 and invokes `generate_vst_dataset.py` with the resolved dataset config.
 The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
 `input_spec.json` is written to `RUN_METADATA_DIR`.

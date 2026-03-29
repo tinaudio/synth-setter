@@ -69,7 +69,7 @@ docs:
         covers: "Run ID prefix generation, shard ID scheme, deterministic naming"
       - pattern: "configs/dataset/**"
         covers: "Dataset generation configs, shard counts, sample counts, synth params"
-      - pattern: "scripts/entrypoint_generate_dataset.py"
+      - pattern: "pipeline/entrypoints/generate_dataset.py"
         covers: "Dataset generation entrypoint, single-shard MVP, CLI interface"
       - pattern: ".github/workflows/dataset-generation.yml"
         covers: "CI workflow steps, trigger conditions, artifact handling"

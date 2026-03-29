@@ -69,7 +69,7 @@ case "${mode}" in
   generate_dataset)
     : "${DATASET_CONFIG:?DATASET_CONFIG is required (path to dataset config YAML)}"
     exec scripts/run-linux-vst-headless.sh \
-        python scripts/entrypoint_generate_dataset.py
+        python -m pipeline.entrypoints.generate_dataset
     ;;
   "")
     echo "Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_dataset." >&2

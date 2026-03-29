@@ -67,7 +67,7 @@ jobs:
               export RUN_METADATA_DIR=/run-metadata && \
               export PYTHONPATH=/home/build/synth-setter && \
               scripts/run-linux-vst-headless.sh \
-                python scripts/entrypoint_generate_dataset.py
+                python -m pipeline.entrypoints.generate_dataset
             " 2>&1 | tee "${METADATA_DIR}/generate.log"
 
       - name: Validate spec exists
