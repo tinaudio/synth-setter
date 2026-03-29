@@ -21,14 +21,14 @@ ______________________________________________________________________
 The entrypoint (`scripts/docker_entrypoint.sh`) dispatches on the `MODE` env var.
 MODE is required -- container errors if unset.
 
-| MODE               | Args    | Behavior                                                                            | Use case                                       |
-| ------------------ | ------- | ----------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `idle`             | ignored | `exec sleep infinity`                                                               | Attach bash to debug container                 |
-| `passthrough`      | given   | `exec "$@"`                                                                         | CI smoke tests, ad-hoc commands, training/eval |
-| `passthrough`      | none    | exit 0                                                                              | CI steps that just need success                |
-| `generate_dataset` | none    | Runs VST dataset generation via `entrypoint_generate_dataset.py` under headless X11 | CI dataset generation workflow                 |
-| *(unset)*          | any     | error                                                                               | Footgun prevention                             |
-| *(unknown)*        | any     | error                                                                               | Typo prevention                                |
+| MODE               | Args    | Behavior                                                                                   | Use case                                       |
+| ------------------ | ------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| `idle`             | ignored | `exec sleep infinity`                                                                      | Attach bash to debug container                 |
+| `passthrough`      | given   | `exec "$@"`                                                                                | CI smoke tests, ad-hoc commands, training/eval |
+| `passthrough`      | none    | exit 0                                                                                     | CI steps that just need success                |
+| `generate_dataset` | none    | Runs VST dataset generation via `pipeline.entrypoints.generate_dataset` under headless X11 | CI dataset generation workflow                 |
+| *(unset)*          | any     | error                                                                                      | Footgun prevention                             |
+| *(unknown)*        | any     | error                                                                                      | Typo prevention                                |
 
 `generate_dataset` uses env vars instead of CLI args — see § MODE=generate_dataset env vars below.
 
