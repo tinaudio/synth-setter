@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import DatasetConfigId, make_dataset_wandb_run_id
@@ -53,14 +53,6 @@ class DatasetPipelineSpec(BaseModel):
     def num_shards(self) -> int:
         """Number of shards, derived from the shards tuple length."""
         return len(self.shards)
-
-    @model_validator(mode="after")
-    def _plugin_path_exists(self) -> DatasetPipelineSpec:
-        """Validate that the plugin path exists on disk."""
-        plugin = Path(self.plugin_path)
-        if not plugin.exists():
-            raise ValueError(f"Plugin path does not exist: {self.plugin_path}")
-        return self
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -128,6 +120,10 @@ def materialize_spec(
     Derives all runtime state internally: git SHA, repo dirty status,
     renderer version from plugin path, current UTC timestamp.
     """
+    plugin = Path(config.plugin_path)
+    if not plugin.exists():
+        raise FileNotFoundError(f"Plugin path does not exist: {config.plugin_path}")
+
     created_at = datetime.now(timezone.utc)
     return _build_pipeline_spec(
         config=config,
