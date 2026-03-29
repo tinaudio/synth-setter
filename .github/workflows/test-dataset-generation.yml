@@ -105,10 +105,11 @@ jobs:
           ls -la /tmp/shard-download/
 
           # Validate shard inside Docker (has h5py)
+          # Mount PR code over /home/build/synth-setter so the editable install
+          # picks up our validate_shard module (not in the published image yet).
           docker run --rm \
             -e MODE=passthrough \
-            -e PYTHONPATH=/code \
-            -v "${{ github.workspace }}:/code:ro" \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
             -v /tmp/shard-download:/download:ro \
             -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
             "$IMAGE" \
