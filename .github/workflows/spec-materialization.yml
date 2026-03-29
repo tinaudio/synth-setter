@@ -1,0 +1,94 @@
+name: Spec Materialization
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot)"
+        required: true
+        type: string
+      config_path:
+        description: "Path to dataset config YAML (relative to repo root)"
+        required: true
+        type: string
+      artifact_name:
+        description: "Name for the uploaded spec artifact"
+        required: false
+        type: string
+        default: "materialized-spec"
+
+jobs:
+  materialize-spec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull tinaudio/perm:${{ inputs.image_tag }}
+
+      - name: Materialize spec in Docker
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v /tmp/spec-output:/spec-output \
+            --entrypoint bash \
+            tinaudio/perm:${{ inputs.image_tag }} \
+            -c "
+              cd /home/build/synth-setter && \
+              mkdir -p plugins && \
+              ln -sf '/usr/lib/vst3/Surge XT.vst3' 'plugins/Surge XT.vst3' && \
+              scripts/run-linux-vst-headless.sh \
+                python scripts/ci/materialize_spec_smoke.py \
+                  ${{ inputs.config_path }} \
+                  /spec-output
+            "
+
+      - name: Validate spec structure
+        run: |
+          echo "=== Materialized Spec ==="
+          cat /tmp/spec-output/spec.json
+          echo ""
+          echo "=== Structural Validation ==="
+          python3 -c "
+          import json, sys
+          spec = json.load(open('/tmp/spec-output/spec.json'))
+          required = ['run_id', 'code_version', 'renderer_version', 'num_params',
+                      'param_spec', 'sample_rate', 'shard_size', 'shards',
+                      'plugin_path', 'preset_path', 'velocity',
+                      'signal_duration_seconds', 'min_loudness', 'sample_batch_size']
+          missing = [f for f in required if f not in spec]
+          if missing:
+              print(f'FAIL: missing fields: {missing}', file=sys.stderr)
+              sys.exit(1)
+          cv = spec['code_version']
+          if not (len(cv) == 40 and all(c in '0123456789abcdef' for c in cv)):
+              print(f'FAIL: code_version is not a valid SHA: {cv}', file=sys.stderr)
+              sys.exit(1)
+          if not spec['renderer_version']:
+              print('FAIL: renderer_version is empty', file=sys.stderr)
+              sys.exit(1)
+          if not spec['shards']:
+              print('FAIL: shards is empty', file=sys.stderr)
+              sys.exit(1)
+          print(f'All structural checks passed:')
+          print(f'  code_version:     {cv}')
+          print(f'  renderer_version: {spec[\"renderer_version\"]}')
+          print(f'  num_params:       {spec[\"num_params\"]}')
+          print(f'  num_shards:       {len(spec[\"shards\"])}')
+          print(f'  config:           ${{ inputs.config_path }}')
+          "
+
+      - name: Upload spec artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: /tmp/spec-output/spec.json
+          retention-days: 30
