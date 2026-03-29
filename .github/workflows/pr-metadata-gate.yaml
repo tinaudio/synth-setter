@@ -199,4 +199,132 @@ jobs:
           fi
 
           echo "✓ All linked issues have required taxonomy metadata"
-          echo "All PR metadata checks passed."
+
+      - name: Check epic lineage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO="${{ github.repository }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          # Re-extract linked issue numbers (same logic as above step)
+          PR_BODY=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.body // ""') || {
+            echo "::error::Failed to fetch PR body; cannot perform epic lineage check."
+            exit 1
+          }
+
+          ISSUE_NUMBERS=()
+
+          TIMELINE_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" \
+            --paginate --jq '[.[] | select(.event == "connected") | .source.issue.number // empty] | unique | .[]') || true
+          for num in $TIMELINE_ISSUES; do
+            ISSUE_NUMBERS+=("$num")
+          done
+
+          BODY_ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' | sort -un) || true
+          for num in $BODY_ISSUE_NUMS; do
+            if [ "$num" != "$PR_NUMBER" ]; then
+              ISSUE_NUMBERS+=("$num")
+            fi
+          done
+
+          ISSUE_NUMBERS=($(printf '%s\n' "${ISSUE_NUMBERS[@]}" | sort -un))
+
+          if [ "${#ISSUE_NUMBERS[@]}" -eq 0 ]; then
+            echo "::error::No issue numbers found — cannot verify epic lineage."
+            exit 1
+          fi
+
+          LINEAGE_FAILURES=0
+
+          echo "::group::Checking epic lineage for linked issues"
+
+          for ISSUE_NUM in "${ISSUE_NUMBERS[@]}"; do
+            echo "--- Checking epic lineage for issue #${ISSUE_NUM} ---"
+
+            # Skip pull requests
+            IS_PR=$(gh api "repos/${REPO}/issues/${ISSUE_NUM}" --jq 'has("pull_request")') || IS_PR="false"
+            if [ "$IS_PR" = "true" ]; then
+              echo "  (skipping #${ISSUE_NUM} — pull request, not an issue)"
+              continue
+            fi
+
+            # Walk up the parent chain to find an Epic ancestor (up to 4 levels).
+            # NOTE: The `parent` field on issues requires the GitHub sub-issues feature
+            # (currently in public preview). If the field is unavailable or returns null,
+            # we fall back to checking whether the issue itself is an Epic (which
+            # inherently has epic traceability). Non-Epic issues without a parent
+            # chain are treated as errors and cause this check to fail, since we cannot
+            # verify their epic lineage.
+            CURRENT=$ISSUE_NUM
+            DEPTH=0
+            FOUND_EPIC=false
+            WALK_FAILED=false
+
+            while [ $DEPTH -lt 4 ]; do
+              RESULT=$(gh api graphql -f query='
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    issue(number: $number) {
+                      issueType { name }
+                      parent { number issueType { name } }
+                    }
+                  }
+                }
+              ' -f owner="${REPO%/*}" -f repo="${REPO#*/}" -F number="$CURRENT" \
+                --jq '.data.repository.issue' 2>/dev/null) || {
+                echo "  Could not query parent chain (GraphQL error or parent field unavailable)."
+                WALK_FAILED=true
+                break
+              }
+
+              TYPE=$(echo "$RESULT" | jq -r '.issueType.name // empty' 2>/dev/null) || TYPE=""
+              if [ "$TYPE" = "Epic" ]; then
+                FOUND_EPIC=true
+                break
+              fi
+
+              PARENT_NUM=$(echo "$RESULT" | jq -r '.parent.number // empty' 2>/dev/null) || PARENT_NUM=""
+              if [ -z "$PARENT_NUM" ] || [ "$PARENT_NUM" = "null" ]; then
+                break
+              fi
+              CURRENT=$PARENT_NUM
+              DEPTH=$((DEPTH + 1))
+            done
+
+            if [ "$FOUND_EPIC" = "true" ]; then
+              echo "  ✓ Issue #${ISSUE_NUM} traces to Epic (via #${CURRENT})"
+            elif [ "$WALK_FAILED" = "true" ]; then
+              # Fallback: check if the issue type itself is Epic or Phase
+              FALLBACK_TYPE=$(gh api graphql -f query='
+                query($owner: String!, $repo: String!, $number: Int!) {
+                  repository(owner: $owner, name: $repo) {
+                    issue(number: $number) {
+                      issueType { name }
+                    }
+                  }
+                }
+              ' -f owner="${REPO%/*}" -f repo="${REPO#*/}" -F number="$ISSUE_NUM" \
+                --jq '.data.repository.issue.issueType.name // ""' 2>/dev/null) || FALLBACK_TYPE=""
+
+              if [ "$FALLBACK_TYPE" = "Epic" ]; then
+                echo "  ✓ Issue #${ISSUE_NUM} is an Epic (inherent epic traceability)"
+              else
+                echo "::error::Issue #${ISSUE_NUM} — could not verify epic lineage (parent field may not be available). Ensure it is a sub-issue of the appropriate Phase/Epic."
+                LINEAGE_FAILURES=$((LINEAGE_FAILURES + 1))
+              fi
+            else
+              echo "::error::Issue #${ISSUE_NUM} does not trace to any Epic. Add it as a sub-issue of the appropriate Phase/Epic for traceability."
+              LINEAGE_FAILURES=$((LINEAGE_FAILURES + 1))
+            fi
+          done
+
+          echo "::endgroup::"
+
+          if [ "$LINEAGE_FAILURES" -gt 0 ]; then
+            echo "✗ ${LINEAGE_FAILURES} issue(s) failed epic lineage check."
+            exit 1
+          fi
+
+          echo "✓ All linked issues trace to an Epic."
