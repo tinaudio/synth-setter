@@ -13,6 +13,7 @@ from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import DatasetConfigId
 from pipeline.schemas.spec import (
     DatasetPipelineSpec,
+    ShardSpec,
     extract_renderer_version,
     materialize_spec,
 )
@@ -46,6 +47,21 @@ def patch_materialize_io(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     return tmp_path / "FakePlugin.vst3"
 
 
+class TestShardSpec:
+    """Behavioral contracts for ShardSpec frozen model."""
+
+    def test_shard_spec_is_frozen(self) -> None:
+        """Assigning to a frozen ShardSpec field raises ValidationError."""
+        shard = ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42)
+        with pytest.raises(ValidationError):
+            shard.shard_id = 99  # type: ignore[misc]
+
+    def test_shard_spec_rejects_extra_fields(self) -> None:
+        """Extra fields on ShardSpec raise ValidationError."""
+        with pytest.raises(ValidationError):
+            ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42, extra="oops")  # type: ignore[call-arg]
+
+
 class TestDatasetPipelineSpec:
     """Behavioral contracts for DatasetPipelineSpec frozen model."""
 
@@ -60,7 +76,7 @@ class TestDatasetPipelineSpec:
         config_id = DatasetConfigId("ci-smoke-test")
         spec = materialize_spec(config, config_id)
         with pytest.raises(ValidationError):
-            spec.num_shards = 99  # type: ignore[misc]
+            spec.shard_size = 99  # type: ignore[misc]
 
     def test_pipeline_spec_rejects_extra_fields(self, patch_materialize_io: Path) -> None:
         """Extra fields on DatasetPipelineSpec raise ValidationError."""
@@ -74,7 +90,6 @@ class TestDatasetPipelineSpec:
             "output_format": "hdf5",
             "sample_rate": 16000,
             "shard_size": 100,
-            "num_shards": 1,
             "base_seed": 42,
             "num_params": 92,
             "splits": SplitsConfig(train=1, val=0, test=0),
@@ -84,6 +99,7 @@ class TestDatasetPipelineSpec:
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
             "sample_batch_size": 32,
+            "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
             "extra_field": "oops",
         }
         with pytest.raises(ValidationError):
@@ -103,7 +119,6 @@ class TestDatasetPipelineSpec:
             "output_format": "parquet",
             "sample_rate": 16000,
             "shard_size": 100,
-            "num_shards": 1,
             "base_seed": 42,
             "num_params": 92,
             "splits": SplitsConfig(train=1, val=0, test=0),
@@ -113,6 +128,7 @@ class TestDatasetPipelineSpec:
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
             "sample_batch_size": 32,
+            "shards": (),
         }
         with pytest.raises(ValidationError):
             DatasetPipelineSpec(**kwargs)
@@ -129,7 +145,6 @@ class TestDatasetPipelineSpec:
             "output_format": "hdf5",
             "sample_rate": 16000,
             "shard_size": 100,
-            "num_shards": 1,
             "base_seed": 42,
             "num_params": 92,
             "plugin_path": "/nonexistent/plugin.vst3",
@@ -139,6 +154,7 @@ class TestDatasetPipelineSpec:
             "min_loudness": -55.0,
             "sample_batch_size": 32,
             "splits": SplitsConfig(train=1, val=0, test=0),
+            "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
         }
         with pytest.raises(ValidationError, match="Plugin path does not exist"):
             DatasetPipelineSpec(**kwargs)
@@ -215,6 +231,10 @@ class TestMaterializeSpec:
         assert spec.sample_rate == 16000
         assert spec.shard_size == 10000
         assert spec.num_shards == 1
+        assert len(spec.shards) == 1
+        assert spec.shards[0].shard_id == 0
+        assert spec.shards[0].filename == "shard-000000.h5"
+        assert spec.shards[0].seed == 42
         assert spec.base_seed == 42
         assert spec.param_spec == "surge_simple"
         assert spec.num_params == len(param_specs["surge_simple"])
@@ -368,6 +388,42 @@ class TestMaterializeSpec:
         with pytest.raises(NotImplementedError, match="wds"):
             materialize_spec(config, config_id)
 
+    def test_multi_shard_seeds_are_base_plus_shard_id(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Each shard seed equals base_seed + shard_id."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 3
+        valid_config_dict["splits"] = {"train": 1, "val": 1, "test": 1}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert [s.seed for s in spec.shards] == [42, 43, 44]
+
+    def test_filenames_are_zero_padded_six_digits(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """Shard filenames use six-digit zero-padded indices."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.shards[0].filename == "shard-000000.h5"
+        assert spec.shards[-1].filename == "shard-000047.h5"
+
+    def test_num_shards_property_matches_shards_length(
+        self, patch_materialize_io: Path, valid_config_dict: dict
+    ) -> None:
+        """num_shards property returns len(shards)."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+        spec = materialize_spec(config, config_id)
+
+        assert spec.num_shards == len(spec.shards)
+
 
 class TestMaterializeSpecIntegration:
     """Integration test with real I/O, no mocks."""
@@ -390,4 +446,5 @@ class TestMaterializeSpecIntegration:
         assert spec.created_at.tzinfo is not None
         assert spec.run_id.startswith("integration-test-")
         assert spec.num_shards == 1
+        assert spec.shards[0].seed == 42
         assert spec.num_params > 0

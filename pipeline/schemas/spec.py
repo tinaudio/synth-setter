@@ -14,6 +14,16 @@ from pipeline.schemas.prefix import DatasetConfigId, make_dataset_wandb_run_id
 from src.data.vst import param_specs
 
 
+class ShardSpec(BaseModel):
+    """Per-shard identity and pre-computed derived values."""
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    shard_id: int
+    filename: str  # "shard-000000.h5"
+    seed: int  # base_seed + shard_id
+
+
 class DatasetPipelineSpec(BaseModel):
     """Frozen runtime specification materialized from DatasetConfig."""
 
@@ -28,7 +38,6 @@ class DatasetPipelineSpec(BaseModel):
     output_format: Literal["hdf5", "wds"]
     sample_rate: int
     shard_size: int
-    num_shards: int
     base_seed: int
     num_params: int  # total encoded param count from param_spec registry
     splits: SplitsConfig
@@ -38,6 +47,12 @@ class DatasetPipelineSpec(BaseModel):
     signal_duration_seconds: float  # audio length per sample (seconds)
     min_loudness: float  # loudness floor — retry if below
     sample_batch_size: int  # batch size for generation efficiency
+    shards: tuple[ShardSpec, ...]
+
+    @property
+    def num_shards(self) -> int:
+        """Number of shards, derived from the shards tuple length."""
+        return len(self.shards)
 
     @model_validator(mode="after")
     def _plugin_path_exists(self) -> DatasetPipelineSpec:
@@ -127,6 +142,15 @@ def _build_pipeline_spec(
 
     run_id = make_dataset_wandb_run_id(config_id, timestamp=created_at)
 
+    shards = tuple(
+        ShardSpec(
+            shard_id=i,
+            filename=f"shard-{i:06d}.h5",
+            seed=config.base_seed + i,
+        )
+        for i in range(config.num_shards)
+    )
+
     return DatasetPipelineSpec(
         run_id=run_id,
         created_at=created_at,
@@ -137,7 +161,6 @@ def _build_pipeline_spec(
         output_format=config.output_format,
         sample_rate=config.sample_rate,
         shard_size=config.shard_size,
-        num_shards=config.num_shards,
         base_seed=config.base_seed,
         num_params=len(param_specs[config.param_spec]),
         splits=config.splits,
@@ -147,4 +170,5 @@ def _build_pipeline_spec(
         signal_duration_seconds=config.signal_duration_seconds,
         min_loudness=config.min_loudness,
         sample_batch_size=config.sample_batch_size,
+        shards=shards,
     )
