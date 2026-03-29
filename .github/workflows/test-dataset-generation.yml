@@ -43,7 +43,7 @@ jobs:
       artifact_name: test-run-metadata
     secrets: inherit
 
-  validate:
+  validate-spec:
     needs: generate
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -58,3 +58,74 @@ jobs:
 
       - name: Validate spec structure
         run: python3 -m pipeline.ci.validate_spec input_spec.json
+
+  validate-shard:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download run metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: test-run-metadata
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Download shard from R2 and validate
+        env:
+          IMAGE: tinaudio/perm:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+        run: |
+          # Extract R2 prefix and shard filename from the spec
+          R2_PREFIX=$(python3 -c "
+          import json
+          spec = json.load(open('input_spec.json'))
+          # R2 prefix: data/{config_id}/{run_id}/
+          # run_id contains config_id as prefix, so we split on the timestamp
+          run_id = spec['run_id']
+          # config_id is run_id minus the timestamp suffix (-YYYYMMDDTHHMMSSZ)
+          config_id = run_id.rsplit('-', 1)[0]
+          # But config_id itself can have hyphens, so we match the timestamp pattern
+          import re
+          m = re.match(r'(.+)-(\d{8}T\d{6}Z)$', run_id)
+          config_id = m.group(1)
+          print(f'data/{config_id}/{run_id}/')
+          ")
+          SHARD_FILE=$(python3 -c "
+          import json
+          spec = json.load(open('input_spec.json'))
+          print(spec['shards'][0]['filename'])
+          ")
+
+          echo "R2 prefix: ${R2_PREFIX}"
+          echo "Shard file: ${SHARD_FILE}"
+
+          # Download shard from R2 via Docker (has rclone + R2 credentials)
+          mkdir -p /tmp/shard-download
+          docker pull "$IMAGE"
+          docker run --rm \
+            -e MODE=passthrough \
+            -v /tmp/shard-download:/download \
+            "$IMAGE" \
+            rclone copy --checksum \
+              "r2:intermediate-data/${R2_PREFIX}${SHARD_FILE}" \
+              /download/
+
+          ls -la /tmp/shard-download/
+
+          # Validate shard inside Docker (has h5py)
+          docker run --rm \
+            -e MODE=passthrough \
+            -v "${{ github.workspace }}:/code:ro" \
+            -v /tmp/shard-download:/download:ro \
+            -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
+            "$IMAGE" \
+            python3 -m pipeline.ci.validate_shard \
+              /spec/input_spec.json \
+              "/download/${SHARD_FILE}"
