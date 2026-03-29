@@ -43,6 +43,7 @@ jobs:
             tinaudio/perm:${{ inputs.image_tag }} \
             -c "
               cd /home/build/synth-setter && \
+              git config --global --add safe.directory /home/build/synth-setter && \
               mkdir -p plugins && \
               ln -sf '/usr/lib/vst3/Surge XT.vst3' 'plugins/Surge XT.vst3' && \
               scripts/run-linux-vst-headless.sh \
