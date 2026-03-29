@@ -10,6 +10,17 @@
             "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in *.env|*.env.*|*.pem|*.key) echo 'BLOCKED: Cannot edit credential/secret files (.env, .pem, .key)' >&2; exit 1;; *) exit 0;; esac"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "if": "Bash(git commit *)",
+        "description": "Branch safety: echoes the current branch name before any git commit. Prints DETACHED HEAD when not on a branch. Goal: catch accidental commits to the wrong branch.",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "branch=$(git branch --show-current 2>/dev/null || true); if [ -z \"$branch\" ]; then branch=\"DETACHED HEAD\"; fi; echo \"Committing to branch: $branch\" >&2"
+          }
+        ]
       }
     ],
     "PostToolUse": [
