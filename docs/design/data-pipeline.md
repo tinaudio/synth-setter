@@ -1195,33 +1195,40 @@ class SplitsConfig(BaseModel):
     test: int
 
 class ShardSpec(BaseModel):
-    model_config = ConfigDict(strict=True)
+    """Per-shard identity and pre-computed derived values."""
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     shard_id: int
     filename: str           # "shard-000042.h5"
-    seed: int
-    row_start: int
-    row_count: int
-    expected_datasets: list[str]  # ["audio", "mel_spec", "param_array"]
-    audio_shape: tuple[int, int]
-    mel_shape: tuple[int, int]    # per-row shape of mel_spec dataset: (mels, frames)
-    param_shape: tuple[int, int]
+    seed: int               # base_seed + shard_id
 
-class PipelineSpec(BaseModel):
-    model_config = ConfigDict(strict=True, frozen=True)
+class DatasetPipelineSpec(BaseModel):
+    """Frozen runtime specification materialized from DatasetConfig."""
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     run_id: str
-    created_at: str         # ISO 8601
-    code_version: str       # git commit hash
-    is_repo_dirty: bool         # True if working tree had uncommitted changes
+    created_at: datetime    # UTC, timezone-aware
+    code_version: str       # git commit SHA
+    is_repo_dirty: bool
     param_spec: str
     renderer_version: str   # Auto-extracted from plugin bundle at materialization
-    output_format: str      # "hdf5" or "wds" — determines finalize output
+    output_format: Literal["hdf5", "wds"]
     sample_rate: int
     shard_size: int
-    num_shards: int
-    splits: SplitsConfig  # shard counts per split
-    shards: list[ShardSpec]
+    base_seed: int
+    num_params: int         # total encoded param count from param_spec registry
+    splits: SplitsConfig
+    plugin_path: str        # VST3 plugin to render through
+    preset_path: str        # VST preset to load
+    velocity: int           # MIDI velocity for note rendering
+    signal_duration_seconds: float  # audio length per sample
+    min_loudness: float     # loudness floor — retry if below
+    sample_batch_size: int  # batch size for generation efficiency
+    shards: tuple[ShardSpec, ...]
+
+    @property
+    def num_shards(self) -> int:
+        return len(self.shards)
 ```
 
 All structured data uses Pydantic `BaseModel` in strict mode. Strict mode catches silent type coercion at serialization boundaries. `frozen=True` makes specs immutable at the type level.
@@ -1343,7 +1350,7 @@ On first `generate`:
 1. Load YAML, validate against Pydantic `DatasetConfig` (strict mode)
 2. Extract `renderer_version` from the plugin bundle (`CFBundleShortVersionString` from `Info.plist` on macOS, `Version` from `moduleinfo.json` on Linux)
 3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`
-4. Materialize `PipelineSpec` — expand config into shard-level spec (seeds, shapes, row ranges)
+4. Materialize `DatasetPipelineSpec` — expand config into per-shard specs (seeds, filenames) and capture runtime state (git SHA, renderer version, num_params)
 5. Upload spec + source config to R2
 6. Proceed with reconciliation
 
@@ -1383,7 +1390,7 @@ pipeline/
   schemas/              # Pydantic models
     __init__.py
     config.py           # DatasetConfig, SplitsConfig, load/ID helpers
-    spec.py             # PipelineSpec, ShardSpec, materialize_spec
+    spec.py             # DatasetPipelineSpec, ShardSpec, materialize_spec
     report.py           # WorkerReport, ShardResult
     card.py             # DatasetCard, ValidationSummary
     sample.py           # Sample dataclass (HDF5→WDS transcoding)
@@ -1437,21 +1444,21 @@ configs/
 
 ## Appendix B: Tech Stack
 
-| Component       | Technology                                                        | Role                                             |
-| --------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
-| Build           | Docker (BuildKit)                                                 | Reproducible compute environments                |
-| Storage         | Cloudflare R2                                                     | Data + coordination, free egress                 |
-| Execution       | RunPod                                                            | Cheap on-demand cloud workers                    |
-| Tracking        | Weights & Biases                                                  | Pipeline metrics, dataset artifact registry      |
-| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                 | Shard generation + local training format         |
-| Training format | [WebDataset](https://github.com/webdataset/webdataset)            | Streaming `.tar` shards for multi-GPU training   |
-| CLI             | [Click](https://click.palletsprojects.com/)                       | Typed arguments, validation, `--help`            |
-| Validation      | [Pydantic](https://docs.pydantic.dev/) (strict mode)              | PipelineSpec, report, and config validation      |
-| Logging         | [structlog](https://www.structlog.org/)                           | Structured JSON debug logging                    |
-| Retry           | [tenacity](https://tenacity.readthedocs.io/)                      | Centralized retry policy                         |
-| Upload/download | [rclone](https://rclone.org/)                                     | R2 file transfer; all transfers use `--checksum` |
-| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)      | Reproducible environments                        |
-| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb) | VST synthesis                                    |
+| Component       | Technology                                                        | Role                                               |
+| --------------- | ----------------------------------------------------------------- | -------------------------------------------------- |
+| Build           | Docker (BuildKit)                                                 | Reproducible compute environments                  |
+| Storage         | Cloudflare R2                                                     | Data + coordination, free egress                   |
+| Execution       | RunPod                                                            | Cheap on-demand cloud workers                      |
+| Tracking        | Weights & Biases                                                  | Pipeline metrics, dataset artifact registry        |
+| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                 | Shard generation + local training format           |
+| Training format | [WebDataset](https://github.com/webdataset/webdataset)            | Streaming `.tar` shards for multi-GPU training     |
+| CLI             | [Click](https://click.palletsprojects.com/)                       | Typed arguments, validation, `--help`              |
+| Validation      | [Pydantic](https://docs.pydantic.dev/) (strict mode)              | DatasetPipelineSpec, report, and config validation |
+| Logging         | [structlog](https://www.structlog.org/)                           | Structured JSON debug logging                      |
+| Retry           | [tenacity](https://tenacity.readthedocs.io/)                      | Centralized retry policy                           |
+| Upload/download | [rclone](https://rclone.org/)                                     | R2 file transfer; all transfers use `--checksum`   |
+| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)      | Reproducible environments                          |
+| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb) | VST synthesis                                      |
 
 ## Appendix C: References
 

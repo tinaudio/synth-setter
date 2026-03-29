@@ -235,7 +235,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 **Files to create:**
 
 - `pipeline/__init__.py`
-- `pipeline/schemas/` — Pydantic models split across submodules: `config.py` (`DatasetConfig`, `SplitsConfig`, load/ID helpers), `spec.py` (`PipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass)
+- `pipeline/schemas/` — Pydantic models split across submodules: `config.py` (`DatasetConfig`, `SplitsConfig`, load/ID helpers), `spec.py` (`DatasetPipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass)
 - `configs/dataset/surge-simple-480k-10k.yaml` — sample config (filename = `dataset_config_id`)
 - `tests/pipeline/__init__.py`
 - `tests/pipeline/test_schemas/`
@@ -244,7 +244,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 
 - `DatasetConfig` (Pydantic strict): validates raw YAML input. Fields match config schema (§4).
   `output_format` defaults to `"hdf5"` if missing from config.
-- `PipelineSpec` (frozen, strict): `dataset_config_id`, `dataset_wandb_run_id` (maps to
+- `DatasetPipelineSpec` (frozen, strict): `dataset_config_id`, `dataset_wandb_run_id` (maps to
   `run_id` in code), `created_at`, `code_version`, `is_repo_dirty`,
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
   `shard_size`, `num_shards`, `base_seed`, `splits` (`{"train": N, "val": N, "test": N}`),
@@ -269,14 +269,14 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   (per-shard `{shard_id, filename, content_hash}`), `input_spec_sha256`, `input_spec_path`.
 - Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
   `dataset_config_id` is the config filename stem, which encodes runtime params for readability.
-- `materialize_spec(config: DatasetConfig, timestamp=None, renderer_version=None) -> PipelineSpec`.
+- `materialize_spec(config: DatasetConfig, timestamp=None, renderer_version=None) -> DatasetPipelineSpec`.
   Optional `renderer_version` override for testing; test fixtures pass `"test-1.0"` explicitly.
 
 **Design doc schema gaps to fix alongside this task:**
 
 - `ValidationSummary` class not defined in design doc (referenced in `DatasetCard` §14.2)
-- `base_seed` not in `PipelineSpec` schema §14.1 (referenced in text)
-- Generation params (preset_path, channels, etc.) not in `PipelineSpec` schema §14.1
+- `base_seed` not in `DatasetPipelineSpec` schema §14.1 (referenced in text)
+- Generation params (preset_path, channels, etc.) not in `DatasetPipelineSpec` schema §14.1
 - `shard_manifest` not in `DatasetCard` schema §14.2 (mentioned in §7.6 prose)
 
 **Unit tests (write first):**
@@ -302,7 +302,7 @@ def test_spec_materialization_end_to_end(tmp_path):
     }
     fixed_ts = datetime(2026, 3, 15, 12, 0, 0, tzinfo=timezone.utc)
     spec = materialize_spec(DatasetConfig(**config), timestamp=fixed_ts)
-    spec2 = PipelineSpec.model_validate_json(spec.model_dump_json())
+    spec2 = DatasetPipelineSpec.model_validate_json(spec.model_dump_json())
 
     assert len(spec2.shards) == 10
     assert spec2.shards[0].shard_id == 0
@@ -394,7 +394,7 @@ ______________________________________________________________________
 - Pure functions (functional core)
 
 **`_make_test_spec` helper** (defined in `tests/pipeline/conftest.py`):
-Returns a valid `PipelineSpec` with sensible defaults: `renderer_version="test"`,
+Returns a valid `DatasetPipelineSpec` with sensible defaults: `renderer_version="test"`,
 `code_version="abc1234"`, `run_id` derived from params, `output_format="hdf5"`.
 Accepts `num_shards`, `shard_size`, `output_format` overrides.
 
@@ -652,7 +652,7 @@ def test_generate_cli_end_to_end(tmp_path):
     for i in range(4):
         assert any(m.endswith(".valid")
             for m in storage.list_shard_markers(run_id, i))  # shard_id is int
-    assert storage.exists(run_id, "metadata/input_spec.json")  # frozen PipelineSpec
+    assert storage.exists(run_id, "metadata/input_spec.json")  # frozen DatasetPipelineSpec
     assert storage.exists(run_id, "metadata/config.yaml")  # source YAML (provenance)
 ```
 
@@ -976,6 +976,6 @@ overlaid from worker reports. Task 5.2 only describes shard counts and missing I
 Several fields in the design doc §14 schemas need updating to match the implementation:
 
 - `ValidationSummary` class not defined in design doc (referenced in `DatasetCard`)
-- `base_seed` not in `PipelineSpec` schema (referenced in §14.1 text)
-- Generation params (preset_path, channels, etc.) not in `PipelineSpec` schema
+- `base_seed` not in `DatasetPipelineSpec` schema (referenced in §14.1 text)
+- Generation params (preset_path, channels, etc.) not in `DatasetPipelineSpec` schema
 - `shard_manifest` not in `DatasetCard` schema (mentioned in §7.6 prose)
