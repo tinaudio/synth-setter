@@ -74,6 +74,9 @@ def extract_renderer_version(plugin_path: Path) -> str:
         json.JSONDecodeError: If moduleinfo.json is malformed.
         plistlib.InvalidFileException: If Info.plist is malformed.
     """
+    if not plugin_path.exists():
+        raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
+
     moduleinfo = plugin_path / "Contents" / "moduleinfo.json"
     if moduleinfo.is_file():
         data = json.loads(moduleinfo.read_text())

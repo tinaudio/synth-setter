@@ -198,6 +198,12 @@ class TestExtractRendererVersion:
         with pytest.raises(FileNotFoundError):
             extract_renderer_version(plugin)
 
+    def test_raises_file_not_found_when_plugin_path_does_not_exist(self, tmp_path: Path) -> None:
+        """Nonexistent plugin path raises FileNotFoundError with clear message."""
+        plugin = tmp_path / "nonexistent.vst3"
+        with pytest.raises(FileNotFoundError, match="Plugin path does not exist"):
+            extract_renderer_version(plugin)
+
     def test_raises_key_error_when_version_field_missing(self, tmp_path: Path) -> None:
         """moduleinfo.json without Version key raises KeyError."""
         plugin = tmp_path / "Plugin.vst3"
