@@ -57,34 +57,7 @@ jobs:
           cat /tmp/spec-output/spec.json
           echo ""
           echo "=== Structural Validation ==="
-          python3 -c "
-          import json, sys
-          spec = json.load(open('/tmp/spec-output/spec.json'))
-          required = ['run_id', 'code_version', 'renderer_version', 'num_params',
-                      'param_spec', 'sample_rate', 'shard_size', 'shards',
-                      'plugin_path', 'preset_path', 'velocity',
-                      'signal_duration_seconds', 'min_loudness', 'sample_batch_size']
-          missing = [f for f in required if f not in spec]
-          if missing:
-              print(f'FAIL: missing fields: {missing}', file=sys.stderr)
-              sys.exit(1)
-          cv = spec['code_version']
-          if not (len(cv) == 40 and all(c in '0123456789abcdef' for c in cv)):
-              print(f'FAIL: code_version is not a valid SHA: {cv}', file=sys.stderr)
-              sys.exit(1)
-          if not spec['renderer_version']:
-              print('FAIL: renderer_version is empty', file=sys.stderr)
-              sys.exit(1)
-          if not spec['shards']:
-              print('FAIL: shards is empty', file=sys.stderr)
-              sys.exit(1)
-          print(f'All structural checks passed:')
-          print(f'  code_version:     {cv}')
-          print(f'  renderer_version: {spec[\"renderer_version\"]}')
-          print(f'  num_params:       {spec[\"num_params\"]}')
-          print(f'  num_shards:       {len(spec[\"shards\"])}')
-          print(f'  config:           ${{ inputs.config_path }}')
-          "
+          python3 scripts/ci/validate_spec_structure.py /tmp/spec-output/spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@v4
