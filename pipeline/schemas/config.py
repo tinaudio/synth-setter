@@ -12,7 +12,7 @@ from pipeline.schemas.prefix import DatasetConfigId
 class SplitsConfig(BaseModel):
     """Train/val/test shard counts."""
 
-    model_config = ConfigDict(strict=True, extra="forbid")
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     train: int
     val: int
