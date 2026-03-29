@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import materialize_spec
 
@@ -25,7 +26,7 @@ def main() -> None:
     spec = materialize_spec(cfg, cid)
 
     spec_json = spec.model_dump_json(indent=2)
-    output_path = output_dir / "spec.json"
+    output_path = output_dir / INPUT_SPEC_FILENAME
     output_path.write_text(spec_json)
 
     sys.stdout.write(spec_json + "\n")

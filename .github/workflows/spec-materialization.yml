@@ -54,14 +54,14 @@ jobs:
       - name: Validate spec structure
         run: |
           echo "=== Materialized Spec ==="
-          cat /tmp/spec-output/spec.json
+          cat /tmp/spec-output/input_spec.json
           echo ""
           echo "=== Structural Validation ==="
-          python3 -m pipeline.ci.validate_spec /tmp/spec-output/spec.json
+          python3 -m pipeline.ci.validate_spec /tmp/spec-output/input_spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact_name }}
-          path: /tmp/spec-output/spec.json
+          path: /tmp/spec-output/input_spec.json
           retention-days: 30

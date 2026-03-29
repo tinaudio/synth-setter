@@ -31,4 +31,4 @@ jobs:
           name: test-materialized-spec
 
       - name: Assert test-specific values
-        run: python3 -m pipeline.ci.validate_spec spec.json --test-values
+        run: python3 -m pipeline.ci.validate_spec input_spec.json --test-values
