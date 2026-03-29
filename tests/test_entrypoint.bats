@@ -131,3 +131,17 @@ EP="$BATS_TEST_DIRNAME/../scripts/docker_entrypoint.sh"
   run env MODE=bogus "$EP" echo SHOULD_NOT_RUN
   [[ ! "$output" =~ "SHOULD_NOT_RUN" ]]
 }
+
+# ---------------------------------------------------------------------------
+# Generate dataset mode (MODE=generate_dataset)
+# ---------------------------------------------------------------------------
+
+@test "test_generate_dataset_missing_config_exits_nonzero" {
+  run env -u DATASET_CONFIG MODE=generate_dataset "$EP"
+  [ "$status" -ne 0 ]
+}
+
+@test "test_generate_dataset_missing_config_prints_error" {
+  run env -u DATASET_CONFIG MODE=generate_dataset "$EP"
+  [[ "$output" =~ "DATASET_CONFIG" ]]
+}

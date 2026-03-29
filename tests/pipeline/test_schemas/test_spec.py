@@ -82,6 +82,7 @@ class TestDatasetPipelineSpec:
         """Extra fields on DatasetPipelineSpec raise ValidationError."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
             "created_at": FIXED_NOW,
             "code_version": "abc123",
             "is_repo_dirty": False,
@@ -95,6 +96,7 @@ class TestDatasetPipelineSpec:
             "splits": SplitsConfig(train=1, val=0, test=0),
             "plugin_path": str(patch_materialize_io),
             "preset_path": "presets/test.vstpreset",
+            "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
@@ -111,6 +113,7 @@ class TestDatasetPipelineSpec:
         """Invalid output_format literal raises ValidationError."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
             "created_at": FIXED_NOW,
             "code_version": "abc123",
             "is_repo_dirty": False,
@@ -124,6 +127,7 @@ class TestDatasetPipelineSpec:
             "splits": SplitsConfig(train=1, val=0, test=0),
             "plugin_path": str(patch_materialize_io),
             "preset_path": "presets/test.vstpreset",
+            "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
@@ -133,10 +137,15 @@ class TestDatasetPipelineSpec:
         with pytest.raises(ValidationError):
             DatasetPipelineSpec(**kwargs)
 
-    def test_direct_construction_with_bad_plugin_path_raises_validation_error(self) -> None:
-        """Constructing DatasetPipelineSpec with nonexistent plugin_path raises ValidationError."""
+    def test_direct_construction_with_nonexistent_plugin_path_succeeds(self) -> None:
+        """Constructing DatasetPipelineSpec with nonexistent plugin_path succeeds.
+
+        Plugin path validation is in materialize_spec(), not the model — so deserialization on
+        machines without the plugin works.
+        """
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
             "created_at": datetime(2026, 3, 28, tzinfo=timezone.utc),
             "code_version": "abc123",
             "is_repo_dirty": False,
@@ -149,6 +158,7 @@ class TestDatasetPipelineSpec:
             "num_params": 92,
             "plugin_path": "/nonexistent/plugin.vst3",
             "preset_path": "presets/test.vstpreset",
+            "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
@@ -156,8 +166,38 @@ class TestDatasetPipelineSpec:
             "splits": SplitsConfig(train=1, val=0, test=0),
             "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
         }
-        with pytest.raises(ValidationError, match="Plugin path does not exist"):
-            DatasetPipelineSpec(**kwargs)
+        spec = DatasetPipelineSpec(**kwargs)
+        assert spec.plugin_path == "/nonexistent/plugin.vst3"
+
+    def test_json_round_trip_without_plugin_on_disk(self) -> None:
+        """JSON round-trip works even when plugin_path doesn't exist on disk."""
+        kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
+            "created_at": datetime(2026, 3, 28, tzinfo=timezone.utc),
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "hdf5",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "base_seed": 42,
+            "num_params": 92,
+            "plugin_path": "/nonexistent/plugin.vst3",
+            "preset_path": "presets/test.vstpreset",
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
+        }
+        spec = DatasetPipelineSpec(**kwargs)
+        json_str = spec.model_dump_json()
+        restored = DatasetPipelineSpec.model_validate_json(json_str)
+        assert restored == spec
 
 
 class TestExtractRendererVersion:

@@ -179,6 +179,60 @@ docker run --rm -e MODE=passthrough synth-setter:dev-snapshot \
 docker run --rm -e MODE=passthrough synth-setter:dev-snapshot
 ```
 
+### MODE=generate_dataset — VST dataset generation
+
+Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
+(Xvfb). X11 bootstrapping (Xvfb/dbus/xsettings) is handled by
+`scripts/run-linux-vst-headless.sh` (invoked from the Docker entrypoint);
+the entrypoint module `pipeline/entrypoints/generate_dataset.py` reads env/config
+and invokes `generate_vst_dataset.py` with the resolved dataset config.
+The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
+`input_spec.json` is written to `RUN_METADATA_DIR`.
+
+| Env var            | Required | Default         | Purpose                                    |
+| ------------------ | -------- | --------------- | ------------------------------------------ |
+| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container   |
+| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where input_spec.json is written |
+
+```bash
+docker run --rm \
+  -e MODE=generate_dataset \
+  -e DATASET_CONFIG=configs/dataset/ci-smoke-test.yaml \
+  -v "$(pwd)/run-metadata:/run-metadata" \
+  synth-setter:dev-snapshot
+```
+
+### Workflow artifact bundle (generate_dataset)
+
+When the test workflow runs, it uploads an artifact bundle named
+`test-run-metadata`. The bundle contains two files:
+
+| File              | Contents                                                           |
+| ----------------- | ------------------------------------------------------------------ |
+| `input_spec.json` | DatasetPipelineSpec written by the container to `RUN_METADATA_DIR` |
+| `generate.log`    | Full container stdout/stderr from generation                       |
+
+**Download:**
+
+```bash
+gh run download <run_id> -n test-run-metadata
+```
+
+**Inspect:**
+
+```bash
+# View the pipeline spec
+jq . input_spec.json
+
+# Check how many samples were generated
+grep -c "Saving sample" generate.log
+
+# Find the R2 location for this run
+jq .r2_prefix input_spec.json
+```
+
+**Retention:** 7 days (GitHub Actions default).
+
 ### Volume mounting (dev-live)
 
 dev-live has no baked source or `docker_entrypoint.sh`. Mount your working
@@ -308,10 +362,10 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 
 ### Entrypoint errors
 
-| Error              | Cause                | Fix                                         |
-| ------------------ | -------------------- | ------------------------------------------- |
-| `MODE is required` | MODE env var not set | Add `-e MODE=idle` or `-e MODE=passthrough` |
-| `unknown MODE 'X'` | Typo in MODE value   | Use `idle` or `passthrough`                 |
+| Error              | Cause                | Fix                                                                      |
+| ------------------ | -------------------- | ------------------------------------------------------------------------ |
+| `MODE is required` | MODE env var not set | Add `-e MODE=idle`, `-e MODE=passthrough`, or `-e MODE=generate_dataset` |
+| `unknown MODE 'X'` | Typo in MODE value   | Use `idle`, `passthrough`, or `generate_dataset`                         |
 
 ______________________________________________________________________
 

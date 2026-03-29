@@ -1,0 +1,118 @@
+name: Test Dataset Generation
+
+# Exercises the dataset-generation reusable workflow with the CI smoke-test
+# config (32 samples, 1 shard). Validates the spec artifact after generation.
+#
+# Triggers:
+# - Manual dispatch: test with custom image tag and config
+# - Pull request: smoke test on dataset-related path changes
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_config:
+        description: "Path to dataset config YAML (under configs/dataset/)"
+        required: true
+        default: "configs/dataset/ci-smoke-test.yaml"
+      docker_image_tag:
+        description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+  pull_request:
+    paths:
+      - "src/data/vst/**"
+      - "pipeline/schemas/**"
+      - "configs/dataset/**"
+      - "pipeline/entrypoints/**"
+      - "scripts/docker_entrypoint.sh"
+      - ".github/workflows/dataset-generation.yml"
+      - ".github/workflows/test-dataset-generation.yml"
+      - "requirements*.txt"
+
+jobs:
+  generate:
+    uses: ./.github/workflows/dataset-generation.yml
+    with:
+      image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      config_path: >-
+        ${{
+          github.event_name == 'pull_request'
+            && 'configs/dataset/ci-smoke-test.yaml'
+            || (inputs.dataset_config || 'configs/dataset/ci-smoke-test.yaml')
+        }}
+      artifact_name: test-run-metadata
+    secrets: inherit
+
+  validate-spec:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download run metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: test-run-metadata
+
+      - name: Validate spec structure
+        run: python3 -m pipeline.ci.validate_spec input_spec.json
+
+  validate-shard:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download run metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: test-run-metadata
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Download shard from R2 and validate
+        env:
+          IMAGE: tinaudio/perm:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+        run: |
+          # Read R2 bucket from pipeline constants (checked-out code, no Docker needed)
+          R2_BUCKET=$(PYTHONPATH=. python3 -c "from pipeline.constants import R2_BUCKET; print(R2_BUCKET)")
+          R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
+          SHARD_FILE=$(python3 -c "import json; print(json.load(open('input_spec.json'))['shards'][0]['filename'])")
+
+          echo "R2 bucket: ${R2_BUCKET}"
+          echo "R2 prefix: ${R2_PREFIX}"
+          echo "Shard file: ${SHARD_FILE}"
+
+          # Download shard from R2 via Docker (has rclone + R2 credentials)
+          mkdir -p /tmp/shard-download
+          docker pull "$IMAGE"
+          docker run --rm \
+            -e MODE=passthrough \
+            -v /tmp/shard-download:/download \
+            "$IMAGE" \
+            rclone copy --checksum \
+              "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
+              /download/
+
+          ls -la /tmp/shard-download/
+
+          # Validate shard inside Docker (has h5py)
+          # Mount PR code over /home/build/synth-setter so the editable install
+          # picks up our validate_shard module (not in the published image yet).
+          docker run --rm \
+            -e MODE=passthrough \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -v /tmp/shard-download:/download:ro \
+            -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
+            "$IMAGE" \
+            python3 -m pipeline.ci.validate_shard \
+              /spec/input_spec.json \
+              "/download/${SHARD_FILE}"
