@@ -46,7 +46,7 @@ jobs:
               mkdir -p plugins && \
               ln -sf '/usr/lib/vst3/Surge XT.vst3' 'plugins/Surge XT.vst3' && \
               scripts/run-linux-vst-headless.sh \
-                python scripts/ci/materialize_spec_smoke.py \
+                python -m pipeline.ci.materialize_spec \
                   ${{ inputs.config_path }} \
                   /spec-output
             "
@@ -57,7 +57,7 @@ jobs:
           cat /tmp/spec-output/spec.json
           echo ""
           echo "=== Structural Validation ==="
-          python3 scripts/ci/validate_spec_structure.py /tmp/spec-output/spec.json
+          python3 -m pipeline.ci.validate_spec /tmp/spec-output/spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@v4
