@@ -35,6 +35,10 @@ jobs:
         run: docker pull tinaudio/perm:${{ inputs.image_tag }}
 
       - name: Materialize spec in Docker
+        # Mount the PR's code into the container so we test THIS branch's code
+        # against the image's environment (Surge XT, Python, pedalboard, etc.).
+        # The image was built earlier and has dependencies but stale code — the
+        # volume mount overlays fresh code from the checkout.
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
@@ -43,9 +47,12 @@ jobs:
             tinaudio/perm:${{ inputs.image_tag }} \
             -c "
               cd /home/build/synth-setter && \
+              # Runner UID != container UID; git refuses to run in untrusted dirs
               git config --global --add safe.directory /home/build/synth-setter && \
+              # Volume mount hides the image's plugins/ symlink — recreate it
               mkdir -p plugins && \
               ln -sf '/usr/lib/vst3/Surge XT.vst3' 'plugins/Surge XT.vst3' && \
+              # Headless X11 needed because importing pedalboard (via param_specs) requires it
               scripts/run-linux-vst-headless.sh \
                 python -m pipeline.ci.materialize_spec \
                   ${{ inputs.config_path }} \
