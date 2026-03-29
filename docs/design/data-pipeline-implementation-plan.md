@@ -269,14 +269,15 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   (per-shard `{shard_id, filename, content_hash}`), `input_spec_sha256`, `input_spec_path`.
 - Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
   `dataset_config_id` is the config filename stem, which encodes runtime params for readability.
-- `materialize_spec(config: DatasetConfig, timestamp=None, renderer_version=None) -> DatasetPipelineSpec`.
-  Optional `renderer_version` override for testing; test fixtures pass `"test-1.0"` explicitly.
+- `materialize_spec(config: DatasetConfig, config_id: DatasetConfigId) -> DatasetPipelineSpec`.
+  Derives all runtime state internally (git SHA, repo dirty status, renderer version from plugin,
+  UTC timestamp). No optional overrides — tests mock I/O helpers instead.
 
 **Design doc schema gaps to fix alongside this task:**
 
 - `ValidationSummary` class not defined in design doc (referenced in `DatasetCard` §14.2)
-- `base_seed` not in `DatasetPipelineSpec` schema §14.1 (referenced in text)
-- Generation params (preset_path, channels, etc.) not in `DatasetPipelineSpec` schema §14.1
+- ~~`base_seed` not in `DatasetPipelineSpec` schema §14.1~~ (fixed: added to spec)
+- ~~Generation params (preset_path, channels, etc.) not in `DatasetPipelineSpec` schema §14.1~~ (fixed: added to spec)
 - `shard_manifest` not in `DatasetCard` schema §14.2 (mentioned in §7.6 prose)
 
 **Unit tests (write first):**
@@ -288,23 +289,15 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 **Reference test:**
 
 ```python
-def test_spec_materialization_end_to_end(tmp_path):
+def test_spec_materialization_end_to_end(patch_materialize_io, valid_config_dict):
     """Config dict -> materialize -> serialize -> deserialize -> verify integrity."""
-    config = {
-        "base_seed": 42,
-        "num_shards": 10, "shard_size": 1000,
-        "splits": {"train": 8, "val": 1, "test": 1},
-        "param_spec": "surge_simple", "plugin_path": "plugins/Surge XT.vst3",
-        "output_format": "hdf5",
-        "preset_path": "presets/surge-base.vstpreset", "sample_rate": 44100,
-        "channels": 2, "velocity": 100, "signal_duration_seconds": 4.0,
-        "min_loudness": -55.0, "sample_batch_size": 32,
-    }
-    fixed_ts = datetime(2026, 3, 15, 12, 0, 0, tzinfo=timezone.utc)
-    spec = materialize_spec(DatasetConfig(**config), timestamp=fixed_ts)
+    valid_config_dict["plugin_path"] = str(patch_materialize_io)
+    config = DatasetConfig(**valid_config_dict)
+    config_id = DatasetConfigId("ci-smoke-test")
+    spec = materialize_spec(config, config_id)
     spec2 = DatasetPipelineSpec.model_validate_json(spec.model_dump_json())
 
-    assert len(spec2.shards) == 10
+    assert spec2.num_shards == 48  # from valid_config_dict
     assert spec2.shards[0].shard_id == 0
     assert spec2.shards[0].filename == "shard-000000.h5"
     assert spec2.shards[0].seed == 42
