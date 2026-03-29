@@ -164,6 +164,7 @@ checkpoints/
 # VST3
 plugins/
 
-# Claude Code (keep skills only)
+# Claude Code (keep skills and settings)
 .claude/
 !.claude/skills/
+!.claude/settings.json

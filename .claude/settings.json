@@ -10,6 +10,16 @@
             "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in *.env|*.env.*|*.pem|*.key) echo 'BLOCKED: Cannot edit credential/secret files (.env, .pem, .key)' >&2; exit 1;; *) exit 0;; esac"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "if": "Bash(git commit:*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"Committing to branch: $(git branch --show-current)\" >&2"
+          }
+        ]
       }
     ],
     "PostToolUse": [
