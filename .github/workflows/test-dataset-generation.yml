@@ -82,9 +82,13 @@ jobs:
         env:
           IMAGE: tinaudio/perm:${{ inputs.docker_image_tag || 'dev-snapshot' }}
         run: |
+          # Read R2 bucket from pipeline constants inside Docker
+          R2_BUCKET=$(docker run --rm -e MODE=passthrough "$IMAGE" \
+            python3 -c "from pipeline.constants import R2_BUCKET; print(R2_BUCKET)")
           R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
           SHARD_FILE=$(python3 -c "import json; print(json.load(open('input_spec.json'))['shards'][0]['filename'])")
 
+          echo "R2 bucket: ${R2_BUCKET}"
           echo "R2 prefix: ${R2_PREFIX}"
           echo "Shard file: ${SHARD_FILE}"
 
@@ -96,7 +100,7 @@ jobs:
             -v /tmp/shard-download:/download \
             "$IMAGE" \
             rclone copy --checksum \
-              "r2:intermediate-data/${R2_PREFIX}${SHARD_FILE}" \
+              "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
               /download/
 
           ls -la /tmp/shard-download/

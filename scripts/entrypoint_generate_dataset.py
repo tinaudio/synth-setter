@@ -21,7 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from pipeline.constants import INPUT_SPEC_FILENAME
+from pipeline.constants import INPUT_SPEC_FILENAME, R2_BUCKET
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec, materialize_spec
 
@@ -103,7 +103,7 @@ def run(config_path: Path, metadata_dir: Path) -> None:
     spec_path.write_text(spec.model_dump_json(indent=2))
 
     # Upload spec to R2 before generation
-    r2_dest = f"r2:intermediate-data/{spec.r2_prefix}"
+    r2_dest = f"r2:{R2_BUCKET}/{spec.r2_prefix}"
     _rclone_copy(str(spec_path), r2_dest)
 
     # Generate shard in temp dir, then upload to R2

@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+from pipeline.constants import R2_BUCKET
 from scripts.entrypoint_generate_dataset import build_generate_args, main, run
 
 _COMPLETE_CONFIG = {
@@ -148,7 +149,7 @@ class TestRun:
         assert len(rclone_calls) == 2
         spec_upload = rclone_calls[0]
         assert "input_spec.json" in spec_upload[0][0]
-        assert "r2:intermediate-data/" in spec_upload[0][1]
+        assert f"r2:{R2_BUCKET}/" in spec_upload[0][1]
 
         # Ordering: spec upload must appear before check_call in the shared call log
         call_names = [c[0] for c in manager.mock_calls]
