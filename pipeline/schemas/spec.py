@@ -29,25 +29,25 @@ class DatasetPipelineSpec(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    run_id: str
-    created_at: datetime  # UTC, timezone-aware
-    code_version: str  # git commit SHA
-    is_repo_dirty: bool
-    param_spec: str
-    renderer_version: str
-    output_format: Literal["hdf5", "wds"]
-    sample_rate: int
-    shard_size: int
-    base_seed: int
+    run_id: str  # unique run ID: {config_id}-{YYYYMMDDTHHMMSSZ}
+    created_at: datetime  # UTC, timezone-aware materialization timestamp
+    code_version: str  # git commit SHA at materialization time
+    is_repo_dirty: bool  # True if working tree had uncommitted changes
+    param_spec: str  # name of param spec in registry (e.g. "surge_simple")
+    renderer_version: str  # VST plugin version, extracted from plugin bundle
+    output_format: Literal["hdf5", "wds"]  # shard file format
+    sample_rate: int  # audio sample rate in Hz
+    shard_size: int  # rows (samples) per shard
+    base_seed: int  # deterministic seed base; per-shard seed = base_seed + shard_id
     num_params: int  # total encoded param count from param_spec registry
-    splits: SplitsConfig
+    splits: SplitsConfig  # train/val/test shard counts
     plugin_path: str  # VST3 plugin to render through
     preset_path: str  # VST preset to load
     velocity: int  # MIDI velocity for note rendering
-    signal_duration_seconds: float  # audio length per sample (seconds)
+    signal_duration_seconds: float  # audio length per sample in seconds
     min_loudness: float  # loudness floor — retry if below
     sample_batch_size: int  # batch size for generation efficiency
-    shards: tuple[ShardSpec, ...]
+    shards: tuple[ShardSpec, ...]  # pre-computed per-shard identity (id, filename, seed)
 
     @property
     def num_shards(self) -> int:
