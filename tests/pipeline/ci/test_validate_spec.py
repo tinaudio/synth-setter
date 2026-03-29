@@ -22,6 +22,8 @@ def _make_valid_spec(**overrides: object) -> dict:
         "splits": {"train": 1, "val": 1, "test": 1},
         "plugin_path": "plugins/Surge XT.vst3",
         "preset_path": "presets/surge-base.vstpreset",
+        "channels": 2,
+        "r2_prefix": "data/test/test-20260328T120000Z/",
         "velocity": 100,
         "signal_duration_seconds": 4.0,
         "min_loudness": -55.0,

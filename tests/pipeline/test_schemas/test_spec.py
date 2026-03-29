@@ -82,6 +82,7 @@ class TestDatasetPipelineSpec:
         """Extra fields on DatasetPipelineSpec raise ValidationError."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
             "created_at": FIXED_NOW,
             "code_version": "abc123",
             "is_repo_dirty": False,
@@ -95,6 +96,7 @@ class TestDatasetPipelineSpec:
             "splits": SplitsConfig(train=1, val=0, test=0),
             "plugin_path": str(patch_materialize_io),
             "preset_path": "presets/test.vstpreset",
+            "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
@@ -111,6 +113,7 @@ class TestDatasetPipelineSpec:
         """Invalid output_format literal raises ValidationError."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
             "created_at": FIXED_NOW,
             "code_version": "abc123",
             "is_repo_dirty": False,
@@ -124,6 +127,7 @@ class TestDatasetPipelineSpec:
             "splits": SplitsConfig(train=1, val=0, test=0),
             "plugin_path": str(patch_materialize_io),
             "preset_path": "presets/test.vstpreset",
+            "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
@@ -141,6 +145,7 @@ class TestDatasetPipelineSpec:
         """
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
             "created_at": datetime(2026, 3, 28, tzinfo=timezone.utc),
             "code_version": "abc123",
             "is_repo_dirty": False,
@@ -153,6 +158,7 @@ class TestDatasetPipelineSpec:
             "num_params": 92,
             "plugin_path": "/nonexistent/plugin.vst3",
             "preset_path": "presets/test.vstpreset",
+            "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
@@ -167,6 +173,7 @@ class TestDatasetPipelineSpec:
         """JSON round-trip works even when plugin_path doesn't exist on disk."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
             "created_at": datetime(2026, 3, 28, tzinfo=timezone.utc),
             "code_version": "abc123",
             "is_repo_dirty": False,
@@ -179,6 +186,7 @@ class TestDatasetPipelineSpec:
             "num_params": 92,
             "plugin_path": "/nonexistent/plugin.vst3",
             "preset_path": "presets/test.vstpreset",
+            "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,

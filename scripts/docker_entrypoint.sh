@@ -18,6 +18,17 @@
 #       docker run -e MODE=passthrough <image> python train.py --lr 0.01
 #       docker run -e MODE=passthrough <image>   # no-op, exits 0
 #
+#   MODE=generate_dataset
+#     Generates a VST dataset shard via generate_vst_dataset.py under headless X11.
+#     Reads config from DATASET_CONFIG env var (required, path to YAML).
+#     The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
+#     input_spec.json is written to RUN_METADATA_DIR.
+#     Optional: RUN_METADATA_DIR (default: /run-metadata).
+#       docker run -e MODE=generate_dataset \
+#         -e DATASET_CONFIG=configs/dataset/ci-smoke-test.yaml \
+#         -e RUN_METADATA_DIR=/run-metadata \
+#         -v /tmp/run-metadata:/run-metadata <image>
+#
 # Examples:
 #
 #   # Debug a container interactively
@@ -33,7 +44,7 @@
 #
 #   # Forgot to set MODE — fails fast with a helpful error
 #   docker run --rm myimage:latest
-#   # => Error: MODE is required. Set MODE=idle or MODE=passthrough.
+#   # => Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_dataset.
 #
 # See also:
 #   docs/reference/docker-spec.md — full spec for modes, image targets, env vars
@@ -55,14 +66,19 @@ case "${mode}" in
     echo "Passthrough mode — no command provided, exiting cleanly."
     exit 0
     ;;
+  generate_dataset)
+    : "${DATASET_CONFIG:?DATASET_CONFIG is required (path to dataset config YAML)}"
+    exec scripts/run-linux-vst-headless.sh \
+        python -m pipeline.entrypoints.generate_dataset
+    ;;
   "")
-    echo "Error: MODE is required. Set MODE=idle or MODE=passthrough." >&2
-    echo "Available modes: idle, passthrough" >&2
+    echo "Error: MODE is required. Set MODE=idle, MODE=passthrough, or MODE=generate_dataset." >&2
+    echo "Available modes: idle, passthrough, generate_dataset" >&2
     exit 1
     ;;
   *)
     echo "Error: unknown MODE '${mode}'." >&2
-    echo "Available modes: idle, passthrough" >&2
+    echo "Available modes: idle, passthrough, generate_dataset" >&2
     exit 1
     ;;
 esac

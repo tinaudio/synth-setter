@@ -13,6 +13,7 @@ from pathlib import Path
 
 _REQUIRED_FIELDS = [
     "base_seed",
+    "channels",
     "code_version",
     "created_at",
     "is_repo_dirty",
@@ -22,6 +23,7 @@ _REQUIRED_FIELDS = [
     "param_spec",
     "plugin_path",
     "preset_path",
+    "r2_prefix",
     "renderer_version",
     "run_id",
     "sample_batch_size",
