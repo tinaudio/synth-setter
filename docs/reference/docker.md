@@ -197,27 +197,25 @@ The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
 ```bash
 docker run --rm \
   -e MODE=generate_dataset \
-  -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
+  -e DATASET_CONFIG=configs/dataset/ci-smoke-test.yaml \
   -v "$(pwd)/run-metadata:/run-metadata" \
   synth-setter:dev-snapshot
 ```
 
 ### Workflow artifact bundle (generate_dataset)
 
-When the dataset generation workflow runs, it uploads an artifact bundle named
-`run-manifest-{config_id}` (e.g., `run-manifest-surge-simple-480k-10k`). The
-bundle contains three files:
+When the test workflow runs, it uploads an artifact bundle named
+`test-run-metadata`. The bundle contains two files:
 
-| File               | Contents                                                           |
-| ------------------ | ------------------------------------------------------------------ |
-| `<config_id>.yaml` | Copy of the dataset config YAML used for the run                   |
-| `input_spec.json`  | DatasetPipelineSpec written by the container to `RUN_METADATA_DIR` |
-| `generate.log`     | Full container stdout/stderr from generation                       |
+| File              | Contents                                                           |
+| ----------------- | ------------------------------------------------------------------ |
+| `input_spec.json` | DatasetPipelineSpec written by the container to `RUN_METADATA_DIR` |
+| `generate.log`    | Full container stdout/stderr from generation                       |
 
 **Download:**
 
 ```bash
-gh run download <run_id> -n run-manifest-surge-simple-480k-10k
+gh run download <run_id> -n test-run-metadata
 ```
 
 **Inspect:**

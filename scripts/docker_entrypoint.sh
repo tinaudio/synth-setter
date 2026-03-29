@@ -25,7 +25,7 @@
 #     input_spec.json is written to RUN_METADATA_DIR.
 #     Optional: RUN_METADATA_DIR (default: /run-metadata).
 #       docker run -e MODE=generate_dataset \
-#         -e DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml \
+#         -e DATASET_CONFIG=configs/dataset/ci-smoke-test.yaml \
 #         -e RUN_METADATA_DIR=/run-metadata \
 #         -v /tmp/run-metadata:/run-metadata <image>
 #
