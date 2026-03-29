@@ -82,26 +82,8 @@ jobs:
         env:
           IMAGE: tinaudio/perm:${{ inputs.docker_image_tag || 'dev-snapshot' }}
         run: |
-          # Extract R2 prefix and shard filename from the spec
-          R2_PREFIX=$(python3 -c "
-          import json
-          spec = json.load(open('input_spec.json'))
-          # R2 prefix: data/{config_id}/{run_id}/
-          # run_id contains config_id as prefix, so we split on the timestamp
-          run_id = spec['run_id']
-          # config_id is run_id minus the timestamp suffix (-YYYYMMDDTHHMMSSZ)
-          config_id = run_id.rsplit('-', 1)[0]
-          # But config_id itself can have hyphens, so we match the timestamp pattern
-          import re
-          m = re.match(r'(.+)-(\d{8}T\d{6}Z)$', run_id)
-          config_id = m.group(1)
-          print(f'data/{config_id}/{run_id}/')
-          ")
-          SHARD_FILE=$(python3 -c "
-          import json
-          spec = json.load(open('input_spec.json'))
-          print(spec['shards'][0]['filename'])
-          ")
+          R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
+          SHARD_FILE=$(python3 -c "import json; print(json.load(open('input_spec.json'))['shards'][0]['filename'])")
 
           echo "R2 prefix: ${R2_PREFIX}"
           echo "Shard file: ${SHARD_FILE}"
