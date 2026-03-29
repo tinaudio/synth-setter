@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from pipeline.schemas.config import DatasetConfig, SplitsConfig
-from pipeline.schemas.prefix import DatasetConfigId, make_dataset_wandb_run_id
+from pipeline.schemas.prefix import DatasetConfigId, DatasetRunId, make_dataset_wandb_run_id
 from src.data.vst import param_specs
 
 
@@ -29,7 +29,7 @@ class DatasetPipelineSpec(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    run_id: str  # unique run ID: {config_id}-{YYYYMMDDTHHMMSSZ}
+    run_id: DatasetRunId  # unique run ID: {config_id}-{YYYYMMDDTHHMMSSZ}
     created_at: datetime  # UTC, timezone-aware materialization timestamp
     code_version: str  # git commit SHA at materialization time
     is_repo_dirty: bool  # True if working tree had uncommitted changes

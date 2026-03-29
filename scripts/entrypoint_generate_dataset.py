@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
-from pipeline.schemas.prefix import DatasetRunId, make_r2_prefix
+from pipeline.schemas.prefix import make_r2_prefix
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec, materialize_spec
 
 
@@ -98,7 +98,7 @@ def run(config_path: Path, metadata_dir: Path) -> None:
     spec_path.write_text(spec.model_dump_json(indent=2))
 
     # Upload spec to R2 before generation
-    r2_prefix = make_r2_prefix(config_id, DatasetRunId(spec.run_id))
+    r2_prefix = make_r2_prefix(config_id, spec.run_id)
     r2_dest = f"r2:intermediate-data/{r2_prefix}"
     _rclone_copy(str(spec_path), r2_dest)
 
