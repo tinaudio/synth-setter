@@ -108,6 +108,7 @@ jobs:
           # Validate shard inside Docker (has h5py)
           docker run --rm \
             -e MODE=passthrough \
+            -e PYTHONPATH=/code \
             -v "${{ github.workspace }}:/code:ro" \
             -v /tmp/shard-download:/download:ro \
             -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \

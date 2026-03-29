@@ -65,6 +65,7 @@ jobs:
               ln -sf '/usr/lib/vst3/Surge XT.vst3' 'plugins/Surge XT.vst3' && \
               export DATASET_CONFIG='${{ inputs.config_path }}' && \
               export RUN_METADATA_DIR=/run-metadata && \
+              export PYTHONPATH=/home/build/synth-setter && \
               scripts/run-linux-vst-headless.sh \
                 python scripts/entrypoint_generate_dataset.py
             " 2>&1 | tee "${METADATA_DIR}/generate.log"
