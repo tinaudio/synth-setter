@@ -3,6 +3,11 @@
 Materializes a DatasetPipelineSpec from config, uploads spec to R2, generates a
 single shard, and uploads the shard to R2.
 
+Public API:
+    run(): full flow — materialize spec, upload, generate, upload shard
+    build_generate_args(): builds CLI args from a spec + shard + output_dir
+    main(): reads env vars and delegates to run()
+
 Expected env vars:
     DATASET_CONFIG   (required): Path to dataset config YAML inside the container.
     RUN_METADATA_DIR (optional): Dir for spec.json output. Default: /run-metadata.
@@ -26,7 +31,7 @@ def _rclone_copy(src: str, dest: str) -> None:
     subprocess.check_call(["rclone", "copy", "--checksum", src, dest])  # noqa: S603, S607
 
 
-def _build_generate_args(
+def build_generate_args(
     spec: DatasetPipelineSpec, shard: ShardSpec, output_dir: Path
 ) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
@@ -105,7 +110,7 @@ def run(config_path: Path, metadata_dir: Path) -> None:
     # Generate shard in temp dir, then upload to R2
     shard = spec.shards[0]
     with tempfile.TemporaryDirectory() as shard_dir:
-        args = _build_generate_args(spec, shard, Path(shard_dir))
+        args = build_generate_args(spec, shard, Path(shard_dir))
         subprocess.check_call(args)  # noqa: S603 — args built from validated spec
         shard_path = Path(shard_dir) / shard.filename
         _rclone_copy(str(shard_path), r2_dest)
