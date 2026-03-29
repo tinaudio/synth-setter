@@ -75,6 +75,7 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 - The main working tree should only be used for read-only operations (exploration, `git log`, `rclone ls`, etc.).
 - When using Claude Code's Agent tool with `isolation: "worktree"`, the worktree is automatically cleaned up if the agent makes no changes. If changes are made, the worktree path and branch are returned for review. For manually created worktrees, clean up with `git worktree remove` when done.
 - **Submodules:** Skills live in a git submodule at `.claude/skills/` (from `tinaudio/skills`). Clone with `--recurse-submodules`. In new worktrees, run `git submodule update --init`.
+- Always verify the correct git branch before pushing commits. Run `git branch --show-current` and confirm it matches the target PR branch before any push.
 
 ### Pipeline-Specific Rules
 
@@ -97,6 +98,21 @@ When reviewing code or PRs, invoke these skills in order:
 7. `ml-test` — ML testing checklist (25 items, model/pipeline test code)
 
 Review all changed code against every checklist. Prefix findings with BLOCK: (must fix) or WARN: (advisory). Skip style issues (Ruff handles formatting and linting).
+
+## Refactoring
+
+When refactoring or moving code, always grep ALL file types (not just .py) for references to the old path/name before considering the task complete. Include .yaml/.yml, .md, .json, .toml, .sh, and Dockerfile.
+
+## Design Principles
+
+Before implementing a new abstraction or design pattern, confirm the scope and abstraction level with the user. Prefer YAGNI — start minimal and expand only when asked. Do not over-engineer models or specs.
+
+## Implementation Approach
+
+- Always prefer the simplest viable implementation first. No extra abstractions, no speculative generality unless explicitly asked for or specified by design doc.
+- Present a plan before writing code. Wait for approval.
+- If you're tempted to introduce a new class, config schema, or architectural pattern, ask: "Do we need this now, or is this speculative?" Default to no.
+- Refactoring comes later, driven by real needs, not anticipated ones.
 
 ## Don't
 
