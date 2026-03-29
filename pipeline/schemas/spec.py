@@ -43,6 +43,7 @@ class DatasetPipelineSpec(BaseModel):
     splits: SplitsConfig  # train/val/test shard counts
     plugin_path: str  # VST3 plugin to render through
     preset_path: str  # VST preset to load
+    channels: int  # audio channels (e.g. 2 for stereo)
     velocity: int  # MIDI velocity for note rendering
     signal_duration_seconds: float  # audio length per sample in seconds
     min_loudness: float  # loudness floor — retry if below
@@ -177,6 +178,7 @@ def _build_pipeline_spec(
         splits=config.splits,
         plugin_path=config.plugin_path,
         preset_path=config.preset_path,
+        channels=config.channels,
         velocity=config.velocity,
         signal_duration_seconds=config.signal_duration_seconds,
         min_loudness=config.min_loudness,

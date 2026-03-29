@@ -16,10 +16,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
-
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
-from pipeline.schemas.prefix import make_r2_prefix
+from pipeline.schemas.prefix import DatasetRunId, make_r2_prefix
+from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec, materialize_spec
 
 
 def _rclone_copy(src: str, dest: str) -> None:
@@ -27,42 +26,43 @@ def _rclone_copy(src: str, dest: str) -> None:
     subprocess.check_call(["rclone", "copy", "--checksum", src, dest])  # noqa: S603, S607
 
 
-def _build_generate_args(spec: DatasetPipelineSpec, output_file: Path) -> list[str]:
-    """Build CLI args for generate_vst_dataset.py from a materialized spec.
+def _build_generate_args(
+    spec: DatasetPipelineSpec, shard: ShardSpec, output_dir: Path
+) -> list[str]:
+    """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
     Args:
-        spec: Materialized pipeline spec.
-        output_file: Path for the output HDF5 shard.
+        spec: Materialized pipeline spec (dataset-level parameters).
+        shard: The specific shard to generate (owns filename).
+        output_dir: Directory for the output HDF5 file.
 
     Returns:
         List of CLI arguments for generate_vst_dataset.py.
     """
-    shard = spec.shards[0]
+    output_file = output_dir / shard.filename
 
-    return [
+    options = {
+        "plugin_path": spec.plugin_path,
+        "preset_path": spec.preset_path,
+        "sample_rate": spec.sample_rate,
+        "channels": spec.channels,
+        "velocity": spec.velocity,
+        "signal_duration_seconds": spec.signal_duration_seconds,
+        "min_loudness": spec.min_loudness,
+        "param_spec": spec.param_spec,
+        "sample_batch_size": spec.sample_batch_size,
+    }
+
+    args = [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
         str(output_file),
-        str(shard.row_count),
-        "--plugin_path",
-        spec.plugin_path,
-        "--preset_path",
-        spec.preset_path,
-        "--sample_rate",
-        str(spec.sample_rate),
-        "--channels",
-        str(shard.audio_shape[0]),
-        "--velocity",
-        str(spec.velocity),
-        "--signal_duration_seconds",
-        str(spec.signal_duration_seconds),
-        "--min_loudness",
-        str(spec.min_loudness),
-        "--param_spec",
-        spec.param_spec,
-        "--sample_batch_size",
-        str(spec.sample_batch_size),
+        str(spec.shard_size),
     ]
+    for key, value in options.items():
+        args.extend([f"--{key}", str(value)])
+
+    return args
 
 
 def run(config_path: Path, metadata_dir: Path) -> None:
@@ -98,17 +98,17 @@ def run(config_path: Path, metadata_dir: Path) -> None:
     spec_path.write_text(spec.model_dump_json(indent=2))
 
     # Upload spec to R2 before generation
-    r2_prefix = make_r2_prefix(config_id, spec.run_id)
+    r2_prefix = make_r2_prefix(config_id, DatasetRunId(spec.run_id))
     r2_dest = f"r2:intermediate-data/{r2_prefix}"
     _rclone_copy(str(spec_path), r2_dest)
 
     # Generate shard in temp dir, then upload to R2
+    shard = spec.shards[0]
     with tempfile.TemporaryDirectory() as shard_dir:
-        shard = spec.shards[0]
-        output_file = Path(shard_dir) / shard.filename
-        args = _build_generate_args(spec, output_file)
+        args = _build_generate_args(spec, shard, Path(shard_dir))
         subprocess.check_call(args)  # noqa: S603 — args built from validated spec
-        _rclone_copy(str(output_file), r2_dest)
+        shard_path = Path(shard_dir) / shard.filename
+        _rclone_copy(str(shard_path), r2_dest)
 
 
 def main() -> None:

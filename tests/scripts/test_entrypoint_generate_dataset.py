@@ -2,7 +2,7 @@
 
 Tests are organized around the PUBLIC typed API:
 - run(): full flow — materialize spec, upload, generate, upload shard
-- _build_generate_args(): builds CLI args from a materialized spec
+- _build_generate_args(): builds CLI args from a spec + shard + output_dir
 - main(): reads env vars and delegates to run()
 """
 
@@ -42,6 +42,31 @@ def _write_config(tmp_path: Path, overrides: dict | None = None) -> Path:
     return config_path
 
 
+def _make_mock_spec() -> MagicMock:
+    """Create a mock DatasetPipelineSpec with all fields needed for arg building."""
+    mock_spec = MagicMock()
+    mock_spec.run_id = "test-dataset-20260328T180000Z"
+    mock_spec.shard_size = 10000
+    mock_spec.plugin_path = "plugins/Surge XT.vst3"
+    mock_spec.preset_path = "presets/surge-base.vstpreset"
+    mock_spec.sample_rate = 16000
+    mock_spec.channels = 2
+    mock_spec.velocity = 100
+    mock_spec.signal_duration_seconds = 4.0
+    mock_spec.min_loudness = -55.0
+    mock_spec.param_spec = "surge_simple"
+    mock_spec.sample_batch_size = 32
+    mock_spec.model_dump_json.return_value = '{"run_id": "test"}'
+
+    mock_shard = MagicMock()
+    mock_shard.filename = "shard-000000.h5"
+    mock_shard.shard_id = 0
+    mock_shard.seed = 42
+    mock_spec.shards = (mock_shard,)
+
+    return mock_spec
+
+
 # ---------------------------------------------------------------------------
 # run — full flow orchestration
 # ---------------------------------------------------------------------------
@@ -63,11 +88,7 @@ class TestRun:
         """spec.json is written to metadata_dir with valid JSON."""
         config_path = _write_config(tmp_path)
         metadata_dir = tmp_path / "metadata"
-        mock_spec = MagicMock()
-        mock_spec.run_id = "test-dataset-20260328T180000Z"
-        mock_spec.shards = [MagicMock(filename="shard-000000.h5", row_count=10000)]
-        mock_spec.model_dump_json.return_value = '{"run_id": "test"}'
-        mock_materialize.return_value = mock_spec
+        mock_materialize.return_value = _make_mock_spec()
 
         run(config_path, metadata_dir)
 
@@ -88,15 +109,10 @@ class TestRun:
         """Rclone uploads spec.json to R2 before generate_vst_dataset runs."""
         config_path = _write_config(tmp_path)
         metadata_dir = tmp_path / "metadata"
-        mock_spec = MagicMock()
-        mock_spec.run_id = "test-dataset-20260328T180000Z"
-        mock_spec.shards = [MagicMock(filename="shard-000000.h5", row_count=10000)]
-        mock_spec.model_dump_json.return_value = "{}"
-        mock_materialize.return_value = mock_spec
+        mock_materialize.return_value = _make_mock_spec()
 
         run(config_path, metadata_dir)
 
-        # First rclone call is spec upload, before check_call (generation)
         rclone_calls = mock_rclone.call_args_list
         assert len(rclone_calls) == 2
         spec_upload = rclone_calls[0]
@@ -116,31 +132,14 @@ class TestRun:
         """generate_vst_dataset.py is called as subprocess with spec-derived args."""
         config_path = _write_config(tmp_path)
         metadata_dir = tmp_path / "metadata"
-        mock_shard = MagicMock()
-        mock_shard.filename = "shard-000000.h5"
-        mock_shard.row_count = 10000
-        mock_shard.audio_shape = (2, 64000)
-        mock_spec = MagicMock()
-        mock_spec.run_id = "test-dataset-20260328T180000Z"
-        mock_spec.shards = [mock_shard]
-        mock_spec.plugin_path = "plugins/Surge XT.vst3"
-        mock_spec.preset_path = "presets/surge-base.vstpreset"
-        mock_spec.sample_rate = 16000
-        mock_spec.velocity = 100
-        mock_spec.signal_duration_seconds = 4.0
-        mock_spec.min_loudness = -55.0
-        mock_spec.param_spec = "surge_simple"
-        mock_spec.sample_batch_size = 32
-        mock_spec.model_dump_json.return_value = "{}"
-        mock_materialize.return_value = mock_spec
+        mock_materialize.return_value = _make_mock_spec()
 
         run(config_path, metadata_dir)
 
-        # check_call was invoked with generate_vst_dataset.py args
         mock_check_call.assert_called_once()
         args = mock_check_call.call_args[0][0]
         assert "generate_vst_dataset.py" in args[1]
-        assert "10000" in args  # row_count
+        assert "10000" in args  # shard_size
 
     @patch("scripts.entrypoint_generate_dataset.subprocess.check_call")
     @patch("scripts.entrypoint_generate_dataset._rclone_copy")
@@ -155,11 +154,7 @@ class TestRun:
         """Second rclone call uploads the shard to R2 after generation."""
         config_path = _write_config(tmp_path)
         metadata_dir = tmp_path / "metadata"
-        mock_spec = MagicMock()
-        mock_spec.run_id = "test-dataset-20260328T180000Z"
-        mock_spec.shards = [MagicMock(filename="shard-000000.h5", row_count=10000)]
-        mock_spec.model_dump_json.return_value = "{}"
-        mock_materialize.return_value = mock_spec
+        mock_materialize.return_value = _make_mock_spec()
 
         run(config_path, metadata_dir)
 
@@ -189,89 +184,67 @@ class TestRun:
 
 
 # ---------------------------------------------------------------------------
-# _build_generate_args — arg construction from spec
+# _build_generate_args — arg construction from spec + shard
 # ---------------------------------------------------------------------------
 
 
 class TestBuildGenerateArgs:
-    """_build_generate_args() produces correct CLI arg lists from a spec."""
+    """_build_generate_args() produces correct CLI arg lists from spec + shard."""
 
-    def _make_mock_spec(self) -> MagicMock:
-        """Create a mock DatasetPipelineSpec with all fields needed for arg building."""
-        mock_shard = MagicMock()
-        mock_shard.filename = "shard-000000.h5"
-        mock_shard.row_count = 10000
-        mock_shard.audio_shape = (2, 64000)
+    def test_output_file_uses_shard_filename(self, tmp_path: Path) -> None:
+        """Output file path is {output_dir}/{shard.filename}."""
+        spec = _make_mock_spec()
+        shard = spec.shards[0]
 
-        mock_spec = MagicMock()
-        mock_spec.shards = [mock_shard]
-        mock_spec.plugin_path = "plugins/Surge XT.vst3"
-        mock_spec.preset_path = "presets/surge-base.vstpreset"
-        mock_spec.sample_rate = 16000
-        mock_spec.velocity = 100
-        mock_spec.signal_duration_seconds = 4.0
-        mock_spec.min_loudness = -55.0
-        mock_spec.param_spec = "surge_simple"
-        mock_spec.sample_batch_size = 32
-        return mock_spec
+        args = _build_generate_args(spec, shard, tmp_path)
 
-    def test_output_file_passed_as_first_positional(self) -> None:
-        """Output file path is the first positional arg after the script."""
-        spec = self._make_mock_spec()
-        output_file = Path("shard-000000.h5")
+        assert args[2] == str(tmp_path / "shard-000000.h5")
 
-        args = _build_generate_args(spec, output_file)
+    def test_num_samples_is_shard_size(self) -> None:
+        """num_samples arg comes from spec.shard_size."""
+        spec = _make_mock_spec()
+        shard = spec.shards[0]
 
-        assert args[2] == str(output_file)
-
-    def test_row_count_from_shard_spec(self) -> None:
-        """num_samples arg comes from shard.row_count."""
-        spec = self._make_mock_spec()
-
-        args = _build_generate_args(spec, Path("shard.h5"))
+        args = _build_generate_args(spec, shard, Path("out"))
 
         assert args[3] == "10000"
 
-    def test_channels_from_audio_shape(self) -> None:
-        """Channels arg derived from shard.audio_shape[0]."""
-        spec = self._make_mock_spec()
+    def test_all_spec_fields_passed_as_options(self) -> None:
+        """All generation parameters from spec are passed as --key value options."""
+        spec = _make_mock_spec()
+        shard = spec.shards[0]
 
-        args = _build_generate_args(spec, Path("shard.h5"))
+        args = _build_generate_args(spec, shard, Path("out"))
 
+        # Parse --key value pairs into a dict
         option_args = {}
-        i = 4
+        i = 4  # skip: python, script, output_file, shard_size
         while i < len(args):
             if args[i].startswith("--"):
-                option_args[args[i]] = args[i + 1]
+                option_args[args[i].lstrip("-")] = args[i + 1]
                 i += 2
             else:
                 i += 1
 
-        assert option_args["--channels"] == "2"
+        assert option_args["plugin_path"] == "plugins/Surge XT.vst3"
+        assert option_args["preset_path"] == "presets/surge-base.vstpreset"
+        assert option_args["sample_rate"] == "16000"
+        assert option_args["channels"] == "2"
+        assert option_args["velocity"] == "100"
+        assert option_args["signal_duration_seconds"] == "4.0"
+        assert option_args["min_loudness"] == "-55.0"
+        assert option_args["param_spec"] == "surge_simple"
+        assert option_args["sample_batch_size"] == "32"
 
-    def test_all_spec_fields_passed(self) -> None:
-        """All generation parameters from spec are passed as CLI options."""
-        spec = self._make_mock_spec()
+    def test_args_start_with_python_and_script(self) -> None:
+        """First arg is the Python executable, second is the generation script."""
+        spec = _make_mock_spec()
+        shard = spec.shards[0]
 
-        args = _build_generate_args(spec, Path("shard.h5"))
+        args = _build_generate_args(spec, shard, Path("out"))
 
-        option_args = {}
-        i = 4
-        while i < len(args):
-            if args[i].startswith("--"):
-                option_args[args[i]] = args[i + 1]
-                i += 2
-            else:
-                i += 1
-
-        assert option_args["--plugin_path"] == "plugins/Surge XT.vst3"
-        assert option_args["--preset_path"] == "presets/surge-base.vstpreset"
-        assert option_args["--sample_rate"] == "16000"
-        assert option_args["--velocity"] == "100"
-        assert option_args["--signal_duration_seconds"] == "4.0"
-        assert option_args["--min_loudness"] == "-55.0"
-        assert option_args["--param_spec"] == "surge_simple"
-        assert option_args["--sample_batch_size"] == "32"
+        assert "python" in args[0].lower() or args[0].endswith("/python3.10")
+        assert args[1] == "src/data/vst/generate_vst_dataset.py"
 
 
 # ---------------------------------------------------------------------------
