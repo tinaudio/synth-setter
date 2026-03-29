@@ -13,36 +13,6 @@ from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import DatasetConfigId, make_dataset_wandb_run_id
 from src.data.vst import param_specs
 
-# Hardcoded by the generator (generate_vst_dataset.py:194).
-# 128 mel bins from librosa default, 401 frames from 100fps hop at 44.1kHz/4s.
-# Changing these requires changing the generator — don't make configurable.
-_MEL_BINS = 128
-_MEL_FRAMES = 401
-
-_EXPECTED_HDF5_DATASETS = ("audio", "mel_spec", "param_array")
-
-
-class ShardSpec(BaseModel):
-    """Per-shard generation specification.
-
-    Shapes are per-row (single sample):
-    - audio_shape: (channels, samples) where samples = sample_rate * duration
-    - mel_shape: (mels, frames) — per-channel; full HDF5 row is (channels, *mel_shape)
-    - param_shape: (num_params,) — total encoded parameter count from param_spec
-    """
-
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
-
-    shard_id: int
-    filename: str
-    seed: int
-    row_start: int
-    row_count: int
-    expected_datasets: tuple[str, ...]
-    audio_shape: tuple[int, int]
-    mel_shape: tuple[int, int]
-    param_shape: tuple[int]
-
 
 class DatasetPipelineSpec(BaseModel):
     """Frozen runtime specification materialized from DatasetConfig."""
@@ -60,6 +30,7 @@ class DatasetPipelineSpec(BaseModel):
     shard_size: int
     num_shards: int
     base_seed: int
+    num_params: int  # total encoded param count from param_spec registry
     splits: SplitsConfig
     plugin_path: str  # VST3 plugin to render through
     preset_path: str  # VST preset to load
@@ -67,7 +38,6 @@ class DatasetPipelineSpec(BaseModel):
     signal_duration_seconds: float  # audio length per sample (seconds)
     min_loudness: float  # loudness floor — retry if below
     sample_batch_size: int  # batch size for generation efficiency
-    shards: tuple[ShardSpec, ...]
 
     @model_validator(mode="after")
     def _plugin_path_exists(self) -> DatasetPipelineSpec:
@@ -156,23 +126,6 @@ def _build_pipeline_spec(
         raise NotImplementedError(f"Output format {config.output_format!r} not yet supported")
 
     run_id = make_dataset_wandb_run_id(config_id, timestamp=created_at)
-    num_params = len(param_specs[config.param_spec])
-    audio_shape = (config.channels, int(config.sample_rate * config.signal_duration_seconds))
-
-    shards = tuple(
-        ShardSpec(
-            shard_id=i,
-            filename=f"shard-{i:06d}.h5",
-            seed=config.base_seed + i,
-            row_start=i * config.shard_size,
-            row_count=config.shard_size,
-            expected_datasets=tuple(_EXPECTED_HDF5_DATASETS),
-            audio_shape=audio_shape,
-            mel_shape=(_MEL_BINS, _MEL_FRAMES),
-            param_shape=(num_params,),
-        )
-        for i in range(config.num_shards)
-    )
 
     return DatasetPipelineSpec(
         run_id=run_id,
@@ -186,6 +139,7 @@ def _build_pipeline_spec(
         shard_size=config.shard_size,
         num_shards=config.num_shards,
         base_seed=config.base_seed,
+        num_params=len(param_specs[config.param_spec]),
         splits=config.splits,
         plugin_path=config.plugin_path,
         preset_path=config.preset_path,
@@ -193,5 +147,4 @@ def _build_pipeline_spec(
         signal_duration_seconds=config.signal_duration_seconds,
         min_loudness=config.min_loudness,
         sample_batch_size=config.sample_batch_size,
-        shards=shards,
     )

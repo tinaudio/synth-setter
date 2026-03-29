@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import plistlib
 import re
 from datetime import datetime, timezone
@@ -14,7 +13,6 @@ from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import DatasetConfigId
 from pipeline.schemas.spec import (
     DatasetPipelineSpec,
-    ShardSpec,
     extract_renderer_version,
     materialize_spec,
 )
@@ -48,43 +46,6 @@ def patch_materialize_io(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     return tmp_path / "FakePlugin.vst3"
 
 
-class TestShardSpec:
-    """Behavioral contracts for ShardSpec frozen model."""
-
-    def test_shard_spec_is_frozen(self) -> None:
-        """Assigning to a frozen ShardSpec field raises ValidationError."""
-        shard = ShardSpec(
-            shard_id=0,
-            filename="shard-000000.h5",
-            seed=42,
-            row_start=0,
-            row_count=100,
-            expected_datasets=("audio", "mel_spec", "param_array"),
-            audio_shape=(2, 64000),
-            mel_shape=(128, 401),
-            param_shape=(92,),
-        )
-        with pytest.raises(ValidationError):
-            shard.shard_id = 99  # type: ignore[misc]
-
-    def test_shard_spec_rejects_extra_fields(self) -> None:
-        """Extra fields on ShardSpec raise ValidationError."""
-        kwargs: dict[str, Any] = {
-            "shard_id": 0,
-            "filename": "shard-000000.h5",
-            "seed": 42,
-            "row_start": 0,
-            "row_count": 100,
-            "expected_datasets": ["audio", "mel_spec", "param_array"],
-            "audio_shape": (2, 64000),
-            "mel_shape": (128, 401),
-            "param_shape": (92,),
-            "extra_field": "oops",
-        }
-        with pytest.raises(ValidationError):
-            ShardSpec(**kwargs)
-
-
 class TestDatasetPipelineSpec:
     """Behavioral contracts for DatasetPipelineSpec frozen model."""
 
@@ -115,6 +76,7 @@ class TestDatasetPipelineSpec:
             "shard_size": 100,
             "num_shards": 1,
             "base_seed": 42,
+            "num_params": 92,
             "splits": SplitsConfig(train=1, val=0, test=0),
             "plugin_path": str(patch_materialize_io),
             "preset_path": "presets/test.vstpreset",
@@ -122,7 +84,6 @@ class TestDatasetPipelineSpec:
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
             "sample_batch_size": 32,
-            "shards": (),
             "extra_field": "oops",
         }
         with pytest.raises(ValidationError):
@@ -144,6 +105,7 @@ class TestDatasetPipelineSpec:
             "shard_size": 100,
             "num_shards": 1,
             "base_seed": 42,
+            "num_params": 92,
             "splits": SplitsConfig(train=1, val=0, test=0),
             "plugin_path": str(patch_materialize_io),
             "preset_path": "presets/test.vstpreset",
@@ -151,7 +113,6 @@ class TestDatasetPipelineSpec:
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
             "sample_batch_size": 32,
-            "shards": (),
         }
         with pytest.raises(ValidationError):
             DatasetPipelineSpec(**kwargs)
@@ -170,6 +131,7 @@ class TestDatasetPipelineSpec:
             "shard_size": 100,
             "num_shards": 1,
             "base_seed": 42,
+            "num_params": 92,
             "plugin_path": "/nonexistent/plugin.vst3",
             "preset_path": "presets/test.vstpreset",
             "velocity": 100,
@@ -177,7 +139,6 @@ class TestDatasetPipelineSpec:
             "min_loudness": -55.0,
             "sample_batch_size": 32,
             "splits": SplitsConfig(train=1, val=0, test=0),
-            "shards": (),
         }
         with pytest.raises(ValidationError, match="Plugin path does not exist"):
             DatasetPipelineSpec(**kwargs)
@@ -234,10 +195,10 @@ class TestExtractRendererVersion:
 class TestMaterializeSpec:
     """Behavioral tests for materialize_spec."""
 
-    def test_single_shard_all_fields_populated(
+    def test_all_fields_populated(
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
-        """Single-shard spec has all fields set to expected values."""
+        """Spec has all fields set to expected values."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
         valid_config_dict["num_shards"] = 1
         valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
@@ -256,6 +217,7 @@ class TestMaterializeSpec:
         assert spec.num_shards == 1
         assert spec.base_seed == 42
         assert spec.param_spec == "surge_simple"
+        assert spec.num_params == len(param_specs["surge_simple"])
         assert spec.splits == SplitsConfig(train=1, val=0, test=0)
         assert spec.plugin_path == str(patch_materialize_io)
         assert spec.preset_path == "presets/surge-base.vstpreset"
@@ -263,65 +225,11 @@ class TestMaterializeSpec:
         assert spec.signal_duration_seconds == 4.0
         assert spec.min_loudness == -55.0
         assert spec.sample_batch_size == 32
-        assert len(spec.shards) == 1
 
-        shard = spec.shards[0]
-        assert shard.shard_id == 0
-        assert shard.filename == "shard-000000.h5"
-        assert shard.seed == 42
-        assert shard.row_start == 0
-        assert shard.row_count == 10000
-        assert shard.audio_shape == (2, 64000)
-        assert shard.mel_shape == (128, 401)
-        assert shard.expected_datasets == ("audio", "mel_spec", "param_array")
-
-    def test_multi_shard_seeds_are_base_plus_shard_id(
+    def test_num_params_resolved_from_registry(
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
-        """Per-shard seeds are base_seed + shard_id."""
-        valid_config_dict["plugin_path"] = str(patch_materialize_io)
-        valid_config_dict["num_shards"] = 3
-        valid_config_dict["splits"] = {"train": 1, "val": 1, "test": 1}
-        config = DatasetConfig(**valid_config_dict)
-        config_id = DatasetConfigId("ci-smoke-test")
-        spec = materialize_spec(config, config_id)
-
-        seeds = [s.seed for s in spec.shards]
-        assert seeds == [42, 43, 44]
-
-    def test_multi_shard_row_ranges_are_contiguous(
-        self, patch_materialize_io: Path, valid_config_dict: dict
-    ) -> None:
-        """Row ranges across shards are contiguous with no gaps or overlaps."""
-        valid_config_dict["plugin_path"] = str(patch_materialize_io)
-        valid_config_dict["num_shards"] = 3
-        valid_config_dict["shard_size"] = 100
-        valid_config_dict["splits"] = {"train": 1, "val": 1, "test": 1}
-        config = DatasetConfig(**valid_config_dict)
-        config_id = DatasetConfigId("ci-smoke-test")
-        spec = materialize_spec(config, config_id)
-
-        row_starts = [s.row_start for s in spec.shards]
-        row_counts = [s.row_count for s in spec.shards]
-        assert row_starts == [0, 100, 200]
-        assert all(c == 100 for c in row_counts)
-
-    def test_filenames_are_zero_padded_six_digits(
-        self, patch_materialize_io: Path, valid_config_dict: dict
-    ) -> None:
-        """Shard filenames use six-digit zero-padded IDs."""
-        valid_config_dict["plugin_path"] = str(patch_materialize_io)
-        config = DatasetConfig(**valid_config_dict)
-        config_id = DatasetConfigId("ci-smoke-test")
-        spec = materialize_spec(config, config_id)
-
-        assert spec.shards[0].filename == "shard-000000.h5"
-        assert spec.shards[-1].filename == "shard-000047.h5"
-
-    def test_audio_shape_derived_from_config_fields(
-        self, patch_materialize_io: Path, valid_config_dict: dict
-    ) -> None:
-        """Audio shape is (channels, sample_rate * duration)."""
+        """num_params matches the length of the param_specs registry entry."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
         valid_config_dict["num_shards"] = 1
         valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
@@ -329,48 +237,7 @@ class TestMaterializeSpec:
         config_id = DatasetConfigId("ci-smoke-test")
         spec = materialize_spec(config, config_id)
 
-        assert spec.shards[0].audio_shape == (2, 64000)
-
-    def test_mel_shape_is_fixed_constant(
-        self, patch_materialize_io: Path, valid_config_dict: dict
-    ) -> None:
-        """Mel shape is (128, 401) regardless of sample rate."""
-        for sr in [16000, 44100]:
-            d = copy.deepcopy(valid_config_dict)
-            d["plugin_path"] = str(patch_materialize_io)
-            d["sample_rate"] = sr
-            d["num_shards"] = 1
-            d["splits"] = {"train": 1, "val": 0, "test": 0}
-            config = DatasetConfig(**d)
-            config_id = DatasetConfigId("ci-smoke-test")
-            spec = materialize_spec(config, config_id)
-            assert spec.shards[0].mel_shape == (128, 401)
-
-    def test_param_shape_resolved_from_registry(
-        self, patch_materialize_io: Path, valid_config_dict: dict
-    ) -> None:
-        """Param shape matches the length of the param_specs registry entry."""
-        valid_config_dict["plugin_path"] = str(patch_materialize_io)
-        valid_config_dict["num_shards"] = 1
-        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
-        config = DatasetConfig(**valid_config_dict)
-        config_id = DatasetConfigId("ci-smoke-test")
-        spec = materialize_spec(config, config_id)
-
-        expected_num_params = len(param_specs["surge_simple"])
-        assert spec.shards[0].param_shape == (expected_num_params,)
-
-    def test_expected_datasets_are_hdf5_standard(
-        self, patch_materialize_io: Path, valid_config_dict: dict
-    ) -> None:
-        """Every shard lists the standard HDF5 datasets."""
-        valid_config_dict["plugin_path"] = str(patch_materialize_io)
-        config = DatasetConfig(**valid_config_dict)
-        config_id = DatasetConfigId("ci-smoke-test")
-        spec = materialize_spec(config, config_id)
-
-        for shard in spec.shards:
-            assert shard.expected_datasets == ("audio", "mel_spec", "param_array")
+        assert spec.num_params == len(param_specs["surge_simple"])
 
     def test_json_round_trip_preserves_all_fields(
         self, patch_materialize_io: Path, valid_config_dict: dict
@@ -523,6 +390,4 @@ class TestMaterializeSpecIntegration:
         assert spec.created_at.tzinfo is not None
         assert spec.run_id.startswith("integration-test-")
         assert spec.num_shards == 1
-        assert len(spec.shards) == 1
-        assert spec.shards[0].seed == 42
-        assert spec.shards[0].audio_shape == (2, 64000)
+        assert spec.num_params > 0
