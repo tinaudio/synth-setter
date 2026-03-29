@@ -86,6 +86,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
     Raises:
         FileNotFoundError: If neither version file exists.
         KeyError: If the version field is missing.
+        json.JSONDecodeError: If moduleinfo.json is malformed.
+        plistlib.InvalidFileException: If Info.plist is malformed.
     """
     moduleinfo = plugin_path / "Contents" / "moduleinfo.json"
     if moduleinfo.is_file():
