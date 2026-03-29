@@ -14,10 +14,11 @@
       {
         "matcher": "Bash",
         "if": "Bash(git commit:*)",
+        "description": "Branch safety: echoes the current branch name before any git commit. Prints DETACHED HEAD when not on a branch. Goal: catch accidental commits to the wrong branch.",
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"Committing to branch: $(git branch --show-current)\" >&2"
+            "command": "branch=$(git branch --show-current 2>/dev/null || true); if [ -z \"$branch\" ]; then branch=\"DETACHED HEAD\"; fi; echo \"Committing to branch: $branch\" >&2"
           }
         ]
       }
