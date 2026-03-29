@@ -190,12 +190,12 @@ class TestExtractRendererVersion:
         (contents / "Info.plist").write_bytes(plistlib.dumps(plist_data))
         assert extract_renderer_version(plugin) == "2.0.0"
 
-    def test_raises_file_not_found_when_no_version_file(self, tmp_path: Path) -> None:
-        """Empty Contents directory raises FileNotFoundError."""
+    def test_raises_when_no_version_file_and_no_loadable_plugin(self, tmp_path: Path) -> None:
+        """Empty Contents directory with no loadable plugin raises an error."""
         plugin = tmp_path / "Plugin.vst3"
         contents = plugin / "Contents"
         contents.mkdir(parents=True)
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(Exception):  # noqa: B017
             extract_renderer_version(plugin)
 
     def test_raises_file_not_found_when_plugin_path_does_not_exist(self, tmp_path: Path) -> None:
