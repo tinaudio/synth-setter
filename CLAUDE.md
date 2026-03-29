@@ -107,6 +107,13 @@ When refactoring or moving code, always grep ALL file types (not just .py) for r
 
 Before implementing a new abstraction or design pattern, confirm the scope and abstraction level with the user. Prefer YAGNI — start minimal and expand only when asked. Do not over-engineer models or specs.
 
+## Implementation Approach
+
+- Always prefer the simplest viable implementation first. No extra abstractions, no speculative generality unless explicitly asked for or specified by design doc.
+- Present a plan before writing code. Wait for approval.
+- If you're tempted to introduce a new class, config schema, or architectural pattern, ask: "Do we need this now, or is this speculative?" Default to no.
+- Refactoring comes later, driven by real needs, not anticipated ones.
+
 ## Don't
 
 - Don't modify `.env` (contains real credentials).
