@@ -109,14 +109,14 @@ class TestRun:
         tmp_path: Path,
         real_spec: object,
     ) -> None:
-        """spec.json is written to metadata_dir as valid JSON with a run_id field."""
+        """input_spec.json is written to metadata_dir as valid JSON with a run_id field."""
         config_path = _write_config(tmp_path)
         metadata_dir = tmp_path / "metadata"
         mock_materialize.return_value = real_spec
 
         run(config_path, metadata_dir)
 
-        spec_path = metadata_dir / "spec.json"
+        spec_path = metadata_dir / "input_spec.json"
         assert spec_path.exists()
         data = json.loads(spec_path.read_text())
         assert "run_id" in data
@@ -132,7 +132,7 @@ class TestRun:
         tmp_path: Path,
         real_spec: object,
     ) -> None:
-        """Rclone uploads spec.json to R2 before generate_vst_dataset runs."""
+        """Rclone uploads input_spec.json to R2 before generate_vst_dataset runs."""
         config_path = _write_config(tmp_path)
         metadata_dir = tmp_path / "metadata"
         mock_materialize.return_value = real_spec
@@ -147,7 +147,7 @@ class TestRun:
         rclone_calls = mock_rclone.call_args_list
         assert len(rclone_calls) == 2
         spec_upload = rclone_calls[0]
-        assert "spec.json" in spec_upload[0][0]
+        assert "input_spec.json" in spec_upload[0][0]
         assert "r2:intermediate-data/" in spec_upload[0][1]
 
         # Ordering: spec upload must appear before check_call in the shared call log

@@ -187,12 +187,12 @@ Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
 the helper script `scripts/entrypoint_generate_dataset.py` reads env/config
 and invokes `generate_vst_dataset.py` with the resolved dataset config.
 The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
-`spec.json` is written to `RUN_METADATA_DIR`.
+`input_spec.json` is written to `RUN_METADATA_DIR`.
 
-| Env var            | Required | Default         | Purpose                                  |
-| ------------------ | -------- | --------------- | ---------------------------------------- |
-| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container |
-| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where spec.json is written     |
+| Env var            | Required | Default         | Purpose                                    |
+| ------------------ | -------- | --------------- | ------------------------------------------ |
+| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container   |
+| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where input_spec.json is written |
 
 ```bash
 docker run --rm \
@@ -211,7 +211,7 @@ bundle contains three files:
 | File               | Contents                                                           |
 | ------------------ | ------------------------------------------------------------------ |
 | `<config_id>.yaml` | Copy of the dataset config YAML used for the run                   |
-| `spec.json`        | DatasetPipelineSpec written by the container to `RUN_METADATA_DIR` |
+| `input_spec.json`  | DatasetPipelineSpec written by the container to `RUN_METADATA_DIR` |
 | `generate.log`     | Full container stdout/stderr from generation                       |
 
 **Download:**
@@ -224,13 +224,13 @@ gh run download <run_id> -n run-manifest-surge-simple-480k-10k
 
 ```bash
 # View the pipeline spec
-jq . spec.json
+jq . input_spec.json
 
 # Check how many samples were generated
 grep -c "Saving sample" generate.log
 
 # Find the R2 location for this run
-jq .r2_prefix spec.json
+jq .r2_prefix input_spec.json
 ```
 
 **Retention:** 7 days (GitHub Actions default).

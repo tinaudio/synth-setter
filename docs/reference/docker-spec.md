@@ -74,13 +74,13 @@ ______________________________________________________________________
 
 ### MODE=generate_dataset env vars
 
-| Variable           | Required | Default         | Purpose                                  |
-| ------------------ | -------- | --------------- | ---------------------------------------- |
-| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container |
-| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where spec.json is written     |
+| Variable           | Required | Default         | Purpose                                    |
+| ------------------ | -------- | --------------- | ------------------------------------------ |
+| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container   |
+| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where input_spec.json is written |
 
 The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
-`spec.json` is written to `RUN_METADATA_DIR`. The entrypoint generates
+`input_spec.json` is written to `RUN_METADATA_DIR`. The entrypoint generates
 `shard_size` samples (one shard per invocation). Multi-shard generation
 (`num_shards > 1`) raises `NotImplementedError`.
 

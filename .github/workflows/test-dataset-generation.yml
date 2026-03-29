@@ -57,4 +57,4 @@ jobs:
           name: test-run-metadata
 
       - name: Validate spec structure
-        run: python3 -m pipeline.ci.validate_spec spec.json
+        run: python3 -m pipeline.ci.validate_spec input_spec.json

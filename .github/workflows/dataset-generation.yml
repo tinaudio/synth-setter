@@ -58,12 +58,12 @@ jobs:
 
       - name: Validate spec exists
         run: |
-          if [ ! -f /tmp/run-metadata/spec.json ]; then
-            echo "::error::spec.json not found in /tmp/run-metadata/"
+          if [ ! -f /tmp/run-metadata/input_spec.json ]; then
+            echo "::error::input_spec.json not found in /tmp/run-metadata/"
             exit 1
           fi
           echo "=== Materialized Spec ==="
-          head -20 /tmp/run-metadata/spec.json
+          head -20 /tmp/run-metadata/input_spec.json
 
       - name: Upload run metadata
         if: always()

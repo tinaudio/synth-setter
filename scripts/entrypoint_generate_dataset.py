@@ -10,7 +10,7 @@ Public API:
 
 Expected env vars:
     DATASET_CONFIG   (required): Path to dataset config YAML inside the container.
-    RUN_METADATA_DIR (optional): Dir for spec.json output. Default: /run-metadata.
+    RUN_METADATA_DIR (optional): Dir for input_spec.json output. Default: /run-metadata.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.prefix import make_r2_prefix
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec, materialize_spec
@@ -75,7 +76,7 @@ def run(config_path: Path, metadata_dir: Path) -> None:
 
     Args:
         config_path: Path to dataset config YAML.
-        metadata_dir: Dir for spec.json (bind-mounted, host reads this).
+        metadata_dir: Dir for input_spec.json (bind-mounted, host reads this).
 
     Raises:
         NotImplementedError: If num_shards > 1.
@@ -99,7 +100,7 @@ def run(config_path: Path, metadata_dir: Path) -> None:
 
     # Write spec to metadata dir (host reads this via bind mount)
     metadata_dir.mkdir(parents=True, exist_ok=True)
-    spec_path = metadata_dir / "spec.json"
+    spec_path = metadata_dir / INPUT_SPEC_FILENAME
     spec_path.write_text(spec.model_dump_json(indent=2))
 
     # Upload spec to R2 before generation
