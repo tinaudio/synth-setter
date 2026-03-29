@@ -101,7 +101,7 @@ Review all changed code against every checklist. Prefix findings with BLOCK: (mu
 
 ## Refactoring
 
-When refactoring or moving code, always grep ALL file types (not just .py) for references to the old path/name before considering the task complete. Include YAML, Markdown, JSON, Shell scripts, and Dockerfiles.
+When refactoring or moving code, always grep ALL file types (not just .py) for references to the old path/name before considering the task complete. Include .yaml/.yml, .md, .json, .toml, .sh, and Dockerfile.
 
 ## Design Principles
 
