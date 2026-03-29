@@ -1,33 +1,28 @@
 name: Dataset Generation
 
-# Generates a single VST dataset shard inside Docker. The container
-# materializes a DatasetPipelineSpec, uploads spec to R2, generates the
-# shard, and uploads the shard to R2.
+# Reusable workflow: generates a single VST dataset shard inside Docker.
+# The container materializes a DatasetPipelineSpec, uploads spec to R2,
+# generates the shard, and uploads the shard to R2.
 #
-# Triggers:
-# - Manual dispatch: full generation from config
-# - Pull request (dataset-related paths): smoke test using ci-smoke-test.yaml
+# Callers provide image_tag and config_path. This workflow handles Docker
+# pull, container execution, spec validation, and artifact upload.
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      dataset_config:
-        description: "Path to dataset config YAML (under configs/dataset/)"
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot)"
         required: true
-        default: "configs/dataset/surge-simple-480k-10k.yaml"
-      docker_image_tag:
-        description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
+        type: string
+      config_path:
+        description: "Path to dataset config YAML (relative to repo root)"
+        required: true
+        type: string
+      artifact_name:
+        description: "Name for the uploaded run metadata artifact"
         required: false
-        default: "dev-snapshot"
-  pull_request:
-    paths:
-      - "src/data/vst/**"
-      - "pipeline/schemas/**"
-      - "configs/dataset/**"
-      - "scripts/entrypoint_generate_dataset.py"
-      - "scripts/docker_entrypoint.sh"
-      - ".github/workflows/dataset-generation.yml"
-      - "requirements*.txt"
+        type: string
+        default: "run-metadata"
 
 jobs:
   generate-dataset:
@@ -36,22 +31,17 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Checkout
+        uses: actions/checkout@v6
 
-      - name: Log in to Docker Hub
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Pull Docker image
-        id: docker
-        run: |
-          IMAGE="tinaudio/perm:${{ github.event.inputs.docker_image_tag || 'dev-snapshot' }}"
-          docker pull "$IMAGE"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+      - name: Pull image
+        run: docker pull tinaudio/perm:${{ inputs.image_tag }}
 
       - name: Generate dataset
         run: |
@@ -59,17 +49,11 @@ jobs:
           METADATA_DIR="/tmp/run-metadata"
           mkdir -p "$METADATA_DIR"
 
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CONFIG="configs/dataset/ci-smoke-test.yaml"
-          else
-            CONFIG="${{ github.event.inputs.dataset_config }}"
-          fi
-
           docker run --rm \
             -e MODE=generate_dataset \
-            -e DATASET_CONFIG="$CONFIG" \
+            -e DATASET_CONFIG="${{ inputs.config_path }}" \
             -v "${METADATA_DIR}:/run-metadata" \
-            "${{ steps.docker.outputs.image }}" \
+            tinaudio/perm:${{ inputs.image_tag }} \
             2>&1 | tee "${METADATA_DIR}/generate.log"
 
       - name: Validate spec exists
@@ -78,14 +62,14 @@ jobs:
             echo "::error::spec.json not found in /tmp/run-metadata/"
             exit 1
           fi
-          echo "Spec:"
+          echo "=== Materialized Spec ==="
           head -20 /tmp/run-metadata/spec.json
 
       - name: Upload run metadata
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: run-metadata
+          name: ${{ inputs.artifact_name }}
           path: /tmp/run-metadata/
           retention-days: 7
           if-no-files-found: warn

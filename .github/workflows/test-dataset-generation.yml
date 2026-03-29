@@ -1,0 +1,60 @@
+name: Test Dataset Generation
+
+# Exercises the dataset-generation reusable workflow with the CI smoke-test
+# config (32 samples, 1 shard). Validates the spec artifact after generation.
+#
+# Triggers:
+# - Manual dispatch: test with custom image tag and config
+# - Pull request: smoke test on dataset-related path changes
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_config:
+        description: "Path to dataset config YAML (under configs/dataset/)"
+        required: true
+        default: "configs/dataset/surge-simple-480k-10k.yaml"
+      docker_image_tag:
+        description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+  pull_request:
+    paths:
+      - "src/data/vst/**"
+      - "pipeline/schemas/**"
+      - "configs/dataset/**"
+      - "scripts/entrypoint_generate_dataset.py"
+      - "scripts/docker_entrypoint.sh"
+      - ".github/workflows/dataset-generation.yml"
+      - ".github/workflows/test-dataset-generation.yml"
+      - "requirements*.txt"
+
+jobs:
+  generate:
+    uses: ./.github/workflows/dataset-generation.yml
+    with:
+      image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      config_path: >-
+        ${{
+          github.event_name == 'pull_request'
+            && 'configs/dataset/ci-smoke-test.yaml'
+            || (inputs.dataset_config || 'configs/dataset/surge-simple-480k-10k.yaml')
+        }}
+      artifact_name: test-run-metadata
+    secrets: inherit
+
+  validate:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download run metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: test-run-metadata
+
+      - name: Validate spec structure
+        run: python3 -m pipeline.ci.validate_spec spec.json
