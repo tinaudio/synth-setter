@@ -1,34 +1,91 @@
 name: Spec Materialization
 
 on:
-  pull_request:
-    paths:
-      - "pipeline/schemas/spec.py"
-      - "pipeline/schemas/config.py"
-      - "pipeline/schemas/prefix.py"
-      - "tests/pipeline/test_schemas/test_spec.py"
-      - "tests/pipeline/fixtures/**"
-  push:
-    branches: [main]
-    paths:
-      - "pipeline/schemas/spec.py"
-      - "pipeline/schemas/config.py"
-      - "pipeline/schemas/prefix.py"
-      - "tests/pipeline/test_schemas/test_spec.py"
-      - "tests/pipeline/fixtures/**"
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Docker image tag (e.g. dev-snapshot)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag"
+        required: false
+        default: "dev-snapshot"
 
 jobs:
-  test-spec-linux:
+  test-spec-materialization:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.11"]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: pip install -r requirements.txt
-      - name: Run spec tests
-        run: pytest tests/pipeline/test_schemas/test_spec.py -v --tb=short
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull tinaudio/perm:${{ inputs.image_tag }}
+
+      - name: Materialize spec in Docker
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v /tmp/spec-output:/spec-output \
+            --entrypoint bash \
+            tinaudio/perm:${{ inputs.image_tag }} \
+            -c "
+              cd /home/build/synth-setter && \
+              mkdir -p plugins && \
+              ln -sf '/usr/lib/vst3/Surge XT.vst3' 'plugins/Surge XT.vst3' && \
+              scripts/run-linux-vst-headless.sh \
+                python scripts/ci/materialize_spec_smoke.py \
+                  configs/dataset/ci-materialize-test.yaml \
+                  /spec-output
+            "
+
+      - name: Inspect spec
+        run: |
+          echo "=== Materialized Spec ==="
+          cat /tmp/spec-output/spec.json
+          echo ""
+          echo "=== Validation ==="
+          python3 -c "
+          import json, sys
+          spec = json.load(open('/tmp/spec-output/spec.json'))
+          checks = []
+          # Check required fields
+          for field in ['run_id', 'code_version', 'renderer_version', 'num_params',
+                        'param_spec', 'sample_rate', 'shard_size', 'shards']:
+              if field in spec:
+                  checks.append(f'  {field}: {spec[field] if not isinstance(spec[field], list) else f\"{len(spec[field])} shards\"}')
+              else:
+                  print(f'FAIL: missing field {field}', file=sys.stderr)
+                  sys.exit(1)
+          # Check code_version is a 40-char hex SHA
+          cv = spec['code_version']
+          assert len(cv) == 40 and all(c in '0123456789abcdef' for c in cv), f'Bad code_version: {cv}'
+          checks.append(f'  code_version is valid SHA: yes')
+          # Check shards
+          assert len(spec['shards']) == 3, f'Expected 3 shards, got {len(spec[\"shards\"])}'
+          seeds = [s['seed'] for s in spec['shards']]
+          assert seeds == [42, 43, 44], f'Bad seeds: {seeds}'
+          checks.append(f'  shard seeds deterministic: {seeds}')
+          # Check renderer_version is not empty
+          assert spec['renderer_version'], 'Empty renderer_version'
+          checks.append(f'  renderer_version extracted: {spec[\"renderer_version\"]}')
+          print('All checks passed:')
+          for c in checks:
+              print(c)
+          "
+
+      - name: Upload spec artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: materialized-spec
+          path: /tmp/spec-output/spec.json
+          retention-days: 30
