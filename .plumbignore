@@ -7,6 +7,14 @@ docs/
 .github/
 .vscode/
 .idea/
+.venv*/
+.virtualenv*/
+.git/
+.claude/
+__pycache__/
+*.egg-info/
+build/
+dist/
 Makefile
 Dockerfile
 docker-compose*
