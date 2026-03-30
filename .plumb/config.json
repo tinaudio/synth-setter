@@ -11,8 +11,14 @@
   ],
   "claude_log_path": null,
   "initialized_at": "2026-03-30T17:58:45.090260+00:00",
-  "last_commit": "44491f1623c910f32709590e4dc4ebd977ece9cd",
+  "last_commit": "48b91edf3369089abeeb59a79c76d07e74a7d63a",
   "last_commit_branch": "chore/add-plumb-tooling",
   "last_extracted_at": null,
-  "program_models": {}
+  "program_models": {
+    "code_coverage_mapper": {"model": "anthropic/claude-haiku-4-5-20251001"},
+    "test_mapper": {"model": "anthropic/claude-haiku-4-5-20251001"},
+    "requirement_parser": {"model": "anthropic/claude-haiku-4-5-20251001"},
+    "question_synthesizer": {"model": "anthropic/claude-haiku-4-5-20251001"},
+    "decision_deduplicator": {"model": "anthropic/claude-haiku-4-5-20251001"}
+  }
 }
