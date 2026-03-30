@@ -16,6 +16,7 @@ tenacity
 webdataset
 
 # --------- dev tools --------- #
+hatchling
 plumb-dev @ git+https://github.com/ktinubu/plumb.git@fix/coverage-respect-plumbignore
 
 # --------- others --------- #
