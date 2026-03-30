@@ -136,6 +136,7 @@ make help              # Show all targets
 ```
 
 <!-- plumb:start -->
+
 ## Plumb (Spec/Test/Code Sync)
 
 This project uses Plumb to keep the spec, tests, and code in sync.
@@ -161,4 +162,5 @@ This project uses Plumb to keep the spec, tests, and code in sync.
 - Never edit files in `.plumb/decisions/` directly.
 - Treat the spec markdown files as the source of truth for intended behavior.
   Plumb will keep them updated as decisions are approved.
+
 <!-- plumb:end -->
