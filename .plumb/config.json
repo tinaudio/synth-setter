@@ -1,13 +1,17 @@
 {
   "spec_paths": [
-    "docs/"
+    "docs/design/data-pipeline.md",
+    "docs/design/eval-pipeline.md",
+    "docs/design/storage-provenance-spec.md",
+    "docs/design/training-pipeline.md",
+    "docs/reference/docker-spec.md"
   ],
   "test_paths": [
     "tests/"
   ],
   "claude_log_path": null,
   "initialized_at": "2026-03-30T17:58:45.090260+00:00",
-  "last_commit": "c404a39b365fd0f0259a5692a54d875228b78b58",
+  "last_commit": "44491f1623c910f32709590e4dc4ebd977ece9cd",
   "last_commit_branch": "chore/add-plumb-tooling",
   "last_extracted_at": null,
   "program_models": {}
