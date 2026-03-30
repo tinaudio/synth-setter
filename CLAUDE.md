@@ -141,7 +141,7 @@ make help              # Show all targets
 
 This project uses Plumb to keep the spec, tests, and code in sync.
 
-- **Spec:** docs/
+- **Spec:** Paths configured in `.plumb/config.json` under `spec_paths`
 - **Tests:** tests/
 - **Decision log:** `.plumb/decisions/`
 
