@@ -33,13 +33,14 @@ ______________________________________________________________________
 ```
 Config YAML → load_dataset_config() → DatasetConfig (Pydantic, validated)
   → materialize_spec() → DatasetPipelineSpec (frozen, immutable)
-    → uploaded to R2 as metadata/input_spec.json
+    → uploaded to R2 as {r2_prefix}/input_spec.json
 ```
 
 - Config is mutable, human-authored YAML in `configs/dataset/`
 - Spec is immutable, machine-generated JSON capturing runtime state (git SHA, renderer version, per-shard seeds)
 - Spec is the reproducibility unit and reconciliation target
 - Config drift protection: re-passing `--config` for a `run_id` that already has a spec errors
+- **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2_prefix}/input_spec.json` (no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
 
 Reference: `data-pipeline.md` §14.5
 
