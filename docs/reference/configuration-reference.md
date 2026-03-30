@@ -39,7 +39,7 @@ Config YAML → load_dataset_config() → DatasetConfig (Pydantic, validated)
 - Config is mutable, human-authored YAML in `configs/dataset/`
 - Spec is immutable, machine-generated JSON capturing runtime state (git SHA, renderer version, per-shard seeds)
 - Spec is the reproducibility unit and reconciliation target
-- Config drift protection: re-passing `--config` for a `run_id` that already has a spec errors
+- **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2_prefix}/input_spec.json` (no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
 
 Reference: `data-pipeline.md` §14.5
