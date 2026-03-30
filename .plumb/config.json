@@ -1,0 +1,14 @@
+{
+  "spec_paths": [
+    "docs/"
+  ],
+  "test_paths": [
+    "tests/"
+  ],
+  "claude_log_path": null,
+  "initialized_at": "2026-03-30T17:58:45.090260+00:00",
+  "last_commit": null,
+  "last_commit_branch": null,
+  "last_extracted_at": null,
+  "program_models": {}
+}
