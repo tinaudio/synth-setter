@@ -7,13 +7,13 @@ ______________________________________________________________________
 
 ## 1. Configuration Layers
 
-| Layer                 | Tool                                           | Validation                                                   | Stored In                       | Example                                      |
-| --------------------- | ---------------------------------------------- | ------------------------------------------------------------ | ------------------------------- | -------------------------------------------- |
-| Experiment config     | Hydra YAML composition                         | Deferred — class constructors at `hydra.utils.instantiate()` | git (`configs/experiment/`)     | `configs/experiment/surge/flow_simple.yaml`  |
-| Pipeline input config | Pydantic `BaseModel(strict=True)`              | Parse-time — `load_dataset_config()`                         | git (`configs/dataset/`)        | `configs/dataset/surge-simple-480k-10k.yaml` |
-| Frozen runtime spec   | Pydantic `BaseModel(strict=True, frozen=True)` | Materialization — `materialize_spec()`                       | R2 (`metadata/input_spec.json`) | `DatasetPipelineSpec`                        |
-| Cloud infrastructure  | Plain YAML                                     | Launcher script (not Hydra)                                  | git (`configs/cloud/`)          | `configs/cloud/runpod-a5000.yaml` (planned)  |
-| Secrets / credentials | Environment variables                          | Runtime                                                      | `.env` (local), CI secrets      | `WANDB_API_KEY`                              |
+| Layer                 | Tool                                           | Validation                                                   | Stored In                          | Example                                      |
+| --------------------- | ---------------------------------------------- | ------------------------------------------------------------ | ---------------------------------- | -------------------------------------------- |
+| Experiment config     | Hydra YAML composition                         | Deferred — class constructors at `hydra.utils.instantiate()` | git (`configs/experiment/`)        | `configs/experiment/surge/flow_simple.yaml`  |
+| Pipeline input config | Pydantic `BaseModel(strict=True)`              | Parse-time — `load_dataset_config()`                         | git (`configs/dataset/`)           | `configs/dataset/surge-simple-480k-10k.yaml` |
+| Frozen runtime spec   | Pydantic `BaseModel(strict=True, frozen=True)` | Materialization — `materialize_spec()`                       | R2 (`{r2_prefix}/input_spec.json`) | `DatasetPipelineSpec`                        |
+| Cloud infrastructure  | Plain YAML                                     | Launcher script (not Hydra)                                  | git (`configs/cloud/`)             | `configs/cloud/runpod-a5000.yaml` (planned)  |
+| Secrets / credentials | Environment variables                          | Runtime                                                      | `.env` (local), CI secrets         | `WANDB_API_KEY`                              |
 
 ### Why These Boundaries
 
