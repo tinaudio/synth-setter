@@ -154,6 +154,21 @@ docs:
       - pattern: ".github/PULL_REQUEST_TEMPLATE.md"
         covers: "PR template structure, required sections"
 
+  # ── Configuration reference ────────────────────────────────────
+  - doc: docs/reference/configuration-reference.md
+    description: Configuration architecture layers, cloud provider comparison, boundary rules, known gaps
+    sources:
+      - pattern: "configs/**"
+        covers: "All Hydra config groups, experiment composition, data/model/trainer/logger configs"
+      - pattern: "pipeline/schemas/config.py"
+        covers: "DatasetConfig Pydantic model, validation rules"
+      - pattern: "pipeline/schemas/spec.py"
+        covers: "DatasetPipelineSpec, materialize_spec() flow"
+      - pattern: "src/train.py"
+        covers: "Training entry point, Hydra composition, instantiation flow"
+      - pattern: "configs/logger/wandb.yaml"
+        covers: "W&B logger config, log_model, entity/project"
+
   # ── rclone reference (placeholder — doc does not exist yet) ─────
   # - doc: docs/reference/rclone.md
   #   description: rclone R2 operations reference
