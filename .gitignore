@@ -167,3 +167,7 @@ plugins/
 # Claude Code (keep skills only)
 .claude/
 !.claude/skills/
+
+# Plumb (generated caches)
+.plumb/code_coverage_map.json
+.plumb/coverage.json
