@@ -17,7 +17,7 @@ webdataset
 
 # --------- dev tools --------- #
 hatchling
-plumb-dev @ git+https://github.com/ktinubu/plumb.git@fix/coverage-respect-plumbignore
+plumb-dev @ git+https://github.com/ktinubu/plumb.git@dc17427ef906d1d33d9733ff136464ea442d6098
 
 # --------- others --------- #
 dask[distributed]

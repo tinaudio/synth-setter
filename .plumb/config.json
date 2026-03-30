@@ -7,7 +7,7 @@
   ],
   "claude_log_path": null,
   "initialized_at": "2026-03-30T17:58:45.090260+00:00",
-  "last_commit": "85ae44357de91cc778b32e939b58779b29e7dceb",
+  "last_commit": "c404a39b365fd0f0259a5692a54d875228b78b58",
   "last_commit_branch": "chore/add-plumb-tooling",
   "last_extracted_at": null,
   "program_models": {}

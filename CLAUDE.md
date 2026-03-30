@@ -145,6 +145,14 @@ This project uses Plumb to keep the spec, tests, and code in sync.
 - **Tests:** tests/
 - **Decision log:** `.plumb/decisions/`
 
+### Setup
+
+After cloning (or in a new worktree), install `plumb-dev` and run `plumb init`
+to install the Plumb git hooks. Note: `plumb init` writes a native git hook to
+`.git/hooks/pre-commit` that is separate from the `pre-commit` framework. After
+running `plumb init`, re-run `pre-commit install` so both hook systems are
+chained. Run `make format` before committing to ensure all linting hooks execute.
+
 ### When working in this project:
 
 - Run `plumb status` before beginning work to understand current alignment.
