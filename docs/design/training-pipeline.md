@@ -50,24 +50,24 @@ Training is operationally different from the data pipeline:
 
 ### Current Strengths
 
-| Already works today                          | Notes                                                              |
-| -------------------------------------------- | ------------------------------------------------------------------ |
-| `python src/train.py` with Hydra composition | Mature entry point                                                 |
-| W&B logger                                   | Tracks metrics; `log_model="all"` uploads checkpoints as artifacts |
-| `ModelCheckpoint`                            | Saves every 5000 steps + best + last                               |
-| CSV logger                                   | Local fallback                                                     |
-| Lightning resume                             | `ckpt_path=` already supported                                     |
-| `rootutils` / `PROJECT_ROOT`                 | Paths already resolve cleanly                                      |
+| Already works today                          | Notes                                                             |
+| -------------------------------------------- | ----------------------------------------------------------------- |
+| `python src/train.py` with Hydra composition | Mature entry point                                                |
+| W&B logger                                   | Tracks metrics; `log_model=true` uploads checkpoints as artifacts |
+| `ModelCheckpoint`                            | Saves every 5000 steps + best + last                              |
+| CSV logger                                   | Local fallback                                                    |
+| Lightning resume                             | `ckpt_path=` already supported                                    |
+| `rootutils` / `PROJECT_ROOT`                 | Paths already resolve cleanly                                     |
 
 ### Current Gaps
 
-| Gap                                     | Impact                                                 |
-| --------------------------------------- | ------------------------------------------------------ |
-| Hardcoded dataset paths in configs      | Fixed by shared config cleanup work                    |
-| No durable cloud checkpoint persistence | Pod death loses progress (W&B `log_model` not enabled) |
-| No RunPod training launcher             | Manual cloud startup                                   |
-| No training-focused Docker image        | Hard to reproduce cloud/local parity                   |
-| Hardcoded W&B identity                  | Wrong defaults for new ownership                       |
+| Gap                                         | Impact                                                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Hardcoded dataset paths in configs          | Fixed by shared config cleanup work                                                                          |
+| ~~No durable cloud checkpoint persistence~~ | ~~Pod death loses progress~~ — **Resolved:** `log_model: true` now configured in `wandb.yaml`                |
+| No RunPod training launcher                 | Manual cloud startup                                                                                         |
+| No training-focused Docker image            | Hard to reproduce cloud/local parity                                                                         |
+| ~~Hardcoded W&B identity~~                  | ~~Wrong defaults for new ownership~~ — **Resolved:** entity/project now env-var driven via `oc.env` resolver |
 
 ______________________________________________________________________
 
@@ -120,6 +120,8 @@ python src/train.py \
   experiment=surge/flow_simple \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
+
+In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/train.py` with Hydra config, and uploads checkpoints to R2 at `{R2_PREFIX}/training/{wandb_run_id}/`. On main, checkpoint durability is W&B-only (see Section 6.2).
 
 ### Docker
 
@@ -189,7 +191,7 @@ ______________________________________________________________________
 Training is a **single long-running job**. All durable outputs flow through W&B:
 
 1. **Metrics and lineage → W&B run**
-2. **Checkpoint files → W&B model artifact** (via `log_model="all"`)
+2. **Checkpoint files → W&B model artifact** (via `log_model=true`)
 3. **Local checkpoints → local disk** (Lightning default, ephemeral on cloud pods)
 
 ```
@@ -203,7 +205,7 @@ Training is a **single long-running job**. All durable outputs flow through W&B:
                                 │
                                 ▼
                          W&B training run
-                         model artifact (log_model="all")
+                         model artifact (log_model=true)
                          metrics / lineage
 ```
 
@@ -235,13 +237,13 @@ ______________________________________________________________________
 
 ### 5.2 W&B Checkpoint Durability
 
-| Property     | Value                                                                    |
-| ------------ | ------------------------------------------------------------------------ |
-| **Trigger**  | Automatic — `WandbLogger(log_model="all")` uploads after each local save |
-| **Input**    | `last.ckpt`, `best.ckpt` (and any other saved checkpoints)               |
-| **Output**   | W&B model artifact with checkpoint files and run lineage                 |
-| **Compute**  | Background upload (non-blocking)                                         |
-| **Contract** | Zero custom code — Lightning's `WandbLogger` handles upload natively     |
+| Property     | Value                                                                   |
+| ------------ | ----------------------------------------------------------------------- |
+| **Trigger**  | Automatic — `WandbLogger(log_model=true)` uploads after each local save |
+| **Input**    | `last.ckpt`, `best.ckpt` (and any other saved checkpoints)              |
+| **Output**   | W&B model artifact with checkpoint files and run lineage                |
+| **Compute**  | Background upload (non-blocking)                                        |
+| **Contract** | Zero custom code — Lightning's `WandbLogger` handles upload natively    |
 
 ### 5.3 Resume
 
@@ -275,7 +277,7 @@ Training uses the same dataset provenance convention as the storage spec:
 ```yaml
 dataset_root: ${paths.data_dir}/{dataset_config_id}/{dataset_wandb_run_id}
 # Optional:
-# r2_path: r2:synth-data/data/{dataset_config_id}/{dataset_wandb_run_id}/
+# r2_path: r2:intermediate-data/data/{dataset_config_id}/{dataset_wandb_run_id}/
 ```
 
 Behavior:
@@ -286,14 +288,14 @@ Behavior:
 
 ### 6.2 Checkpoint Durability via W&B
 
-Lightning's `WandbLogger` with `log_model="all"` uploads every checkpoint as a W&B artifact automatically. No custom callback needed.
+Lightning's `WandbLogger` with `log_model=true` uploads the best and last checkpoints as W&B artifacts automatically. No custom callback needed. To upload every checkpoint (including intermediate steps), set `log_model: "all"` ([#401](https://github.com/tinaudio/synth-setter/issues/401)).
 
 ```yaml
 # configs/logger/wandb.yaml
 wandb:
   _target_: lightning.pytorch.loggers.WandbLogger
   project: synth-setter
-  log_model: "all"  # uploads every checkpoint as a model artifact
+  log_model: true  # uploads best + last checkpoints as model artifacts
 ```
 
 This gives us:
@@ -362,7 +364,7 @@ ______________________________________________________________________
 
 ### 7.2 W&B as the Checkpoint Durability Layer
 
-**Decision:** checkpoint durability uses W&B artifacts via `log_model="all"`. No custom R2 upload callback.
+**Decision:** checkpoint durability uses W&B artifacts via `log_model=true`. No custom R2 upload callback.
 
 **Rationale:** zero custom code — Lightning's `WandbLogger` handles upload natively. Lineage is automatic. Resume downloads the artifact. R2 checkpoint upload is deferred until W&B download speed becomes a bottleneck for large models.
 
@@ -382,7 +384,7 @@ ______________________________________________________________________
 
 **Decision:** W&B handles both checkpoint durability and lineage. R2 checkpoint upload deferred.
 
-**Rationale:** `log_model="all"` provides durability, lineage, and resume with zero custom code. Adding an R2 mirror would require a custom callback (~100 lines), rclone in the training path, R2 credential plumbing in every environment, and three open design questions (which checkpoints to mirror, GC policy, dual-copy cost). Defer until needed.
+**Rationale:** `log_model=true` provides durability, lineage, and resume with zero custom code. Adding an R2 mirror would require a custom callback (~100 lines), rclone in the training path, R2 credential plumbing in every environment, and three open design questions (which checkpoints to mirror, GC policy, dual-copy cost). Defer until needed.
 
 ### 7.6 No Automatic Promotion
 
@@ -410,7 +412,7 @@ ______________________________________________________________________
 | TBD   | Phase | Phase 5: Documentation                | #107    |
 | TBD   | Task  | Task 1.1: Config Cleanup for Training | Phase 1 |
 | TBD   | Task  | Task 1.2: W&B Config Cleanup          | Phase 1 |
-| TBD   | Task  | Task 2.1: Enable W&B log_model="all"  | Phase 2 |
+| TBD   | Task  | Task 2.1: Enable W&B log_model=true   | Phase 2 |
 | #92   | Task  | Task 2.2: Resume From W&B Artifact    | Phase 2 |
 | TBD   | Task  | Task 3.1: RunPod Training Launcher    | Phase 3 |
 | TBD   | Task  | Task 4.1: Training Docker Image       | Phase 4 |
@@ -432,7 +434,7 @@ ______________________________________________________________________
 Use the same linkage pattern as the eval and data pipeline docs:
 
 ```text
-### Task 2.1: Enable W&B log_model="all" (TBD) ✅ — Completed in PR #XXX
+### Task 2.1: Enable W&B log_model=true (TBD) ✅ — Completed in PR #XXX
 ```
 
 ### Estimated Change Size
@@ -521,21 +523,21 @@ ______________________________________________________________________
 
 ## Appendix B: Current File Inventory
 
-| File                        | Current role                    | Gap                               |
-| --------------------------- | ------------------------------- | --------------------------------- |
-| `src/train.py`              | Main training entry point       | `log_model` not enabled           |
-| `configs/logger/wandb.yaml` | W&B config                      | Identity cleanup needed           |
-| `configs/data/*.yaml`       | Dataset paths                   | Shared portability cleanup needed |
-| `docker/*`                  | Existing container setup        | Training-specific image needed    |
-| `scripts/runpod_*.py`       | Data-pipeline-focused launchers | No training launcher              |
+| File                        | Current role                                           | Gap                               |
+| --------------------------- | ------------------------------------------------------ | --------------------------------- |
+| `src/train.py`              | Main training entry point                              | —                                 |
+| `configs/logger/wandb.yaml` | W&B config (`log_model: true`, env-var entity/project) | —                                 |
+| `configs/data/*.yaml`       | Dataset paths                                          | Shared portability cleanup needed |
+| `docker/*`                  | Existing container setup                               | Training-specific image needed    |
+| `scripts/runpod_*.py`       | Data-pipeline-focused launchers                        | No training launcher              |
 
 ## Appendix C: Checkpoint Policy
 
-| Checkpoint              | Keep locally          | Upload to W&B           |
-| ----------------------- | --------------------- | ----------------------- |
-| `last.ckpt`             | Yes                   | Yes (`log_model="all"`) |
-| `best.ckpt`             | Yes                   | Yes (`log_model="all"`) |
-| Intermediate step ckpts | Per checkpoint config | Yes (`log_model="all"`) |
+| Checkpoint              | Keep locally          | Upload to W&B                                                                                 |
+| ----------------------- | --------------------- | --------------------------------------------------------------------------------------------- |
+| `last.ckpt`             | Yes                   | Yes (`log_model=true`)                                                                        |
+| `best.ckpt`             | Yes                   | Yes (`log_model=true`)                                                                        |
+| Intermediate step ckpts | Per checkpoint config | No (requires `log_model: "all"`, [#401](https://github.com/tinaudio/synth-setter/issues/401)) |
 
 > R2 checkpoint upload is deferred. If added later, only `best` + `last` would be mirrored.
 
