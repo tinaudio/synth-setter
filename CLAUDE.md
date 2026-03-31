@@ -128,7 +128,7 @@ Before implementing a new abstraction or design pattern, confirm the scope and a
 
 - Every PR body must link a taxonomy-compliant issue via `Closes #N`, `Fixes #N`, `Refs #N`, or `Part of #N`.
 - Use `Refs #N` (not `Fixes #N` or `Closes #N`) when a PR is a workaround or partial fix — `Fixes` auto-closes the issue.
-- Always use full markdown hyperlinks for PR/issue references: `[#N](https://github.com/tinaudio/synth-setter/issues/N)` — bare `#N` is not clickable outside GitHub.
+- In chat responses, use full markdown hyperlinks for PR/issue references: `[#N](https://github.com/tinaudio/synth-setter/issues/N)`. In PR/issue bodies, use bare `Fixes #N` / `Closes #N` / `Refs #N` so GitHub auto-close works.
 - Never add "Generated with Claude Code" or similar attribution footers to PRs, commits, issues, or comments.
 
 ### PR Verification
