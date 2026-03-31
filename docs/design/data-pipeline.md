@@ -50,6 +50,12 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 
 ### Distributed Pipeline
 
+> **Implementation status:** Only single-shard generation is implemented today
+> (`pipeline/entrypoints/generate_dataset.py`). Multi-shard generation raises
+> `NotImplementedError`. The distributed pipeline described below is the design
+> target — the CLI, backends, reconciliation, and finalize stages are planned but
+> not yet built.
+
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
 The pipeline is designed for datasets that scale to multi-terabyte sizes while keeping costs minimal — cheap compute, free egress, no infrastructure to manage.
@@ -73,21 +79,24 @@ cat configs/dataset/surge-simple-480k-10k.yaml
 # → num_shards: 48, shard_size: 10000, ...
 
 # 2. Launch generation — creates spec, launches workers, exits
-python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
+# **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)
+# is not yet implemented. Currently only single-shard generation is available via:
+python -m pipeline.entrypoints.generate_dataset configs/dataset/surge-simple-480k-10k.yaml
+# → Single-shard MVP. Multi-shard (num_shards > 1) raises NotImplementedError.
+
+# --- Target state (distributed pipeline, not yet implemented) ---
+# python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
 # → Created run surge-simple-480k-10k-20260313T100000Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
-
-# 3. Check progress (can run from any machine, any time)
-python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
+#
+# python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
 # → Valid: 44/48  Missing: 2  Quarantined: 2
-
-# 4. Re-run generation for missing shards only
-python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000Z
+#
+# python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000Z
 # → 4 shards missing, launching 1 worker
-
-# 5. Finalize — download, reshard, compute stats, register in W&B
-python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000Z
+#
+# python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000Z
 # → 48/48 valid. output_format: hdf5
 # → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
 # → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
@@ -95,6 +104,8 @@ python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000Z
 ```
 
 Make targets are thin aliases for convenience:
+
+> **Not yet implemented.** These `make` targets are planned but do not exist in the Makefile yet.
 
 ```bash
 make generate ARGS="--config configs/dataset/surge-simple-480k-10k.yaml --workers 10"
@@ -186,8 +197,8 @@ Both planes use R2. There is no separate database, message queue, or coordinatio
 
 What if reconciliation itself has a bug — e.g., it validates a corrupt shard as good?
 
-- **Defense in depth:** Workers run four independent validation checks before upload; all must pass ([§7.5](#75-shard-validation)).
-- **Tiered validation:** Workers do full 4-check validation. Finalize structural-checks staged shards before promoting. Each tier catches a different class of failure.
+- **Defense in depth:** Workers run three independent validation checks before upload; all must pass ([§7.5](#75-shard-validation)).
+- **Tiered validation:** Workers do full 3-check validation. Finalize structural-checks staged shards before promoting. Each tier catches a different class of failure.
 - **Training is the ultimate check:** A corrupt dataset will fail to train properly, providing end-to-end verification.
 - **Manual spot-checking is feasible:** At 1-2 runs/week, eyeballing a few shards is practical and encouraged.
 
@@ -479,7 +490,7 @@ missing → rendering → staged-valid → finalized (canonical)
 **Transitions:**
 
 - **missing → rendering:** Worker begins shard generation, writes `.rendering` marker.
-- **rendering → staged-valid:** Worker validates locally (full 4-check), uploads `.h5` to staging, writes worker report, then writes `.valid` marker as the **last step**. The `.valid` marker is the commit point — it signals that the worker completed the full shard lifecycle (render, validate, upload, bookkeeping). The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
+- **rendering → staged-valid:** Worker validates locally (full 3-check), uploads `.h5` to staging, writes worker report, then writes `.valid` marker as the **last step**. The `.valid` marker is the commit point — it signals that the worker completed the full shard lifecycle (render, validate, upload, bookkeeping). The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
 - **rendering → invalid:** Worker validates locally and the shard fails. Worker uploads the corrupt shard to `quarantine/` and writes `.invalid` marker, preserving the evidence for debugging. The shard is treated as missing on next `generate`.
 - **rendering → missing:** Worker crashes before writing `.valid`. The `.rendering` marker is orphaned — observable evidence of the crashed attempt. Any `.h5` uploaded before the crash exists but without `.valid` is not considered staged-valid.
 - **staged-valid → finalized:** Finalize structural-checks the staged shard, copies it to `data/shards/shard-{id}.h5`, writes `.promoted` marker, records content hash in `dataset.json`, and writes `dataset.complete` after all shards are promoted. Staged files remain in place (append-only — no deletion).
@@ -506,7 +517,7 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 
 1. Write `.rendering` marker: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
 2. Render shard to a local temp file
-3. **Validate locally** — full 4-check validation (structural, shape, value, row count). This is the primary defense against corrupt data.
+3. **Validate locally** — full 3-check validation (structural, shape, value, row count). This is the primary defense against corrupt data.
 4. **If validation passes:**
    - Upload shard to staging: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.h5`
    - Write worker report (content hash, timing, per-shard results): `metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json`
@@ -597,7 +608,7 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 
 - Check for `.h5` + `.valid` marker in staging directory. No data loading.
 - The `.valid` marker is authoritative for staging admission: it means a worker completed the full shard lifecycle and committed the result ([§7.2](#72-shard-lifecycle)). It is not sufficient for final dataset correctness — finalize remains the gate before promotion.
-- The trust chain justifies this: workers do full 4-check validation before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
+- The trust chain justifies this: workers do full 3-check validation before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
 
 **Structural check** — run by finalize before promoting staged shards to `data/shards/`:
 
@@ -607,7 +618,7 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 
 | Stage               | Validation                                              | Cost                                   | Why                                                                 |
 | ------------------- | ------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
-| **Worker**          | Full 4-check (structural, shape, value, row count)      | Expensive (loads all data)             | Primary defense — catches VST crashes, NaN, wrong shapes            |
+| **Worker**          | Full 3-check (valid HDF5, expected datasets, row count) | Expensive (loads all data)             | Primary defense — catches VST crashes, NaN, wrong shapes            |
 | **Generate/status** | Existence (`.h5` + `.valid` marker)                     | Cheap (file listing)                   | Workers already validated; re-validation is redundant               |
 | **Finalize**        | Structural (valid HDF5, datasets present, shapes match) | Moderate (opens file, no data loading) | Catches transfer corruption; last checkpoint before sealing dataset |
 
@@ -1188,7 +1199,7 @@ Schema for the frozen input specification described in [§7.1](#71-storage-as-th
 ```python
 class SplitsConfig(BaseModel):
     """Train/val/test shard counts."""
-    model_config = ConfigDict(strict=True, extra="forbid")
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     train: int
     val: int
@@ -1206,7 +1217,8 @@ class DatasetPipelineSpec(BaseModel):
     """Frozen runtime specification materialized from DatasetConfig."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    run_id: str
+    run_id: DatasetRunId    # unique run ID: {config_id}-{YYYYMMDDTHHMMSSZ}
+    r2_prefix: R2Prefix     # R2 storage path: data/{config_id}/{run_id}/
     created_at: datetime    # UTC, timezone-aware
     code_version: str       # git commit SHA
     is_repo_dirty: bool
@@ -1220,6 +1232,7 @@ class DatasetPipelineSpec(BaseModel):
     splits: SplitsConfig
     plugin_path: str        # VST3 plugin to render through
     preset_path: str        # VST preset to load
+    channels: int           # audio channels (e.g. 2 for stereo)
     velocity: int           # MIDI velocity for note rendering
     signal_duration_seconds: float  # audio length per sample
     min_loudness: float     # loudness floor — retry if below
@@ -1374,29 +1387,42 @@ Config filenames live in `configs/dataset/` and use the pattern `{name}-{total_t
 
 ```
 pipeline/
-  cli.py               # Click entry point: generate, status, finalize
+  __init__.py
 
-  stages/              # Each stage is a self-contained module
-    generate.py         # Generate stage logic
-    finalize.py         # Finalize stage logic
-
-  backends/            # Compute provider implementations
-    base.py             # ComputeBackend Protocol definition
-    runpod.py           # RunPodBackend (production)
-    local.py            # LocalBackend (development/testing)
-
-  storage.py            # R2 operations (list, upload, download, quarantine)
-  reconcile.py          # Read spec, validate shards, compute missing set
-  schemas/              # Pydantic models
+  schemas/              # Pydantic models (implemented)
     __init__.py
     config.py           # DatasetConfig, SplitsConfig, load/ID helpers
     spec.py             # DatasetPipelineSpec, ShardSpec, materialize_spec
-    report.py           # WorkerReport, ShardResult
-    card.py             # DatasetCard, ValidationSummary
-    sample.py           # Sample dataclass (HDF5→WDS transcoding)
-  validation.py         # Shard validation (structural, shape, value, row count)
-  retry.py              # Centralized tenacity retry policy
-  logging_config.py     # structlog configuration
+    prefix.py           # DatasetConfigId, DatasetRunId, R2Prefix helpers
+    image_config.py     # Docker image configuration
+
+  entrypoints/          # Pipeline entry points (implemented)
+    __init__.py
+    generate_dataset.py # Single-shard dataset generation (MVP)
+
+  ci/                   # CI validation scripts (implemented)
+    validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count)
+
+  constants.py          # Well-known filenames and paths (R2_BUCKET, etc.)
+
+  # --- Planned (not yet implemented) ---
+  # cli.py              # Click entry point: generate, status, finalize
+  # stages/             # Each stage is a self-contained module
+  #   generate.py       # Generate stage logic
+  #   finalize.py       # Finalize stage logic
+  # backends/           # Compute provider implementations
+  #   base.py           # ComputeBackend Protocol definition
+  #   runpod.py         # RunPodBackend (production)
+  #   local.py          # LocalBackend (development/testing)
+  # storage.py          # R2 operations (list, upload, download, quarantine)
+  # reconcile.py        # Read spec, validate shards, compute missing set
+  # schemas/
+  #   report.py         # WorkerReport, ShardResult
+  #   card.py           # DatasetCard, ValidationSummary
+  #   sample.py         # Sample dataclass (HDF5→WDS transcoding)
+  # validation.py       # Full shard validation
+  # retry.py            # Centralized tenacity retry policy
+  # logging_config.py   # structlog configuration
 ```
 
 Pipeline configs live in `configs/dataset/` (filename = `dataset_config_id`) to distinguish them from training configs in `configs/data/` and `configs/trainer/`:
@@ -1561,7 +1587,7 @@ artifact = wandb.Artifact(
 artifact.add_file(input_spec_path)        # input_spec.json
 artifact.add_file(card_path)        # dataset.json
 artifact.add_reference(
-    f"s3://synth-data/data/{spec.dataset_config_id}/{spec.dataset_wandb_run_id}/"
+    f"s3://intermediate-data/data/{spec.dataset_config_id}/{spec.dataset_wandb_run_id}/"
 )  # R2 is S3-compatible; W&B resolves via S3 API (uses AWS_ENDPOINT_URL or WANDB_S3_ENDPOINT_URL; see storage-provenance-spec.md §11)
 run.log_artifact(artifact)
 run.finish()
