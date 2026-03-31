@@ -53,15 +53,10 @@ train: ## Train the model
 # Docker targets
 # =====================================================================
 #
-# Two build modes:
-#   1. docker-build-dev-snapshot — self-contained image. Clones repo at GIT_REF,
-#                                  bakes source + deps + Surge XT + rclone/R2 config.
-#                                  Run it anywhere (CI, cloud, vast.ai).
-#
-#   2. docker-build-dev-live     — DEV image. Same base (Surge + deps + R2 config)
-#                                  but does NOT bake source code. Mount your local
-#                                  working tree at runtime with docker-run-dev.
-#                                  Rebuild only when deps or Surge version change.
+# Build mode:
+#   docker-build-dev-snapshot — self-contained image. Clones repo at GIT_REF,
+#                               bakes source + deps + Surge XT + rclone/R2 config.
+#                               Run it anywhere (CI, cloud, vast.ai).
 #
 # Required variables (pass on the command line):
 #   GIT_PAT             GitHub personal access token with repo read access.
@@ -118,22 +113,4 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
 		-t $(DOCKER_IMAGE):dev-snapshot \
-		.
-
-docker-build-dev-live: ## Build dev image (Surge + deps, no baked-in source)
-	DOCKER_BUILDKIT=1 docker buildx build \
-		-f $(DOCKER_FILE) \
-		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
-		--secret id=git_pat,env=GIT_PAT \
-		$(DOCKER_SECRETS) \
-		--platform $(DOCKER_TARGETPLATFORM) \
-		--build-arg IMAGE="dev-live" \
-		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
-		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
-		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(CURRENT_LOCAL_GIT_REF) \
-		--build-arg TARGETARCH=$(TARGETARCH) \
-		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
-		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
-		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-live-$(CURRENT_LOCAL_GIT_REF) \
-		-t $(DOCKER_IMAGE):dev-live \
 		.
