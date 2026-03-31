@@ -96,38 +96,6 @@ The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
 `shard_size` samples (one shard per invocation). Multi-shard generation
 (`num_shards > 1`) raises `NotImplementedError`.
 
-### Build ARGs
-
-| ARG                          | Default        | Purpose                                       |
-| ---------------------------- | -------------- | --------------------------------------------- |
-| `IMAGE`                      | `dev-snapshot` | Selects final target (`dev-snapshot`)         |
-| `SYNTH_PERMUTATIONS_GIT_REF` | `main`         | Git ref for source code                       |
-| `SURGE_GIT_REF`              | *(pinned SHA)* | Surge XT release commit                       |
-| `BUILD_MODE`                 | `source`       | `source` or `prebuilt` (Surge install method) |
-| `R2_BUCKET`                  | *(empty)*      | Cloudflare R2 bucket name                     |
-| `TORCH_INDEX_URL`            | *(required)*   | PyTorch wheel index URL                       |
-
-### Baked ENV vars (available at runtime)
-
-| Variable                     | Set in targets             | Value                                |
-| ---------------------------- | -------------------------- | ------------------------------------ |
-| `SYNTH_PERMUTATIONS_GIT_REF` | `dev-snapshot`             | The git ref the image was built from |
-| `R2_BUCKET`                  | all (via `r2-config-base`) | Cloudflare R2 bucket name            |
-| `VIRTUAL_ENV`                | all                        | `/venv/main`                         |
-| `PATH`                       | all                        | `$VIRTUAL_ENV/bin:$PATH`             |
-
-### MODE=generate_dataset env vars
-
-| Variable           | Required | Default         | Purpose                                    |
-| ------------------ | -------- | --------------- | ------------------------------------------ |
-| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container   |
-| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where input_spec.json is written |
-
-The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
-`input_spec.json` is written to `RUN_METADATA_DIR`. The entrypoint generates
-`shard_size` samples (one shard per invocation). Multi-shard generation
-(`num_shards > 1`) raises `NotImplementedError`.
-
 ______________________________________________________________________
 
 ## 4. Known Design Issues
