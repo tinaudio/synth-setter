@@ -105,7 +105,7 @@ python -m pipeline.entrypoints.generate_dataset configs/dataset/surge-simple-480
 
 Make targets are thin aliases for convenience:
 
-> **Not yet implemented.** These `make` targets are planned but do not exist in the Makefile yet.
+> **Not yet implemented.** These `make` targets are planned but do not exist in the Makefile yet ([#72](https://github.com/tinaudio/synth-setter/issues/72)).
 
 ```bash
 make generate ARGS="--config configs/dataset/surge-simple-480k-10k.yaml --workers 10"
@@ -197,8 +197,8 @@ Both planes use R2. There is no separate database, message queue, or coordinatio
 
 What if reconciliation itself has a bug — e.g., it validates a corrupt shard as good?
 
-- **Defense in depth:** Workers run three independent validation checks before upload; all must pass ([§7.5](#75-shard-validation)).
-- **Tiered validation:** Workers do full 3-check validation. Finalize structural-checks staged shards before promoting. Each tier catches a different class of failure.
+- **Defense in depth:** Workers run validation checks before upload; all must pass ([§7.5](#75-shard-validation)).
+- **Tiered validation:** Full validation (4-check design target: structural, shape, value, row count — [#103](https://github.com/tinaudio/synth-setter/issues/103)). Current implementation: 3-check (valid HDF5, expected datasets, row count). Shape and value checks are planned. Finalize structural-checks staged shards before promoting. Each tier catches a different class of failure.
 - **Training is the ultimate check:** A corrupt dataset will fail to train properly, providing end-to-end verification.
 - **Manual spot-checking is feasible:** At 1-2 runs/week, eyeballing a few shards is practical and encouraged.
 
@@ -490,7 +490,7 @@ missing → rendering → staged-valid → finalized (canonical)
 **Transitions:**
 
 - **missing → rendering:** Worker begins shard generation, writes `.rendering` marker.
-- **rendering → staged-valid:** Worker validates locally (full 3-check), uploads `.h5` to staging, writes worker report, then writes `.valid` marker as the **last step**. The `.valid` marker is the commit point — it signals that the worker completed the full shard lifecycle (render, validate, upload, bookkeeping). The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
+- **rendering → staged-valid:** Worker validates locally (full validation — 4-check design target: structural, shape, value, row count — [#103](https://github.com/tinaudio/synth-setter/issues/103); current implementation: 3-check), uploads `.h5` to staging, writes worker report, then writes `.valid` marker as the **last step**. The `.valid` marker is the commit point — it signals that the worker completed the full shard lifecycle (render, validate, upload, bookkeeping). The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
 - **rendering → invalid:** Worker validates locally and the shard fails. Worker uploads the corrupt shard to `quarantine/` and writes `.invalid` marker, preserving the evidence for debugging. The shard is treated as missing on next `generate`.
 - **rendering → missing:** Worker crashes before writing `.valid`. The `.rendering` marker is orphaned — observable evidence of the crashed attempt. Any `.h5` uploaded before the crash exists but without `.valid` is not considered staged-valid.
 - **staged-valid → finalized:** Finalize structural-checks the staged shard, copies it to `data/shards/shard-{id}.h5`, writes `.promoted` marker, records content hash in `dataset.json`, and writes `dataset.complete` after all shards are promoted. Staged files remain in place (append-only — no deletion).
@@ -517,7 +517,7 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 
 1. Write `.rendering` marker: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
 2. Render shard to a local temp file
-3. **Validate locally** — full 3-check validation (structural, shape, value, row count). This is the primary defense against corrupt data.
+3. **Validate locally** — full validation (4-check design target: structural, shape, value, row count — [#103](https://github.com/tinaudio/synth-setter/issues/103)). Current implementation: 3-check (valid HDF5, expected datasets, row count). Shape and value checks are planned. This is the primary defense against corrupt data.
 4. **If validation passes:**
    - Upload shard to staging: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.h5`
    - Write worker report (content hash, timing, per-shard results): `metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json`
@@ -608,7 +608,7 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 
 - Check for `.h5` + `.valid` marker in staging directory. No data loading.
 - The `.valid` marker is authoritative for staging admission: it means a worker completed the full shard lifecycle and committed the result ([§7.2](#72-shard-lifecycle)). It is not sufficient for final dataset correctness — finalize remains the gate before promotion.
-- The trust chain justifies this: workers do full 3-check validation before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
+- The trust chain justifies this: workers do full validation (4-check design target — [#103](https://github.com/tinaudio/synth-setter/issues/103); current implementation: 3-check) before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
 
 **Structural check** — run by finalize before promoting staged shards to `data/shards/`:
 
@@ -616,11 +616,11 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 - This catches the only realistic failure between worker validation and finalize: transfer corruption or bit rot. Value-level corruption (NaN, wrong bounds) and row count mismatches were already caught by workers — re-checking would require loading all data from every shard, which is redundant.
 - If a staged shard fails the structural check, finalize writes `.invalid` for that attempt, reports the failure, and exits 1. The shard is treated as missing and regenerated on next `generate`.
 
-| Stage               | Validation                                              | Cost                                   | Why                                                                 |
-| ------------------- | ------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
-| **Worker**          | Full 3-check (valid HDF5, expected datasets, row count) | Expensive (loads all data)             | Primary defense — catches VST crashes, NaN, wrong shapes            |
-| **Generate/status** | Existence (`.h5` + `.valid` marker)                     | Cheap (file listing)                   | Workers already validated; re-validation is redundant               |
-| **Finalize**        | Structural (valid HDF5, datasets present, shapes match) | Moderate (opens file, no data loading) | Catches transfer corruption; last checkpoint before sealing dataset |
+| Stage               | Validation                                                                                                                                                             | Cost                                   | Why                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
+| **Worker**          | Full validation (4-check design target — [#103](https://github.com/tinaudio/synth-setter/issues/103); current impl: 3-check: valid HDF5, expected datasets, row count) | Expensive (loads all data)             | Primary defense — catches VST crashes, NaN, wrong shapes            |
+| **Generate/status** | Existence (`.h5` + `.valid` marker)                                                                                                                                    | Cheap (file listing)                   | Workers already validated; re-validation is redundant               |
+| **Finalize**        | Structural (valid HDF5, datasets present, shapes match)                                                                                                                | Moderate (opens file, no data loading) | Catches transfer corruption; last checkpoint before sealing dataset |
 
 **Content hashes** (SHA-256 over the full HDF5 file) are recorded in worker reports for provenance and divergence detection. They are not used as acceptance criteria. If two workers produce different hashes for the same shard, the content hashes surface the divergence for investigation.
 

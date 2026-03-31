@@ -477,7 +477,7 @@ rm "$tempfile"
 > **Note:** The current `renderscript.sh` assumes a headless Linux environment
 > (always launches Xvfb). It does not detect macOS or existing `$DISPLAY`, and has
 > no cleanup trap. The auto-detection logic shown in earlier drafts of this doc is a
-> proposed improvement, not the current implementation.
+> proposed improvement, not the current implementation ([#86](https://github.com/tinaudio/synth-setter/issues/86)).
 
 **Rationale:** Requiring users to know whether they're headless and set `DISPLAY` manually is error-prone. Auto-detection handles all environments (macOS dev, Linux dev, Docker, CI) with zero configuration.
 
@@ -551,7 +551,7 @@ hands Lightning a resolved local path transparently.
 
 **Decision:** All eval operations are `make` targets — consistent with the existing `make test`, `make format` pattern.
 
-> **Not yet implemented.** These `make` targets are proposed but do not exist in the Makefile yet.
+> **Not yet implemented.** These `make` targets are proposed but do not exist in the Makefile yet ([#86](https://github.com/tinaudio/synth-setter/issues/86)).
 
 | Target             | Maps to                                       |
 | ------------------ | --------------------------------------------- |
@@ -613,7 +613,7 @@ This section consolidates every configuration and environment behavior change in
 | **Checkpoint: reproducible** | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` in experiment config                                                                                | `configs/experiment/surge/flow_simple.yaml`   | Yes       | **New** — portable, pinned                       |
 | **R2 dataset access**        | `data.r2_path=r2:intermediate-data/...` triggers auto-download in `prepare_data()`                                                                                       | CLI or experiment config (no default)         | Yes       | **New** — explicit opt-in                        |
 | **Checkpoint download**      | `${wandb:...}` OmegaConf resolver → lazy W&B artifact download to `$PROJECT_ROOT/.cache/checkpoints/`                                                                    | `src/utils/utils.py` (`register_resolvers()`) | Yes       | **New** — replaces `get-ckpt-from-wandb.sh`      |
-| **Checkpoint upload**        | W&B `log_model="all"` — uploads every saved checkpoint automatically                                                                                                     | `configs/logger/wandb.yaml`                   | Yes       | Config change only — `true` → `"all"`            |
+| **Checkpoint upload**        | W&B `log_model="all"` — uploads every saved checkpoint automatically. Current config: `log_model: true` (best+last only). Design target: `"all"` (every checkpoint).     | `configs/logger/wandb.yaml`                   | Yes       | Config change only — `true` → `"all"`            |
 | **Credentials**              | `.env` for R2 + W&B secrets only                                                                                                                                         | `.env` / `.env.example`                       | Yes       | **New** — secrets only, no paths                 |
 | **Display handling**         | Auto-detect: macOS native / Linux Xvfb / Docker baked                                                                                                                    | `renderscript.sh`                             | Yes       | Linux-only → cross-platform                      |
 | **Log directory**            | `${paths.root_dir}/logs/` (unchanged)                                                                                                                                    | `configs/paths/default.yaml`                  | Yes       | No change                                        |
