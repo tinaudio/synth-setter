@@ -32,7 +32,7 @@ ______________________________________________________________________
 ## 2. R2 Bucket Layout
 
 ```
-synth-data/
+intermediate-data/
 ├── data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
 └── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
@@ -43,6 +43,8 @@ ______________________________________________________________________
 ## 3. R2 Contents Per Workflow
 
 ### 3a. Data Generation
+
+> **Implementation status:** The layout below is the target architecture. The current single-shard MVP uses a flat structure: spec and shard upload directly to `data/{config_id}/{run_id}/`.
 
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/
@@ -99,11 +101,13 @@ ______________________________________________________________________
 
 ## 4. W&B Artifact Types
 
-| Type           | Name Pattern               | Logged By               | Example name        |
-| -------------- | -------------------------- | ----------------------- | ------------------- |
-| `dataset`      | `data-{dataset_config_id}` | `pipeline.cli finalize` | `data-diva-v1`      |
-| `model`        | `model-{train_config_id}`  | `src/train.py`          | `model-flow-simple` |
-| `eval-results` | `eval-{eval_config_id}`    | eval script             | `eval-nsynth-v1`    |
+| Type           | Name Pattern               | Logged By                         | Example name        |
+| -------------- | -------------------------- | --------------------------------- | ------------------- |
+| `dataset`      | `data-{dataset_config_id}` | `pipeline.cli finalize` (planned) | `data-diva-v1`      |
+| `model`        | `model-{train_config_id}`  | `src/train.py`                    | `model-flow-simple` |
+| `eval-results` | `eval-{eval_config_id}`    | eval script                       | `eval-nsynth-v1`    |
+
+> **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
 - The `*_wandb_run_id` is stored in `artifact.metadata`, not the artifact name
@@ -152,11 +156,13 @@ ______________________________________________________________________
 
 ## 7. `job_type` Values
 
-| `job_type`        | Stage         | Script                  |
-| ----------------- | ------------- | ----------------------- |
-| `data-generation` | Data pipeline | `pipeline.cli finalize` |
-| `training`        | Training      | `src/train.py`          |
-| `evaluation`      | Evaluation    | eval script             |
+| `job_type`        | Stage         | Script                            |
+| ----------------- | ------------- | --------------------------------- |
+| `data-generation` | Data pipeline | `pipeline.cli finalize` (planned) |
+| `training`        | Training      | `src/train.py`                    |
+| `evaluation`      | Evaluation    | eval script                       |
+
+> **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
 - Set on every `wandb.init(job_type=...)` call
 
@@ -164,14 +170,14 @@ ______________________________________________________________________
 
 ## 8. GitHub Actions Workflows
 
-| Workflow        | File                 | Trigger              | Runner                          | Secrets             | Key Inputs                                                       |
-| --------------- | -------------------- | -------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
-| Tests           | `test.yml`           | push, PR             | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
-| Full Tests      | `test-expensive.yml` | push(main), dispatch | `gpu-x64`                       | —                   | —                                                                |
-| Data Generation | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | config, n_workers                                                |
-| Training        | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
-| Evaluation      | TBD                  | `workflow_dispatch`  | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |
-| Model Promotion | `promote.yml`        | `workflow_dispatch`  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
+| Workflow        | File                     | Trigger             | Runner                          | Secrets             | Key Inputs                                                       |
+| --------------- | ------------------------ | ------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
+| Tests           | `test.yml`               | push, PR            | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
+| Full Tests      | `test-expensive.yml`     | schedule, dispatch  | `gpu-x64`                       | —                   | —                                                                |
+| Data Generation | `dataset-generation.yml` | `workflow_call`     | `ubuntu-latest-4core`           | DockerHub           | `image_tag`, `config_path`, `artifact_name`                      |
+| Training        | TBD                      | `workflow_dispatch` | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
+| Evaluation      | TBD                      | `workflow_dispatch` | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |
+| Model Promotion | `promote.yml` (planned)  | `workflow_dispatch` | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
 
 - All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
 - Evaluation requires `train_wandb_run_id` (to find the model artifact) and `eval_config_id` (which dataset to evaluate on).
@@ -251,7 +257,7 @@ ______________________________________________________________________
 
 ## 11. Artifact → Storage Mapping
 
-- W&B artifacts reference R2 objects via `artifact.add_reference("s3://synth-data/...")` (R2 is S3-compatible)
+- W&B artifacts reference R2 objects via `artifact.add_reference("s3://intermediate-data/...")` (R2 is S3-compatible)
 - Requires `AWS_ENDPOINT_URL` (or `WANDB_S3_ENDPOINT_URL`) set to the R2 endpoint in any environment that calls `add_reference` or downloads reference artifacts. Without this, W&B will attempt to resolve against AWS S3.
 - Artifacts do not duplicate large data files — they contain metadata, manifests, and statistics
 - Bulk data lives in R2; W&B provides the index and lineage graph
