@@ -90,8 +90,9 @@ ______________________________________________________________________
 | `prod`         | Baked at `GIT_REF` (tarball) | Production            |
 
 > **Note:** The Makefile only has `docker-build-dev-live` and
-> `docker-build-dev-snapshot` targets. To build the `prod` target, pass
-> `--build-arg IMAGE=prod` via `DOCKER_BUILD_FLAGS` or invoke `docker buildx build` directly.
+> `docker-build-dev-snapshot` targets. To build the `prod` target, invoke
+> `docker buildx build` directly with `--build-arg IMAGE=prod` — the Makefile's
+> `docker-build-*` targets override the `IMAGE` build arg after `DOCKER_BUILD_FLAGS`.
 
 All targets require `GIT_PAT`. `dev-snapshot` and `prod` additionally require `GIT_REF`:
 
