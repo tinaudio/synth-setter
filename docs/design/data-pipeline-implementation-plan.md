@@ -83,7 +83,9 @@ ______________________________________________________________________
 
 ### NOT ported (stays on `experiment`)
 
-- `scripts/generate_shards.py`, `finalize_shards.py`, `runpod_launch.py`, `runpod_stop.py`,
+- `scripts/generate_shards.py` ([#407](https://github.com/tinaudio/synth-setter/issues/407)),
+  `finalize_shards.py` ([#408](https://github.com/tinaudio/synth-setter/issues/408)),
+  `runpod_launch.py`, `runpod_stop.py`,
   `run_dataset_pipeline.py`, `reshard_data_dynamic_shard.py` + all their tests
 - `tests/test_entrypoint.bats`
 - `scripts/setup-dev.sh`, `scripts/setup-rclone.sh`
@@ -516,7 +518,8 @@ ______________________________________________________________________
 **Files to create:**
 
 - `pipeline/backends/__init__.py`, `pipeline/backends/base.py`, `pipeline/backends/local.py`
-- `pipeline/worker.py`
+- `pipeline/worker.py` — note: the experiment branch implements this as
+  `scripts/generate_shards.py` called from the entrypoint, not a separate module
 - `tests/pipeline/test_backends.py`, `tests/pipeline/test_worker.py`
 
 **Key behaviors — Worker:**
@@ -804,7 +807,7 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `scripts/docker_entrypoint.sh` — add `MODE=pipeline-worker`
+- `scripts/docker_entrypoint.sh` — add `MODE=generate-shards`
 - `Makefile` — `make pipeline-generate`, `pipeline-status`, `pipeline-finalize`
 
 **RunPodBackend:** `runpod.create_pod()` with env vars, auth check, dry-run. Tags all
@@ -813,7 +816,8 @@ pods with `run_id` for cleanup.
 **`cleanup` CLI command:** `python -m pipeline cleanup --run-id <id>` — queries RunPod API
 for pods tagged with `run_id`, terminates them. Safety net for orphaned pods.
 
-**Docker:** `MODE=pipeline-worker` → `python -m pipeline.worker`. Bash EXIT trap uploads
+**Docker:** `MODE=generate-shards` — entrypoint dispatches to shard generation logic
+(experiment branch `scripts/generate_shards.py` is prior art). Bash EXIT trap uploads
 JSONL debug log + fallback `error.json` to `metadata/workers/attempts/{w}-{a}/` on crash.
 
 **Adhoc Docker script:** Builds image, runs container with test config + mounted storage,
@@ -922,7 +926,7 @@ ______________________________________________________________________
     (`random.seed()` + `np.random.seed()`) for reproducibility (#100, P3). Provides
     OS-level crash isolation (SIGSEGV/OOM kill only one shard), per-shard timeout, and
     clean VST plugin state. See design doc §7.8.1
-08. Entrypoint gets `MODE=pipeline-worker`, existing modes untouched
+08. Entrypoint gets `MODE=generate-shards`, existing modes untouched
 09. Tests in `tests/pipeline/` with own conftest
 10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling
     `reshard_data.py` — it hardcodes 10k shard size)
