@@ -121,7 +121,7 @@ python src/train.py \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
 
-Cloud training runs as `MODE=train` (scoped, validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)). Downloads dataset from R2 via rclone, runs `src/train.py` with Hydra config, uploads checkpoints to `{R2_PREFIX}/training/{wandb_run_id}/`.
+In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/train.py` with Hydra config, and uploads checkpoints to R2 at `{R2_PREFIX}/training/{wandb_run_id}/`. On main, checkpoint durability is W&B-only (see Section 6.2).
 
 ### Docker
 
@@ -288,14 +288,14 @@ Behavior:
 
 ### 6.2 Checkpoint Durability via W&B
 
-Lightning's `WandbLogger` with `log_model=true` uploads every checkpoint as a W&B artifact automatically. No custom callback needed.
+Lightning's `WandbLogger` with `log_model=true` uploads the best and last checkpoints as W&B artifacts automatically. No custom callback needed. To upload every checkpoint (including intermediate steps), set `log_model: "all"` ([#401](https://github.com/tinaudio/synth-setter/issues/401)).
 
 ```yaml
 # configs/logger/wandb.yaml
 wandb:
   _target_: lightning.pytorch.loggers.WandbLogger
   project: synth-setter
-  log_model: true  # uploads every checkpoint as a model artifact
+  log_model: true  # uploads best + last checkpoints as model artifacts
 ```
 
 This gives us:
@@ -533,11 +533,11 @@ ______________________________________________________________________
 
 ## Appendix C: Checkpoint Policy
 
-| Checkpoint              | Keep locally          | Upload to W&B          |
-| ----------------------- | --------------------- | ---------------------- |
-| `last.ckpt`             | Yes                   | Yes (`log_model=true`) |
-| `best.ckpt`             | Yes                   | Yes (`log_model=true`) |
-| Intermediate step ckpts | Per checkpoint config | Yes (`log_model=true`) |
+| Checkpoint              | Keep locally          | Upload to W&B                                                                                 |
+| ----------------------- | --------------------- | --------------------------------------------------------------------------------------------- |
+| `last.ckpt`             | Yes                   | Yes (`log_model=true`)                                                                        |
+| `best.ckpt`             | Yes                   | Yes (`log_model=true`)                                                                        |
+| Intermediate step ckpts | Per checkpoint config | No (requires `log_model: "all"`, [#401](https://github.com/tinaudio/synth-setter/issues/401)) |
 
 > R2 checkpoint upload is deferred. If added later, only `best` + `last` would be mirrored.
 

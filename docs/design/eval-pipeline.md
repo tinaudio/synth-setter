@@ -479,7 +479,7 @@ rm "$tempfile"
 > no cleanup trap. The auto-detection logic shown in earlier drafts of this doc is a
 > proposed improvement, not the current implementation ([#86](https://github.com/tinaudio/synth-setter/issues/86)).
 
-**Rationale:** Requiring users to know whether they're headless and set `DISPLAY` manually is error-prone. Auto-detection handles all environments (macOS dev, Linux dev, Docker, CI) with zero configuration.
+**Rationale (design target):** Requiring users to know whether they're headless and set `DISPLAY` manually is error-prone. Auto-detection handles all environments (macOS dev, Linux dev, Docker, CI) with zero configuration. The current implementation always launches Xvfb; auto-detection is a proposed improvement ([#86](https://github.com/tinaudio/synth-setter/issues/86)).
 
 ### 7.2 Checkpoint Resolution
 
