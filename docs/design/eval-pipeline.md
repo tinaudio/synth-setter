@@ -316,9 +316,8 @@ Behavior:
 
 Checkpoints are stored in **W&B artifacts**, not R2. This is a deliberate decision — see [§10](#10-alternatives-considered) for the full R2-vs-W&B analysis.
 
-**Upload** (training): `log_model="all"` in `configs/logger/wandb.yaml` uploads every checkpoint
-saved by `ModelCheckpoint` (currently every 5000 steps + best + last). Zero new code — already
-configured, just change `log_model: true` → `log_model: "all"`.
+**Upload** (training): `log_model: true` in `configs/logger/wandb.yaml` uploads best+last
+checkpoints saved by `ModelCheckpoint` as W&B artifacts. Zero new code — already configured.
 
 **Download** (eval): Checkpoints are resolved lazily via a custom OmegaConf resolver. The
 experiment config pins a W&B artifact reference using resolver syntax:
@@ -570,7 +569,7 @@ Each system handles what it's best at:
 
 | System                                 | What it stores                                                                                                                 | Why                                                       |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
-| **W&B**                                | Training metrics, checkpoints (`log_model="all"`), eval summary metrics, artifact lineage                                      | UI for browsing/comparing, lineage graphs, model registry |
+| **W&B**                                | Training metrics, checkpoints (`log_model: true` — best+last), eval summary metrics, artifact lineage                          | UI for browsing/comparing, lineage graphs, model registry |
 | **R2**                                 | Datasets (generated shards, train/val/test splits), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics) | Too large for W&B, cheaper per GB, fast rclone egress     |
 | **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                       | Exact reproducibility without querying W&B                |
 
@@ -586,55 +585,55 @@ This section consolidates every configuration and environment behavior change in
 
 #### Current behavior (as-is)
 
-| Concern                   | Current mechanism                                                   | Where defined                              | Portable? | Problem                                            |
-| ------------------------- | ------------------------------------------------------------------- | ------------------------------------------ | --------- | -------------------------------------------------- |
-| **Dataset path**          | Hardcoded `/data/scratch/acw585/surge_simple/`                      | `configs/data/surge_simple.yaml`           | No        | Only works on university cluster                   |
-| **Checkpoint resolution** | `get-ckpt-from-wandb.sh` searches local `logs/train/` by W&B run ID | `jobs/predict/*.sh` (19 scripts)           | No        | Requires training logs on same machine             |
-| **Checkpoint path**       | `ckpt_path: ???` in eval, resolved by shell script to local path    | `configs/eval.yaml` + shell                | No        | Local filesystem dependency                        |
-| **R2 dataset access**     | Not supported                                                       | —                                          | —         | Must manually copy data to machine                 |
-| **Checkpoint access**     | `get-ckpt-from-wandb.sh` (local filesystem search by W&B run ID)    | `jobs/predict/*.sh`                        | No        | Only works on the machine where training happened  |
-| **Checkpoint upload**     | W&B `log_model: true` — uploads best checkpoint only                | `configs/logger/wandb.yaml`                | Partially | No periodic upload, crash loses intermediate ckpts |
-| **Credentials**           | No `.env` pattern for R2                                            | —                                          | —         | No standardized credential management              |
-| **Display handling**      | `renderscript.sh` assumes Linux + Xvfb                              | `renderscript.sh`                          | No        | Fails on macOS (no Xvfb needed), no auto-detect    |
-| **Log directory**         | `${paths.root_dir}/logs/` via `PROJECT_ROOT`                        | `configs/paths/default.yaml`               | Yes       | Already works                                      |
-| **Predict output**        | `${paths.output_dir}/predictions`                                   | `configs/callbacks/prediction_writer.yaml` | Yes       | Already works                                      |
-| **W&B entity**            | Hardcoded `entity: "benhayes"`                                      | `configs/logger/wandb.yaml`                | No        | Wrong for other users                              |
-| **SGE scripts**           | 19 near-identical scripts, one per model                            | `jobs/predict/*.sh`                        | No        | Copy-paste errors, cluster-only                    |
-| **Eval CLI**              | Raw `python src/eval.py ...` with many args                         | Shell scripts                              | No        | No `make` targets, hard to discover                |
+| Concern                   | Current mechanism                                                   | Where defined                              | Portable? | Problem                                           |
+| ------------------------- | ------------------------------------------------------------------- | ------------------------------------------ | --------- | ------------------------------------------------- |
+| **Dataset path**          | Hardcoded `/data/scratch/acw585/surge_simple/`                      | `configs/data/surge_simple.yaml`           | No        | Only works on university cluster                  |
+| **Checkpoint resolution** | `get-ckpt-from-wandb.sh` searches local `logs/train/` by W&B run ID | `jobs/predict/*.sh` (19 scripts)           | No        | Requires training logs on same machine            |
+| **Checkpoint path**       | `ckpt_path: ???` in eval, resolved by shell script to local path    | `configs/eval.yaml` + shell                | No        | Local filesystem dependency                       |
+| **R2 dataset access**     | Not supported                                                       | —                                          | —         | Must manually copy data to machine                |
+| **Checkpoint access**     | `get-ckpt-from-wandb.sh` (local filesystem search by W&B run ID)    | `jobs/predict/*.sh`                        | No        | Only works on the machine where training happened |
+| **Checkpoint upload**     | W&B `log_model: true` — uploads best+last checkpoints               | `configs/logger/wandb.yaml`                | Yes       | —                                                 |
+| **Credentials**           | No `.env` pattern for R2                                            | —                                          | —         | No standardized credential management             |
+| **Display handling**      | `renderscript.sh` assumes Linux + Xvfb                              | `renderscript.sh`                          | No        | Fails on macOS (no Xvfb needed), no auto-detect   |
+| **Log directory**         | `${paths.root_dir}/logs/` via `PROJECT_ROOT`                        | `configs/paths/default.yaml`               | Yes       | Already works                                     |
+| **Predict output**        | `${paths.output_dir}/predictions`                                   | `configs/callbacks/prediction_writer.yaml` | Yes       | Already works                                     |
+| **W&B entity**            | Hardcoded `entity: "benhayes"`                                      | `configs/logger/wandb.yaml`                | No        | Wrong for other users                             |
+| **SGE scripts**           | 19 near-identical scripts, one per model                            | `jobs/predict/*.sh`                        | No        | Copy-paste errors, cluster-only                   |
+| **Eval CLI**              | Raw `python src/eval.py ...` with many args                         | Shell scripts                              | No        | No `make` targets, hard to discover               |
 
 #### Proposed behavior (to-be)
 
-| Concern                      | Proposed mechanism                                                                                                                                                       | Where defined                                 | Portable? | Change from current                                   |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | --------- | ----------------------------------------------------- |
-| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z` (paths convention + run ID)                                                                 | `configs/data/surge_simple.yaml`              | Yes       | Hardcoded → paths convention + run ID                 |
-| **Dataset path override**    | CLI: `data.dataset_root=/cluster/path/surge_simple-20260312T143022Z/`                                                                                                    | Command line                                  | Yes       | Implicit → explicit                                   |
-| **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in experiment configs                                                                                                                    | `configs/eval.yaml` + `configs/experiment/`   | Yes       | Shell script → Hydra config                           |
-| **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                                                                                                                       | Command line                                  | No        | Same as today but without shell wrapper               |
-| **Checkpoint: reproducible** | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` in experiment config                                                                                | `configs/experiment/surge/flow_simple.yaml`   | Yes       | **New** — portable, pinned                            |
-| **R2 dataset access**        | `data.r2_path=r2:intermediate-data/...` triggers auto-download in `prepare_data()`                                                                                       | CLI or experiment config (no default)         | Yes       | **New** — explicit opt-in                             |
-| **Checkpoint download**      | `${wandb:...}` OmegaConf resolver → lazy W&B artifact download to `$PROJECT_ROOT/.cache/checkpoints/`                                                                    | `src/utils/utils.py` (`register_resolvers()`) | Yes       | **New** — replaces `get-ckpt-from-wandb.sh`           |
-| **Checkpoint upload**        | W&B `log_model: true` — uploads best+last checkpoints. Design target: `log_model: "all"` (every checkpoint).                                                             | `configs/logger/wandb.yaml`                   | Yes       | Already configured (`true`); `"all"` is design target |
-| **Credentials**              | `.env` for R2 + W&B secrets only                                                                                                                                         | `.env` / `.env.example`                       | Yes       | **New** — secrets only, no paths                      |
-| **Display handling**         | Auto-detect: macOS native / Linux Xvfb / Docker baked                                                                                                                    | `renderscript.sh`                             | Yes       | Linux-only → cross-platform                           |
-| **Log directory**            | `${paths.root_dir}/logs/` (unchanged)                                                                                                                                    | `configs/paths/default.yaml`                  | Yes       | No change                                             |
-| **Predict output**           | `${paths.output_dir}/predictions` (unchanged)                                                                                                                            | `configs/callbacks/prediction_writer.yaml`    | Yes       | No change                                             |
-| **W&B entity**               | `entity: ${oc.env:WANDB_ENTITY,tinaudio}`, `project: ${oc.env:WANDB_PROJECT,synth-setter}`                                                                               | `configs/logger/wandb.yaml`                   | Yes       | Hardcoded → configurable                              |
-| **SGE scripts**              | Deprecated — left as-is, not maintained                                                                                                                                  | `jobs/predict/*.sh`                           | No        | Active → deprecated                                   |
-| **R2 eval artifact upload**  | `make upload-eval` → `r2:intermediate-data/eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/` | `Makefile`                                    | Yes       | **New** — 6-segment path encodes full provenance      |
-| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                                                                                   | `scripts/compute_audio_metrics.py`            | Yes       | **New** — programmatic provenance chain               |
-| **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                                                                                                            | `Makefile`                                    | Yes       | **New** — discoverable, consistent                    |
+| Concern                      | Proposed mechanism                                                                                                                                                       | Where defined                                 | Portable? | Change from current                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | --------- | ------------------------------------------------ |
+| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z` (paths convention + run ID)                                                                 | `configs/data/surge_simple.yaml`              | Yes       | Hardcoded → paths convention + run ID            |
+| **Dataset path override**    | CLI: `data.dataset_root=/cluster/path/surge_simple-20260312T143022Z/`                                                                                                    | Command line                                  | Yes       | Implicit → explicit                              |
+| **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in experiment configs                                                                                                                    | `configs/eval.yaml` + `configs/experiment/`   | Yes       | Shell script → Hydra config                      |
+| **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                                                                                                                       | Command line                                  | No        | Same as today but without shell wrapper          |
+| **Checkpoint: reproducible** | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` in experiment config                                                                                | `configs/experiment/surge/flow_simple.yaml`   | Yes       | **New** — portable, pinned                       |
+| **R2 dataset access**        | `data.r2_path=r2:intermediate-data/...` triggers auto-download in `prepare_data()`                                                                                       | CLI or experiment config (no default)         | Yes       | **New** — explicit opt-in                        |
+| **Checkpoint download**      | `${wandb:...}` OmegaConf resolver → lazy W&B artifact download to `$PROJECT_ROOT/.cache/checkpoints/`                                                                    | `src/utils/utils.py` (`register_resolvers()`) | Yes       | **New** — replaces `get-ckpt-from-wandb.sh`      |
+| **Checkpoint upload**        | W&B `log_model: true` — uploads best+last checkpoints                                                                                                                    | `configs/logger/wandb.yaml`                   | Yes       | Already configured — no change needed            |
+| **Credentials**              | `.env` for R2 + W&B secrets only                                                                                                                                         | `.env` / `.env.example`                       | Yes       | **New** — secrets only, no paths                 |
+| **Display handling**         | Auto-detect: macOS native / Linux Xvfb / Docker baked                                                                                                                    | `renderscript.sh`                             | Yes       | Linux-only → cross-platform                      |
+| **Log directory**            | `${paths.root_dir}/logs/` (unchanged)                                                                                                                                    | `configs/paths/default.yaml`                  | Yes       | No change                                        |
+| **Predict output**           | `${paths.output_dir}/predictions` (unchanged)                                                                                                                            | `configs/callbacks/prediction_writer.yaml`    | Yes       | No change                                        |
+| **W&B entity**               | `entity: ${oc.env:WANDB_ENTITY,tinaudio}`, `project: ${oc.env:WANDB_PROJECT,synth-setter}`                                                                               | `configs/logger/wandb.yaml`                   | Yes       | Hardcoded → configurable                         |
+| **SGE scripts**              | Deprecated — left as-is, not maintained                                                                                                                                  | `jobs/predict/*.sh`                           | No        | Active → deprecated                              |
+| **R2 eval artifact upload**  | `make upload-eval` → `r2:intermediate-data/eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/` | `Makefile`                                    | Yes       | **New** — 6-segment path encodes full provenance |
+| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                                                                                   | `scripts/compute_audio_metrics.py`            | Yes       | **New** — programmatic provenance chain          |
+| **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                                                                                                            | `Makefile`                                    | Yes       | **New** — discoverable, consistent               |
 
 Cloud evaluation runs as `MODE=eval` (planned — [#410](https://github.com/tinaudio/synth-setter/issues/410)). Env var contract follows the same pattern as `MODE=train`: download checkpoint + dataset from R2, run `src/eval.py`, upload results. No implementation exists on any branch.
 
 #### What changes, what stays
 
-| Category       | Items that change                                                                                                                                                                 | Items that stay |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| **Removed**    | Hardcoded cluster paths, `get-ckpt-from-wandb.sh` shell script, SGE as supported platform                                                                                         |                 |
-| **Deprecated** | 19 SGE scripts (left in repo, no maintenance)                                                                                                                                     |                 |
-| **New**        | `${wandb:...}` OmegaConf resolver, `data.r2_path` opt-in, `make` targets, cross-platform display, `.env` for secrets, W&B Teams plan, W&B eval lineage, R2 provenance paths       |                 |
-| **Modified**   | `dataset_root` (hardcoded → paths convention), `renderscript.sh` (Linux-only → auto-detect), W&B entity (hardcoded → configurable), `log_model` (design target: `true` → `"all"`) |                 |
-| **Unchanged**  | `ckpt_path: ???` in eval.yaml, `ckpt_path: null` in train.yaml, `log_dir`, `output_dir`, prediction writer, W&B metric logging, CSV logger, `ModelCheckpoint` save cadence        |                 |
+| Category       | Items that change                                                                                                                                                                             | Items that stay |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| **Removed**    | Hardcoded cluster paths, `get-ckpt-from-wandb.sh` shell script, SGE as supported platform                                                                                                     |                 |
+| **Deprecated** | 19 SGE scripts (left in repo, no maintenance)                                                                                                                                                 |                 |
+| **New**        | `${wandb:...}` OmegaConf resolver, `data.r2_path` opt-in, `make` targets, cross-platform display, `.env` for secrets, W&B Teams plan, W&B eval lineage, R2 provenance paths                   |                 |
+| **Modified**   | `dataset_root` (hardcoded → paths convention), `renderscript.sh` (Linux-only → auto-detect), W&B entity (hardcoded → configurable)                                                            |                 |
+| **Unchanged**  | `ckpt_path: ???` in eval.yaml, `ckpt_path: null` in train.yaml, `log_dir`, `output_dir`, prediction writer, W&B metric logging, CSV logger, `ModelCheckpoint` save cadence, `log_model: true` |                 |
 
 #### Diff analysis
 
@@ -649,14 +648,14 @@ Cloud evaluation runs as `MODE=eval` (planned — [#410](https://github.com/tina
 
 **2. Checkpoint resolution (§7.2)**
 
-|                            | Current                                     | Proposed                                                                                        |
-| -------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| **Eval checkpoint**        | Shell script finds local file by W&B run ID | Pinned `${wandb:...}` resolver in experiment config or CLI arg                                  |
-| **Training checkpoint**    | `ckpt_path: null` (start fresh)             | Same — no change                                                                                |
-| **Training resume**        | `ckpt_path=/local/path/last.ckpt`           | `ckpt_path=${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (portable)                  |
-| **Upload during training** | W&B `log_model: true` (best only)           | W&B `log_model="all"` (every saved checkpoint — crash resilient)                                |
-| **Risk eliminated**        | —                                           | "Checkpoint is on the cluster" — W&B artifacts available everywhere                             |
-| **Trade-off**              | —                                           | W&B Teams at $50/mo; storage burns faster with `"all"` (see [§10](#10-alternatives-considered)) |
+|                            | Current                                     | Proposed                                                                       |
+| -------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
+| **Eval checkpoint**        | Shell script finds local file by W&B run ID | Pinned `${wandb:...}` resolver in experiment config or CLI arg                 |
+| **Training checkpoint**    | `ckpt_path: null` (start fresh)             | Same — no change                                                               |
+| **Training resume**        | `ckpt_path=/local/path/last.ckpt`           | `ckpt_path=${wandb:tinaudio/synth-setter/model-flow_simple:latest}` (portable) |
+| **Upload during training** | W&B `log_model: true` (best+last)           | W&B `log_model: true` (best+last — no change needed)                           |
+| **Risk eliminated**        | —                                           | "Checkpoint is on the cluster" — W&B artifacts available everywhere            |
+| **Trade-off**              | —                                           | W&B Teams at $50/mo                                                            |
 
 **3. Dataset access (§6.3)**
 
@@ -758,7 +757,6 @@ main ──●──────────────●───────
 | 2.1  | rclone wrapper           | —                                   | New utility `src/data/rclone.py`   | ~40   |
 | 2.2  | `prepare_data()` R2 sync | —                                   | Override in SurgeDataModule        | ~15   |
 | 3.1  | W&B resolver             | `register_resolvers()` exists       | Add wandb resolver (~15 lines)     | ~15   |
-| 3.1  | W&B config               | `log_model: true`                   | Change to `"all"`                  | 1     |
 | —    | Makefile targets         | help, test, format, train           | Add predict, render, metrics, etc. | ~40   |
 | —    | Tests                    | conftest.py fixtures exist          | New test files + fixtures          | ~400  |
 
@@ -922,7 +920,6 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `configs/logger/wandb.yaml` — change `log_model: true` → `log_model: "all"`
 - `src/utils/utils.py` — add `_wandb_resolver` to `register_resolvers()` (~15 lines)
 
 **Files to create:**
@@ -931,7 +928,7 @@ ______________________________________________________________________
 
 **Key behaviors:**
 
-- `log_model="all"` uploads every saved checkpoint (every 5000 steps + best + last)
+- `log_model: true` uploads best+last checkpoints (already configured)
 - `${wandb:...}` OmegaConf resolver handles artifact download + cache
 - Cache dir: `$PROJECT_ROOT/.cache/checkpoints/` (gitignored)
 - Zero new modules — resolver lives in existing `register_resolvers()`
@@ -1089,9 +1086,9 @@ for checkpoint storage and chose W&B Teams.
 
 | Approach                                | Upload mechanism                                          | Download mechanism                                                      | New code                  |
 | --------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------- |
-| **A: W&B `log_model=true`** (current)   | Lightning auto-uploads best checkpoint                    | `get-ckpt-from-wandb.sh` (local filesystem search)                      | None                      |
+| **A: W&B `log_model: true`** (selected) | Lightning auto-uploads best+last checkpoints              | `${wandb:...}` OmegaConf resolver → `wandb.Api().artifact().download()` | ~15 lines (resolver only) |
 | **B: R2 via custom callback**           | `R2CheckpointUploader` fires every `ModelCheckpoint` save | `r2:` prefix → rclone download to cache                                 | ~200 lines + tests        |
-| **C: W&B `log_model="all"`** (selected) | Lightning auto-uploads every saved checkpoint             | `${wandb:...}` OmegaConf resolver → `wandb.Api().artifact().download()` | ~15 lines (resolver only) |
+| **C: W&B `log_model="all"`** (rejected) | Lightning auto-uploads every saved checkpoint             | Same as A                                                               | Same as A                 |
 
 #### Cost comparison
 
@@ -1124,9 +1121,9 @@ R2 checkpoints (Option B) would have cost ~$24/year vs $600/year for W&B Teams. 
 
 | Concern              | R2 checkpoints                         | W&B checkpoints (selected)                       | Winner                           |
 | -------------------- | -------------------------------------- | ------------------------------------------------ | -------------------------------- |
-| **Upload**           | Custom callback (~200 lines)           | Config change: `log_model: "all"`                | W&B — zero new code              |
+| **Upload**           | Custom callback (~200 lines)           | Already configured: `log_model: true`            | W&B — zero new code              |
 | **Download**         | `rclone copyto` (fast, free egress)    | `wandb.Api().artifact().download()` (slower)     | R2 — faster for large files      |
-| **Crash resilience** | Callback uploads every 5000 steps      | `log_model="all"` uploads every saved checkpoint | Tie — same cadence               |
+| **Crash resilience** | Callback uploads every 5000 steps      | `log_model: true` uploads best+last after save   | R2 — more frequent uploads       |
 | **Browse/compare**   | `rclone ls` — no UI                    | W&B model registry, lineage graphs, side-by-side | W&B — significantly better       |
 | **Cost**             | ~$2/mo                                 | $50/mo                                           | R2 — 25x cheaper                 |
 | **New code**         | ~200 lines (callback, resolver, cache) | ~15 lines (OmegaConf resolver only)              | W&B — less to build and maintain |

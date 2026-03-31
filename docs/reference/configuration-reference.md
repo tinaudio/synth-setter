@@ -170,14 +170,14 @@ Gaps are configuration inputs that design docs specify or that standard practice
 
 ### 5.2 W&B / Artifact Lineage
 
-| Input                        | Type   | What's Needed                                                                | Reference                   |
-| ---------------------------- | ------ | ---------------------------------------------------------------------------- | --------------------------- |
-| `logger.wandb.log_model`     | string | Change from `true` to `"all"` — uploads every checkpoint, not just best+last | training-pipeline.md §6.2   |
-| `logger.wandb.id`            | string | `{train_config_id}-{YYYYMMDDTHHMMSSZ}` instead of null/random                | wandb-integration.md gap #8 |
-| `logger.wandb.job_type`      | string | `"training"` instead of empty                                                | storage-provenance-spec §7  |
-| `logger.wandb.resume`        | string | `"allow"` for W&B resume support                                             | training-pipeline.md §5.3   |
-| Dataset `run.use_artifact()` | code   | Lineage link to consumed dataset artifact                                    | storage-provenance-spec §5  |
-| Model `run.log_artifact()`   | code   | Lineage link for produced model artifact                                     | storage-provenance-spec §5  |
+| Input                        | Type   | What's Needed                                                     | Reference                   |
+| ---------------------------- | ------ | ----------------------------------------------------------------- | --------------------------- |
+| `logger.wandb.log_model`     | bool   | `true` — uploads best+last checkpoints (current value is correct) | training-pipeline.md §6.2   |
+| `logger.wandb.id`            | string | `{train_config_id}-{YYYYMMDDTHHMMSSZ}` instead of null/random     | wandb-integration.md gap #8 |
+| `logger.wandb.job_type`      | string | `"training"` instead of empty                                     | storage-provenance-spec §7  |
+| `logger.wandb.resume`        | string | `"allow"` for W&B resume support                                  | training-pipeline.md §5.3   |
+| Dataset `run.use_artifact()` | code   | Lineage link to consumed dataset artifact                         | storage-provenance-spec §5  |
+| Model `run.log_artifact()`   | code   | Lineage link for produced model artifact                          | storage-provenance-spec §5  |
 
 ### 5.3 Data Portability
 

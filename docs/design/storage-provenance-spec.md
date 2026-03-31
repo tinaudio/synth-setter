@@ -78,6 +78,8 @@ train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_
 └── config.yaml               # Frozen experiment config
 ```
 
+- Set `log_model=True` in the W&B Lightning Logger to persist best and last checkpoints only. `log_model="all"` is not used.
+
 ### 3c. Evaluation
 
 ```
@@ -187,7 +189,6 @@ ______________________________________________________________________
 
 ```
 ## Eval Card
-
 | Field       | Value                                        |
 |-------------|----------------------------------------------|
 | W&B Train   | link to training run                         |

@@ -52,14 +52,15 @@ that persist in the final image:
 
 The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-setter/issues/310)).
 
-### First build (dev-live)
+### First build (dev-snapshot)
 
-The dev-live image has Surge XT + Python deps but no baked source code.
-Mount your local working tree at runtime.
+The dev-snapshot image has Surge XT + Python deps + source code baked at a
+specific git ref.
 
 ```bash
-make docker-build-dev-live \
+make docker-build-dev-snapshot \
   GIT_PAT="$GIT_PAT" \
+  GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
   # --load: imports the built image into your local Docker daemon
   # --push: pushes directly to a registry (for CI/multi-platform)
@@ -67,15 +68,12 @@ make docker-build-dev-live \
 
 ### Smoke test
 
-After building, verify the image works. dev-live uses a fallback entrypoint
-(not `docker_entrypoint.sh`), so override it with `--entrypoint bash`:
+After building, verify the image works:
 
 ```bash
-docker run --rm --entrypoint bash synth-setter:dev-live \
-  -c "python -c \"import torch; print('torch', torch.__version__)\""
+docker run --rm -e MODE=passthrough synth-setter:dev-snapshot \
+  python -c "import torch; print('torch', torch.__version__)"
 ```
-
-Rebuild only when Python deps or Surge version change.
 
 ______________________________________________________________________
 
@@ -83,19 +81,12 @@ ______________________________________________________________________
 
 ### Make targets
 
-| Target         | Source code                  | Typical use           |
-| -------------- | ---------------------------- | --------------------- |
-| `dev-live`     | Volume-mounted               | Local development     |
-| `dev-snapshot` | Git clone at `GIT_REF`       | CI, cloud, evaluation |
-| `prod`         | Baked at `GIT_REF` (tarball) | Production            |
+| Target         | Source code            | Typical use           |
+| -------------- | ---------------------- | --------------------- |
+| `dev-snapshot` | Git clone at `GIT_REF` | CI, cloud, evaluation |
 
-> **Note:** The Makefile only has `docker-build-dev-live` and
-> `docker-build-dev-snapshot` targets. To build the `prod` target, invoke
-> `docker buildx build` directly with `--build-arg IMAGE=prod` — the Makefile's
-> `docker-build-*` targets override the `IMAGE` build arg after `DOCKER_BUILD_FLAGS`.
-
-All targets require `GIT_PAT`. `dev-snapshot` and `prod` should set `GIT_REF`
-for reproducible builds (defaults to `main` if omitted):
+The target requires `GIT_PAT`. Set `GIT_REF` for reproducible builds
+(defaults to `main` if omitted):
 
 ```bash
 # dev-snapshot — self-contained image at a specific commit
@@ -155,21 +146,11 @@ ______________________________________________________________________
 
 ## 3. Running Containers
 
-### Entrypoint differences
+### Entrypoint
 
-Only `prod` and `dev-snapshot` include `docker_entrypoint.sh` with MODE
-dispatch. `dev-live` has a fallback entrypoint that errors unless the repo
-is mounted at `/home/build/synth-setter` — use `--entrypoint bash` to bypass
-it for ad-hoc commands.
-
-| Target         | Entrypoint                | MODE support | Typical invocation           |
-| -------------- | ------------------------- | ------------ | ---------------------------- |
-| `dev-snapshot` | `docker_entrypoint.sh`    | Yes          | `-e MODE=idle`               |
-| `prod`         | `docker_entrypoint.sh`    | Yes          | `-e MODE=idle`               |
-| `dev-live`     | Fallback (requires mount) | No           | `--entrypoint bash` or mount |
-
-For `dev-snapshot` / `prod`, MODE is required — the container exits with an
-error if unset. There is no default to avoid silent misconfiguration.
+`dev-snapshot` includes `docker_entrypoint.sh` with MODE dispatch. MODE is
+required — the container exits with an error if unset. There is no default
+to avoid silent misconfiguration.
 
 Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
 polluting your host shell:
@@ -251,20 +232,6 @@ jq .r2_prefix input_spec.json
 ```
 
 **Retention:** 7 days (GitHub Actions default).
-
-### Volume mounting (dev-live)
-
-dev-live has no baked source or `docker_entrypoint.sh`. Mount your working
-tree at `/home/build/synth-setter` and override the entrypoint:
-
-```bash
-docker run --rm \
-  --entrypoint bash \
-  -v "$(pwd):/home/build/synth-setter" \
-  -w /home/build/synth-setter \
-  synth-setter:dev-live \
-  -c "python -m pytest tests/ -m 'not slow'"
-```
 
 ### Headless VST
 
@@ -405,12 +372,6 @@ ______________________________________________________________________
 
 - **MODE=eval** ([#410](https://github.com/tinaudio/synth-setter/issues/410)) — download checkpoint + dataset,
   run evaluation, upload results. Counterpart to `MODE=train`.
-
-### Other future work
-
-- **dev-live MODE support** — currently dev-live uses a fallback entrypoint
-  that requires a volume mount. A future change would add `docker_entrypoint.sh`
-  to dev-live so it supports MODE dispatch like dev-snapshot/prod.
 
 ______________________________________________________________________
 
