@@ -1,8 +1,10 @@
 # Checklist: Migrating to a GitHub Organization
 
-> **Status**: Draft
+> **Status**: COMPLETED — Migration to `tinaudio` org finished. This document
+> is retained for historical reference only.
+>
 > **Author**: ktinubu@
-> **Last Updated**: 2026-03-19
+> **Last Updated**: 2026-03-31
 
 ______________________________________________________________________
 

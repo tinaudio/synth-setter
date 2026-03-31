@@ -1,11 +1,17 @@
 # Implementation Plan: Distributed Data Pipeline
 
+> **Status**: PARTIALLY IMPLEMENTED — Phase 1 (Foundation) is complete. Phase 2
+> (Pipeline Core) is partially complete: schemas (`config.py`, `spec.py`,
+> `prefix.py`, `image_config.py`) exist but `report.py`, `card.py`, `sample.py`
+> are not yet created. Phases 3-6 are not started. Storage layer, validation,
+> reconciliation, compute backend, and CLI modules do not exist yet.
+>
 > **Canonical design:** [data-pipeline.md](data-pipeline.md)
 > **Tracking:** #74
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
 > **Storage conventions:** [storage-provenance-spec.md](storage-provenance-spec.md)
 > **Builds on:** Generation infrastructure by benhayes@ (see design doc §1)
-> **Last Updated:** 2026-03-20
+> **Last Updated:** 2026-03-31
 
 ______________________________________________________________________
 
@@ -235,7 +241,10 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 **Files to create:**
 
 - `pipeline/__init__.py`
-- `pipeline/schemas/` — Pydantic models split across submodules: `config.py` (`DatasetConfig`, `SplitsConfig`, load/ID helpers), `spec.py` (`DatasetPipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass)
+- `pipeline/schemas/` — Pydantic models split across submodules: `config.py` (`DatasetConfig`, `SplitsConfig`, load/ID helpers), `spec.py` (`DatasetPipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass).
+  **Note:** As of 2026-03-31, only `config.py`, `spec.py`, `prefix.py`, and
+  `image_config.py` exist. `report.py`, `card.py`, and `sample.py` are not yet
+  created.
 - `configs/dataset/surge-simple-480k-10k.yaml` — sample config (filename = `dataset_config_id`)
 - `tests/pipeline/__init__.py`
 - `tests/pipeline/test_schemas/`
@@ -244,17 +253,22 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 
 - `DatasetConfig` (Pydantic strict): validates raw YAML input. Fields match config schema (§4).
   `output_format` defaults to `"hdf5"` if missing from config.
-- `DatasetPipelineSpec` (frozen, strict): `dataset_config_id`, `dataset_wandb_run_id` (maps to
-  `run_id` in code), `created_at`, `code_version`, `is_repo_dirty`,
+- `DatasetPipelineSpec` (frozen, strict): `run_id` (was `dataset_wandb_run_id` in plan),
+  `r2_prefix`, `created_at`, `code_version`, `is_repo_dirty`,
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
-  `shard_size`, `num_shards`, `base_seed`, `splits` (`{"train": N, "val": N, "test": N}`),
-  `shards` (list of `ShardSpec`), plus generation params.
+  `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `preset_path`,
+  `channels`, `velocity`, `signal_duration_seconds`, `min_loudness`,
+  `sample_batch_size`, `shards` (tuple of `ShardSpec`).
+  **Note:** `num_shards` is a derived property (not a stored field).
+  `dataset_config_id` is not stored on the spec; it is encoded in `run_id`.
   ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
   Splits use explicit `{train: N, val: N, test: N}` matching design doc §14.4.
   Validation: `train + val + test == num_shards`.
-- `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed` (= `base_seed + shard_id`),
-  `row_start`, `row_count`, `expected_datasets`, `audio_shape`, `mel_shape`, `param_shape`.
+- `ShardSpec`: `shard_id: int`, `filename: str` (`"shard-000042.h5"`), `seed` (= `base_seed + shard_id`).
   `shard_id` is int in schema; formatted to string for paths via `shard_dir_name(shard_id) -> str`.
+  **Note:** As implemented, `ShardSpec` has only `shard_id`, `filename`, `seed`.
+  Fields `row_start`, `row_count`, `expected_datasets`, `audio_shape`, `mel_shape`,
+  `param_shape` from the original plan are not yet implemented.
 - `Sample` dataclass (frozen, slots): `sample_id: int`, `audio`, `mel_spec`, `params` —
   typed container for HDF5→WDS transcoding (not Pydantic, already-validated data).
   Pydantic for trust boundaries, dataclass for internal typed containers.

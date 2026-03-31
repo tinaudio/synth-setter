@@ -36,7 +36,7 @@ For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shell
 
 ## Files
 
-See the checkbox list in https://github.com/ktinubu/synth-permutations/issues/25
+See the checkbox list in https://github.com/tinaudio/synth-setter/issues/25
 
 ## Done when
 

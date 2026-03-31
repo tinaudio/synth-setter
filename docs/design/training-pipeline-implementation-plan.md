@@ -1,10 +1,13 @@
 # Implementation Plan: Training Pipeline
 
+> **Status**: NOT STARTED — No phases have been implemented. All phase issues
+> are TBD. This plan describes the intended implementation sequence.
+>
 > **Canonical design:** [training-pipeline.md](training-pipeline.md)
 > **Tracking:** #107
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
 > **Storage conventions:** [storage-provenance-spec.md](storage-provenance-spec.md)
-> **Last Updated:** 2026-03-20
+> **Last Updated:** 2026-03-31
 
 ______________________________________________________________________
 
