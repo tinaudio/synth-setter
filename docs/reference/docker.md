@@ -37,8 +37,12 @@ that persist in the final image:
 | `git_pat`              | `GIT_PAT`              | *(not persisted)*                  | GitHub API access for source tarball |
 | `r2_access_key_id`     | `R2_ACCESS_KEY_ID`     | `/root/.config/rclone/rclone.conf` | R2 rclone config                     |
 | `r2_secret_access_key` | `R2_SECRET_ACCESS_KEY` | `/root/.config/rclone/rclone.conf` | R2 rclone config                     |
-| `r2_endpoint`          | `R2_ENDPOINT`          | `/root/.config/rclone/rclone.conf` | R2 rclone config                     |
 | `wandb_api_key`        | `WANDB_API_KEY`        | `/root/.netrc`                     | W&B auth                             |
+
+> **Note:** `R2_ENDPOINT` and `R2_BUCKET` are passed as `--build-arg`, not as
+> BuildKit secrets. `R2_ENDPOINT` is written into `rclone.conf` by the
+> `r2-config-base` stage; `R2_BUCKET` is set as an `ENV` in the image. Both
+> appear in `docker history`. See the build-arg table below.
 
 > [!WARNING]
 > R2 and W&B credentials persist in the final image filesystem (`rclone.conf`,
@@ -46,7 +50,7 @@ that persist in the final image:
 > `docker history`), but the resulting config files **are baked into the image**.
 > Push only to private registries. Rotate R2 tokens after each build campaign.
 
-See [rclone.md](rclone.md) § Docker for the full R2 credential flow.
+The rclone reference doc is planned but does not yet exist.
 
 ### First build (dev-live)
 
@@ -79,12 +83,17 @@ ______________________________________________________________________
 
 ### Make targets
 
-| Target         | Source code            | Typical use           |
-| -------------- | ---------------------- | --------------------- |
-| `dev-live`     | Volume-mounted         | Local development     |
-| `dev-snapshot` | Git clone at `GIT_REF` | CI, cloud, evaluation |
+| Target         | Source code                  | Typical use           |
+| -------------- | ---------------------------- | --------------------- |
+| `dev-live`     | Volume-mounted               | Local development     |
+| `dev-snapshot` | Git clone at `GIT_REF`       | CI, cloud, evaluation |
+| `prod`         | Baked at `GIT_REF` (tarball) | Production            |
 
-Both targets require `GIT_PAT`. `dev-snapshot` additionally requires `GIT_REF`:
+> **Note:** The Makefile only has `docker-build-dev-live` and
+> `docker-build-dev-snapshot` targets. To build the `prod` target, pass
+> `--build-arg IMAGE=prod` via `DOCKER_BUILD_FLAGS` or invoke `docker buildx build` directly.
+
+All targets require `GIT_PAT`. `dev-snapshot` and `prod` additionally require `GIT_REF`:
 
 ```bash
 # dev-snapshot — self-contained image at a specific commit
@@ -96,17 +105,22 @@ make docker-build-dev-snapshot \
 
 ### Build variables
 
-| Variable                | Default                         | Purpose                               | Override via |
-| ----------------------- | ------------------------------- | ------------------------------------- | ------------ |
-| `DOCKER_FILE`           | `docker/ubuntu22_04/Dockerfile` | Dockerfile path                       | CLI only     |
-| `DOCKER_IMAGE`          | `synth-setter`                  | Image name (local builds)             | CLI only     |
-| `DOCKER_BUILD_MODE`     | `prebuilt`                      | Surge install: `source` or `prebuilt` | CLI only     |
-| `DOCKER_TARGETPLATFORM` | `linux/amd64`                   | Target platform                       | CLI only     |
-| `DOCKER_TORCH_IDX`      | CUDA 12.8 wheels                | PyTorch wheel index URL               | CLI or YAML  |
-| `DOCKER_BUILD_FLAGS`    | *(empty)*                       | `--load` (local) or `--push` (remote) | CLI only     |
+| Variable                | Default                         | Purpose                                          | Override via |
+| ----------------------- | ------------------------------- | ------------------------------------------------ | ------------ |
+| `DOCKER_FILE`           | `docker/ubuntu22_04/Dockerfile` | Dockerfile path                                  | CLI only     |
+| `DOCKER_IMAGE`          | `synth-setter`                  | Image name (local builds)                        | CLI only     |
+| `DOCKER_BUILD_MODE`     | `prebuilt`                      | Surge install: `source` or `prebuilt` (see note) | CLI only     |
+| `DOCKER_TARGETPLATFORM` | `linux/amd64`                   | Target platform                                  | CLI only     |
+| `DOCKER_TORCH_IDX`      | CUDA 12.8 wheels                | PyTorch wheel index URL                          | CLI or YAML  |
+| `DOCKER_BUILD_FLAGS`    | *(empty)*                       | `--load` (local) or `--push` (remote)            | CLI only     |
 
 `DOCKER_TORCH_IDX` can also be set via `torch_index_url` in the image config
 YAML (see Image config below). CLI takes precedence.
+
+> **BUILD_MODE default divergence:** The Makefile defaults `DOCKER_BUILD_MODE`
+> to `prebuilt`, which is passed as `--build-arg BUILD_MODE`. The Dockerfile's
+> own `ARG BUILD_MODE=source` default only applies when the arg is not provided
+> at all. In practice, builds through `make` always use `prebuilt`.
 
 ### Image config (CI)
 
@@ -125,11 +139,13 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_index_url: "https://download.pytorch.org/whl/cu128"
+r2_endpoint: "https://efb9275d571811db929e83eb710b74a7.r2.cloudflarestorage.com"
+r2_bucket: "intermediate-data"
 ```
 
 Runtime inputs (`github_sha`, `issue_number`) are provided by the caller, not
 stored in the YAML. The schema is tested in
-[test_image_config.py](../../tests/scripts/test_image_config.py) (18 tests
+[test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) (22 tests
 covering validation, defaults, and drift detection against the real YAML).
 
 ______________________________________________________________________
@@ -385,7 +401,7 @@ ______________________________________________________________________
 ## 7. Cross-references
 
 - [docker-spec.md](docker-spec.md) — image target contract, entrypoint spec, env vars
-- [rclone.md](rclone.md) — R2 setup, Docker credential baking
+- rclone.md (planned) — R2 setup, Docker credential baking
 - [wandb-integration.md](wandb-integration.md) — W&B logging and auth
 - [data-pipeline.md](../design/data-pipeline.md) — pipeline architecture, worker provisioning
 - [image_config.py](../../pipeline/schemas/image_config.py) — image config schema (Pydantic model)

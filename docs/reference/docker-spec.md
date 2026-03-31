@@ -7,12 +7,10 @@ ______________________________________________________________________
 
 ## Current vs. Planned
 
-The entrypoint on `main` today (`scripts/docker_entrypoint.sh`) is a passthrough stub:
-`exec "$@"` if args are given, error if not. It has no MODE dispatch.
-
-Everything in this spec that differs from that behavior — MODE dispatch, `idle` mode,
-`passthrough` with no args exiting 0 — is **planned work** tracked in #265.
-The spec documents the target contract, not the current implementation.
+MODE dispatch is fully implemented in `scripts/docker_entrypoint.sh` on `main`.
+The entrypoint supports three modes (`idle`, `passthrough`, `generate_dataset`),
+exits with an error if MODE is unset or unknown, and exits 0 for `passthrough`
+with no arguments. The spec below matches the current implementation.
 
 ______________________________________________________________________
 
@@ -32,6 +30,14 @@ MODE is required -- container errors if unset.
 
 `generate_dataset` uses env vars instead of CLI args — see § MODE=generate_dataset env vars below.
 
+### Exit codes
+
+| Condition                  | Exit code |
+| -------------------------- | --------- |
+| Unset or empty MODE        | 1         |
+| Unknown MODE value         | 1         |
+| `passthrough` with no args | 0         |
+
 Future modes: `pipeline-worker` (see `docs/design/data-pipeline-implementation-plan.md`).
 
 ______________________________________________________________________
@@ -46,7 +52,7 @@ ______________________________________________________________________
 | `dev-snapshot` | `docker_entrypoint.sh`          | Git clone at `GIT_REF`       | CI, cloud runs |
 | `dev-live`     | fallback (errors without mount) | Volume-mounted               | Local dev      |
 
-All targets inherit from `r2-config-base`. R2 credentials are baked only when BuildKit secrets are provided at build time (placeholder rclone config otherwise). W&B auth is not baked — `WANDB_API_KEY` is required at runtime.
+All targets inherit from `r2-config-base`. R2 credentials are baked only when BuildKit secrets are provided at build time (placeholder rclone config otherwise). W&B auth is baked into `~/.netrc` when the `wandb_api_key` BuildKit secret is provided at build time; if the secret is missing, `WANDB_API_KEY` is required at runtime.
 
 ______________________________________________________________________
 
