@@ -1,6 +1,999 @@
 # CHANGELOG
 
 
+## v0.1.2 (2026-03-31)
+
+### Bug Fixes
+
+- **ci**: Narrow test.yml path filter and fix taxonomy hook regex
+  ([#400](https://github.com/tinaudio/synth-setter/pull/400),
+  [`dd5c443`](https://github.com/tinaudio/synth-setter/commit/dd5c443eba70a84f060768c2e786203abad840f0))
+
+* fix(ci): narrow test.yml path filter and fix taxonomy hook regex
+
+test.yml: Switch both push and pull_request triggers from paths-ignore to explicit paths so only
+  changes to src/, pipeline/, tests/, configs/, scripts/, requirements, pyproject, setup.py, and the
+  workflow itself trigger the test suite. Previously, changes to docker/, notebooks/, jobs/,
+  .github/ templates, and other non-test files would trigger unnecessary runs.
+
+verify-gh-taxonomy.sh: Add fallback #N regex so the hook recognizes issue references inside markdown
+  hyperlinks like [#399](url), matching the same pattern pr-metadata-gate.yaml uses.
+
+Fixes #399
+
+* fix(ci): dedup and exclude self-reference in taxonomy hook fallback
+
+The fallback #N regex didn't deduplicate or exclude the PR's own number, which could cause the hook
+  to validate the PR itself as a linked issue. Add sort -un and grep -v to match
+  pr-metadata-gate.yaml behavior.
+
+Refs #399
+
+### Build System
+
+- Bump skills submodule (pr-checkbox v3 + description)
+  ([#362](https://github.com/tinaudio/synth-setter/pull/362),
+  [`007f958`](https://github.com/tinaudio/synth-setter/commit/007f9581d45c77e37612a509efde84abacdcbd32))
+
+- Replace local skills with tinaudio/skills submodule
+  ([#331](https://github.com/tinaudio/synth-setter/pull/331),
+  [`666c861`](https://github.com/tinaudio/synth-setter/commit/666c861c3dc4942a3d2e26f3338b963bce3a6a59))
+
+* build: replace local skills with tinaudio/skills submodule
+
+Move all 13 skills to tinaudio/skills repo for cross-project reuse. Skills are mounted via git
+  submodule at .claude/skills/ — same path as before, so all skill references in CLAUDE.md and hooks
+  continue to work unchanged.
+
+Add submodule note to CLAUDE.md Git Workflow section.
+
+Refs #330
+
+* chore: retrigger copilot review
+
+- **ci**: Generalize BATS workflow to auto-discover tests
+  ([#325](https://github.com/tinaudio/synth-setter/pull/325),
+  [`c3681d9`](https://github.com/tinaudio/synth-setter/commit/c3681d9d78ee8f1b9bb7017ebfc8780b50b5b7f2))
+
+Replace hardcoded entrypoint-tests workflow with a catch-all bats-tests workflow that uses glob path
+  triggers and `bats --recursive tests/` for automatic test discovery.
+
+- **docker**: Add image build-and-push workflow
+  ([#313](https://github.com/tinaudio/synth-setter/pull/313),
+  [`c7d4584`](https://github.com/tinaudio/synth-setter/commit/c7d4584bc74e908ab4599a1f21f0628a68456c78))
+
+* build(docker): add image build-and-push workflow with metadata and DockerHub push
+
+Evolve docker-build-validation.yml from a local-only dev-live build into a full image creation
+  workflow that builds dev-snapshot, tags via docker/metadata-action, and pushes to Docker Hub via
+  docker/build-push-action.
+
+- Upgrade runner to ubuntu-latest-4core (16 GiB RAM) to fix OOM - Load build args from
+  configs/image/dev-snapshot.yaml via image_config.py (reuses tested Pydantic schema instead of raw
+  yq) - Add docker/login-action for Docker Hub authentication - Add docker/metadata-action for
+  OCI-standard tags and labels - Replace make docker-build-dev-live with docker/build-push-action -
+  Pass all BuildKit secrets (GIT_PAT, R2, W&B) - Update smoke tests to pull pushed image from Docker
+  Hub
+
+Refs #311
+
+* fix(docker): use SHA-pinned tag for smoke tests to avoid race condition
+
+The mutable dev-snapshot tag could be overwritten by a concurrent workflow run between push and
+  pull. Smoke tests now pull the immutable dev-snapshot-<full-sha> tag instead.
+
+Also switch from type=sha (7-char short SHA) to type=raw with full github.sha so the tag and smoke
+  test reference are guaranteed to match.
+
+* fix(docker): remove global TARGETARCH ARG and wire R2 config to workflow
+
+Global-scope `ARG TARGETARCH` / `ARG TARGETPLATFORM` shadowed the automatic platform args that
+  buildx sets via --platform, causing TARGETARCH to be empty in every build stage.
+
+The workflow also referenced a nonexistent R2_ENDPOINT GitHub secret. Now extracts r2_endpoint and
+  r2_bucket from the image config YAML and passes them as a Docker secret and build-arg
+  respectively.
+
+* fix(docker): pass R2_ENDPOINT as build-arg, not secret
+
+d17dc09 changed R2_ENDPOINT from a Docker secret mount to a build ARG. The workflow still passed it
+  as a secret, so the ARG was unset and bash's set -u caused "unbound variable" before the
+  empty-check ran.
+
+* fix(docker): use git init+fetch in dev-snapshot for non-empty WORKDIR
+
+The parent stage (builder-install-synth-setter-deps) creates a plugins/ symlink in
+  /home/build/synth-setter/, so git clone into '.' fails with "destination path already exists and
+  is not an empty directory".
+
+Replace with git init + git fetch + git checkout FETCH_HEAD, which works in non-empty directories
+  and fetches only the needed commit.
+
+* fix(docker): fetch all refs before checkout (SHA fetch unsupported)
+
+git fetch origin <sha> fails — GitHub doesn't expose raw SHAs as fetchable refs. Use git fetch
+  origin (all refs) then checkout the SHA, matching the original git clone behavior.
+
+* fix(docker): use checked-out SHA instead of github.sha
+
+In workflow_dispatch, github.sha is the tip of the dispatching branch, not the checked-out ref. When
+  git_ref differs from the dispatch branch (e.g. scheduled runs defaulting to main), the image was
+  tagged, built, and tested against the wrong commit. Capture git rev-parse HEAD after checkout and
+  use it consistently.
+
+* chore(docker): rename SHA step to source, bump setup-python to v6
+
+Rename step id from 'ref' to 'source' for clarity — steps.source.outputs.sha reads as "the SHA of
+  the source we're building". Bump actions/setup-python from v5 to v6 for consistency with other
+  workflows.
+
+* refactor(docker): extract config loader to scripts/ci/load_image_config.py
+
+Replace inline python -c block with a standalone script that takes --config, --github-sha, and
+  --issue-number args. Cleaner, testable locally, and avoids YAML/Python quoting gymnastics.
+
+Restore pip install step (pyyaml/pydantic not available on bare runner) and set PYTHONPATH=. so the
+  scripts package is importable.
+
+* fix(docker): use pip install --no-deps -e . instead of PYTHONPATH hack
+
+Registers the project package so cross-package imports work without PYTHONPATH=. — the standard
+  approach for CI scripts that need project modules without pulling heavy ML dependencies.
+
+* fix(docker): add ARG TARGETPLATFORM to arm64-vars, revert to PYTHONPATH
+
+Add ARG TARGETPLATFORM to arm64-vars stage so the diagnostic echo receives the automatic buildx
+  value. Without the declaration, the variable was always <unset>.
+
+Revert pip install --no-deps -e . back to PYTHONPATH=. — the editable install registers src/
+  (synth-permutations) not scripts/, so the cross-directory import still failed. PYTHONPATH=. is the
+  correct approach for non-package directories like scripts/.
+
+* chore(docker): add TODO comment for PYTHONPATH workaround (#323)
+
+* fix(docker): add early Docker Hub push-scope verification
+
+Request a token with pull+push scope from the Docker Hub auth endpoint before the expensive build.
+  Fails fast with a clear error message if the token lacks write permissions, instead of building
+  for 30+ minutes and failing at push time.
+
+* test(docker): add pytest smoke tests for Docker image validation
+
+Replace inline python -c commands (which had IndentationError from YAML-indented Python) with proper
+  pytest tests in tests/docker/.
+
+- test_pedalboard_importable: verifies pedalboard package installs - test_surge_xt_loads: verifies
+  VST plugin loads under headless X11 - Add docker_smoke marker to pyproject.toml - Workflow calls
+  pytest by test ID inside the container
+
+* fix(test): add skip guards to Docker smoke tests for host CI
+
+The smoke tests are designed to run inside the Docker image but pytest also collects them on the
+  host CI runner. Add skipif guards so they skip gracefully when pedalboard/VST aren't available.
+
+* test(ci): add unit tests for scripts/ci/load_image_config.py
+
+Cover GITHUB_OUTPUT file writing, stdout fallback, append mode, missing required args, and invalid
+  SHA validation. 7 tests.
+
+* build(docker): trigger build validation on Docker-related PR changes
+
+Add pull_request trigger with path filters for docker/, configs/image/, scripts/image_config.py,
+  requirements*.txt, and tests/docker/.
+
+PRs get build-only validation (no push, no smoke tests). Dispatch and schedule runs still do full
+  build + push + smoke tests.
+
+Also fix docstring in test_smoke.py to clarify CI vs manual usage.
+
+* fix(docker): checkout PR head SHA for pull_request trigger
+
+The checkout ref defaulted to 'main' for pull_request events because github.event.inputs is
+  undefined (inputs are workflow_dispatch only). Use github.event.pull_request.head.sha for PRs,
+  which is undefined for other events and falls through to the dispatch/schedule defaults.
+
+* fix(docker): move Docker Hub login before buildx setup
+
+setup-buildx-action pulls moby/buildkit from Docker Hub. Without authentication, this fails when the
+  runner IP is rate-limited (triggered by earlier failed login attempts with a bad token). Moving
+  login before buildx and making it unconditional ensures authenticated pulls.
+
+* fix(docker): pass Docker Hub creds via env vars, dynamic issue_number
+
+- Move Docker Hub credentials from curl -u (visible in process argv) to env vars (DH_USER, DH_TOKEN)
+  for the push-scope check - Add issue_number workflow_dispatch input (default: 311) - For
+  pull_request events, use github.event.pull_request.number - For schedule, fall back to 311
+  (tracking issue)
+
+- **docker**: Remove ImageConfig defaults, add R2 config fields
+  ([#318](https://github.com/tinaudio/synth-setter/pull/318),
+  [`d17dc09`](https://github.com/tinaudio/synth-setter/commit/d17dc09375204907e0c48324f364034942c62f5f))
+
+* internal-feat(docker): remove ImageConfig defaults, add r2_endpoint and r2_bucket
+
+Refs #311
+
+* test(docker): update image_config tests for required fields and R2 config
+
+* build(docker): add r2_endpoint and r2_bucket to image config YAML
+
+* build(docker): use R2_ENDPOINT as build-arg instead of secret
+
+R2_ENDPOINT is not sensitive (it's a well-known Cloudflare URL), so pass it as a plain ARG instead
+  of a BuildKit secret. This simplifies the build and aligns with the image config schema which
+  treats it as a non-secret field.
+
+r2_access_key_id and r2_secret_access_key remain as BuildKit secrets.
+
+* build(docker): pass R2_ENDPOINT as build-arg in Makefile
+
+Update DOCKER_SECRETS block to pass R2_ENDPOINT via --build-arg instead of --secret, matching the
+  Dockerfile change.
+
+- **docker**: Split wheels stage into torch and app layers
+  ([#346](https://github.com/tinaudio/synth-setter/pull/346),
+  [`7e89340`](https://github.com/tinaudio/synth-setter/commit/7e8934033b525f7c85ffc3af1d60294c590d77db))
+
+* build(docker): split wheels stage into torch and app layers
+
+* build(docker): use --find-links and requirements-app.txt in wheels stage
+
+- Build only app wheels (not full requirements.txt) to avoid re-resolving torch from PyPI without
+  the CUDA index URL - Add --find-links /wheels so transitive torch deps are satisfied from the
+  existing CUDA wheels built in the wheels-torch stage
+
+- **pre-commit**: Exclude CHANGELOG.md from mdformat and codespell
+  ([#340](https://github.com/tinaudio/synth-setter/pull/340),
+  [`0580555`](https://github.com/tinaudio/synth-setter/commit/05805555cdc08169b158963758a6260d2d605638))
+
+Machine-generated CHANGELOG.md trips two pre-commit hooks: - mdformat: mixed bullet markers, line
+  wrapping, thematic breaks - codespell: typos baked in from original commit messages
+
+Exclude it from both hooks. README.md and .claude/* are already excluded from mdformat for similar
+  reasons.
+
+### Chores
+
+- Add plumb coverage caches and bump plumb ref
+  ([#391](https://github.com/tinaudio/synth-setter/pull/391),
+  [`f5bf838`](https://github.com/tinaudio/synth-setter/commit/f5bf8384bbde539e13e47142974d0e32ba7b8b0f))
+
+* chore: add plumb coverage caches and bump plumb ref
+
+Track code_coverage_map.json and coverage.json (force-added past gitignore) so plumb coverage
+  results persist across sessions. Update config.json with program_models assignments. Bump
+  plumb-dev ref to feat/claude-code-cli-backend branch.
+
+Refs #388
+
+* chore: gitignore .plumb dir, fix trailing newline, add force-add rule
+
+- Add Plumb tooling, fix coverage perf, bump skills
+  ([#389](https://github.com/tinaudio/synth-setter/pull/389),
+  [`bd0a084`](https://github.com/tinaudio/synth-setter/commit/bd0a08475eaa58f2d6535f9fb56281a73dee7110))
+
+* chore: add Plumb spec/test/code sync tooling
+
+Initialize Plumb to keep specs (docs/), tests (tests/), and code in sync. Adds config, 778 extracted
+  requirements from existing docs, ignore patterns, and CLAUDE.md workflow instructions.
+
+Refs #388
+
+* chore: pin plumb-dev fork and extend .plumbignore
+
+Pin plumb-dev to ktinubu/plumb fork which fixes coverage_reporter to respect .plumbignore patterns
+  during source scanning. Add .venv*/, .virtualenv*/, .git/, .claude/, __pycache__/, and build
+  artifact dirs to .plumbignore so coverage skips them (51k → 57 files).
+
+* chore: gitignore plumb coverage caches
+
+These are regenerated by plumb coverage and would cause noisy diffs and merge conflicts if tracked.
+  The incremental cache (code_coverage_map.json) is rebuilt per-developer on demand.
+
+* chore: bump skills submodule (plumb skill, github-taxonomy fix)
+
+* chore: fix mdformat lint in CLAUDE.md plumb section
+
+* chore: add hatchling to requirements for plumb-dev Docker build
+
+plumb-dev uses hatchling as its build backend. The Docker install stage runs with --no-index, so
+  hatchling must be pre-built in the wheels cache.
+
+* chore: address review feedback on PR #389
+
+- Remove docs/ from .plumbignore to avoid confusion with spec_paths - Pin plumb-dev to immutable
+  commit SHA instead of branch name - Add Setup subsection documenting plumb init and hook conflict
+
+* docs: remove reference docs from plumb spec_paths
+
+* Apply plumb spec files in claude.md
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- Add pre-commit branch-echo hook ([#368](https://github.com/tinaudio/synth-setter/pull/368),
+  [`b3c86c1`](https://github.com/tinaudio/synth-setter/commit/b3c86c1e5e764f554c40131cccef4cb2dc179565))
+
+* chore: add pre-commit branch-echo hook to project settings
+
+Add a PreToolUse hook that echoes the current branch name to stderr before any git commit command.
+  Acts as a safety net against committing to the wrong branch.
+
+Also unignore .claude/settings.json so project-wide hooks are tracked.
+
+* fix(chore): revert .gitignore change — force-add suffices
+
+The settings.json file was force-added to the index, so the .gitignore exception is unnecessary. Git
+  tracks indexed files regardless of ignore patterns.
+
+* fix(hook): handle detached HEAD and add description field
+
+Address PR review: git branch --show-current prints empty on detached HEAD, so fall back to
+  "DETACHED HEAD". Add description field for consistency with other hooks in the file.
+
+- Bump skills submodule (4 new skills) ([#370](https://github.com/tinaudio/synth-setter/pull/370),
+  [`422bb02`](https://github.com/tinaudio/synth-setter/commit/422bb02cc48dea384f634f19be9da125065b2003))
+
+* chore: bump skills submodule (4 new skills)
+
+Updates .claude/skills to include: - pr-preflight - gha-workflow-validator - tdd-refactor -
+  multi-repo-pr
+
+* chore: update skills submodule to merged main
+
+Points at 81e10b5 (skills#45 merged) instead of the feature branch.
+
+- **ci**: Add epic-lineage enforcement to taxonomy skill, CI gate, and CLAUDE.md
+  ([#374](https://github.com/tinaudio/synth-setter/pull/374),
+  [`402b4fd`](https://github.com/tinaudio/synth-setter/commit/402b4fd75c2ca8249fe0e4154935095a758e4a91))
+
+Adds Step 2.5 to the github-taxonomy skill to verify that linked issues trace back to an Epic via
+  the sub-issue hierarchy. Adds a hard-failure epic lineage check to pr-metadata-gate.yaml that
+  walks up to 4 levels of parents via GraphQL. Documents the epic traceability requirement in
+  CLAUDE.md with standalone-task exceptions per the taxonomy doc.
+
+Fixes #373
+
+- **ci**: Add pr-review-resolver skill and enforce epic lineage in hook
+  ([#377](https://github.com/tinaudio/synth-setter/pull/377),
+  [`e422224`](https://github.com/tinaudio/synth-setter/commit/e422224b5c97b93ab1f74c293fa9ac6af3925480))
+
+* chore: bump skills submodule to include pr-review-resolver
+
+* fix(ci): add epic lineage and hierarchy blocks to taxonomy hook
+
+The verify-gh-taxonomy.sh hook checked CI minimum three (type, label, milestone) but never verified
+  epic lineage — letting PRs through that the pr-metadata-gate CI workflow would reject. Also, issue
+  creation only warned about missing hierarchy instead of blocking.
+
+Changes: - Add check_epic_lineage helper (walks parent chain via GraphQL) - PR mode: hard BLOCK if
+  linked issue has no Epic ancestor - Issue creation mode: hard BLOCK to force hierarchy, project
+  board, and priority setup before proceeding
+
+### Continuous Integration
+
+- **docker**: Switch to registry cache and load image locally for smoke tests
+  ([#347](https://github.com/tinaudio/synth-setter/pull/347),
+  [`017cbdf`](https://github.com/tinaudio/synth-setter/commit/017cbdf9dd519fc08d6da16d3f9989766ec73e55))
+
+* ci(docker): switch to registry cache and load image locally for smoke tests
+
+* ci(docker): guard cache-to for fork PRs and clarify cache docs
+
+- Disable registry cache-to on pull_request events so fork PRs without Docker Hub secrets don't fail
+  - Clarify docs: buildx prune clears local cache only; add instructions for clearing the remote
+  registry cache tag
+
+- **gpu**: Move GPU tests to twice-weekly schedule
+  ([#335](https://github.com/tinaudio/synth-setter/pull/335),
+  [`3977c03`](https://github.com/tinaudio/synth-setter/commit/3977c031a5efcbbd7bf26ef13e8c64b05a252f71))
+
+Replace per-push trigger with cron schedule (Mon + Thu 06:00 UTC). Keeps workflow_dispatch for
+  on-demand runs.
+
+Refs #334
+
+### Documentation
+
+- Add project-specific doc-map.yaml ([#348](https://github.com/tinaudio/synth-setter/pull/348),
+  [`d644834`](https://github.com/tinaudio/synth-setter/commit/d6448346f3c3e9007f936c84b4a5c343cd5c1b65))
+
+* docs: add project-specific doc-map.yaml and bump skills submodule
+
+* docs: fix dead source patterns in doc-map.yaml
+
+- scripts/image_config.py → pipeline/schemas/image_config.py - scripts/generate_shards.py →
+  scripts/entrypoint_generate_shards.py - Remove deleted files: src/data/uploader.py,
+  scripts/finalize_shards.py, scripts/setup-rclone.sh - Comment out rclone section
+  (docs/reference/rclone.md doesn't exist yet)
+
+- Add project-specific doc-map.yaml ([#352](https://github.com/tinaudio/synth-setter/pull/352),
+  [`098c725`](https://github.com/tinaudio/synth-setter/commit/098c725f26fd8279547f408e6ccb0c71dfa0b14c))
+
+* docs: add project-specific doc-map.yaml and bump skills submodule
+
+* docs: add documentation domain to github-taxonomy
+
+* ci: add documentation domain to pr-metadata-gate
+
+* docs: overhaul doc-map.yaml with full project coverage
+
+* Apply suggestions from code review
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- Add refactoring, design principles, and git push verification guidelines
+  ([#366](https://github.com/tinaudio/synth-setter/pull/366),
+  [`d09dd8a`](https://github.com/tinaudio/synth-setter/commit/d09dd8a1909a0be001d7a91bd9943ede943d4868))
+
+* docs: add refactoring, design principles, and git push verification guidelines
+
+Refs #N/A
+
+* docs: list explicit file extensions in refactoring guideline
+
+Refs #367
+
+* docs: add implementation approach guidelines to CLAUDE.md
+
+- **docker**: Add Docker usage reference ([#315](https://github.com/tinaudio/synth-setter/pull/315),
+  [`c1de1d2`](https://github.com/tinaudio/synth-setter/commit/c1de1d20fa664ec922de75443a2a30b8218510e3))
+
+* docs(docker): add Docker usage reference
+
+Practical guide covering building, running, and debugging Docker images. Complements docker-spec.md
+  (contract/spec) with how-to content:
+
+- Build targets (dev-live, dev-snapshot) via Make and raw buildx - Running containers with MODE
+  dispatch (idle, passthrough) - CI workflow: image_config.py validation, DockerHub push, SHA-pinned
+  tags - Debugging: OOM, headless VST, entrypoint errors
+
+Refs #311
+
+* docs(docker): incorporate review feedback on Docker reference
+
+Address reviewer feedback: - Add intro paragraph defining audience and purpose - Clarify secret
+  lifecycle: BuildKit mounts vs persisted config files (rclone.conf, .netrc) with explicit
+  "Persisted to" column - Reorder sections: move BuildKit secrets into Setup (before Building) so
+  the mental model is built before it's needed - Simplify Make target table: drop redundant Command
+  column - Add --load/--push explanation and DOCKER_TORCH_IDX override note - Add smoke test example
+  after first build - Add docker run --env-file .env recommendation - Note why MODE has no default
+  (avoid silent misconfiguration) - Simplify CI steps from 7-item numbered list to 4-item summary -
+  Add comment to manual trigger command - Use GitHub alert syntax for security and OOM warnings -
+  Standardize debugging subsection format (consistent numbered lists) - Make all cross-references
+  clickable markdown links
+
+Refs #314
+
+* docs(docker): fix dev-live entrypoint examples and add future plans
+
+Address remaining Copilot review comments: - Add entrypoint differences table showing which targets
+  support MODE dispatch (dev-snapshot, prod) vs fallback (dev-live) - Fix MODE=idle example: use
+  dev-snapshot instead of dev-live - Fix volume mount example: use /home/build/synth-setter (not
+  /workspace), override entrypoint with --entrypoint bash - Fix smoke test: use --entrypoint bash
+  for dev-live - Note PR-triggered build-only mode in CI section - Note Makefile local tag format
+  differs from CI tags - Add Section 6 (Future plans): dev-live MODE support, MODE=train,
+  MODE=pipeline-worker
+
+* docs(docker): fix debug session example to use single-terminal flow
+
+The previous example started a foreground container without -d or --name, then suggested docker exec
+  from another terminal — confusing. Simplified to a single docker run with bash appended.
+
+- **pipeline**: Align design docs and CLAUDE.md with PR #305
+  ([#338](https://github.com/tinaudio/synth-setter/pull/338),
+  [`fd60408`](https://github.com/tinaudio/synth-setter/commit/fd60408047333cf9f182a5d5128ed8a1b9990873))
+
+* docs(pipeline): align design docs with PR #305 implementation choices
+
+- Rename RunConfig → DatasetConfig (more descriptive, matches implementation) - Replace splits
+  dict[str, int] with SplitsConfig Pydantic model - Replace flat schemas.py with schemas/ package
+  directory
+
+Refs #337
+
+* docs: update CLAUDE.md architecture to include pipeline/ package
+
+- **training**: Add configuration reference doc
+  ([#384](https://github.com/tinaudio/synth-setter/pull/384),
+  [`3e60c47`](https://github.com/tinaudio/synth-setter/commit/3e60c47c6131a0ffc944c9100d91c298142ddad2))
+
+* docs(training): add configuration reference doc
+
+Refs #383
+
+* docs(training): note input_spec.json path divergence (#385)
+
+Refs #385
+
+* docs(training): fix config drift wording, link #386 and #387
+
+Config drift protection is planned (per design doc) but not yet enforced in the current
+  implementation. Updated wording to reflect this.
+
+Refs #386, #387
+
+* chore: address review feedback on PR #384
+
+- Fix R2 path in §1 table: metadata/input_spec.json → {r2_prefix}/input_spec.json (aligns with §2.1
+  diagram and actual code in generate_dataset.py) - Narrow doc-map.yaml configs/** to specific
+  subdirectories (configs/dataset/**, configs/experiment/**, configs/train.yaml, configs/eval.yaml)
+  to prevent false-positive drift alerts on routine config changes
+
+### Internal-Feat
+
+- **pipeline**: Add dataset generation workflow
+  ([#344](https://github.com/tinaudio/synth-setter/pull/344),
+  [`cf74d5c`](https://github.com/tinaudio/synth-setter/commit/cf74d5c0c3fba86799145fa5bd5b5e24da592712))
+
+* internal-feat(pipeline): add dataset generation workflow and entrypoint mode
+
+Add a GitHub Actions workflow that generates VST datasets inside the Docker container, a CI config
+  loader for dataset YAML configs, and a generate_shards entrypoint mode for the Docker image.
+
+- scripts/ci/load_dataset_config.py: emits dataset config fields to GITHUB_OUTPUT, following the
+  image config loader pattern - scripts/entrypoint_generate_shards.py: reads env vars, parses
+  config, invokes generate_vst_dataset.py as subprocess - scripts/docker_entrypoint.sh: new
+  MODE=generate_shards dispatches to headless X11 wrapper + generate helper -
+  .github/workflows/dataset-generation.yml: manual dispatch with configurable samples/R2 upload, PR
+  validation with 10 samples
+
+Refs #277, refs #267
+
+* refactor(pipeline): replace shell echo block with testable Python param resolver
+
+All run parameters are now derived from the dataset config with no hardcoded magic numbers. PR mode
+  uses sample_batch_size for num_samples (one batch = minimum smoke test). Dispatch mode uses
+  provided values with config-derived fallbacks.
+
+* docs(docker): document MODE=generate_shards entrypoint mode
+
+Add generate_shards to the MODE table, document DATASET_CONFIG, NUM_SAMPLES, and OUTPUT_DIR env
+  vars, and add usage examples.
+
+* fix(pipeline): remove num_samples override, address PR review feedback
+
+Remove --num-samples-override from all scripts — num_samples is always derived from shard_size *
+  num_shards in the config. The resolve script uses sample_batch_size for PR smoke tests, shard_size
+  * num_shards for dispatch.
+
+Also addresses PR review comments: - Validate output_format == 'hdf5' in entrypoint helper (#6) -
+  Validate upload_to_r2 input in param resolver (#3) - Add set -o pipefail to docker run step (#5) -
+  Fix docker.md X11 attribution wording (#4) - Remove NUM_SAMPLES env var from docs and entrypoint
+
+* docs: overhaul doc-map.yaml with verified sources and full coverage
+
+* docs(docker): document dataset generation workflow artifacts
+
+Describe the run manifest artifact bundle contents, how to download and inspect it, and retention
+  period.
+
+* internal-feat(pipeline): add CI smoke-test dataset config
+
+32 samples, single shard. Used by the dataset-generation workflow on pull_request events instead of
+  branching on event name.
+
+* refactor(pipeline): rename generate_shards→generate_dataset, enforce single-shard MVP
+
+Each invocation now generates one shard (shard_size samples). Multi-shard raises
+  NotImplementedError. Output file is shard-000000.hdf5 instead of {config_id}.hdf5 — aligns with
+  design doc shard naming convention.
+
+* refactor(pipeline): remove num_samples from CI plumbing, simplify resolver
+
+- resolve_dataset_run_params.py: remove event-name branching and num_samples. Just fills empty
+  inputs with defaults. - load_dataset_config.py: emit shard_size and num_shards as separate fields
+  instead of derived num_samples. - Config YAML is the single source of truth for generation
+  parameters. PR mode uses ci-smoke-test.yaml instead of event-name branching.
+
+* refactor(pipeline): update workflow for single-shard MVP and renamed mode
+
+Use ci-smoke-test.yaml for PR trigger, MODE=generate_dataset, shard-000000.hdf5 output,
+  shard_size/num_shards in manifest. Remove num_samples from all plumbing.
+
+* docs(docker): rename generate_shards→generate_dataset, update for single-shard MVP
+
+Remove NUM_SAMPLES env var, document shard_size-based generation, update manifest fields to
+  shard_size/num_shards.
+
+* docs: update doc-map.yaml for generate_dataset rename
+
+Update entrypoint pattern references and MODE value list.
+
+* refactor(pipeline): rewrite for DataPipelineSpec, delete CI scripts
+
+Container does everything: materialize spec, upload spec to R2, generate shard, upload shard to R2.
+  No CI Python scripts needed.
+
+- Rewrite entrypoint to use materialize_spec() from DataPipelineSpec - Delete load_dataset_config.py
+  and resolve_dataset_run_params.py - Simplify workflow to: pull image, one docker run, upload
+  artifact - Replace OUTPUT_DIR with RUN_METADATA_DIR (spec.json only) - spec.json IS the manifest —
+  no separate manifest construction
+
+Tests will fail at import until #354 (DataPipelineSpec) merges.
+
+Refs #354, refs #277, refs #267
+
+* refactor(pipeline): rename DataPipelineSpec→DatasetPipelineSpec
+
+Align with #354 naming convention.
+
+Refs #354, refs #267
+
+* test(docker): add BATS tests for MODE=generate_dataset
+
+Test that missing DATASET_CONFIG env var exits nonzero with a clear error message. Full generation
+  testing requires headless X11 + VST which is only available inside the Docker container.
+
+* fix(pipeline): move plugin_path validation from model to materialize_spec
+
+The model_validator checked plugin_path exists on disk at construction time, which breaks
+  deserialization on machines without the VST plugin (e.g., finalize-only, CI validation). Move the
+  check to materialize_spec() where it belongs — only materialization needs the plugin on disk.
+
+Refs #354
+
+* fix: restore doc-map.yaml sections lost during rebase
+
+The rebase conflict resolution incorrectly dropped eval pipeline, github taxonomy, docker-spec, and
+  other sections added by #348/#352. Restored main's version and applied only our 3 targeted
+  changes.
+
+* refactor(ci): split dataset workflow into reusable + test pattern
+
+Split dataset-generation.yml into two files matching the pattern from spec-materialization.yml /
+  test-spec-materialization.yml:
+
+- dataset-generation.yml: reusable workflow_call building block (inputs: image_tag, config_path,
+  artifact_name) - test-dataset-generation.yml: test workflow with dispatch + PR triggers, calls the
+  reusable workflow with ci-smoke-test.yaml for PRs
+
+* fix(pipeline): add channels to DatasetPipelineSpec, fix entrypoint arg building
+
+- Add channels field to DatasetPipelineSpec and _build_pipeline_spec - Fix _build_generate_args: use
+  dict for options, take ShardSpec + output_dir (shard owns filename, builder owns path
+  construction) - Use spec.shard_size instead of nonexistent shard.row_count - Use spec.channels
+  instead of nonexistent shard.audio_shape - Fix pyright: cast spec.run_id to DatasetRunId for
+  make_r2_prefix
+
+Refs #354, refs #277
+
+* fix(pipeline): type run_id as DatasetRunId on DatasetPipelineSpec
+
+run_id is always a DatasetRunId (from make_dataset_wandb_run_id). Using the NewType annotation
+  removes the need for explicit casts at call sites.
+
+* refactor(pipeline): improve entrypoint tests — state over interaction testing
+
+Replace mock spec factory with real DatasetPipelineSpec fixture. Convert interaction tests to state
+  assertions where possible. Make build_generate_args public. Add subprocess/rclone failure
+  propagation tests. Simplify change-detector test to structural assertions.
+
+Refs #344
+
+* fix(pipeline): use canonical input_spec.json filename from constants
+
+Replace hardcoded spec.json with INPUT_SPEC_FILENAME constant in the entrypoint. Update workflow
+  YAML, tests, docs, and entrypoint comments to use the canonical input_spec.json name from
+  pipeline.constants.
+
+Refs #354, refs #344
+
+* fix(ci): use ci-smoke-test.yaml as default in test workflow
+
+The test workflow should default to the smoke test config, not the production 480k config. The
+  production config is for dispatch runs from the reusable workflow, not the test workflow.
+
+* internal-feat(pipeline): add shard validation for CI dataset generation tests
+
+Validates HDF5 shard against DatasetPipelineSpec: checks expected datasets exist (audio, mel_spec,
+  param_array) and row counts match shard_size. Used by test-dataset-generation.yml to verify
+  generation output after R2 upload.
+
+Refs #344, refs #267
+
+* ci(pipeline): add shard validation step to test workflow
+
+After generation, download the shard from R2 via Docker and validate it against the spec using
+  pipeline.ci.validate_shard. Checks HDF5 structure, expected datasets, and row count against
+  shard_size.
+
+validate-spec and validate-shard run in parallel after generate.
+
+* refactor(pipeline): add r2_prefix to DatasetPipelineSpec, simplify workflow
+
+Add r2_prefix field to DatasetPipelineSpec, computed during materialization from config_id + run_id.
+  Replaces brittle regex parsing of run_id in the test workflow. The entrypoint now reads
+  spec.r2_prefix instead of computing it independently.
+
+Refs #344, refs #354
+
+* refactor(pipeline): extract R2_BUCKET constant, remove hardcoded bucket name
+
+Add R2_BUCKET to pipeline.constants. Entrypoint and test workflow now read the bucket name from the
+  constant instead of hardcoding 'intermediate-data'. The workflow reads it via Docker to avoid
+  duplicating the value in YAML.
+
+* fix(ci): use volume-mount pattern for dataset generation workflow
+
+The published Docker image doesn't have MODE=generate_dataset yet (it's being added in this PR).
+  Mount the PR's code into the container and run the entrypoint directly, matching the pattern from
+  spec-materialization.yml. This tests the PR's code against the image's environment (Surge XT,
+  Python, rclone).
+
+* fix(ci): add PYTHONPATH for volume-mounted code in Docker workflows
+
+The Docker image's editable install was built before pipeline/constants.py existed. Setting
+  PYTHONPATH ensures Python finds all modules from the mounted code regardless of the stale editable
+  install.
+
+* fix(pipeline): address PR review comments — validate_spec fields, doc accuracy
+
+- Add channels and r2_prefix to _REQUIRED_FIELDS in validate_spec.py - Update docker.md artifact
+  section: correct artifact name (test-run-metadata), remove nonexistent config YAML from bundle,
+  fix two files not three - Fix docker run examples: use ci-smoke-test.yaml (not 480k config which
+  raises NotImplementedError with num_shards > 1)
+
+* fix(ci): read R2_BUCKET from checkout, not Docker image
+
+The Docker image doesn't have pipeline.constants yet. Read it from the checked-out code on the
+  runner instead (PYTHONPATH=.).
+
+* fix(ci): mount code at editable install path for validate_shard
+
+The Docker image's editable install resolves pipeline.* from /home/build/synth-setter. Mount the PR
+  code there (not /code) so new modules like pipeline.ci.validate_shard are discoverable.
+
+* refactor(pipeline): move entrypoint from scripts/ to pipeline/entrypoints/
+
+Resolves recurring Docker module import issues — the entrypoint now lives in the pipeline package
+  and is discoverable via the editable install. Run as python -m
+  pipeline.entrypoints.generate_dataset.
+
+Fixes #361 Refs #344
+
+* docs(docker): fix stale entrypoint path in docker-spec.md
+
+Update MODE table to reference pipeline.entrypoints.generate_dataset instead of the old scripts/
+  path.
+
+- **pipeline**: Add DatasetConfig, YAML loader, and R2 prefix generation
+  ([#305](https://github.com/tinaudio/synth-setter/pull/305),
+  [`dd577e3`](https://github.com/tinaudio/synth-setter/commit/dd577e35c41b38fce209a5f1feeaf4e17bf8bf22))
+
+* internal-feat(pipeline): add DatasetConfig model and YAML loader
+
+Refs #275
+
+* internal-feat(pipeline): add R2 prefix generation
+
+Refs #276
+
+* internal-fix(pipeline): harden config loader and fix test issues from review
+
+Address Copilot review feedback on PR #305: - load_dataset_config: .exists() → .is_file() so
+  directories raise FileNotFoundError - load_dataset_config: guard against empty/non-mapping YAML
+  with clear TypeError - conftest: shallow .copy() → copy.deepcopy() to isolate nested dict
+  mutations - conftest: yaml.dump → yaml.safe_dump for safer serialization - test_prefix: patch
+  datetime.now to eliminate flaky midnight-rollover race
+
+Refs #275, Refs #276
+
+* refactor(pipeline): add NewType wrappers for DatasetConfigId and DatasetRunId
+
+Prevent silent argument swaps in functions like make_r2_prefix(config_id, run_id) where both params
+  are str. NewType gives pyright visibility with zero runtime cost.
+
+* refactor(pipeline): add R2Prefix NewType for make_r2_prefix return type
+
+Completes the NewType coverage so all three pipeline identifiers (DatasetConfigId, DatasetRunId,
+  R2Prefix) are type-distinct.
+
+- **pipeline**: Add DatasetPipelineSpec, ShardSpec, and materialize_spec
+  ([#356](https://github.com/tinaudio/synth-setter/pull/356),
+  [`6b26bd9`](https://github.com/tinaudio/synth-setter/commit/6b26bd924706262fcdf7321a44c906e285dc1ee8))
+
+* internal-feat(pipeline): add PipelineSpec, ShardSpec, and materialize_spec
+
+Frozen runtime specification materialized from DatasetConfig. Contains per-shard seeds, shapes,
+  filenames, and row ranges. Same config + same code version = same spec (deterministic).
+
+Also adds extract_renderer_version() for platform-specific VST3 plugin version extraction (Linux
+  moduleinfo.json, macOS Info.plist).
+
+Includes dedicated CI workflow for spec materialization tests on Linux.
+
+Refs #354 Refs #267
+
+* fix(pipeline): address PR review feedback on PipelineSpec
+
+- Change created_at field from str to datetime for type-level validation - Use tuples instead of
+  lists for immutable collections (expected_datasets, shards) to enforce deep immutability - Add
+  NotImplementedError guard for unsupported WDS output format - Expand CI workflow push.paths to
+  match pull_request.paths
+
+Refs #354
+
+* internal-feat(pipeline): rename to DatasetPipelineSpec, add generation fields
+
+Rename PipelineSpec → DatasetPipelineSpec for consistency with DatasetConfig naming. Add 6
+  generation parameters (plugin_path, preset_path, velocity, signal_duration_seconds, min_loudness,
+  sample_batch_size) so workers have all rendering config in the spec.
+
+Add model_validator to check plugin_path exists at construction time.
+
+* docs(pipeline): document parse error exceptions in extract_renderer_version
+
+Add json.JSONDecodeError and plistlib.InvalidFileException to the docstring Raises section. These
+  can occur if version files are present but malformed.
+
+* refactor(pipeline): remove ShardSpec, add num_params to DatasetPipelineSpec
+
+ShardSpec expanded per-shard values (seeds, shapes, filenames) that are trivially derivable from
+  shard index + top-level fields. Shape metadata (audio_shape, mel_shape, param_shape) is output
+  metadata, not generation input — belongs on a dataset card, not the generation spec.
+
+Workers derive per-shard values at runtime: seed = base_seed + shard_id filename =
+  f"shard-{shard_id:06d}.h5" row_start = shard_id * shard_size
+
+num_params is captured from the param_spec registry at materialization time since workers need it to
+  allocate HDF5 datasets.
+
+* refactor(pipeline): add lean ShardSpec, replace num_shards with property
+
+Re-add ShardSpec with only per-shard values (shard_id, filename, seed). Remove num_shards field —
+  len(spec.shards) is the single source of truth, exposed via a @property for convenience.
+
+* docs(pipeline): update design docs for DatasetPipelineSpec rename
+
+Update §14.1 schema to match implementation: PipelineSpec → DatasetPipelineSpec, lean ShardSpec
+  (shard_id, filename, seed only), num_shards as @property, generation fields on spec. Remove shape
+  metadata (audio_shape, mel_shape, param_shape) from ShardSpec — these are output metadata, not
+  generation inputs.
+
+* docs(pipeline): add inline comments to all DatasetPipelineSpec fields
+
+* fix(pipeline): add plugin_path guard in extract_renderer_version, bump CI timeout
+
+extract_renderer_version now checks plugin_path.exists() first and raises a clear FileNotFoundError
+  instead of a misleading "no version files in Contents/" message when the plugin itself doesn't
+  exist.
+
+Bump spec CI workflow timeout from 10 to 30 minutes to account for cold-runner pip install times
+  (torch, pedalboard, etc.).
+
+* ci(pipeline): rewrite spec workflow as reusable Docker integration test
+
+Replace the redundant pytest-based workflow with a Docker integration test that materializes a real
+  spec inside the production container.
+
+- Add reusable workflow_call interface (accepts image_tag input) - Add workflow_dispatch for manual
+  trigger - Pull image from Docker Hub, mount PR code, run materialize_spec - Inspect output spec
+  (validate code_version SHA, shard seeds, renderer_version) - Upload spec.json as GitHub artifact
+  (30-day retention) - Add ci-materialize-test.yaml config (3 shards for multi-shard verification) -
+  Add scripts/ci/materialize_spec_smoke.py for in-container execution
+
+* ci(pipeline): split spec workflow into reusable step and test
+
+spec-materialization.yml: reusable building block (workflow_call). Takes image_tag + config_path,
+  materializes spec in Docker, validates structure (required fields, valid SHA, non-empty
+  renderer_version), uploads artifact. No value assertions — generic for any config.
+
+test-spec-materialization.yml: test workflow (workflow_dispatch). Calls the reusable workflow with
+  ci-materialize-test.yaml, downloads artifact, asserts test-specific values (3 shards, seeds
+  [42,43,44], config passthrough fields).
+
+* refactor(ci): extract inline Python from workflows into scripts
+
+Move structural validation to scripts/ci/validate_spec_structure.py and test assertions to
+  scripts/ci/validate_spec_test_values.py. Both are now linted by ruff/pyright and maintainable
+  outside YAML.
+
+* refactor(ci): move CI scripts to pipeline/ci, combine validators, add tests
+
+Move materialize_spec_smoke → pipeline/ci/materialize_spec. Combine validate_spec_structure +
+  validate_spec_test_values → pipeline/ci/validate_spec with --test-values flag.
+
+Add tests for both validation functions (plain dict in, errors out). Delete scripts/ci/ originals —
+  all logic now in pipeline/ci/.
+
+* fix(pipeline): use input_spec.json filename from design doc
+
+Add pipeline/constants.py with INPUT_SPEC_FILENAME — canonical name from
+  docs/design/data-pipeline.md §7.1 storage layout. Was incorrectly using "spec.json" instead of
+  "input_spec.json".
+
+* fix(ci): add git safe.directory for volume-mounted repo in Docker
+
+git rev-parse HEAD fails inside Docker when the repo is volume-mounted from the GitHub runner
+  (different UID). Add safe.directory config before running materialize_spec.
+
+* docs(ci): add comments explaining Docker mount pattern in spec workflow
+
+Explains why we volume-mount, recreate the plugin symlink, add safe.directory, and use headless X11.
+
+* fix(pipeline): add pedalboard fallback for renderer version extraction
+
+The prebuilt Surge XT .deb doesn't include Contents/moduleinfo.json — only the .so binary. Fall back
+  to pedalboard.VST3Plugin.version which reads the version from the VST3 factory info embedded in
+  the binary.
+
+Static file checks (moduleinfo.json, Info.plist) remain as fast paths for plugins that include
+  metadata files.
+
+* docs(pipeline): fix stale materialize_spec signatures in implementation plan
+
+Update function signature to match implementation (2-arg, no optional overrides). Update reference
+  test to use patch_materialize_io fixture. Mark resolved schema gaps as fixed.
+
+### Refactoring
+
+- **pipeline**: Freeze SplitsConfig for immutability
+  ([#357](https://github.com/tinaudio/synth-setter/pull/357),
+  [`3c0eaf2`](https://github.com/tinaudio/synth-setter/commit/3c0eaf208fd1a1f2acf635b1c374c4045880f216))
+
+SplitsConfig fields (train, val, test) should not be mutated after construction. Adding frozen=True
+  enforces this at the Pydantic level. Prepares for PipelineSpec deep immutability (#354).
+
+Refs #354
+
+- **pipeline**: Move CI script from scripts/ci/ to pipeline/ci/
+  ([#359](https://github.com/tinaudio/synth-setter/pull/359),
+  [`a824c56`](https://github.com/tinaudio/synth-setter/commit/a824c56ab7c2c8854fe3bb0484ec58cc277df4cc))
+
+The load_image_config CLI wrapper now lives at pipeline/ci/ and is invocable as `python -m
+  pipeline.ci.load_image_config`, eliminating the PYTHONPATH=. hack in the Docker build workflow.
+
+Refs #323
+
+- **pipeline**: Move config schemas to pipeline/schemas/
+  ([#343](https://github.com/tinaudio/synth-setter/pull/343),
+  [`3f21db6`](https://github.com/tinaudio/synth-setter/commit/3f21db61acb22ac82cae6dca8b330cfb33317ab5))
+
+* refactor(pipeline): move config and prefix to pipeline/schemas/
+
+Aligns with the directory layout in docs/design/data-pipeline.md §14 which specifies
+  pipeline/schemas/ for Pydantic models and ID helpers.
+
+Refs #267
+
+* refactor(pipeline): move image config schema to pipeline/schemas/
+
+Co-locates ImageConfig with DatasetConfig under pipeline/schemas/, aligning all Pydantic config
+  schemas in one place.
+
+* fix(pipeline): update stale path references after schema move
+
+Update workflow PR trigger, doc links, config comment, and test docstring to reference the new
+  pipeline/schemas/ locations.
+
+Refs #342
+
+### Testing
+
+- **wandb**: Add env var resolution tests to test_configs.py
+  ([#376](https://github.com/tinaudio/synth-setter/pull/376),
+  [`f97fc7e`](https://github.com/tinaudio/synth-setter/commit/f97fc7e9b7df6acd413406d06831b8f993118160))
+
+* test(wandb): add OmegaConf env var resolution integration tests
+
+Closes the only test coverage gap found during Phase 1-3 pr-checkbox verification: no test verified
+  that configs/logger/wandb.yaml resolves WANDB_ENTITY and WANDB_PROJECT from environment variables.
+
+Three tests added: - entity resolves from WANDB_ENTITY env var - project resolves from WANDB_PROJECT
+  env var - defaults to tinaudio/synth-setter when env vars unset
+
+Refs #265, refs #375
+
+* refactor(test): merge wandb config tests into test_configs.py
+
+Move 3 wandb env var resolution tests from standalone test_wandb_integration.py into test_configs.py
+  where config tests belong. Fix docstring to link issue #265 instead of opaque "Task 1.2".
+
+
 ## v0.1.1 (2026-03-26)
 
 ### Bug Fixes

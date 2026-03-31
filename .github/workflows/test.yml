@@ -4,14 +4,28 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
+    paths:
+      - "src/**"
+      - "pipeline/**"
+      - "tests/**"
+      - "configs/**"
+      - "scripts/**"
+      - "requirements*.txt"
+      - "pyproject.toml"
+      - "setup.py"
+      - ".github/workflows/test.yml"
   pull_request:
     branches: [main, "release/*", "dev"]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
+    paths:
+      - "src/**"
+      - "pipeline/**"
+      - "tests/**"
+      - "configs/**"
+      - "scripts/**"
+      - "requirements*.txt"
+      - "pyproject.toml"
+      - "setup.py"
+      - ".github/workflows/test.yml"
 
 jobs:
   run_tests_ubuntu:
