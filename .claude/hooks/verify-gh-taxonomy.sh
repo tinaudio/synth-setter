@@ -315,7 +315,7 @@ if [ "$MODE" = "pr" ]; then
   # Fallback: check for any #N reference in the body (matches bare #N and
   # markdown hyperlinks like [#399](url)), same as pr-metadata-gate.yaml.
   if [ -z "$ISSUE_NUMS" ]; then
-    ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' || true)
+    ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${PR_NUM}$" || true)
   fi
 
   if [ -z "$ISSUE_NUMS" ]; then
