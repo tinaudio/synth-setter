@@ -31,6 +31,8 @@ MODE is required -- container errors if unset.
 
 `generate_dataset` uses env vars instead of CLI args — see § MODE=generate_dataset env vars below.
 
+> **Note:** `generate_dataset` is the current single-shard MVP. It will be deprecated when `generate-shards` lands on main ([#411](https://github.com/tinaudio/synth-setter/issues/411)).
+
 ### Exit codes
 
 | Condition                  | Exit code |
@@ -39,7 +41,14 @@ MODE is required -- container errors if unset.
 | Unknown MODE value         | 1         |
 | `passthrough` with no args | 0         |
 
-Future modes: `pipeline-worker` (see `docs/design/data-pipeline-implementation-plan.md`).
+### Next modes
+
+| MODE              | Status                     | Description                                                                  | Tracking                                                    |
+| ----------------- | -------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `generate-shards` | Scoped (experiment branch) | Multi-shard parallel generation with R2 upload. Replaces `generate_dataset`. | [#407](https://github.com/tinaudio/synth-setter/issues/407) |
+| `finalize-shards` | Scoped (experiment branch) | Reshard into train/val/test, compute stats, upload to R2.                    | [#408](https://github.com/tinaudio/synth-setter/issues/408) |
+| `train`           | Scoped (experiment branch) | Download dataset from R2, run training, upload checkpoints.                  | [#409](https://github.com/tinaudio/synth-setter/issues/409) |
+| `eval`            | Planned                    | Download checkpoint + dataset, run eval, upload results.                     | [#410](https://github.com/tinaudio/synth-setter/issues/410) |
 
 ______________________________________________________________________
 
@@ -105,5 +114,5 @@ ______________________________________________________________________
 ## 5. Cross-references
 
 - `docs/design/storage-provenance-spec.md` -- R2 paths, W&B artifacts, secrets
-- `docs/design/data-pipeline-implementation-plan.md` -- future `MODE=pipeline-worker`
+- `docs/design/data-pipeline-implementation-plan.md` -- `MODE=generate-shards` ([#407](https://github.com/tinaudio/synth-setter/issues/407))
 - `docs/reference/wandb-integration.md` -- W&B logging reference

@@ -385,16 +385,29 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 
 ______________________________________________________________________
 
-## 6. Future plans
+## 6. Scoped and planned modes
+
+### Scoped — validated on experiment branch, pending port to main
+
+- **MODE=generate-shards** ([#407](https://github.com/tinaudio/synth-setter/issues/407)) — multi-shard parallel VST
+  dataset generation with R2 upload. Replaces `generate_dataset` (which becomes
+  deprecated, [#411](https://github.com/tinaudio/synth-setter/issues/411)).
+  See [data-pipeline.md](../design/data-pipeline.md) § Generate stage.
+- **MODE=finalize-shards** ([#408](https://github.com/tinaudio/synth-setter/issues/408)) — download shards from R2,
+  reshard into train/val/test, compute normalization stats, upload.
+- **MODE=train** ([#409](https://github.com/tinaudio/synth-setter/issues/409)) — download dataset from R2, run
+  `src/train.py` via Hydra, upload checkpoints. Currently handled manually.
+
+### Planned — not yet implemented
+
+- **MODE=eval** ([#410](https://github.com/tinaudio/synth-setter/issues/410)) — download checkpoint + dataset,
+  run evaluation, upload results. Counterpart to `MODE=train`.
+
+### Other future work
 
 - **dev-live MODE support** — currently dev-live uses a fallback entrypoint
-  that requires a volume mount at `/home/build/synth-setter`. A future change
-  would add `docker_entrypoint.sh` to dev-live so it supports MODE dispatch
-  like dev-snapshot/prod, removing the need for `--entrypoint bash` overrides.
-- **MODE=train** — dedicated training mode in the entrypoint that downloads
-  data from R2, runs training, and uploads results. Currently handled manually.
-- **MODE=pipeline-worker** — for distributed shard generation on RunPod.
-  See [data-pipeline.md](../design/data-pipeline.md) § Generate stage.
+  that requires a volume mount. A future change would add `docker_entrypoint.sh`
+  to dev-live so it supports MODE dispatch like dev-snapshot/prod.
 
 ______________________________________________________________________
 
