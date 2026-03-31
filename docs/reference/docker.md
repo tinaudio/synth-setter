@@ -50,7 +50,7 @@ that persist in the final image:
 > `docker history`), but the resulting config files **are baked into the image**.
 > Push only to private registries. Rotate R2 tokens after each build campaign.
 
-The rclone reference doc is planned but does not yet exist.
+The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-setter/issues/310)).
 
 ### First build (dev-live)
 
@@ -401,7 +401,7 @@ ______________________________________________________________________
 ## 7. Cross-references
 
 - [docker-spec.md](docker-spec.md) — image target contract, entrypoint spec, env vars
-- rclone.md (planned) — R2 setup, Docker credential baking
+- rclone.md (planned — [#310](https://github.com/tinaudio/synth-setter/issues/310)) — R2 setup, Docker credential baking
 - [wandb-integration.md](wandb-integration.md) — W&B logging and auth
 - [data-pipeline.md](../design/data-pipeline.md) — pipeline architecture, worker provisioning
 - [image_config.py](../../pipeline/schemas/image_config.py) — image config schema (Pydantic model)

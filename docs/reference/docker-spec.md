@@ -8,6 +8,7 @@ ______________________________________________________________________
 ## Current vs. Planned
 
 MODE dispatch is fully implemented in `scripts/docker_entrypoint.sh` on `main`.
+MODE dispatch was implemented as part of [#265](https://github.com/tinaudio/synth-setter/issues/265).
 The entrypoint supports three modes (`idle`, `passthrough`, `generate_dataset`),
 exits with an error if MODE is unset or unknown, and exits 0 for `passthrough`
 with no arguments. The spec below matches the current implementation.
