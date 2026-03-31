@@ -59,10 +59,13 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 ### Architecture
 
 - `src/` — ML code (models, data modules, training, evaluation)
-- `pipeline/` — distributed data pipeline (`python -m pipeline`)
-  - `schemas/` — Pydantic models (config, spec, report, card, sample)
-  - `stages/` — generate and finalize stage logic
-  - `backends/` — compute providers (local, RunPod)
+- `pipeline/` — distributed data pipeline (`python -m pipeline` planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
+  - `schemas/` — Pydantic models (config, spec, prefix, image_config; planned: report, card, sample — [#74](https://github.com/tinaudio/synth-setter/issues/74))
+  - `entrypoints/` — pipeline entry points (generate_dataset)
+  - `ci/` — CI validation scripts (materialize_spec, validate_shard, validate_spec)
+  - `constants.py` — shared constants (R2 bucket, spec filename)
+  - `stages/` — generate and finalize stage logic (planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
+  - `backends/` — compute providers: local, RunPod (planned — [#71](https://github.com/tinaudio/synth-setter/issues/71))
 - `scripts/` — standalone scripts
 - `configs/` — Hydra YAML configs (`data/`, `trainer/`) and pipeline configs (`dataset/`)
 - `tests/` — mirrors `src/` and `pipeline/` structure
