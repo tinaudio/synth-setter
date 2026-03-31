@@ -17,7 +17,7 @@ webdataset
 
 # --------- dev tools --------- #
 hatchling
-plumb-dev @ git+https://github.com/ktinubu/plumb.git@1159ced838fd493c7dade65ae664639aca5f768f
+plumb-dev @ git+https://github.com/ktinubu/plumb.git@33247ad411cccc1dad75a588e899304a96f772ef
 
 # --------- others --------- #
 dask[distributed]
