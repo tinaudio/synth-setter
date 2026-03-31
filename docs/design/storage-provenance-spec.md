@@ -170,14 +170,14 @@ ______________________________________________________________________
 
 ## 8. GitHub Actions Workflows
 
-| Workflow        | File                     | Trigger              | Runner                          | Secrets             | Key Inputs                                                       |
-| --------------- | ------------------------ | -------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
-| Tests           | `test.yml`               | push, PR             | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
-| Full Tests      | `test-expensive.yml`     | push(main), dispatch | `gpu-x64`                       | —                   | —                                                                |
-| Data Generation | `dataset-generation.yml` | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | config, n_workers                                                |
-| Training        | TBD                      | `workflow_dispatch`  | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
-| Evaluation      | TBD                      | `workflow_dispatch`  | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |
-| Model Promotion | `promote.yml` (planned)  | `workflow_dispatch`  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
+| Workflow        | File                     | Trigger             | Runner                          | Secrets             | Key Inputs                                                       |
+| --------------- | ------------------------ | ------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
+| Tests           | `test.yml`               | push, PR            | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
+| Full Tests      | `test-expensive.yml`     | schedule, dispatch  | `gpu-x64`                       | —                   | —                                                                |
+| Data Generation | `dataset-generation.yml` | `workflow_call`     | `ubuntu-latest-4core`           | DockerHub           | `image_tag`, `config_path`, `artifact_name`                      |
+| Training        | TBD                      | `workflow_dispatch` | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
+| Evaluation      | TBD                      | `workflow_dispatch` | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |
+| Model Promotion | `promote.yml` (planned)  | `workflow_dispatch` | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
 
 - All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
 - Evaluation requires `train_wandb_run_id` (to find the model artifact) and `eval_config_id` (which dataset to evaluate on).
