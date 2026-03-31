@@ -1,9 +1,6 @@
 <div align="center">
-
-# synth-setter
-
-Synth inversion, sound matching, and preset exploration tools.
-
+<h1>synth-setter</h1>
+<p>Synth inversion, sound matching, and preset exploration tools.</p>
 </div>
 
 ## Overview

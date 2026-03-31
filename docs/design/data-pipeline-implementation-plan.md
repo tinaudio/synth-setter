@@ -242,14 +242,13 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 
 **Files to create:**
 
-- `pipeline/__init__.py`
-- `pipeline/schemas/` — Pydantic models split across submodules: `config.py` (`DatasetConfig`, `SplitsConfig`, load/ID helpers), `spec.py` (`DatasetPipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass).
-  **Note:** As of 2026-03-31, only `config.py`, `spec.py`, `prefix.py`, and
-  `image_config.py` exist. `report.py`, `card.py`, and `sample.py` are not yet
-  created.
-- `configs/dataset/surge-simple-480k-10k.yaml` — sample config (filename = `dataset_config_id`)
-- `tests/pipeline/__init__.py`
-- `tests/pipeline/test_schemas/`
+- ~~`pipeline/__init__.py`~~ ✅
+- `pipeline/schemas/` — Pydantic models split across submodules: ~~`config.py`~~ ✅ (`DatasetConfig`, `SplitsConfig`, load/ID helpers), ~~`spec.py`~~ ✅ (`DatasetPipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass).
+  **Note:** ~~`prefix.py`~~ ✅ and ~~`image_config.py`~~ ✅ also exist.
+  `report.py`, `card.py`, and `sample.py` are not yet created.
+- ~~`configs/dataset/surge-simple-480k-10k.yaml`~~ ✅ — sample config (filename = `dataset_config_id`)
+- ~~`tests/pipeline/__init__.py`~~ ✅
+- ~~`tests/pipeline/test_schemas/`~~ ✅
 
 **Key behaviors:**
 
