@@ -7,12 +7,11 @@ ______________________________________________________________________
 
 ## Current vs. Planned
 
-The entrypoint on `main` today (`scripts/docker_entrypoint.sh`) is a passthrough stub:
-`exec "$@"` if args are given, error if not. It has no MODE dispatch.
-
-Everything in this spec that differs from that behavior — MODE dispatch, `idle` mode,
-`passthrough` with no args exiting 0 — is **planned work** tracked in #265.
-The spec documents the target contract, not the current implementation.
+MODE dispatch is fully implemented in `scripts/docker_entrypoint.sh` on `main`.
+MODE dispatch was implemented as part of [#265](https://github.com/tinaudio/synth-setter/issues/265).
+The entrypoint supports three modes (`idle`, `passthrough`, `generate_dataset`),
+exits with an error if MODE is unset or unknown, and exits 0 for `passthrough`
+with no arguments. The spec below matches the current implementation.
 
 ______________________________________________________________________
 
@@ -32,7 +31,24 @@ MODE is required -- container errors if unset.
 
 `generate_dataset` uses env vars instead of CLI args — see § MODE=generate_dataset env vars below.
 
-Future modes: `pipeline-worker` (see `docs/design/data-pipeline-implementation-plan.md`).
+> **Note:** `generate_dataset` is the current single-shard MVP. It will be deprecated when `generate-shards` lands on main ([#411](https://github.com/tinaudio/synth-setter/issues/411)).
+
+### Exit codes
+
+| Condition                  | Exit code |
+| -------------------------- | --------- |
+| Unset or empty MODE        | 1         |
+| Unknown MODE value         | 1         |
+| `passthrough` with no args | 0         |
+
+### Next modes
+
+| MODE              | Status                     | Description                                                                  | Tracking                                                    |
+| ----------------- | -------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `generate-shards` | Scoped (experiment branch) | Multi-shard parallel generation with R2 upload. Replaces `generate_dataset`. | [#407](https://github.com/tinaudio/synth-setter/issues/407) |
+| `finalize-shards` | Scoped (experiment branch) | Reshard into train/val/test, compute stats, upload to R2.                    | [#408](https://github.com/tinaudio/synth-setter/issues/408) |
+| `train`           | Scoped (experiment branch) | Download dataset from R2, run training, upload checkpoints.                  | [#409](https://github.com/tinaudio/synth-setter/issues/409) |
+| `eval`            | Planned                    | Download checkpoint + dataset, run eval, upload results.                     | [#410](https://github.com/tinaudio/synth-setter/issues/410) |
 
 ______________________________________________________________________
 
@@ -46,7 +62,7 @@ ______________________________________________________________________
 | `dev-snapshot` | `docker_entrypoint.sh`          | Git clone at `GIT_REF`       | CI, cloud runs |
 | `dev-live`     | fallback (errors without mount) | Volume-mounted               | Local dev      |
 
-All targets inherit from `r2-config-base`. R2 credentials are baked only when BuildKit secrets are provided at build time (placeholder rclone config otherwise). W&B auth is not baked — `WANDB_API_KEY` is required at runtime.
+All targets inherit from `r2-config-base`. R2 credentials are baked only when BuildKit secrets are provided at build time (placeholder rclone config otherwise). W&B auth is baked into `~/.netrc` when the `wandb_api_key` BuildKit secret is provided at build time; if the secret is missing, `WANDB_API_KEY` is required at runtime.
 
 ______________________________________________________________________
 
@@ -98,5 +114,5 @@ ______________________________________________________________________
 ## 5. Cross-references
 
 - `docs/design/storage-provenance-spec.md` -- R2 paths, W&B artifacts, secrets
-- `docs/design/data-pipeline-implementation-plan.md` -- future `MODE=pipeline-worker`
+- `docs/design/data-pipeline-implementation-plan.md` -- `MODE=generate-shards` ([#407](https://github.com/tinaudio/synth-setter/issues/407))
 - `docs/reference/wandb-integration.md` -- W&B logging reference
