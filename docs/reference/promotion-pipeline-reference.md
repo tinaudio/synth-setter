@@ -1,7 +1,10 @@
 # Model Promotion Pipeline Reference
 
-> **Status**: Draft
-> **Last Updated**: 2026-03-20
+> **Status**: NOT IMPLEMENTED — `scripts/promote.py` and
+> `.github/workflows/promote.yml` do not exist yet. This document describes
+> the planned design. See #122 for tracking.
+>
+> **Last Updated**: 2026-03-31
 > **Tracking**: #122
 
 Promote a W&B run to a GitHub Release. Secrets are documented in [storage-provenance-spec.md](../design/storage-provenance-spec.md) §9.
