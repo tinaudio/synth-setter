@@ -521,7 +521,7 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 
 1. Write `.rendering` marker: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
 2. Render shard to a local temp file
-3. **Validate locally** — full validation (4-check design target: structural, shape, value, row count — [#103](https://github.com/tinaudio/synth-setter/issues/103)). Current implementation: 3-check (valid HDF5, expected datasets, row count). Shape and value checks are planned. This is the primary defense against corrupt data.
+3. **Validate locally** — basic 3-check validation (opens as HDF5, expected datasets exist, row count matches shard_size). The design target is 4-check validation adding shape and value checks ([#103](https://github.com/tinaudio/synth-setter/issues/103)). This is the primary defense against corrupt data.
 4. **If validation passes:**
    - Upload shard to staging: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.h5`
    - Write worker report (content hash, timing, per-shard results): `metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json`
@@ -601,18 +601,23 @@ Worker error details are overlaid from metadata files when present. The core out
 
 Validation is **tiered** — each stage does the minimum work needed for its role, avoiding redundant re-validation of shards that workers already checked.
 
-**Full validation (4 checks)** — run by workers before upload:
+**Worker validation (3 checks; 4-check design target)** — run by workers before upload:
 
-- **Structural**: Valid HDF5, expected datasets present (`audio`, `mel_spec`, `param_array`)
+Current implementation:
+
+- **Structural**: Opens as HDF5, expected datasets present (`audio`, `mel_spec`, `param_array`)
+- **Row count**: Matches spec's expected shard size
+
+Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds:
+
 - **Shape**: Array dimensions match spec (sample rate, spectrogram bins, parameter count)
 - **Value**: No NaN/Inf values, audio within [-1, 1], parameters within spec bounds
-- **Row count**: Matches spec's expected shard size
 
 **Existence check** — run by `generate`/`status` during reconciliation:
 
 - Check for `.h5` + `.valid` marker in staging directory. No data loading.
 - The `.valid` marker is authoritative for staging admission: it means a worker completed the full shard lifecycle and committed the result ([§7.2](#72-shard-lifecycle)). It is not sufficient for final dataset correctness — finalize remains the gate before promotion.
-- The trust chain justifies this: workers do full validation (4-check design target — [#103](https://github.com/tinaudio/synth-setter/issues/103); current implementation: 3-check) before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
+- The trust chain justifies this: workers do 3-check validation (4-check design target — [#103](https://github.com/tinaudio/synth-setter/issues/103)) before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
 
 **Structural check** — run by finalize before promoting staged shards to `data/shards/`:
 
@@ -620,11 +625,11 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 - This catches the only realistic failure between worker validation and finalize: transfer corruption or bit rot. Value-level corruption (NaN, wrong bounds) and row count mismatches were already caught by workers — re-checking would require loading all data from every shard, which is redundant.
 - If a staged shard fails the structural check, finalize writes `.invalid` for that attempt, reports the failure, and exits 1. The shard is treated as missing and regenerated on next `generate`.
 
-| Stage               | Validation                                                                                                                                                             | Cost                                   | Why                                                                 |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
-| **Worker**          | Full validation (4-check design target — [#103](https://github.com/tinaudio/synth-setter/issues/103); current impl: 3-check: valid HDF5, expected datasets, row count) | Expensive (loads all data)             | Primary defense — catches VST crashes, NaN, wrong shapes            |
-| **Generate/status** | Existence (`.h5` + `.valid` marker)                                                                                                                                    | Cheap (file listing)                   | Workers already validated; re-validation is redundant               |
-| **Finalize**        | Structural (valid HDF5, datasets present, shapes match)                                                                                                                | Moderate (opens file, no data loading) | Catches transfer corruption; last checkpoint before sealing dataset |
+| Stage               | Validation                                                                                                                                                  | Cost                                   | Why                                                                       |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------- |
+| **Worker**          | 3-check: valid HDF5, expected datasets, row count. 4-check design target adds shape/value/NaN ([#103](https://github.com/tinaudio/synth-setter/issues/103)) | Moderate (opens file, checks metadata) | Primary defense — catches corrupt HDF5, missing datasets, wrong row count |
+| **Generate/status** | Existence (`.h5` + `.valid` marker)                                                                                                                         | Cheap (file listing)                   | Workers already validated; re-validation is redundant                     |
+| **Finalize**        | Structural (valid HDF5, datasets present, shapes match)                                                                                                     | Moderate (opens file, no data loading) | Catches transfer corruption; last checkpoint before sealing dataset       |
 
 **Content hashes** (SHA-256 over the full HDF5 file) are recorded in worker reports for provenance and divergence detection. They are not used as acceptance criteria. If two workers produce different hashes for the same shard, the content hashes surface the divergence for investigation.
 
