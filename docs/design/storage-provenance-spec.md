@@ -107,7 +107,7 @@ ______________________________________________________________________
 | `model`        | `model-{train_config_id}`  | `src/train.py`                    | `model-flow-simple` |
 | `eval-results` | `eval-{eval_config_id}`    | eval script                       | `eval-nsynth-v1`    |
 
-> **Note:** `pipeline.cli` is the target CLI (Phase 5). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
+> **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
 - The `*_wandb_run_id` is stored in `artifact.metadata`, not the artifact name
@@ -162,7 +162,7 @@ ______________________________________________________________________
 | `training`        | Training      | `src/train.py`                    |
 | `evaluation`      | Evaluation    | eval script                       |
 
-> **Note:** `pipeline.cli` is the target CLI (Phase 5). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
+> **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
 - Set on every `wandb.init(job_type=...)` call
 
