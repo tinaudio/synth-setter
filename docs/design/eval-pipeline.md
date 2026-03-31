@@ -624,6 +624,8 @@ This section consolidates every configuration and environment behavior change in
 | **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                                                                                   | `scripts/compute_audio_metrics.py`            | Yes       | **New** — programmatic provenance chain          |
 | **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                                                                                                            | `Makefile`                                    | Yes       | **New** — discoverable, consistent               |
 
+Cloud evaluation runs as `MODE=eval` (planned — [#410](https://github.com/tinaudio/synth-setter/issues/410)). Env var contract follows the same pattern as `MODE=train`: download checkpoint + dataset from R2, run `src/eval.py`, upload results. No implementation exists on any branch.
+
 #### What changes, what stays
 
 | Category       | Items that change                                                                                                                                                           | Items that stay |

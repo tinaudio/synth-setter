@@ -83,6 +83,8 @@ cat configs/dataset/surge-simple-480k-10k.yaml
 # is not yet implemented. Currently only single-shard generation is available via:
 python -m pipeline.entrypoints.generate_dataset configs/dataset/surge-simple-480k-10k.yaml
 # → Single-shard MVP. Multi-shard (num_shards > 1) raises NotImplementedError.
+# `generate_dataset` is the current single-shard MVP. It will be deprecated when
+# `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
 # python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
@@ -217,6 +219,8 @@ Finalize output depends on `output_format` in the spec:
 | --------------- | -------------------------------------------------------------------------------- | ---------------------------------- |
 | `hdf5`          | `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets)                          | Local random access                |
 | `wds`           | `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives) | Sequential streaming (local or R2) |
+
+Each worker container runs with `MODE=generate-shards` — the entrypoint mode IS the worker. Scoped and validated on the `experiment` branch; pending port to main ([#407](https://github.com/tinaudio/synth-setter/issues/407)).
 
 **Stage order is static and explicit.** Generate must complete before finalize. The user runs generate, checks the report, then runs finalize. There is no automatic chaining.
 
@@ -644,6 +648,8 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 10. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
 11. **Upload finalized dataset** to R2
 12. **Write `dataset.complete`** — completion marker (last step)
+
+The finalize step runs with `MODE=finalize-shards`. Scoped and validated on the `experiment` branch ([#408](https://github.com/tinaudio/synth-setter/issues/408)).
 
 **`dataset.complete` semantics:**
 
@@ -1398,7 +1404,7 @@ pipeline/
 
   entrypoints/          # Pipeline entry points (implemented)
     __init__.py
-    generate_dataset.py # Single-shard dataset generation (MVP)
+    generate_dataset.py # Single-shard dataset generation (MVP); deprecated when generate-shards lands (#411)
 
   ci/                   # CI validation scripts (implemented)
     validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count)

@@ -121,6 +121,8 @@ python src/train.py \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
 
+Cloud training runs as `MODE=train` (scoped, validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)). Downloads dataset from R2 via rclone, runs `src/train.py` with Hydra config, uploads checkpoints to `{R2_PREFIX}/training/{wandb_run_id}/`.
+
 ### Docker
 
 ```bash
