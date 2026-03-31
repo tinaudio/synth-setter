@@ -36,7 +36,7 @@ make help
 
 ```
 src/           ML code (models, data modules, training, evaluation)
-pipeline/      Distributed data pipeline (python -m pipeline)
+pipeline/      Distributed data pipeline
 scripts/       Standalone scripts
 configs/       Hydra YAML configs and pipeline configs
 tests/         Test suite

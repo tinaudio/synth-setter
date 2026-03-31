@@ -1,7 +1,6 @@
 # Implementation Plan: Training Pipeline
 
-> **Status**: NOT STARTED — No phases have been implemented. All phase issues
-> are TBD. This plan describes the intended implementation sequence.
+> **Status**: INCOMPLETE — Implementation is not yet tracked against the phase criteria.
 >
 > **Canonical design:** [training-pipeline.md](training-pipeline.md)
 > **Tracking:** #107
