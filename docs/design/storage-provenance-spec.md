@@ -101,11 +101,11 @@ ______________________________________________________________________
 
 ## 4. W&B Artifact Types
 
-| Type           | Name Pattern               | Logged By               | Example name        |
-| -------------- | -------------------------- | ----------------------- | ------------------- |
-| `dataset`      | `data-{dataset_config_id}` | `pipeline.cli finalize` | `data-diva-v1`      |
-| `model`        | `model-{train_config_id}`  | `src/train.py`          | `model-flow-simple` |
-| `eval-results` | `eval-{eval_config_id}`    | eval script             | `eval-nsynth-v1`    |
+| Type           | Name Pattern               | Logged By                         | Example name        |
+| -------------- | -------------------------- | --------------------------------- | ------------------- |
+| `dataset`      | `data-{dataset_config_id}` | `pipeline.cli finalize` (planned) | `data-diva-v1`      |
+| `model`        | `model-{train_config_id}`  | `src/train.py`                    | `model-flow-simple` |
+| `eval-results` | `eval-{eval_config_id}`    | eval script                       | `eval-nsynth-v1`    |
 
 > **Note:** `pipeline.cli` is the target CLI (Phase 5). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
@@ -156,11 +156,11 @@ ______________________________________________________________________
 
 ## 7. `job_type` Values
 
-| `job_type`        | Stage         | Script                  |
-| ----------------- | ------------- | ----------------------- |
-| `data-generation` | Data pipeline | `pipeline.cli finalize` |
-| `training`        | Training      | `src/train.py`          |
-| `evaluation`      | Evaluation    | eval script             |
+| `job_type`        | Stage         | Script                            |
+| ----------------- | ------------- | --------------------------------- |
+| `data-generation` | Data pipeline | `pipeline.cli finalize` (planned) |
+| `training`        | Training      | `src/train.py`                    |
+| `evaluation`      | Evaluation    | eval script                       |
 
 > **Note:** `pipeline.cli` is the target CLI (Phase 5). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
