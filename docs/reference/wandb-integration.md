@@ -118,11 +118,11 @@ Source: `src/utils/utils.py:138-149`, called from `src/train.py:91-93`.
 `log_wandb_provenance()` (`src/utils/logging_utils.py:64-98`) is called in both
 `src/train.py:89` and `src/eval.py:82`, after `log_hyperparameters()`.
 
-| Key          | Source               | Example                                     |
-| ------------ | -------------------- | ------------------------------------------- |
-| `github_sha` | `git rev-parse HEAD` | `3e60c47c6131...`                           |
-| `image_tag`  | `IMAGE_TAG` env var  | `dev-snapshot-abc123`                       |
-| `command`    | `sys.argv`           | `['src/train.py', 'experiment=surge/flow']` |
+| Key          | Source               | Example                                |
+| ------------ | -------------------- | -------------------------------------- |
+| `github_sha` | `git rev-parse HEAD` | `3e60c47c6131...`                      |
+| `image_tag`  | `IMAGE_TAG` env var  | `dev-snapshot-abc123`                  |
+| `command`    | `" ".join(sys.argv)` | `"src/train.py experiment=surge/flow"` |
 
 Written via `wandb.config.update(..., allow_val_change=True)`.
 
