@@ -46,6 +46,28 @@ tests/         Test suite
 docs/design/   Design documents
 ```
 
+## Publication
+
+This repository accompanies a submission to ISMIR 2025. An online supplement with
+audio examples is available at
+[benhayes.net/synth-perm/](https://benhayes.net/synth-perm/).
+
+## Key Files
+
+```
+src/models/components/transformer.py       <- DiT and AST implementations
+src/models/components/residual_mlp.py      <- Residual MLP implementations
+src/models/components/cnn.py               <- CNN encoder implementations
+src/models/components/vae.py               <- VAE+RealNVP baseline implementation
+src/models/*_module.py                     <- LightningModule implementations, containing training logic
+src/data/vst/*                             <- Dataset generation
+src/data/vst/surge_xt_param_spec.py        <- Specification of Surge XT dataset sampling distributions
+src/data/ot.py                             <- Optimal transport minibatch coupling
+src/data/kosc_datamodule.py                <- Implementation of k-osc task
+configs/experiment/kosc                    <- k-osc experiment configs
+configs/experiment/surge                   <- Surge XT experiment configs
+```
+
 ## Documentation
 
 - Design docs live in `docs/design/`
