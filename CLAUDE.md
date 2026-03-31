@@ -116,6 +116,37 @@ Before implementing a new abstraction or design pattern, confirm the scope and a
 - If you're tempted to introduce a new class, config schema, or architectural pattern, ask: "Do we need this now, or is this speculative?" Default to no.
 - Refactoring comes later, driven by real needs, not anticipated ones.
 
+## Workflow Rules
+
+### Commits & Hooks
+
+- Never add `Co-Authored-By` trailers to commit messages.
+- Never use `--no-verify` when committing — hooks work in worktrees and must not be skipped.
+- After force-pushing (squash, amend, rewrite) to a PR branch, update the PR title and description with `gh pr edit` to match.
+
+### PR & Issue References
+
+- Every PR body must link a taxonomy-compliant issue via `Closes #N`, `Fixes #N`, `Refs #N`, or `Part of #N`.
+- Use `Refs #N` (not `Fixes #N` or `Closes #N`) when a PR is a workaround or partial fix — `Fixes` auto-closes the issue.
+- Always use full markdown hyperlinks for PR/issue references: `[#N](https://github.com/tinaudio/synth-setter/issues/N)` — bare `#N` is not clickable outside GitHub.
+- Never add "Generated with Claude Code" or similar attribution footers to PRs, commits, issues, or comments.
+
+### PR Verification
+
+- `/pr-checkbox` is verification-only — look for existing branches/PRs and run checks, never plan implementation.
+- Each verification step gets a checkbox (`- [ ]` / `- [x]`) with the command run and its console output as evidence.
+- Size output appropriately: small (\<20 lines) inline, medium (20-100) in a PR comment, large (100+) in a Gist linked from a comment.
+- Only tick `[x]` if the result unambiguously passes.
+
+### PR Review Comments
+
+- Always reply to PR review comments after pushing a fix — never push silently.
+- Link the specific fix commit SHA in the reply (e.g., "Fixed in abc1234").
+
+### GitHub Project
+
+- Select the GitHub project by name (`"synth-setter"`) or known ID (`PVT_kwDOD6Bkms4BSS3h`) — never use `nodes[0]` or array index.
+
 ## Don't
 
 - Don't modify `.env` (contains real credentials).
