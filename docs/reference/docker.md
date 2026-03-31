@@ -94,7 +94,8 @@ ______________________________________________________________________
 > `docker buildx build` directly with `--build-arg IMAGE=prod` — the Makefile's
 > `docker-build-*` targets override the `IMAGE` build arg after `DOCKER_BUILD_FLAGS`.
 
-All targets require `GIT_PAT`. `dev-snapshot` and `prod` additionally require `GIT_REF`:
+All targets require `GIT_PAT`. `dev-snapshot` and `prod` should set `GIT_REF`
+for reproducible builds (defaults to `main` if omitted):
 
 ```bash
 # dev-snapshot — self-contained image at a specific commit
@@ -121,7 +122,8 @@ YAML (see Image config below). CLI takes precedence.
 > **BUILD_MODE default divergence:** The Makefile defaults `DOCKER_BUILD_MODE`
 > to `prebuilt`, which is passed as `--build-arg BUILD_MODE`. The Dockerfile's
 > own `ARG BUILD_MODE=source` default only applies when the arg is not provided
-> at all. In practice, builds through `make` always use `prebuilt`.
+> at all. In practice, builds through `make` default to `prebuilt` (override with
+> `DOCKER_BUILD_MODE=source`).
 
 ### Image config (CI)
 
