@@ -73,6 +73,12 @@ docs:
         covers: "Dataset generation entrypoint, single-shard MVP, CLI interface"
       - pattern: ".github/workflows/dataset-generation.yml"
         covers: "CI workflow steps, trigger conditions, artifact handling"
+      - pattern: "pipeline/ci/**"
+        covers: "CI validation scripts, spec materialization, shard validation"
+      - pattern: "pipeline/constants.py"
+        covers: "R2 bucket name constant, input spec filename"
+      - pattern: "pipeline/schemas/spec.py"
+        covers: "DatasetPipelineSpec, ShardSpec, materialize_spec() flow"
 
   # ── Storage provenance spec ─────────────────────────────────────
   - doc: docs/design/storage-provenance-spec.md
@@ -84,9 +90,11 @@ docs:
         covers: "R2 listing commands, shard status reporting, path parsing"
       - pattern: "configs/image/dev-snapshot.yaml"
         covers: "r2_endpoint, r2_bucket values, storage configuration"
-      - pattern: "scripts/docker_entrypoint.sh"
-        covers: "rclone download/upload paths, R2 credentials, --checksum usage"
+      - pattern: "pipeline/entrypoints/generate_dataset.py"
+        covers: "rclone upload of spec and shard files, R2 path construction"
         scope: "rclone"
+      - pattern: "pipeline/constants.py"
+        covers: "R2 bucket name constant (intermediate-data), INPUT_SPEC_FILENAME"
 
   # ── Training pipeline design doc ────────────────────────────────
   - doc: docs/design/training-pipeline.md
@@ -125,7 +133,7 @@ docs:
       - pattern: "scripts/predict_vst_audio.py"
         covers: "Audio prediction script, VST rendering, parameter-to-audio pipeline"
       - pattern: "scripts/compute_audio_metrics.py"
-        covers: "Audio metric computation, FAD/FD/KL scores, reference comparisons"
+        covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers"
       - pattern: "renderscript.sh"
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "configs/eval.yaml"
@@ -174,6 +182,10 @@ docs:
         covers: "Training entry point, Hydra composition, instantiation flow"
       - pattern: "configs/logger/wandb.yaml"
         covers: "W&B logger config, log_model, entity/project"
+      - pattern: "pipeline/schemas/prefix.py"
+        covers: "DatasetConfigId, DatasetRunId, R2Prefix, make_r2_prefix()"
+      - pattern: "pipeline/constants.py"
+        covers: "R2 bucket name, INPUT_SPEC_FILENAME constant"
 
   # ── rclone reference (placeholder — doc does not exist yet) ─────
   # - doc: docs/reference/rclone.md
@@ -198,23 +210,3 @@ docs:
   #       covers: "Promotion script, W&B artifact download, GitHub Release creation"
   #     - pattern: ".github/workflows/promote.yml"
   #       covers: "Promotion workflow, manual trigger, dry-run mode"
-  # ── W&B integration (placeholder — expand when doc exists) ──────
-  # - doc: docs/reference/wandb-integration.md
-  #   description: W&B logging and auth reference
-  #   sources:
-  #     - pattern: "src/training/**"
-  #       covers: "W&B logging calls, metric names, run config, artifact logging"
-  #     - pattern: "scripts/docker_entrypoint.sh"
-  #       covers: "W&B netrc setup, WANDB_API_KEY injection"
-  #       scope: "wandb"
-
-  # ── Docker spec (the contract doc) ──────────────────────────────
-  - doc: docs/reference/docker-spec.md
-    description: Image target contract, entrypoint modes, env var spec
-    sources:
-      - pattern: "scripts/docker_entrypoint.sh"
-        covers: "All MODE values, env var contract, exit codes, error handling"
-      - pattern: "docker/**"
-        covers: "Target names, stage dependencies, what each target produces"
-      - pattern: "pipeline/schemas/image_config.py"
-        covers: "ImageConfig fields that define the target contract"
