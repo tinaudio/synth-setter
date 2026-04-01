@@ -99,7 +99,7 @@ jobs:
 
           # Keep in sync with docs/design/github-taxonomy.md §2 and §6
           VALID_TYPES=("Epic" "Phase" "Task" "Bug" "Feature")
-          DOMAIN_LABELS=("data-pipeline" "ci-automation" "code-health" "documentation" "evaluation" "storage" "testing" "training")
+          DOMAIN_LABELS=("data-pipeline" "ci-automation" "code-health" "documentation" "evaluation" "monitoring" "storage" "testing" "training")
           FAILURES=""
 
           for ISSUE_NUM in "${ISSUE_NUMBERS[@]}"; do

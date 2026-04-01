@@ -134,6 +134,7 @@ Labels classify issues by **domain**. Type and blocking are handled by native fe
 | `code-health`   | #fbca04 | Code quality and tech debt                                      |
 | `documentation` | #0075ca | Documentation quality, drift detection, and doc-map maintenance |
 | `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference                     |
+| `monitoring`    | #0E8A16 | Observability, W&B integration, logging                         |
 | `storage`       | #D4C5F9 | Storage infrastructure (R2, rclone)                             |
 | `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config                   |
 | `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure                      |
@@ -148,6 +149,7 @@ Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wa
 | -------------------- | --------------- |
 | data-pipeline v1.0.0 | Data Pipeline   |
 | evaluation v1.0.0    | Evaluation      |
+| monitoring v1.0.0    | Monitoring      |
 | training v1.0.0      | Training        |
 | ci-automation v1.0.0 | CI & Automation |
 | code-health v1.0.0   | Code Health     |
