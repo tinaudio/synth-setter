@@ -37,11 +37,11 @@ Issues are classified using GitHub's native Issue Types (org-level):
 
 | Type        | Purpose                                          | Example                                |
 | ----------- | ------------------------------------------------ | -------------------------------------- |
-| **Epic**    | Umbrella issue grouping phases for a work stream | #74 distributed data pipeline          |
-| **Phase**   | Large feature area within an epic                | #69 Pipeline Core                      |
-| **Task**    | Unit of work (standalone or within a phase)      | #102 storage layer, CI improvements    |
-| **Bug**     | Something isn't working                          | #10 OmegaConf resolver re-registration |
-| **Feature** | A request, idea, or new functionality            | #23 improve generation throughput      |
+| **Epic**    | Umbrella issue grouping phases for a work stream | Epic: distributed data pipeline        |
+| **Phase**   | Large feature area within an epic                | Phase 2: Pipeline Core                 |
+| **Task**    | Unit of work within a phase                      | Task 2.1: Schemas                      |
+| **Bug**     | Something isn't working                          | fix(ci): broken workflow               |
+| **Feature** | A request, idea, or new functionality            | Feature: improve generation throughput |
 
 Types are set on the issue itself, filterable in issue lists, and show distinct icons.
 
@@ -52,25 +52,28 @@ Types are set on the issue itself, filterable in issue lists, and show distinct 
 All work streams use the same structure:
 
 ```
-Epic (type: Epic)
-├── Phase 1 (type: Phase, sub-issue of Epic)
-│   ├── Task 1.1 (type: Task, sub-issue of Phase 1)
-│   └── Task 1.2
-├── Phase 2
-│   └── Task 2.1
-└── Phase N
+Epic: <name>
+├── Phase 1: <name> (sub-issue of Epic)
+│   ├── Task 1.1: <name> (sub-issue of Phase 1)
+│   └── Task 1.2: <name>
+├── Phase 2: <name>
+│   └── Task 2.1: <name>
+└── Phase N: <name>
 ```
 
 - **Phase** — a large feature or functional area. Each phase is a sub-issue of its epic.
-- **Task** — a testable unit of work. A task under a phase is what was previously called a "step". Standalone tasks exist outside the hierarchy.
+- **Task / Bug / Feature** — work items. Every work item must trace to an epic via the sub-issue hierarchy (there are no standalone issues).
 - **PR** — a shipping unit, orthogonal to the hierarchy. A PR may contain one task, multiple tasks, or part of a large task.
 
 Hierarchy is tracked via native sub-issues (up to 8 levels). Projects render this as an expandable tree via **hierarchy view**.
 
 ### Naming
 
+- Epics: `Epic: Name` (e.g., "Epic: distributed data pipeline")
 - Phases: `Phase N: Name` (e.g., "Phase 2: Pipeline Core")
 - Tasks under phases: `Task N.M: Name` (e.g., "Task 2.1: Schemas")
+- Features: `Feature: Name` (e.g., "Feature: improve generation throughput")
+- Bugs: use conventional commit style (e.g., "fix(ci): broken workflow")
 
 ### Merge path
 
@@ -78,13 +81,18 @@ All PRs merge to `main`. Phase ordering defines the dependency chain, but PRs wi
 
 ### Current epics
 
-| Epic | Title                                                          | Domain Label    | Design Doc                           |
-| ---- | -------------------------------------------------------------- | --------------- | ------------------------------------ |
-| #74  | feat(pipeline): distributed data pipeline                      | `data-pipeline` | `data-pipeline.md`                   |
-| #98  | feat(eval): evaluation pipeline — predict, render, metrics     | `evaluation`    | `eval-pipeline.md` (PR #101)         |
-| #99  | feat(storage): R2 integration for datasets and checkpoints     | `evaluation`    | `eval-pipeline.md` §6                |
-| #107 | feat(training): training pipeline & ops                        | `training`      | `training-ops-braindump.md` (PR #84) |
-| #351 | feat(documentation): documentation quality and drift detection | `documentation` | —                                    |
+| Epic | Title                                                | Domain Label    | Design Doc                           |
+| ---- | ---------------------------------------------------- | --------------- | ------------------------------------ |
+| #74  | Epic: distributed data pipeline                      | `data-pipeline` | `data-pipeline.md`                   |
+| #98  | Epic: evaluation pipeline — predict, render, metrics | `evaluation`    | `eval-pipeline.md` (PR #101)         |
+| #99  | Epic: R2 integration for datasets and checkpoints    | `storage`       | `eval-pipeline.md` §6                |
+| #107 | Epic: training pipeline & ops                        | `training`      | `training-ops-braindump.md` (PR #84) |
+| #114 | Epic: codebase modernization                         | `code-health`   | —                                    |
+| #148 | Epic: CI & automation platform                       | `ci-automation` | —                                    |
+| #149 | Epic: test infrastructure & coverage                 | `testing`       | —                                    |
+| #264 | Epic: end-to-end MVP pipeline                        | `training`      | —                                    |
+| #321 | Epic: pre-launch cleanup                             | `code-health`   | —                                    |
+| #351 | Epic: documentation quality and drift detection      | `documentation` | —                                    |
 
 ## 4. Blocking & Dependencies
 
@@ -126,6 +134,7 @@ Labels classify issues by **domain**. Type and blocking are handled by native fe
 | `code-health`   | #fbca04 | Code quality and tech debt                                      |
 | `documentation` | #0075ca | Documentation quality, drift detection, and doc-map maintenance |
 | `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference                     |
+| `monitoring`    | #0E8A16 | Observability, W&B integration, logging                         |
 | `storage`       | #D4C5F9 | Storage infrastructure (R2, rclone)                             |
 | `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config                   |
 | `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure                      |
@@ -140,6 +149,7 @@ Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wa
 | -------------------- | --------------- |
 | data-pipeline v1.0.0 | Data Pipeline   |
 | evaluation v1.0.0    | Evaluation      |
+| monitoring v1.0.0    | Monitoring      |
 | training v1.0.0      | Training        |
 | ci-automation v1.0.0 | CI & Automation |
 | code-health v1.0.0   | Code Health     |

@@ -80,8 +80,8 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 - **Submodules:** Skills live in a git submodule at `.claude/skills/` (from `tinaudio/skills`). Clone with `--recurse-submodules`. In new worktrees, run `git submodule update --init`.
 - After `git add -f`, always run `make format` before committing.
 - Always verify the correct git branch before pushing commits. Run `git branch --show-current` and confirm it matches the target PR branch before any push.
-- **Epic traceability:** Issues that participate in the roadmap hierarchy must be created as sub-issues of the appropriate Phase or Epic. Standalone tasks explicitly allowed by `docs/design/github-taxonomy.md` are exempt from this requirement but must follow that document's guidance (labels, milestones, etc.). PRs that reference orphan roadmap issues lose epic traceability.
-- **PR metadata hooks:** The `github-taxonomy` skill enforces taxonomy compliance (type, label, milestone, epic lineage), respecting the standalone-task exceptions defined in `docs/design/github-taxonomy.md`, before every `gh pr create`. The CI workflow `pr-metadata-gate.yaml` provides a second check.
+- **Epic traceability:** Every issue must trace to an Epic via the sub-issue hierarchy (Epic → Phase → Task/Bug/Feature). There are no standalone tasks — all work items need a home. PRs that reference orphan issues lose epic traceability.
+- **PR metadata hooks:** The `github-taxonomy` skill enforces taxonomy compliance (type, label, milestone, epic lineage) before every `gh pr create`. The CI workflow `pr-metadata-gate.yaml` provides a second check.
 
 ### Pipeline-Specific Rules
 
