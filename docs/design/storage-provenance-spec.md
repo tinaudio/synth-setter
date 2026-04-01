@@ -78,7 +78,7 @@ train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_
 └── config.yaml               # Frozen experiment config
 ```
 
-- Set `log_model=True` in the W&B Lightning Logger to persist best and last checkpoints only. `log_model="all"` is not used.
+- Set `log_model="all"` in the W&B Lightning Logger to persist every saved checkpoint immediately as a W&B artifact (crash-resilient).
 
 ### 3c. Evaluation
 

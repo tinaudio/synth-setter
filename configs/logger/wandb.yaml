@@ -8,7 +8,7 @@ wandb:
   id: null # pass correct id to resume experiment!
   anonymous: null # enable anonymous logging
   project: "${oc.env:WANDB_PROJECT,synth-setter}"
-  log_model: true # upload lightning ckpts
+  log_model: "all" # upload every checkpoint as W&B artifact (crash-resilient)
   prefix: "" # a string to put at the beginning of metric keys
   entity: "${oc.env:WANDB_ENTITY,tinaudio}" # set to name of your wandb team
   group: ""

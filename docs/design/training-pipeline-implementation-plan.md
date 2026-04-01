@@ -109,7 +109,7 @@ tests/test_wandb_checkpoint.py
 
 ### Completion criteria
 
-- `log_model: true` already configured; best+last checkpoints appear as W&B model artifacts
+- `log_model: "all"` configured; every checkpoint appears as W&B model artifact
 - resume works with `ckpt_path=wandb:model-{train_config_id}:latest`
 - Lightning optimizer state restored correctly
 
