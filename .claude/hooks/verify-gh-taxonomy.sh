@@ -82,7 +82,7 @@
 # MODE=hierarchy (after `addSubIssue` GraphQL mutation):
 #   Validates that Tasks/Bugs/Features are attached to Phases, not directly
 #   to Epics. The taxonomy requires: Epic → Phase → Task/Bug/Feature.
-#   Result: WARN if a leaf issue is attached directly to an Epic.
+#   Result: BLOCK if a leaf issue is attached directly to an Epic.
 #
 # =============================================================================
 set -euo pipefail
