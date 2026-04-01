@@ -70,11 +70,20 @@ jobs:
           REPO="${{ github.repository }}"
 
           # Fetch PR metadata once
-          PR_DATA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '{draft: .draft, base: .base.ref, sha: .head.sha}')
+          PR_DATA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '{draft: .draft, base: .base.ref, sha: .head.sha, author: .user.login}')
           IS_DRAFT=$(echo "$PR_DATA" | jq -r '.draft')
           BASE_REF=$(echo "$PR_DATA" | jq -r '.base')
           HEAD_SHA=$(echo "$PR_DATA" | jq -r '.sha')
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+          PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author')
+
+          # --- Condition: Only approve PRs by ktinubu ---
+          if [ "$PR_AUTHOR" != "ktinubu" ]; then
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+            echo "reason=PR author ${PR_AUTHOR} is not eligible for auto-approve" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # --- Condition 0: Only approve PRs targeting main ---
           if [ "$BASE_REF" != "main" ]; then
