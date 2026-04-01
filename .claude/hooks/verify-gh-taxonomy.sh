@@ -312,6 +312,12 @@ if [ "$MODE" = "pr" ]; then
   PR_BODY=$(gh pr view "$PR_NUM" --repo "${OWNER}/${REPO}" --json body --jq '.body' 2>/dev/null || echo "")
   ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '(Fixes|Closes|Refs|fixes|closes|refs) #[0-9]+' | grep -oE '[0-9]+' || true)
 
+  # Fallback: check for any #N reference in the body (matches bare #N and
+  # markdown hyperlinks like [#399](url)), same as pr-metadata-gate.yaml.
+  if [ -z "$ISSUE_NUMS" ]; then
+    ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${PR_NUM}$" || true)
+  fi
+
   if [ -z "$ISSUE_NUMS" ]; then
     echo '{"decision":"block","reason":"PR has no linked issue (Fixes #N / Closes #N / Refs #N). The pr-metadata-gate CI check will fail."}'
     exit 0
