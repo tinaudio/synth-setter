@@ -17,3 +17,16 @@ dist/
 Makefile
 Dockerfile
 docker-compose*
+
+# Project meta
+CLAUDE.md
+CLAUDE.local.md
+.gitignore
+
+# Build/release metadata
+pyproject.toml
+requirements*.txt
+setup.cfg
+
+# Non-spec docs (spec files already excluded as plumb-managed paths)
+docs/
