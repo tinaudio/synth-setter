@@ -37,11 +37,11 @@ Issues are classified using GitHub's native Issue Types (org-level):
 
 | Type        | Purpose                                          | Example                                |
 | ----------- | ------------------------------------------------ | -------------------------------------- |
-| **Epic**    | Umbrella issue grouping phases for a work stream | #74 distributed data pipeline          |
-| **Phase**   | Large feature area within an epic                | #69 Pipeline Core                      |
-| **Task**    | Unit of work within a phase                      | #102 storage layer, CI improvements    |
-| **Bug**     | Something isn't working                          | #10 OmegaConf resolver re-registration |
-| **Feature** | A request, idea, or new functionality            | #23 improve generation throughput      |
+| **Epic**    | Umbrella issue grouping phases for a work stream | Epic: distributed data pipeline        |
+| **Phase**   | Large feature area within an epic                | Phase 2: Pipeline Core                 |
+| **Task**    | Unit of work within a phase                      | Task 2.1: Schemas                      |
+| **Bug**     | Something isn't working                          | fix(ci): broken workflow               |
+| **Feature** | A request, idea, or new functionality            | Feature: improve generation throughput |
 
 Types are set on the issue itself, filterable in issue lists, and show distinct icons.
 
@@ -62,7 +62,7 @@ Epic: <name>
 ```
 
 - **Phase** — a large feature or functional area. Each phase is a sub-issue of its epic.
-- **Task** — a testable unit of work. A task under a phase is what was previously called a "step". Every task must trace to an epic via the sub-issue hierarchy.
+- **Task / Bug / Feature** — work items. Every work item must trace to an epic via the sub-issue hierarchy (there are no standalone issues).
 - **PR** — a shipping unit, orthogonal to the hierarchy. A PR may contain one task, multiple tasks, or part of a large task.
 
 Hierarchy is tracked via native sub-issues (up to 8 levels). Projects render this as an expandable tree via **hierarchy view**.

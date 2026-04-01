@@ -1,5 +1,5 @@
 name: Task
-description: Unit of work (standalone or within a phase)
+description: Unit of work within a phase
 title: "Task N.M: "
 labels: []
 type: Task
@@ -8,7 +8,7 @@ body:
     id: parent
     attributes:
       label: Parent Issue
-      description: "Phase or epic this task belongs to (e.g., #137). Leave blank for standalone tasks."
+      description: "Phase or epic this task belongs to (e.g., #137). Required — all tasks must trace to an epic."
       placeholder: "#"
     validations:
       required: false
@@ -21,6 +21,8 @@ body:
         - ci-automation
         - code-health
         - evaluation
+        - documentation
+        - monitoring
         - storage
         - testing
         - training
@@ -33,6 +35,8 @@ body:
       options:
         - data-pipeline v1.0.0
         - evaluation v1.0.0
+        - documentation v1.0.0
+        - monitoring v1.0.0
         - training v1.0.0
         - storage v1.0.0
         - ci-automation v1.0.0
