@@ -82,7 +82,7 @@
 # MODE=hierarchy (after `addSubIssue` GraphQL mutation):
 #   Validates that Tasks/Bugs/Features are attached to Phases, not directly
 #   to Epics. The taxonomy requires: Epic → Phase → Task/Bug/Feature.
-#   Result: WARN if a leaf issue is attached directly to an Epic.
+#   Result: BLOCK if a leaf issue is attached directly to an Epic.
 #
 # =============================================================================
 set -euo pipefail
@@ -429,9 +429,9 @@ elif [ "$MODE" = "hierarchy" ]; then
     esac
   done
 
-  # Warn if a leaf issue is attached directly to an Epic (should go to a Phase).
+  # Block if a leaf issue is attached directly to an Epic (must go under a Phase).
   if [ "$PARENT_TYPE" = "Epic" ] && [ -n "$CHILD_TYPE" ]; then
-    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"WARNING: ${CHILD_TYPE} #${CHILD_NUM} attached directly to Epic #${PARENT_NUM}. It should be a sub-issue of a Phase, not the Epic itself.\"}}"
+    echo "{\"decision\":\"block\",\"reason\":\"${CHILD_TYPE} #${CHILD_NUM} cannot be a direct child of Epic #${PARENT_NUM}. Task/Bug/Feature issues must be sub-issues of a Phase, not an Epic. Add it under the appropriate Phase instead.\"}"
     exit 0
   fi
 
