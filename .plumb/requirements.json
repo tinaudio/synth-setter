@@ -1,2432 +1,1496 @@
 [
   {
-    "id": "req-62ea16c1",
+    "id": "req-26eca531",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall support launching data generation with a generate command that accepts a dataset config YAML file.",
+    "text": "The pipeline shall have exactly two stages: generate and finalize, each invoked by explicit user commands",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-85ffd2db",
+    "id": "req-8cd79119",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall support checking generation progress with a status command that accepts a run_id parameter.",
+    "text": "The generate stage shall read a dataset configuration file or frozen specification and produce HDF5 shards in a staging area",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-4831eb2e",
+    "id": "req-36d15094",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall support finalizing a dataset with a finalize command that accepts a run_id parameter.",
+    "text": "The finalize stage shall read validated staged shards and produce train/val/test splits in the specified output format (HDF5 or WebDataset) plus normalization statistics and dataset.complete marker",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-bc388485",
+    "id": "req-d70b95dd",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall create a frozen input specification (input_spec.json) that captures all generation parameters including per-shard seeds, shard shapes, and renderer version.",
+    "text": "The pipeline shall support resumable generation where re-running generate regenerates only missing or invalid shards",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-fc2753cb",
+    "id": "req-c8e1d2e0",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "A shard shall be considered staged-valid when both a .h5 file and a .valid marker exist in the staging directory for that shard.",
+    "text": "Cloud credentials (R2, RunPod API key) shall be validated before launching any worker instances",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-ed11b46a",
+    "id": "req-efe1655d",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The generate command shall compute which shards are missing by comparing the spec against staged-valid shards in R2.",
+    "text": "Local execution mode shall be supported using Docker containers and local filesystem instead of cloud infrastructure",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-fa5c202e",
+    "id": "req-5e5ff6b9",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The generate command shall partition missing shards across N workers and submit worker tasks to cloud compute.",
+    "text": "Cloudflare R2 shall serve as the authoritative source of truth for shard completeness, determined by file existence and validation markers",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-4e32a4c6",
+    "id": "req-9f751e55",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The generate command shall exit immediately after submitting worker tasks without waiting for completion.",
+    "text": "Shard identifiers shall be logical and deterministic (shard-000000 through shard-N), independent of which worker instance produces them",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-70948dc1",
+    "id": "req-c1d2a20f",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The generate command shall verify R2 and RunPod credentials before launching any workers.",
+    "text": "The pipeline shall determine remaining work through reconciliation by comparing the input specification against validated shards present in storage",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-6c6b3419",
+    "id": "req-1c1ad238",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The status command shall report the count of staged-valid, missing, and quarantined shards without loading shard data.",
+    "text": "Each pipeline stage shall be independently executable and capable of determining its own completion without communicating with other stages",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-20dc6f7f",
+    "id": "req-99759add",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The status command shall be safe to run from any machine at any time without side effects.",
+    "text": "Worker processes shall write artifacts only under the metadata/workers/ prefix; the finalize process shall write canonical outputs only under the data/ prefix",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-c9eb9555",
+    "id": "req-bb3b81b8",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall check for a dataset.complete marker to determine if finalization is already done.",
+    "text": "Worker processes shall never write directly to canonical shard paths (data/shards/)",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-54660bdc",
+    "id": "req-eee4f671",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall verify all required shards are staged-valid before proceeding with promotion.",
+    "text": "Each shard shall render in a separate operating system process via multiprocessing with spawn context to isolate renderer crashes",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-e3a81c71",
+    "id": "req-6abac128",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall perform structural validation of each staged shard: valid HDF5 format, expected datasets present, and shapes match specification.",
+    "text": "Debug logs shall be uploaded to R2 via bash EXIT trap even if the worker process terminates unexpectedly",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-3da95cae",
+    "id": "req-d0135b99",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall promote validated staged shards to canonical path data/shards/shard-{id}.h5.",
+    "text": "All rclone file transfers shall use the --checksum flag to verify transfer integrity",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-6320c7a1",
+    "id": "req-27a1827d",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall write a .promoted marker for each shard promoted to canonical storage.",
+    "text": "Worker-side shard validation shall include minimum three checks: valid HDF5 file format, expected datasets present (audio, mel_spec, param_array), row count matches specification",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-a42acc9d",
+    "id": "req-9dc3e402",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall download canonical shards and reshard into train/val/test splits.",
+    "text": "The design target for shard validation includes four checks, adding shape validation and value bounds checking to the minimum three checks",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-a8adfe65",
+    "id": "req-c1715928",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall compute normalization statistics (mean and standard deviation) across the training set.",
+    "text": "Finalize shall perform structural validation on staged shards before promoting them to canonical paths",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-3b5a901b",
+    "id": "req-273ab59d",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "When output_format is hdf5, finalize shall produce HDF5 virtual datasets named train.h5, val.h5, and test.h5.",
+    "text": "When multiple valid staged shard attempts exist for the same shard ID, finalize shall select the lexicographically smallest filename for promotion",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-8d6b0e5d",
+    "id": "req-6b3c8dc2",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "When output_format is wds, finalize shall produce WebDataset .tar archives for each split.",
+    "text": "The .valid lifecycle marker shall be written only as the final step after rendering, local validation, upload, and bookkeeping are complete",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-1fef682b",
+    "id": "req-eedefde1",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall write dataset.json containing dataset metadata and shard content hashes.",
+    "text": "Corrupt shards shall be uploaded to quarantine subdirectories and marked with .invalid markers for preservation and debugging",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-b482e5ed",
+    "id": "req-b8a649c0",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall register the finalized dataset as a Weights & Biases artifact named data-{dataset_config_id}.",
+    "text": "Generation throughput shall support at least 500,000 samples in under 2 hours with 10 parallel workers",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-2da6cec9",
+    "id": "req-51993a38",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The finalize command shall write dataset.complete marker as the absolute final step of execution.",
+    "text": "100% of shard generation failures shall include actionable error messages describing the failure cause",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-b3db5915",
+    "id": "req-d7df3c77",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Workers shall render audio samples through the Surge XT VST plugin.",
+    "text": "The pipeline shall support generation and finalization of multi-terabyte datasets",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-45fc353f",
+    "id": "req-39e59f27",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Workers shall produce HDF5 shards containing audio, mel_spec, and param_array datasets.",
+    "text": "The cost per 500,000-sample dataset generation run shall not exceed $5 USD",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-5611d29f",
+    "id": "req-9c3bfede",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Workers shall validate shards locally before upload: verify valid HDF5, expected datasets exist, and row count matches specification.",
+    "text": "The input specification shall be immutable after initial creation and shall not be modified during or after execution",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-0d57a6af",
+    "id": "req-2b453be4",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Workers shall upload validated shards to metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.h5.",
+    "text": "The input specification shall include: git commit SHA, is_repo_dirty boolean flag, renderer version, and per-shard seeds for reproducibility",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-a30105cf",
+    "id": "req-470fb0bc",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Workers shall write a .rendering marker when starting shard generation.",
+    "text": "All machine-generated structured files (specifications, reports, dataset cards) shall use JSON format",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-40de3f7a",
+    "id": "req-3cfbf391",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Workers shall write a .valid marker as the final step after shard validation and upload completes.",
+    "text": "User-authored configuration files shall use YAML format",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-289543ce",
+    "id": "req-c4fd8b9f",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Workers shall write a .invalid marker and upload the shard to quarantine/ if validation fails.",
+    "text": "Worker debug logs shall use JSONL (JSON Lines) format for append-only streaming",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-2e9b9f8e",
+    "id": "req-b75445e3",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Workers shall never write to the data/shards/ prefix; this canonical prefix is reserved exclusively for finalize.",
+    "text": "Dataset cards (dataset.json) shall be self-describing and comprehensible without access to the metadata directory",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-5660efca",
+    "id": "req-f963b6a4",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall support local compute mode using Docker containers with local filesystem instead of R2.",
+    "text": "The pipeline shall write the dataset.complete marker as the final step after all outputs are uploaded and verified",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-b7f20906",
+    "id": "req-6cbb5ab4",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall support RunPod backend for cloud execution.",
+    "text": "The pipeline shall be safe to execute at any time, in any order, and multiple times without risk of data corruption",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-7e6f8ef8",
+    "id": "req-706a57a8",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Shard identifiers shall be deterministic logical IDs (shard-000000, shard-000001, etc.) independent of worker infrastructure.",
+    "text": "The pipeline shall support two output formats: HDF5 (for local random-access training) and WebDataset (for distributed streaming training)",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-2c15cdf8",
+    "id": "req-151259e9",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Any worker shall be able to compute any shard; work assignment shall be determined by reconciliation of missing shards.",
+    "text": "WebDataset .tar archives shall contain samples as individual NumPy files using the naming pattern {sample_id}.audio.npy, {sample_id}.params.npy, and {sample_id}.mel.npy",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-5950c899",
+    "id": "req-d7bf32a7",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Concurrent invocations of generate on the same run_id shall be safe and not corrupt data.",
+    "text": "The pipeline shall not use consensus protocols, distributed transactions, service discovery, or message queues for coordination",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-caa50e3d",
+    "id": "req-3fa11aa1",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Concurrent invocations of finalize on the same run_id shall be safe and not corrupt data.",
+    "text": "The pipeline shall not implement automatic stage chaining; stage transitions shall be explicit user-invoked commands",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-55087e15",
+    "id": "req-d62b6c8e",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Running finalize while workers are still uploading shards shall be safe and not corrupt the finalized dataset.",
+    "text": "The pipeline shall not poll cloud provider job status APIs; work completeness shall be determined from storage state only",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-07d8d502",
+    "id": "req-9943b26c",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Each shard shall render in a separate operating system process using the spawn context.",
+    "text": "The pipeline shall not include speculative provider abstractions; only RunPod and local compute backends shall be implemented",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-fc9e321d",
+    "id": "req-2305c559",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "A crash (SIGSEGV, OOM) in the VST plugin for one shard shall not affect other shards on the same worker.",
+    "text": "Worker reports shall include content hashes (SHA-256), per-shard results (success/failure, row count, render time), and error details for all attempts",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-aab1dd87",
+    "id": "req-f0114eee",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Worker process crash shall upload debug logs via bash EXIT trap before terminating.",
+    "text": "Worker environment information (CPU architecture, OS information) shall be recorded to detect floating-point non-determinism across hardware",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-90515346",
+    "id": "req-e44e6643",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Missing shards shall be detected via reconciliation regardless of the failure mode.",
+    "text": "Cloudflare R2 shall provide strong read-after-write consistency for PUT and LIST operations",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-e32483e4",
+    "id": "req-8058ee41",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Content hashes (SHA-256) shall be recorded in worker reports for provenance and divergence detection.",
+    "text": "Concurrent execution of generate or finalize on the same run shall not corrupt data; duplicate work is the only consequence",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-1740c41f",
+    "id": "req-92451fd4",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Shards that fail validation shall be uploaded to metadata/workers/shards/shard-{id}/quarantine/ and marked with .invalid.",
+    "text": "Worker uploads after finalize completion shall not affect canonical finalized data due to staging/canonical prefix separation",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-e9f67970",
+    "id": "req-9cc04fda",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall record code version (git commit SHA), repository dirty status, parameter specification, and renderer version in the frozen specification.",
+    "text": "Content hashes shall be used to detect and surface floating-point non-determinism across different CPU architectures",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-1e08c227",
+    "id": "req-c8dabc9b",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "All pipeline commands (generate, status, finalize) shall be safe to re-run without manual intervention.",
+    "text": "The output format (HDF5 or WebDataset) shall be a configuration choice specified at run creation and frozen in the input specification",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-7251c700",
+    "id": "req-f4f7b220",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The status command shall report which specific shards are missing and their quarantine status.",
+    "text": "Training/validation/test split ratios shall be configurable and recorded immutably in the input specification",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-89593231",
+    "id": "req-74aa845b",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall not require a database or message queue for coordination; storage shall serve as the coordination layer.",
+    "text": "All configuration schemas shall be validated using Pydantic with strict=True mode to catch type errors at parse time",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-89d9e669",
+    "id": "req-455c526a",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Cloudflare R2 shall serve as both the data plane (shard storage) and control plane (coordination metadata).",
+    "text": "Shard generation shall be deterministic within the same Docker image and hardware architecture using the same input specification",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-203b2d70",
+    "id": "req-37250f13",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Shard completeness shall be determined by file existence and content validation in R2, not by metadata databases.",
+    "text": "Per-shard random number generator seeds shall be computed deterministically as base_seed + shard_id",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-eb517343",
+    "id": "req-b2c0c6c2",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Worker reports and debug logs shall be auxiliary metadata for debugging; they shall not be authoritative for shard admission decisions.",
+    "text": "Worker lifecycle markers (.rendering, .valid, .invalid) shall be written as empty files to signal attempt state transitions",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-f70c4e07",
+    "id": "req-664b68df",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "When multiple staged attempts exist for the same shard, finalize shall select the attempt with the lexicographically smallest filename.",
+    "text": "Each worker attempt shall use a unique identifier in file names to prevent overwrites of previous attempts",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-20892e98",
+    "id": "req-d631b696",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Staging and canonical storage prefixes shall be completely separate; workers shall write only to metadata/workers/, and finalize shall write only to data/.",
+    "text": "The make status command shall display reconciliation results by analyzing storage without querying cloud provider APIs",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-64afb8c1",
+    "id": "req-6bb2aa65",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Zombie worker uploads to the staging prefix after finalize completes shall not corrupt canonical data in data/shards/.",
+    "text": "Local compute mode (LocalBackend) shall use identical spec format and validation logic as cloud mode for complete behavioral fidelity",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-73b0d947",
+    "id": "req-21353e2c",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The pipeline shall support dataset scales up to multi-terabyte sizes.",
+    "text": "W&B artifacts shall be named data-{dataset_config_id} of type 'dataset' with metadata including shard count, provenance, and splits",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-b6c04ae7",
+    "id": "req-13e790e3",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "Generation throughput shall achieve at least 500k samples in under 2 hours using 10 workers.",
+    "text": "W&B artifacts shall reference the R2 path to actual data without uploading the raw shard data to W&B",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-1e191d8b",
+    "id": "req-4da8fd1e",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "The cost per 500k-sample dataset run shall not exceed $5.",
+    "text": "Pipeline execution metrics shall be recorded in wandb.summary including shard counts (total, valid, quarantined), total samples, generation time, and finalize time",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-0d8698d9",
+    "id": "req-9d11b393",
     "source_file": "docs/design/data-pipeline.md",
     "source_section": "",
-    "text": "All worker credentials (RunPod API key, R2 credentials, W&B API key) shall be validated before launching any workers.",
+    "text": "The pipeline shall detect and report the existence and count of quarantined shards in status reports",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-288c3c88",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall provide structured JSONL debug logs from workers with timestamps and structured fields.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d57bfa2b",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall track per-shard errors and results in worker reports.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-5d4b7151",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall preserve quarantined shards indefinitely for post-run debugging and analysis.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-0a13c970",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Worker reports shall record CPU architecture and OS information to detect non-determinism across heterogeneous hardware.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-8d71872b",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The input specification shall be frozen and immutable after initial creation.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-04fcb22c",
-    "source_file": "docs/design/data-pipeline.md",
+    "id": "req-2087c2a3",
+    "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Running generate multiple times on the same run_id shall only re-generate shards that are missing or invalid.",
+    "text": "The evaluation pipeline must run on local macOS machines, local Linux machines, Docker containers, and CI runners",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-6698937b",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The finalize command shall be idempotent; re-running finalize shall produce identical results without data corruption.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-eee795bc",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Shard filenames in staging shall include {worker_id}-{attempt_uuid} to uniquely identify each generation attempt.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-e8d33c55",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Lifecycle markers (.rendering, .valid, .invalid, .promoted) shall be empty files where presence indicates state.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c3aaf536",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Finalize shall not delete staged files; the staging directory shall preserve the complete history of all attempts.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2d41b9c9",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall detect and report when non-deterministic outputs occur across heterogeneous hardware.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-1680b71c",
-    "source_file": "docs/design/data-pipeline.md",
+    "id": "req-ea35a276",
+    "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Per-shard process isolation shall use the spawn context to create a fresh Python interpreter for each shard.",
+    "text": "Environment differences must be handled by configuration, not by code forks",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-e0fb89a2",
-    "source_file": "docs/design/data-pipeline.md",
+    "id": "req-4c1a3957",
+    "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Each shard generation shall have a configurable timeout.",
+    "text": "Every link in the debuggability chain (CSV \u2192 per-sample CSV \u2192 rendered audio \u2192 predicted parameters \u2192 checkpoint \u2192 training run \u2192 dataset) must be inspectable",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-1898288a",
-    "source_file": "docs/design/data-pipeline.md",
+    "id": "req-98850dd6",
+    "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Worker reports shall include per-shard results, content hashes, timing information, and error details.",
+    "text": "Every make target must be safe to re-run without data loss or side effects",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-b8bab1be",
-    "source_file": "docs/design/data-pipeline.md",
+    "id": "req-fab6b02e",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Worker debug logs shall be in JSONL format with ISO 8601 timestamps and structured event fields.",
+    "text": "All rclone operations must use the --checksum flag",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-5ce97f4d",
-    "source_file": "docs/design/data-pipeline.md",
+    "id": "req-3088e3ef",
+    "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "The dataset.json card shall include provenance information, dataset structure, statistics, and validation summary.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-e2e382c1",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The dataset.complete marker shall contain the run_id and finalization timestamp.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-32c8a27b",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "W&B artifacts shall be named data-{dataset_config_id} with type dataset.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-af33c4fd",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "W&B artifact metadata shall include dataset_config_id, shard_count, param_spec, and code_version.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-fbf58008",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "W&B artifacts shall reference the R2 path rather than uploading the actual HDF5 shard data.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-05d32cbc",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Training runs shall declare finalized datasets as inputs using W&B artifact lineage.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-17055172",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall support two output formats: hdf5 and wds (WebDataset).",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-f1a9ffe7",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Output format shall be specified in the config and frozen in the specification at run creation.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9f290a63",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Workers shall always produce HDF5 shards regardless of the target output format for training.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-67a4f225",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Finalize shall perform format conversion from HDF5 staging format to the specified output format.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-fef35966",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "WebDataset .tar archives shall contain individual samples as .audio.npy, .params.npy, and .mel.npy files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-1be76495",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "HDF5 output shall use virtual datasets referencing the canonical promoted shards.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-5a8d3cae",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The config filename without extension shall serve as the dataset_config_id.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-1e7bbada",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The dataset_wandb_run_id shall follow the format {dataset_config_id}-{YYYYMMDDTHHMMSSZ}.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-04698363",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The R2 storage path shall follow the format data/{dataset_config_id}/{dataset_wandb_run_id}/.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-e611852b",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Per-shard seeds shall be derived deterministically as base_seed + shard_id.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-07a7806f",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Re-running generation with the same frozen specification shall produce an identical dataset.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9c9e072c",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The VST plugin version shall be automatically extracted and recorded in the specification.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-bd3e7a97",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The git commit SHA shall be recorded in the specification for reproducibility tracking.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-23186cae",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall preserve the complete history of all shard generation attempts in the staging directory.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-49bf43bb",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Multiple generation attempts for the same shard shall be visible in the staging directory with distinct filenames.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2b0a4983",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The .valid marker shall be authoritative for staging admission but not sufficient for final dataset correctness.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d76536c7",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The finalize command shall be the authoritative gate for data promotion to canonical storage.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-58396fbc",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Shard validation shall check for NaN and Inf values in array data (design target feature).",
+    "text": "Fresh clone must complete eval pipeline to metrics CSV in under 15 minutes on a small fixture",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-fdc69b27",
-    "source_file": "docs/design/data-pipeline.md",
+    "id": "req-1d9e84e3",
+    "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Shard validation shall check that array value bounds conform to parameter specification (design target feature).",
+    "text": "No hardcoded /data/scratch/ paths may appear in committed configuration files",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-bda1896e",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The 19 SGE scripts in jobs/predict/ must remain unchanged and deprecated",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-8abe707d",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "No new code may reference SGE (Sun Grid Engine) directives",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-6a34c15c",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The make eval target must run predict \u2192 render \u2192 metrics in sequence",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-083c3bf4",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The make predict target must auto-download checkpoints from W&B when referenced via ${wandb:...} resolver",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-3501087b",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The make render target must accept PRED_DIR and OUTPUT_DIR parameters",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-0e9b3092",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The make metrics target must accept AUDIO_DIR and OUTPUT_DIR parameters",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-5620f15b",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The make upload-eval target must sync eval artifacts to R2 using rclone with checksums",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-8be18011",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The make docker-eval target must run the full eval pipeline inside a Docker container",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-be84f808",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "Predict, render, and metrics must be explicit make targets, not automatically chained",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-46718f2a",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The system must not use a DAG orchestrator (Airflow, Prefect, or custom DAG engine)",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-f4e6204e",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The predict stage must load a trained checkpoint via PyTorch Lightning's Trainer.predict()",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-61473bc4",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The predict stage must run inference on the test dataset split",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-2e98a046",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The predict stage must output predicted parameter tensors via a PredictionWriter callback",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-95d90acc",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The predict stage must resolve dataset_root from data.dataset_root configuration",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-879cff34",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "When data.r2_path is explicitly set, SurgeDataModule.prepare_data() must sync from R2 before loading",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-a025b010",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "Checkpoint paths must support ${wandb:...} OmegaConf resolver syntax for W&B artifact download",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-277a2b79",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The predict output directory must be ${paths.output_dir}/predictions",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-ec28d0be",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The render stage must load predicted parameter tensors from disk",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-b26f1d16",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The render stage must render audio via the Surge XT VST plugin using pedalboard library",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-0353ac07",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The render stage must output both predicted and ground-truth target audio waveforms",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-6811afef",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The render stage must auto-detect display availability (Xvfb on Linux, native on macOS)",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-d0d93f84",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The render stage must default plugin path to plugins/Surge XT.vst3",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-4d8d7925",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The render stage must default preset path to presets/surge-base.vstpreset",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-0af2b67f",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The metrics stage must compute MSS, wMFCC, SOT, and RMS metrics",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-a3a70290",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The metrics stage must parallelize metric computation using ProcessPoolExecutor",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-b9fa4ed6",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The metrics stage must output metrics.csv (per-sample) and aggregated_metrics.csv",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-0a8342aa",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The r2_path configuration must have no default value - R2 download must be explicit opt-in only",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-c7fa546c",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "If dataset_root already contains data matching checksum, no R2 download must occur",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-bbf1dfcd",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "Checkpoints must be stored in W&B artifacts, not in R2",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-3da8d59e",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The ${wandb:...} OmegaConf resolver must resolve lazily on first access of ckpt_path",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-a55bc392",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The ${wandb:...} resolver must check .cache/checkpoints/ for cached copies before calling W&B API",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-c941965f",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The ${wandb:...} resolver must download from W&B artifacts using wandb.Api().artifact().download()",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-1be8d4fd",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "Checkpoint resolution must follow Hydra's standard override precedence: CLI > Experiment config > Base config",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-79f6ae52",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "Checkpoint resolution must support three patterns: CLI argument, experiment config with pinned W&B artifact, and null (training only)",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-ad788739",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The base eval.yaml must require ckpt_path to force explicit user specification",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-4c138349",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "Eval artifact paths in R2 must follow the pattern: eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-29173c8e",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "W&B eval runs must declare input artifacts (model checkpoint + dataset) using use_artifact()",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-5df5432b",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "W&B eval runs must log summary metrics (MSS, wMFCC, SOT, RMS)",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-10ec3075",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "W&B eval runs must have job_type set to 'evaluation'",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-ac2e947a",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "configs/data/surge_simple.yaml must replace hardcoded paths with ${paths.data_dir}/{dataset_config_id}/{dataset_wandb_run_id} pattern",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-b2b39d4e",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "configs/data/surge_mini.yaml must replace hardcoded paths with ${paths.data_dir}/{dataset_config_id}/{dataset_wandb_run_id} pattern",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-b2760fb1",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": ".env.example must contain only R2 credentials and WANDB_API_KEY, no path variables",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-573c9045",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The make predict target must fail with a clear error message if dataset is not found",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-28abcf8b",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "On headless Linux, Xvfb must be auto-launched with DISPLAY exported before rendering",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-16d45223",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "On headless Linux, Xvfb must be cleaned up after rendering completes",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-788eea1f",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "On macOS, rendering must use the native display without launching Xvfb",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-543fdf69",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The checkpoint cache directory must be $PROJECT_ROOT/.cache/checkpoints/",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-9a1b21fd",
+    "source_file": "docs/design/eval-pipeline.md",
+    "source_section": "",
+    "text": "The W&B resolver must not be called multiple times for the same artifact in a single run",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-8d6aeeee",
-    "source_file": "docs/design/data-pipeline.md",
+    "id": "req-bbe4f27e",
+    "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Finalize structural validation shall verify HDF5 file validity before promotion.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-78f8409f",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Finalize shall record content hashes in dataset.json for integrity verification and divergence detection.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-cf6ef359",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall calculate train/val/test dataset splits based on shard counts from the specification.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-29a7e807",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall compute per-channel statistics during finalization.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-20a79704",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Normalization statistics shall be stored in stats.npz format.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c2084ced",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Make targets shall serve as convenient aliases for the core pipeline commands.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-82ffabeb",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The status command shall identify orphaned .rendering markers that lack corresponding .valid markers.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c2408bfa",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Missing shards shall be assigned to workers on each generate invocation based on current staging state.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-f34fbf2e",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The generate command shall accept a --config flag specifying the dataset configuration for the first run.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-26bbf0a6",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The status and finalize commands shall accept a --run-id flag to operate on existing runs.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-8053d8d1",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Retry invocations shall not require the config flag; the stored specification shall be authoritative.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-f11cc7af",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Worker reports shall record content_hash as the SHA-256 hash of the complete .h5 shard file.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-b8d7f5de",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall provide dry-run modes for cost estimation without executing actual work.",
+    "text": "Hydra config files must be frozen and stored with eval outputs for reproducibility",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-496aba86",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Finalize shall produce a dataset card (dataset.json) that describes the final output and is self-describing.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-17fe52ff",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Cloudflare R2 shall provide strong read-after-write consistency guarantees for the pipeline.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-04a2759a",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "Concurrent worker writes to the staging prefix shall not overwrite due to unique per-attempt filenames.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-5172e729",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall handle worker timeouts gracefully without corrupting shard state.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-a7a04027",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall not poll RunPod APIs for task status; completion shall be determined solely by reconciliation of R2 storage.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-8e6ccd69",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall support credential validation via environment variables.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-ab49eea3",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "The pipeline shall bake credentials into Docker images via BuildKit secrets.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-71d28851",
-    "source_file": "docs/design/data-pipeline.md",
-    "source_section": "",
-    "text": "When the repository is dirty, finalize shall create and upload a git diff patch for provenance.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-f0318033",
+    "id": "req-b1e9f62c",
     "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "The evaluation pipeline must consist of three sequential stages: predict, render, and metrics.",
+    "text": "W&B must store training metrics, checkpoints (via log_model: all), and eval summary metrics",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-38f00033",
+    "id": "req-4b6786be",
     "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "The evaluation pipeline must run on macOS without code modifications.",
+    "text": "R2 must store generated datasets and eval bulk artifacts (predictions, audio, metrics)",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-30307a62",
+    "id": "req-868903c5",
     "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "The evaluation pipeline must run on Linux without code modifications.",
+    "text": "Local logs directory must store Hydra output, TensorBoard logs, and temporary checkpoints",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-816aad6f",
+    "id": "req-2bd89f46",
     "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "The evaluation pipeline must run in Docker containers without code modifications.",
+    "text": "The system must register the ${wandb:...} resolver in src/utils/utils.py via register_resolvers()",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-c0d27260",
+    "id": "req-2d2b20ff",
     "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "The evaluation pipeline must run in GitHub Actions CI runners without code modifications.",
+    "text": "The {{wandb:...}} resolver implementation must use wandb.Api() without requiring an active W&B run context",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-7af637c0",
+    "id": "req-21ba9f14",
     "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Committed configuration files must not contain /data/scratch/ paths.",
+    "text": "Experiment configs must pin model variants with stable W&B artifact references",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-2f286748",
+    "id": "req-2910fbf9",
     "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Dataset paths must follow the pattern ${paths.data_dir}/{dataset_config_id}/{dataset_wandb_run_id}.",
+    "text": "Dataset download in prepare_data() must run before data loaders are created",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-fc8e641c",
+    "id": "req-14820a31",
     "source_file": "docs/design/eval-pipeline.md",
     "source_section": "",
-    "text": "Checkpoint resolution must support ${wandb:...} OmegaConf resolver syntax.",
+    "text": "The W&B Teams plan must be used for checkpoint storage to support unlimited tracking hours",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-fd0f0141",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-fc5acded",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Downloaded W&B checkpoints must be cached in $PROJECT_ROOT/.cache/checkpoints/.",
+    "text": "dataset_config_id must be constructed from the config filename stem in configs/dataset/{id}.yaml",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-95364a18",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-6df7c153",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Cached W&B checkpoints must be reused on subsequent runs if checksums match.",
+    "text": "dataset_wandb_run_id must be configurable via wandb.init(id=...) with default format {dataset_config_id}-{YYYYMMDDTHHMMSSZ}",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-83ed5fea",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-0062a955",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "All rclone operations must include the --checksum flag.",
+    "text": "train_config_id must be constructed from the config filename stem in configs/experiment/.../{id}.yaml",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-30d4e70c",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-84592fe5",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "R2 dataset downloads are opt-in via explicit r2_path specification with no default value.",
+    "text": "train_wandb_run_id must be configurable via wandb.init(id=...) with default format {train_config_id}-{YYYYMMDDTHHMMSSZ}",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-542f3971",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-043ed17c",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Eval artifact R2 paths must follow eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/ format.",
+    "text": "eval_config_id must be constructed from the eval dataset config filename stem in configs/dataset/{id}.yaml",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-95ed2011",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-c9bc6188",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "The make target 'predict' must execute the predict stage.",
+    "text": "eval_wandb_run_id must be configurable via wandb.init(id=...) with default format {eval_config_id}-{YYYYMMDDTHHMMSSZ}",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-a2266d5a",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-6760bc25",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "The make target 'render' must execute the render stage.",
+    "text": "W&B run ID must not exceed 64 characters",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-c1a85dc1",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-8f913909",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "The make target 'metrics' must execute the metrics stage.",
+    "text": "R2 bucket intermediate-data/ must contain subdirectories data/, train/, and eval/ following the specified path structure",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-4c598414",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-95645616",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "The make target 'eval' must execute predict, render, and metrics stages sequentially.",
+    "text": "Workers must only write under metadata/workers/ directory in data generation R2 paths",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-2b8e5127",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-e0c8b03c",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "The make target 'docker-eval' must execute the full pipeline in a Docker container.",
+    "text": "shards/ directory must be written only by the finalize process",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-5c281eb5",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-b9ce58a2",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "The make target 'upload-eval' must upload eval artifacts to R2 with --checksum verification.",
+    "text": "Datasets become immutable once dataset.complete file exists",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-cf6386c2",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-4f137b88",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Display server detection must use native display on macOS.",
+    "text": "New dataset versions must use a new dataset_wandb_run_id",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-c8409af8",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-bb2d32ca",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Display server detection must automatically launch Xvfb on headless Linux.",
+    "text": "Training must set log_model='all' in the W&B Lightning Logger to persist checkpoints as W&B artifacts",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-cabaae31",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-c7782bc8",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Display server detection must configure DISPLAY environment variable appropriately for the platform.",
+    "text": "Dataset artifact name must follow pattern data-{dataset_config_id}",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-15f4efb8",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Model artifact name must follow pattern model-{train_config_id}",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-63d8647f",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Eval-results artifact name must follow pattern eval-{eval_config_id}",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-207599d8",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "W&B must auto-version artifacts with :v0, :v1, :v2 suffixes on subsequent runs of the same config",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-a074e060",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "W&B must automatically set :latest alias on every log_artifact call",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-012ec33d",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Training script must set :best alias on model artifact when validation metric improves using run.log_artifact(art, aliases=['best'])",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-2369f13a",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Promote workflow must set :production alias on model artifacts when promoting to GitHub Release",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-19a3323b",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Every run must call run.use_artifact() for all input artifacts",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-fa04d2ff",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Every run must call run.log_artifact() for all output artifacts",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-b1e6ee17",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Runs must use run.use_artifact() instead of api.artifact() to create lineage links",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-30edbba4",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Every run must include github_sha in wandb.config",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-f92df4f3",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "wandb.config must contain hyperparameters that are set before the run",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-ea4800a5",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-38592270",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "The default VST plugin path must be plugins/Surge XT.vst3.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-26520f1f",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The default preset path must be presets/surge-base.vstpreset.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-5d434531",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Checkpoint path must be required in eval.yaml with no default value.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-3a9a13ab",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Checkpoint path must be optional in train.yaml with default value null.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c3b466bc",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The metrics stage must compute MSS (Multi-Scale Spectrogram) metric.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-4572a09a",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The metrics stage must compute wMFCC (Weighted MFCC) metric.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-0e33e110",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The metrics stage must compute SOT (Spectral Optimal Transport) metric.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-e3aa3667",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The metrics stage must compute RMS (RMS Amplitude Envelope) metric.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-53c3b752",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Metrics output must include per-sample metrics in metrics.csv.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-0a61c3f6",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Metrics output must include aggregated statistics (mean and standard deviation) in aggregated_metrics.csv.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-8ccbfb37",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "W&B eval runs must declare input artifacts via use_artifact() method.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-f967be84",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "W&B eval runs must log summary metrics for MSS, wMFCC, SOT, and RMS.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-758be5a2",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "All make targets must be idempotent and safe to re-run.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-3b482509",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The render stage must skip samples that already exist on disk.",
+    "text": "wandb.summary must contain final metrics that are measured after the run",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-f07971e7",
-    "source_file": "docs/design/eval-pipeline.md",
+    "id": "req-d24c4258",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Metric computation must only recompute when input files change.",
+    "text": "artifact.metadata must contain properties of the artifact itself",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-b172ca5f",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Fresh clone to metrics.csv completion must take less than 15 minutes for a small fixture.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-85506f32",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "SGE scripts in jobs/predict/ are deprecated and must not be maintained.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c0399b30",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Configuration file surge_simple.yaml must be updated to remove /data/scratch/ paths.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c6b9a4cf",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Configuration file surge_mini.yaml must be updated to remove /data/scratch/ paths.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-ff16b2b3",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "A rclone wrapper utility must be created at src/data/rclone.py.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-47150ba0",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The rclone wrapper must enforce --checksum flag in all sync operations.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-4912f8a8",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "SurgeDataModule.prepare_data() must sync datasets from R2 when r2_path is explicitly specified.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-090d56f9",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The ${wandb:...} OmegaConf resolver must be implemented in src/utils/utils.py.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-3df76b87",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "CI workflows must not require R2 credentials.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-910a5003",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "CI workflows must not require W&B credentials.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-a8236b63",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Test fixtures must include a minimal checkpoint file.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2c56f8b7",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Test fixtures must include a minimal dataset.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-53f187f6",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Test fixtures must include sample audio files for testing.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-dec093f3",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Every evaluation run is traceable from metrics CSV to checkpoint to training run to dataset.",
-    "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-7057eee0",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Predict stage outputs must include pred-{batch_idx}.pt files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-0c9502d5",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Predict stage outputs must include target-audio-{batch_idx}.pt files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-00cacc13",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Predict stage outputs must include target-params-{batch_idx}.pt files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-0fa2f536",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Render stage outputs must include sample_{N}/pred.wav files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-40ddc7c9",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Render stage outputs must include sample_{N}/target.wav files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-815385c8",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Render stage outputs must include sample_{N}/spec.png files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9426df92",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "Render stage outputs must include sample_{N}/params.csv files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-cce92a5f",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The predict stage must accept ckpt_path parameter for checkpoint location.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-bcb2a924",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The predict stage must accept data parameter for dataset configuration.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9fe96354",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The predict stage must accept experiment parameter for experiment configuration.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-1e700721",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The render stage must accept an input directory containing .pt prediction files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-ee726ad7",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The render stage must accept an output directory for audio and spectrogram outputs.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-4f37b666",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The render stage must accept --plugin_path parameter to override VST plugin location.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-47913bbc",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The render stage must accept --preset_path parameter to override preset location.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-700d1e9f",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The metrics stage must accept an input directory containing sample_{N}/ subdirectories with .wav files.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-714fabb2",
-    "source_file": "docs/design/eval-pipeline.md",
-    "source_section": "",
-    "text": "The metrics stage must accept an output directory for CSV outputs.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-8b683b57",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`dataset_config_id` is constructed from the config filename stem stored at `configs/dataset/{id}.yaml`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d99cbf24",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`dataset_wandb_run_id` defaults to `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` format unless explicitly configured",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-04db29d5",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`train_config_id` is constructed from the config filename stem stored at `configs/experiment/.../{id}.yaml`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-3b4b832c",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`train_wandb_run_id` defaults to `{train_config_id}-{YYYYMMDDTHHMMSSZ}` format unless explicitly configured",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9cac330f",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`eval_config_id` is constructed from the eval dataset config filename stem stored at `configs/dataset/{id}.yaml`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-cc9bfe29",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`eval_wandb_run_id` defaults to `{eval_config_id}-{YYYYMMDDTHHMMSSZ}` format unless explicitly configured",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d15a2674",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Default timestamp format for W&B run IDs is `YYYYMMDDTHHMMSSZ` (UTC, seconds precision)",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-1faee503",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B run ID maximum length is 64 characters",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d4e577c5",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "R2 data storage path is `intermediate-data/data/{dataset_config_id}/{dataset_wandb_run_id}/`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-68103a98",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "R2 training storage path is `intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-de7e86ec",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "R2 evaluation storage path is `intermediate-data/eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-dc9d23c3",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Data generation output includes subdirectories: `shards/`, `metadata/`, and files `train.h5`, `val.h5`, `test.h5`, `stats.npz`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-511a582c",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Metadata subdirectory contains `config.yaml`, `input_spec.json`, `dataset.json`, `dataset.complete`, and `workers/`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c3dc52e6",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Workers may only write to `metadata/workers/` subdirectory in data generation output",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-bd9b37f4",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`shards/` directory is written exclusively by the finalize step",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-ca565526",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "All rclone operations use the `--checksum` flag",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9e9acab2",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Datasets are immutable once `dataset.complete` marker file exists",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-27bc1d3a",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Creating a new version of a dataset requires generating a new `dataset_wandb_run_id`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-38863b5b",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Training output includes `checkpoints/` subdirectory containing `last.ckpt` and `best.ckpt` files",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2555aa60",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Training output includes `config.yaml` file with frozen experiment configuration",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-96b5c70e",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B Lightning Logger must be configured with `log_model=\"all\"` to immediately persist checkpoints as W&B artifacts",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c72bcbae",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Evaluation output includes `predictions/`, `audio/`, and `metrics/` subdirectories",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c5ecaa6a",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`predictions/` subdirectory contains `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, and `target-params-{batch_idx}.pt` files",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c8927576",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`audio/{sample_N}/` subdirectory contains `pred.wav`, `target.wav`, `spec.png`, and `params.csv`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2bb4b6cd",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`metrics/` subdirectory contains `metrics.csv` and `aggregated_metrics.csv` files",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-4d6f7e42",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B `dataset` artifact type uses naming pattern `data-{dataset_config_id}`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-37fda50e",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B `model` artifact type uses naming pattern `model-{train_config_id}`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-b24e708b",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B `eval-results` artifact type uses naming pattern `eval-{eval_config_id}`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2406ba95",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B automatically versions artifacts with sequential suffixes (`:v0`, `:v1`, `:v2`, etc.)",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-a860857a",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`*_wandb_run_id` values are stored in W&B artifact metadata",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-b9f11d11",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B automatically sets `:latest` alias on every artifact log",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-8d7984f2",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Training script sets `:best` alias on model artifact when validation metric improves",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-839e83d5",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Promote workflow sets `:production` alias on model artifact when promoting to GitHub Release",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c391276f",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Every run must call `run.use_artifact()` to consume input artifacts and create lineage links",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-a4d82241",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Every run must call `run.log_artifact()` to produce output artifacts",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-16294b06",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Every run must include `github_sha` in `wandb.config`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-8f74e4ff",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`wandb.config` stores hyperparameters and settings configured before the run",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-74499f1c",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`wandb.summary` stores final metrics measured after the run completes",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-767f4302",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`artifact.metadata` stores properties of the artifact itself (separate from config/summary)",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-ad78efcb",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Dataset properties are stored on the dataset artifact, not on downstream training runs that consume it",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-f9a41ba7",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`job_type=data-generation` is set for data generation pipeline runs",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-a0ebadd3",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`job_type=training` is set for training stage runs",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2d276684",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`job_type=evaluation` is set for evaluation stage runs",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-99f3db6d",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Tests workflow (test.yml) triggers on push and pull request events",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-bedf6040",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Tests workflow runs on `ubuntu-latest` and `macos-latest` runners",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-78aa0c37",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Full Tests workflow (test-expensive.yml) triggers on schedule and dispatch events",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-228988c1",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Full Tests workflow runs on `gpu-x64` runner",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9f17b51f",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Data Generation workflow (dataset-generation.yml) triggers on `workflow_call` event",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-3f536239",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Data Generation workflow runs on `ubuntu-latest-4core` runner",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d84d816c",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Data Generation workflow inputs include `image_tag`, `config_path`, and `artifact_name`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d09421d1",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Training workflow is TBD",
-    "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d9abebb3",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Evaluation workflow is TBD",
-    "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-47e2a805",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Model Promotion workflow (promote.yml) is planned",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-d15aeb27",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Model Promotion workflow triggers on `workflow_dispatch` event",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2bd92993",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Model Promotion workflow runs on `ubuntu-latest` runner",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-32f9538c",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Actions Model Promotion workflow inputs include `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, and `dry_run`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-13e3f802",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "All workflows that create W&B runs must export `GITHUB_SHA` environment variable",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-ddecf33a",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Evaluation workflow requires `train_wandb_run_id` as input to locate the model artifact",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-517e376c",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Evaluation workflow requires `eval_config_id` as input to select the evaluation dataset",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-30978381",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Model Promotion workflow requires `train_wandb_run_id` to pull the model artifact",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-72a2a122",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Model Promotion workflow requires `eval_wandb_run_id` to pull evaluation metrics",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-7003d979",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Release tag format is `model-v{N}` where N is an incrementing integer",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-233b5551",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Release includes model file asset in `.pt` or `.onnx` format",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-f142e9b5",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Release body includes link to W&B training run",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-4892e62c",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Release body includes link to W&B evaluation run",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-1541318d",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Release body includes UTC timestamp of release",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c035175f",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "GitHub Release body includes Git SHA of the commit that produced the training run",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-0128434e",
+    "id": "req-f24e86cb",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "GitHub Release body includes training metrics from training run's `wandb.summary`, excluding underscore-prefixed metrics",
+    "text": "Dataset properties must be logged to the dataset artifact, not to training runs that consume it",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-18808b01",
+    "id": "req-978e5f15",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "GitHub Release body includes evaluation metrics from eval run's `wandb.summary`, excluding underscore-prefixed metrics",
+    "text": "Data pipeline stage must use job_type='data-generation' in wandb.init()",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-d88a4bd0",
+    "id": "req-1806cd4d",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "GitHub Release body includes full training configuration as JSON",
+    "text": "Training stage must use job_type='training' in wandb.init()",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-557429be",
+    "id": "req-9f9c3de0",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "GitHub Release body includes dataset artifacts used by training run with versions",
+    "text": "Evaluation stage must use job_type='evaluation' in wandb.init()",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-8ae571e9",
+    "id": "req-8cf5b9d1",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "GitHub Release body includes evaluation dataset artifacts used by eval run with versions",
+    "text": "Every wandb.init() call must set the job_type parameter",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-d6310865",
+    "id": "req-20e6151a",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`WANDB_API_KEY` secret is used by data generation, training, evaluation, and promotion workflows",
+    "text": "Tests workflow must trigger on push and PR events",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-a7711a96",
+    "id": "req-d369d94f",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`WANDB_API_KEY` is sourced from wandb.ai/settings",
+    "text": "Tests workflow must run on ubuntu-latest and macos-latest runners",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-6f40ff87",
+    "id": "req-e3b0a810",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`GITHUB_TOKEN` secret is used by promotion workflow",
+    "text": "Full Tests workflow must trigger on schedule and dispatch events",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-b452ee2c",
+    "id": "req-7fcf5794",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`GITHUB_TOKEN` is automatically available in GitHub Actions",
+    "text": "Full Tests workflow must run on gpu-x64 runner",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-7ae16020",
+    "id": "req-fdb243fc",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`RUNPOD_API_KEY` secret is used by data generation and training workflows",
+    "text": "Data Generation workflow must use workflow_call trigger type",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-9f265088",
+    "id": "req-e456510d",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`RUNPOD_API_KEY` is sourced from runpod.io",
+    "text": "Data Generation workflow must run on ubuntu-latest-4core runner",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-e5cc91de",
+    "id": "req-b40103af",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`RCLONE_CONFIG_R2_ACCESS_KEY_ID` secret is used by data generation, training, and evaluation workflows",
+    "text": "All workflows that create W&B runs must export GITHUB_SHA to the run environment",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-47967ba7",
+    "id": "req-c9e67e2f",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`RCLONE_CONFIG_R2_ACCESS_KEY_ID` is sourced from Cloudflare R2 dashboard",
+    "text": "Evaluation workflow must accept train_wandb_run_id as an input parameter",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-96fb3d32",
+    "id": "req-0e653387",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` secret is used by data generation, training, and evaluation workflows",
+    "text": "Evaluation workflow must accept eval_config_id as an input parameter",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-9cf03bc0",
+    "id": "req-5d2fd451",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` is sourced from Cloudflare R2 dashboard",
+    "text": "Promotion workflow must accept train_wandb_run_id as an input parameter",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-c7ff17a4",
+    "id": "req-e70dba18",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`RCLONE_CONFIG_R2_ENDPOINT` secret is used by data generation, training, and evaluation workflows",
+    "text": "Promotion workflow must accept eval_wandb_run_id as an input parameter",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-8e5ec844",
+    "id": "req-a38bed79",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`RCLONE_CONFIG_R2_ENDPOINT` is sourced from Cloudflare R2 dashboard",
+    "text": "GitHub Release tags must follow format model-v{N} where N is an incrementing integer",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
@@ -2434,170 +1498,116 @@
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
     "text": "Secrets must only be available to workflows that require them",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-223a5d96",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Training workflow requires R2 read access to download dataset shards",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-4b167b47",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Training workflow requires R2 write access to upload checkpoints",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-413b9f9e",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B entity is configured as `tinaudio`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-15de6798",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B project is configured as `synth-setter`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-e12fa149",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B entity and project are set via `WANDB_ENTITY` and `WANDB_PROJECT` environment variables",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-1755adf6",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Configuration files use `entity: ${oc.env:WANDB_ENTITY,tinaudio}` and `project: ${oc.env:WANDB_PROJECT,synth-setter}` to provide defaults",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2adaff47",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "Legacy runs in `benhayes`/`synth-permutations` W&B workspace remain read-only",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9bc358ce",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "W&B artifacts reference R2 objects using `artifact.add_reference(\"s3://intermediate-data/...\")`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-0d838f4d",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "R2 is accessed as S3-compatible storage",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2331fa6a",
-    "source_file": "docs/design/storage-provenance-spec.md",
-    "source_section": "",
-    "text": "`AWS_ENDPOINT_URL` or `WANDB_S3_ENDPOINT_URL` environment variable must be set to R2 endpoint in environments calling `add_reference` or downloading reference artifacts",
     "ambiguous": true,
     "created_at": "2026-04-01T00:52:24.901599+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-8283705f",
+    "id": "req-a2ab6b1d",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Without R2 endpoint configuration, W&B attempts to resolve artifacts against AWS S3",
+    "text": "Training workflows must have R2 read access for downloading dataset shards",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-5b6bf3cb",
+    "id": "req-c6889367",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "W&B artifacts contain metadata, manifests, and statistics but not bulk data files",
+    "text": "Training workflows must have R2 write access for uploading checkpoints",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-13dc6877",
+    "id": "req-86fb2d53",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Bulk data is stored in R2, while W&B provides the index and lineage graph",
+    "text": "W&B Entity must be set to tinaudio",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-eda0d9b2",
+    "id": "req-27369d64",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "`*_wandb_run_id` values uniquely identify immutable run outputs",
+    "text": "W&B Project must be set to synth-setter",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-9e40a4ae",
+    "id": "req-5e3fcfe3",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Every run must log W&B artifacts for its outputs",
+    "text": "Configs must use environment variable syntax entity: ${oc.env:WANDB_ENTITY,tinaudio}",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-732c2012",
+    "id": "req-7c8e90f7",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Every run must consume W&B artifacts for its inputs",
+    "text": "Configs must use environment variable syntax project: ${oc.env:WANDB_PROJECT,synth-setter}",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-344b544c",
+    "id": "req-5f70777b",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "All configuration files are frozen into artifacts or R2 storage paths at run time",
+    "text": "W&B artifacts must reference R2 objects via artifact.add_reference('s3://intermediate-data/...')",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-14538ba3",
+    "id": "req-b364f1b5",
     "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "R2 storage paths are append-only after completion markers are created",
+    "text": "Environments calling add_reference() must have AWS_ENDPOINT_URL or WANDB_S3_ENDPOINT_URL set to the R2 endpoint",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-6cd30167",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Environments downloading reference artifacts must have AWS_ENDPOINT_URL or WANDB_S3_ENDPOINT_URL set to the R2 endpoint",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-e34832d8",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Artifacts must not duplicate large data files",
+    "ambiguous": true,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-ca7ce687",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "Bulk data must live in R2, not stored within W&B artifacts",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-21192fbd",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "*_wandb_run_id must uniquely identify an immutable run output",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
@@ -2610,732 +1620,597 @@
     "last_seen_commit": null
   },
   {
-    "id": "req-c3aed2b5",
-    "source_file": "docs/design/training-pipeline.md",
+    "id": "req-9406bf69",
+    "source_file": "docs/design/storage-provenance-spec.md",
     "source_section": "",
-    "text": "Training must execute successfully on local Linux machines",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-ac34a5ca",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must execute successfully on local macOS machines",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-adc459e9",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must execute successfully in Docker containers",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-5e6df078",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must execute successfully on RunPod cloud infrastructure",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-08212203",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training command must accept `experiment=` parameter for specifying experiment configuration",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-6522f07d",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training command must accept config overrides via command-line parameters",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-f5b144f3",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must output metrics to W&B",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-937c0d43",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must output lineage information to W&B",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-6efe76f0",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must save `last.ckpt` checkpoint to local disk",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-b8d225e8",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must save `best.ckpt` checkpoint to local disk",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9eaa1178",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "WandbLogger configured with `log_model=\"all\"` must upload every checkpoint to W&B immediately after save",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-5af60254",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Resume via `ckpt_path=<local_path>` must restore optimizer state",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-51621478",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Resume via `ckpt_path=<local_path>` must restore scheduler state",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-182b3584",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Resume via `ckpt_path=wandb:<artifact>` must download W&B artifact and restore training",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-68854564",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Every training run must set `job_type=\"training\"` in W&B configuration",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-dda569b1",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Every training run must call `run.use_artifact()` for the dataset artifact",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-73127728",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Every training run must call `run.log_artifact()` for the model artifact",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-9626831b",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Every training run must include `github_sha` in `wandb.config`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-14c50bd9",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Model artifacts must follow naming pattern `model-{train_config_id}`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-bec9d94e",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Dataset artifacts must follow naming pattern `data-{dataset_config_id}`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c7e44538",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must write final metrics to `wandb.summary`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-486ff5da",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Dataset paths must follow convention `${paths.data_dir}/{dataset_config_id}/{dataset_wandb_run_id}`",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-b520d1d6",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must not fetch datasets from R2 by default without explicit configuration",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-3adafc4c",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "When `r2_path` is specified in dataset config, training must sync dataset from R2 before training begins",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-a69d39b3",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "macOS development environment must support Metal Performance Shaders (MPS) GPU acceleration",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-b28fe32f",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Linux development environment must support CUDA GPU acceleration",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-b412b166",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Docker training must support CUDA GPU acceleration",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-2ae4c59f",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "RunPod training must support CUDA GPU acceleration",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-69d0e4e3",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "RunPod training must retrieve datasets from R2",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-e0179dcb",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Local development must support local dataset source",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-e94855a0",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Local development must support R2 dataset source",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-acc071d6",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "CI training must use fixture datasets",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-686591cd",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training must use single long-running job execution model without distributed worker graphs",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-068e3325",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training checkpoint durability must rely on W&B artifacts",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-c7072944",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Resume behavior must use Lightning's native checkpoint loading semantics",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-0d52869c",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Training storage and provenance conventions must align with data pipeline conventions",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-4f03de3c",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Model promotion must be handled by separate promotion workflow, not training workflow",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-8f50264d",
-    "source_file": "docs/design/training-pipeline.md",
-    "source_section": "",
-    "text": "Pod death must result in loss of at most one checkpoint interval (5000 steps) of training progress",
+    "text": "R2 paths must be append-only after completion markers exist",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-33928755",
+    "id": "req-f87cbb2a",
+    "source_file": "docs/design/storage-provenance-spec.md",
+    "source_section": "",
+    "text": "All configs must be frozen into artifacts or R2 storage paths at run time",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-8fdf646c",
     "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "Intermediate step checkpoints must be uploaded to W&B per checkpoint configuration",
+    "text": "Training must run successfully on local Linux machines",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-853ee450",
+    "id": "req-b524cdce",
     "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "Resume from W&B artifacts must be accomplished via a single documented command",
-    "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "text": "Training must run successfully on local macOS machines",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-375cc5a2",
+    "id": "req-01ece77a",
     "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "Training must not implement reconciliation layer for checkpoint recovery",
+    "text": "Training must run successfully in Docker",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-af8a0fa7",
+    "id": "req-5c5e7aed",
     "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "W&B-only checkpoint strategy must be used in version 1 (R2 mirror deferred)",
+    "text": "Training must run successfully on RunPod",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-90918c22",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-4962a50a",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "The entrypoint script (scripts/docker_entrypoint.sh) dispatches on the MODE environment variable.",
+    "text": "Checkpoints must survive pod death",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-47d8780f",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-931b548d",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "The container exits with error code 1 if MODE environment variable is unset or empty.",
+    "text": "Resume from last durable checkpoint must restore full optimizer state",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-a2e5ea71",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-f778efcb",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "The container exits with error code 1 if MODE is set to an unknown value.",
+    "text": "Resume from last durable checkpoint must restore full scheduler state",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-817804c7",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-ea368260",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "When MODE=idle, the entrypoint executes 'sleep infinity'.",
+    "text": "Dataset version must be inspectable from training run metadata",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-5cc64335",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-d3747770",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "When MODE=passthrough with arguments, the entrypoint executes those arguments ($@).",
+    "text": "Training configuration must be inspectable from training run metadata",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-ead3c985",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-02344e82",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "When MODE=passthrough with no arguments, the entrypoint exits with code 0.",
+    "text": "Git SHA must be inspectable from training run metadata",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-171bd403",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-0e5b06f0",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "When MODE=generate_dataset, the entrypoint runs VST dataset generation via pipeline.entrypoints.generate_dataset under headless X11.",
+    "text": "Checkpoint lineage must be inspectable from training run metadata",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-788d4dac",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-1a8980c4",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "The docker/ubuntu22_04/Dockerfile defines a single target named dev-snapshot.",
+    "text": "Training must execute as a single long-running job (not distributed)",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-dd580739",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-0eb166b3",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "The dev-snapshot target uses docker_entrypoint.sh as its entrypoint.",
+    "text": "Training must support launch via `make train EXPERIMENT=<experiment_name>`",
     "ambiguous": false,
-    "created_at": "2026-03-30T21:36:45.303790+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-27b4e2e5",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-107dd9f5",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "The dev-snapshot target clones source code from a Git reference specified at build time.",
+    "text": "Training must support launch via `make runpod-train EXPERIMENT=<experiment_name>`",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-d78886b9",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-c72e6f7a",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "The dev-snapshot target is used for CI and cloud run use cases.",
+    "text": "Training must support launch via `make docker-train EXPERIMENT=<experiment_name>`",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-2ad0554c",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-072e56c1",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "The dev-snapshot target inherits from r2-config-base.",
+    "text": "Resume must support local checkpoint paths via `ckpt_path=<local_path>`",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-93f48f2e",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-08677a42",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "R2 credentials are baked into the image only when BuildKit secrets are provided at build time.",
+    "text": "Resume must support W&B artifact references via `ckpt_path=wandb:model-<name>:<alias>`",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-23857c28",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "W&B logging must set job_type to 'training'",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-79129a1f",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "W&B logging must call run.use_artifact() for the dataset artifact",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-af67c4f8",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "W&B logging must call run.log_artifact() for the model artifact",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-7b276381",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "W&B config must include github_sha",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-ccaf4d71",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "Model artifacts must be named according to pattern model-{train_config_id}",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-6c24df6b",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "Dataset artifacts must be named according to pattern data-{dataset_config_id}",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-7cd42c81",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "Every checkpoint (last, best, intermediate) must be uploaded to W&B immediately after save",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-15bb6561",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "Checkpoint durability must be achieved through WandbLogger with log_model='all'",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-752fd3f3",
+    "source_file": "docs/design/training-pipeline.md",
+    "source_section": "",
+    "text": "Pod death must result in loss of at most one checkpoint interval",
     "ambiguous": true,
-    "created_at": "2026-03-30T21:36:45.303790+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-10404fd2",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-85c4bde3",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "A placeholder rclone configuration is used when BuildKit secrets are not provided at build time.",
+    "text": "RunPod launcher must be implemented as a thin launcher script (not a backend abstraction)",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-a778b5dc",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-cbe746ff",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "W&B authentication is baked into ~/.netrc when the wandb_api_key BuildKit secret is provided at build time.",
+    "text": "Training must use a separate Docker image from the data pipeline",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-a5632509",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-d3b1d8f8",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "If wandb_api_key BuildKit secret is missing, WANDB_API_KEY must be provided at runtime.",
+    "text": "W&B artifact downloads must be cached locally during resume",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-77b4e7c5",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-81303cca",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "Build ARG IMAGE defaults to dev-snapshot.",
+    "text": "Promotion must remain a separate workflow (not automatic after training)",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-0f10d916",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-6267dd38",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "Build ARG SYNTH_PERMUTATIONS_GIT_REF defaults to main.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-b4f8b788",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "Build ARG SURGE_GIT_REF defaults to a pinned SHA.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-bc7c8935",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "Build ARG BUILD_MODE defaults to source.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-6653344e",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "Build ARG BUILD_MODE accepts either source or prebuilt.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-efb014ee",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "Build ARG R2_BUCKET defaults to empty.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-ced70e43",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "Build ARG TORCH_INDEX_URL is required.",
+    "text": "Same training experiment configuration must produce consistent behavior across local, Docker, and RunPod environments",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-564511d7",
-    "source_file": "docs/reference/docker-spec.md",
+    "id": "req-da9a8850",
+    "source_file": "docs/design/training-pipeline.md",
     "source_section": "",
-    "text": "Environment variable SYNTH_PERMUTATIONS_GIT_REF is baked into the dev-snapshot target with the Git reference used at build time.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-4154773c",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "Environment variable R2_BUCKET is baked into the dev-snapshot target via r2-config-base.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-e9b6c88a",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "Environment variable VIRTUAL_ENV is set to /venv/main in the dev-snapshot target.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-cc9d812b",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "Environment variable PATH is set to include $VIRTUAL_ENV/bin in the dev-snapshot target.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-34cac29a",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "DATASET_CONFIG environment variable is required for MODE=generate_dataset.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-bafff87c",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "DATASET_CONFIG environment variable specifies a path to a dataset config YAML file in the container.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-6812b125",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "RUN_METADATA_DIR environment variable is optional for MODE=generate_dataset.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-34509493",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "RUN_METADATA_DIR environment variable defaults to /run-metadata.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-6569ee0e",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "RUN_METADATA_DIR environment variable specifies the directory where input_spec.json is written.",
-    "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
-    "last_seen_commit": null
-  },
-  {
-    "id": "req-3e671363",
-    "source_file": "docs/reference/docker-spec.md",
-    "source_section": "",
-    "text": "The generate_dataset mode materializes a DatasetPipelineSpec.",
+    "text": "Dataset access must follow storage provenance convention",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-c0a8e86f",
+    "id": "req-60e9c9de",
     "source_file": "docs/reference/docker-spec.md",
     "source_section": "",
-    "text": "The generate_dataset mode uploads the spec and shard to R2.",
+    "text": "The entrypoint must dispatch on the MODE environment variable.",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-4cdfd71a",
+    "id": "req-8e52b475",
     "source_file": "docs/reference/docker-spec.md",
     "source_section": "",
-    "text": "The generate_dataset mode writes input_spec.json to RUN_METADATA_DIR.",
+    "text": "The entrypoint must exit with code 1 if MODE is unset or empty.",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-1cfd2378",
+    "id": "req-7b08ffce",
     "source_file": "docs/reference/docker-spec.md",
     "source_section": "",
-    "text": "The generate_dataset mode generates shard_size samples per invocation.",
+    "text": "The entrypoint must exit with code 1 if MODE has an unknown value.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-3cab011f",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=idle, the entrypoint must execute 'sleep infinity'.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-ad541e01",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=passthrough with arguments, the entrypoint must execute the provided arguments as a command.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-7f09e4ae",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=passthrough with no arguments, the entrypoint must exit with code 0.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-1cb78576",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=generate_dataset, the entrypoint must run VST dataset generation via 'pipeline.entrypoints.generate_dataset' under headless X11.",
     "ambiguous": true,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-c52244a4",
+    "id": "req-d1239d1d",
     "source_file": "docs/reference/docker-spec.md",
     "source_section": "",
-    "text": "The generate_dataset mode raises NotImplementedError when num_shards is greater than 1.",
+    "text": "The generate_dataset mode must accept configuration via environment variables instead of CLI arguments.",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-6e5d2517",
+    "id": "req-bf6287eb",
     "source_file": "docs/reference/docker-spec.md",
     "source_section": "",
-    "text": "CI workflows currently use --entrypoint bash, which bypasses the docker_entrypoint.sh script.",
+    "text": "The Dockerfile must define a 'dev-snapshot' target.",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   },
   {
-    "id": "req-0742ee5c",
+    "id": "req-758c3c4b",
     "source_file": "docs/reference/docker-spec.md",
     "source_section": "",
-    "text": "BATS entrypoint tests are not currently integrated into the CI pipeline.",
+    "text": "The 'dev-snapshot' target must use 'docker_entrypoint.sh' as the entrypoint.",
     "ambiguous": false,
-    "created_at": "2026-04-01T00:52:24.901599+00:00",
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-7be88525",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The 'dev-snapshot' target must inherit from 'r2-config-base'.",
+    "ambiguous": true,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-fe64fa8a",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "R2 credentials must be baked into the image only when BuildKit secrets are provided at build time.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-ff8b45e4",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "A placeholder rclone config must be used when R2 BuildKit secrets are not provided.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-5cdc0745",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "W&B authentication must be baked into '~/.netrc' when the 'wandb_api_key' BuildKit secret is provided at build time.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-481e98d5",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When the 'wandb_api_key' BuildKit secret is not provided, the WANDB_API_KEY environment variable must be required at runtime.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-7352f4ed",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The IMAGE build argument must default to 'dev-snapshot'.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-fc7e5853",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The SYNTH_PERMUTATIONS_GIT_REF build argument must default to 'main'.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-bf7b80ba",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The SURGE_GIT_REF build argument must default to a pinned SHA.",
+    "ambiguous": true,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-c63cd79a",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The BUILD_MODE build argument must default to 'source' and accept values 'source' or 'prebuilt'.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-ea9e18d8",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The R2_BUCKET build argument must default to empty.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-024a65b8",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The TORCH_INDEX_URL build argument must be required.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-137c658b",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The image must set SYNTH_PERMUTATIONS_GIT_REF to the git reference value used at build time.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-47a6f1ed",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The image must set R2_BUCKET from the build argument value.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-3e9e2280",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The image must set VIRTUAL_ENV to '/venv/main'.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-c76fb592",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The image must set PATH to '$VIRTUAL_ENV/bin:$PATH'.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-a7360ffe",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The DATASET_CONFIG environment variable must be required for MODE=generate_dataset.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-84ebde7c",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "The RUN_METADATA_DIR environment variable must default to '/run-metadata' for MODE=generate_dataset.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-10b0c0b7",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=generate_dataset, the container must materialize a DatasetPipelineSpec.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-6e69d1c2",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=generate_dataset, the container must upload the spec and shard to R2.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-5bd551a7",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=generate_dataset, the container must write input_spec.json to RUN_METADATA_DIR.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-e2d52f55",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=generate_dataset, the container must generate samples equal to shard_size.",
+    "ambiguous": true,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
+    "last_seen_commit": null
+  },
+  {
+    "id": "req-bbe52a4d",
+    "source_file": "docs/reference/docker-spec.md",
+    "source_section": "",
+    "text": "When MODE=generate_dataset with num_shards > 1, the container must raise NotImplementedError.",
+    "ambiguous": false,
+    "created_at": "2026-04-01T02:41:40.377197+00:00",
     "last_seen_commit": null
   }
 ]

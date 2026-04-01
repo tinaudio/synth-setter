@@ -13,6 +13,8 @@ from tests.helpers.run_if import RunIf
 
 
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
+    # plumb:req-8fdf646c
+    # plumb:req-b524cdce
     # plumb:req-c3aed2b5
     # plumb:req-ac34a5ca
     """Run for 1 train, val and test step with small batch size, no compile.
@@ -128,6 +130,10 @@ def test_train_ddp_sim(cfg_train: DictConfig) -> None:
 
 @pytest.mark.slow
 def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
+    # plumb:req-931b548d
+    # plumb:req-f778efcb
+    # plumb:req-072e56c1
+    # plumb:req-4962a50a
     # plumb:req-5af60254
     # plumb:req-51621478
     """Run 1 epoch, finish, and resume for another epoch.

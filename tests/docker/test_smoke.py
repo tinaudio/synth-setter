@@ -30,6 +30,7 @@ skip_no_vst = pytest.mark.skipif(
 @pytest.mark.docker_smoke
 @skip_no_pedalboard
 def test_pedalboard_importable():
+    # plumb:req-b26f1d16
     # plumb:req-b3db5915
     """Verify pedalboard is installed and VST3Plugin class is available."""
     from pedalboard import VST3Plugin
@@ -41,6 +42,7 @@ def test_pedalboard_importable():
 @pytest.mark.requires_vst
 @skip_no_vst
 def test_surge_xt_loads():
+    # plumb:req-d0d93f84
     """Verify Surge XT VST3 plugin loads and exposes parameters."""
     from pedalboard import VST3Plugin
 

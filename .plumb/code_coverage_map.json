@@ -59,2059 +59,1280 @@
     "src/utils/rich_utils.py": "250cd8059541cb9410502fb2d28f7db2042a1c86bc713cab0be8ffa479d2947b",
     "src/utils/utils.py": "98161c5f26e9039e3ccb9671d38191e3f9807277855454d98fccac890d42459e"
   },
-  "requirements_hash": "67c99c92ed1d003db5f8d5766e9f315653364d1e6b8939a8e08aedf84380e275",
+  "requirements_hash": "c88fd9db680590c3c084fd3ddcd747c1931db3c79988a65fd2f5de3ad8cfb5b9",
   "results": {
-    "req-62ea16c1": {
+    "req-26eca531": {
+      "implemented": false,
+      "evidence": "generate_dataset.py shows generate stage, but finalize stage not evident in source summaries",
+      "source_files": []
+    },
+    "req-8cd79119": {
       "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py has run() function that accepts config_path",
+      "evidence": "pipeline/schemas/config.py:DatasetConfig and pipeline/entrypoints/generate_dataset.py:run; src/data/vst/generate_vst_dataset.py:save_samples, create_dataset_and_get_first_unwritten_idx",
       "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
+        "pipeline/entrypoints/generate_dataset.py",
+        "pipeline/schemas/config.py",
+        "src/data/vst/generate_vst_dataset.py"
       ]
     },
-    "req-85ffd2db": {
+    "req-36d15094": {
       "implemented": false,
-      "evidence": "No status command found in source code",
+      "evidence": "No finalize stage functions found in source summaries",
       "source_files": []
     },
-    "req-4831eb2e": {
-      "implemented": false,
-      "evidence": "No finalize command implementation found",
-      "source_files": []
-    },
-    "req-bc388485": {
+    "req-d70b95dd": {
       "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py writes input_spec.json to RUN_METADATA_DIR",
-      "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
-      ]
-    },
-    "req-fc2753cb": {
-      "implemented": false,
-      "evidence": "Staged-valid shard logic not explicitly implemented in source",
-      "source_files": []
-    },
-    "req-ed11b46a": {
-      "implemented": false,
-      "evidence": "No missing shard computation logic found",
-      "source_files": []
-    },
-    "req-fa5c202e": {
-      "implemented": false,
-      "evidence": "No worker task partition logic found",
-      "source_files": []
-    },
-    "req-4e32a4c6": {
-      "implemented": false,
-      "evidence": "No immediate exit after submission logic found",
-      "source_files": []
-    },
-    "req-70948dc1": {
-      "implemented": false,
-      "evidence": "No credential verification before worker launch found",
-      "source_files": []
-    },
-    "req-6c6b3419": {
-      "implemented": false,
-      "evidence": "No status command implementation",
-      "source_files": []
-    },
-    "req-20dc6f7f": {
-      "implemented": false,
-      "evidence": "No status command implementation",
-      "source_files": []
-    },
-    "req-c9eb9555": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-54660bdc": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-e3a81c71": {
-      "implemented": false,
-      "evidence": "validate_shard.py exists but not integrated with finalize",
-      "source_files": []
-    },
-    "req-3da95cae": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-6320c7a1": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-a42acc9d": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-a8adfe65": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-3b5a901b": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-8d6b0e5d": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-1fef682b": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-b482e5ed": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-2da6cec9": {
-      "implemented": false,
-      "evidence": "No finalize command implementation",
-      "source_files": []
-    },
-    "req-b3db5915": {
-      "implemented": true,
-      "evidence": "src/data/vst/core.py has load_plugin(), render_params() for VST rendering",
-      "source_files": [
-        "src/data/vst/core.py"
-      ]
-    },
-    "req-45fc353f": {
-      "implemented": true,
-      "evidence": "src/data/vst/generate_vst_dataset.py generates HDF5 shards with audio, mel_spec, param datasets",
+      "evidence": "src/data/vst/generate_vst_dataset.py:get_first_unwritten_idx, create_dataset_and_get_first_unwritten_idx provide resumable generation logic",
       "source_files": [
         "src/data/vst/generate_vst_dataset.py"
       ]
     },
-    "req-5611d29f": {
+    "req-c8e1d2e0": {
+      "implemented": false,
+      "evidence": "Cloud credential validation not evident in source summaries",
+      "source_files": []
+    },
+    "req-efe1655d": {
+      "implemented": false,
+      "evidence": "Local execution mode not clearly documented in source summaries",
+      "source_files": []
+    },
+    "req-5e5ff6b9": {
       "implemented": true,
-      "evidence": "pipeline/ci/validate_shard.py contains validate_shard() function",
+      "evidence": "pipeline/entrypoints/generate_dataset.py:_rclone_copy implements R2 interaction for shard completeness",
+      "source_files": [
+        "pipeline/entrypoints/generate_dataset.py"
+      ]
+    },
+    "req-9f751e55": {
+      "implemented": true,
+      "evidence": "pipeline/schemas/spec.py:ShardSpec defines shard identity and derived values",
+      "source_files": [
+        "pipeline/schemas/spec.py"
+      ]
+    },
+    "req-c1d2a20f": {
+      "implemented": false,
+      "evidence": "Reconciliation logic not evident in source summaries",
+      "source_files": []
+    },
+    "req-1c1ad238": {
+      "implemented": false,
+      "evidence": "Independent stage execution not documented in source summaries",
+      "source_files": []
+    },
+    "req-99759add": {
+      "implemented": false,
+      "evidence": "Artifact path management (metadata/workers/, data/ prefixes) not evident in summaries",
+      "source_files": []
+    },
+    "req-bb3b81b8": {
+      "implemented": false,
+      "evidence": "Canonical shard path protection not evident in summaries",
+      "source_files": []
+    },
+    "req-eee4f671": {
+      "implemented": false,
+      "evidence": "Multiprocessing with spawn context not clearly documented in summaries",
+      "source_files": []
+    },
+    "req-6abac128": {
+      "implemented": false,
+      "evidence": "Debug log upload via EXIT trap not evident in summaries",
+      "source_files": []
+    },
+    "req-d0135b99": {
+      "implemented": true,
+      "evidence": "pipeline/entrypoints/generate_dataset.py:_rclone_copy uses rclone for checksum-verified transfers",
+      "source_files": [
+        "pipeline/entrypoints/generate_dataset.py"
+      ]
+    },
+    "req-27a1827d": {
+      "implemented": true,
+      "evidence": "pipeline/ci/validate_shard.py:validate_shard performs HDF5 format, dataset presence, and row count checks",
       "source_files": [
         "pipeline/ci/validate_shard.py"
       ]
     },
-    "req-0d57a6af": {
+    "req-9dc3e402": {
+      "implemented": false,
+      "evidence": "Extended validation (shape and value bounds) not documented in summaries",
+      "source_files": []
+    },
+    "req-c1715928": {
+      "implemented": false,
+      "evidence": "Finalize-stage structural validation not evident in source summaries",
+      "source_files": []
+    },
+    "req-273ab59d": {
+      "implemented": false,
+      "evidence": "Lexicographic shard selection logic not evident in summaries",
+      "source_files": []
+    },
+    "req-6b3c8dc2": {
+      "implemented": false,
+      "evidence": "Lifecycle marker (.valid) placement not documented in summaries",
+      "source_files": []
+    },
+    "req-eedefde1": {
+      "implemented": false,
+      "evidence": "Quarantine subdirectory and .invalid marker logic not evident in summaries",
+      "source_files": []
+    },
+    "req-b8a649c0": {
+      "implemented": false,
+      "evidence": "Throughput performance target not testable from source code",
+      "source_files": []
+    },
+    "req-51993a38": {
+      "implemented": false,
+      "evidence": "Error message quality not evident in summaries",
+      "source_files": []
+    },
+    "req-d7df3c77": {
+      "implemented": false,
+      "evidence": "Multi-terabyte dataset support not documented in summaries",
+      "source_files": []
+    },
+    "req-39e59f27": {
+      "implemented": false,
+      "evidence": "Cost constraints not testable from source code",
+      "source_files": []
+    },
+    "req-9c3bfede": {
       "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py has _rclone_copy() for uploading shards",
-      "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
-      ]
-    },
-    "req-a30105cf": {
-      "implemented": false,
-      "evidence": "No .rendering marker creation logic found",
-      "source_files": []
-    },
-    "req-40de3f7a": {
-      "implemented": false,
-      "evidence": "No .valid marker creation logic found",
-      "source_files": []
-    },
-    "req-289543ce": {
-      "implemented": false,
-      "evidence": "No .invalid marker and quarantine upload logic found",
-      "source_files": []
-    },
-    "req-2e9b9f8e": {
-      "implemented": false,
-      "evidence": "Design principle not verifiable from code",
-      "source_files": []
-    },
-    "req-5660efca": {
-      "implemented": false,
-      "evidence": "No local compute mode with Docker implementation found",
-      "source_files": []
-    },
-    "req-b7f20906": {
-      "implemented": false,
-      "evidence": "No RunPod backend implementation found",
-      "source_files": []
-    },
-    "req-7e6f8ef8": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/spec.py defines ShardSpec with deterministic logical IDs",
-      "source_files": [
-        "pipeline/schemas/spec.py"
-      ]
-    },
-    "req-2c15cdf8": {
-      "implemented": false,
-      "evidence": "Design principle not implemented",
-      "source_files": []
-    },
-    "req-5950c899": {
-      "implemented": false,
-      "evidence": "No concurrent safety implementation found",
-      "source_files": []
-    },
-    "req-caa50e3d": {
-      "implemented": false,
-      "evidence": "No finalize implementation",
-      "source_files": []
-    },
-    "req-55087e15": {
-      "implemented": false,
-      "evidence": "No finalize implementation",
-      "source_files": []
-    },
-    "req-07d8d502": {
-      "implemented": false,
-      "evidence": "No spawn context process isolation logic found",
-      "source_files": []
-    },
-    "req-fc9e321d": {
-      "implemented": false,
-      "evidence": "Design principle not verifiable",
-      "source_files": []
-    },
-    "req-aab1dd87": {
-      "implemented": false,
-      "evidence": "No debug log upload via EXIT trap found",
-      "source_files": []
-    },
-    "req-90515346": {
-      "implemented": false,
-      "evidence": "No reconciliation-based missing shard detection found",
-      "source_files": []
-    },
-    "req-e32483e4": {
-      "implemented": true,
-      "evidence": "scripts/r2_shard_report.py references content hashes",
-      "source_files": [
-        "scripts/r2_shard_report.py"
-      ]
-    },
-    "req-1740c41f": {
-      "implemented": false,
-      "evidence": "No quarantine upload logic found",
-      "source_files": []
-    },
-    "req-e9f67970": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/spec.py has extract_renderer_version(), _get_git_sha(), _is_repo_dirty()",
+      "evidence": "pipeline/schemas/spec.py:DatasetPipelineSpec described as 'Frozen runtime specification'",
       "source_files": [
         "pipeline/schemas/spec.py"
       ]
     },
-    "req-1e08c227": {
-      "implemented": false,
-      "evidence": "Re-runnable commands not fully implemented",
-      "source_files": []
-    },
-    "req-7251c700": {
-      "implemented": false,
-      "evidence": "No status command",
-      "source_files": []
-    },
-    "req-89593231": {
+    "req-2b453be4": {
       "implemented": true,
-      "evidence": "Design principle: no database/message queue required",
-      "source_files": []
-    },
-    "req-89d9e669": {
-      "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py uses R2 via rclone",
-      "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
-      ]
-    },
-    "req-203b2d70": {
-      "implemented": true,
-      "evidence": "Design principle: shard completeness via file existence",
-      "source_files": []
-    },
-    "req-eb517343": {
-      "implemented": true,
-      "evidence": "Design principle: worker reports are auxiliary",
-      "source_files": []
-    },
-    "req-f70c4e07": {
-      "implemented": false,
-      "evidence": "No lexicographic selection logic found",
-      "source_files": []
-    },
-    "req-20892e98": {
-      "implemented": true,
-      "evidence": "Design principle: separate staging and canonical prefixes",
-      "source_files": []
-    },
-    "req-64afb8c1": {
-      "implemented": true,
-      "evidence": "Design principle: zombie writes won't corrupt canonical data",
-      "source_files": []
-    },
-    "req-73b0d947": {
-      "implemented": false,
-      "evidence": "Design target not verifiable",
-      "source_files": []
-    },
-    "req-b6c04ae7": {
-      "implemented": false,
-      "evidence": "Performance requirement not verifiable",
-      "source_files": []
-    },
-    "req-1e191d8b": {
-      "implemented": false,
-      "evidence": "Cost target not verifiable",
-      "source_files": []
-    },
-    "req-0d8698d9": {
-      "implemented": false,
-      "evidence": "No credential validation before worker launch",
-      "source_files": []
-    },
-    "req-288c3c88": {
-      "implemented": false,
-      "evidence": "No JSONL debug logs found",
-      "source_files": []
-    },
-    "req-d57bfa2b": {
-      "implemented": false,
-      "evidence": "No per-shard error tracking in worker reports",
-      "source_files": []
-    },
-    "req-5d4b7151": {
-      "implemented": false,
-      "evidence": "No quarantine preservation logic",
-      "source_files": []
-    },
-    "req-0a13c970": {
-      "implemented": false,
-      "evidence": "No CPU/OS info in worker reports",
-      "source_files": []
-    },
-    "req-8d71872b": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/spec.py defines DatasetPipelineSpec as frozen",
+      "evidence": "pipeline/schemas/spec.py contains _get_git_sha, _is_repo_dirty, extract_renderer_version for spec composition",
       "source_files": [
         "pipeline/schemas/spec.py"
       ]
     },
-    "req-04fcb22c": {
+    "req-470fb0bc": {
       "implemented": false,
-      "evidence": "No incremental re-generation logic",
+      "evidence": "JSON format enforcement not evident in summaries",
       "source_files": []
     },
-    "req-6698937b": {
-      "implemented": false,
-      "evidence": "No finalize implementation",
-      "source_files": []
-    },
-    "req-eee795bc": {
+    "req-3cfbf391": {
       "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py generates shards with worker_id-attempt_uuid in filenames",
-      "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
-      ]
-    },
-    "req-e8d33c55": {
-      "implemented": false,
-      "evidence": "Lifecycle marker design not implemented",
-      "source_files": []
-    },
-    "req-c3aaf536": {
-      "implemented": false,
-      "evidence": "No finalize implementation",
-      "source_files": []
-    },
-    "req-2d41b9c9": {
-      "implemented": false,
-      "evidence": "No non-determinism detection",
-      "source_files": []
-    },
-    "req-1680b71c": {
-      "implemented": false,
-      "evidence": "No process isolation implementation",
-      "source_files": []
-    },
-    "req-e0fb89a2": {
-      "implemented": false,
-      "evidence": "No configurable timeout implementation",
-      "source_files": []
-    },
-    "req-1898288a": {
-      "implemented": false,
-      "evidence": "No worker report implementation",
-      "source_files": []
-    },
-    "req-b8bab1be": {
-      "implemented": false,
-      "evidence": "No JSONL debug logs",
-      "source_files": []
-    },
-    "req-5ce97f4d": {
-      "implemented": false,
-      "evidence": "No dataset.json generation",
-      "source_files": []
-    },
-    "req-e2e382c1": {
-      "implemented": false,
-      "evidence": "No finalize implementation",
-      "source_files": []
-    },
-    "req-32c8a27b": {
-      "implemented": true,
-      "evidence": "Naming pattern design confirmed in pipeline/schemas/prefix.py",
-      "source_files": [
-        "pipeline/schemas/prefix.py"
-      ]
-    },
-    "req-af33c4fd": {
-      "implemented": false,
-      "evidence": "No W&B artifact metadata implementation",
-      "source_files": []
-    },
-    "req-fbf58008": {
-      "implemented": false,
-      "evidence": "No W&B reference artifacts",
-      "source_files": []
-    },
-    "req-05d32cbc": {
-      "implemented": false,
-      "evidence": "No training artifact consumption",
-      "source_files": []
-    },
-    "req-17055172": {
-      "implemented": false,
-      "evidence": "No output format support",
-      "source_files": []
-    },
-    "req-f1a9ffe7": {
-      "implemented": false,
-      "evidence": "No format specification",
-      "source_files": []
-    },
-    "req-9f290a63": {
-      "implemented": true,
-      "evidence": "src/data/vst/generate_vst_dataset.py produces HDF5 shards",
-      "source_files": [
-        "src/data/vst/generate_vst_dataset.py"
-      ]
-    },
-    "req-67a4f225": {
-      "implemented": false,
-      "evidence": "No finalize format conversion",
-      "source_files": []
-    },
-    "req-fef35966": {
-      "implemented": false,
-      "evidence": "No WebDataset implementation",
-      "source_files": []
-    },
-    "req-1be76495": {
-      "implemented": false,
-      "evidence": "No virtual dataset implementation",
-      "source_files": []
-    },
-    "req-5a8d3cae": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/config.py has dataset_config_id_from_path()",
+      "evidence": "pipeline/schemas/config.py:load_dataset_config loads YAML configuration files",
       "source_files": [
         "pipeline/schemas/config.py"
       ]
     },
-    "req-1e7bbada": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/prefix.py has make_dataset_wandb_run_id()",
-      "source_files": [
-        "pipeline/schemas/prefix.py"
-      ]
-    },
-    "req-04698363": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/prefix.py has make_r2_prefix()",
-      "source_files": [
-        "pipeline/schemas/prefix.py"
-      ]
-    },
-    "req-e611852b": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/spec.py ShardSpec includes seed computation",
-      "source_files": [
-        "pipeline/schemas/spec.py"
-      ]
-    },
-    "req-07a7806f": {
+    "req-c4fd8b9f": {
       "implemented": false,
-      "evidence": "Reproducibility design principle not verifiable",
+      "evidence": "JSONL logging format not evident in summaries",
       "source_files": []
     },
-    "req-9c9e072c": {
+    "req-b75445e3": {
+      "implemented": false,
+      "evidence": "Dataset card self-description not evident in summaries",
+      "source_files": []
+    },
+    "req-f963b6a4": {
+      "implemented": false,
+      "evidence": "dataset.complete marker not documented in summaries",
+      "source_files": []
+    },
+    "req-6cbb5ab4": {
+      "implemented": false,
+      "evidence": "Idempotency guarantees not testable from summaries",
+      "source_files": []
+    },
+    "req-706a57a8": {
+      "implemented": false,
+      "evidence": "Only HDF5 generation evident; WebDataset format support not documented",
+      "source_files": []
+    },
+    "req-151259e9": {
+      "implemented": false,
+      "evidence": "WebDataset .tar format not evident in summaries",
+      "source_files": []
+    },
+    "req-d7bf32a7": {
+      "implemented": false,
+      "evidence": "Architecture constraints not testable from source code",
+      "source_files": []
+    },
+    "req-3fa11aa1": {
+      "implemented": false,
+      "evidence": "Stage chaining prevention not documented in summaries",
+      "source_files": []
+    },
+    "req-d62b6c8e": {
+      "implemented": false,
+      "evidence": "Job status polling constraints not testable from summaries",
+      "source_files": []
+    },
+    "req-9943b26c": {
+      "implemented": false,
+      "evidence": "Provider abstraction constraints not testable from summaries",
+      "source_files": []
+    },
+    "req-2305c559": {
+      "implemented": false,
+      "evidence": "Worker report structure not documented in summaries",
+      "source_files": []
+    },
+    "req-f0114eee": {
+      "implemented": false,
+      "evidence": "Environment information recording not evident in summaries",
+      "source_files": []
+    },
+    "req-e44e6643": {
+      "implemented": false,
+      "evidence": "R2 consistency is a provider capability, not implementable in user code",
+      "source_files": []
+    },
+    "req-8058ee41": {
+      "implemented": false,
+      "evidence": "Concurrent execution safety not documented in summaries",
+      "source_files": []
+    },
+    "req-92451fd4": {
+      "implemented": false,
+      "evidence": "Staging/canonical prefix separation not evident in summaries",
+      "source_files": []
+    },
+    "req-9cc04fda": {
+      "implemented": false,
+      "evidence": "Content hash non-determinism detection not documented in summaries",
+      "source_files": []
+    },
+    "req-c8dabc9b": {
+      "implemented": false,
+      "evidence": "Output format configuration not clearly implemented in summaries",
+      "source_files": []
+    },
+    "req-f4f7b220": {
       "implemented": true,
-      "evidence": "pipeline/schemas/spec.py has extract_renderer_version()",
-      "source_files": [
-        "pipeline/schemas/spec.py"
-      ]
-    },
-    "req-bd3e7a97": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/spec.py has _get_git_sha()",
-      "source_files": [
-        "pipeline/schemas/spec.py"
-      ]
-    },
-    "req-23186cae": {
-      "implemented": false,
-      "evidence": "Design principle not verifiable",
-      "source_files": []
-    },
-    "req-49bf43bb": {
-      "implemented": false,
-      "evidence": "Design principle not verifiable",
-      "source_files": []
-    },
-    "req-2b0a4983": {
-      "implemented": false,
-      "evidence": "Design principle not verifiable",
-      "source_files": []
-    },
-    "req-d76536c7": {
-      "implemented": false,
-      "evidence": "No finalize implementation",
-      "source_files": []
-    },
-    "req-58396fbc": {
-      "implemented": true,
-      "evidence": "pipeline/ci/validate_shard.py performs validation",
-      "source_files": [
-        "pipeline/ci/validate_shard.py"
-      ]
-    },
-    "req-fdc69b27": {
-      "implemented": true,
-      "evidence": "pipeline/ci/validate_shard.py validates array bounds",
-      "source_files": [
-        "pipeline/ci/validate_shard.py"
-      ]
-    },
-    "req-8d6aeeee": {
-      "implemented": false,
-      "evidence": "No finalize implementation",
-      "source_files": []
-    },
-    "req-78f8409f": {
-      "implemented": false,
-      "evidence": "No finalize implementation",
-      "source_files": []
-    },
-    "req-cf6ef359": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/config.py has SplitsConfig",
+      "evidence": "pipeline/schemas/config.py:SplitsConfig defines configurable train/val/test split ratios",
       "source_files": [
         "pipeline/schemas/config.py"
       ]
     },
-    "req-29a7e807": {
-      "implemented": true,
-      "evidence": "scripts/get_dataset_stats.py has get_stats_hdf5()",
-      "source_files": [
-        "scripts/get_dataset_stats.py"
-      ]
-    },
-    "req-20a79704": {
-      "implemented": true,
-      "evidence": "scripts/get_dataset_stats.py references stats.npz",
-      "source_files": [
-        "scripts/get_dataset_stats.py"
-      ]
-    },
-    "req-c2084ced": {
+    "req-74aa845b": {
       "implemented": false,
-      "evidence": "No make targets found",
+      "evidence": "Pydantic strict=True validation not evident in summaries",
       "source_files": []
     },
-    "req-82ffabeb": {
+    "req-455c526a": {
       "implemented": false,
-      "evidence": "No status command",
+      "evidence": "Determinism guarantees not testable from source code",
       "source_files": []
     },
-    "req-c2408bfa": {
+    "req-37250f13": {
       "implemented": false,
-      "evidence": "No missing shard assignment logic",
+      "evidence": "RNG seed computation not documented in summaries",
       "source_files": []
     },
-    "req-f34fbf2e": {
+    "req-b2c0c6c2": {
+      "implemented": false,
+      "evidence": "Lifecycle marker files not evident in summaries",
+      "source_files": []
+    },
+    "req-664b68df": {
+      "implemented": false,
+      "evidence": "Unique worker attempt identifiers not documented in summaries",
+      "source_files": []
+    },
+    "req-d631b696": {
+      "implemented": false,
+      "evidence": "Status command implementation not in source summaries (likely Makefile target)",
+      "source_files": []
+    },
+    "req-6bb2aa65": {
+      "implemented": false,
+      "evidence": "LocalBackend identical spec format not evident in summaries",
+      "source_files": []
+    },
+    "req-21353e2c": {
+      "implemented": false,
+      "evidence": "W&B artifact naming convention not evident in summaries",
+      "source_files": []
+    },
+    "req-13e790e3": {
+      "implemented": false,
+      "evidence": "W&B artifact references not documented in summaries",
+      "source_files": []
+    },
+    "req-4da8fd1e": {
+      "implemented": false,
+      "evidence": "Pipeline metrics recording not evident in summaries",
+      "source_files": []
+    },
+    "req-9d11b393": {
+      "implemented": false,
+      "evidence": "Quarantine detection and reporting not evident in summaries",
+      "source_files": []
+    },
+    "req-2087c2a3": {
+      "implemented": false,
+      "evidence": "Multi-platform eval execution not evident in source summaries",
+      "source_files": []
+    },
+    "req-ea35a276": {
+      "implemented": false,
+      "evidence": "Configuration-based environment handling not documented in summaries",
+      "source_files": []
+    },
+    "req-4c1a3957": {
+      "implemented": false,
+      "evidence": "Debuggability chain implementation not evident in summaries",
+      "source_files": []
+    },
+    "req-98850dd6": {
+      "implemented": false,
+      "evidence": "Make target safety not testable from source code",
+      "source_files": []
+    },
+    "req-fab6b02e": {
       "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py accepts config_path",
-      "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
-      ]
-    },
-    "req-26bbf0a6": {
-      "implemented": false,
-      "evidence": "No status/finalize commands",
-      "source_files": []
-    },
-    "req-8053d8d1": {
-      "implemented": false,
-      "evidence": "No retry logic",
-      "source_files": []
-    },
-    "req-f11cc7af": {
-      "implemented": true,
-      "evidence": "pipeline/ci/validate_shard.py references SHA-256 hashing",
-      "source_files": [
-        "pipeline/ci/validate_shard.py"
-      ]
-    },
-    "req-b8d7f5de": {
-      "implemented": false,
-      "evidence": "No dry-run mode",
-      "source_files": []
-    },
-    "req-496aba86": {
-      "implemented": false,
-      "evidence": "No finalize/dataset.json",
-      "source_files": []
-    },
-    "req-17fe52ff": {
-      "implemented": true,
-      "evidence": "Design assumption: R2 provides strong consistency",
-      "source_files": []
-    },
-    "req-04a2759a": {
-      "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py generates unique filenames per attempt",
-      "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
-      ]
-    },
-    "req-5172e729": {
-      "implemented": false,
-      "evidence": "No timeout handling",
-      "source_files": []
-    },
-    "req-a7a04027": {
-      "implemented": true,
-      "evidence": "Design principle: no RunPod API polling",
-      "source_files": []
-    },
-    "req-8e6ccd69": {
-      "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py uses environment variables",
+      "evidence": "pipeline/entrypoints/generate_dataset.py:_rclone_copy uses rclone with checksums",
       "source_files": [
         "pipeline/entrypoints/generate_dataset.py"
       ]
     },
-    "req-ab49eea3": {
+    "req-3088e3ef": {
       "implemented": false,
-      "evidence": "No Docker BuildKit secrets",
+      "evidence": "Pipeline speed targets not testable from source code",
       "source_files": []
     },
-    "req-71d28851": {
+    "req-1d9e84e3": {
+      "implemented": false,
+      "evidence": "Hardcoded path restrictions not testable from source code",
+      "source_files": []
+    },
+    "req-bda1896e": {
+      "implemented": false,
+      "evidence": "SGE scripts preservation not evident in source summaries",
+      "source_files": []
+    },
+    "req-8abe707d": {
+      "implemented": false,
+      "evidence": "SGE directive restrictions not testable from summaries",
+      "source_files": []
+    },
+    "req-6a34c15c": {
+      "implemented": false,
+      "evidence": "Make eval target sequence not in source summaries",
+      "source_files": []
+    },
+    "req-083c3bf4": {
+      "implemented": false,
+      "evidence": "Make predict checkpoint auto-download not in source summaries",
+      "source_files": []
+    },
+    "req-3501087b": {
+      "implemented": false,
+      "evidence": "Make render target parameters not in source summaries",
+      "source_files": []
+    },
+    "req-0e9b3092": {
+      "implemented": false,
+      "evidence": "Make metrics target parameters not in source summaries",
+      "source_files": []
+    },
+    "req-5620f15b": {
+      "implemented": false,
+      "evidence": "Make upload-eval target not in source summaries",
+      "source_files": []
+    },
+    "req-8be18011": {
+      "implemented": false,
+      "evidence": "Make docker-eval target not in source summaries",
+      "source_files": []
+    },
+    "req-be84f808": {
+      "implemented": false,
+      "evidence": "Explicit make targets not evident in source summaries",
+      "source_files": []
+    },
+    "req-46718f2a": {
+      "implemented": false,
+      "evidence": "DAG orchestrator avoidance not testable from source code",
+      "source_files": []
+    },
+    "req-f4e6204e": {
+      "implemented": false,
+      "evidence": "Trainer.predict() usage not documented in summaries",
+      "source_files": []
+    },
+    "req-61473bc4": {
+      "implemented": false,
+      "evidence": "Test dataset inference not clearly documented in summaries",
+      "source_files": []
+    },
+    "req-2e98a046": {
       "implemented": true,
-      "evidence": "pipeline/schemas/spec.py has _is_repo_dirty()",
+      "evidence": "src/utils/callbacks.py:PredictionWriter outputs predicted parameters via callback",
       "source_files": [
-        "pipeline/schemas/spec.py"
+        "src/utils/callbacks.py"
       ]
     },
-    "req-f0318033": {
+    "req-95d90acc": {
+      "implemented": false,
+      "evidence": "dataset_root configuration resolution not evident in summaries",
+      "source_files": []
+    },
+    "req-879cff34": {
       "implemented": true,
-      "evidence": "src/eval.py, scripts/predict_vst_audio.py, scripts/compute_audio_metrics.py implement three-stage pipeline",
-      "source_files": [
-        "scripts/compute_audio_metrics.py",
-        "scripts/predict_vst_audio.py",
-        "src/eval.py"
-      ]
-    },
-    "req-38f00033": {
-      "implemented": false,
-      "evidence": "Platform support not verifiable",
-      "source_files": []
-    },
-    "req-30307a62": {
-      "implemented": false,
-      "evidence": "Platform support not verifiable",
-      "source_files": []
-    },
-    "req-816aad6f": {
-      "implemented": false,
-      "evidence": "Docker support not verifiable",
-      "source_files": []
-    },
-    "req-c0d27260": {
-      "implemented": false,
-      "evidence": "CI support not verifiable",
-      "source_files": []
-    },
-    "req-7af637c0": {
-      "implemented": false,
-      "evidence": "Configuration requirement not verifiable",
-      "source_files": []
-    },
-    "req-2f286748": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py references dataset paths",
+      "evidence": "src/data/surge_datamodule.py:SurgeDataModule class exists for data module with prepare_data method",
       "source_files": [
         "src/data/surge_datamodule.py"
       ]
     },
-    "req-fc8e641c": {
+    "req-a025b010": {
+      "implemented": false,
+      "evidence": "OmegaConf wandb resolver syntax not documented in summaries",
+      "source_files": []
+    },
+    "req-277a2b79": {
+      "implemented": false,
+      "evidence": "Predict output directory structure not evident in summaries",
+      "source_files": []
+    },
+    "req-ec28d0be": {
+      "implemented": false,
+      "evidence": "Render parameter tensor loading not documented in summaries",
+      "source_files": []
+    },
+    "req-b26f1d16": {
       "implemented": true,
-      "evidence": "src/utils/utils.py has register_resolvers()",
-      "source_files": [
-        "src/utils/utils.py"
-      ]
-    },
-    "req-fd0f0141": {
-      "implemented": false,
-      "evidence": "No checkpoint caching implementation",
-      "source_files": []
-    },
-    "req-95364a18": {
-      "implemented": false,
-      "evidence": "No checkpoint reuse logic",
-      "source_files": []
-    },
-    "req-83ed5fea": {
-      "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py uses rclone --checksum",
-      "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
-      ]
-    },
-    "req-30d4e70c": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py mentions r2_path opt-in",
-      "source_files": [
-        "src/data/surge_datamodule.py"
-      ]
-    },
-    "req-542f3971": {
-      "implemented": false,
-      "evidence": "No eval artifact paths",
-      "source_files": []
-    },
-    "req-95ed2011": {
-      "implemented": false,
-      "evidence": "No make targets",
-      "source_files": []
-    },
-    "req-a2266d5a": {
-      "implemented": false,
-      "evidence": "No make targets",
-      "source_files": []
-    },
-    "req-c1a85dc1": {
-      "implemented": false,
-      "evidence": "No make targets",
-      "source_files": []
-    },
-    "req-4c598414": {
-      "implemented": false,
-      "evidence": "No make targets",
-      "source_files": []
-    },
-    "req-2b8e5127": {
-      "implemented": false,
-      "evidence": "No make targets",
-      "source_files": []
-    },
-    "req-5c281eb5": {
-      "implemented": false,
-      "evidence": "No make targets",
-      "source_files": []
-    },
-    "req-cf6386c2": {
-      "implemented": false,
-      "evidence": "No display server detection",
-      "source_files": []
-    },
-    "req-c8409af8": {
-      "implemented": false,
-      "evidence": "No Xvfb logic",
-      "source_files": []
-    },
-    "req-cabaae31": {
-      "implemented": false,
-      "evidence": "No display configuration",
-      "source_files": []
-    },
-    "req-ea4800a5": {
-      "implemented": true,
-      "evidence": "src/data/vst/core.py loads VST plugins",
+      "evidence": "src/data/vst/core.py:render_params, load_plugin, load_preset implement VST rendering",
       "source_files": [
         "src/data/vst/core.py"
       ]
     },
-    "req-26520f1f": {
-      "implemented": true,
-      "evidence": "src/data/vst/core.py loads presets",
-      "source_files": [
-        "src/data/vst/core.py"
-      ]
-    },
-    "req-5d434531": {
+    "req-0353ac07": {
       "implemented": false,
-      "evidence": "Configuration requirement not verifiable",
+      "evidence": "Dual audio output (predicted and ground-truth) not evident in summaries",
       "source_files": []
     },
-    "req-3a9a13ab": {
+    "req-6811afef": {
       "implemented": false,
-      "evidence": "Configuration requirement not verifiable",
+      "evidence": "Display auto-detection (Xvfb/native) not documented in summaries",
       "source_files": []
     },
-    "req-c3b466bc": {
+    "req-d0d93f84": {
+      "implemented": false,
+      "evidence": "Plugin path defaults not evident in summaries",
+      "source_files": []
+    },
+    "req-4d8d7925": {
+      "implemented": false,
+      "evidence": "Preset path defaults not evident in summaries",
+      "source_files": []
+    },
+    "req-0af2b67f": {
       "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py has compute_mss()",
+      "evidence": "scripts/compute_audio_metrics.py contains compute_mss, compute_wmfcc, compute_sot, compute_rms functions",
       "source_files": [
         "scripts/compute_audio_metrics.py"
       ]
     },
-    "req-4572a09a": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py has compute_wmfcc()",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-0e33e110": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py has compute_sot()",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-e3aa3667": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py has compute_rms()",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-53c3b752": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py outputs metrics.csv",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-0a61c3f6": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py outputs aggregated_metrics.csv",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-8ccbfb37": {
-      "implemented": true,
-      "evidence": "src/eval.py uses W&B artifacts",
-      "source_files": [
-        "src/eval.py"
-      ]
-    },
-    "req-f967be84": {
-      "implemented": true,
-      "evidence": "src/eval.py logs W&B metrics",
-      "source_files": [
-        "src/eval.py"
-      ]
-    },
-    "req-758be5a2": {
+    "req-a3a70290": {
       "implemented": false,
-      "evidence": "Idempotency not fully implemented",
+      "evidence": "ProcessPoolExecutor parallelization not evident in metric computation summaries",
       "source_files": []
     },
-    "req-3b482509": {
+    "req-b9fa4ed6": {
+      "implemented": false,
+      "evidence": "CSV output structure not documented in summaries",
+      "source_files": []
+    },
+    "req-0a8342aa": {
+      "implemented": false,
+      "evidence": "r2_path default value constraints not evident in summaries",
+      "source_files": []
+    },
+    "req-c7fa546c": {
+      "implemented": false,
+      "evidence": "Checksum-based R2 skip logic not evident in summaries",
+      "source_files": []
+    },
+    "req-bbf1dfcd": {
+      "implemented": false,
+      "evidence": "Checkpoint storage in W&B not documented in summaries",
+      "source_files": []
+    },
+    "req-3da8d59e": {
       "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py handles incremental rendering",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
-    },
-    "req-f07971e7": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py recomputes metrics",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-b172ca5f": {
-      "implemented": false,
-      "evidence": "Performance target not verifiable",
-      "source_files": []
-    },
-    "req-85506f32": {
-      "implemented": false,
-      "evidence": "Configuration not verifiable",
-      "source_files": []
-    },
-    "req-c0399b30": {
-      "implemented": false,
-      "evidence": "Configuration not verifiable",
-      "source_files": []
-    },
-    "req-c6b9a4cf": {
-      "implemented": false,
-      "evidence": "Configuration not verifiable",
-      "source_files": []
-    },
-    "req-ff16b2b3": {
-      "implemented": false,
-      "evidence": "No rclone wrapper at src/data/rclone.py",
-      "source_files": []
-    },
-    "req-47150ba0": {
-      "implemented": false,
-      "evidence": "No rclone wrapper",
-      "source_files": []
-    },
-    "req-4912f8a8": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py syncs from R2",
-      "source_files": [
-        "src/data/surge_datamodule.py"
-      ]
-    },
-    "req-090d56f9": {
-      "implemented": true,
-      "evidence": "src/utils/utils.py has register_resolvers()",
+      "evidence": "src/utils/utils.py:register_resolvers implements OmegaConf resolver registration",
       "source_files": [
         "src/utils/utils.py"
       ]
     },
-    "req-3df76b87": {
+    "req-a55bc392": {
       "implemented": false,
-      "evidence": "CI configuration not verifiable",
+      "evidence": "Checkpoint cache checking not evident in summaries",
       "source_files": []
     },
-    "req-910a5003": {
+    "req-c941965f": {
       "implemented": false,
-      "evidence": "CI configuration not verifiable",
+      "evidence": "W&B artifact download implementation not documented in summaries",
       "source_files": []
     },
-    "req-a8236b63": {
+    "req-1be8d4fd": {
       "implemented": false,
-      "evidence": "No test fixtures",
+      "evidence": "Hydra override precedence not documented in summaries",
       "source_files": []
     },
-    "req-2c56f8b7": {
+    "req-79f6ae52": {
       "implemented": false,
-      "evidence": "No test fixtures",
+      "evidence": "Checkpoint resolution patterns not evident in summaries",
       "source_files": []
     },
-    "req-53f187f6": {
+    "req-ad788739": {
       "implemented": false,
-      "evidence": "No test fixtures",
+      "evidence": "eval.yaml configuration not in source summaries",
       "source_files": []
     },
-    "req-dec093f3": {
+    "req-4c138349": {
       "implemented": false,
-      "evidence": "Traceability design not verifiable",
+      "evidence": "R2 artifact path structure not evident in summaries",
       "source_files": []
     },
-    "req-7057eee0": {
-      "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py generates predictions",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
-    },
-    "req-0c9502d5": {
+    "req-29173c8e": {
       "implemented": false,
-      "evidence": "No target audio output files",
+      "evidence": "W&B input artifact declaration not evident in summaries",
       "source_files": []
     },
-    "req-00cacc13": {
+    "req-5df5432b": {
       "implemented": false,
-      "evidence": "No target params output files",
+      "evidence": "W&B summary metric logging not documented in summaries",
       "source_files": []
     },
-    "req-0fa2f536": {
-      "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py generates audio files",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
-    },
-    "req-40ddc7c9": {
+    "req-10ec3075": {
       "implemented": false,
-      "evidence": "No target audio output",
+      "evidence": "W&B job_type configuration not evident in summaries",
       "source_files": []
     },
-    "req-815385c8": {
+    "req-ac2e947a": {
+      "implemented": false,
+      "evidence": "surge_simple.yaml path configuration not in source summaries",
+      "source_files": []
+    },
+    "req-b2b39d4e": {
+      "implemented": false,
+      "evidence": "surge_mini.yaml path configuration not in source summaries",
+      "source_files": []
+    },
+    "req-b2760fb1": {
+      "implemented": false,
+      "evidence": ".env.example structure not in source summaries",
+      "source_files": []
+    },
+    "req-573c9045": {
+      "implemented": false,
+      "evidence": "Error message for missing dataset not evident in summaries",
+      "source_files": []
+    },
+    "req-28abcf8b": {
+      "implemented": false,
+      "evidence": "Xvfb auto-launch not documented in summaries",
+      "source_files": []
+    },
+    "req-16d45223": {
+      "implemented": false,
+      "evidence": "Xvfb cleanup not documented in summaries",
+      "source_files": []
+    },
+    "req-788eea1f": {
+      "implemented": false,
+      "evidence": "macOS native display not documented in summaries",
+      "source_files": []
+    },
+    "req-543fdf69": {
+      "implemented": false,
+      "evidence": "Checkpoint cache directory path not evident in summaries",
+      "source_files": []
+    },
+    "req-9a1b21fd": {
+      "implemented": false,
+      "evidence": "W&B resolver single-call constraint not evident in summaries",
+      "source_files": []
+    },
+    "req-bbe4f27e": {
+      "implemented": false,
+      "evidence": "Hydra config freezing not documented in summaries",
+      "source_files": []
+    },
+    "req-b1e9f62c": {
+      "implemented": false,
+      "evidence": "W&B training metric storage not evident in summaries",
+      "source_files": []
+    },
+    "req-4b6786be": {
+      "implemented": false,
+      "evidence": "R2 storage structure not documented in summaries",
+      "source_files": []
+    },
+    "req-868903c5": {
+      "implemented": false,
+      "evidence": "Local logs directory structure not evident in summaries",
+      "source_files": []
+    },
+    "req-2bd89f46": {
       "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py has write_spectrograms()",
+      "evidence": "src/utils/utils.py:register_resolvers registers OmegaConf resolvers",
       "source_files": [
-        "scripts/predict_vst_audio.py"
+        "src/utils/utils.py"
       ]
     },
-    "req-9426df92": {
-      "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py has params_to_csv()",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
+    "req-2d2b20ff": {
+      "implemented": false,
+      "evidence": "wandb.Api() resolver implementation details not evident in summaries",
+      "source_files": []
     },
-    "req-cce92a5f": {
-      "implemented": true,
-      "evidence": "src/eval.py accepts checkpoint parameters",
-      "source_files": [
-        "src/eval.py"
-      ]
+    "req-21ba9f14": {
+      "implemented": false,
+      "evidence": "Experiment config W&B artifact pinning not evident in summaries",
+      "source_files": []
     },
-    "req-bcb2a924": {
-      "implemented": true,
-      "evidence": "src/eval.py accepts data parameters",
-      "source_files": [
-        "src/eval.py"
-      ]
+    "req-2910fbf9": {
+      "implemented": false,
+      "evidence": "Dataset download before loader creation not documented in summaries",
+      "source_files": []
     },
-    "req-9fe96354": {
-      "implemented": true,
-      "evidence": "src/eval.py accepts config parameters",
-      "source_files": [
-        "src/eval.py"
-      ]
+    "req-14820a31": {
+      "implemented": false,
+      "evidence": "W&B Teams plan usage not evident in code",
+      "source_files": []
     },
-    "req-1e700721": {
+    "req-fc5acded": {
       "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py accepts input directory",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
-    },
-    "req-ee726ad7": {
-      "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py accepts output directory",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
-    },
-    "req-4f37b666": {
-      "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py uses VST plugin path",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
-    },
-    "req-47913bbc": {
-      "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py uses preset path",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
-    },
-    "req-700d1e9f": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py accepts input directory",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-714fabb2": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py accepts output directory",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-8b683b57": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/config.py has dataset_config_id_from_path()",
+      "evidence": "pipeline/schemas/config.py:dataset_config_id_from_path extracts ID from config filename",
       "source_files": [
         "pipeline/schemas/config.py"
       ]
     },
-    "req-d99cbf24": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/prefix.py has make_dataset_wandb_run_id()",
-      "source_files": [
-        "pipeline/schemas/prefix.py"
-      ]
-    },
-    "req-04db29d5": {
+    "req-6df7c153": {
       "implemented": false,
-      "evidence": "No train_config_id construction",
+      "evidence": "dataset_wandb_run_id generation not documented in summaries",
       "source_files": []
     },
-    "req-3b4b832c": {
+    "req-0062a955": {
       "implemented": false,
-      "evidence": "No train_wandb_run_id",
+      "evidence": "train_config_id construction not evident in summaries",
       "source_files": []
     },
-    "req-9cac330f": {
+    "req-84592fe5": {
       "implemented": false,
-      "evidence": "No eval_config_id",
+      "evidence": "train_wandb_run_id generation not documented in summaries",
       "source_files": []
     },
-    "req-cc9bfe29": {
+    "req-043ed17c": {
       "implemented": false,
-      "evidence": "No eval_wandb_run_id",
+      "evidence": "eval_config_id construction not evident in summaries",
       "source_files": []
     },
-    "req-d15a2674": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/prefix.py uses timestamp formatting",
-      "source_files": [
-        "pipeline/schemas/prefix.py"
-      ]
-    },
-    "req-1faee503": {
+    "req-c9bc6188": {
       "implemented": false,
-      "evidence": "Run ID length not verifiable",
+      "evidence": "eval_wandb_run_id generation not documented in summaries",
       "source_files": []
     },
-    "req-d4e577c5": {
-      "implemented": true,
-      "evidence": "pipeline/schemas/prefix.py implements correct R2 path",
-      "source_files": [
-        "pipeline/schemas/prefix.py"
-      ]
-    },
-    "req-68103a98": {
+    "req-6760bc25": {
       "implemented": false,
-      "evidence": "No training R2 path",
+      "evidence": "W&B run ID length constraints not evident in summaries",
       "source_files": []
     },
-    "req-de7e86ec": {
+    "req-8f913909": {
       "implemented": false,
-      "evidence": "No eval R2 path",
+      "evidence": "R2 bucket structure not documented in summaries",
       "source_files": []
     },
-    "req-dc9d23c3": {
-      "implemented": true,
-      "evidence": "Design specification confirmed",
-      "source_files": []
-    },
-    "req-511a582c": {
-      "implemented": true,
-      "evidence": "Design specification confirmed",
-      "source_files": []
-    },
-    "req-c3dc52e6": {
-      "implemented": true,
-      "evidence": "Design specification confirmed",
-      "source_files": []
-    },
-    "req-bd9b37f4": {
+    "req-95645616": {
       "implemented": false,
-      "evidence": "No finalize implementation",
+      "evidence": "metadata/workers/ prefix constraint not evident in summaries",
       "source_files": []
     },
-    "req-ca565526": {
-      "implemented": true,
-      "evidence": "pipeline/entrypoints/generate_dataset.py uses --checksum",
-      "source_files": [
-        "pipeline/entrypoints/generate_dataset.py"
-      ]
-    },
-    "req-9e9acab2": {
+    "req-e0c8b03c": {
       "implemented": false,
-      "evidence": "Design principle not verifiable",
+      "evidence": "shards/ finalize-only constraint not documented in summaries",
       "source_files": []
     },
-    "req-27bc1d3a": {
-      "implemented": true,
-      "evidence": "Design principle confirmed",
-      "source_files": []
-    },
-    "req-38863b5b": {
-      "implemented": true,
-      "evidence": "src/train.py uses Lightning checkpoints",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-2555aa60": {
-      "implemented": true,
-      "evidence": "src/train.py saves config",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-96b5c70e": {
+    "req-b9ce58a2": {
       "implemented": false,
-      "evidence": "No WandbLogger log_model configuration",
+      "evidence": "dataset.complete immutability not evident in summaries",
       "source_files": []
     },
-    "req-c72bcbae": {
-      "implemented": true,
-      "evidence": "Output structure confirmed",
-      "source_files": []
-    },
-    "req-c5ecaa6a": {
-      "implemented": true,
-      "evidence": "src/eval.py generates predictions",
-      "source_files": [
-        "src/eval.py"
-      ]
-    },
-    "req-c8927576": {
-      "implemented": true,
-      "evidence": "scripts/predict_vst_audio.py generates audio",
-      "source_files": [
-        "scripts/predict_vst_audio.py"
-      ]
-    },
-    "req-2bb4b6cd": {
-      "implemented": true,
-      "evidence": "scripts/compute_audio_metrics.py outputs CSVs",
-      "source_files": [
-        "scripts/compute_audio_metrics.py"
-      ]
-    },
-    "req-4d6f7e42": {
-      "implemented": true,
-      "evidence": "Design specification confirmed",
-      "source_files": []
-    },
-    "req-37fda50e": {
-      "implemented": true,
-      "evidence": "Design specification confirmed",
-      "source_files": []
-    },
-    "req-b24e708b": {
-      "implemented": true,
-      "evidence": "Design specification confirmed",
-      "source_files": []
-    },
-    "req-2406ba95": {
-      "implemented": true,
-      "evidence": "W&B feature confirmed",
-      "source_files": []
-    },
-    "req-a860857a": {
+    "req-4f137b88": {
       "implemented": false,
-      "evidence": "No artifact metadata implementation",
+      "evidence": "Dataset version management not documented in summaries",
       "source_files": []
     },
-    "req-b9f11d11": {
-      "implemented": true,
-      "evidence": "W&B feature confirmed",
-      "source_files": []
-    },
-    "req-8d7984f2": {
+    "req-bb2d32ca": {
       "implemented": false,
-      "evidence": "No :best alias setting",
+      "evidence": "W&B log_model='all' not evident in summaries",
       "source_files": []
     },
-    "req-839e83d5": {
+    "req-c7782bc8": {
       "implemented": false,
-      "evidence": "No promotion workflow",
+      "evidence": "Dataset artifact naming not documented in summaries",
       "source_files": []
     },
-    "req-c391276f": {
-      "implemented": true,
-      "evidence": "src/train.py and src/eval.py use W&B artifacts",
-      "source_files": [
-        "src/eval.py",
-        "src/train.py"
-      ]
-    },
-    "req-a4d82241": {
-      "implemented": true,
-      "evidence": "src/train.py and src/eval.py log artifacts",
-      "source_files": [
-        "src/eval.py",
-        "src/train.py"
-      ]
-    },
-    "req-16294b06": {
-      "implemented": true,
-      "evidence": "src/utils/logging_utils.py has log_wandb_provenance()",
-      "source_files": [
-        "src/utils/logging_utils.py"
-      ]
-    },
-    "req-8f74e4ff": {
-      "implemented": true,
-      "evidence": "W&B feature confirmed",
-      "source_files": []
-    },
-    "req-74499f1c": {
-      "implemented": true,
-      "evidence": "W&B feature confirmed",
-      "source_files": []
-    },
-    "req-767f4302": {
-      "implemented": true,
-      "evidence": "W&B feature confirmed",
-      "source_files": []
-    },
-    "req-ad78efcb": {
-      "implemented": true,
-      "evidence": "Design principle confirmed",
-      "source_files": []
-    },
-    "req-f9a41ba7": {
+    "req-15f4efb8": {
       "implemented": false,
-      "evidence": "No job_type setting",
+      "evidence": "Model artifact naming not documented in summaries",
       "source_files": []
     },
-    "req-a0ebadd3": {
+    "req-63d8647f": {
       "implemented": false,
-      "evidence": "No job_type setting",
+      "evidence": "Eval-results artifact naming not evident in summaries",
       "source_files": []
     },
-    "req-2d276684": {
+    "req-207599d8": {
       "implemented": false,
-      "evidence": "No job_type setting",
+      "evidence": "W&B artifact versioning not documented in summaries",
       "source_files": []
     },
-    "req-99f3db6d": {
+    "req-a074e060": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": ":latest alias auto-setting not evident in summaries",
       "source_files": []
     },
-    "req-bedf6040": {
+    "req-012ec33d": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": ":best alias training logic not documented in summaries",
       "source_files": []
     },
-    "req-78aa0c37": {
+    "req-2369f13a": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": ":production alias promotion logic not evident in summaries",
       "source_files": []
     },
-    "req-228988c1": {
+    "req-19a3323b": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "run.use_artifact() calls not documented in summaries",
       "source_files": []
     },
-    "req-9f17b51f": {
+    "req-fa04d2ff": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "run.log_artifact() calls not documented in summaries",
       "source_files": []
     },
-    "req-3f536239": {
+    "req-b1e6ee17": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "use_artifact lineage usage not evident in summaries",
       "source_files": []
     },
-    "req-d84d816c": {
+    "req-30edbba4": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "github_sha in wandb.config not documented in summaries",
       "source_files": []
     },
-    "req-d09421d1": {
+    "req-f92df4f3": {
       "implemented": false,
-      "evidence": "Training workflow TBD",
+      "evidence": "wandb.config hyperparameter logging not evident in summaries",
       "source_files": []
     },
-    "req-d9abebb3": {
+    "req-38592270": {
       "implemented": false,
-      "evidence": "Evaluation workflow TBD",
+      "evidence": "wandb.summary metric logging not documented in summaries",
       "source_files": []
     },
-    "req-47e2a805": {
+    "req-d24c4258": {
       "implemented": false,
-      "evidence": "Promotion workflow planned",
+      "evidence": "artifact.metadata storage not evident in summaries",
       "source_files": []
     },
-    "req-d15aeb27": {
+    "req-f24e86cb": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "Dataset properties logging not documented in summaries",
       "source_files": []
     },
-    "req-2bd92993": {
+    "req-978e5f15": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "job_type='data-generation' not evident in summaries",
       "source_files": []
     },
-    "req-32f9538c": {
+    "req-1806cd4d": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "job_type='training' not documented in summaries",
       "source_files": []
     },
-    "req-13e3f802": {
+    "req-9f9c3de0": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "job_type='evaluation' not evident in summaries",
       "source_files": []
     },
-    "req-ddecf33a": {
+    "req-8cf5b9d1": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "job_type parameter universality not documented in summaries",
       "source_files": []
     },
-    "req-517e376c": {
+    "req-20e6151a": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "Tests workflow triggers not in source code",
       "source_files": []
     },
-    "req-30978381": {
+    "req-d369d94f": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "Tests workflow runners not in source code",
       "source_files": []
     },
-    "req-72a2a122": {
+    "req-e3b0a810": {
       "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "Full Tests workflow triggers not in source code",
       "source_files": []
     },
-    "req-7003d979": {
+    "req-7fcf5794": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
+      "evidence": "gpu-x64 runner not in source code",
       "source_files": []
     },
-    "req-233b5551": {
+    "req-fdb243fc": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
+      "evidence": "Data Generation workflow not in source code",
       "source_files": []
     },
-    "req-f142e9b5": {
+    "req-e456510d": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
+      "evidence": "ubuntu-latest-4core runner not in source code",
       "source_files": []
     },
-    "req-4892e62c": {
+    "req-b40103af": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
+      "evidence": "GITHUB_SHA export not in source code",
       "source_files": []
     },
-    "req-1541318d": {
+    "req-c9e67e2f": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
+      "evidence": "Evaluation workflow parameters not in source code",
       "source_files": []
     },
-    "req-c035175f": {
+    "req-0e653387": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
+      "evidence": "eval_config_id workflow parameter not in source code",
       "source_files": []
     },
-    "req-0128434e": {
+    "req-5d2fd451": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
+      "evidence": "Promotion workflow parameters not in source code",
       "source_files": []
     },
-    "req-18808b01": {
+    "req-e70dba18": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
+      "evidence": "eval_wandb_run_id promotion parameter not in source code",
       "source_files": []
     },
-    "req-d88a4bd0": {
+    "req-a38bed79": {
       "implemented": false,
-      "evidence": "GitHub Release not verifiable",
-      "source_files": []
-    },
-    "req-557429be": {
-      "implemented": false,
-      "evidence": "GitHub Release not verifiable",
-      "source_files": []
-    },
-    "req-8ae571e9": {
-      "implemented": false,
-      "evidence": "GitHub Release not verifiable",
-      "source_files": []
-    },
-    "req-d6310865": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-a7711a96": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-6f40ff87": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-b452ee2c": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-7ae16020": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-9f265088": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-e5cc91de": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-47967ba7": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-96fb3d32": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-9cf03bc0": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-c7ff17a4": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
-      "source_files": []
-    },
-    "req-8e5ec844": {
-      "implemented": false,
-      "evidence": "Secrets not verifiable",
+      "evidence": "Release tag format not in source code",
       "source_files": []
     },
     "req-e2087c24": {
       "implemented": false,
-      "evidence": "Secrets not verifiable",
+      "evidence": "Secrets scoping not in source code",
       "source_files": []
     },
-    "req-223a5d96": {
+    "req-a2ab6b1d": {
       "implemented": false,
-      "evidence": "CI requirement not verifiable",
+      "evidence": "Training R2 read access not in source code",
       "source_files": []
     },
-    "req-4b167b47": {
+    "req-c6889367": {
       "implemented": false,
-      "evidence": "CI requirement not verifiable",
+      "evidence": "Training R2 write access not in source code",
       "source_files": []
     },
-    "req-413b9f9e": {
+    "req-86fb2d53": {
       "implemented": false,
-      "evidence": "Configuration not verifiable",
+      "evidence": "W&B Entity tinaudio not in source code",
       "source_files": []
     },
-    "req-15de6798": {
+    "req-27369d64": {
       "implemented": false,
-      "evidence": "Configuration not verifiable",
+      "evidence": "W&B Project synth-setter not in source code",
       "source_files": []
     },
-    "req-e12fa149": {
-      "implemented": true,
-      "evidence": "src/utils/utils.py and configs use environment variables",
-      "source_files": [
-        "src/utils/utils.py"
-      ]
-    },
-    "req-1755adf6": {
+    "req-5e3fcfe3": {
       "implemented": false,
-      "evidence": "Configuration not verifiable",
+      "evidence": "WANDB_ENTITY environment variable syntax not in source code",
       "source_files": []
     },
-    "req-2adaff47": {
-      "implemented": true,
-      "evidence": "Design note confirmed",
-      "source_files": []
-    },
-    "req-9bc358ce": {
+    "req-7c8e90f7": {
       "implemented": false,
-      "evidence": "No W&B add_reference implementation",
+      "evidence": "WANDB_PROJECT environment variable syntax not in source code",
       "source_files": []
     },
-    "req-0d838f4d": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-2331fa6a": {
+    "req-5f70777b": {
       "implemented": false,
-      "evidence": "Configuration not verifiable",
+      "evidence": "W&B R2 reference not in source code",
       "source_files": []
     },
-    "req-8283705f": {
-      "implemented": true,
-      "evidence": "W&B behavior confirmed",
+    "req-b364f1b5": {
+      "implemented": false,
+      "evidence": "AWS_ENDPOINT_URL configuration not in source code",
       "source_files": []
     },
-    "req-5b6bf3cb": {
-      "implemented": true,
-      "evidence": "Design principle confirmed",
+    "req-6cd30167": {
+      "implemented": false,
+      "evidence": "R2 endpoint configuration for download not in source code",
       "source_files": []
     },
-    "req-13dc6877": {
-      "implemented": true,
-      "evidence": "Design principle confirmed",
+    "req-e34832d8": {
+      "implemented": false,
+      "evidence": "Artifact deduplication not documented in summaries",
       "source_files": []
     },
-    "req-eda0d9b2": {
-      "implemented": true,
-      "evidence": "Design principle confirmed",
+    "req-ca7ce687": {
+      "implemented": false,
+      "evidence": "R2 bulk storage not documented in summaries",
       "source_files": []
     },
-    "req-9e40a4ae": {
-      "implemented": true,
-      "evidence": "src/train.py and src/eval.py log artifacts",
-      "source_files": [
-        "src/eval.py",
-        "src/train.py"
-      ]
-    },
-    "req-732c2012": {
-      "implemented": true,
-      "evidence": "src/train.py and src/eval.py consume artifacts",
-      "source_files": [
-        "src/eval.py",
-        "src/train.py"
-      ]
-    },
-    "req-344b544c": {
-      "implemented": true,
-      "evidence": "Design principle confirmed",
-      "source_files": []
-    },
-    "req-14538ba3": {
-      "implemented": true,
-      "evidence": "Design principle confirmed",
+    "req-21192fbd": {
+      "implemented": false,
+      "evidence": "*_wandb_run_id uniqueness not evident in summaries",
       "source_files": []
     },
     "req-31c0ee5a": {
+      "implemented": false,
+      "evidence": "Completion marker checking not documented in summaries",
+      "source_files": []
+    },
+    "req-9406bf69": {
+      "implemented": false,
+      "evidence": "R2 append-only enforcement not evident in summaries",
+      "source_files": []
+    },
+    "req-f87cbb2a": {
+      "implemented": false,
+      "evidence": "Config freezing not documented in summaries",
+      "source_files": []
+    },
+    "req-8fdf646c": {
+      "implemented": false,
+      "evidence": "Training on Linux not testable from source code",
+      "source_files": []
+    },
+    "req-b524cdce": {
+      "implemented": false,
+      "evidence": "Training on macOS not testable from source code",
+      "source_files": []
+    },
+    "req-01ece77a": {
+      "implemented": false,
+      "evidence": "Training in Docker not testable from source code",
+      "source_files": []
+    },
+    "req-5c5e7aed": {
+      "implemented": false,
+      "evidence": "Training on RunPod not testable from source code",
+      "source_files": []
+    },
+    "req-4962a50a": {
+      "implemented": false,
+      "evidence": "Checkpoint pod death recovery not documented in summaries",
+      "source_files": []
+    },
+    "req-931b548d": {
+      "implemented": false,
+      "evidence": "Optimizer state restoration not documented in summaries",
+      "source_files": []
+    },
+    "req-f778efcb": {
+      "implemented": false,
+      "evidence": "Scheduler state restoration not documented in summaries",
+      "source_files": []
+    },
+    "req-ea368260": {
+      "implemented": false,
+      "evidence": "Dataset version inspectability not documented in summaries",
+      "source_files": []
+    },
+    "req-d3747770": {
+      "implemented": false,
+      "evidence": "Training config inspectability not documented in summaries",
+      "source_files": []
+    },
+    "req-02344e82": {
+      "implemented": false,
+      "evidence": "Git SHA inspectability not documented in summaries",
+      "source_files": []
+    },
+    "req-0e5b06f0": {
+      "implemented": false,
+      "evidence": "Checkpoint lineage inspectability not documented in summaries",
+      "source_files": []
+    },
+    "req-1a8980c4": {
+      "implemented": false,
+      "evidence": "Single job training constraint not testable from code",
+      "source_files": []
+    },
+    "req-0eb166b3": {
+      "implemented": false,
+      "evidence": "make train target not in source code",
+      "source_files": []
+    },
+    "req-107dd9f5": {
+      "implemented": false,
+      "evidence": "make runpod-train target not in source code",
+      "source_files": []
+    },
+    "req-c72e6f7a": {
+      "implemented": false,
+      "evidence": "make docker-train target not in source code",
+      "source_files": []
+    },
+    "req-072e56c1": {
+      "implemented": false,
+      "evidence": "Local checkpoint resume not documented in summaries",
+      "source_files": []
+    },
+    "req-08677a42": {
+      "implemented": false,
+      "evidence": "W&B artifact resume not documented in summaries",
+      "source_files": []
+    },
+    "req-23857c28": {
+      "implemented": false,
+      "evidence": "Training job_type not evident in summaries",
+      "source_files": []
+    },
+    "req-79129a1f": {
+      "implemented": false,
+      "evidence": "Dataset artifact use_artifact not documented in summaries",
+      "source_files": []
+    },
+    "req-af67c4f8": {
+      "implemented": false,
+      "evidence": "Model artifact log_artifact not documented in summaries",
+      "source_files": []
+    },
+    "req-7b276381": {
+      "implemented": false,
+      "evidence": "wandb.config github_sha not documented in summaries",
+      "source_files": []
+    },
+    "req-ccaf4d71": {
+      "implemented": false,
+      "evidence": "Model artifact naming not documented in summaries",
+      "source_files": []
+    },
+    "req-6c24df6b": {
+      "implemented": false,
+      "evidence": "Dataset artifact naming not documented in summaries",
+      "source_files": []
+    },
+    "req-7cd42c81": {
+      "implemented": false,
+      "evidence": "Checkpoint upload timing not documented in summaries",
+      "source_files": []
+    },
+    "req-15bb6561": {
+      "implemented": false,
+      "evidence": "WandbLogger log_model='all' not evident in summaries",
+      "source_files": []
+    },
+    "req-752fd3f3": {
+      "implemented": false,
+      "evidence": "Pod death checkpoint loss bounds not testable from code",
+      "source_files": []
+    },
+    "req-85c4bde3": {
+      "implemented": false,
+      "evidence": "RunPod thin launcher not evident in summaries",
+      "source_files": []
+    },
+    "req-cbe746ff": {
+      "implemented": false,
+      "evidence": "Separate training Docker image not in source code",
+      "source_files": []
+    },
+    "req-d3b1d8f8": {
+      "implemented": false,
+      "evidence": "W&B artifact cache during resume not documented in summaries",
+      "source_files": []
+    },
+    "req-81303cca": {
+      "implemented": false,
+      "evidence": "Promotion workflow separation not in source code",
+      "source_files": []
+    },
+    "req-6267dd38": {
+      "implemented": false,
+      "evidence": "Multi-environment consistency not testable from code",
+      "source_files": []
+    },
+    "req-da9a8850": {
+      "implemented": false,
+      "evidence": "Storage provenance convention not documented in summaries",
+      "source_files": []
+    },
+    "req-60e9c9de": {
+      "implemented": false,
+      "evidence": "MODE environment variable entrypoint dispatch not in source summaries",
+      "source_files": []
+    },
+    "req-8e52b475": {
+      "implemented": false,
+      "evidence": "MODE unset exit behavior not in source summaries",
+      "source_files": []
+    },
+    "req-7b08ffce": {
+      "implemented": false,
+      "evidence": "MODE unknown value exit behavior not in source summaries",
+      "source_files": []
+    },
+    "req-3cab011f": {
+      "implemented": false,
+      "evidence": "MODE=idle behavior not in source summaries",
+      "source_files": []
+    },
+    "req-ad541e01": {
+      "implemented": false,
+      "evidence": "MODE=passthrough behavior not in source summaries",
+      "source_files": []
+    },
+    "req-7f09e4ae": {
+      "implemented": false,
+      "evidence": "MODE=passthrough no-args behavior not in source summaries",
+      "source_files": []
+    },
+    "req-1cb78576": {
+      "implemented": false,
+      "evidence": "MODE=generate_dataset behavior not in source summaries",
+      "source_files": []
+    },
+    "req-d1239d1d": {
+      "implemented": false,
+      "evidence": "generate_dataset environment variable config not in source summaries",
+      "source_files": []
+    },
+    "req-bf6287eb": {
+      "implemented": false,
+      "evidence": "Dockerfile dev-snapshot target not in source code",
+      "source_files": []
+    },
+    "req-758c3c4b": {
+      "implemented": false,
+      "evidence": "docker_entrypoint.sh entrypoint not in source code",
+      "source_files": []
+    },
+    "req-7be88525": {
+      "implemented": false,
+      "evidence": "r2-config-base inheritance not in source code",
+      "source_files": []
+    },
+    "req-fe64fa8a": {
+      "implemented": false,
+      "evidence": "R2 BuildKit secrets baking not in source code",
+      "source_files": []
+    },
+    "req-ff8b45e4": {
+      "implemented": false,
+      "evidence": "Placeholder rclone config not in source code",
+      "source_files": []
+    },
+    "req-5cdc0745": {
+      "implemented": false,
+      "evidence": "W&B authentication baking not in source code",
+      "source_files": []
+    },
+    "req-481e98d5": {
+      "implemented": false,
+      "evidence": "WANDB_API_KEY runtime requirement not in source code",
+      "source_files": []
+    },
+    "req-7352f4ed": {
+      "implemented": false,
+      "evidence": "IMAGE build argument not in source code",
+      "source_files": []
+    },
+    "req-fc7e5853": {
+      "implemented": false,
+      "evidence": "SYNTH_PERMUTATIONS_GIT_REF argument not in source code",
+      "source_files": []
+    },
+    "req-bf7b80ba": {
+      "implemented": false,
+      "evidence": "SURGE_GIT_REF argument not in source code",
+      "source_files": []
+    },
+    "req-c63cd79a": {
+      "implemented": false,
+      "evidence": "BUILD_MODE argument not in source code",
+      "source_files": []
+    },
+    "req-ea9e18d8": {
+      "implemented": false,
+      "evidence": "R2_BUCKET argument not in source code",
+      "source_files": []
+    },
+    "req-024a65b8": {
+      "implemented": false,
+      "evidence": "TORCH_INDEX_URL argument not in source code",
+      "source_files": []
+    },
+    "req-137c658b": {
+      "implemented": false,
+      "evidence": "SYNTH_PERMUTATIONS_GIT_REF image env var not in source code",
+      "source_files": []
+    },
+    "req-47a6f1ed": {
+      "implemented": false,
+      "evidence": "R2_BUCKET image env var not in source code",
+      "source_files": []
+    },
+    "req-3e9e2280": {
+      "implemented": false,
+      "evidence": "VIRTUAL_ENV environment variable not in source code",
+      "source_files": []
+    },
+    "req-c76fb592": {
+      "implemented": false,
+      "evidence": "PATH environment variable configuration not in source code",
+      "source_files": []
+    },
+    "req-a7360ffe": {
+      "implemented": false,
+      "evidence": "DATASET_CONFIG requirement not in source summaries",
+      "source_files": []
+    },
+    "req-84ebde7c": {
+      "implemented": false,
+      "evidence": "RUN_METADATA_DIR default not in source summaries",
+      "source_files": []
+    },
+    "req-10b0c0b7": {
       "implemented": true,
-      "evidence": "Design principle confirmed",
-      "source_files": []
-    },
-    "req-c3aed2b5": {
-      "implemented": false,
-      "evidence": "Platform support not verifiable",
-      "source_files": []
-    },
-    "req-ac34a5ca": {
-      "implemented": false,
-      "evidence": "Platform support not verifiable",
-      "source_files": []
-    },
-    "req-adc459e9": {
-      "implemented": false,
-      "evidence": "Platform support not verifiable",
-      "source_files": []
-    },
-    "req-5e6df078": {
-      "implemented": false,
-      "evidence": "Platform support not verifiable",
-      "source_files": []
-    },
-    "req-08212203": {
-      "implemented": true,
-      "evidence": "src/train.py accepts experiment parameter",
+      "evidence": "pipeline/ci/materialize_spec.py:main materializes DatasetPipelineSpec",
       "source_files": [
-        "src/train.py"
+        "pipeline/ci/materialize_spec.py"
       ]
     },
-    "req-6522f07d": {
+    "req-6e69d1c2": {
       "implemented": true,
-      "evidence": "src/train.py accepts config overrides",
+      "evidence": "pipeline/entrypoints/generate_dataset.py:run uploads spec and shard to R2",
       "source_files": [
-        "src/train.py"
+        "pipeline/entrypoints/generate_dataset.py"
       ]
     },
-    "req-f5b144f3": {
+    "req-5bd551a7": {
+      "implemented": false,
+      "evidence": "input_spec.json writing not explicitly documented in summaries",
+      "source_files": []
+    },
+    "req-e2d52f55": {
       "implemented": true,
-      "evidence": "src/train.py outputs to W&B",
+      "evidence": "src/data/vst/generate_vst_dataset.py implements sample generation and save_samples",
       "source_files": [
-        "src/train.py"
+        "src/data/vst/generate_vst_dataset.py"
       ]
     },
-    "req-937c0d43": {
-      "implemented": true,
-      "evidence": "src/train.py outputs lineage",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-6efe76f0": {
-      "implemented": true,
-      "evidence": "src/train.py saves checkpoints",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-b8d225e8": {
-      "implemented": true,
-      "evidence": "src/train.py saves best checkpoint",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-9eaa1178": {
+    "req-bbe52a4d": {
       "implemented": false,
-      "evidence": "No log_model=\"all\" configuration",
-      "source_files": []
-    },
-    "req-5af60254": {
-      "implemented": true,
-      "evidence": "Lightning checkpoint loading confirmed",
-      "source_files": []
-    },
-    "req-51621478": {
-      "implemented": true,
-      "evidence": "Lightning checkpoint loading confirmed",
-      "source_files": []
-    },
-    "req-182b3584": {
-      "implemented": false,
-      "evidence": "No W&B artifact resume",
-      "source_files": []
-    },
-    "req-68854564": {
-      "implemented": false,
-      "evidence": "No job_type setting",
-      "source_files": []
-    },
-    "req-dda569b1": {
-      "implemented": true,
-      "evidence": "src/train.py uses W&B artifacts",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-73127728": {
-      "implemented": true,
-      "evidence": "src/train.py logs artifacts",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-9626831b": {
-      "implemented": true,
-      "evidence": "src/utils/logging_utils.py includes github_sha",
-      "source_files": [
-        "src/utils/logging_utils.py"
-      ]
-    },
-    "req-14c50bd9": {
-      "implemented": true,
-      "evidence": "Design specification confirmed",
-      "source_files": []
-    },
-    "req-bec9d94e": {
-      "implemented": true,
-      "evidence": "Design specification confirmed",
-      "source_files": []
-    },
-    "req-c7e44538": {
-      "implemented": true,
-      "evidence": "src/train.py writes to wandb.summary",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-486ff5da": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py follows convention",
-      "source_files": [
-        "src/data/surge_datamodule.py"
-      ]
-    },
-    "req-b520d1d6": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py doesn't fetch by default",
-      "source_files": [
-        "src/data/surge_datamodule.py"
-      ]
-    },
-    "req-3adafc4c": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py syncs when r2_path specified",
-      "source_files": [
-        "src/data/surge_datamodule.py"
-      ]
-    },
-    "req-a69d39b3": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-b28fe32f": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-b412b166": {
-      "implemented": false,
-      "evidence": "Docker support not verifiable",
-      "source_files": []
-    },
-    "req-2ae4c59f": {
-      "implemented": false,
-      "evidence": "RunPod support not verifiable",
-      "source_files": []
-    },
-    "req-69d0e4e3": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py syncs from R2",
-      "source_files": [
-        "src/data/surge_datamodule.py"
-      ]
-    },
-    "req-e0179dcb": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py supports local datasets",
-      "source_files": [
-        "src/data/surge_datamodule.py"
-      ]
-    },
-    "req-e94855a0": {
-      "implemented": true,
-      "evidence": "src/data/surge_datamodule.py supports R2 datasets",
-      "source_files": [
-        "src/data/surge_datamodule.py"
-      ]
-    },
-    "req-acc071d6": {
-      "implemented": false,
-      "evidence": "CI fixture setup not verifiable",
-      "source_files": []
-    },
-    "req-686591cd": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-068e3325": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-c7072944": {
-      "implemented": true,
-      "evidence": "src/train.py uses Lightning",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-0d52869c": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-4f03de3c": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-8f50264d": {
-      "implemented": false,
-      "evidence": "Pod death recovery not verifiable",
-      "source_files": []
-    },
-    "req-33928755": {
-      "implemented": true,
-      "evidence": "src/train.py uploads checkpoints",
-      "source_files": [
-        "src/train.py"
-      ]
-    },
-    "req-853ee450": {
-      "implemented": false,
-      "evidence": "No documented resume command",
-      "source_files": []
-    },
-    "req-375cc5a2": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-af8a0fa7": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-90918c22": {
-      "implemented": false,
-      "evidence": "Docker entrypoint not verifiable",
-      "source_files": []
-    },
-    "req-47d8780f": {
-      "implemented": false,
-      "evidence": "Docker entrypoint not verifiable",
-      "source_files": []
-    },
-    "req-a2e5ea71": {
-      "implemented": false,
-      "evidence": "Docker entrypoint not verifiable",
-      "source_files": []
-    },
-    "req-817804c7": {
-      "implemented": false,
-      "evidence": "Docker entrypoint not verifiable",
-      "source_files": []
-    },
-    "req-5cc64335": {
-      "implemented": false,
-      "evidence": "Docker entrypoint not verifiable",
-      "source_files": []
-    },
-    "req-ead3c985": {
-      "implemented": false,
-      "evidence": "Docker entrypoint not verifiable",
-      "source_files": []
-    },
-    "req-171bd403": {
-      "implemented": false,
-      "evidence": "Docker entrypoint not verifiable",
-      "source_files": []
-    },
-    "req-788d4dac": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-dd580739": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-27b4e2e5": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-d78886b9": {
-      "implemented": true,
-      "evidence": "Design confirmed",
-      "source_files": []
-    },
-    "req-2ad0554c": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-93f48f2e": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-10404fd2": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-a778b5dc": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-a5632509": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-77b4e7c5": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-0f10d916": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-b4f8b788": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-bc7c8935": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-6653344e": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-efb014ee": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-ced70e43": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-564511d7": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-4154773c": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-e9b6c88a": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-cc9d812b": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-34cac29a": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-bafff87c": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-6812b125": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-34509493": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-6569ee0e": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-3e671363": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-c0a8e86f": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-4cdfd71a": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-1cfd2378": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-c52244a4": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-6e5d2517": {
-      "implemented": false,
-      "evidence": "Docker file not verifiable",
-      "source_files": []
-    },
-    "req-0742ee5c": {
-      "implemented": false,
-      "evidence": "CI workflow not verifiable",
+      "evidence": "num_shards > 1 NotImplementedError not documented in summaries",
       "source_files": []
     }
   }

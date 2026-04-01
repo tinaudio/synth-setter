@@ -17,6 +17,7 @@ class TestMakeDatasetWandbRunId:
     """Tests for make_dataset_wandb_run_id."""
 
     def test_make_run_id_fixed_timestamp_format(self):
+        # plumb:req-6df7c153
         # plumb:req-1e7bbada
         # plumb:req-d15a2674
         """Fixed UTC timestamp produces the expected run ID string."""
@@ -34,6 +35,7 @@ class TestMakeDatasetWandbRunId:
         assert result == "test-config-20260615T123045Z"
 
     def test_make_run_id_rejects_naive_timestamp(self):
+        # plumb:req-74aa845b
         """Naive datetime (no tzinfo) raises ValueError."""
         import pytest
 
@@ -69,6 +71,7 @@ class TestMakeR2Prefix:
     """Tests for make_r2_prefix."""
 
     def test_make_r2_prefix_format(self):
+        # plumb:req-8f913909
         # plumb:req-04698363
         """Prefix matches the expected data/<config_id>/<run_id>/ pattern."""
         result = make_r2_prefix(

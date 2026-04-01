@@ -50,6 +50,8 @@ class TestLoadImageConfigValid:
     """load_image_config returns correct ImageConfig for valid inputs."""
 
     def test_all_fields_populated(self, tmp_path: Path) -> None:
+        # plumb:req-74aa845b
+        # plumb:req-c8e1d2e0
         # plumb:req-788d4dac
         """Valid YAML + runtime inputs produce ImageConfig with all fields set."""
         config_path = _write_config(tmp_path)
@@ -167,6 +169,7 @@ class TestImageConfigIdDerivation:
     """image_config_id is derived from the config filename stem."""
 
     def test_dev_snapshot_yaml_gives_dev_snapshot_id(self, tmp_path: Path) -> None:
+        # plumb:req-bf6287eb
         """dev-snapshot.yaml produces image_config_id 'dev-snapshot'."""
         config_path = _write_config(tmp_path)
 
@@ -175,6 +178,7 @@ class TestImageConfigIdDerivation:
         assert result.image_config_id == "dev-snapshot"
 
     def test_custom_name_gives_matching_id(self, tmp_path: Path) -> None:
+        # plumb:req-fc5acded
         """Arbitrary filename stem becomes image_config_id."""
         config_path = tmp_path / "my-custom-image.yaml"
         config_path.write_text(_COMPLETE_YAML)
@@ -208,6 +212,7 @@ class TestLoadImageConfigErrors:
             load_image_config(dir_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
     def test_yaml_non_mapping_raises(self, tmp_path: Path) -> None:
+        # plumb:req-3cfbf391
         """YAML with a list instead of a mapping raises ValueError."""
         config_path = tmp_path / "bad.yaml"
         config_path.write_text("[1, 2, 3]\n")
@@ -259,6 +264,7 @@ class TestStaticFieldsAndYamlMerge:
     """Static fields are loaded from YAML and merged with runtime inputs."""
 
     def test_yaml_last_key_wins_for_build_mode(self, tmp_path: Path) -> None:
+        # plumb:req-c63cd79a
         """YAML value for build_mode is loaded correctly."""
         config_path = _write_config(tmp_path, overrides="build_mode: source\n")
 
@@ -281,6 +287,8 @@ class TestStaticFieldsAndYamlMerge:
             load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
     def test_static_field_values_match_dev_snapshot_yaml(self) -> None:
+        # plumb:req-758c3c4b
+        # plumb:req-7be88525
         """Real dev-snapshot.yaml fields match expected defaults (catches drift)."""
         config_path = Path("configs/image/dev-snapshot.yaml")
 

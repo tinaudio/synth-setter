@@ -203,6 +203,7 @@ class TestMainInvalidSha:
     """Main() raises ValidationError when given an invalid SHA."""
 
     def test_main_invalid_sha_raises(
+        # plumb:req-74aa845b
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Short SHA passed via CLI triggers pydantic ValidationError."""

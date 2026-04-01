@@ -51,6 +51,8 @@ class TestShardSpec:
     """Behavioral contracts for ShardSpec frozen model."""
 
     def test_shard_spec_is_frozen(self) -> None:
+        # plumb:req-9c3bfede
+        # plumb:req-74aa845b
         # plumb:req-8d71872b
         """Assigning to a frozen ShardSpec field raises ValidationError."""
         shard = ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42)
@@ -109,6 +111,8 @@ class TestDatasetPipelineSpec:
             DatasetPipelineSpec(**kwargs)
 
     def test_pipeline_spec_output_format_rejects_invalid_literal(
+        # plumb:req-706a57a8
+        # plumb:req-c8dabc9b
         # plumb:req-17055172
         # plumb:req-f1a9ffe7
         self, patch_materialize_io: Path
@@ -173,6 +177,7 @@ class TestDatasetPipelineSpec:
         assert spec.plugin_path == "/nonexistent/plugin.vst3"
 
     def test_json_round_trip_without_plugin_on_disk(self) -> None:
+        # plumb:req-470fb0bc
         """JSON round-trip works even when plugin_path doesn't exist on disk."""
         kwargs: dict[str, Any] = {
             "run_id": "test-run",
@@ -207,6 +212,7 @@ class TestExtractRendererVersion:
     """Platform-specific VST3 plugin version extraction."""
 
     def test_extracts_version_from_linux_moduleinfo_json(self, tmp_path: Path) -> None:
+        # plumb:req-2b453be4
         """Linux moduleinfo.json with Version key returns the version string."""
         plugin = tmp_path / "Plugin.vst3"
         contents = plugin / "Contents"
@@ -234,6 +240,7 @@ class TestExtractRendererVersion:
         assert extract_renderer_version(plugin) == "2.0.0"
 
     def test_raises_when_no_version_file_and_no_loadable_plugin(self, tmp_path: Path) -> None:
+        # plumb:req-51993a38
         """Empty Contents directory with no loadable plugin raises an error."""
         plugin = tmp_path / "Plugin.vst3"
         contents = plugin / "Contents"
@@ -324,6 +331,7 @@ class TestMaterializeSpec:
         assert restored == spec
 
     def test_run_id_format_from_config_id_and_timestamp(
+        # plumb:req-6df7c153
         # plumb:req-1e7bbada
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
@@ -442,6 +450,8 @@ class TestMaterializeSpec:
             materialize_spec(config, config_id)
 
     def test_multi_shard_seeds_are_base_plus_shard_id(
+        # plumb:req-37250f13
+        # plumb:req-455c526a
         # plumb:req-e611852b
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
@@ -456,6 +466,7 @@ class TestMaterializeSpec:
         assert [s.seed for s in spec.shards] == [42, 43, 44]
 
     def test_filenames_are_zero_padded_six_digits(
+        # plumb:req-9f751e55
         # plumb:req-7e6f8ef8
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
