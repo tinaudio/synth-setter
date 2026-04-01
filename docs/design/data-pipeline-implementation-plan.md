@@ -452,7 +452,7 @@ Sub-issue: [#7](https://github.com/tinaudio/synth-setter/issues/7) (buildx TARGE
 - `docker/ubuntu22_04/Dockerfile` — multi-stage build with BuildKit secrets
 - `scripts/docker_entrypoint.sh` — container dispatch (existing modes only for now)
 - `scripts/run-linux-vst-headless.sh` — Xvfb wrapper for headless VST
-- `Makefile` additions — `docker-build-dev-snapshot`, `docker-build-dev-live`, etc.
+- `Makefile` additions — `docker-build-dev-snapshot`
 
 **Verification:**
 

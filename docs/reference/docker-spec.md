@@ -54,39 +54,35 @@ ______________________________________________________________________
 
 ## 2. Image Targets
 
-`docker/ubuntu22_04/Dockerfile` defines three targets via `--target`:
+`docker/ubuntu22_04/Dockerfile` defines a single target via `--target`:
 
-| Target         | Entrypoint                      | Source code                  | Use case       |
-| -------------- | ------------------------------- | ---------------------------- | -------------- |
-| `prod`         | `docker_entrypoint.sh`          | Baked at `GIT_REF` (tarball) | Production     |
-| `dev-snapshot` | `docker_entrypoint.sh`          | Git clone at `GIT_REF`       | CI, cloud runs |
-| `dev-live`     | fallback (errors without mount) | Volume-mounted               | Local dev      |
+| Target         | Entrypoint             | Source code            | Use case       |
+| -------------- | ---------------------- | ---------------------- | -------------- |
+| `dev-snapshot` | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs |
 
-All targets inherit from `r2-config-base`. R2 credentials are baked only when BuildKit secrets are provided at build time (placeholder rclone config otherwise). W&B auth is baked into `~/.netrc` when the `wandb_api_key` BuildKit secret is provided at build time; if the secret is missing, `WANDB_API_KEY` is required at runtime.
-
-______________________________________________________________________
+The `dev-snapshot` target inherits from `r2-config-base`. R2 credentials are baked only when BuildKit secrets are provided at build time (placeholder rclone config otherwise). W&B auth is baked into `~/.netrc` when the `wandb_api_key` BuildKit secret is provided at build time; if the secret is missing, `WANDB_API_KEY` is required at runtime.
 
 ## 3. Environment Variables
 
 ### Build ARGs
 
-| ARG                          | Default        | Purpose                                                   |
-| ---------------------------- | -------------- | --------------------------------------------------------- |
-| `IMAGE`                      | `dev-snapshot` | Selects final target (`prod`, `dev-snapshot`, `dev-live`) |
-| `SYNTH_PERMUTATIONS_GIT_REF` | `main`         | Git ref for source code                                   |
-| `SURGE_GIT_REF`              | *(pinned SHA)* | Surge XT release commit                                   |
-| `BUILD_MODE`                 | `source`       | `source` or `prebuilt` (Surge install method)             |
-| `R2_BUCKET`                  | *(empty)*      | Cloudflare R2 bucket name                                 |
-| `TORCH_INDEX_URL`            | *(required)*   | PyTorch wheel index URL                                   |
+| ARG                          | Default        | Purpose                                       |
+| ---------------------------- | -------------- | --------------------------------------------- |
+| `IMAGE`                      | `dev-snapshot` | Selects final target (`dev-snapshot`)         |
+| `SYNTH_PERMUTATIONS_GIT_REF` | `main`         | Git ref for source code                       |
+| `SURGE_GIT_REF`              | *(pinned SHA)* | Surge XT release commit                       |
+| `BUILD_MODE`                 | `source`       | `source` or `prebuilt` (Surge install method) |
+| `R2_BUCKET`                  | *(empty)*      | Cloudflare R2 bucket name                     |
+| `TORCH_INDEX_URL`            | *(required)*   | PyTorch wheel index URL                       |
 
 ### Baked ENV vars (available at runtime)
 
-| Variable                     | Set in targets             | Value                                |
-| ---------------------------- | -------------------------- | ------------------------------------ |
-| `SYNTH_PERMUTATIONS_GIT_REF` | `prod`, `dev-snapshot`     | The git ref the image was built from |
-| `R2_BUCKET`                  | all (via `r2-config-base`) | Cloudflare R2 bucket name            |
-| `VIRTUAL_ENV`                | all                        | `/venv/main`                         |
-| `PATH`                       | all                        | `$VIRTUAL_ENV/bin:$PATH`             |
+| Variable                     | Set in targets                        | Value                                |
+| ---------------------------- | ------------------------------------- | ------------------------------------ |
+| `SYNTH_PERMUTATIONS_GIT_REF` | `dev-snapshot`                        | The git ref the image was built from |
+| `R2_BUCKET`                  | `dev-snapshot` (via `r2-config-base`) | Cloudflare R2 bucket name            |
+| `VIRTUAL_ENV`                | `dev-snapshot`                        | `/venv/main`                         |
+| `PATH`                       | `dev-snapshot`                        | `$VIRTUAL_ENV/bin:$PATH`             |
 
 ### MODE=generate_dataset env vars
 

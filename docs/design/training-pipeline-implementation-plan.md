@@ -16,7 +16,7 @@ ______________________________________________________________________
 | ------------------------------------------------ | ----------------------------- |
 | [Branch Strategy](#branch-strategy)              | Merge path and phase overview |
 | [Phase 1](#phase-1-portable-training-foundation) | Config cleanup, smoke test    |
-| [Phase 2](#phase-2-wb-checkpoint-durability)     | W&B log_model, resume         |
+| [Phase 2](#phase-2-wb-checkpoint-durability)     | W&B resume                    |
 | [Phase 3](#phase-3-runpod-launcher)              | RunPod launcher, resume       |
 | [Phase 4](#phase-4-docker--ci)                   | Docker image, CI smoke test   |
 | [Phase 5](#phase-5-documentation)                | Training runbook              |
@@ -88,10 +88,9 @@ ______________________________________________________________________
 
 ### Tasks
 
-| Task     | Description                  |
-| -------- | ---------------------------- |
-| Task 2.1 | Enable W&B `log_model="all"` |
-| Task 2.2 | Resume from W&B artifact     |
+| Task     | Description              |
+| -------- | ------------------------ |
+| Task 2.2 | Resume from W&B artifact |
 
 ### Files to modify
 
@@ -110,7 +109,7 @@ tests/test_wandb_checkpoint.py
 
 ### Completion criteria
 
-- `log_model="all"` enabled; checkpoints appear as W&B model artifacts
+- `log_model: "all"` configured; every checkpoint appears as W&B model artifact
 - resume works with `ckpt_path=wandb:model-{train_config_id}:latest`
 - Lightning optimizer state restored correctly
 
@@ -198,7 +197,6 @@ ______________________________________________________________________
 | ----------------------- | ------------------------- | ----- |
 | Training config cleanup | remove cluster paths      | ~5    |
 | W&B config cleanup      | env-driven entity/project | ~5    |
-| W&B `log_model` enable  | config change + test      | ~10   |
 | Resume from W&B         | artifact resolver         | ~40   |
 | RunPod launcher         | new launcher script       | ~80   |
 | Docker train image      | Dockerfile + make targets | ~120  |

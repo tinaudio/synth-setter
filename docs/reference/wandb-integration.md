@@ -23,7 +23,7 @@ ______________________________________________________________________
 | W&B run creation  | `WandbLogger` instantiated by Hydra                                                                            | `configs/logger/wandb.yaml`       |
 | Entity / project  | Env-var driven: `entity: "${oc.env:WANDB_ENTITY,tinaudio}"`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"` | `configs/logger/wandb.yaml:10,13` |
 | Run ID            | `null` (W&B auto-generates)                                                                                    | `configs/logger/wandb.yaml:8`     |
-| Checkpoint upload | `log_model: true`                                                                                              | `configs/logger/wandb.yaml:11`    |
+| Checkpoint upload | `log_model: "all"`                                                                                             | `configs/logger/wandb.yaml:11`    |
 | Code saving       | `wandb.Settings(code_dir=".")`                                                                                 | `configs/logger/wandb.yaml:17-19` |
 | Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                               | `src/utils/utils.py:102-107`      |
 
@@ -97,13 +97,13 @@ Logged via `self.log()` in each LightningModule:
 
 ### 2d. Callbacks — Non-W&B
 
-| Callback              | What it does                                          | Config                                     |
-| --------------------- | ----------------------------------------------------- | ------------------------------------------ |
-| `ModelCheckpoint`     | Saves `.ckpt` locally (uploaded by `log_model: true`) | `configs/callbacks/model_checkpoint.yaml`  |
-| `LearningRateMonitor` | Logs LR to Lightning logger                           | `configs/callbacks/lr_monitor.yaml`        |
-| `RichProgressBar`     | Terminal display only                                 | `configs/callbacks/rich_progress_bar.yaml` |
-| `ModelSummary`        | Prints param summary to console                       | `configs/callbacks/model_summary.yaml`     |
-| `PredictionWriter`    | Saves predictions to `.pt` files locally              | `src/utils/callbacks.py:307-342`           |
+| Callback              | What it does                                           | Config                                     |
+| --------------------- | ------------------------------------------------------ | ------------------------------------------ |
+| `ModelCheckpoint`     | Saves `.ckpt` locally (uploaded by `log_model: "all"`) | `configs/callbacks/model_checkpoint.yaml`  |
+| `LearningRateMonitor` | Logs LR to Lightning logger                            | `configs/callbacks/lr_monitor.yaml`        |
+| `RichProgressBar`     | Terminal display only                                  | `configs/callbacks/rich_progress_bar.yaml` |
+| `ModelSummary`        | Prints param summary to console                        | `configs/callbacks/model_summary.yaml`     |
+| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/utils/callbacks.py:307-342`           |
 
 ### 2e. Gradient Watching
 
@@ -139,10 +139,10 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact          | Source                                | When                                                            |
-| ----------------- | ------------------------------------- | --------------------------------------------------------------- |
-| Model checkpoints | `ModelCheckpoint` + `log_model: true` | Every 5000 steps (with `default_surge` callbacks) + best + last |
-| Source code       | `wandb.Settings(code_dir=".")`        | Run start                                                       |
+| Artifact          | Source                                 | When                                                                                      |
+| ----------------- | -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Model checkpoints | `ModelCheckpoint` + `log_model: "all"` | Every 5000 steps (with `default_surge` callbacks) + best + last, all uploaded immediately |
+| Source code       | `wandb.Settings(code_dir=".")`         | Run start                                                                                 |
 
 ______________________________________________________________________
 
@@ -165,7 +165,7 @@ ______________________________________________________________________
 | 2   | **No `wandb.config` for env vars** — W&B captures `sys.argv` but not env vars like `TRAINING_ARGS`. **Partially resolved:** `IMAGE_TAG` is now captured by `log_wandb_provenance()`. | Config passed via env vars is silently missing from W&B (except `IMAGE_TAG`)                        | #252     |
 | 3   | ~~**No `github_sha` in `wandb.config`**~~ **RESOLVED** — `log_wandb_provenance()` now logs `github_sha` via `git rev-parse HEAD`                                                     | ~~Can't reliably link a run to the exact code that produced it~~                                    | —        |
 | 4   | **No GitHub issue integration** — train job doesn't post run ID back to GitHub                                                                                                       | Manual lookup to match runs to issues                                                               | #263     |
-| 5   | **`log_model: true` vs `"all"`** — config uses `true` (uploads best + last only), design doc specifies `"all"` (every checkpoint)                                                    | Intermediate checkpoints not uploaded to W&B                                                        | —        |
+| 5   | ~~**`log_model: true` vs `"all"`**~~ **RESOLVED** — changed to `log_model: "all"` for crash resilience (every checkpoint uploaded immediately)                                       | —                                                                                                   | —        |
 | 6   | **Visualization callbacks use `wandb.log()` directly** — bypasses Lightning logger abstraction                                                                                       | Breaks if logger is swapped; step alignment relies on `trainer.global_step`                         | —        |
 | 7   | **`torch.compile` crashes test-stage `setup()`** — eval after training fails                                                                                                         | Post-training test metrics never logged to W&B                                                      | #248     |
 | 8   | **No structured run ID convention** — `id: null` means W&B generates random IDs                                                                                                      | Can't reconstruct run lineage from ID alone; design doc specifies `{config_id}-{timestamp}` pattern | —        |
