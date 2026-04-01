@@ -159,7 +159,7 @@ ______________________________________________________________________
 - `pyproject.toml` — added `pipeline` pytest marker
 - `checkmake.ini` (new)
 
-**Verification:** `pip install -r requirements.txt && ruff check . && pytest tests/ -x`
+**Verification:** `uv pip install -r requirements.txt && ruff check . && pytest tests/ -x`
 
 **Design notes:**
 
