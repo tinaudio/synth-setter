@@ -20,7 +20,7 @@ Lightning with Hydra configs.
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 
 # Run tests
 make test

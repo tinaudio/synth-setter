@@ -1,6 +1,6 @@
 # Backward-compatible umbrella requirements file.
 # Docker/CI can install these files separately for tighter control and better caching:
-#   pip install -r requirements-torch.txt
-#   pip install -r requirements-app.txt
+#   uv pip install -r requirements-torch.txt
+#   uv pip install -r requirements-app.txt
 -r requirements-torch.txt
 -r requirements-app.txt
