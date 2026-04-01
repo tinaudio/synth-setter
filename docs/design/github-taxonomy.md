@@ -67,6 +67,10 @@ Epic: <name>
 
 Hierarchy is tracked via native sub-issues (up to 8 levels). Projects render this as an expandable tree via **hierarchy view**.
 
+### Phase-parenting rule
+
+Task, Bug, and Feature issues MUST be sub-issues of a Phase — never direct children of an Epic. Only Phase issues should be direct children of Epics. This ensures every work item traces to an epic through exactly one phase, keeping the hierarchy view clean and enabling phase-level progress tracking.
+
 ### Naming
 
 - Epics: `Epic: Name` (e.g., "Epic: distributed data pipeline")
@@ -157,6 +161,17 @@ Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wa
 | storage v1.0.0       | Storage         |
 
 Every work stream has a milestone. Set the milestone on each issue individually — GitHub does not auto-inherit milestones from parent issues.
+
+### Goal milestones
+
+Goal milestones track measurable quality targets. They coexist with work-stream milestones — use the more specific goal milestone when the issue directly contributes to a measurable target.
+
+| Milestone                | Goal                                  | Phase      |
+| ------------------------ | ------------------------------------- | ---------- |
+| docstring-coverage-80pct | ≥80% docstring coverage (interrogate) | #114 → #27 |
+| zero-bandit-warnings     | Zero bandit security warnings in src/ | #114 → #28 |
+| type-annotation-coverage | Type annotations on all public APIs   | #114 → #29 |
+| test-coverage-80pct      | Test coverage ≥80% for src/           | #149 → #30 |
 
 ## 8. Project
 
