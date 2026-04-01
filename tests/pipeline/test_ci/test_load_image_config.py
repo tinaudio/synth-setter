@@ -68,7 +68,10 @@ class TestMainGithubOutput:
     """Main() writes key=value lines to the GITHUB_OUTPUT file."""
 
     def test_main_writes_all_fields_to_github_output(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        # plumb:req-13e3f802
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """All ImageConfig fields are written as key=value lines to GITHUB_OUTPUT file."""
         config_path = _write_config(tmp_path)
@@ -202,7 +205,10 @@ class TestMainInvalidSha:
     """Main() raises ValidationError when given an invalid SHA."""
 
     def test_main_invalid_sha_raises(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        # plumb:req-74aa845b
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Short SHA passed via CLI triggers pydantic ValidationError."""
         config_path = _write_config(tmp_path)

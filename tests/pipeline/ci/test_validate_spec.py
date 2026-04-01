@@ -42,6 +42,10 @@ class TestValidateStructure:
     """Tests for validate_structure."""
 
     def test_valid_spec_returns_no_errors(self) -> None:
+        # plumb:req-74aa845b
+        # plumb:req-2b453be4
+        # plumb:req-9c3bfede
+        # plumb:req-bc388485
         """Valid spec with all required fields passes validation."""
         spec = _make_valid_spec()
         assert validate_structure(spec) == []
@@ -55,16 +59,19 @@ class TestValidateStructure:
         assert "missing" in errors[0]
 
     def test_invalid_code_version_returns_error(self) -> None:
+        # plumb:req-bd3e7a97
         """Non-hex code_version returns a code_version error."""
         spec = _make_valid_spec(code_version="not-a-sha")
         assert any("code_version" in e for e in validate_structure(spec))
 
     def test_empty_renderer_version_returns_error(self) -> None:
+        # plumb:req-9c9e072c
         """Empty renderer_version returns a renderer_version error."""
         spec = _make_valid_spec(renderer_version="")
         assert any("renderer_version" in e for e in validate_structure(spec))
 
     def test_empty_shards_returns_error(self) -> None:
+        # plumb:req-9f751e55
         """Empty shards list returns a shards error."""
         spec = _make_valid_spec(shards=[])
         assert any("shards" in e for e in validate_structure(spec))
@@ -79,6 +86,7 @@ class TestValidateTestValues:
         assert validate_test_values(spec) == []
 
     def test_wrong_shard_count_returns_error(self) -> None:
+        # plumb:req-c1d2a20f
         """Spec with 2 shards instead of 3 returns a shard count error."""
         spec = _make_valid_spec(
             shards=[
@@ -90,6 +98,8 @@ class TestValidateTestValues:
         assert any("3 shards" in e for e in errors)
 
     def test_wrong_seeds_returns_error(self) -> None:
+        # plumb:req-37250f13
+        # plumb:req-455c526a
         """Spec with wrong seeds returns a seed error."""
         spec = _make_valid_spec(
             shards=[

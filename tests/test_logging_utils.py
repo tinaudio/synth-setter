@@ -46,6 +46,10 @@ class TestLogWandbProvenanceHappyPath:
     """Provenance fields are logged correctly when all dependencies are available."""
 
     def test_logs_git_sha_as_valid_hex(self) -> None:
+        # plumb:req-30edbba4
+        # plumb:req-7b276381
+        # plumb:req-02344e82
+        # plumb:req-16294b06
         """github_sha is the real 40-char hex SHA from the current git repo."""
         fake = make_fake_wandb()
 
