@@ -11,37 +11,32 @@
   ],
   "claude_log_path": null,
   "initialized_at": "2026-03-30T17:58:45.090260+00:00",
-  "last_commit": "44491f1623c910f32709590e4dc4ebd977ece9cd",
-  "last_commit_branch": "chore/add-plumb-tooling",
-  "last_extracted_at": "2026-04-01T02:23:00.294607+00:00",
-  "program_models": {
+  "last_commit": "051706ebd4b6e3228360cfd7395e1b79efada5a7",
+  "last_commit_branch": "chore-plum-coverage",
+  "last_extracted_at": null,
+"program_models": {
     "diff_analyzer": {
-      "model": "anthropic/claude-haiku-4-5-20251001",
-      "max_tokens": 4096
+      "model": "anthropic/claude-haiku-4-5-20251001"
     },
     "decision_extractor": {
-      "model": "anthropic/claude-haiku-4-5-20251001",
-      "max_tokens": 4096
+      "model": "anthropic/claude-haiku-4-5-20251001"
     },
     "decision_deduplicator": {
-      "model": "anthropic/claude-haiku-4-5-20251001",
-      "max_tokens": 4096
+      "model": "anthropic/claude-haiku-4-5-20251001"
     },
     "question_synthesizer": {
-      "model": "anthropic/claude-haiku-4-5-20251001",
-      "max_tokens": 4096
+      "model": "anthropic/claude-haiku-4-5-20251001"
     },
     "requirement_parser": {
-      "model": "anthropic/claude-haiku-4-5-20251001",
-      "max_tokens": 8192
+      "model": "anthropic/claude-haiku-4-5-20251001"
     },
     "test_mapper": {
       "model": "anthropic/claude-haiku-4-5-20251001",
-      "max_tokens": 8192
+      "budget": 15000
     },
     "code_coverage_mapper": {
       "model": "anthropic/claude-haiku-4-5-20251001",
-      "max_tokens": 8192
+      "budget": 15000
     }
   }
 }
