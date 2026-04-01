@@ -80,8 +80,8 @@ RUN case "${BUILD_MODE}" in \
       *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
     esac
 RUN case "${IMAGE}" in \
-      "dev-snapshot" | "dev-live" | "prod") ;; \
-      *) echo "ERROR: IMAGE must be dev-snapshot, dev-live, or prod (got '${IMAGE}')" >&2; exit 1 ;; \
+      "dev-snapshot") ;; \
+      *) echo "ERROR: IMAGE must be dev-snapshot (got '${IMAGE}')" >&2; exit 1 ;; \
     esac
 RUN --mount=type=secret,id=git_pat \
     set -eu; \
@@ -412,46 +412,6 @@ RUN --mount=type=secret,id=wandb_api_key \
         chmod 600 /root/.netrc; \
         echo "W&B netrc config written." >&2; \
     fi
-
-# ==========================================
-# Dev target: Surge + Python deps pre-installed, no baked-in source code.
-# Contains baked R2 credentials — keep registry PRIVATE.
-# Usage: make docker-build-dev-live GIT_PAT=<token> && make docker-run-dev
-# TODO: consider a lighter dev base without Surge for faster builds when VST is not needed.
-# ==========================================
-FROM r2-config-base AS dev-live
-# No COPY of entrypoint — it comes from the runtime mount in docker-run-dev.
-# Bake a fallback that prints a helpful error if run without a mount.
-RUN printf '#!/bin/bash\necho "ERROR: dev-live requires a volume mount at /home/build/synth-setter" >&2\nexit 1\n' \
-      > /usr/local/bin/entrypoint-fallback.sh && \
-    chmod +x /usr/local/bin/entrypoint-fallback.sh
-ENTRYPOINT ["/usr/local/bin/entrypoint-fallback.sh"]
-CMD []
-
-# ==========================================
-# prod: full self-contained image — deps + baked-in source at SYNTH_PERMUTATIONS_GIT_REF.
-# Contains baked R2 credentials — keep registry PRIVATE.
-# ==========================================
-# TODO: Add linting.
-FROM r2-config-base AS prod
-
-ARG SYNTH_PERMUTATIONS_GIT_REF
-ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
-
-# Copy full source (after deps for caching)
-COPY --from=synth-setter-src /home/build/synth-setter /home/build/synth-setter
-
-# Install the project package so `import src` works from any working directory.
-# --no-deps: all runtime deps already installed from requirements*.txt wheels.
-RUN pip install --no-deps -e .
-
-# Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
-RUN pytest -k "not slow" -v
-
-COPY scripts/docker_entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD []
 
 # ==========================================
 # dev-snapshot: deps + live git clone at SYNTH_PERMUTATIONS_GIT_REF.
