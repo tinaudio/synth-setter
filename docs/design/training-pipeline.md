@@ -239,7 +239,7 @@ ______________________________________________________________________
 
 | Property     | Value                                                                             |
 | ------------ | --------------------------------------------------------------------------------- |
-| **Trigger**  | Automatic — `WandbLogger(log_model=true)` uploads best+last after each local save |
+| **Trigger**  | Automatic — `WandbLogger(log_model=True)` uploads best+last after each local save |
 | **Input**    | `last.ckpt`, `best.ckpt`                                                          |
 | **Output**   | W&B model artifact with checkpoint files and run lineage                          |
 | **Compute**  | Background upload (non-blocking)                                                  |
@@ -288,7 +288,7 @@ Behavior:
 
 ### 6.2 Checkpoint Durability via W&B
 
-Lightning's `WandbLogger` with `log_model=true` uploads the best and last checkpoints as W&B artifacts automatically. No custom callback needed. Intermediate step checkpoints are not uploaded to W&B — only best+last are.
+Lightning's `WandbLogger` with `log_model: true` uploads the best and last checkpoints as W&B artifacts automatically. No custom callback needed. Intermediate step checkpoints are not uploaded to W&B — only best+last are.
 
 ```yaml
 # configs/logger/wandb.yaml
