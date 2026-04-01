@@ -19,6 +19,7 @@ Lightning with Hydra configs.
 ## Quick Start
 
 ```bash
+# Install uv (https://docs.astral.sh/uv/getting-started/installation/)
 # Install dependencies
 uv pip install -r requirements.txt
 
