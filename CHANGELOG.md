@@ -1,6 +1,260 @@
 # CHANGELOG
 
 
+## v0.1.3 (2026-04-01)
+
+### Bug Fixes
+
+- **ci**: Align taxonomy hook issue-ref fallback with CI gate
+  ([#419](https://github.com/tinaudio/synth-setter/pull/419),
+  [`4a2bf35`](https://github.com/tinaudio/synth-setter/commit/4a2bf35c703dc0d922cbd4013fabfe4aaebf5a04))
+
+* fix(ci): align taxonomy hook issue-ref fallback with CI gate
+
+The local verify-gh-taxonomy.sh hook only matched keyword-prefixed issue references
+  (Fixes/Closes/Refs #N). The CI gate also accepts bare #N references and markdown hyperlinks. Add a
+  fallback grep to match any #N in the PR body when keywords aren't found.
+
+Fixes #418
+
+* Apply suggestions from code review
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+### Chores
+
+- Remove prod and dev-live Docker targets
+  ([#417](https://github.com/tinaudio/synth-setter/pull/417),
+  [`af0bb0f`](https://github.com/tinaudio/synth-setter/commit/af0bb0fc073431ab6802ab6e91e4403669374e4a))
+
+- **ci**: Replace pip with uv in all CI workflows
+  ([#426](https://github.com/tinaudio/synth-setter/pull/426),
+  [`4edf13e`](https://github.com/tinaudio/synth-setter/commit/4edf13e070d1a443e7e853937ff416d1a2436dd9))
+
+Refs #423
+
+- **plumb**: Add coverage mapping and test annotations
+  ([#428](https://github.com/tinaudio/synth-setter/pull/428),
+  [`6f0f05f`](https://github.com/tinaudio/synth-setter/commit/6f0f05f9387f10b8422c2a23d52917e43a675395))
+
+* chore(plumb): run plumb coverage
+
+* chore: add plumb decisions and model budget
+
+* chore(plumb): plumb coverage and test mapping
+
+* chore: run make format on plumb coverage files
+
+### Documentation
+
+- Consolidate Claude workflow rules into CLAUDE.md
+  ([#413](https://github.com/tinaudio/synth-setter/pull/413),
+  [`a9d48f7`](https://github.com/tinaudio/synth-setter/commit/a9d48f75d4f24b9ae8375123c22d80665c8d565e))
+
+* docs: consolidate Claude workflow rules into CLAUDE.md
+
+Add a Workflow Rules section covering commit conventions, PR/issue linking, verification format,
+  review comment etiquette, and GitHub project selection. These rules were previously stored as
+  local Claude memory files and are now version-controlled and shared.
+
+Fixes #412
+
+* docs: narrow hyperlink rule to chat responses only
+
+Markdown hyperlinks for issue/PR refs should only be used in chat responses (for IDE clickability).
+  PR bodies should use bare Fixes #N so GitHub auto-close keywords work correctly.
+
+Refs #412
+
+- Fix doc drift in CLAUDE.md and doc-map.yaml (10 findings)
+  ([#396](https://github.com/tinaudio/synth-setter/pull/396),
+  [`7d77e98`](https://github.com/tinaudio/synth-setter/commit/7d77e98f49ee72124bfe9b7b397842e2767df0bf))
+
+* docs: fix doc drift in CLAUDE.md and doc-map.yaml (10 findings)
+
+Update pipeline architecture section to reflect actual directory structure (entrypoints/, ci/,
+  constants.py instead of stages/, backends/). Fix doc-map.yaml: remove duplicate docker-spec.md
+  entry, remove stale wandb placeholder, fix incorrect metric names, update rclone attribution, add
+  missing source patterns.
+
+Refs #392
+
+* docs: restore planned pipeline architecture in CLAUDE.md
+
+Previous commit silently removed planned directories (stages/, backends/) and schemas (report, card,
+  sample) that have open tracking issues. Restore as planned items with issue references (#71, #72,
+  #74).
+
+- Fix doc drift in design docs (21 findings)
+  ([#393](https://github.com/tinaudio/synth-setter/pull/393),
+  [`f6ba0cf`](https://github.com/tinaudio/synth-setter/commit/f6ba0cfb06ac5e7a33257494bdcf4f8394ee0dff))
+
+* docs: fix doc drift in design docs (21 findings)
+
+Update data-pipeline.md: R2 bucket synth-data → intermediate-data, add implementation status notes,
+  fix schema fields, mark planned CLI. Update training-pipeline.md: fix log_model claims (true not
+  "all"), mark resolved W&B identity gap. Update eval-pipeline.md: fix renderscript.sh description,
+  mark wandb resolver as not implemented, R2 bucket rename.
+
+Refs #392
+
+* docs: restore design targets and add issue refs in design docs
+
+Restore 4-check validation as design target (3-check is current partial impl, #103). Add issue refs
+  to renderscript auto-detect (#86), make targets (#72), and log_model design target. Design intent
+  must be preserved alongside current state.
+
+* docs: add entrypoint mode names to design docs
+
+Name the Docker entrypoint modes in design docs: generate stage = MODE=generate-shards (#407),
+  finalize = MODE=finalize-shards (#408), training = MODE=train (#409), eval = MODE=eval (#410).
+  Note generate_dataset as legacy MVP pending deprecation (#411).
+
+* docs: address review comments on PR #393
+
+Fix 3-check/4-check inconsistencies in data-pipeline.md: align validation descriptions with actual
+  validate_shard.py checks, note 4-check as design target (#103). Fix eval-pipeline.md log_model
+  table cell.
+
+* docs: address round 2 review comments on PR #393
+
+Fix MODE=train wording (experiment branch, not main). Fix log_model claims (true = best+last, not
+  every checkpoint). Fix checkpoint policy table (intermediates need "all"). Fix renderscript
+  Decision header (design target). Fix generate_dataset invocation (env var, not positional arg).
+
+- Fix doc drift in docker-spec.md and docker.md (12 findings)
+  ([#397](https://github.com/tinaudio/synth-setter/pull/397),
+  [`89336cb`](https://github.com/tinaudio/synth-setter/commit/89336cb25ed26a97bd51648ef3dd4cc00aed70a1))
+
+* docs: fix doc drift in docker-spec.md and docker.md (12 findings)
+
+Rewrite stale "Current vs. Planned" section — MODE dispatch is fully implemented. Fix W&B auth claim
+  (baked, not runtime-only). Fix broken links (rclone.md, test_image_config.py path). Correct
+  BuildKit secrets table (r2_endpoint is build-arg). Add missing R2_BUCKET documentation. Update
+  YAML snippet and test count.
+
+Refs #392
+
+* docs: add tracking issue refs to docker docs planned items
+
+Add #310 ref to rclone.md planned notes. Add #265 ref to docker-spec MODE dispatch section for
+  traceability to the original tracking issue.
+
+* docs: replace pipeline-worker with entrypoint mode inventory
+
+Replace pipeline-worker (wrong abstraction) with generate-shards (#407). Add full mode inventory:
+  generate-shards, finalize-shards (#408), train (#409) as scoped; eval (#410) as planned. Add
+  generate_dataset deprecation note (#411).
+
+* docs: address review comment on PR #397
+
+Fix prod target build instructions — DOCKER_BUILD_FLAGS cannot override IMAGE arg because Makefile
+  appends it after.
+
+* docs: address round 2 review comments on PR #397
+
+Fix BUILD_MODE "always" to "default". Fix GIT_REF "requires" to "should set" (has default=main).
+
+- Fix doc drift in unmapped docs (17 findings)
+  ([#394](https://github.com/tinaudio/synth-setter/pull/394),
+  [`19212b5`](https://github.com/tinaudio/synth-setter/commit/19212b5692d99531706d06bfed21bbaa5b5d890c))
+
+* docs: fix doc drift in unmapped docs (17 findings)
+
+Add status banners to completed/unimplemented docs (org-migration-checklist,
+  promotion-pipeline-reference). Update README beyond ISMIR 2025 submission. Add implementation
+  status notes to implementation plans. Fix old repo URL in lint-cleanup agent.
+
+Refs #392
+
+* docs: restore ISMIR 2025 citation and code map in README
+
+Previous commit deleted academic provenance (ISMIR 2025 reference, online supplement link) and
+  detailed code navigation map. Restore both as dedicated sections alongside the updated project
+  description.
+
+* docs: replace pipeline-worker with generate-shards in impl plan
+
+The pipeline-worker abstraction was wrong — the entrypoint mode IS the worker. Replace all
+  references with MODE=generate-shards (#407). Add tracking issue refs. Note experiment branch as
+  prior art.
+
+* docs: address review comments on PR #394
+
+Fix README H1 rendering inside HTML div. Mark already-existing files as completed in data-pipeline
+  implementation plan file lists.
+
+* docs: address round 2 review comments on PR #394
+
+Fix README pipeline description (no __main__.py). Fix training implementation plan status from NOT
+  STARTED to INCOMPLETE.
+
+- Fix doc drift in wandb-integration.md and storage-provenance-spec.md (13 findings)
+  ([#398](https://github.com/tinaudio/synth-setter/pull/398),
+  [`6d60923`](https://github.com/tinaudio/synth-setter/commit/6d60923baa90edd41c529e899fde1ee61c971eff))
+
+* docs: fix doc drift in wandb-integration.md and storage-provenance-spec.md (13 findings)
+
+Update wandb-integration.md: entity/project now env-var driven, mark resolved Known Gaps (#1, #3),
+  document log_wandb_provenance(), fix stale code version hash. Update storage-provenance-spec.md:
+  R2 bucket synth-data → intermediate-data, mark unimplemented CLI references, update workflow
+  table, add implementation status note.
+
+Refs #392
+
+* docs: mark pipeline.cli finalize as planned in table cells
+
+Add (planned) annotation to pipeline.cli finalize references in table cells for consistency with the
+  callout notes and promote.yml pattern.
+
+* docs: add MODE=finalize-shards ref to storage provenance spec
+
+Note that the finalize step runs as MODE=finalize-shards in Docker (#408), alongside the planned
+  pipeline.cli finalize CLI interface.
+
+* docs: address review comment on PR #398
+
+Fix command field type in provenance table — it's a joined string, not a list.
+
+* docs: address round 2 review comments on PR #398
+
+Fix workflow table: Full Tests trigger is schedule+dispatch (not push), Data Generation is
+  workflow_call on ubuntu-latest-4core with image_tag/config_path inputs.
+
+- Remove prod/dev-live Docker targets and keep log_model=true
+  ([#416](https://github.com/tinaudio/synth-setter/pull/416),
+  [`c1860dc`](https://github.com/tinaudio/synth-setter/commit/c1860dcd183a1e53796b382ab5474bfa24403909))
+
+- **ci**: Taxonomy cleanup — naming conventions, epics table, standalone tasks
+  ([#429](https://github.com/tinaudio/synth-setter/pull/429),
+  [`2a51eaa`](https://github.com/tinaudio/synth-setter/commit/2a51eaa6e66853a908d1243455be97ca8052ca03))
+
+* docs(ci): update taxonomy — naming conventions, epics table, standalone tasks, plumb pin
+
+- Add Epic:/Feature: naming convention to match existing Phase:/Task: pattern - Complete the current
+  epics table with all 10 active epics (#114, #148, #149, #264, #321 were missing) - Remove
+  standalone task concept — all issues must trace to an epic - Update CLAUDE.md to reflect mandatory
+  epic lineage - Bump plumb-dev pin to a0dd821 (strips GIT_* env vars in worktree hooks)
+
+Fixes #427
+
+* fix(ci): sync DOMAIN_LABELS across hook, CI gate, and taxonomy doc
+
+Hook was missing documentation, CI gate was missing monitoring, taxonomy doc §6/§7 was missing
+  monitoring. All three now list the same 9 domain labels.
+
+Refs #427
+
+* fix(ci): address review feedback on PR #429
+
+- Use full 40-char SHA for plumb-dev pin (comment #3019650141) - Broaden §3 epic lineage rule to all
+  work types, not just Tasks (comment #3019650163) - Update §2 examples to use new naming
+  conventions (comment #3019650165) - Remove standalone task language from task.yml template
+  (comment #3019650172) - Add documentation and monitoring to all issue template dropdowns
+
+
 ## v0.1.2 (2026-03-31)
 
 ### Bug Fixes
