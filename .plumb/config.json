@@ -11,9 +11,9 @@
   ],
   "claude_log_path": null,
   "initialized_at": "2026-03-30T17:58:45.090260+00:00",
-  "last_commit": "614777c7747f298bbba062ffd5565fcc6307b4dc",
+  "last_commit": "23d13e934d50bdcb5c07c35fdbbf59048d088eef",
   "last_commit_branch": "chore-plum-coverage",
-  "last_extracted_at": "2026-04-01T03:16:15.149906+00:00",
+  "last_extracted_at": null,
   "program_models": {
     "diff_analyzer": {
       "model": "anthropic/claude-haiku-4-5-20251001"

@@ -115,7 +115,8 @@ class TestDatasetPipelineSpec:
         # plumb:req-c8dabc9b
         # plumb:req-17055172
         # plumb:req-f1a9ffe7
-        self, patch_materialize_io: Path
+        self,
+        patch_materialize_io: Path,
     ) -> None:
         """Invalid output_format literal raises ValidationError."""
         kwargs: dict[str, Any] = {
@@ -333,7 +334,9 @@ class TestMaterializeSpec:
     def test_run_id_format_from_config_id_and_timestamp(
         # plumb:req-6df7c153
         # plumb:req-1e7bbada
-        self, patch_materialize_io: Path, valid_config_dict: dict
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict,
     ) -> None:
         """Run ID combines config_id and UTC timestamp."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
@@ -347,7 +350,9 @@ class TestMaterializeSpec:
 
     def test_created_at_is_utc_iso_format(
         # plumb:req-e9f67970
-        self, patch_materialize_io: Path, valid_config_dict: dict
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict,
     ) -> None:
         """created_at is a timezone-aware UTC datetime."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
@@ -364,7 +369,9 @@ class TestMaterializeSpec:
 
     def test_code_version_from_git(
         # plumb:req-bd3e7a97
-        self, patch_materialize_io: Path, valid_config_dict: dict
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict,
     ) -> None:
         """code_version is the mocked git SHA."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
@@ -397,7 +404,9 @@ class TestMaterializeSpec:
 
     def test_renderer_version_from_plugin(
         # plumb:req-9c9e072c
-        self, patch_materialize_io: Path, valid_config_dict: dict
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict,
     ) -> None:
         """renderer_version comes from the plugin's moduleinfo.json."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
@@ -453,7 +462,9 @@ class TestMaterializeSpec:
         # plumb:req-37250f13
         # plumb:req-455c526a
         # plumb:req-e611852b
-        self, patch_materialize_io: Path, valid_config_dict: dict
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict,
     ) -> None:
         """Each shard seed equals base_seed + shard_id."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
@@ -468,7 +479,9 @@ class TestMaterializeSpec:
     def test_filenames_are_zero_padded_six_digits(
         # plumb:req-9f751e55
         # plumb:req-7e6f8ef8
-        self, patch_materialize_io: Path, valid_config_dict: dict
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict,
     ) -> None:
         """Shard filenames use six-digit zero-padded indices."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)

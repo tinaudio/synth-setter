@@ -363,7 +363,10 @@ class TestMainEnvVars:
     def test_default_metadata_dir(
         # plumb:req-84ebde7c
         # plumb:req-34509493
-        self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Default RUN_METADATA_DIR is /run-metadata when env unset."""
         config_path = _write_config(tmp_path)
@@ -377,7 +380,10 @@ class TestMainEnvVars:
     @patch("pipeline.entrypoints.generate_dataset.run")
     def test_custom_metadata_dir(
         # plumb:req-6569ee0e
-        self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """RUN_METADATA_DIR env var overrides default."""
         config_path = _write_config(tmp_path)
