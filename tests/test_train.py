@@ -13,6 +13,8 @@ from tests.helpers.run_if import RunIf
 
 
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
+    # plumb:req-c3aed2b5
+    # plumb:req-ac34a5ca
     """Run for 1 train, val and test step with small batch size, no compile.
 
     :param cfg_train: A DictConfig containing a valid training configuration.
@@ -50,6 +52,7 @@ def test_train_fast_dev_run(cfg_train: DictConfig) -> None:
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 def test_train_fast_dev_run_gpu(cfg_train: DictConfig) -> None:
+    # plumb:req-a69d39b3
     """Run for 1 train, val and test step on GPU.
 
     :param cfg_train: A DictConfig containing a valid training configuration.
@@ -125,6 +128,8 @@ def test_train_ddp_sim(cfg_train: DictConfig) -> None:
 
 @pytest.mark.slow
 def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
+    # plumb:req-5af60254
+    # plumb:req-51621478
     """Run 1 epoch, finish, and resume for another epoch.
 
     :param tmp_path: The temporary logging path.

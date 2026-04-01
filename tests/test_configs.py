@@ -41,6 +41,7 @@ class TestWandbConfigResolvesFromEnv:
     """Verify wandb entity/project resolve from env vars (#265)."""
 
     def test_wandb_entity_resolves_from_env(self, monkeypatch):
+        # plumb:req-e12fa149
         """OmegaConf resolves WANDB_ENTITY from environment."""
         monkeypatch.setenv("WANDB_ENTITY", "test-entity")
         cfg = OmegaConf.load("configs/logger/wandb.yaml")
@@ -53,6 +54,7 @@ class TestWandbConfigResolvesFromEnv:
         assert OmegaConf.select(cfg, "wandb.project") == "test-project"
 
     def test_wandb_defaults_when_env_unset(self, monkeypatch):
+        # plumb:req-1755adf6
         """Falls back to tinaudio/synth-setter when env vars unset."""
         monkeypatch.delenv("WANDB_ENTITY", raising=False)
         monkeypatch.delenv("WANDB_PROJECT", raising=False)

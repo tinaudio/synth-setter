@@ -68,6 +68,7 @@ class TestMainGithubOutput:
     """Main() writes key=value lines to the GITHUB_OUTPUT file."""
 
     def test_main_writes_all_fields_to_github_output(
+        # plumb:req-13e3f802
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """All ImageConfig fields are written as key=value lines to GITHUB_OUTPUT file."""

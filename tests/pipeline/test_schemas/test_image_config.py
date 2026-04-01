@@ -50,6 +50,7 @@ class TestLoadImageConfigValid:
     """load_image_config returns correct ImageConfig for valid inputs."""
 
     def test_all_fields_populated(self, tmp_path: Path) -> None:
+        # plumb:req-788d4dac
         """Valid YAML + runtime inputs produce ImageConfig with all fields set."""
         config_path = _write_config(tmp_path)
 
@@ -75,6 +76,7 @@ class TestGithubShaValidation:
     """github_sha must be exactly 40 lowercase hex characters."""
 
     def test_short_sha_rejected(self, tmp_path: Path) -> None:
+        # plumb:req-13e3f802
         """SHA shorter than 40 chars is rejected."""
         config_path = _write_config(tmp_path)
 

@@ -83,6 +83,7 @@ class TestValidateShard:
     """Tests for validate_shard() function."""
 
     def test_valid_shard_returns_no_errors(self, real_spec: object, tmp_path: Path) -> None:
+        # plumb:req-e3a81c71
         """Correct HDF5 with all expected datasets and correct row counts returns []."""
         shard_path = tmp_path / "shard-000000.h5"
         _create_shard(shard_path, shard_size=real_spec.shard_size)  # type: ignore[union-attr]

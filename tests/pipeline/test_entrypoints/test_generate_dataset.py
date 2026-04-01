@@ -103,6 +103,8 @@ class TestRun:
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_writes_spec_json_to_metadata_dir(
+        # plumb:req-3e671363
+        # plumb:req-4cdfd71a
         self,
         mock_materialize: MagicMock,
         mock_rclone: MagicMock,
@@ -126,6 +128,7 @@ class TestRun:
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_uploads_spec_to_r2_before_generation(
+        # plumb:req-c0a8e86f
         self,
         mock_materialize: MagicMock,
         mock_rclone: MagicMock,
@@ -242,6 +245,7 @@ class TestRun:
             run(config_path, metadata_dir)
 
     def test_num_shards_greater_than_one_raises(self, tmp_path: Path) -> None:
+        # plumb:req-c52244a4
         """num_shards > 1 raises NotImplementedError."""
         config_path = _write_config(
             tmp_path,
@@ -333,6 +337,7 @@ class TestMainEnvVars:
     """Main() reads DATASET_CONFIG and RUN_METADATA_DIR from environment."""
 
     def test_missing_dataset_config_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # plumb:req-34cac29a
         """Missing DATASET_CONFIG env var raises KeyError."""
         monkeypatch.delenv("DATASET_CONFIG", raising=False)
         monkeypatch.delenv("RUN_METADATA_DIR", raising=False)
@@ -342,6 +347,7 @@ class TestMainEnvVars:
 
     @patch("pipeline.entrypoints.generate_dataset.run")
     def test_default_metadata_dir(
+        # plumb:req-34509493
         self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Default RUN_METADATA_DIR is /run-metadata when env unset."""
@@ -355,6 +361,7 @@ class TestMainEnvVars:
 
     @patch("pipeline.entrypoints.generate_dataset.run")
     def test_custom_metadata_dir(
+        # plumb:req-6569ee0e
         self, mock_run: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """RUN_METADATA_DIR env var overrides default."""

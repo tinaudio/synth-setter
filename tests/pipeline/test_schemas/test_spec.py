@@ -51,6 +51,7 @@ class TestShardSpec:
     """Behavioral contracts for ShardSpec frozen model."""
 
     def test_shard_spec_is_frozen(self) -> None:
+        # plumb:req-8d71872b
         """Assigning to a frozen ShardSpec field raises ValidationError."""
         shard = ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42)
         with pytest.raises(ValidationError):
@@ -108,6 +109,8 @@ class TestDatasetPipelineSpec:
             DatasetPipelineSpec(**kwargs)
 
     def test_pipeline_spec_output_format_rejects_invalid_literal(
+        # plumb:req-17055172
+        # plumb:req-f1a9ffe7
         self, patch_materialize_io: Path
     ) -> None:
         """Invalid output_format literal raises ValidationError."""
@@ -321,6 +324,7 @@ class TestMaterializeSpec:
         assert restored == spec
 
     def test_run_id_format_from_config_id_and_timestamp(
+        # plumb:req-1e7bbada
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
         """Run ID combines config_id and UTC timestamp."""
@@ -334,6 +338,7 @@ class TestMaterializeSpec:
         assert spec.run_id == "ci-smoke-test-20260328T120000Z"
 
     def test_created_at_is_utc_iso_format(
+        # plumb:req-e9f67970
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
         """created_at is a timezone-aware UTC datetime."""
@@ -350,6 +355,7 @@ class TestMaterializeSpec:
         assert offset.total_seconds() == 0
 
     def test_code_version_from_git(
+        # plumb:req-bd3e7a97
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
         """code_version is the mocked git SHA."""
@@ -382,6 +388,7 @@ class TestMaterializeSpec:
         assert spec.is_repo_dirty is dirty_value
 
     def test_renderer_version_from_plugin(
+        # plumb:req-9c9e072c
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
         """renderer_version comes from the plugin's moduleinfo.json."""
@@ -435,6 +442,7 @@ class TestMaterializeSpec:
             materialize_spec(config, config_id)
 
     def test_multi_shard_seeds_are_base_plus_shard_id(
+        # plumb:req-e611852b
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
         """Each shard seed equals base_seed + shard_id."""
@@ -448,6 +456,7 @@ class TestMaterializeSpec:
         assert [s.seed for s in spec.shards] == [42, 43, 44]
 
     def test_filenames_are_zero_padded_six_digits(
+        # plumb:req-7e6f8ef8
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
         """Shard filenames use six-digit zero-padded indices."""

@@ -30,6 +30,7 @@ skip_no_vst = pytest.mark.skipif(
 @requires_vst
 @skip_no_vst
 def test_preset_dependent_params_accessible_after_flush():
+    # plumb:req-b3db5915
     """Preset-dependent params (e.g. sawtooth) exist after load + flush + reset."""
     from pedalboard import VST3Plugin
 

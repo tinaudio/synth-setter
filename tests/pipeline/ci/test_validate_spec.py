@@ -42,6 +42,7 @@ class TestValidateStructure:
     """Tests for validate_structure."""
 
     def test_valid_spec_returns_no_errors(self) -> None:
+        # plumb:req-bc388485
         """Valid spec with all required fields passes validation."""
         spec = _make_valid_spec()
         assert validate_structure(spec) == []
@@ -55,11 +56,13 @@ class TestValidateStructure:
         assert "missing" in errors[0]
 
     def test_invalid_code_version_returns_error(self) -> None:
+        # plumb:req-bd3e7a97
         """Non-hex code_version returns a code_version error."""
         spec = _make_valid_spec(code_version="not-a-sha")
         assert any("code_version" in e for e in validate_structure(spec))
 
     def test_empty_renderer_version_returns_error(self) -> None:
+        # plumb:req-9c9e072c
         """Empty renderer_version returns a renderer_version error."""
         spec = _make_valid_spec(renderer_version="")
         assert any("renderer_version" in e for e in validate_structure(spec))
