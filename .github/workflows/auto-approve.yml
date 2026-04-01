@@ -70,10 +70,11 @@ jobs:
           REPO="${{ github.repository }}"
 
           # Fetch PR metadata once
-          PR_DATA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '{draft: .draft, base: .base.ref, sha: .head.sha, author: .user.login}')
+          PR_DATA=$(gh api "repos/${REPO}/pulls/${PR}" --jq '{draft: .draft, base: .base.ref, sha: .head.sha, author: .user.login, head_repo: .head.repo.full_name}')
           IS_DRAFT=$(echo "$PR_DATA" | jq -r '.draft')
           BASE_REF=$(echo "$PR_DATA" | jq -r '.base')
           HEAD_SHA=$(echo "$PR_DATA" | jq -r '.sha')
+          HEAD_REPO=$(echo "$PR_DATA" | jq -r '.head_repo')
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
           PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author')
@@ -92,10 +93,16 @@ jobs:
             exit 0
           fi
 
-          # --- Condition 1: PR is not a draft or fork ---
+          # --- Condition 1: PR is not a draft ---
           if [ "$IS_DRAFT" = "true" ]; then
             echo "result=failure" >> "$GITHUB_OUTPUT"
             echo "reason=PR is a draft" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --- Condition 1b: PR is not from a fork ---
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+            echo "reason=PR is from a fork (${HEAD_REPO})" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # --- Condition 2: All CI checks pass ---
