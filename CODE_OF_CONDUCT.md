@@ -49,8 +49,9 @@ individual is officially representing the project in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported by opening a GitHub issue or starting a thread in GitHub Discussions.
-All complaints will be reviewed and investigated promptly and fairly.
+reported by emailing the maintainers at **conduct@tinaudio.org**. All complaints
+will be reviewed and investigated promptly and fairly. Reports are treated
+confidentially.
 
 Project maintainers are obligated to respect the privacy and security of the
 reporter of any incident.
