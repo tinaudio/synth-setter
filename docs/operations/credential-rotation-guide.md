@@ -197,7 +197,7 @@ ______________________________________________________________________
 
 ```bash
 # Test RunPod API access (list pods)
-curl -s -H "Authorization: Bearer rpk_xxxxxxxxxxxx" \
+curl -s -H "Authorization: Bearer $RUNPOD_API_KEY" \
   https://api.runpod.io/v2/pods | python3 -m json.tool
 ```
 
@@ -225,8 +225,8 @@ ______________________________________________________________________
 **Verification:**
 
 ```bash
-# Test Docker Hub login
-echo "dkr_pat_xxxxxxxxxxxx" | docker login -u <username> --password-stdin
+# Test Docker Hub login using environment variables
+echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 ```
 
 Confirm that a CI workflow that pushes images (e.g., `docker-build-validation.yml`)
@@ -280,8 +280,9 @@ ______________________________________________________________________
 
 **Verification:**
 
-Trigger the `claude-review.yml` workflow (e.g., by opening a PR) and confirm the
-review step completes without authentication errors.
+Trigger the `claude-review.yml` workflow by adding the `needs-claude-review`
+label to a pull request and confirm the review step completes without
+authentication errors.
 
 ______________________________________________________________________
 
