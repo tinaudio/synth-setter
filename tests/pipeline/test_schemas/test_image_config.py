@@ -24,7 +24,7 @@ base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146af
 base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
-torch_index_url: "https://download.pytorch.org/whl/cu128"
+torch_backend: "cu128"
 r2_endpoint: "https://example.r2.cloudflarestorage.com"
 r2_bucket: test-bucket
 """
@@ -247,7 +247,7 @@ class TestLoadImageConfigErrors:
             "base_image_tag: ubuntu22_04\n"
             "build_mode: prebuilt\n"
             "target_platform: linux/amd64\n"
-            'torch_index_url: "https://download.pytorch.org/whl/cu128"\n'
+            'torch_backend: "cu128"\n'
             'r2_endpoint: "https://example.r2.cloudflarestorage.com"\n'
         )
 
@@ -302,7 +302,7 @@ class TestStaticFieldsAndYamlMerge:
         assert result.base_image_tag == "ubuntu22_04"
         assert result.build_mode == "prebuilt"
         assert result.target_platform == "linux/amd64"
-        assert result.torch_index_url == "https://download.pytorch.org/whl/cu128"
+        assert result.torch_backend == "cu128"
         assert result.r2_endpoint == (
             "https://efb9275d571811db929e83eb710b74a7.r2.cloudflarestorage.com"
         )

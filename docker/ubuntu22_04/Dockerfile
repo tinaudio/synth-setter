@@ -270,59 +270,38 @@ RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/nu
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-dev
+    python3 python3-dev
 RUN python3 --version && \
     python3 -c "import sys; exit(0) if sys.version_info[:2] == (3,10) else exit(1)"
+COPY --from=ghcr.io/astral-sh/uv:0.11.2 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
-# PIP_DISABLE_PIP_VERSION_CHECK=1 — suppresses version check noise in all layers
 # PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
 # PYTHONUNBUFFERED=1 — stdout/stderr stream immediately (important for logs)
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
-    python3 -m pip install --upgrade pip virtualenv \
-    && python3 -m virtualenv $VIRTUAL_ENV \
-    && ${VIRTUAL_ENV}/bin/pip install --upgrade pip
+RUN uv venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python --version && \
     python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version"
-
-# ==========================================
-# Wheels stage: build wheels for all Python deps (online, with index access).
-# Split into torch (rarely changes, ~2.5 GB) and app (changes often, smaller)
-# so that requirements-app.txt edits don't re-download torch wheels.
-# ==========================================
-FROM python-base AS wheels-torch
-COPY --from=synth-setter-src /home/build/synth-setter/requirements-torch.txt /artifacts/
-ARG TORCH_INDEX_URL
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
-    pip wheel \
-        --wheel-dir /wheels \
-        --extra-index-url ${TORCH_INDEX_URL} \
-        -r /artifacts/requirements-torch.txt
-
-FROM wheels-torch AS wheels
-COPY --from=synth-setter-src /home/build/synth-setter/requirements-app.txt /artifacts/
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
-    pip wheel \
-        --wheel-dir /wheels \
-        --find-links /wheels \
-        -r /artifacts/requirements-app.txt
 
 # ==========================================
 # Shared runtime base: Python + runtime deps on top of python-base.
 # Both dev and final-stage inherit from this stage.
 # ==========================================
 FROM python-base AS builder-install-synth-setter-deps
-# Install Python dependencies from pre-built wheels (offline, deterministic).
-# Use --mount=from=wheels to bind the wheels stage's /wheels dir during the RUN
-# without copying it into a layer (avoids the COPY+rm layer bloat anti-pattern).
+# Install all Python dependencies via uv in a single resolution pass.
+# uv's built-in cache (mounted below) persists across builds — torch wheels
+# (~2.5 GB) are only downloaded once and survive requirements-app.txt changes.
+#
+# --torch-backend: tells uv which PyTorch variant to install (e.g. cu128, cpu).
+# This replaces --extra-index-url + --index-strategy unsafe-best-match,
+# which was needed because the PyTorch CUDA index carried stale copies of
+# common packages.
 COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
-RUN --mount=from=wheels,source=/wheels,target=/wheels \
-    pip install \
-        --no-index \
-        --find-links=/wheels \
+ARG TORCH_BACKEND=cu128
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install \
+        --torch-backend ${TORCH_BACKEND} \
         -r /artifacts/requirements.txt && \
     rm -rf /artifacts/requirements*.txt
 
@@ -439,8 +418,8 @@ RUN --mount=type=secret,id=git_pat \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.
-# --no-deps: all runtime deps already installed from requirements*.txt wheels.
-RUN pip install --no-deps -e .
+# --no-deps: all runtime deps already installed via uv pip install above.
+RUN uv pip install --no-deps -e .
 
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
@@ -453,5 +432,5 @@ CMD []
 FROM ${IMAGE} AS freeze-deps
 # Record package versions for audit / reproducibility
 RUN mkdir -p /usr/local/share/audit && \
-    python -m pip freeze --all | sort > /usr/local/share/audit/pip-freeze.txt && \
+    uv pip freeze | sort > /usr/local/share/audit/pip-freeze.txt && \
     dpkg-query -W -f='${Package}=${Version}\n' | sort > /usr/local/share/audit/dpkg.txt

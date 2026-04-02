@@ -245,8 +245,11 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Install dependencies
-        run: pip install wandb
+        run: uv pip install --system wandb
 
       - name: Promote model
         id: promote

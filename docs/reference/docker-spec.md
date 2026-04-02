@@ -73,7 +73,7 @@ The `dev-snapshot` target inherits from `r2-config-base`. R2 credentials are bak
 | `SURGE_GIT_REF`              | *(pinned SHA)* | Surge XT release commit                       |
 | `BUILD_MODE`                 | `source`       | `source` or `prebuilt` (Surge install method) |
 | `R2_BUCKET`                  | *(empty)*      | Cloudflare R2 bucket name                     |
-| `TORCH_INDEX_URL`            | *(required)*   | PyTorch wheel index URL                       |
+| `TORCH_BACKEND`              | `cu128`        | PyTorch backend for uv (e.g. cu128, cpu)      |
 
 ### Baked ENV vars (available at runtime)
 

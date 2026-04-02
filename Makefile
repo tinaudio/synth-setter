@@ -69,7 +69,7 @@ train: ## Train the model
 #   DOCKER_IMAGE        Image name                  (default: tinaudio/perm)
 #   DOCKER_BUILD_MODE   "source" or "prebuilt"       (default: prebuilt)
 #   DOCKER_TARGETPLATFORM   "linux/amd64" or "linux/arm64" (default: linux/amd64)
-#   DOCKER_TORCH_IDX    PyTorch wheel index URL      (default: cu128 wheels)
+#   DOCKER_TORCH_BACKEND  PyTorch backend (e.g. cu128, cpu) (default: cu128)
 #   DOCKER_BUILD_FLAGS  Extra flags passed verbatim to docker buildx build.
 # =====================================================================
 DOCKER_FILE       ?= docker/ubuntu22_04/Dockerfile
@@ -79,7 +79,7 @@ DOCKER_BASE_IMAGE_TAG ?= ubuntu22_04
 DOCKER_BUILD_MODE ?= prebuilt
 DOCKER_TARGETPLATFORM ?= linux/amd64
 TARGETARCH ?= amd64
-DOCKER_TORCH_IDX  ?= https://download.pytorch.org/whl/cu128
+DOCKER_TORCH_BACKEND ?= cu128
 DOCKER_BUILD_FLAGS ?=
 _INTERNAL_BUILD_FLAGS :=
 CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse HEAD))
@@ -110,7 +110,7 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
 		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
 		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
-		--build-arg TORCH_INDEX_URL=$(DOCKER_TORCH_IDX) \
+		--build-arg TORCH_BACKEND=$(DOCKER_TORCH_BACKEND) \
 		--build-arg TARGETARCH=$(TARGETARCH) \
 		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
