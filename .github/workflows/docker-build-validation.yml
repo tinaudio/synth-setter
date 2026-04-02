@@ -51,8 +51,22 @@ jobs:
 
           REPO_URL="https://hub.docker.com/v2/repositories/tinaudio/perm/"
 
-          # Fetch repository metadata; fail with a clear error if the API call fails.
-          RESPONSE=$(curl -sSf -u "${DH_USER}:${DH_TOKEN}" "$REPO_URL") || {
+          # Docker Hub v2 API requires JWT auth, not basic auth.
+          JWT=$(curl -sSf -H "Content-Type: application/json" \
+            -d "{\"username\":\"${DH_USER}\",\"password\":\"${DH_TOKEN}\"}" \
+            "https://hub.docker.com/v2/users/login/" \
+            | jq -r '.token // empty') || {
+            echo "::error::Failed to authenticate with Docker Hub. Check DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets."
+            exit 1
+          }
+
+          if [ -z "$JWT" ]; then
+            echo "::error::Docker Hub login returned empty token. Check DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets."
+            exit 1
+          fi
+
+          # Fetch repository metadata with JWT auth.
+          RESPONSE=$(curl -sSf -H "Authorization: JWT ${JWT}" "$REPO_URL") || {
             echo "::error::Failed to query Docker Hub API at ${REPO_URL} when checking repo visibility."
             exit 1
           }
