@@ -1,6 +1,63 @@
 # CHANGELOG
 
 
+## v0.1.4 (2026-04-02)
+
+### Bug Fixes
+
+- **ci**: Add fork guard to auto-approve workflow
+  ([#449](https://github.com/tinaudio/synth-setter/pull/449),
+  [`dd6a411`](https://github.com/tinaudio/synth-setter/commit/dd6a411621b5f80bf952b591eb7c41f3b0ec4b26))
+
+The comment said "not a draft or fork" but only checked draft. Compare head repo against base repo
+  to reject fork PRs.
+
+### Chores
+
+- **ci**: Enable uv caching and migrate remaining pip references
+  ([#431](https://github.com/tinaudio/synth-setter/pull/431),
+  [`53f0290`](https://github.com/tinaudio/synth-setter/commit/53f0290e4e9dc7fbce223ee4c88cc2b98f8ceefa))
+
+* chore(ci): enable uv caching and migrate remaining pip references
+
+Enable `enable-cache: true` on all `astral-sh/setup-uv@v6` steps for warm-cache CI speedups. Migrate
+  Makefile install/coverage targets and docs from pip to uv pip.
+
+Closes #423
+
+* docs(readme): add uv install reference and bootstrap Makefile
+
+Add `pip install uv` bootstrap to Makefile install/coverage targets so they work without uv
+  pre-installed. Add uv install comment to README quick-start.
+
+Addresses review feedback on PR #431.
+
+- **ci**: Restrict auto-approve to ktinubu PRs only
+  ([#447](https://github.com/tinaudio/synth-setter/pull/447),
+  [`6a122d9`](https://github.com/tinaudio/synth-setter/commit/6a122d94e98934f76d180eb7686c010514d3d73e))
+
+Add author check before evaluating CI/review conditions so the approval bot only acts on PRs
+  authored by ktinubu.
+
+- **plumb**: Expand .plumbignore to reduce false-positive triggers
+  ([#445](https://github.com/tinaudio/synth-setter/pull/445),
+  [`71d0758`](https://github.com/tinaudio/synth-setter/commit/71d0758ffd11dc2408e70ac0b8b06e82830bb704))
+
+### Documentation
+
+- **ci**: Add phase-parenting rule and goal milestones to taxonomy
+  ([#444](https://github.com/tinaudio/synth-setter/pull/444),
+  [`e065319`](https://github.com/tinaudio/synth-setter/commit/e06531955321a4cc4965643b6da105ecce63da73))
+
+* docs(ci): add phase-parenting rule and goal milestones to taxonomy
+
+* chore: bump skills submodule to include phase-parenting enforcement
+
+* fix(ci): upgrade phase-parenting hook from WARN to BLOCK
+
+* fix(ci): update header comment to match BLOCK behavior
+
+
 ## v0.1.3 (2026-04-01)
 
 ### Bug Fixes
