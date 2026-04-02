@@ -418,7 +418,7 @@ RUN --mount=type=secret,id=git_pat \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.
-# --no-deps: all runtime deps already installed from requirements*.txt wheels.
+# --no-deps: all runtime deps already installed via uv pip install above.
 RUN uv pip install --no-deps -e .
 
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
