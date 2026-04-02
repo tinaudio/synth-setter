@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+title: synth-setter
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Khaled
+    family-names: Tinubu
+license: GPL-3.0-only
+repository-code: https://github.com/tinaudio/synth-setter
