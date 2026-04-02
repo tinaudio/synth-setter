@@ -137,9 +137,9 @@ the same R2 path structure and ID conventions defined in
 
 ## Design Documents
 
-| Document | Covers |
-|----------|--------|
-| [data-pipeline.md](design/data-pipeline.md) | Distributed dataset generation, finalization, reconciliation |
-| [training-pipeline.md](design/training-pipeline.md) | Training orchestration, checkpoint durability, resume |
-| [eval-pipeline.md](design/eval-pipeline.md) | Evaluation pipeline (predict, render, metrics) and R2 integration |
-| [storage-provenance-spec.md](design/storage-provenance-spec.md) | Authoritative R2 paths, W&B artifacts, ID conventions |
+| Document                                                        | Covers                                                            |
+| --------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [data-pipeline.md](design/data-pipeline.md)                     | Distributed dataset generation, finalization, reconciliation      |
+| [training-pipeline.md](design/training-pipeline.md)             | Training orchestration, checkpoint durability, resume             |
+| [eval-pipeline.md](design/eval-pipeline.md)                     | Evaluation pipeline (predict, render, metrics) and R2 integration |
+| [storage-provenance-spec.md](design/storage-provenance-spec.md) | Authoritative R2 paths, W&B artifacts, ID conventions             |
