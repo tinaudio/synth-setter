@@ -29,7 +29,13 @@ def main() -> None:
 
     try:
         for field_name, value in cfg.model_dump().items():
-            dest.write(f"{field_name}={value}\n")
+            str_value = str(value)
+            if "\n" in str_value or "\r" in str_value:
+                raise ValueError(
+                    f"GITHUB_OUTPUT value for '{field_name}' contains a newline or carriage-return"
+                    " character; this would inject extra output keys"
+                )
+            dest.write(f"{field_name}={str_value}\n")
     finally:
         if dest is not sys.stdout:
             dest.close()
