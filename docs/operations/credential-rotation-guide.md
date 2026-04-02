@@ -20,20 +20,20 @@ ______________________________________________________________________
 
 ## Credential Inventory
 
-| Credential                 | Where Used                                     | Storage Locations                                                          |
-| -------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------- |
-| `R2_ACCESS_KEY_ID`         | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`)                       |
-| `R2_SECRET_ACCESS_KEY`     | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`)                       |
-| `R2_ENDPOINT`              | Docker builds (build-arg, not secret)          | Image config YAML (`configs/image/`), `.env`, Docker image (`rclone.conf`) |
-| `WANDB_API_KEY`            | Training, evaluation, promotion, Docker images | GitHub Secrets, `.env`, Docker image (`~/.netrc`)                          |
-| `GIT_PAT`                  | Docker builds, CI workflows                    | GitHub Secrets, `.env`                                                     |
-| `GITHUB_TOKEN`             | CI workflows (automatic)                       | Automatic per workflow run                                                 |
-| `RUNPOD_API_KEY`           | Pipeline orchestration                         | GitHub Secrets, `.env`                                                     |
-| `DOCKERHUB_USERNAME`       | CI image push workflows                        | GitHub Secrets                                                             |
-| `DOCKERHUB_TOKEN`          | CI image push workflows                        | GitHub Secrets                                                             |
-| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow        | GitHub Secrets                                                             |
-| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow        | GitHub Secrets                                                             |
-| `ANTHROPIC_API_KEY`        | Claude review workflow                         | GitHub Secrets                                                             |
+| Credential                 | Where Used                                     | Storage Locations                                                                               |
+| -------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `R2_ACCESS_KEY_ID`         | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`)                                            |
+| `R2_SECRET_ACCESS_KEY`     | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`)                                            |
+| `R2_ENDPOINT`              | Docker builds (build-arg, not secret)          | Image config YAML (`r2_endpoint` key in `configs/image/`), `.env`, Docker image (`rclone.conf`) |
+| `WANDB_API_KEY`            | Training, evaluation, promotion, Docker images | GitHub Secrets, `.env`, Docker image (`~/.netrc`)                                               |
+| `GIT_PAT`                  | Docker builds, CI workflows                    | GitHub Secrets, `.env`                                                                          |
+| `GITHUB_TOKEN`             | CI workflows (automatic)                       | Automatic per workflow run                                                                      |
+| `RUNPOD_API_KEY`           | Pipeline orchestration                         | GitHub Secrets, `.env`                                                                          |
+| `DOCKERHUB_USERNAME`       | CI image push workflows                        | GitHub Secrets                                                                                  |
+| `DOCKERHUB_TOKEN`          | CI image push workflows                        | GitHub Secrets                                                                                  |
+| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow        | GitHub Secrets                                                                                  |
+| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow        | GitHub Secrets                                                                                  |
+| `ANTHROPIC_API_KEY`        | Claude review workflow                         | GitHub Secrets                                                                                  |
 
 ______________________________________________________________________
 
@@ -63,7 +63,8 @@ ______________________________________________________________________
 6. Update local `.env` files on all developer machines.
 7. Rebuild Docker images (existing images contain old baked credentials):
    ```bash
-   make docker-build-dev-snapshot GIT_REF=<sha> GIT_PAT=<token>
+   # Ensure GIT_PAT is set in your environment (for example, via `.env`)
+   make docker-build-dev-snapshot GIT_REF=<sha>
    ```
 8. Revoke the old API token in the Cloudflare dashboard.
 
@@ -86,7 +87,8 @@ since it is passed as a Docker build-arg and stored alongside R2 credentials.
 
 **Where stored:**
 
-- Image config YAML (`configs/image/dev-snapshot.yaml`) — read by CI via
+- Image config YAML — stored under the key `r2_endpoint` in
+  `configs/image/dev-snapshot.yaml`, read by CI via
   `pipeline.ci.load_image_config` and passed as a Docker `--build-arg`
 - Local `.env` files
 - Baked into Docker images (written to `rclone.conf`)
@@ -120,8 +122,8 @@ ______________________________________________________________________
 **Verification:**
 
 ```bash
-# Test W&B authentication
-WANDB_API_KEY=wapi_xxxxxxxxxxxx wandb login --verify
+# Test W&B authentication (assumes WANDB_API_KEY is already exported, e.g. from .env)
+wandb login --verify
 ```
 
 ______________________________________________________________________
@@ -152,8 +154,9 @@ workflows for accessing the repository source tarball.
 **Verification:**
 
 ```bash
-# Test Docker build with new PAT
-make docker-build-dev-snapshot GIT_REF=main GIT_PAT=github_pat_xxxxxxxxxxxx
+# Ensure GIT_PAT is already exported in your environment (for example, via `.env`)
+# Then test Docker build with new PAT
+make docker-build-dev-snapshot GIT_REF=main
 ```
 
 Confirm the `docker-build-validation.yml` workflow passes.
