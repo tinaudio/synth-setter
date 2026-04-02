@@ -42,14 +42,27 @@ jobs:
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
           DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          HTTP_CODE=$(curl -s -o /tmp/dh-repo.json -w '%{http_code}' \
-            -u "${DH_USER}:${DH_TOKEN}" \
-            "https://hub.docker.com/v2/repositories/tinaudio/perm/")
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Docker Hub API returned HTTP ${HTTP_CODE} for tinaudio/perm. Check DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets."
+          set -euo pipefail
+
+          if [ -z "${DH_USER:-}" ] || [ -z "${DH_TOKEN:-}" ]; then
+            echo "::error::Docker Hub credentials (DOCKERHUB_USERNAME / DOCKERHUB_TOKEN) are not configured."
             exit 1
           fi
-          IS_PRIVATE=$(jq -r '.is_private' /tmp/dh-repo.json)
+
+          REPO_URL="https://hub.docker.com/v2/repositories/tinaudio/perm/"
+
+          # Fetch repository metadata; fail with a clear error if the API call fails.
+          RESPONSE=$(curl -sSf -u "${DH_USER}:${DH_TOKEN}" "$REPO_URL") || {
+            echo "::error::Failed to query Docker Hub API at ${REPO_URL} when checking repo visibility."
+            exit 1
+          }
+
+          # Parse is_private flag; fail explicitly if the response shape is unexpected.
+          IS_PRIVATE=$(printf '%s' "$RESPONSE" | jq -re '.is_private') || {
+            echo "::error::Failed to parse Docker Hub API response (missing or invalid .is_private field) when checking repo visibility."
+            exit 1
+          }
+
           if [ "$IS_PRIVATE" != "true" ]; then
             echo "::error::Docker Hub repository tinaudio/perm is NOT private (is_private=${IS_PRIVATE}). Dev-snapshot images contain baked-in R2 and W&B credentials. Set the repo to private immediately."
             exit 1
