@@ -15,6 +15,8 @@ For detailed internal standards (aimed at AI-assisted development), see
 - **make** (GNU Make)
 - **pre-commit** (`pip install pre-commit`)
 - **Git** (with submodule support)
+- **[bats](https://github.com/bats-core/bats-core)** (optional, for shell tests:
+  `brew install bats-core` on macOS or `apt-get install bats` on Debian/Ubuntu)
 
 ### Clone and install
 
@@ -119,7 +121,7 @@ auto-fixes what it can.
 ```bash
 make test           # quick tests -- excludes slow and requires_vst markers
 make test-full      # all tests (some require GPU or VST plugins)
-make test-bats      # BATS shell tests
+make test-bats      # BATS shell tests (requires bats — see Prerequisites)
 make coverage       # tests with coverage report (HTML + terminal)
 make benchmark      # performance benchmarks
 ```
