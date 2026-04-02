@@ -2,6 +2,7 @@
 name = "synth-permutations"
 version = "0.1.4"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
+authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
