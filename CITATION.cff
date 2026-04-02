@@ -10,6 +10,7 @@ authors:
   - family-names: Tinubu
     given-names: Khaled
     alias: ktinubu
+    affiliation: Google
 repository-code: https://github.com/tinaudio/synth-setter
 license: MIT
 keywords:
@@ -32,6 +33,7 @@ preferred-citation:
       affiliation: Queen Mary University of London
     - family-names: Tinubu
       given-names: Khaled
+      affiliation: Google
   year: 2025
   conference:
     name: "ISMIR 2025"
