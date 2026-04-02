@@ -1,3 +1,3 @@
 [submodule ".claude/skills"]
 	path = .claude/skills
-	url = git@github.com:tinaudio/skills.git
+	url = https://github.com/tinaudio/skills.git
