@@ -287,46 +287,20 @@ RUN python --version && \
     python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version"
 
 # ==========================================
-# Wheels stage: build wheels for all Python deps (online, with index access).
-# Split into torch (rarely changes, ~2.5 GB) and app (changes often, smaller)
-# so that requirements-app.txt edits don't re-download torch wheels.
-# ==========================================
-FROM python-base AS wheels-torch
-COPY --from=synth-setter-src /home/build/synth-setter/requirements-torch.txt /artifacts/
-ARG TORCH_INDEX_URL
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
-    pip wheel \
-        --wheel-dir /wheels \
-        --extra-index-url ${TORCH_INDEX_URL} \
-        -r /artifacts/requirements-torch.txt
-
-FROM wheels-torch AS wheels
-COPY --from=synth-setter-src /home/build/synth-setter/requirements-app.txt /artifacts/
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
-    pip wheel \
-        --wheel-dir /wheels \
-        --find-links /wheels \
-        -r /artifacts/requirements-app.txt
-
-# ==========================================
 # Shared runtime base: Python + runtime deps on top of python-base.
 # Both dev and final-stage inherit from this stage.
 # ==========================================
 FROM python-base AS builder-install-synth-setter-deps
-# Install Python dependencies from pre-built wheels (offline, deterministic).
-# Use --mount=from=wheels to bind the wheels stage's /wheels dir during the RUN
-# without copying it into a layer (avoids the COPY+rm layer bloat anti-pattern).
-#
-# --no-deps: skip uv's resolver because PyTorch wheels use local version
-# suffixes (+cu128) that uv's strict PEP 440 resolver can't match against
-# bare version specs (e.g. torchvision requires torch==2.11.0 but the wheel
-# is torch-2.11.0+cu128). pip wheel already resolved all deps correctly,
-# so we install every built wheel directly.
-RUN --mount=from=wheels,source=/wheels,target=/wheels \
+# Install all Python dependencies via uv in a single resolution pass.
+# uv's built-in cache (mounted below) persists across builds — torch wheels
+# (~2.5 GB) are only downloaded once and survive requirements-app.txt changes.
+COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
+ARG TORCH_INDEX_URL
+RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install \
-        --no-index \
-        --no-deps \
-        /wheels/*.whl
+        --extra-index-url ${TORCH_INDEX_URL} \
+        -r /artifacts/requirements.txt && \
+    rm -rf /artifacts/requirements*.txt
 
 # Runtime apt packages for headless VST loading + rclone for R2 uploads
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
