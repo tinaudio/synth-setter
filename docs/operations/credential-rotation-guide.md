@@ -327,7 +327,7 @@ must be revoked immediately.
 
 ### 1. Revoke first, update second
 
-The priority is to **invalidate the compromised credential immediately**, even
+The priority is to **invalidate the compromised credential**, even
 before replacements are in place. This will temporarily break CI and local
 workflows.
 
@@ -342,31 +342,14 @@ workflows.
 ### 2. Issue replacement credentials
 
 1. Create the new credential at its source.
-2. Update GitHub Secrets immediately.
+2. Update GitHub Secrets.
 3. Rebuild Docker images if the credential was baked in.
 
-### 3. Notify the team
-
-1. Post in the team channel that an emergency rotation was performed.
-2. Specify which credential was rotated.
-3. Ask developers to update their local `.env` files.
-4. Note any running workloads (RunPod workers, training runs) that may be
-   affected.
-
-### 4. Post-incident
-
-1. Determine how the credential was exposed.
-2. Check CI logs for accidental credential printing (look for `echo` or debug
-   statements that may have leaked values).
-3. Review Docker build logs for credential exposure.
-4. File an incident report if the exposure was confirmed.
-
+### 3. Create a github issue assigned to ktinubu@ documenting that rotation took place.
 ______________________________________________________________________
 
 ## Notes
 
-- **R2 endpoint and bucket name** are not secrets. `R2_ENDPOINT` is a
-  well-known Cloudflare URL. The bucket name is `intermediate-data`.
 - **`GITHUB_TOKEN`** is automatically provisioned per workflow run and does not
   require manual rotation.
 - **Docker images with baked credentials** are a secondary exposure surface.
