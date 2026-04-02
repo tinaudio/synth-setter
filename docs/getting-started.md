@@ -86,11 +86,12 @@ do not need any external datasets, VST plugins, or cloud storage.
 ### 3a. Train a model
 
 ```bash
-python src/train.py +experiment=kosc/ffn_mse trainer.max_epochs=5
+python src/train.py experiment=kosc/ffn_mse trainer.max_steps=5000
 ```
 
-This runs a feed-forward network with MSE loss on the k-osc task for 5 epochs.
-You should see Lightning's progress bar with decreasing loss values.
+This runs a feed-forward network with MSE loss on the k-osc task for 5,000
+training steps. You should see Lightning's progress bar with decreasing loss
+values.
 
 **What happens:**
 
@@ -104,19 +105,19 @@ You should see Lightning's progress bar with decreasing loss values.
 
 The `configs/experiment/kosc/` directory contains several variants:
 
-| Config | Description |
-| --- | --- |
-| `kosc/base` | Base config (used by other variants) |
-| `kosc/ffn_mse` | Feed-forward network, MSE loss |
-| `kosc/ffn_chamfer` | Feed-forward network, Chamfer loss |
-| `kosc/flow` | Flow matching model |
-| `kosc/flow_asym` | Flow matching, asymmetric |
-| `kosc/flowmlp` | Flow MLP variant |
+| Config             | Description                          |
+| ------------------ | ------------------------------------ |
+| `kosc/base`        | Base config (used by other variants) |
+| `kosc/ffn_mse`     | Feed-forward network, MSE loss       |
+| `kosc/ffn_chamfer` | Feed-forward network, Chamfer loss   |
+| `kosc/flow`        | Flow matching model                  |
+| `kosc/flow_asym`   | Flow matching, asymmetric            |
+| `kosc/flowmlp`     | Flow MLP variant                     |
 
 Run any of them with:
 
 ```bash
-python src/train.py +experiment=kosc/<variant>
+python src/train.py experiment=kosc/<variant>
 ```
 
 ______________________________________________________________________
@@ -136,8 +137,8 @@ programmatically driving this plugin.
 **Install:**
 
 1. Download the installer from [surge-synthesizer.github.io](https://surge-synthesizer.github.io/)
-1. Run the installer and follow the prompts
-1. Note the installation path (the test suite needs to find the plugin binary)
+2. Run the installer and follow the prompts
+3. Note the installation path (the test suite needs to find the plugin binary)
 
 **Verify:**
 
@@ -204,8 +205,8 @@ codebase.
 **Setup:**
 
 1. Create an account at [wandb.ai](https://wandb.ai/)
-1. Get your API key from [wandb.ai/authorize](https://wandb.ai/authorize)
-1. Log in:
+2. Get your API key from [wandb.ai/authorize](https://wandb.ai/authorize)
+3. Log in:
 
 ```bash
 wandb login
@@ -227,7 +228,7 @@ WANDB_PROJECT=synth-setter   # W&B project name
 To train **without W&B** (e.g., for local experimentation), override the logger:
 
 ```bash
-python src/train.py +experiment=kosc/ffn_mse logger=csv
+python src/train.py experiment=kosc/ffn_mse logger=csv
 ```
 
 This logs metrics to CSV files instead.
@@ -243,8 +244,8 @@ RunPod for local development or training.**
 If you are working on the data pipeline and need to run distributed generation:
 
 1. Create a RunPod account at [runpod.io](https://www.runpod.io/)
-1. Generate an API key from the RunPod dashboard
-1. Set the environment variable:
+2. Generate an API key from the RunPod dashboard
+3. Set the environment variable:
 
 ```
 RUNPOD_API_KEY=<your-api-key>
@@ -280,22 +281,22 @@ Override any config value from the command line:
 
 ```bash
 # Change batch size
-python src/train.py +experiment=kosc/ffn_mse data.batch_size=32
+python src/train.py experiment=kosc/ffn_mse data.batch_size=32
 
 # Change learning rate
-python src/train.py +experiment=kosc/ffn_mse model.lr=1e-4
+python src/train.py experiment=kosc/ffn_mse model.optimizer.lr=1e-4
 
 # Use CPU trainer instead of GPU
-python src/train.py +experiment=kosc/ffn_mse trainer=cpu
+python src/train.py experiment=kosc/ffn_mse trainer=cpu
 
 # Use TensorBoard logger instead of W&B
-python src/train.py +experiment=kosc/ffn_mse logger=tensorboard
+python src/train.py experiment=kosc/ffn_mse logger=tensorboard
 
-# Limit training epochs
-python src/train.py +experiment=kosc/ffn_mse trainer.max_epochs=10
+# Limit training steps
+python src/train.py experiment=kosc/ffn_mse trainer.max_steps=10000
 
 # Run in debug mode (1 batch per epoch, no logging)
-python src/train.py +experiment=kosc/ffn_mse debug=default
+python src/train.py experiment=kosc/ffn_mse debug=default
 ```
 
 For the full configuration reference, see
@@ -373,13 +374,13 @@ make format
 Reduce the batch size:
 
 ```bash
-python src/train.py +experiment=kosc/ffn_mse data.batch_size=8
+python src/train.py experiment=kosc/ffn_mse data.batch_size=8
 ```
 
 Or switch to CPU for debugging:
 
 ```bash
-python src/train.py +experiment=kosc/ffn_mse trainer=cpu
+python src/train.py experiment=kosc/ffn_mse trainer=cpu
 ```
 
 ### W&B login issues
