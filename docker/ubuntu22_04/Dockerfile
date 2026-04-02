@@ -316,13 +316,17 @@ FROM python-base AS builder-install-synth-setter-deps
 # Install Python dependencies from pre-built wheels (offline, deterministic).
 # Use --mount=from=wheels to bind the wheels stage's /wheels dir during the RUN
 # without copying it into a layer (avoids the COPY+rm layer bloat anti-pattern).
-COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
+#
+# --no-deps: skip uv's resolver because PyTorch wheels use local version
+# suffixes (+cu128) that uv's strict PEP 440 resolver can't match against
+# bare version specs (e.g. torchvision requires torch==2.11.0 but the wheel
+# is torch-2.11.0+cu128). pip wheel already resolved all deps correctly,
+# so we install every built wheel directly.
 RUN --mount=from=wheels,source=/wheels,target=/wheels \
     uv pip install \
         --no-index \
-        --find-links=/wheels \
-        -r /artifacts/requirements.txt && \
-    rm -rf /artifacts/requirements*.txt
+        --no-deps \
+        /wheels/*.whl
 
 # Runtime apt packages for headless VST loading + rclone for R2 uploads
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
