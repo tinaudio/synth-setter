@@ -238,7 +238,7 @@ class TestMainInvalidSha:
 
 
 class TestNewlineInjection:
-    """Main() rejects config values that contain newlines."""
+    """Main() rejects config values that contain newlines or carriage returns."""
 
     def test_main_rejects_value_with_newline(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -272,7 +272,7 @@ r2_bucket: test-bucket
             ],
         )
 
-        with pytest.raises(ValueError, match="contains a newline"):
+        with pytest.raises(ValueError, match="contains a newline or carriage-return"):
             main()
 
     def test_main_rejects_value_with_carriage_return(
@@ -307,7 +307,7 @@ r2_bucket: test-bucket
             ],
         )
 
-        with pytest.raises(ValueError, match="contains a newline"):
+        with pytest.raises(ValueError, match="contains a newline or carriage-return"):
             main()
 
 

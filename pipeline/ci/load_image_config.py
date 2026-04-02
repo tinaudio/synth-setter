@@ -32,8 +32,8 @@ def main() -> None:
             str_value = str(value)
             if "\n" in str_value or "\r" in str_value:
                 raise ValueError(
-                    f"GITHUB_OUTPUT value for '{field_name}' contains a newline character; "
-                    "this would inject extra output keys"
+                    f"GITHUB_OUTPUT value for '{field_name}' contains a newline or carriage-return"
+                    " character; this would inject extra output keys"
                 )
             dest.write(f"{field_name}={str_value}\n")
     finally:
