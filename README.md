@@ -124,18 +124,22 @@ configs/experiment/kosc                    k-osc experiment configs
 configs/experiment/surge                   Surge XT experiment configs
 ```
 
-## Publication
-
-This repository accompanies a submission to ISMIR 2025. An online supplement with
-audio examples is available at
-[benhayes.net/synth-perm/](https://benhayes.net/synth-perm/).
-
 ## Documentation
 
 - Getting started guide (coming soon)
 - [Design documents](docs/design/)
 - Contributing guidelines (coming soon)
 - Run `make help` for available commands
+
+## Acknowledgments
+
+This project builds on prior work by Ben Hayes (Queen Mary University of London),
+whose research and generation infrastructure provided the foundation for the
+synthesizer parameter estimation pipeline. The accompanying paper is available at
+[benhayes.net/synth-perm](https://benhayes.net/synth-perm/).
+
+[Surge XT](https://surge-synthesizer.github.io/) is developed by the
+Surge Synth Team and is used in this project under the GPL-3.0 license.
 
 ## License
 
