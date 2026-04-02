@@ -18,8 +18,8 @@ For detailed internal standards (aimed at AI-assisted development), see
 
 ### Clone and install
 
-The repository uses a git submodule for shared skills. Always clone with
-`--recurse-submodules`:
+The repository uses a git submodule for shared skills (configured with an SSH
+URL). Always clone with `--recurse-submodules`:
 
 ```bash
 git clone --recurse-submodules https://github.com/tinaudio/synth-setter.git
@@ -31,6 +31,15 @@ If you already cloned without that flag:
 ```bash
 git submodule update --init
 ```
+
+> **Note:** The submodule in `.gitmodules` uses an SSH URL
+> (`git@github.com:tinaudio/skills.git`). If you don't have SSH keys configured
+> for GitHub, override the URL to use HTTPS:
+>
+> ```bash
+> git config submodule..claude/skills.url https://github.com/tinaudio/skills.git
+> git submodule update --init
+> ```
 
 Install the project in editable mode with development dependencies:
 
@@ -227,7 +236,8 @@ plumb coverage      # identify what needs to be implemented or tested
 ### Escape hatch
 
 If Plumb intercepts a commit that doesn't touch spec-relevant files (e.g., a
-docs-only change), you can skip it:
+docs-only change), you can skip it with the `PLUMB_SKIP` environment variable
+(checked by the Plumb pre-commit hook in `.git/hooks/pre-commit`):
 
 ```bash
 PLUMB_SKIP=1 git commit -m "docs: your message"
@@ -261,8 +271,5 @@ Use the same conventional commit format as your commit message (e.g.,
 
 ## Code of conduct
 
-Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
-
-## License
-
-This project's license is described in [LICENSE](LICENSE).
+Please be respectful and constructive in all interactions. We expect
+contributors to act professionally and collaboratively.
