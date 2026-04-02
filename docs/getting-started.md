@@ -28,7 +28,7 @@ cd synth-setter
 If you already cloned without `--recurse-submodules`, initialize the submodules:
 
 ```bash
-git submodule update --init
+git submodule update --init --recursive
 ```
 
 > **Note on submodules:** This repository includes a git submodule whose URL is
