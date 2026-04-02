@@ -102,8 +102,6 @@ pipeline/      Distributed data pipeline
   schemas/     Pydantic models (config, spec, prefix, image_config)
   entrypoints/ Pipeline entry points
   ci/          CI validation scripts
-  stages/      Generate and finalize stage logic
-  backends/    Compute providers (local, RunPod)
 configs/       Hydra YAML configs and pipeline configs
 scripts/       Standalone scripts
 tests/         Test suite (mirrors src/ and pipeline/ structure)
