@@ -32,8 +32,33 @@ on:
       - "tests/docker/**"
 
 jobs:
+  visibility-check:
+    name: Verify Docker Hub repo is private
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check tinaudio/perm visibility
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/dh-repo.json -w '%{http_code}' \
+            -u "${DH_USER}:${DH_TOKEN}" \
+            "https://hub.docker.com/v2/repositories/tinaudio/perm/")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Docker Hub API returned HTTP ${HTTP_CODE} for tinaudio/perm. Check DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets."
+            exit 1
+          fi
+          IS_PRIVATE=$(jq -r '.is_private' /tmp/dh-repo.json)
+          if [ "$IS_PRIVATE" != "true" ]; then
+            echo "::error::Docker Hub repository tinaudio/perm is NOT private (is_private=${IS_PRIVATE}). Dev-snapshot images contain baked-in R2 and W&B credentials. Set the repo to private immediately."
+            exit 1
+          fi
+          echo "Docker Hub repository tinaudio/perm is private."
+
   docker-build:
     name: Build and push Docker image
+    needs: visibility-check
     runs-on: ubuntu-latest-4core
     timeout-minutes: 60
 
