@@ -86,18 +86,20 @@ do not need any external datasets, VST plugins, or cloud storage.
 ### 3a. Train a model
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse trainer.max_steps=5000
+python src/train.py experiment=kosc/ffn_mse trainer.max_steps=5000 trainer.min_steps=null
 ```
 
 This runs a feed-forward network with MSE loss on the k-osc task for 5,000
-training steps. You should see Lightning's progress bar with decreasing loss
-values.
+training steps. The `trainer.min_steps=null` override is needed because the
+default trainer config sets `min_steps: 400_000`, which would otherwise prevent
+the run from stopping at 5,000 steps. You should see Lightning's progress bar
+with decreasing loss values.
 
 **What happens:**
 
 - Hydra composes the config from `configs/train.yaml` + the experiment override
 - Lightning sets up the data module, model, callbacks, and trainer
-- Checkpoints are saved under `logs/train/runs/<timestamp>/checkpoints/`
+- Checkpoints are saved under `logs/{task_name}/{experiment_name}/{run_name}-{timestamp}/checkpoints/` (for this command: `logs/train/kosc/ffn_mse-<timestamp>/checkpoints/`)
 - If W&B is configured (see [section 4c](#4c-weights--biases-wb)), metrics are
   logged to your dashboard
 
@@ -190,10 +192,10 @@ R2_BUCKET=<bucket-name>
 **Verify:**
 
 ```bash
-rclone ls r2:<bucket-name>/ --max-depth 1
+rclone lsd r2:<bucket-name>/
 ```
 
-You should see top-level directories like `data/` and `metadata/`.
+You should see top-level directories like `data/`, `train/`, and `eval/`.
 
 ### 4c. Weights & Biases (W&B)
 
@@ -306,18 +308,15 @@ ______________________________________________________________________
 
 ## 6. Evaluation
 
-After training, evaluate the model on the test set:
-
-```bash
-python src/eval.py
-```
-
-By default, evaluation uses the config and checkpoint from the most recent
-training run. You can point it at a specific checkpoint:
+After training, evaluate the model on the test set. You must provide the
+checkpoint path (`ckpt_path` is required):
 
 ```bash
 python src/eval.py ckpt_path=/path/to/checkpoint.ckpt
 ```
+
+Use the checkpoint saved during training (see the checkpoint path in
+[section 3a](#3a-train-a-model)).
 
 ______________________________________________________________________
 
@@ -336,7 +335,8 @@ make docker-build-dev-snapshot \
   R2_ACCESS_KEY_ID=<key> \
   R2_SECRET_ACCESS_KEY=<secret> \
   R2_ENDPOINT=<endpoint> \
-  R2_BUCKET=<bucket>
+  R2_BUCKET=<bucket> \
+  DOCKER_BUILD_FLAGS=--load
 ```
 
 See `make help` for the full list of Docker-related variables and targets. The
