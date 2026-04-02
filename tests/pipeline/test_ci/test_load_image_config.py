@@ -251,7 +251,7 @@ base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146af
 base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
-torch_index_url: "https://download.pytorch.org/whl/cu128"
+torch_backend: "cu128"
 r2_endpoint: "https://example.r2.cloudflarestorage.com"
 r2_bucket: test-bucket
 """
@@ -286,7 +286,7 @@ base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146af
 base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
-torch_index_url: "https://download.pytorch.org/whl/cu128"
+torch_backend: "cu128"
 r2_endpoint: "https://example.r2.cloudflarestorage.com"
 r2_bucket: test-bucket
 """
