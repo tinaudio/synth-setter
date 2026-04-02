@@ -31,6 +31,16 @@ If you already cloned without `--recurse-submodules`, initialize the submodules:
 git submodule update --init
 ```
 
+> **Note on submodules:** This repository includes a git submodule whose URL is
+> SSH-based (`git@github.com:...`). If you clone via HTTPS and do not have SSH
+> keys configured, submodule checkout will fail. Work around this by telling Git
+> to rewrite SSH GitHub URLs to HTTPS:
+>
+> ```bash
+> git config url."https://github.com/".insteadOf git@github.com:
+> git submodule update --init --recursive
+> ```
+
 ### 2b. Create a virtual environment (recommended)
 
 ```bash
@@ -180,7 +190,21 @@ rclone config
 
 Follow the prompts to create a new remote named `r2` with provider
 `Cloudflare R2` (or `S3` with the R2 endpoint). Alternatively, set these
-environment variables in your `.env` file:
+environment variables in your `.env` file so rclone can auto-configure the `r2`
+remote:
+
+```
+RCLONE_CONFIG_R2_TYPE=s3
+RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+RCLONE_CONFIG_R2_ACCESS_KEY_ID=<your-access-key>
+RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<your-secret-key>
+RCLONE_CONFIG_R2_ENDPOINT=<your-r2-endpoint-url>
+```
+
+The Docker build uses a different set of variable names (`R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY`, etc.) which are passed as BuildKit secrets. Add these
+to `.env` as well if you plan to build Docker images (see
+[section 7](#7-docker-workflow)):
 
 ```
 R2_ACCESS_KEY_ID=<your-access-key>
@@ -328,16 +352,24 @@ rclone/R2 configuration.
 
 **Build the image:**
 
+The Makefile reads secrets from environment variables and passes them as
+BuildKit secrets (never embedded in image layers). Load your `.env` first to
+avoid leaking credentials in shell history or process listings:
+
 ```bash
+# Load secrets from .env into the current shell
+set -a
+source .env
+set +a
+
 make docker-build-dev-snapshot \
   GIT_REF=$(git rev-parse HEAD) \
-  GIT_PAT=<your-github-pat> \
-  R2_ACCESS_KEY_ID=<key> \
-  R2_SECRET_ACCESS_KEY=<secret> \
-  R2_ENDPOINT=<endpoint> \
-  R2_BUCKET=<bucket> \
   DOCKER_BUILD_FLAGS=--load
 ```
+
+The target expects `GIT_PAT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+`R2_ENDPOINT`, and `R2_BUCKET` to be set in the environment (all of which
+should be in your `.env` file -- see [section 4b](#4b-rclone--cloudflare-r2)).
 
 See `make help` for the full list of Docker-related variables and targets. The
 `GIT_REF` argument controls which commit is baked into the image (use a full
