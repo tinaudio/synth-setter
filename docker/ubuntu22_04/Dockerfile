@@ -273,7 +273,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     python3 python3-pip python3-dev
 RUN python3 --version && \
     python3 -c "import sys; exit(0) if sys.version_info[:2] == (3,10) else exit(1)"
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.4.29 /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
 # PIP_DISABLE_PIP_VERSION_CHECK=1 — suppresses version check noise in pip wheel layers
 # PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
