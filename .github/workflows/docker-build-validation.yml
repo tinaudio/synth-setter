@@ -38,36 +38,25 @@ jobs:
     timeout-minutes: 2
     steps:
       - name: Check tinaudio/perm visibility
-        env:
-          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          if [ -z "${DH_USER:-}" ] || [ -z "${DH_TOKEN:-}" ]; then
-            echo "::error::Docker Hub credentials (DOCKERHUB_USERNAME / DOCKERHUB_TOKEN) are not configured."
-            exit 1
-          fi
-
           REPO_URL="https://hub.docker.com/v2/repositories/tinaudio/perm/"
 
-          # Docker Hub PATs authenticate as Bearer tokens against the Hub API.
-          RESPONSE=$(curl -sSf -H "Authorization: Bearer ${DH_TOKEN}" "$REPO_URL") || {
-            echo "::error::Failed to query Docker Hub API at ${REPO_URL} when checking repo visibility."
-            exit 1
-          }
+          # Query WITHOUT credentials: if an anonymous user can see the repo,
+          # it's public and leaking baked-in secrets. A 404 means the repo is
+          # private (or doesn't exist — either way, not publicly exposed).
+          HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$REPO_URL")
 
-          # Parse is_private flag; fail explicitly if the response shape is unexpected.
-          IS_PRIVATE=$(printf '%s' "$RESPONSE" | jq -re '.is_private') || {
-            echo "::error::Failed to parse Docker Hub API response (missing or invalid .is_private field) when checking repo visibility."
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "::error::Docker Hub repository tinaudio/perm is PUBLIC (HTTP 200). Dev-snapshot images contain baked-in R2 and W&B credentials. Set the repo to private immediately."
             exit 1
-          }
-
-          if [ "$IS_PRIVATE" != "true" ]; then
-            echo "::error::Docker Hub repository tinaudio/perm is NOT private (is_private=${IS_PRIVATE}). Dev-snapshot images contain baked-in R2 and W&B credentials. Set the repo to private immediately."
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "Docker Hub repository tinaudio/perm is not publicly visible (HTTP 404)."
+          else
+            echo "::error::Unexpected HTTP ${HTTP_CODE} from Docker Hub API at ${REPO_URL}."
             exit 1
           fi
-          echo "Docker Hub repository tinaudio/perm is private."
 
   docker-build:
     name: Build and push Docker image
