@@ -32,8 +32,35 @@ on:
       - "tests/docker/**"
 
 jobs:
+  visibility-check:
+    name: Verify Docker Hub repo is private
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check tinaudio/perm visibility
+        run: |
+          set -euo pipefail
+
+          REPO_URL="https://hub.docker.com/v2/repositories/tinaudio/perm/"
+
+          # Query WITHOUT credentials: if an anonymous user can see the repo,
+          # it's public and leaking baked-in secrets. A 404 means the repo is
+          # private (or doesn't exist — either way, not publicly exposed).
+          HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$REPO_URL")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "::error::Docker Hub repository tinaudio/perm is PUBLIC (HTTP 200). Dev-snapshot images contain baked-in R2 and W&B credentials. Set the repo to private immediately."
+            exit 1
+          elif [ "$HTTP_CODE" = "404" ]; then
+            echo "Docker Hub repository tinaudio/perm is not publicly visible (HTTP 404)."
+          else
+            echo "::error::Unexpected HTTP ${HTTP_CODE} from Docker Hub API at ${REPO_URL}."
+            exit 1
+          fi
+
   docker-build:
     name: Build and push Docker image
+    needs: visibility-check
     runs-on: ubuntu-latest-4core
     timeout-minutes: 60
 

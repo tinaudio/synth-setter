@@ -50,6 +50,14 @@ that persist in the final image:
 > `docker history`), but the resulting config files **are baked into the image**.
 > Push only to private registries. Rotate R2 tokens after each build campaign.
 
+> [!IMPORTANT]
+> **Invariant: The Docker Hub repository `tinaudio/perm` must remain private.**
+> Dev-snapshot images contain baked-in R2 and W&B credentials. If the repository
+> were public, anyone could pull the image and extract these secrets. CI enforces
+> this via a visibility check in the `docker-build-validation` workflow
+> ([docker-build-validation.yml](../../.github/workflows/docker-build-validation.yml))
+> that queries the Docker Hub API and fails the build if `is_private` is not `true`.
+
 The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-setter/issues/310)).
 
 ### First build (dev-snapshot)
