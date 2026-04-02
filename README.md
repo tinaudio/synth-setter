@@ -75,10 +75,11 @@ make install
 
 ### GPU vs CPU
 
-The default installation installs CPU-only PyTorch. For GPU training, install
-PyTorch with CUDA wheels for your system -- see the
-[PyTorch install matrix](https://pytorch.org/get-started/locally/) for the
-correct command.
+This project depends on PyTorch (`torch>=2.0.0`), but the requirements do not fix
+whether you use a CPU-only build or a CUDA-enabled build. Choose and install the
+appropriate PyTorch package for your system (CPU-only or a specific CUDA version)
+using the [PyTorch install matrix](https://pytorch.org/get-started/locally/), then
+install the remaining dependencies as described above.
 
 ## Quick Start
 
