@@ -233,6 +233,85 @@ class TestMainInvalidSha:
 
 
 # ---------------------------------------------------------------------------
+# main — newline injection prevention
+# ---------------------------------------------------------------------------
+
+
+class TestNewlineInjection:
+    """Main() rejects config values that contain newlines."""
+
+    def test_main_rejects_value_with_newline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A config value containing a newline raises ValueError."""
+        yaml_with_newline = """\
+dockerfile: docker/ubuntu22_04/Dockerfile
+image: "tinaudio/perm\\nevil_key=evil_value"
+base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
+base_image_tag: ubuntu22_04
+build_mode: prebuilt
+target_platform: linux/amd64
+torch_index_url: "https://download.pytorch.org/whl/cu128"
+r2_endpoint: "https://example.r2.cloudflarestorage.com"
+r2_bucket: test-bucket
+"""
+        config_path = tmp_path / "dev-snapshot.yaml"
+        config_path.write_text(yaml_with_newline)
+        output_file = tmp_path / "github_output.txt"
+
+        monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+        _set_argv(
+            monkeypatch,
+            [
+                "--config",
+                str(config_path),
+                "--github-sha",
+                VALID_SHA,
+                "--issue-number",
+                VALID_ISSUE,
+            ],
+        )
+
+        with pytest.raises(ValueError, match="contains a newline"):
+            main()
+
+    def test_main_rejects_value_with_carriage_return(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A config value containing a carriage return raises ValueError."""
+        yaml_with_cr = """\
+dockerfile: docker/ubuntu22_04/Dockerfile
+image: "tinaudio/perm\\revil_key=evil_value"
+base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
+base_image_tag: ubuntu22_04
+build_mode: prebuilt
+target_platform: linux/amd64
+torch_index_url: "https://download.pytorch.org/whl/cu128"
+r2_endpoint: "https://example.r2.cloudflarestorage.com"
+r2_bucket: test-bucket
+"""
+        config_path = tmp_path / "dev-snapshot.yaml"
+        config_path.write_text(yaml_with_cr)
+        output_file = tmp_path / "github_output.txt"
+
+        monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+        _set_argv(
+            monkeypatch,
+            [
+                "--config",
+                str(config_path),
+                "--github-sha",
+                VALID_SHA,
+                "--issue-number",
+                VALID_ISSUE,
+            ],
+        )
+
+        with pytest.raises(ValueError, match="contains a newline"):
+            main()
+
+
+# ---------------------------------------------------------------------------
 # module invocability
 # ---------------------------------------------------------------------------
 
