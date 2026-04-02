@@ -32,13 +32,13 @@ test-bats: ## Run BATS shell tests
 	bats --recursive tests/
 
 install: ## Install project in editable mode with dev deps
-	pip install uv
+	command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 	uv pip install -r requirements.txt -e .
 
 # coverage runs serially (no -n auto): GPU tests require exclusive device
 # access and VRAM contention causes flaky failures with xdist parallelism.
 coverage: ## Run tests with coverage report
-	pip install uv
+	command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 	uv pip install pytest-cov[toml]
 	pytest --cov=src --cov-report=term-missing --cov-report=html -m "not slow"
 

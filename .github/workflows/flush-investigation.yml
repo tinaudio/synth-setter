@@ -57,7 +57,7 @@ jobs:
             -e SURGE_VST3_PATH="${SURGE_VST3_PATH}" \
             synth-setter:dev-snapshot \
             -c "
-              pip install -q jupyter nbconvert auraloss librosa &&
+              uv pip install -q jupyter nbconvert auraloss librosa &&
               cd /home/build/synth-setter &&
               scripts/run-linux-vst-headless.sh \
                 jupyter nbconvert \

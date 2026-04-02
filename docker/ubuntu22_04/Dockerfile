@@ -273,17 +273,15 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     python3 python3-pip python3-dev
 RUN python3 --version && \
     python3 -c "import sys; exit(0) if sys.version_info[:2] == (3,10) else exit(1)"
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 ENV VIRTUAL_ENV=/venv/main
-# PIP_DISABLE_PIP_VERSION_CHECK=1 — suppresses version check noise in all layers
+# PIP_DISABLE_PIP_VERSION_CHECK=1 — suppresses version check noise in pip wheel layers
 # PYTHONDONTWRITEBYTECODE=1 — no .pyc files written in the image
 # PYTHONUNBUFFERED=1 — stdout/stderr stream immediately (important for logs)
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-RUN --mount=type=cache,id=pip-cache,target=/root/.cache/pip \
-    python3 -m pip install --upgrade pip virtualenv \
-    && python3 -m virtualenv $VIRTUAL_ENV \
-    && ${VIRTUAL_ENV}/bin/pip install --upgrade pip
+RUN uv venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python --version && \
     python -c "import sys; assert sys.version_info[:2] == (3, 10), sys.version"
@@ -320,7 +318,7 @@ FROM python-base AS builder-install-synth-setter-deps
 # without copying it into a layer (avoids the COPY+rm layer bloat anti-pattern).
 COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
 RUN --mount=from=wheels,source=/wheels,target=/wheels \
-    pip install \
+    uv pip install \
         --no-index \
         --find-links=/wheels \
         -r /artifacts/requirements.txt && \
@@ -440,7 +438,7 @@ RUN --mount=type=secret,id=git_pat \
 
 # Install the project package so `import src` works from any working directory.
 # --no-deps: all runtime deps already installed from requirements*.txt wheels.
-RUN pip install --no-deps -e .
+RUN uv pip install --no-deps -e .
 
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
@@ -453,5 +451,5 @@ CMD []
 FROM ${IMAGE} AS freeze-deps
 # Record package versions for audit / reproducibility
 RUN mkdir -p /usr/local/share/audit && \
-    python -m pip freeze --all | sort > /usr/local/share/audit/pip-freeze.txt && \
+    uv pip freeze | sort > /usr/local/share/audit/pip-freeze.txt && \
     dpkg-query -W -f='${Package}=${Version}\n' | sort > /usr/local/share/audit/dpkg.txt
