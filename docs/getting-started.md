@@ -99,6 +99,13 @@ do not need any external datasets, VST plugins, or cloud storage.
 python src/train.py experiment=kosc/ffn_mse trainer.max_steps=5000 trainer.min_steps=null
 ```
 
+> **No CUDA GPU?** The default trainer is `gpu` (CUDA). On CPU-only machines use
+> `trainer=cpu`; on Apple Silicon use `trainer=mps`:
+>
+> ```bash
+> python src/train.py experiment=kosc/ffn_mse trainer=cpu trainer.max_steps=5000 trainer.min_steps=null
+> ```
+
 This runs a feed-forward network with MSE loss on the k-osc task for 5,000
 training steps. The `trainer.min_steps=null` override is needed because the
 default trainer config sets `min_steps: 400_000`, which would otherwise prevent
@@ -353,8 +360,13 @@ rclone/R2 configuration.
 **Build the image:**
 
 The Makefile reads secrets from environment variables and passes them as
-BuildKit secrets (never embedded in image layers). Load your `.env` first to
-avoid leaking credentials in shell history or process listings:
+BuildKit secrets. Load your `.env` first to avoid leaking credentials in shell
+history or process listings.
+
+> **Warning:** Although BuildKit secrets are not stored in build cache layers,
+> the Dockerfile writes some injected credentials (for example, R2 and W&B
+> config) into files that persist in the final image filesystem. Treat built
+> images as sensitive artifacts and do **not** push them to public registries.
 
 ```bash
 # Load secrets from .env into the current shell
