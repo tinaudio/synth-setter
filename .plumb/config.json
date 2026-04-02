@@ -1,10 +1,6 @@
 {
   "spec_paths": [
-    "docs/design/data-pipeline.md",
-    "docs/design/eval-pipeline.md",
-    "docs/design/storage-provenance-spec.md",
-    "docs/design/training-pipeline.md",
-    "docs/reference/docker-spec.md"
+    "plumb_spec.md"
   ],
   "test_paths": [
     "tests/"
