@@ -30,7 +30,7 @@ class ImageConfig(BaseModel, strict=True, extra="forbid"):
     base_image_tag: str
     build_mode: Literal["source", "prebuilt"]
     target_platform: Literal["linux/amd64", "linux/arm64"]
-    torch_index_url: str
+    torch_backend: str
     r2_endpoint: str
     r2_bucket: str
 

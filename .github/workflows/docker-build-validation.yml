@@ -144,7 +144,7 @@ jobs:
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
-            TORCH_INDEX_URL=${{ steps.config.outputs.torch_index_url }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
             SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
             R2_BUCKET=${{ steps.config.outputs.r2_bucket }}
             R2_ENDPOINT=${{ steps.config.outputs.r2_endpoint }}

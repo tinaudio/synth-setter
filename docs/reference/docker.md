@@ -112,10 +112,10 @@ make docker-build-dev-snapshot \
 | `DOCKER_IMAGE`          | `synth-setter`                  | Image name (local builds)                        | CLI only     |
 | `DOCKER_BUILD_MODE`     | `prebuilt`                      | Surge install: `source` or `prebuilt` (see note) | CLI only     |
 | `DOCKER_TARGETPLATFORM` | `linux/amd64`                   | Target platform                                  | CLI only     |
-| `DOCKER_TORCH_IDX`      | CUDA 12.8 wheels                | PyTorch wheel index URL                          | CLI or YAML  |
+| `DOCKER_TORCH_BACKEND`  | `cu128`                         | PyTorch backend (e.g. cu128, cpu)                | CLI or YAML  |
 | `DOCKER_BUILD_FLAGS`    | *(empty)*                       | `--load` (local) or `--push` (remote)            | CLI only     |
 
-`DOCKER_TORCH_IDX` can also be set via `torch_index_url` in the image config
+`DOCKER_TORCH_BACKEND` can also be set via `torch_backend` in the image config
 YAML (see Image config below). CLI takes precedence.
 
 > **BUILD_MODE default divergence:** The Makefile defaults `DOCKER_BUILD_MODE`
@@ -140,7 +140,7 @@ base_image: "ubuntu@sha256:3ba65aa..."
 base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
-torch_index_url: "https://download.pytorch.org/whl/cu128"
+torch_backend: "cu128"
 r2_endpoint: "https://efb9275d571811db929e83eb710b74a7.r2.cloudflarestorage.com"
 r2_bucket: "intermediate-data"
 ```
