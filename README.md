@@ -4,7 +4,6 @@
 <p>
   <a href="https://github.com/tinaudio/synth-setter/actions/workflows/test.yml"><img src="https://github.com/tinaudio/synth-setter/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/tinaudio/synth-setter" alt="License"></a>
 </p>
 </div>
 
@@ -28,7 +27,7 @@ it. Built on PyTorch Lightning with Hydra configs.
 - **Python 3.10+**
 - **uv** (recommended) -- [install uv](https://docs.astral.sh/uv/getting-started/installation/)
 - **Git** with submodule support (clone with `--recurse-submodules`)
-- **System dependencies for VST rendering** -- see [getting started guide](docs/getting-started.md) for details
+- **System dependencies for VST rendering** -- see the project documentation for details
 
 ## Installation
 
@@ -38,6 +37,16 @@ Clone the repository:
 git clone --recurse-submodules https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 ```
+
+> **Note on submodules**
+>
+> This repository uses Git submodules that are configured with SSH URLs (`git@github.com:...`).
+> If you clone via HTTPS as above and do not have SSH access set up, submodule fetching may fail.
+> You can either configure an SSH key with GitHub, or ask Git to rewrite SSH URLs to HTTPS:
+>
+> ```bash
+> git config --global url."https://github.com/".insteadOf git@github.com:
+> ```
 
 ### Using uv (recommended)
 
@@ -83,7 +92,7 @@ make format
 make help
 ```
 
-See the [getting started guide](docs/getting-started.md) for a full walkthrough.
+See the project documentation for a full walkthrough.
 
 ## Project Structure
 
@@ -125,12 +134,11 @@ audio examples is available at
 
 ## Documentation
 
-- [Getting started guide](docs/getting-started.md)
+- Getting started guide (coming soon)
 - [Design documents](docs/design/)
-- [Contributing](CONTRIBUTING.md)
+- Contributing guidelines (coming soon)
 - Run `make help` for available commands
 
 ## License
 
-This project is licensed under the MIT License -- see [LICENSE](LICENSE) for
-details.
+License information will be added soon. See the repository for updates.
