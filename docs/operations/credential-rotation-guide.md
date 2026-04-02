@@ -16,26 +16,26 @@ All credentials listed below are stored as **GitHub Actions repository secrets**
 unless otherwise noted. Some are also present in local developer `.env` files
 and/or baked into Docker images at build time.
 
----
+______________________________________________________________________
 
 ## Credential Inventory
 
-| Credential | Where Used | Storage Locations |
-|---|---|---|
-| `R2_ACCESS_KEY_ID` | Docker builds, pipeline workers, rclone | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
-| `R2_SECRET_ACCESS_KEY` | Docker builds, pipeline workers, rclone | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
-| `R2_ENDPOINT` | Docker builds (build-arg, not secret) | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
-| `WANDB_API_KEY` | Training, evaluation, promotion, Docker images | GitHub Secrets, `.env`, Docker image (`~/.netrc`) |
-| `GIT_PAT` | Docker builds, CI workflows | GitHub Secrets, `.env` |
-| `GITHUB_TOKEN` | CI workflows (automatic) | Automatic per workflow run |
-| `RUNPOD_API_KEY` | Pipeline orchestration | GitHub Secrets, `.env` |
-| `DOCKERHUB_USERNAME` | CI image push workflows | GitHub Secrets |
-| `DOCKERHUB_TOKEN` | CI image push workflows | GitHub Secrets |
-| `APPROVAL_BOT_APP_ID` | Auto-approve workflow, release workflow | GitHub Secrets |
-| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow | GitHub Secrets |
-| `ANTHROPIC_API_KEY` | Claude review workflow | GitHub Secrets |
+| Credential                 | Where Used                                     | Storage Locations                                                          |
+| -------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------- |
+| `R2_ACCESS_KEY_ID`         | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`)                       |
+| `R2_SECRET_ACCESS_KEY`     | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`)                       |
+| `R2_ENDPOINT`              | Docker builds (build-arg, not secret)          | Image config YAML (`configs/image/`), `.env`, Docker image (`rclone.conf`) |
+| `WANDB_API_KEY`            | Training, evaluation, promotion, Docker images | GitHub Secrets, `.env`, Docker image (`~/.netrc`)                          |
+| `GIT_PAT`                  | Docker builds, CI workflows                    | GitHub Secrets, `.env`                                                     |
+| `GITHUB_TOKEN`             | CI workflows (automatic)                       | Automatic per workflow run                                                 |
+| `RUNPOD_API_KEY`           | Pipeline orchestration                         | GitHub Secrets, `.env`                                                     |
+| `DOCKERHUB_USERNAME`       | CI image push workflows                        | GitHub Secrets                                                             |
+| `DOCKERHUB_TOKEN`          | CI image push workflows                        | GitHub Secrets                                                             |
+| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow        | GitHub Secrets                                                             |
+| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow        | GitHub Secrets                                                             |
+| `ANTHROPIC_API_KEY`        | Claude review workflow                         | GitHub Secrets                                                             |
 
----
+______________________________________________________________________
 
 ## Rotation Procedures
 
@@ -76,7 +76,7 @@ rclone ls r2:intermediate-data/ --max-depth 1 --checksum
 
 Confirm that a CI workflow using R2 (e.g., `test-dataset-generation.yml`) passes.
 
----
+______________________________________________________________________
 
 ### R2 Endpoint (`R2_ENDPOINT`)
 
@@ -86,14 +86,15 @@ since it is passed as a Docker build-arg and stored alongside R2 credentials.
 
 **Where stored:**
 
-- GitHub Secrets (as a convenience variable, not sensitive)
+- Image config YAML (`configs/image/dev-snapshot.yaml`) — read by CI via
+  `pipeline.ci.load_image_config` and passed as a Docker `--build-arg`
 - Local `.env` files
-- Baked into Docker images as a build-arg
+- Baked into Docker images (written to `rclone.conf`)
 
 **Rotation:** Only changes if the Cloudflare account ID changes. Update the
-value in GitHub Secrets and `.env` files if the account is migrated.
+value in the image config YAML and `.env` files if the account is migrated.
 
----
+______________________________________________________________________
 
 ### Weights & Biases (`WANDB_API_KEY`)
 
@@ -123,7 +124,7 @@ value in GitHub Secrets and `.env` files if the account is migrated.
 WANDB_API_KEY=wapi_xxxxxxxxxxxx wandb login --verify
 ```
 
----
+______________________________________________________________________
 
 ### GitHub PAT (`GIT_PAT`)
 
@@ -157,7 +158,7 @@ make docker-build-dev-snapshot GIT_REF=main GIT_PAT=github_pat_xxxxxxxxxxxx
 
 Confirm the `docker-build-validation.yml` workflow passes.
 
----
+______________________________________________________________________
 
 ### GitHub Token (`GITHUB_TOKEN`)
 
@@ -170,7 +171,7 @@ automatically per workflow run by GitHub. No action is required.
 If you need to change its permissions, update the `permissions:` block in the
 relevant workflow YAML files.
 
----
+______________________________________________________________________
 
 ### RunPod (`RUNPOD_API_KEY`)
 
@@ -200,7 +201,7 @@ curl -s -H "Authorization: Bearer rpk_xxxxxxxxxxxx" \
   https://api.runpod.io/v2/pods | python3 -m json.tool
 ```
 
----
+______________________________________________________________________
 
 ### Docker Hub (`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`)
 
@@ -231,7 +232,7 @@ echo "dkr_pat_xxxxxxxxxxxx" | docker login -u <username> --password-stdin
 Confirm that a CI workflow that pushes images (e.g., `docker-build-validation.yml`)
 passes.
 
----
+______________________________________________________________________
 
 ### Approval Bot (`APPROVAL_BOT_APP_ID`, `APPROVAL_BOT_PRIVATE_KEY`)
 
@@ -257,7 +258,7 @@ passes.
 Trigger the `auto-approve.yml` workflow (e.g., by opening a qualifying PR) and
 confirm it succeeds.
 
----
+______________________________________________________________________
 
 ### Anthropic (`ANTHROPIC_API_KEY`)
 
@@ -282,7 +283,7 @@ confirm it succeeds.
 Trigger the `claude-review.yml` workflow (e.g., by opening a PR) and confirm the
 review step completes without authentication errors.
 
----
+______________________________________________________________________
 
 ## Rotation Checklist
 
@@ -290,30 +291,30 @@ Use this checklist when performing a full credential rotation (e.g., pre-public
 audit):
 
 - [ ] **Cloudflare R2:** Create new API token, update `R2_ACCESS_KEY_ID` and
-      `R2_SECRET_ACCESS_KEY` in GitHub Secrets and `.env`, rebuild Docker images,
-      revoke old token
+  `R2_SECRET_ACCESS_KEY` in GitHub Secrets and `.env`, rebuild Docker images,
+  revoke old token
 - [ ] **W&B:** Regenerate API key, update `WANDB_API_KEY` in GitHub Secrets and
-      `.env`, rebuild Docker images
+  `.env`, rebuild Docker images
 - [ ] **GitHub PAT:** Generate new fine-grained token, update `GIT_PAT` in
-      GitHub Secrets and `.env`, delete old token
+  GitHub Secrets and `.env`, delete old token
 - [ ] **RunPod:** Create new API key, update `RUNPOD_API_KEY` in GitHub Secrets
-      and `.env`, delete old key
+  and `.env`, delete old key
 - [ ] **Docker Hub:** Create new access token, update `DOCKERHUB_TOKEN` (and
-      `DOCKERHUB_USERNAME` if needed) in GitHub Secrets, revoke old token
+  `DOCKERHUB_USERNAME` if needed) in GitHub Secrets, revoke old token
 - [ ] **Approval Bot:** Generate new private key, update
-      `APPROVAL_BOT_PRIVATE_KEY` in GitHub Secrets, delete old key
+  `APPROVAL_BOT_PRIVATE_KEY` in GitHub Secrets, delete old key
 - [ ] **Anthropic:** Create new API key, update `ANTHROPIC_API_KEY` in GitHub
-      Secrets, revoke old key
+  Secrets, revoke old key
 - [ ] **Docker images:** Rebuild all Docker images to replace baked credentials
-      (R2 in `rclone.conf`, W&B in `~/.netrc`)
+  (R2 in `rclone.conf`, W&B in `~/.netrc`)
 - [ ] **Old Docker images:** Delete or de-list any published images that contain
-      old baked credentials
+  old baked credentials
 - [ ] **CI verification:** Run a full CI pass to confirm all workflows succeed
-      with new credentials
+  with new credentials
 - [ ] **Local `.env` files:** Notify all developers to update their local `.env`
-      files
+  files
 
----
+______________________________________________________________________
 
 ## Emergency Rotation Procedure
 
@@ -356,13 +357,12 @@ workflows.
 3. Review Docker build logs for credential exposure.
 4. File an incident report if the exposure was confirmed.
 
----
+______________________________________________________________________
 
 ## Notes
 
-- **`R2_ENDPOINT` and `R2_BUCKET`** are not secrets. `R2_ENDPOINT` is a
-  well-known Cloudflare URL. `R2_BUCKET` is the bucket name (`intermediate-data`).
-  Neither requires rotation unless the Cloudflare account is migrated.
+- **R2 endpoint and bucket name** are not secrets. `R2_ENDPOINT` is a
+  well-known Cloudflare URL. The bucket name is `intermediate-data`.
 - **`GITHUB_TOKEN`** is automatically provisioned per workflow run and does not
   require manual rotation.
 - **Docker images with baked credentials** are a secondary exposure surface.
