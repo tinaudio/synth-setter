@@ -141,8 +141,8 @@ Tests use `pytest` with strict markers. The registered markers are:
 | `@pytest.mark.benchmark`    | Performance benchmarks              |
 | `@pytest.mark.docker_smoke` | Smoke tests inside Docker image     |
 
-Tests with missing dependencies (GPU, VST plugin, R2 credentials) skip
-silently. This is expected behavior.
+Tests with missing dependencies (GPU, VST plugin, R2 credentials) are skipped
+automatically. This is expected and reported by pytest.
 
 ### Writing tests
 
