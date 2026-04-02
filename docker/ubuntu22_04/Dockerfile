@@ -294,11 +294,17 @@ FROM python-base AS builder-install-synth-setter-deps
 # Install all Python dependencies via uv in a single resolution pass.
 # uv's built-in cache (mounted below) persists across builds — torch wheels
 # (~2.5 GB) are only downloaded once and survive requirements-app.txt changes.
+#
+# --index-strategy unsafe-best-match: the PyTorch CUDA index carries stale
+# copies of common packages (e.g. requests 2.28.1). Without this flag uv
+# only considers the first index that has a package, which blocks deps that
+# need newer versions from PyPI.
 COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
 ARG TORCH_INDEX_URL
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install \
         --extra-index-url ${TORCH_INDEX_URL} \
+        --index-strategy unsafe-best-match \
         -r /artifacts/requirements.txt && \
     rm -rf /artifacts/requirements*.txt
 
