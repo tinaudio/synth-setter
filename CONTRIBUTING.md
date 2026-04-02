@@ -97,7 +97,8 @@ auto-fixes what it can.
   parsing, external JSON). Use dataclasses for internal typed containers.
 - **Keep functions short and single-purpose.** If you need a comment explaining
   what a block does, extract it into a function.
-- **Logging:** use `structlog` in pipeline code, Python's `logging` module
+- **Logging:** use `structlog` for new pipeline code (see
+  [design doc](docs/design/data-pipeline.md)); use Python's `logging` module
   elsewhere.
 
 ### Project layout
