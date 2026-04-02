@@ -63,7 +63,8 @@ pip install -r requirements.txt
 ### Using conda
 
 ```bash
-conda env create -f environment.yaml
+conda env create -f environment.yaml  # creates the "myenv" environment by default
+conda activate myenv
 ```
 
 ### Editable install
