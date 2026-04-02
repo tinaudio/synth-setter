@@ -3,38 +3,7 @@ title: synth-setter
 message: "If you use this software, please cite it as below."
 type: software
 authors:
-  - family-names: Hayes
-    given-names: Ben
-    email: b.j.hayes@qmul.ac.uk
-    affiliation: Queen Mary University of London
-  - family-names: Tinubu
-    given-names: Khaled
-    alias: ktinubu
-    affiliation: Google
+  - given-names: Khaled
+    family-names: Tinubu
+license: GPL-3.0-only
 repository-code: https://github.com/tinaudio/synth-setter
-license: MIT
-keywords:
-  - synthesizer
-  - sound-matching
-  - machine-learning
-  - audio
-  - vst
-abstract: >-
-  synth-setter provides tools for automatic synthesizer parameter estimation
-  (synth inversion), sound matching, and preset exploration. Built on PyTorch
-  Lightning with Hydra configs, it includes flow matching models for parameter
-  estimation and a distributed data pipeline for VST audio dataset generation.
-preferred-citation:
-  type: conference-paper
-  title: "synth-setter: Synth Inversion, Sound Matching and Preset Exploration"
-  authors:
-    - family-names: Hayes
-      given-names: Ben
-      affiliation: Queen Mary University of London
-    - family-names: Tinubu
-      given-names: Khaled
-      affiliation: Google
-  year: 2025
-  conference:
-    name: "ISMIR 2025"
-  url: https://benhayes.net/synth-perm/
