@@ -30,7 +30,7 @@ to submit a report. This keeps the details confidential until a fix is available
 ## Response Timeline
 
 - **Acknowledgement:** within 48 hours of receiving the report.
-- **Triage:** within 7 days we will assess severity and confirm whether the
+- **Triage:** within 7 days, we will assess severity and confirm whether the
   report is accepted or declined.
 - **Resolution:** timeline depends on severity and complexity. We will keep
   you informed of progress.
