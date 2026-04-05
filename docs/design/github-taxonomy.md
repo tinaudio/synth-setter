@@ -131,17 +131,18 @@ Priority is tracked via a **Priority** single-select field on the project:
 
 Labels classify issues by **domain**. Type and blocking are handled by native features; priority is a project field.
 
-| Label           | Color   | Description                                                     |
-| --------------- | ------- | --------------------------------------------------------------- |
-| `data-pipeline` | #0e8a16 | Data pipeline work stream                                       |
-| `ci-automation` | #1d76db | CI & automation work stream                                     |
-| `code-health`   | #fbca04 | Code quality and tech debt                                      |
-| `documentation` | #0075ca | Documentation quality, drift detection, and doc-map maintenance |
-| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference                     |
-| `monitoring`    | #0E8A16 | Observability, W&B integration, logging                         |
-| `storage`       | #D4C5F9 | Storage infrastructure (R2, rclone)                             |
-| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config                   |
-| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure                      |
+| Label           | Color   | Description                                                            |
+| --------------- | ------- | ---------------------------------------------------------------------- |
+| `data-pipeline` | #0e8a16 | Data pipeline work stream                                              |
+| `ci-automation` | #1d76db | CI & automation work stream                                            |
+| `code-health`   | #fbca04 | Code quality and tech debt                                             |
+| `documentation` | #0075ca | Documentation quality, drift detection, and doc-map maintenance        |
+| `evaluation`    | #C5DEF5 | Evaluation pipeline, metrics, and inference                            |
+| `experiments`   | #E99695 | One-off validation experiments, result replication, and parity studies |
+| `monitoring`    | #0E8A16 | Observability, W&B integration, logging                                |
+| `storage`       | #D4C5F9 | Storage infrastructure (R2, rclone)                                    |
+| `testing`       | #0E8A16 | Test infrastructure, fixtures, CI test config                          |
+| `training`      | #8B5CF6 | Training pipeline, ops, and infrastructure                             |
 
 **Multi-label policy:** Most issues carry a single domain label. Cross-cutting infrastructure (e.g., R2/rclone work that serves both data pipeline and eval pipeline) may carry multiple domain labels to appear in all relevant filtered views. Use multiple labels only when the work genuinely spans work streams — not as a default.
 
@@ -153,12 +154,14 @@ Workflow labels (`duplicate`, `invalid`, `wontfix`, `good first issue`, `help wa
 | -------------------- | --------------- |
 | data-pipeline v1.0.0 | Data Pipeline   |
 | evaluation v1.0.0    | Evaluation      |
+| experiments v1.0.0   | Experiments     |
 | monitoring v1.0.0    | Monitoring      |
 | training v1.0.0      | Training        |
 | ci-automation v1.0.0 | CI & Automation |
 | code-health v1.0.0   | Code Health     |
 | documentation v1.0.0 | Documentation   |
 | storage v1.0.0       | Storage         |
+| testing v1.0.0       | Testing         |
 
 Every work stream has a milestone. Set the milestone on each issue individually — GitHub does not auto-inherit milestones from parent issues.
 
@@ -200,10 +203,13 @@ Use saved views with domain label filters to switch between work streams:
 | All Work        | Hierarchy | (none)                |
 | Data Pipeline   | Hierarchy | `label:data-pipeline` |
 | Evaluation      | Hierarchy | `label:evaluation`    |
+| Experiments     | Hierarchy | `label:experiments`   |
 | Storage         | Hierarchy | `label:storage`       |
 | CI & Automation | Board     | `label:ci-automation` |
 | Code Health     | Table     | `label:code-health`   |
 | Documentation   | Table     | `label:documentation` |
+| Monitoring      | Table     | `label:monitoring`    |
+| Testing         | Table     | `label:testing`       |
 | Training        | Hierarchy | `label:training`      |
 | Roadmap         | Roadmap   | (none)                |
 | Blocked         | Table     | is:blocked            |

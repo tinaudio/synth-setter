@@ -22,6 +22,7 @@ body:
         - code-health
         - evaluation
         - documentation
+        - experiments
         - monitoring
         - storage
         - testing
@@ -36,11 +37,13 @@ body:
         - data-pipeline v1.0.0
         - evaluation v1.0.0
         - documentation v1.0.0
+        - experiments v1.0.0
         - monitoring v1.0.0
         - training v1.0.0
         - storage v1.0.0
         - ci-automation v1.0.0
         - code-health v1.0.0
+        - testing v1.0.0
     validations:
       required: true
   - type: textarea
