@@ -85,6 +85,39 @@ This runs the quick test suite (excluding slow tests and tests that require a
 VST plugin). All tests should pass. If you see import errors, double-check that
 the virtual environment is active and dependencies installed correctly.
 
+### 2f. Alternative: GitHub Codespaces
+
+Instead of setting up locally, you can open the repo in a GitHub Codespace. The
+Codespace uses the same Docker image (`tinaudio/perm:dev-snapshot`) we run on
+RunPod, so VST-dependent tests, `generate_dataset` → R2 uploads, and CPU
+training all work identically — no local Surge XT, rclone, or R2 setup needed.
+GPU training still runs on RunPod.
+
+**Prerequisites** (one-time, org admin):
+
+- Docker Hub registry credentials configured as org-level Codespace registry
+  secrets (`*_CONTAINER_REGISTRY_USER`, `*_CONTAINER_REGISTRY_PASSWORD`) so
+  Codespaces can pull the private image.
+
+**Open a Codespace:**
+
+1. On GitHub, click **Code → Codespaces → Create codespace on main**.
+2. First start takes ~5 min (image pull). Subsequent starts are fast.
+3. `.devcontainer/post-create.sh` initializes submodules, installs the
+   workspace editable, and wires up pre-commit hooks — then the terminal is
+   ready.
+
+**Verify:**
+
+```bash
+make test
+python -c "import torch; print(torch.cuda.is_available())"   # False (CPU)
+rclone lsd r2:intermediate-data
+```
+
+**Fall back to RunPod for** full GPU training (CUDA kernels, large batch
+sizes) and multi-hour runs.
+
 ______________________________________________________________________
 
 ## 3. k-osc Quickstart (No External Dependencies)
