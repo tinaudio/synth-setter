@@ -163,8 +163,11 @@ bind mount, so git submodule/hook operations fail to resolve their gitdir.
   run `git worktree prune` inside the container — it will drop registry
   entries for worktrees that are still valid on the host.
 - `git submodule update` for the private `tinaudio/skills` submodule needs
-  GitHub credentials forwarded into the container (VS Code's git credential
-  helper usually does this; for the CLI, export `GITHUB_TOKEN`).
+  GitHub credentials available to git inside the container. VS Code's git
+  credential helper usually forwards these automatically. For the CLI, run
+  `gh auth login && gh auth setup-git` inside the container, or configure
+  git's credential helper with a PAT. Exporting `GITHUB_TOKEN` alone is not
+  sufficient — git will not use it without a credential helper configured.
 
 ______________________________________________________________________
 
