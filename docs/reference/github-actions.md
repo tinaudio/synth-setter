@@ -104,7 +104,7 @@ gh run rerun <run-id> --failed
 
 Or use the Actions tab UI.
 
-**Skip CI:** No `[skip ci]` convention is configured — every push to main and every PR runs the full matrix.
+**Skip CI:** No supported `[skip ci]` convention is configured. Whether CI runs is controlled by each workflow's triggers and `paths:` filters, so doc-only changes may not run the full matrix.
 
 **Add a new workflow:** Copy the closest existing workflow as a template (e.g. [bats-tests.yml](../../.github/workflows/bats-tests.yml) for a simple CI job). Both `.yml` and `.yaml` extensions are present in the repo; either works. After writing, invoke the `gha-workflow-validator` skill and run `make format` to validate.
 
