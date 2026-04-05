@@ -62,7 +62,13 @@ train: ## Train the model
 #
 # Required variables (pass on the command line):
 #   GIT_PAT             GitHub personal access token with repo read access.
-#   GIT_REF             Commit SHA, tag, or branch to bake. Prefer full SHA.
+#   GIT_REF             Git ref to bake. Passed verbatim to the Dockerfile's
+#                       `git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"`
+#                       after only `git fetch origin`. Use a full 40-char SHA
+#                       — branch/tag names may not be fetched and will fail.
+#                       (The CI workflow's `git_ref` input is different: it
+#                       checks out locally and resolves any ref to a SHA via
+#                       `git rev-parse HEAD` before the build.)
 #
 # Optional overrides:
 #   DOCKER_FILE         Path to Dockerfile          (default: docker/ubuntu22_04/Dockerfile)

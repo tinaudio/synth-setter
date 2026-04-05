@@ -6,12 +6,21 @@ name: Docker Image Build and Push
 # Triggers:
 # - Manual dispatch or weekly schedule: full build + push + smoke tests
 # - Pull request (Docker-related paths): build-only validation (no push)
+#
+# git_ref resolution:
+# The git_ref input accepts any ref form (branch, tag, or full SHA). After
+# checkout, `git rev-parse HEAD` resolves it to a 40-char lowercase commit
+# SHA (steps.source.outputs.sha), which is what gets baked into the image
+# via the SYNTH_PERMUTATIONS_GIT_REF build-arg. The build ALWAYS pins to
+# the resolved commit SHA — the original input form is discarded.
+# The resolved SHA is validated as 40-char lowercase hex by load_image_config
+# (pipeline/schemas/image_config.py) in the "Load image config" step.
 
 on:
   workflow_dispatch:
     inputs:
       git_ref:
-        description: "Git ref to build (branch, tag, or SHA). Builds and pushes to Docker Hub."
+        description: "Git ref to build (branch, tag, or full SHA). Resolved to a 40-char commit SHA via `git rev-parse HEAD` after checkout; the build pins to the resolved commit."
         required: false
         default: "main"
       issue_number:
