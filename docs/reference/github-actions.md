@@ -2,7 +2,7 @@
 
 Project-specific knowledge for the workflows in [.github/workflows/](../../.github/workflows/). This doc documents **what the YAML can't tell you** — intent, secret purposes, cross-workflow dependencies, and non-obvious gotchas. For literal triggers, runners, and steps, read the YAML.
 
-Almost all workflows run on GitHub-hosted runners. The one exception is `test-expensive`, which runs on the self-hosted `gpu-x64` runner.
+All workflows run on GitHub-hosted runners. `test-expensive` uses the `gpu-x64` larger runner (GitHub-hosted, GPU-equipped); everything else uses standard labels (`ubuntu-latest`, `ubuntu-latest-4core`, `ubuntu-22.04`, `macos-latest`).
 
 For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/actions).
 
@@ -13,7 +13,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 | Workflow                  | Purpose                                                                                         | Gotcha                                                                                                                         |
 | ------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `test`                    | Runs non-slow pytest on Ubuntu + macOS across Python 3.10/3.11, plus a coverage job.            | Static MNIST cache key (`mnist-dataset-v1`); macOS excludes `test_mnist_datamodule`. See [Caching](#caching).                  |
-| `test-expensive`          | Runs GPU-marked pytest on the self-hosted `gpu-x64` runner.                                     | Pins `torch<2.7.0` for CUDA 12.8 compatibility. See [Self-hosted GPU runner](#self-hosted-gpu-runner).                         |
+| `test-expensive`          | Runs GPU-marked pytest on the `gpu-x64` GitHub-hosted GPU runner.                               | Pins `torch<2.7.0` for CUDA 12.8 compatibility. See [GPU runner torch pin](#gpu-runner-torch-pin).                             |
 | `code-quality-pr`         | Runs pre-commit hooks on files changed in the PR.                                               |                                                                                                                                |
 | `code-quality-main`       | Runs pre-commit hooks on all files after merge to main.                                         | Skips `no-commit-to-branch` hook (would reject main commits).                                                                  |
 | `pr-metadata-gate`        | Enforces that every PR links a taxonomy-compliant issue (type, label, milestone, Epic lineage). | Walks issue parent chain up to 4 levels; falls back to Epic check if GraphQL parent field unavailable.                         |
@@ -118,9 +118,9 @@ Only `release` uses a concurrency group (`release-${{ github.ref }}`, `cancel-in
 
 `test` caches the MNIST dataset under the static key `mnist-dataset-v1` (identical across all three jobs). The key is **not** derived from a lockfile or dataset hash — bump the `v1` suffix by hand if the MNIST source changes. Because the key is stable, dependency upgrades don't invalidate this cache.
 
-### Self-hosted GPU runner
+### GPU runner torch pin
 
-`test-expensive` runs on `gpu-x64`, the sole self-hosted runner. It pins `torch<2.7.0` via a constraint file because the GPU runner's NVIDIA driver provides CUDA 12.8, which PyTorch 2.7+ doesn't support. If PyTorch or the driver is upgraded, update the pin. The runner needs a working CUDA toolchain and appropriate Docker group membership.
+`test-expensive` runs on `gpu-x64`, a GitHub-hosted GPU larger runner (NVIDIA driver 12080 / CUDA 12.8). It pins `torch<2.7.0` via a constraint file passed to `uv pip install --constraint`, because torch 2.7+ requires CUDA 13.x. The pin is applied at install time so `requirements-torch.txt` doesn't need to change. If the runner's driver is upgraded to CUDA 13.x, drop the pin.
 
 ### Docker build visibility gate
 
