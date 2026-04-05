@@ -5,7 +5,16 @@
 # only wires up the workspace checkout to the image's venv.
 set -euo pipefail
 
-cd /workspaces/synth-setter
+# Locate the workspace root via the .project-root anchor, not by hardcoded
+# path. GitHub Codespaces mounts at /workspaces/synth-setter, but locally the
+# devcontainer CLI uses the host directory basename (e.g. a git worktree
+# name), so the mount path is not fixed.
+dir="$(cd "$(dirname "$0")" && pwd)"
+while [[ "$dir" != "/" && ! -f "$dir/.project-root" ]]; do
+  dir="$(dirname "$dir")"
+done
+[[ -f "$dir/.project-root" ]] || { echo "ERROR: .project-root not found" >&2; exit 1; }
+cd "$dir"
 
 # Codespaces runs this script as root against a workspace that may be owned
 # by another UID, tripping git's safe.directory check. Mark the repo trusted
@@ -19,7 +28,10 @@ git submodule update --init --recursive
 # --no-deps skips re-downloading the ~2.5GB of deps already in the image.
 uv pip install --no-deps -e .
 
-# Pre-commit hooks (pre-commit itself is in the image's deps).
+# Pre-commit hooks (pre-commit itself is in the image's deps). Strip any
+# absolute host-path core.hooksPath that may leak from the host .git/config
+# (harmless in Codespaces; bites local devcontainer users).
+git config --unset-all core.hooksPath 2>/dev/null || true
 pre-commit install
 
 # plumb writes a native git hook — re-run pre-commit install to chain it.

@@ -118,6 +118,54 @@ rclone lsd r2:intermediate-data
 **Fall back to RunPod for** full GPU training (CUDA kernels, large batch
 sizes) and multi-hour runs.
 
+### 2g. Alternative: Local Dev Container
+
+If you want the same image Codespaces uses (VST plugins, rclone, baked R2/W&B
+credentials) but prefer to work on your own machine, open the dev container
+locally **on the main working tree** and create git worktrees *inside* the
+container.
+
+**Prerequisites:**
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) and
+  either the VS Code
+  [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+  or the [`devcontainer` CLI](https://github.com/devcontainers/cli).
+- Docker Hub credentials (`docker login`) — the image is private.
+- Apple Silicon: set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (the image is
+  amd64-only).
+
+**Open the container on main:**
+
+```bash
+cd /path/to/synth-setter
+devcontainer up --workspace-folder .
+# or in VS Code: "Dev Containers: Reopen in Container"
+```
+
+**Create worktrees from inside the container:**
+
+```bash
+# Inside the container, starting from the workspace root on main:
+git worktree add .claude/worktrees/my-feature -b feat/my-feature
+cd .claude/worktrees/my-feature
+```
+
+This is the supported local pattern. Mounting a worktree directly from the
+host does not work — the worktree's `.git` file points to
+`<repo>/.git/worktrees/<name>/` on the host, which is outside the container's
+bind mount, so git submodule/hook operations fail to resolve their gitdir.
+
+**Caveats:**
+
+- `git worktree list` inside the container marks host-created worktrees as
+  `prunable` (their host paths don't resolve inside the mount). Do **not**
+  run `git worktree prune` inside the container — it will drop registry
+  entries for worktrees that are still valid on the host.
+- `git submodule update` for the private `tinaudio/skills` submodule needs
+  GitHub credentials forwarded into the container (VS Code's git credential
+  helper usually does this; for the CLI, export `GITHUB_TOKEN`).
+
 ______________________________________________________________________
 
 ## 3. k-osc Quickstart (No External Dependencies)

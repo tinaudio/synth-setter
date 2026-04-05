@@ -7,7 +7,7 @@
   },
 
   "remoteUser": "root",
-  "workspaceFolder": "/workspaces/synth-setter",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
 
   "postCreateCommand": ".devcontainer/post-create.sh",
 
