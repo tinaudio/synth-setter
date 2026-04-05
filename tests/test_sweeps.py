@@ -6,7 +6,10 @@ from tests.helpers.run_if import RunIf
 from tests.helpers.run_sh_command import run_sh_command
 
 startfile = "src/train.py"
-overrides = ["logger=[]"]
+# logger=[] disables wandb/tensorboard for these throwaway sweep subprocess runs.
+# ~callbacks.lr_monitor works around #517 — LearningRateMonitor hard-requires a
+# logger and crashes at on_train_start when logger is empty.
+overrides = ["logger=[]", "~callbacks.lr_monitor"]
 
 
 # TODO(#514): migrate from mnist configs to ksin. test_experiments globs every
