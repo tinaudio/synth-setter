@@ -125,6 +125,19 @@ def test_train_ddp_sim(cfg_train: DictConfig) -> None:
         cfg_train.trainer.accelerator = "cpu"
         cfg_train.trainer.devices = 2
         cfg_train.trainer.strategy = "ddp_spawn"
+        # Integer limits avoid the `fraction * batches < 1` error when the
+        # fixture's fractions (0.01, 0.1) shrink too far under DDP sharding.
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+        cfg_train.trainer.limit_test_batches = 1
+        # Shrink model, batch, and dataset to keep DDP-on-CPU fast.
+        cfg_train.data.batch_size = 2
+        cfg_train.data.signal_length = 64
+        cfg_train.data.train_val_test_sizes = [4, 4, 4]
+        cfg_train.model.net.channels = 4
+        cfg_train.model.net.encoder_blocks = 1
+        cfg_train.model.net.trunk_blocks = 1
+        cfg_train.model.net.hidden_dim = 32
     train(cfg_train)
 
 
