@@ -129,7 +129,7 @@ fi
 # ---------------------------------------------------------------------------
 OWNER="tinaudio"
 REPO="synth-setter"
-DOMAIN_LABELS="data-pipeline ci-automation code-health documentation evaluation monitoring storage testing training"
+DOMAIN_LABELS="data-pipeline ci-automation code-health documentation evaluation experiments monitoring storage testing training"
 
 # ---------------------------------------------------------------------------
 # Helper: query an issue's taxonomy metadata (type, labels, milestone).
