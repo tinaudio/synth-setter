@@ -61,6 +61,16 @@ Verify your setup:
 make test           # quick tests (excludes slow and VST-dependent tests)
 ```
 
+## Good first issues
+
+If you're looking for a place to start, browse the [good first issue label](https://github.com/tinaudio/synth-setter/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
+These are scoped, self-contained tasks that don't require deep audio/ML domain
+knowledge or access to cloud resources (R2, RunPod, GPU runners).
+
+To claim one, comment on the issue to let others know you're working on it, and
+ask any questions in the thread. When you open your PR, reference the issue in
+the PR body with `Closes #N` so it auto-closes on merge.
+
 ## Code standards
 
 ### Formatting and linting
