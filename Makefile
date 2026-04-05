@@ -62,10 +62,13 @@ train: ## Train the model
 #
 # Required variables (pass on the command line):
 #   GIT_PAT             GitHub personal access token with repo read access.
-#   GIT_REF             Git ref to bake. Passed verbatim to the Dockerfile's
+#   GIT_REF             Git ref to bake. Used twice by the Dockerfile: the
+#                       `synth-setter-src` stage downloads a GitHub tarball
+#                       at this ref, and the `dev-snapshot` stage runs
 #                       `git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"`
-#                       after only `git fetch origin`. Use a full 40-char SHA
-#                       — branch/tag names may not be fetched and will fail.
+#                       after `git fetch origin`. A full 40-char SHA reachable
+#                       from a pushed branch/tag satisfies both and pins the
+#                       build deterministically.
 #                       (The CI workflow's `git_ref` input is different: it
 #                       checks out locally and resolves any ref to a SHA via
 #                       `git rev-parse HEAD` before the build.)
