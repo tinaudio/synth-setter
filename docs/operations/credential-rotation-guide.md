@@ -346,6 +346,7 @@ workflows.
 3. Rebuild Docker images if the credential was baked in.
 
 ### 3. Create a github issue assigned to ktinubu@ documenting that rotation took place.
+
 ______________________________________________________________________
 
 ## Notes
