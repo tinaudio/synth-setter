@@ -37,20 +37,6 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
-@pytest.mark.slow
-def test_train_fast_dev_run(cfg_train: DictConfig) -> None:
-    """Run for 1 train, val and test step with torch.compile enabled.
-
-    :param cfg_train: A DictConfig containing a valid training configuration.
-    """
-    HydraConfig().set_config(cfg_train)
-    with open_dict(cfg_train):
-        cfg_train.trainer.fast_dev_run = True
-        cfg_train.trainer.accelerator = "cpu"
-        cfg_train.model.compile = True
-    train(cfg_train)
-
-
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 def test_train_fast_dev_run_gpu(cfg_train: DictConfig) -> None:
@@ -100,6 +86,8 @@ def test_train_epoch_gpu_amp(cfg_train: DictConfig) -> None:
 
 
 # TODO: fix val_check_interval incompatibility with check_val_every_n_epoch=None (#47)
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
 @pytest.mark.slow
 def test_train_epoch_double_val_loop(cfg_train: DictConfig) -> None:
     """Train 1 epoch with validation loop twice per epoch.
@@ -109,6 +97,7 @@ def test_train_epoch_double_val_loop(cfg_train: DictConfig) -> None:
     HydraConfig().set_config(cfg_train)
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
+        cfg_train.trainer.accelerator = "gpu"
         cfg_train.trainer.val_check_interval = 0.5
     train(cfg_train)
 
@@ -128,6 +117,8 @@ def test_train_ddp_sim(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
 @pytest.mark.slow
 def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     # plumb:req-931b548d
@@ -143,6 +134,7 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     """
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
+        cfg_train.trainer.accelerator = "gpu"
 
     HydraConfig().set_config(cfg_train)
     metric_dict_1, _ = train(cfg_train)

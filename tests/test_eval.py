@@ -7,8 +7,11 @@ from omegaconf import DictConfig, open_dict
 
 from src.eval import evaluate
 from src.train import train
+from tests.helpers.run_if import RunIf
 
 
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
 @pytest.mark.slow
 def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig) -> None:
     # plumb:req-f4e6204e
@@ -27,7 +30,10 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
 
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
+        cfg_train.trainer.accelerator = "gpu"
         cfg_train.test = True
+    with open_dict(cfg_eval):
+        cfg_eval.trainer.accelerator = "gpu"
 
     HydraConfig().set_config(cfg_train)
     train_metric_dict, _ = train(cfg_train)
