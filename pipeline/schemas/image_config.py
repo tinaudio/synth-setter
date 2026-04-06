@@ -31,7 +31,6 @@ class ImageConfig(BaseModel, strict=True, extra="forbid"):
     build_mode: Literal["source", "prebuilt"]
     target_platform: Literal["linux/amd64", "linux/arm64"]
     torch_backend: str
-    r2_endpoint: str
     r2_bucket: str
 
     # --- Runtime fields (from caller, no defaults) ---
@@ -55,7 +54,7 @@ class ImageConfig(BaseModel, strict=True, extra="forbid"):
             raise ValueError("issue_number must be a positive integer")
         return v
 
-    @field_validator("r2_endpoint", "r2_bucket")
+    @field_validator("r2_bucket")
     @classmethod
     def must_not_be_blank(cls, v: str) -> str:
         """Reject empty or whitespace-only strings."""

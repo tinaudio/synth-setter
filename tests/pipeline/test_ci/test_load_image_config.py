@@ -27,7 +27,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_endpoint: "https://example.r2.cloudflarestorage.com"
 r2_bucket: test-bucket
 """
 
@@ -39,7 +38,6 @@ _EXPECTED_LINES = [
     "build_mode=prebuilt",
     "target_platform=linux/amd64",
     "torch_backend=cu128",
-    "r2_endpoint=https://example.r2.cloudflarestorage.com",
     "r2_bucket=test-bucket",
     f"github_sha={VALID_SHA}",
     "issue_number=311",
@@ -252,7 +250,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_endpoint: "https://example.r2.cloudflarestorage.com"
 r2_bucket: test-bucket
 """
         config_path = tmp_path / "dev-snapshot.yaml"
@@ -287,7 +284,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_endpoint: "https://example.r2.cloudflarestorage.com"
 r2_bucket: test-bucket
 """
         config_path = tmp_path / "dev-snapshot.yaml"

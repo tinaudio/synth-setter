@@ -88,15 +88,17 @@ CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse HEAD))
 R2_ACCESS_KEY_ID     ?=
 R2_SECRET_ACCESS_KEY ?=
 R2_ENDPOINT          ?=
-R2_BUCKET            ?=
 WANDB_API_KEY        ?=
+
+# R2_BUCKET: single source of truth is configs/image/dev-snapshot.yaml.
+R2_BUCKET := $(shell python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
 
 DOCKER_SECRETS = \
 	--secret id=r2_access_key_id,env=R2_ACCESS_KEY_ID \
 	--secret id=r2_secret_access_key,env=R2_SECRET_ACCESS_KEY \
+	--secret id=r2_endpoint,env=R2_ENDPOINT \
 	--secret id=wandb_api_key,env=WANDB_API_KEY \
-	--build-arg R2_BUCKET=$(R2_BUCKET) \
-	--build-arg R2_ENDPOINT=$(R2_ENDPOINT)
+	--build-arg R2_BUCKET=$(R2_BUCKET)
 
 docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_PAT)
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi
