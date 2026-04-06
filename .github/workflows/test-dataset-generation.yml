@@ -78,6 +78,9 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Install PyYAML for config parsing
+        run: pip install pyyaml
+
       - name: Download shard from R2 and validate
         env:
           IMAGE: tinaudio/perm:${{ inputs.docker_image_tag || 'dev-snapshot' }}
