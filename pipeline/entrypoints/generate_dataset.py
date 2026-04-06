@@ -10,6 +10,7 @@ Public API:
 
 Expected env vars:
     DATASET_CONFIG   (required): Path to dataset config YAML inside the container.
+    R2_BUCKET        (required): Cloudflare R2 bucket name for uploads.
     RUN_METADATA_DIR (optional): Dir for input_spec.json output. Default: /run-metadata.
 """
 
@@ -21,7 +22,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from pipeline.constants import INPUT_SPEC_FILENAME, R2_BUCKET
+from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec, materialize_spec
 
@@ -70,12 +71,13 @@ def build_generate_args(
     return args
 
 
-def run(config_path: Path, metadata_dir: Path) -> None:
+def run(config_path: Path, metadata_dir: Path, r2_bucket: str) -> None:
     """Full generate_dataset flow: materialize, upload spec, generate, upload shard.
 
     Args:
         config_path: Path to dataset config YAML.
         metadata_dir: Dir for input_spec.json (bind-mounted, host reads this).
+        r2_bucket: Cloudflare R2 bucket name for uploads.
 
     Raises:
         NotImplementedError: If num_shards > 1.
@@ -103,7 +105,7 @@ def run(config_path: Path, metadata_dir: Path) -> None:
     spec_path.write_text(spec.model_dump_json(indent=2))
 
     # Upload spec to R2 before generation
-    r2_dest = f"r2:{R2_BUCKET}/{spec.r2_prefix}"
+    r2_dest = f"r2:{r2_bucket}/{spec.r2_prefix}"
     _rclone_copy(str(spec_path), r2_dest)
 
     # Generate shard in temp dir, then upload to R2
@@ -118,9 +120,10 @@ def run(config_path: Path, metadata_dir: Path) -> None:
 def main() -> None:
     """Read env vars and run."""
     config_path = Path(os.environ["DATASET_CONFIG"])
+    r2_bucket = os.environ["R2_BUCKET"]
     metadata_dir = Path(os.environ.get("RUN_METADATA_DIR", "/run-metadata"))
 
-    run(config_path, metadata_dir)
+    run(config_path, metadata_dir, r2_bucket)
 
 
 if __name__ == "__main__":

@@ -20,20 +20,20 @@ ______________________________________________________________________
 
 ## Credential Inventory
 
-| Credential                 | Where Used                                     | Storage Locations                                                                               |
-| -------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `R2_ACCESS_KEY_ID`         | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`)                                            |
-| `R2_SECRET_ACCESS_KEY`     | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`)                                            |
-| `R2_ENDPOINT`              | Docker builds (build-arg, not secret)          | Image config YAML (`r2_endpoint` key in `configs/image/`), `.env`, Docker image (`rclone.conf`) |
-| `WANDB_API_KEY`            | Training, evaluation, promotion, Docker images | GitHub Secrets, `.env`, Docker image (`~/.netrc`)                                               |
-| `GIT_PAT`                  | Docker builds, CI workflows                    | GitHub Secrets, `.env`                                                                          |
-| `GITHUB_TOKEN`             | CI workflows (automatic)                       | Automatic per workflow run                                                                      |
-| `RUNPOD_API_KEY`           | Pipeline orchestration                         | GitHub Secrets, `.env`                                                                          |
-| `DOCKERHUB_USERNAME`       | CI image push workflows                        | GitHub Secrets                                                                                  |
-| `DOCKERHUB_TOKEN`          | CI image push workflows                        | GitHub Secrets                                                                                  |
-| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow        | GitHub Secrets                                                                                  |
-| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow        | GitHub Secrets                                                                                  |
-| `ANTHROPIC_API_KEY`        | Claude review workflow                         | GitHub Secrets                                                                                  |
+| Credential                 | Where Used                                     | Storage Locations                                    |
+| -------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
+| `R2_ACCESS_KEY_ID`         | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
+| `R2_SECRET_ACCESS_KEY`     | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
+| `R2_ENDPOINT`              | Docker builds (BuildKit secret)                | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
+| `WANDB_API_KEY`            | Training, evaluation, promotion, Docker images | GitHub Secrets, `.env`, Docker image (`~/.netrc`)    |
+| `GIT_PAT`                  | Docker builds, CI workflows                    | GitHub Secrets, `.env`                               |
+| `GITHUB_TOKEN`             | CI workflows (automatic)                       | Automatic per workflow run                           |
+| `RUNPOD_API_KEY`           | Pipeline orchestration                         | GitHub Secrets, `.env`                               |
+| `DOCKERHUB_USERNAME`       | CI image push workflows                        | GitHub Secrets                                       |
+| `DOCKERHUB_TOKEN`          | CI image push workflows                        | GitHub Secrets                                       |
+| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow        | GitHub Secrets                                       |
+| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow        | GitHub Secrets                                       |
+| `ANTHROPIC_API_KEY`        | Claude review workflow                         | GitHub Secrets                                       |
 
 ______________________________________________________________________
 
@@ -81,20 +81,18 @@ ______________________________________________________________________
 
 ### R2 Endpoint (`R2_ENDPOINT`)
 
-**What:** The Cloudflare R2 S3-compatible endpoint URL. This is not a secret
-(it is a well-known Cloudflare URL), but it is listed here for completeness
-since it is passed as a Docker build-arg and stored alongside R2 credentials.
+**What:** The Cloudflare R2 S3-compatible endpoint URL. Contains the
+permanent Cloudflare account ID — treated as a secret to avoid exposing
+the account ID in git history or `docker history`.
 
 **Where stored:**
 
-- Image config YAML — stored under the key `r2_endpoint` in
-  `configs/image/dev-snapshot.yaml`, read by CI via
-  `pipeline.ci.load_image_config` and passed as a Docker `--build-arg`
+- GitHub Secrets (`R2_ENDPOINT`) — passed as BuildKit secret at build time
 - Local `.env` files
 - Baked into Docker images (written to `rclone.conf`)
 
 **Rotation:** Only changes if the Cloudflare account ID changes. Update the
-value in the image config YAML and `.env` files if the account is migrated.
+GitHub Secret and `.env` files if the account is migrated.
 
 ______________________________________________________________________
 

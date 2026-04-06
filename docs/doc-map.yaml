@@ -89,12 +89,12 @@ docs:
       - pattern: "scripts/r2_shard_report.py"
         covers: "R2 listing commands, shard status reporting, path parsing"
       - pattern: "configs/image/dev-snapshot.yaml"
-        covers: "r2_endpoint, r2_bucket values, storage configuration"
+        covers: "r2_bucket value, storage configuration"
       - pattern: "pipeline/entrypoints/generate_dataset.py"
         covers: "rclone upload of spec and shard files, R2 path construction"
         scope: "rclone"
       - pattern: "pipeline/constants.py"
-        covers: "R2 bucket name constant (intermediate-data), INPUT_SPEC_FILENAME"
+        covers: "INPUT_SPEC_FILENAME constant"
 
   # ── Training pipeline design doc ────────────────────────────────
   - doc: docs/design/training-pipeline.md

@@ -78,12 +78,15 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Install PyYAML for config parsing
+        run: pip install pyyaml
+
       - name: Download shard from R2 and validate
         env:
           IMAGE: tinaudio/perm:${{ inputs.docker_image_tag || 'dev-snapshot' }}
         run: |
-          # Read R2 bucket from pipeline constants (checked-out code, no Docker needed)
-          R2_BUCKET=$(PYTHONPATH=. python3 -c "from pipeline.constants import R2_BUCKET; print(R2_BUCKET)")
+          # Read R2 bucket from image config YAML (single source of truth)
+          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
           R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
           SHARD_FILE=$(python3 -c "import json; print(json.load(open('input_spec.json'))['shards'][0]['filename'])")
 

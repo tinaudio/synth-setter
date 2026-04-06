@@ -32,17 +32,18 @@ data is available only during the `RUN` instruction and never appears in
 `docker history`. However, the build writes some secrets into config files
 that persist in the final image:
 
-| Secret                 | Source env var         | Persisted to                       | Purpose                              |
-| ---------------------- | ---------------------- | ---------------------------------- | ------------------------------------ |
-| `git_pat`              | `GIT_PAT`              | *(not persisted)*                  | GitHub API access for source tarball |
-| `r2_access_key_id`     | `R2_ACCESS_KEY_ID`     | `/root/.config/rclone/rclone.conf` | R2 rclone config                     |
-| `r2_secret_access_key` | `R2_SECRET_ACCESS_KEY` | `/root/.config/rclone/rclone.conf` | R2 rclone config                     |
-| `wandb_api_key`        | `WANDB_API_KEY`        | `/root/.netrc`                     | W&B auth                             |
+| Secret                 | Source env var         | Persisted to                       | Purpose                                |
+| ---------------------- | ---------------------- | ---------------------------------- | -------------------------------------- |
+| `git_pat`              | `GIT_PAT`              | *(not persisted)*                  | GitHub API access for source tarball   |
+| `r2_access_key_id`     | `R2_ACCESS_KEY_ID`     | `/root/.config/rclone/rclone.conf` | R2 rclone config                       |
+| `r2_secret_access_key` | `R2_SECRET_ACCESS_KEY` | `/root/.config/rclone/rclone.conf` | R2 rclone config                       |
+| `r2_endpoint`          | `R2_ENDPOINT`          | `/root/.config/rclone/rclone.conf` | R2 rclone config (Cloudflare endpoint) |
+| `wandb_api_key`        | `WANDB_API_KEY`        | `/root/.netrc`                     | W&B auth                               |
 
-> **Note:** `R2_ENDPOINT` and `R2_BUCKET` are passed as `--build-arg`, not as
-> BuildKit secrets. `R2_ENDPOINT` is written into `rclone.conf` by the
-> `r2-config-base` stage; `R2_BUCKET` is set as an `ENV` in the image. Both
-> appear in `docker history`. See the build-arg table below.
+> **Note:** `R2_BUCKET` is passed as `--build-arg` (not a BuildKit secret) and
+> set as an `ENV` in the image. Its value is sourced from
+> `configs/image/dev-snapshot.yaml` (single source of truth). It appears in
+> `docker history` — this is intentional since the bucket name is not sensitive.
 
 > [!WARNING]
 > R2 and W&B credentials persist in the final image filesystem (`rclone.conf`,
@@ -141,7 +142,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_endpoint: "https://efb9275d571811db929e83eb710b74a7.r2.cloudflarestorage.com"
 r2_bucket: "intermediate-data"
 ```
 
@@ -299,15 +299,15 @@ gh workflow run docker-build-validation.yml --ref main
 
 ### Required secrets
 
-| Secret                 | Purpose                              |
-| ---------------------- | ------------------------------------ |
-| `GIT_PAT`              | GitHub API access for source tarball |
-| `DOCKERHUB_USERNAME`   | Docker Hub login                     |
-| `DOCKERHUB_TOKEN`      | Docker Hub access token              |
-| `R2_ACCESS_KEY_ID`     | R2 credentials (baked via BuildKit)  |
-| `R2_SECRET_ACCESS_KEY` | R2 credentials                       |
-| `R2_ENDPOINT`          | R2 endpoint                          |
-| `WANDB_API_KEY`        | W&B auth                             |
+| Secret                 | Purpose                                 |
+| ---------------------- | --------------------------------------- |
+| `GIT_PAT`              | GitHub API access for source tarball    |
+| `DOCKERHUB_USERNAME`   | Docker Hub login                        |
+| `DOCKERHUB_TOKEN`      | Docker Hub access token                 |
+| `R2_ACCESS_KEY_ID`     | R2 credentials (baked via BuildKit)     |
+| `R2_SECRET_ACCESS_KEY` | R2 credentials                          |
+| `R2_ENDPOINT`          | R2 endpoint (baked via BuildKit secret) |
+| `WANDB_API_KEY`        | W&B auth                                |
 
 ______________________________________________________________________
 

@@ -17,8 +17,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from pipeline.constants import R2_BUCKET
 from pipeline.entrypoints.generate_dataset import build_generate_args, main, run
+
+_TEST_R2_BUCKET = "test-bucket"
 
 _COMPLETE_CONFIG = {
     "param_spec": "surge_simple",
@@ -119,7 +120,7 @@ class TestRun:
         metadata_dir = tmp_path / "metadata"
         mock_materialize.return_value = real_spec
 
-        run(config_path, metadata_dir)
+        run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
         spec_path = metadata_dir / "input_spec.json"
         assert spec_path.exists()
@@ -150,13 +151,13 @@ class TestRun:
         manager.attach_mock(mock_rclone, "rclone")
         manager.attach_mock(mock_check_call, "check_call")
 
-        run(config_path, metadata_dir)
+        run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
         rclone_calls = mock_rclone.call_args_list
         assert len(rclone_calls) == 2
         spec_upload = rclone_calls[0]
         assert "input_spec.json" in spec_upload[0][0]
-        assert f"r2:{R2_BUCKET}/" in spec_upload[0][1]
+        assert f"r2:{_TEST_R2_BUCKET}/" in spec_upload[0][1]
 
         # Ordering: spec upload must appear before check_call in the shared call log
         call_names = [c[0] for c in manager.mock_calls]
@@ -180,7 +181,7 @@ class TestRun:
         metadata_dir = tmp_path / "metadata"
         mock_materialize.return_value = real_spec
 
-        run(config_path, metadata_dir)
+        run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
         mock_check_call.assert_called_once()
         args = mock_check_call.call_args[0][0]
@@ -203,7 +204,7 @@ class TestRun:
         metadata_dir = tmp_path / "metadata"
         mock_materialize.return_value = real_spec
 
-        run(config_path, metadata_dir)
+        run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
         rclone_calls = mock_rclone.call_args_list
         assert len(rclone_calls) == 2
@@ -229,7 +230,7 @@ class TestRun:
         mock_check_call.side_effect = subprocess.CalledProcessError(1, "generate_vst_dataset.py")
 
         with pytest.raises(subprocess.CalledProcessError):
-            run(config_path, metadata_dir)
+            run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
@@ -249,7 +250,7 @@ class TestRun:
         mock_rclone.side_effect = subprocess.CalledProcessError(1, "rclone")
 
         with pytest.raises(subprocess.CalledProcessError):
-            run(config_path, metadata_dir)
+            run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
     def test_num_shards_greater_than_one_raises(self, tmp_path: Path) -> None:
         # plumb:req-bbe52a4d
@@ -262,7 +263,7 @@ class TestRun:
         metadata_dir = tmp_path / "metadata"
 
         with pytest.raises(NotImplementedError, match="num_shards > 1"):
-            run(config_path, metadata_dir)
+            run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
     def test_wds_output_format_raises(self, tmp_path: Path) -> None:
         """output_format 'wds' raises ValueError."""
@@ -270,7 +271,7 @@ class TestRun:
         metadata_dir = tmp_path / "metadata"
 
         with pytest.raises(ValueError, match="only supports hdf5"):
-            run(config_path, metadata_dir)
+            run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +356,22 @@ class TestMainEnvVars:
         """Missing DATASET_CONFIG env var raises KeyError."""
         monkeypatch.delenv("DATASET_CONFIG", raising=False)
         monkeypatch.delenv("RUN_METADATA_DIR", raising=False)
+        monkeypatch.delenv("R2_BUCKET", raising=False)
 
         with pytest.raises(KeyError, match="DATASET_CONFIG"):
+            main()
+
+    def test_missing_r2_bucket_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing R2_BUCKET env var raises KeyError."""
+        config_path = _write_config(tmp_path)
+        monkeypatch.setenv("DATASET_CONFIG", str(config_path))
+        monkeypatch.delenv("R2_BUCKET", raising=False)
+
+        with pytest.raises(KeyError, match="R2_BUCKET"):
             main()
 
     @patch("pipeline.entrypoints.generate_dataset.run")
@@ -371,11 +386,12 @@ class TestMainEnvVars:
         """Default RUN_METADATA_DIR is /run-metadata when env unset."""
         config_path = _write_config(tmp_path)
         monkeypatch.setenv("DATASET_CONFIG", str(config_path))
+        monkeypatch.setenv("R2_BUCKET", _TEST_R2_BUCKET)
         monkeypatch.delenv("RUN_METADATA_DIR", raising=False)
 
         main()
 
-        mock_run.assert_called_once_with(config_path, Path("/run-metadata"))
+        mock_run.assert_called_once_with(config_path, Path("/run-metadata"), _TEST_R2_BUCKET)
 
     @patch("pipeline.entrypoints.generate_dataset.run")
     def test_custom_metadata_dir(
@@ -389,8 +405,9 @@ class TestMainEnvVars:
         config_path = _write_config(tmp_path)
         custom_dir = tmp_path / "custom-meta"
         monkeypatch.setenv("DATASET_CONFIG", str(config_path))
+        monkeypatch.setenv("R2_BUCKET", _TEST_R2_BUCKET)
         monkeypatch.setenv("RUN_METADATA_DIR", str(custom_dir))
 
         main()
 
-        mock_run.assert_called_once_with(config_path, custom_dir)
+        mock_run.assert_called_once_with(config_path, custom_dir, _TEST_R2_BUCKET)

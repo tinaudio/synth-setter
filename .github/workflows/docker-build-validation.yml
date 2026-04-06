@@ -156,11 +156,11 @@ jobs:
             TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
             SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
             R2_BUCKET=${{ steps.config.outputs.r2_bucket }}
-            R2_ENDPOINT=${{ steps.config.outputs.r2_endpoint }}
           secrets: |
             git_pat=${{ secrets.GIT_PAT }}
             r2_access_key_id=${{ secrets.R2_ACCESS_KEY_ID }}
             r2_secret_access_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
+            r2_endpoint=${{ secrets.R2_ENDPOINT }}
             wandb_api_key=${{ secrets.WANDB_API_KEY }}
           cache-from: type=registry,ref=tinaudio/perm:buildcache
           cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=tinaudio/perm:buildcache,mode=max' || '' }}

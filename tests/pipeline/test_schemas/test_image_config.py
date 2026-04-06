@@ -25,7 +25,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_endpoint: "https://example.r2.cloudflarestorage.com"
 r2_bucket: test-bucket
 """
 
@@ -65,7 +64,6 @@ class TestLoadImageConfigValid:
         assert result.github_sha == VALID_SHA
         assert result.issue_number == VALID_ISSUE
         assert result.image_config_id == "dev-snapshot"
-        assert result.r2_endpoint == "https://example.r2.cloudflarestorage.com"
         assert result.r2_bucket == "test-bucket"
 
 
@@ -135,22 +133,8 @@ class TestIssueNumberValidation:
 # ---------------------------------------------------------------------------
 
 
-class TestR2FieldValidation:
-    """r2_endpoint and r2_bucket must not be empty or whitespace-only."""
-
-    def test_empty_r2_endpoint_rejected(self, tmp_path: Path) -> None:
-        """Empty r2_endpoint is rejected."""
-        config_path = _write_config(tmp_path, overrides='r2_endpoint: ""\n')
-
-        with pytest.raises(ValidationError, match="must not be blank"):
-            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
-
-    def test_whitespace_r2_endpoint_rejected(self, tmp_path: Path) -> None:
-        """Whitespace-only r2_endpoint is rejected."""
-        config_path = _write_config(tmp_path, overrides='r2_endpoint: "  "\n')
-
-        with pytest.raises(ValidationError, match="must not be blank"):
-            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
+class TestR2BucketValidation:
+    """r2_bucket must not be empty or whitespace-only."""
 
     def test_empty_r2_bucket_rejected(self, tmp_path: Path) -> None:
         """Empty r2_bucket is rejected."""
@@ -248,7 +232,6 @@ class TestLoadImageConfigErrors:
             "build_mode: prebuilt\n"
             "target_platform: linux/amd64\n"
             'torch_backend: "cu128"\n'
-            'r2_endpoint: "https://example.r2.cloudflarestorage.com"\n'
         )
 
         with pytest.raises(ValidationError):
@@ -303,8 +286,5 @@ class TestStaticFieldsAndYamlMerge:
         assert result.build_mode == "prebuilt"
         assert result.target_platform == "linux/amd64"
         assert result.torch_backend == "cu128"
-        assert result.r2_endpoint == (
-            "https://efb9275d571811db929e83eb710b74a7.r2.cloudflarestorage.com"
-        )
         assert result.r2_bucket == "intermediate-data"
         assert result.image_config_id == "dev-snapshot"
