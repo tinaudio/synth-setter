@@ -3,15 +3,14 @@
 import threading
 
 import numpy as np
-import pedalboard
-from pedalboard import Pedalboard
+from pedalboard import VST3Plugin
 from pedalboard.io import AudioStream
 
 CHANNELS = 2
 SAMPLE_RATE = 44100
 BUFFER_SIZE = 512
 
-plugin = pedalboard.load_plugin("plugins/Surge XT.vst3")
+plugin = VST3Plugin("plugins/Surge XT.vst3")
 
 
 def play_audio():
@@ -21,10 +20,9 @@ def play_audio():
         sample_rate=SAMPLE_RATE,
         buffer_size=BUFFER_SIZE,
     ) as stream:
-        board = Pedalboard([plugin])
         while True:
             silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
-            synth_output = board(silence, SAMPLE_RATE, reset=False)
+            synth_output = plugin(silence, SAMPLE_RATE, reset=False)
             stream.write(synth_output, SAMPLE_RATE)
 
 
