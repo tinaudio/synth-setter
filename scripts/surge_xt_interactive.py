@@ -2,6 +2,7 @@
 
 import threading
 
+import click
 import numpy as np
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioStream
@@ -24,10 +25,17 @@ def play_audio(plugin: VST3Plugin) -> None:
             stream.write(synth_output, SAMPLE_RATE)
 
 
-if __name__ == "__main__":
-    plugin = VST3Plugin("plugins/Surge XT.vst3")
+@click.command()
+@click.option("--plugin-path", "-p", default="plugins/Surge XT.vst3", help="Path to VST3 plugin.")
+def main(plugin_path: str) -> None:
+    """Open Surge XT GUI with real-time audio streaming."""
+    plugin = VST3Plugin(plugin_path)
 
     t = threading.Thread(target=play_audio, args=(plugin,), daemon=True)
     t.start()
 
     plugin.show_editor()
+
+
+if __name__ == "__main__":
+    main()  # type: ignore[call-arg]
