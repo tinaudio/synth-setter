@@ -1,6 +1,587 @@
 # CHANGELOG
 
 
+## v0.2.0 (2026-04-09)
+
+### Chores
+
+- Add .devcontainer config for GitHub Codespaces
+  ([#498](https://github.com/tinaudio/synth-setter/pull/498),
+  [`baa51de`](https://github.com/tinaudio/synth-setter/commit/baa51defaa0cad36d75da462e1a61380ad389ff5))
+
+* chore: add .devcontainer config for GitHub Codespaces
+
+Reuses the existing tinaudio/perm:dev-snapshot image (same as RunPod) so VST-dependent tests,
+  generate_dataset -> R2 uploads, and CPU training work identically in a Codespace. GPU training
+  still runs on RunPod.
+
+The post-create.sh installs only the editable workspace (--no-deps) since deps are already baked
+  into the image, then initializes submodules and wires up pre-commit hooks.
+
+Uses the image's MODE=idle entrypoint path instead of overrideCommand -- the image's own API, not a
+  bypass.
+
+Closes #186
+
+* chore: mark workspace as safe.directory in post-create
+
+Codespaces runs post-create.sh as root against a workspace whose files may be owned by another UID,
+  which trips git's safe.directory protection (CVE-2022-24765 mitigation) and blocks git submodule
+  update and pre-commit install.
+
+Addresses Copilot review comment on #498.
+
+- Add authors to pyproject.toml ([#483](https://github.com/tinaudio/synth-setter/pull/483),
+  [`7219f83`](https://github.com/tinaudio/synth-setter/commit/7219f8319ffd2734cb38f09a2148684207d03fc4))
+
+- Add GPLv3 LICENSE file ([#470](https://github.com/tinaudio/synth-setter/pull/470),
+  [`2178c90`](https://github.com/tinaudio/synth-setter/commit/2178c90d50787bdce4a7a5086977c07cae211af2))
+
+- Rewrite .env.example with complete variable inventory
+  ([#471](https://github.com/tinaudio/synth-setter/pull/471),
+  [`5ec6527`](https://github.com/tinaudio/synth-setter/commit/5ec652780e6825e85d4a531a2d19cc636c138139))
+
+* chore: rewrite .env.example with complete variable inventory
+
+* address review feedback on PR #471
+
+* chore: address second round of review feedback on PR #471
+
+- Add optional logger tokens (COMET_API_TOKEN, NEPTUNE_API_TOKEN) in a dedicated section, noting
+  they are template-provided and not actively used - Document that PROJECT_ROOT is auto-set by
+  rootutils (not a .env variable) - Flip AWS_ENDPOINT_URL to commented-out with a warning about
+  global scope; promote WANDB_S3_ENDPOINT_URL as the preferred override
+
+* chore: clarify RUNPOD_API_KEY is planned, comment it out
+
+Mark the RunPod section as planned (#71) and comment out the variable since no code paths currently
+  reference it. Addresses review feedback.
+
+- Switch skills submodule URL from SSH to HTTPS
+  ([#474](https://github.com/tinaudio/synth-setter/pull/474),
+  [`9976cde`](https://github.com/tinaudio/synth-setter/commit/9976cde3a280a7c6b7c12638d6bda60b3118990e))
+
+- **code-health**: Label good-first-issue starter set and link from CONTRIBUTING
+  ([#511](https://github.com/tinaudio/synth-setter/pull/511),
+  [`f701439`](https://github.com/tinaudio/synth-setter/commit/f7014393f277182b5a87a1b4bae3218069be0316))
+
+Label three curated starter issues and add a "Good first issues" section to CONTRIBUTING.md linking
+  to the label filter, so newcomers have a clear entry point after running through Getting started.
+
+Labeled: - #33 (docs/logging: add debug log of resolved config in train()) - #38 (tests: replace
+  deprecated pkg_resources with importlib.metadata) - #51 (typing: resolve inconsistencies flagged
+  by Copilot in PR #49)
+
+Closes #464 Part of #457
+
+- **docker**: Migrate from pip to uv with --torch-backend
+  ([#484](https://github.com/tinaudio/synth-setter/pull/484),
+  [`a691b33`](https://github.com/tinaudio/synth-setter/commit/a691b335e2cc80046e4ea11fa38a3e2dcc83226c))
+
+* chore(docker): replace pip with uv pip in Dockerfile and remaining refs
+
+Migrate all pip install commands to uv pip install across Dockerfile, CI workflows, Makefile, and
+  docs. Keeps pip wheel for building wheels (uv doesn't support pip wheel yet). Installs uv via COPY
+  from the official ghcr.io/astral-sh/uv image and uses uv venv instead of pip+virtualenv for venv
+  creation.
+
+Closes #424
+
+* Update docker/ubuntu22_04/Dockerfile
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+* fix(make): revert uv install to pip install uv
+
+The curl | sh approach installs uv to ~/.local/bin which may not be on PATH in a non-interactive
+  Make recipe, causing uv: command not found on the next line. pip install uv avoids this entirely
+  since it installs into the active environment's bin/ already on PATH.
+
+Refs #484
+
+* fix(docker): use --no-deps for offline wheel install to bypass uv local version bug
+
+uv's strict PEP 440 resolver rejects torch wheels with +cu128 local version suffixes (torchvision
+  requires torch==2.11.0 but the wheel is torch-2.11.0+cu128). Since pip wheel already resolved all
+  dependencies correctly, install every built wheel directly with --no-deps to skip uv's resolver
+  entirely.
+
+* chore(docker): replace pip wheel stages with single uv pip install
+
+Delete the wheels-torch and wheels stages entirely. uv resolves and installs all deps in one pass
+  from PyPI + the PyTorch CUDA index, using its built-in cache (mounted at /root/.cache/uv) for
+  cross-build persistence. This eliminates both the duplicate transitive dep problem (fsspec) and
+  the +cu128 local version mismatch.
+
+* fix(docker): add --index-strategy unsafe-best-match for PyTorch index
+
+The PyTorch CUDA index carries stale copies of common packages (e.g. requests 2.28.1). uv's default
+  index strategy only considers the first index that has a package, blocking deps that need newer
+  versions from PyPI. unsafe-best-match picks the best version across all indexes.
+
+Verified via dry-run: uv resolves torch==2.11.0+cu128 + all transitive deps cleanly with this flag.
+
+* chore(docker): use uv --torch-backend, bump uv to 0.11.2, drop pip
+
+Replace --extra-index-url + --index-strategy unsafe-best-match with uv's native --torch-backend
+  cu128 flag. uv routes only PyTorch ecosystem packages to the CUDA index automatically — no index
+  mixing, no unsafe flags.
+
+Changes across the config/CI/Makefile/docs chain: - TORCH_INDEX_URL build arg → TORCH_BACKEND
+  (default: cu128) - DOCKER_TORCH_IDX Makefile var → DOCKER_TORCH_BACKEND - torch_index_url in image
+  config → torch_backend - Bump uv from 0.4.29 to 0.11.2 (--torch-backend requires ≥0.5) - Drop
+  python3-pip from Dockerfile (nothing uses pip anymore) - Drop PIP_DISABLE_PIP_VERSION_CHECK env
+  var
+
+* fix(test): update newline injection fixtures to use torch_backend
+
+The TestNewlineInjection tests added on main use inline YAML fixtures with the old torch_index_url
+  field. Update to torch_backend to match the renamed ImageConfig schema.
+
+* chore(docker): update stale comment referencing removed wheel stages
+
+---------
+
+- **plumb**: Dedicated spec file with 124 requirements across 15 sections
+  ([#468](https://github.com/tinaudio/synth-setter/pull/468),
+  [`ea082b9`](https://github.com/tinaudio/synth-setter/commit/ea082b9807dc6383b190596152a4e3a84e289029))
+
+* chore: switch plumb spec to dedicated file and seed cross-cutting invariants
+
+- Bump plumb-dev pin to f4160bb (tip of dev branch) - Change spec_paths from design docs to
+  plumb_spec.md - Seed spec with 10 cross-cutting invariants from design docs
+
+Closes #467
+
+* chore(plumb): expand spec with domain requirements and move to docs/
+
+Move plumb_spec.md to docs/plumb_spec.md and expand from 10 cross-cutting invariants to 124
+  requirements across 15 sections.
+
+New sections: Reconciliation and Resumability, Model Promotion, Artifact Provenance, Concurrency and
+  Crash Resilience, CLI Interface.
+
+Expanded sections: Audio Dataset Generation (lifecycle markers, quarantine, HDF5 contents), Shard
+  Validation (content hashing, completeness checks), Dataset Finalization (normalization stats,
+  virtual datasets, WebDataset archives, dataset card), Model Training (checkpoint intervals,
+  provenance), Model Evaluation (specific metrics, denormalization, conditional R2 download),
+  Container Environment (MODE specifics, credential fallback), Storage Layout (R2 path conventions,
+  S3-compatible references).
+
+All requirements are atomic, testable, active voice, and abstracted from implementation details per
+  plumb_spec formatting rules.
+
+Part of #466 Closes #467
+
+### Continuous Integration
+
+- Add experiments domain to taxonomy ([#493](https://github.com/tinaudio/synth-setter/pull/493),
+  [`3729c32`](https://github.com/tinaudio/synth-setter/commit/3729c3250c7b2742ae7d12c1ceb2eebb80abc275))
+
+* feat(ci): add experiments domain to taxonomy
+
+Register a new `experiments` domain for one-off validation experiments (result replication, baseline
+  parity, render variability benchmarks). Distinct from `evaluation` (production eval pipeline) and
+  `testing` (unit/integration test infra).
+
+Updates all 8 synth-setter locations that enumerate domains: - CI gate DOMAIN_LABELS
+  (pr-metadata-gate.yaml) - PostToolUse hook DOMAIN_LABELS (verify-gh-taxonomy.sh) - All 5 issue
+  template domain+milestone dropdowns - docs/design/github-taxonomy.md §6 labels, §7 milestones, §8
+  views
+
+Fixes pre-existing drift found while touching these files: the `testing v1.0.0` milestone was
+  missing from all 5 template milestone dropdowns and §7 milestones table (the milestone existed on
+  GitHub but couldn't be selected from templates); §8 views was missing rows for `monitoring` and
+  `testing`. All 8 files now list the same 10 domains.
+
+The companion skill update (SKILL.md in tinaudio/skills) is in tinaudio/skills#53. Submodule pointer
+  bump will follow that PR's merge.
+
+Refs #492
+
+* chore(skills): bump submodule to pick up experiments domain
+
+Picks up tinaudio/skills#53 which adds `experiments` to the github-taxonomy skill's 3 domain
+  enumerations and fixes pre-existing skill drift (previously missing `documentation` and
+  `monitoring`).
+
+After this bump, the skill's domain list matches the 10-domain set enforced by pr-metadata-gate.yaml
+  and verify-gh-taxonomy.sh in this same PR.
+
+- Validate GITHUB_OUTPUT values against newline injection
+  ([#473](https://github.com/tinaudio/synth-setter/pull/473),
+  [`593c615`](https://github.com/tinaudio/synth-setter/commit/593c615c95cb4868cb23a99cfd884c8e2eff9111))
+
+* fix(ci): validate GITHUB_OUTPUT values against newline injection
+
+Values written to GITHUB_OUTPUT are now checked for newline (\n) and carriage-return (\r) characters
+  before writing. A config value containing either character would previously inject arbitrary
+  key-value pairs into the Actions output file. The fix raises ValueError with a clear message when
+  a newline is detected.
+
+Fixes #333
+
+* fix: clarify error message for newline and carriage-return injection
+
+- **devcontainer**: Derive workspaceFolder from host directory name
+  ([#502](https://github.com/tinaudio/synth-setter/pull/502),
+  [`02bb634`](https://github.com/tinaudio/synth-setter/commit/02bb63483b3e2dfdf8c99b1e55455980f419460b))
+
+* fix(devcontainer): derive workspaceFolder from host directory name
+
+The devcontainer config hardcoded workspaceFolder to /workspaces/synth-setter and post-create.sh
+  hardcoded cd to the same path. This only worked in GitHub Codespaces (repo always cloned to
+  /workspaces/<repo-name>) and in local clones literally named "synth-setter". Forks cloned to
+  custom directory names and git worktrees failed with chdir exit 127 in postCreateCommand.
+
+Changes:
+
+- devcontainer.json: workspaceFolder uses ${localWorkspaceFolderBasename} substitution, matching the
+  devcontainer CLI's mount-target derivation. - post-create.sh: walks up from the script's location
+  to find the .project-root anchor (the project's existing rootutils convention), instead of
+  hardcoding the path. - post-create.sh: defensively unsets core.hooksPath before pre-commit
+  install, stripping any absolute host-path that may leak from the host .git/config (harmless in
+  Codespaces; breaks local devcontainer users who ran pre-commit install on the host).
+
+Also documents the supported local-devcontainer workflow in docs/getting-started.md §2g: open the
+  container on the main working tree and create git worktrees *inside* the container. Mounting a
+  worktree directly from the host does not work because the worktree's .git file points to a host
+  path outside the container's bind mount.
+
+Closes #186
+
+* style(docs): add blank line before HR in credential rotation guide
+
+mdformat requires a blank line between a heading and a horizontal rule separator. Without it, the
+  rendered output collapses the `______` line visually and mdformat rejects the file. Failing the
+  `Code Quality Main` workflow on main since baa51de (#498 merge).
+
+Found by pre-commit run --all-files.
+
+* address review feedback on PR #502
+
+Copilot review round:
+
+- post-create.sh header: reframe as "Dev container first-run setup for both Codespaces and local
+  devcontainers" so the file header matches reality after this PR (comment #3037279752). -
+  post-create.sh final echo: change "Codespace ready" to "Dev container ready" so local users aren't
+  misled (comment #3037279754). - post-create.sh hooksPath unset: add explicit --local scope so the
+  command can never touch the global git config even if cwd drifts (comment #3037291219). -
+  post-create.sh .project-root error: include the search-start path and a remediation hint so users
+  who opened the container on a subdirectory can self-diagnose (comment #3037291225). -
+  docs/getting-started.md §2g caveat: clarify that exporting GITHUB_TOKEN alone is not sufficient —
+  git needs a credential helper configured (e.g., gh auth login && gh auth setup-git, or a
+  PAT-backed credential store) (comment #3037279746).
+
+### Documentation
+
+- Add CITATION.cff for project citation metadata
+  ([#475](https://github.com/tinaudio/synth-setter/pull/475),
+  [`7c5e439`](https://github.com/tinaudio/synth-setter/commit/7c5e4393449684b581f0b7043727cf4662f7cd96))
+
+* docs: add CITATION.cff for project citation metadata
+
+* docs: add missing affiliation for Khaled Tinubu in CITATION.cff
+
+Add Google affiliation to both the top-level authors list and the preferred-citation authors block,
+  matching the existing affiliation pattern used for the first author.
+
+* docs: simplify CITATION.cff to self-citation only
+
+- Add CONTRIBUTING.md with contributor onboarding guide
+  ([#477](https://github.com/tinaudio/synth-setter/pull/477),
+  [`7c7c252`](https://github.com/tinaudio/synth-setter/commit/7c7c2523e2d72858ab611d74de68dab905eb8926))
+
+* docs: add CONTRIBUTING.md with contributor onboarding guide
+
+* docs: address review feedback on CONTRIBUTING.md
+
+- Add HTTPS override instructions for SSH submodule URL (comment 3025900308) - Document where
+  PLUMB_SKIP is implemented (comment 3025900314) - Remove broken CODE_OF_CONDUCT.md and LICENSE
+  links (comment 3025900327)
+
+* docs: clarify structlog as intended standard for new pipeline code
+
+* docs: add bats to prerequisites and note requirement for test-bats
+
+* Update CONTRIBUTING.md
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- Add credential rotation operational runbook
+  ([#478](https://github.com/tinaudio/synth-setter/pull/478),
+  [`5e9d20d`](https://github.com/tinaudio/synth-setter/commit/5e9d20d2c7d5598aafc41cfbf789fd025019c612))
+
+* docs: add credential rotation operational runbook
+
+* docs: address PR #478 review feedback on credential rotation guide
+
+- Fix R2_ENDPOINT storage location: sourced from image config YAML (configs/image/dev-snapshot.yaml)
+  via pipeline.ci.load_image_config, not from GitHub Secrets - Simplify R2 endpoint/bucket note per
+  reviewer suggestion: remove undefined R2_BUCKET reference, clarify both are non-secret config
+
+* docs: address second round of review feedback on PR #478
+
+- Fix claude-review.yml trigger: runs on needs-claude-review label, not PR open - Replace hardcoded
+  RunPod API key with $RUNPOD_API_KEY env var reference - Replace hardcoded Docker Hub token with
+  $DOCKERHUB_TOKEN env var reference
+
+* docs: address round 3 review feedback on PR #478
+
+- Clarify r2_endpoint YAML key name in inventory table and R2 Endpoint section - Replace inline
+  WANDB_API_KEY placeholder with env var reference - Replace inline GIT_PAT values with env var
+  references in verification and rebuild examples
+
+* Revise credential rotation steps and add issue creation
+
+Updated credential rotation guide to simplify instructions and add a step for creating a GitHub
+  issue.
+
+- Add getting-started tutorial for new contributors
+  ([#481](https://github.com/tinaudio/synth-setter/pull/481),
+  [`864ac9f`](https://github.com/tinaudio/synth-setter/commit/864ac9f2364047448b5829ea529aa76d3a7da32d))
+
+* docs: add getting-started tutorial for new contributors
+
+* docs: fix Hydra override syntax and trainer config in tutorial
+
+- Use experiment= (not +experiment=) since train.yaml already defines experiment: null - Use
+  trainer.max_steps (not trainer.max_epochs) matching actual trainer config - Use model.optimizer.lr
+  (not model.lr) matching nested optimizer config - mdformat table alignment and ordered list
+  normalization
+
+* docs: address review feedback on getting-started tutorial
+
+- Add trainer.min_steps=null override to quickstart command so the run actually stops at 5,000 steps
+  (default min_steps is 400,000) - Fix checkpoint path to match Hydra output dir pattern:
+  logs/{task_name}/{experiment_name}/{run_name}-{timestamp}/checkpoints/ - Fix rclone verification:
+  use lsd (list directories) instead of ls, and correct top-level dirs to data/, train/, eval/ - Fix
+  eval section: ckpt_path is required, not optional - Add DOCKER_BUILD_FLAGS=--load to Docker build
+  example
+
+* docs: fix submodule SSH note, rclone env vars, and Docker secret handling
+
+- Add note about SSH-based submodule URL and HTTPS workaround for contributors who clone via HTTPS
+  without SSH keys configured - Fix rclone env var names to use RCLONE_CONFIG_R2_* prefix for local
+  rclone auto-configuration, and clarify that R2_* names are for Docker BuildKit secrets - Replace
+  inline Docker build credentials with set -a/source .env pattern to avoid leaking secrets in shell
+  history
+
+* docs: add CPU/MPS trainer note and Docker credential warning
+
+Address round 3 review feedback on PR #481: - Add trainer=cpu/mps guidance for the k-osc quickstart
+  command - Add warning that Docker images contain credentials in the filesystem
+
+* Update docs/getting-started.md
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- Add GitHub Actions workflow reference ([#504](https://github.com/tinaudio/synth-setter/pull/504),
+  [`8906d0e`](https://github.com/tinaudio/synth-setter/commit/8906d0e9e81faa3a07ca7ea727b887d5be784c06))
+
+* docs: add GitHub Actions workflow reference
+
+Adds docs/reference/github-actions.md documenting the 20 workflows in .github/workflows/. Captures
+  intent, secret purposes, cross-workflow dependencies, and non-obvious gotchas — not literal YAML
+  transcription.
+
+Closes #503
+
+* docs: correct gpu-x64 runner classification
+
+The gpu-x64 runner is a GitHub-hosted larger runner (per the YAML comment "GitHub GPU runner ships
+  NVIDIA driver 12080"), not self-hosted. Fix the overview line, catalog row, gotcha section, and
+  anchor link.
+
+Refs #503
+
+* docs: note that paths filters affect which workflows run
+
+The original Skip CI line overstated CI coverage: 4 workflows (test, test-dataset-generation,
+  bats-tests, docker-build-validation) have paths: filters, so doc-only changes don't trigger the
+  full matrix.
+
+- Add glossary and architecture overview ([#482](https://github.com/tinaudio/synth-setter/pull/482),
+  [`bae4184`](https://github.com/tinaudio/synth-setter/commit/bae4184028427c8b02141a594dc1e571c9f331ac))
+
+* docs: add glossary and architecture overview
+
+* docs: apply mdformat table formatting
+
+* docs: fix feed-forward model class names in glossary
+
+- Add module docstrings and scripts inventory
+  ([#476](https://github.com/tinaudio/synth-setter/pull/476),
+  [`7c15ef2`](https://github.com/tinaudio/synth-setter/commit/7c15ef2a31adaf6775f9ae1304484aceef886494))
+
+* docs: add module docstrings and scripts inventory
+
+Add one-line module docstrings to src/, src/data/, src/models/, and pipeline/ __init__.py files.
+  Create scripts/README.md with an inventory table covering all 18 scripts and 2 data directories.
+
+Refs #463
+
+* docs: address review feedback on PR #476
+
+- Fix MFCD typo to MFCC in compute_audio_metrics.py description - List actual docker_entrypoint.sh
+  modes (idle, passthrough, generate_dataset)
+
+* docs: quote Surge XT path instead of escaping space in scripts README
+
+* docs: exclude pipeline from find_packages in setup.py
+
+The pipeline/ directory has its own __init__.py (predating this PR), so find_packages() was silently
+  including it in the installed distribution. Add an explicit exclude so only src/ is packaged.
+
+Refs #476
+
+- Expand README with badges, install guide, and project overview
+  ([#479](https://github.com/tinaudio/synth-setter/pull/479),
+  [`3debf52`](https://github.com/tinaudio/synth-setter/commit/3debf52cfd897e1a042e1f5645e0dbfee65671a8))
+
+* docs: expand README with badges, install guide, and project overview
+
+* address review feedback on PR #479
+
+* docs: remove non-existent pipeline dirs from project structure
+
+Remove pipeline/stages/ and pipeline/backends/ from the README project structure section -- these
+  directories do not exist yet (planned in #72 and #71). Also update PR description to remove
+  incorrect license badge claim.
+
+Refs #460
+
+* docs: add Acknowledgments section, fold Publication, update license to GPL-3.0
+
+* docs: add conda activate command and env name hint to README
+
+Refs #479
+
+* Update README.md
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- **ci-automation**: Document 40-char SHA requirement for Docker workflow git_ref
+  ([#509](https://github.com/tinaudio/synth-setter/pull/509),
+  [`55b0c10`](https://github.com/tinaudio/synth-setter/commit/55b0c107f5fcc46a4ead3ed0041f74f2890cd203))
+
+* docs(ci-automation): document git_ref SHA resolution in Docker workflow
+
+Clarify that the Docker build workflow's git_ref input accepts any ref form but the build always
+  pins to the commit SHA resolved by `git rev-parse HEAD` after checkout. Strengthen the Makefile
+  GIT_REF doc to note that Makefile targets pass GIT_REF verbatim to `git checkout --detach` after
+  only `git fetch origin` and require a full SHA for reliable resolution, unlike the CI workflow
+  which resolves any ref form to a SHA before the build.
+
+Workflow-level SHA validation is already provided by load_image_config's Pydantic validator
+  (pipeline/schemas/image_config.py), so no new workflow check is added.
+
+Closes #332
+
+* docs: describe both SYNTH_PERMUTATIONS_GIT_REF paths in Makefile
+
+The Dockerfile uses SYNTH_PERMUTATIONS_GIT_REF in two stages: the `synth-setter-src` stage downloads
+  a GitHub tarball at that ref, and the `dev-snapshot` stage runs `git checkout --detach` after `git
+  fetch origin`. The previous GIT_REF block mentioned only the git-checkout path. Also drops the
+  too-strong "branch/tag names may not be fetched" claim — `git fetch origin` fetches all branch
+  heads and tags by default; the real constraint is that a full SHA reachable from a pushed
+  branch/tag is the only ref form that reliably satisfies both paths.
+
+Addresses Copilot review comment on PR #509.
+
+### Features
+
+- **evaluation**: Add interactive Surge XT preview script
+  ([#531](https://github.com/tinaudio/synth-setter/pull/531),
+  [`46caaf0`](https://github.com/tinaudio/synth-setter/commit/46caaf0c797602fab1dd9990c8cc1432bdf4d508))
+
+opens Surge XT GUI via pedalboard with real-time audio streaming.
+
+### Testing
+
+- Shrink test_train_ddp_sim to fix limit_val_batches under DDP sharding
+  ([#515](https://github.com/tinaudio/synth-setter/pull/515),
+  [`bd794a3`](https://github.com/tinaudio/synth-setter/commit/bd794a3982f7784cbff25c1e1e6f54293bd2c7fd))
+
+The fixture's limit_val_batches=0.1 yielded 0 val batches per rank under ddp_spawn with devices=2
+  (10 val batches → 5/rank → 0.1 × 5 = 0.5, which Lightning rejects). Override with integer limits
+  and shrink model/data/batch to match the tiny-model tests so DDP-on-CPU finishes in ~13s instead
+  of consuming several minutes on the full ksin model and dataset.
+
+Closes #46
+
+- **benchmarks**: Initialize HydraConfig before resolving cfg_train
+  ([#501](https://github.com/tinaudio/synth-setter/pull/501),
+  [`20587b8`](https://github.com/tinaudio/synth-setter/commit/20587b881119e09361db7374ef43bd95cd30c776))
+
+* test(benchmarks): initialize HydraConfig before resolving cfg_train
+
+The test_config_resolution_speed benchmark walks the full cfg_train tree with
+  OmegaConf.to_container(resolve=True). The tree contains ${hydra:runtime.cwd} from
+  configs/paths/default.yaml (work_dir), whose resolver only works when HydraConfig has been set for
+  the config. The cfg_train fixture does not call HydraConfig().set_config(), so the benchmark
+  raises during resolution — mirroring test_train_config, call set_config() inside the test.
+
+Refs #500
+
+* test(benchmarks): strip hydra section before resolving cfg_train
+
+Setting HydraConfig makes ${hydra:runtime.*} resolvers work, but the hydra subtree itself contains
+  hydra.run.dir = ${run_name}-... which references a key only defined by experiment configs —
+  resolve=True on the full tree still fails with InterpolationKeyError. In production Hydra strips
+  its own hydra section before handing the config to the user task, so the benchmark now mirrors
+  that: pop 'hydra' from a copy and resolve the user-facing subtree.
+
+---------
+
+Co-authored-by: a <a@as-mac-mini.taile31224.ts.net>
+
+- **testing**: Move heavy training tests to GPU runner
+  ([#506](https://github.com/tinaudio/synth-setter/pull/506),
+  [`c596bea`](https://github.com/tinaudio/synth-setter/commit/c596bea76d6ad3f2d3f19f1cf0fcea221e6c1d74))
+
+The nightly-full-suite runner (ubuntu-latest: 2 vCPU / 7 GB, no GPU) has been killed by GitHub infra
+  ("runner lost communication") 17/17 times since the workflow was added 2026-03-21 — the CPU
+  train+eval loop in test_train_eval exhausts the runner. Move the 4 heavy slow CPU training tests
+  to the GPU runner (test-expensive.yml, twice-weekly):
+
+- test_eval.py::test_train_eval - test_train.py::test_train_epoch_double_val_loop -
+  test_train.py::test_train_resume - test_train.py::test_train_fast_dev_run (deleted — identical to
+  test_train_fast_dev_run_gpu_compile after GPU migration)
+
+Keep test_train_ddp_sim on CPU (its purpose is to verify ddp_spawn on CPU), and
+  test_train_fast_dev_run_tiny_model_tiny_data remains the one CPU training test on every PR.
+
+After this change, nightly-full-suite's CPU training load drops from 6 tests to 2, which should
+  allow the runner to complete without being killed.
+
+Refs #505
+
+Co-authored-by: a <a@as-mac-mini.taile31224.ts.net>
+
+- **testing**: Rename pytest.fail msg= kwarg to reason= for pytest 9 compat
+  ([#508](https://github.com/tinaudio/synth-setter/pull/508),
+  [`d29e250`](https://github.com/tinaudio/synth-setter/commit/d29e250ae73d94c7890a90100595f48b3c531e76))
+
+pytest 9 removed the `msg=` keyword alias from `pytest.fail` (deprecated since pytest 7, renamed to
+  `reason=`). run_sh_command.py still used the removed kwarg, so every call raised:
+
+TypeError: _Fail.__call__() got an unexpected keyword argument 'msg'
+
+This broke all 5 tests in tests/test_sweeps.py whenever the `sh` package was installed (nightly.yml,
+  test-expensive.yml). The failures were masked until #506 unblocked the nightly runner hang.
+
+Refs #507
+
+Co-authored-by: a <a@as-mac-mini.taile31224.ts.net>
+
+
 ## v0.1.4 (2026-04-02)
 
 ### Bug Fixes
