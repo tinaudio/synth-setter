@@ -1,12 +1,13 @@
 {
   "name": "synth-setter",
-  "image": "tinaudio/perm:dev-snapshot",
+  "build": { "dockerfile": "Dockerfile" },
 
   "containerEnv": {
     "MODE": "idle"
   },
 
-  "remoteUser": "root",
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
 
   "postCreateCommand": ".devcontainer/post-create.sh",
