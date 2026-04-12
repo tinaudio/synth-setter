@@ -22,10 +22,11 @@ done
 }
 cd "$dir"
 
-# Codespaces runs this script as root against a workspace that may be owned
-# by another UID, tripping git's safe.directory check. Mark the repo trusted
-# before any git operation (submodule update, pre-commit install).
-git config --global --add safe.directory "$(pwd)"
+# Trust the workspace repo and every submodule (e.g. .claude/skills) before
+# any git operation (submodule update, pre-commit install). The wildcard is
+# safe inside a dev container where the repo is the only thing present, and
+# avoids per-submodule entries that broke when .claude/skills was added.
+git config --global --add safe.directory '*'
 
 # Skills live in a git submodule (.claude/skills → tinaudio/skills).
 git submodule update --init --recursive
