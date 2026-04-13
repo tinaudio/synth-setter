@@ -1,4 +1,9 @@
-FROM tinaudio/perm:dev-snapshot
+# Base image is published only for linux/amd64. On Apple Silicon this runs
+# under Rosetta/qemu — matches the pre-PR behavior of the plain `image:`
+# devcontainer config, but must be explicit now that we build via `build:`
+# because BuildKit resolves the FROM step against the builder's target
+# platform. Multi-arch publishing of the base image is the long-term fix.
+FROM --platform=linux/amd64 tinaudio/perm:dev-snapshot
 
 ARG USERNAME=dev
 ARG USER_UID=1000
