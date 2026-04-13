@@ -24,7 +24,7 @@ cd "$dir"
 
 # Codespaces runs this script as root against a workspace that may be owned
 # by another UID, tripping git's safe.directory check. Mark the repo trusted
-# before any git operation (submodule update, pre-commit install).
+# before later git config calls and pre-commit install.
 git config --global --add safe.directory "$(pwd)"
 
 # Install the workspace as an editable package into the image's venv.

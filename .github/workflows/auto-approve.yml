@@ -7,7 +7,7 @@ name: Auto-approve PR
 # - Manual trigger via workflow_dispatch
 on:
   workflow_run:
-    workflows: ["Tests", "Code Quality PR", "Claude Code Review"]
+    workflows: ["Tests", "Code Quality PR"]
     types: [completed]
   pull_request_review:
     types: [submitted]
