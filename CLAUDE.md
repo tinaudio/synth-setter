@@ -97,7 +97,7 @@ When reviewing code or PRs, invoke these skills in order:
 1. `tdd-implementation` — TDD compliance checklist (16 items)
 2. `code-health` — code quality checklist (24 items)
 3. `ml-data-pipeline` — ML pipeline checklist (12 items)
-4. `project-standards` — project-specific checklist (30 items)
+4. `synth-setter-project-standards` — project-specific checklist (30 items)
 5. `python-style` — Google Python Style Guide checklist (21 items)
 6. `shell-style` — Google Shell Style Guide checklist (19 items, `.sh` files only)
 7. `ml-test` — ML testing checklist (25 items, model/pipeline test code)
