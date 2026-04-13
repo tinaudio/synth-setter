@@ -1,5 +1,5 @@
 {
-  "enabledPlugins": { "synth-setter-skills@tinaudio-skills": true },
+  "enabledPlugins": { "tinaudio-synth-setter-skills@tinaudio-skills": true },
   "extraKnownMarketplaces": {
     "tinaudio-skills": {
       "source": { "source": "github", "repo": "tinaudio/skills" }
