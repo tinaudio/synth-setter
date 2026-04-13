@@ -12,7 +12,7 @@ ARG USER_GID=$USER_UID
 # Non-root user with passwordless sudo. Follows the official VS Code pattern:
 # https://code.visualstudio.com/remote/advancedcontainers/add-nonroot-user
 RUN groupadd --gid $USER_GID $USERNAME \
-    && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME \
+    && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME \
     && apt-get update \
     && apt-get install -y --no-install-recommends sudo \
     && echo "$USERNAME ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
