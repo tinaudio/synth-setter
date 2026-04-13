@@ -1,8 +1,9 @@
 # SkyPilot Compute Integration Design
 
-> **Status:** Draft
-> **Issue:** [#534](https://github.com/tinaudio/synth-setter/issues/534)
-> **Refs:** [#105](https://github.com/tinaudio/synth-setter/issues/105) (Task 4.2: Compute Backend & Worker), [#106](https://github.com/tinaudio/synth-setter/issues/106) (Task 6.1: RunPod Backend & E2E)
+> **Status**: Draft
+> **Author**: ktinubu@
+> **Last Updated**: 2026-04-13
+> **Tracking**: [#534](https://github.com/tinaudio/synth-setter/issues/534), [#105](https://github.com/tinaudio/synth-setter/issues/105) (Task 4.2: Compute Backend & Worker), [#106](https://github.com/tinaudio/synth-setter/issues/106) (Task 6.1: RunPod Backend & E2E)
 
 ## 1. Context
 
@@ -23,18 +24,18 @@ The reconciliation-based pipeline design is naturally compatible with SkyPilot m
 
 ## 2. Architecture Decisions
 
-| Decision          | Choice                                                  | Rationale                                                                                               |
-| ----------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Integration depth | Full managed jobs                                       | Spot recovery + R2 markers as natural checkpoints. Cost savings 3-5x on interruptible instances         |
-| Local dev/test    | Keep LocalBackend                                       | In-process execution for fast unit tests. Two code paths (local vs SkyPilot)                            |
-| Field name        | `compute_config`                                        | Tool-agnostic. Value is a path to a SkyPilot YAML today. Survives tool changes without schema migration |
-| Backend selection | Presence of `compute_config`                            | `None` → local, path → SkyPilot. No enum, no protocol, no extra plumbing                                |
-| Shard parallelism | `num_workers` in DatasetConfig                          | Parallelism is a reproducible property of the config, not a runtime variable                            |
-| Worker identity   | UUID generated at worker start                          | Decoupled from any provider. Fully portable                                                             |
-| Deployment        | Docker image                                            | Reproducible, matches existing CI/image_config.py. SkyPilot pulls the image                             |
-| CLI ownership     | `python -m pipeline generate` wraps SkyPilot            | Single entry point. User never touches `sky` CLI directly for generation                                |
-| Frozen spec       | Include `compute_config`                                | For provenance and cost tracking                                                                        |
-| Scope             | Design all three config types, implement pipeline first | DatasetConfig, train, eval all get `compute_config`                                                     |
+| Decision          | Choice                                                  | Rationale                                                                                                               |
+| ----------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Integration depth | Full managed jobs                                       | Spot recovery + R2 markers as natural checkpoints. Cost savings 3-5x on interruptible instances                         |
+| Local dev/test    | Keep LocalBackend                                       | In-process execution for fast unit tests. Two code paths (local vs SkyPilot)                                            |
+| Field name        | `compute_config`                                        | Tool-agnostic. Value is a path to a SkyPilot YAML today. Survives tool changes without schema migration                 |
+| Backend selection | Presence of `compute_config`                            | `None` → local, path → SkyPilot. No enum, no protocol, no extra plumbing                                                |
+| Shard parallelism | `num_workers` in DatasetConfig                          | Parallelism is a reproducible property of the config, not a runtime variable                                            |
+| Worker identity   | UUID generated at worker start                          | Decoupled from any provider. Fully portable                                                                             |
+| Deployment        | Docker image                                            | Reproducible; aligns with `pipeline/schemas/image_config.py` (see `docs/reference/docker.md`). SkyPilot pulls the image |
+| CLI ownership     | `python -m pipeline generate` wraps SkyPilot            | Single entry point. User never touches `sky` CLI directly for generation                                                |
+| Frozen spec       | Include `compute_config`                                | For provenance and cost tracking                                                                                        |
+| Scope             | Design all three config types, implement pipeline first | DatasetConfig, train, eval all get `compute_config`                                                                     |
 
 ## 3. Schema Changes
 
@@ -119,7 +120,9 @@ resources:
   accelerators: A100:1       # Adjust per workload
   use_spot: true
   disk_size: 100
-  image_id: docker:tinaudio/synth-setter:latest
+  # Use the existing CI image name and an immutable tag (for example, a git SHA).
+  # In practice, the pinned tag can be injected by CI or at launch time.
+  image_id: docker:tinaudio/perm:<git-sha>
 
 setup: |
   # Worker setup runs inside the container
@@ -219,10 +222,15 @@ This is where the `compute_config` presence/absence drives behavior:
 
 ```python
 if spec.compute_config:
-    # Launch N managed jobs via SkyPilot Python SDK
+    # Launch N managed jobs via SkyPilot Python SDK.
+    # `spec.compute_config` is an embedded dict (see §3.2), so build the
+    # SkyPilot Task programmatically from that dict rather than loading a
+    # YAML path.
     for i, shard_batch in enumerate(partitioned_shards):
-        task = sky.Task.from_yaml(compute_config_path)
-        task.update_envs({"SHARD_RANGE": f"{batch.start}-{batch.end}", ...})
+        task = build_skypilot_task(spec.compute_config)
+        task.update_envs(
+            {"SHARD_RANGE": f"{shard_batch.start}-{shard_batch.end}", ...}
+        )
         sky.jobs.launch(task, name=f"worker-{i}")
 else:
     # Run workers in-process (LocalBackend)
