@@ -116,7 +116,7 @@ jobs:
           # still saw "1 check(s) failed" from the original run.
           CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '
             [.check_runs[]
-              | select(.name != "auto-approve" and .name != "Auto-approve status" and .name != "claude-review")
+              | select(.name != "auto-approve" and .name != "Auto-approve status")
             ]
             | group_by(.name)
             | map(sort_by(.id) | last)

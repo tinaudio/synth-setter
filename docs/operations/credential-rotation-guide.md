@@ -263,6 +263,8 @@ ______________________________________________________________________
 
 ### Anthropic (`ANTHROPIC_API_KEY`)
 
+<!-- TODO: stale rotation smoke test; claude-review.yml was removed (see git log), find a replacement verification before the next rotation -->
+
 **What:** API key for the Claude review workflow in CI.
 
 **Where stored:**

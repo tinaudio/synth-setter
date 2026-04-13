@@ -26,7 +26,7 @@ it. Built on PyTorch Lightning with Hydra configs.
 
 - **Python 3.10+**
 - **uv** (recommended) -- [install uv](https://docs.astral.sh/uv/getting-started/installation/)
-- **Git** with submodule support (clone with `--recurse-submodules`)
+- **Git**
 - **System dependencies for VST rendering** -- see the project documentation for details
 
 ## Installation
@@ -34,19 +34,9 @@ it. Built on PyTorch Lightning with Hydra configs.
 Clone the repository:
 
 ```bash
-git clone --recurse-submodules https://github.com/tinaudio/synth-setter.git
+git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 ```
-
-> **Note on submodules**
->
-> This repository uses Git submodules that are configured with SSH URLs (`git@github.com:...`).
-> If you clone via HTTPS as above and do not have SSH access set up, submodule fetching may fail.
-> You can either configure an SSH key with GitHub, or ask Git to rewrite SSH URLs to HTTPS:
->
-> ```bash
-> git config --global url."https://github.com/".insteadOf git@github.com:
-> ```
 
 ### Using uv (recommended)
 

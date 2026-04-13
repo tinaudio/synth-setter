@@ -27,9 +27,6 @@ cd "$dir"
 # before any git operation (submodule update, pre-commit install).
 git config --global --add safe.directory "$(pwd)"
 
-# Skills live in a git submodule (.claude/skills → tinaudio/skills).
-git submodule update --init --recursive
-
 # Install the workspace as an editable package into the image's venv.
 # --no-deps skips re-downloading the ~2.5GB of deps already in the image.
 uv pip install --no-deps -e .
