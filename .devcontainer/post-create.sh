@@ -27,10 +27,6 @@ cd "$dir"
 # before later git config calls and pre-commit install.
 git config --global --add safe.directory "$(pwd)"
 
-# Install the workspace as an editable package into the image's venv.
-# --no-deps skips re-downloading the ~2.5GB of deps already in the image.
-uv pip install --no-deps -e .
-
 # Pre-commit hooks (pre-commit itself is in the image's deps). Strip any
 # absolute host-path core.hooksPath that may leak from the host .git/config
 # (harmless in Codespaces; bites local devcontainer users).
