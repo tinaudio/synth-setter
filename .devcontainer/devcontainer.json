@@ -1,6 +1,9 @@
 {
   "name": "synth-setter",
-  "build": { "dockerfile": "Dockerfile" },
+  "build": {
+    "dockerfile": "Dockerfile",
+    "options": ["--platform=linux/amd64"]
+  },
 
   "containerEnv": {
     "MODE": "idle"

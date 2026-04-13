@@ -1,9 +1,9 @@
-# Base image is published only for linux/amd64. On Apple Silicon this runs
-# under Rosetta/qemu — matches the pre-PR behavior of the plain `image:`
-# devcontainer config, but must be explicit now that we build via `build:`
-# because BuildKit resolves the FROM step against the builder's target
-# platform. Multi-arch publishing of the base image is the long-term fix.
-FROM --platform=linux/amd64 tinaudio/perm:dev-snapshot
+# Platform routing for this amd64-only base image is pinned in
+# devcontainer.json's build.options (--platform=linux/amd64). That sets
+# the build target for the whole build — pulling the amd64 manifest AND
+# scheduling RUN steps on an amd64-capable worker — which a FROM --platform
+# flag alone does not do (it only selects the manifest variant).
+FROM tinaudio/perm:dev-snapshot
 
 ARG USERNAME=dev
 ARG USER_UID=1000
