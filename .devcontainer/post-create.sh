@@ -33,10 +33,4 @@ git config --global --add safe.directory "$(pwd)"
 git config --local --unset-all core.hooksPath 2>/dev/null || true
 pre-commit install
 
-# plumb writes a native git hook — re-run pre-commit install to chain it.
-if command -v plumb >/dev/null 2>&1; then
-  plumb init || true
-  pre-commit install
-fi
-
 echo "Dev container ready. Run 'make test' to verify."
