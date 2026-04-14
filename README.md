@@ -25,7 +25,7 @@ This repository is published to share ongoing research and invite discussion.
 
 ## Acknowledgments
 
-This project builds directly on SOTA prior work in audio synthesizer inversion by [Ben Hayes et al](https://benhayes.net): [Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching](https://benhayes.net/synth-perm/) with companion
+This project builds directly on recent prior work in audio synthesizer inversion by [Ben Hayes et al.](https://benhayes.net): [Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching](https://benhayes.net/synth-perm/) with companion
 code at [ben-hayes/synth-permutations](https://github.com/ben-hayes/synth-permutations).
 
 [Surge XT](https://surge-synthesizer.github.io/), developed by the Surge
@@ -34,19 +34,20 @@ under the GPL-3.0 license.
 
 ## Features
 
-- **Flow matching models** for synthesizer parameter estimation
-- **Distributed data pipeline** for VST audio dataset generation (multi cloud via [skypilot](https://github.com/skypilot-org/skypilot))
+- **Flow matching and baseline models** for synthesizer parameter estimation
+- **Distributed data pipeline** for VST audio dataset generation with cloud support
 - **W&B integration** for experiment tracking and model checkpointing
 - **Docker support** for reproducible training and generation environments
 - **Hydra configs** for flexible experiment management
 
 ## Prerequisites
 
-- **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only; no Windows.
+- **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
 - **Python 3.10+**
-- **uv** (recommended) -- [install uv](https://docs.astral.sh/uv/getting-started/installation/)
+- **uv** (recommended) — [install uv](https://docs.astral.sh/uv/getting-started/installation/)
 - **Git**
-- **System dependencies for VST rendering** -- see the project documentation for details
+- **[Surge XT](https://github.com/surge-synthesizer/surge) 1.3.4** — the VST synthesizer used for dataset generation. See the [Surge XT downloads page](https://surge-synthesizer.github.io/downloads/) for installation instructions.
+- **System dependencies for VST rendering** — see the project documentation for details
 
 ## Installation
 
