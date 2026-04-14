@@ -14,11 +14,6 @@ from tests.helpers.run_if import RunIf
 @RunIf(min_gpus=1)
 @pytest.mark.slow
 def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig) -> None:
-    # plumb:req-f4e6204e
-    # plumb:req-61473bc4
-    # plumb:req-2e98a046
-    # plumb:req-c3aed2b5
-    # plumb:req-ac34a5ca
     """Tests training and evaluation by training for 1 epoch with `train.py` then evaluating with
     `eval.py`.
 

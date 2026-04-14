@@ -64,8 +64,6 @@ class TestAnalyzeShardsCounts:
     """analyze_shards returns correct file counts, totals, and logical shard counts."""
 
     def test_h5_count_equals_six(self) -> None:
-        # plumb:req-d631b696
-        # plumb:req-c1d2a20f
         """Sample data has 6 h5 files."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
@@ -78,7 +76,6 @@ class TestAnalyzeShardsCounts:
         assert report["json_count"] == 2
 
     def test_logical_shard_count_equals_three(self) -> None:
-        # plumb:req-9f751e55
         """Sample data has 3 unique shard IDs (6 chunks / 2 chunks per shard)."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
@@ -112,7 +109,6 @@ class TestAnalyzeShardsSuspect:
     """analyze_shards correctly identifies suspect files below the threshold."""
 
     def test_suspect_count_with_default_threshold(self) -> None:
-        # plumb:req-9d11b393
         """Two 2296-byte h5 files are below the 1 GiB threshold."""
         report: ShardReport = analyze_shards(SAMPLE_FILES, threshold_gib=DEFAULT_THRESHOLD)
 
@@ -242,7 +238,6 @@ class TestParseRcloneLsOutput:
     """Smoke test: parse_rclone_ls_output produces RcloneFile list from raw output."""
 
     def test_parses_sample_output_into_rclone_files(self) -> None:
-        # plumb:req-5e5ff6b9
         """Raw rclone ls output is parsed into 8 RcloneFile entries."""
         files = parse_rclone_ls_output(SAMPLE_RCLONE_OUTPUT)
 
