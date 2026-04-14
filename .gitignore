@@ -164,9 +164,8 @@ checkpoints/
 # VST3
 plugins/
 
-# Claude Code (keep skills only)
+# Claude Code
 .claude/
-!.claude/skills/
 
 # Plumb (all files force-added; gitignore prevents accidental staging)
 .plumb/

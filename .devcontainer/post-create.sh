@@ -24,17 +24,8 @@ cd "$dir"
 
 # Codespaces runs this script as root against a workspace that may be owned
 # by another UID, tripping git's safe.directory check. Mark the repo trusted
-# before any git operation (submodule update, pre-commit install).
+# before later git config calls and pre-commit install.
 git config --global --add safe.directory "$(pwd)"
-
-# Skills live in a git submodule (.claude/skills → tinaudio/skills).
-git submodule update --init --recursive
-
-# No editable install here: the base image already ran `uv pip install
-# --no-deps -e .` at bake time against /home/build/synth-setter (see
-# docker/ubuntu22_04/Dockerfile), and devcontainer.json now mounts the
-# live workspace on top of that same path — so the existing .pth file
-# already points at the workspace.
 
 # Pre-commit hooks (pre-commit itself is in the image's deps). Strip any
 # absolute host-path core.hooksPath that may leak from the host .git/config

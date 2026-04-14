@@ -263,7 +263,9 @@ ______________________________________________________________________
 
 ### Anthropic (`ANTHROPIC_API_KEY`)
 
-**What:** API key for the Claude review workflow in CI.
+<!-- TODO: stale rotation smoke test; claude-review.yml was removed (see git log), find a replacement verification before the next rotation -->
+
+**What:** API key that was consumed by the `claude-review.yml` workflow (removed from the repo). Currently unused, but the secret is kept registered for a possible future revival of Claude-powered CI review.
 
 **Where stored:**
 
@@ -281,9 +283,10 @@ ______________________________________________________________________
 
 **Verification:**
 
-Trigger the `claude-review.yml` workflow by adding the `needs-claude-review`
-label to a pull request and confirm the review step completes without
-authentication errors.
+No automated smoke test is currently available — the previous procedure
+(triggering `claude-review.yml` via the `needs-claude-review` label) no
+longer works since the workflow was removed. See the TODO above; a
+replacement verification is needed before the next rotation.
 
 ______________________________________________________________________
 

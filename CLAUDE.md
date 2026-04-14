@@ -77,7 +77,6 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 - Use `isolation: "worktree"` when spawning subagents that write code or create commits.
 - The main working tree should only be used for read-only operations (exploration, `git log`, `rclone ls`, etc.).
 - When using Claude Code's Agent tool with `isolation: "worktree"`, the worktree is automatically cleaned up if the agent makes no changes. If changes are made, the worktree path and branch are returned for review. For manually created worktrees, clean up with `git worktree remove` when done.
-- **Submodules:** Skills live in a git submodule at `.claude/skills/` (from `tinaudio/skills`). Clone with `--recurse-submodules`. In new worktrees, run `git submodule update --init`.
 - After `git add -f`, always run `make format` before committing.
 - Always verify the correct git branch before pushing commits. Run `git branch --show-current` and confirm it matches the target PR branch before any push.
 - **Epic traceability:** Every issue must trace to an Epic via the sub-issue hierarchy (Epic → Phase → Task/Bug/Feature). There are no standalone tasks — all work items need a home. PRs that reference orphan issues lose epic traceability.
@@ -98,7 +97,7 @@ When reviewing code or PRs, invoke these skills in order:
 1. `tdd-implementation` — TDD compliance checklist (16 items)
 2. `code-health` — code quality checklist (24 items)
 3. `ml-data-pipeline` — ML pipeline checklist (12 items)
-4. `project-standards` — project-specific checklist (30 items)
+4. `synth-setter-project-standards` — project-specific checklist (30 items)
 5. `python-style` — Google Python Style Guide checklist (21 items)
 6. `shell-style` — Google Shell Style Guide checklist (19 items, `.sh` files only)
 7. `ml-test` — ML testing checklist (25 items, model/pipeline test code)

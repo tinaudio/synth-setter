@@ -9,7 +9,7 @@ ______________________________________________________________________
 ## 1. Prerequisites
 
 - **Python 3.10+** (check with `python --version`)
-- **Git** (with `--recurse-submodules` support)
+- **Git**
 - **make** (ships with macOS/Linux; on Windows use WSL)
 - **A CUDA GPU** is recommended for training. CPU and MPS (Apple Silicon) trainers
   are available but significantly slower.
@@ -21,25 +21,9 @@ ______________________________________________________________________
 ### 2a. Clone the repository
 
 ```bash
-git clone --recurse-submodules https://github.com/tinaudio/synth-setter.git
+git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 ```
-
-If you already cloned without `--recurse-submodules`, initialize the submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-> **Note on submodules:** This repository includes a git submodule whose URL is
-> SSH-based (`git@github.com:...`). If you clone via HTTPS and do not have SSH
-> keys configured, submodule checkout will fail. Work around this by telling Git
-> to rewrite SSH GitHub URLs to HTTPS:
->
-> ```bash
-> git config url."https://github.com/".insteadOf git@github.com:
-> git submodule update --init --recursive
-> ```
 
 ### 2b. Create a virtual environment (recommended)
 

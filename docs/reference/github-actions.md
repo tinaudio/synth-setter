@@ -48,7 +48,6 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 | Workflow          | Purpose                                                                                                               | Gotcha                                                                                                                                 |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `auto-approve`    | Auto-approves PRs once all CI checks pass, Copilot has reviewed, threads are resolved, and the author is allowlisted. | Deduplicates check-runs by name (re-runs share a name but have distinct IDs). See [Check-run deduplication](#check-run-deduplication). |
-| `claude-review`   | Invokes Claude Code to review a PR and post inline comments when the `needs-claude-review` label is applied.          | Gated to non-fork PRs.                                                                                                                 |
 | `stale`           | Labels issues/PRs inactive for 120 days as stale. Never auto-closes (`days-before-close: -1`).                        |                                                                                                                                        |
 | `snooze-issue`    | Lets an issue comment snooze the issue for N days.                                                                    |                                                                                                                                        |
 | `unsnooze-issues` | Daily job that unsnoozes issues whose snooze window has elapsed.                                                      |                                                                                                                                        |
@@ -62,7 +61,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 **Workflow-run triggers (`workflow_run`):**
 
-- `auto-approve` triggers on completion of: `Tests`, `Code Quality PR`, `Claude Code Review`
+- `auto-approve` triggers on completion of: `Tests`, `Code Quality PR`
 
 **Artifact chains (`upload-artifact` → `download-artifact`):**
 
@@ -74,17 +73,17 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 All secrets are repo-scoped (no workflow uses an `environment:` block). No custom variables (`${{ vars.* }}`) are in use.
 
-| Name                       | Used by                                                                                            | Purpose                                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `ANTHROPIC_API_KEY`        | `claude-review`                                                                                    | Auth for Claude Code to post PR review comments.                                                             |
-| `APPROVAL_BOT_APP_ID`      | `auto-approve`, `release`                                                                          | GitHub App ID for the approval-bot (issues approval reviews; writes release commits past branch protection). |
-| `APPROVAL_BOT_PRIVATE_KEY` | `auto-approve`, `release`                                                                          | GitHub App private key paired with `APPROVAL_BOT_APP_ID`.                                                    |
-| `DOCKERHUB_USERNAME`       | `dataset-generation`, `spec-materialization`, `test-dataset-generation`, `docker-build-validation` | Docker Hub login for pulling/pushing pipeline images.                                                        |
-| `DOCKERHUB_TOKEN`          | same as above                                                                                      | Docker Hub token paired with `DOCKERHUB_USERNAME`.                                                           |
-| `GIT_PAT`                  | `docker-build-validation`, `flush-investigation`                                                   | PAT baked into images for private-repo access at container runtime.                                          |
-| `R2_ACCESS_KEY_ID`         | `docker-build-validation`                                                                          | Cloudflare R2 credentials baked into image for smoke tests.                                                  |
-| `R2_SECRET_ACCESS_KEY`     | `docker-build-validation`                                                                          | Paired with `R2_ACCESS_KEY_ID`.                                                                              |
-| `WANDB_API_KEY`            | `docker-build-validation`                                                                          | W&B credentials baked into image for smoke tests.                                                            |
+| Name                       | Used by                                                                                            | Purpose                                                                                                           |
+| -------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`        | (currently unused)                                                                                 | Previously consumed by `claude-review`, which was removed. Secret is kept registered for possible future revival. |
+| `APPROVAL_BOT_APP_ID`      | `auto-approve`, `release`                                                                          | GitHub App ID for the approval-bot (issues approval reviews; writes release commits past branch protection).      |
+| `APPROVAL_BOT_PRIVATE_KEY` | `auto-approve`, `release`                                                                          | GitHub App private key paired with `APPROVAL_BOT_APP_ID`.                                                         |
+| `DOCKERHUB_USERNAME`       | `dataset-generation`, `spec-materialization`, `test-dataset-generation`, `docker-build-validation` | Docker Hub login for pulling/pushing pipeline images.                                                             |
+| `DOCKERHUB_TOKEN`          | same as above                                                                                      | Docker Hub token paired with `DOCKERHUB_USERNAME`.                                                                |
+| `GIT_PAT`                  | `docker-build-validation`, `flush-investigation`                                                   | PAT baked into images for private-repo access at container runtime.                                               |
+| `R2_ACCESS_KEY_ID`         | `docker-build-validation`                                                                          | Cloudflare R2 credentials baked into image for smoke tests.                                                       |
+| `R2_SECRET_ACCESS_KEY`     | `docker-build-validation`                                                                          | Paired with `R2_ACCESS_KEY_ID`.                                                                                   |
+| `WANDB_API_KEY`            | `docker-build-validation`                                                                          | W&B credentials baked into image for smoke tests.                                                                 |
 
 ## Common operations
 
