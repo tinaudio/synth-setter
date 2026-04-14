@@ -1,0 +1,61 @@
+{
+  "name": "synth-setter (gpu)",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "options": ["--platform=linux/amd64"]
+  },
+
+  "runArgs": ["--gpus", "all"],
+
+  "containerEnv": {
+    "MODE": "idle"
+  },
+
+  "remoteUser": "dev",
+  "updateRemoteUserUID": true,
+  "workspaceFolder": "/home/build/synth-setter",
+  "workspaceMount": "type=bind,source=${localWorkspaceFolder},target=/home/build/synth-setter,consistency=cached",
+
+  "postCreateCommand": ".devcontainer/post-create.sh",
+
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "ms-python.vscode-python-envs",
+        "charliermarsh.ruff",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.jupyter-keymap",
+        "ms-toolsai.jupyter-renderers",
+        "ms-toolsai.vscode-jupyter-cell-tags",
+        "ms-toolsai.vscode-jupyter-slideshow",
+        "redhat.vscode-yaml",
+        "kamilturek.vscode-pyproject-toml-snippets",
+        "ms-vscode.makefile-tools",
+        "jetmartin.bats",
+        "timonwong.shellcheck",
+        "lochbrunner.vscode-hdf5-viewer",
+        "adamviola.parquet-explorer",
+        "mechatroner.rainbow-csv",
+        "github.vscode-pull-request-github",
+        "github.vscode-github-actions",
+        "eamodio.gitlens",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/venv/main/bin/python",
+        "python.terminal.activateEnvironment": false,
+        "editor.formatOnSave": true,
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"]
+      }
+    }
+  }
+}

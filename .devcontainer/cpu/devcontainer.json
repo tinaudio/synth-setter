@@ -1,7 +1,8 @@
 {
-  "name": "synth-setter",
+  "name": "synth-setter (cpu)",
   "build": {
-    "dockerfile": "Dockerfile",
+    "dockerfile": "../Dockerfile",
+    "context": "..",
     "options": ["--platform=linux/amd64"]
   },
 
