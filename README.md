@@ -20,13 +20,14 @@ it. Built on PyTorch Lightning with Hydra configs.
 **Early-stage research project — work in progress.** Many features are
 partially implemented or not yet wired end-to-end, and the end-to-end MVP
 pipeline is still being built out (see [Project Tracking](#project-tracking)
-below). Expect breaking changes to APIs, configs, and on-disk data formats.
+below). Current contributions are infrastructure and code quality improvements on top of
+the original codebase; no novel modeling work yet. Expect breaking changes to APIs, configs, and on-disk data formats.
 This repository is published to share ongoing research and invite discussion.
 
 ## Acknowledgments
 
-This project builds directly on recent prior work in audio synthesizer inversion by [Ben Hayes et al.](https://benhayes.net): [Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching](https://benhayes.net/synth-perm/) with companion
-code at [ben-hayes/synth-permutations](https://github.com/ben-hayes/synth-permutations).
+This project builds on [*Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching*](https://benhayes.net/synth-perm/)
+by [Ben Hayes et al.](https://benhayes.net) Original code [here](https://github.com/ben-hayes/synth-permutations).
 
 [Surge XT](https://surge-synthesizer.github.io/), developed by the Surge
 Synth Team, is the synthesizer used for dataset generation and is integrated
