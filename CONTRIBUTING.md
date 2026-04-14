@@ -203,41 +203,6 @@ modes and how to fix them:
 If a hook auto-fixes files (ruff, trailing-whitespace, etc.), stage the fixes
 and commit again.
 
-## Plumb (spec/test/code sync)
-
-This project uses [Plumb](https://github.com/tinaudio/plumb) to keep the spec,
-tests, and source code in sync. If you're working on changes that touch
-spec-tracked files, Plumb may intercept your commit and present decisions for
-review.
-
-### What happens on commit
-
-When Plumb detects changes to tracked files, it pauses the commit and presents
-pending decisions. Each decision can be:
-
-- **Approved** -- the change is accepted and synced to the spec
-- **Ignored** -- the change is noted but not synced
-- **Rejected** -- the change is rolled back
-
-### Useful commands
-
-```bash
-plumb status        # current alignment between spec, tests, and code
-plumb diff          # preview what Plumb will capture on next commit
-plumb sync          # update spec and generate tests after decisions are resolved
-plumb coverage      # identify what needs to be implemented or tested
-```
-
-### Escape hatch
-
-If Plumb intercepts a commit that doesn't touch spec-relevant files (e.g., a
-docs-only change), you can skip it with the `PLUMB_SKIP` environment variable
-(checked by the Plumb pre-commit hook in `.git/hooks/pre-commit`):
-
-```bash
-PLUMB_SKIP=1 git commit -m "docs: your message"
-```
-
 ## Pull requests
 
 ### Branch workflow
