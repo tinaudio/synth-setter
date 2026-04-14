@@ -159,10 +159,28 @@ actually being built right now.
 
 ## Documentation
 
-- Getting started guide (coming soon)
-- [Design documents](docs/design/)
-- Contributing guidelines (coming soon)
-- Run `make help` for available commands
+New to the project? These are the docs worth skimming first, in order:
+
+1. **[Getting started](docs/getting-started.md)** — setup, running the test
+   suite, training your first model, and configuring the external dependencies
+   needed for the full data pipeline.
+2. **[Architecture overview](docs/architecture.md)** — system diagram and how
+   the `generate → finalize → train → evaluate` stages fit together.
+3. **[Glossary](docs/glossary.md)** — domain terms (synth inversion, flow
+   matching, `param_spec`, mel spectrogram, VST, …). Useful as a dictionary
+   while reading the other docs.
+4. **[Data pipeline design](docs/design/data-pipeline.md)** — the canonical
+   design doc for the distributed data pipeline, referenced throughout the
+   codebase.
+
+Further reading (mostly for contributors and maintainers):
+
+- [`docs/design/`](docs/design/) — training pipeline, evaluation pipeline,
+  storage provenance spec, SkyPilot integration, implementation plans
+- [`docs/reference/`](docs/reference/) — configuration reference, Docker,
+  GitHub Actions, W&B integration
+
+Run `make help` for available commands.
 
 ## License
 
