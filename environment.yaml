@@ -12,24 +12,24 @@ channels:
   - conda-forge
   - defaults
 
-# it is strongly recommended to specify versions of packages installed through conda
-# to avoid situation when version-unspecified packages install their latest major
-# versions which can sometimes break things
-
-# current approach below keeps the dependencies in the same major versions across all
-# users, but allows for different minor and patch versions of packages where backwards
-# compatibility is usually guaranteed
+# Split of responsibilities between conda and pip:
+# - conda owns the torch stack (python, pytorch, torchvision, lightning, torchmetrics)
+#   because that's the whole reason to use the conda path — precompiled binaries.
+# - pip owns everything else, installed in a single shot via `-r requirements-app.txt`
+#   below. This gives us a non-overlapping dependency set by construction, so the
+#   conda and pip installers cannot fight over the same package.
+#
+# The torch-stack version specs here are kept in lock-step with requirements-torch.txt:
+# if that file raises a lower bound, bump the matching spec here too. Otherwise conda
+# could legally resolve to an older version than the pip spec allows, and the two
+# installers would disagree silently.
 
 dependencies:
   - python=3.10
-  - pytorch=2.*
-  - torchvision=0.*
-  - lightning=2.*
-  - torchmetrics=0.*
-  - hydra-core=1.*
-  - rich=13.*
-  - pre-commit=3.*
-  - pytest=7.*
+  - pytorch>=2.0.0
+  - torchvision>=0.15.0
+  - lightning>=2.0.0
+  - torchmetrics>=0.11.4
 
   # --------- loggers --------- #
   # - wandb
@@ -38,10 +38,11 @@ dependencies:
   # - comet-ml
   # - aim>=3.16.2 # no lower than 3.16.2, see https://github.com/aimhubio/aim/issues/2550
 
+  # torchmetrics imports `pkg_resources`, which ships with setuptools. conda's
+  # minimal base env doesn't include it, so install it explicitly.
+  - setuptools
   - pip>=23
   - pip:
-      # conda already installs the torch stack above (that's the point of the conda path
-      # — precompiled binaries). Pull in only the non-torch pip deps here so
-      # `conda env create -f environment.yaml` is a one-shot without re-installing
-      # torch/torchvision/lightning/torchmetrics through pip.
+      # Non-torch pip deps — conda owns the torch stack above, pip owns everything
+      # else. hydra-core, rich, pre-commit, pytest, etc. all come in via this file.
       - -r requirements-app.txt
