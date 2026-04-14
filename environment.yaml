@@ -40,6 +40,6 @@ dependencies:
 
   - pip>=23
   - pip:
-      - hydra-optuna-sweeper
-      - hydra-colorlog
-      - rootutils
+      # Single source of truth for pip deps — `conda env create -f environment.yaml`
+      # now installs everything in one shot; no separate `pip install -r requirements.txt`.
+      - -r requirements.txt

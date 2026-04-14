@@ -1,0 +1,68 @@
+name: Tests (conda)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "pipeline/**"
+      - "tests/**"
+      - "configs/**"
+      - "scripts/**"
+      - "requirements*.txt"
+      - "environment.yaml"
+      - "pyproject.toml"
+      - "setup.py"
+      - ".github/workflows/test-conda.yml"
+  pull_request:
+    branches: [main, "release/*", "dev"]
+    paths:
+      - "src/**"
+      - "pipeline/**"
+      - "tests/**"
+      - "configs/**"
+      - "scripts/**"
+      - "requirements*.txt"
+      - "environment.yaml"
+      - "pyproject.toml"
+      - "setup.py"
+      - ".github/workflows/test-conda.yml"
+
+defaults:
+  run:
+    # Login shell so the conda env activated by setup-micromamba is on PATH.
+    shell: bash -el {0}
+
+jobs:
+  run_tests_conda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up conda env from environment.yaml
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yaml
+          environment-name: myenv
+          cache-environment: true
+          init-shell: bash
+
+      - name: List dependencies
+        run: |
+          micromamba list
+          pip list
+
+      - name: Cache MNIST dataset
+        uses: actions/cache@v4
+        with:
+          path: data/MNIST
+          key: mnist-dataset-v1
+
+      - name: Run pytest
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: pytest -n auto -m "not slow" -vv -s
