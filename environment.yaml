@@ -40,6 +40,8 @@ dependencies:
 
   - pip>=23
   - pip:
-      # Single source of truth for pip deps — `conda env create -f environment.yaml`
-      # now installs everything in one shot; no separate `pip install -r requirements.txt`.
-      - -r requirements.txt
+      # conda already installs the torch stack above (that's the point of the conda path
+      # — precompiled binaries). Pull in only the non-torch pip deps here so
+      # `conda env create -f environment.yaml` is a one-shot without re-installing
+      # torch/torchvision/lightning/torchmetrics through pip.
+      - -r requirements-app.txt
