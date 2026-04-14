@@ -4,6 +4,7 @@
 <p>
   <a href="https://github.com/tinaudio/synth-setter/actions/workflows/test.yml"><img src="https://github.com/tinaudio/synth-setter/actions/workflows/test.yml/badge.svg" alt="CI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="Python 3.10+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0"></a>
 </p>
 </div>
 
@@ -14,21 +15,39 @@ synth-setter provides tools for automatic synthesizer parameter estimation
 recording of a synthesizer sound, models predict the parameters that reproduce
 it. Built on PyTorch Lightning with Hydra configs.
 
+## Status
+
+**Early-stage research project — work in progress.** Many features are
+partially implemented or not yet wired end-to-end, and the end-to-end MVP
+pipeline is still being built out (see [Project Tracking](#project-tracking)
+below). Expect breaking changes to APIs, configs, and on-disk data formats.
+This repository is published to share ongoing research and invite discussion.
+
+## Acknowledgments
+
+This project builds directly on recent prior work in audio synthesizer inversion by [Ben Hayes et al.](https://benhayes.net): [Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching](https://benhayes.net/synth-perm/) with companion
+code at [ben-hayes/synth-permutations](https://github.com/ben-hayes/synth-permutations).
+
+[Surge XT](https://surge-synthesizer.github.io/), developed by the Surge
+Synth Team, is the synthesizer used for dataset generation and is integrated
+under the GPL-3.0 license.
+
 ## Features
 
-- **Flow matching models** for synthesizer parameter estimation
-- **Distributed data pipeline** for VST audio dataset generation (RunPod + Cloudflare R2)
+- **Flow matching and baseline models** for synthesizer parameter estimation
+- **Distributed data pipeline** for VST audio dataset generation with cloud support
 - **W&B integration** for experiment tracking and model checkpointing
 - **Docker support** for reproducible training and generation environments
 - **Hydra configs** for flexible experiment management
 
 ## Prerequisites
 
-- **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only; no Windows.
+- **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
 - **Python 3.10+**
-- **uv** (recommended) -- [install uv](https://docs.astral.sh/uv/getting-started/installation/)
+- **uv** (recommended) — [install uv](https://docs.astral.sh/uv/getting-started/installation/)
 - **Git**
-- **System dependencies for VST rendering** -- see the project documentation for details
+- **[Surge XT](https://github.com/surge-synthesizer/surge) 1.3.4** — the VST synthesizer used for dataset generation. See the [Surge XT downloads page](https://surge-synthesizer.github.io/downloads/) for installation instructions.
+- **System dependencies for VST rendering** — see the project documentation for details
 
 ## Installation
 
@@ -117,23 +136,50 @@ configs/experiment/kosc                    k-osc experiment configs
 configs/experiment/surge                   Surge XT experiment configs
 ```
 
+## Project Tracking
+
+Work is organized as epics → phases → tasks, tracked publicly on GitHub.
+Since the project is in flux, the board is the best place to see what's
+actually being built right now.
+
+- **Project board:** [tinaudio/projects/1](https://github.com/orgs/tinaudio/projects/1)
+- **MVP epic:** [#264 — end-to-end MVP pipeline](https://github.com/tinaudio/synth-setter/issues/264) (Docker entrypoint → candidate image creation → dataset generation → training → validation)
+- **Active epics:**
+  - [#74 — distributed data pipeline](https://github.com/tinaudio/synth-setter/issues/74)
+  - [#98 — evaluation pipeline (predict, render, metrics)](https://github.com/tinaudio/synth-setter/issues/98)
+  - [#99 — R2 integration for datasets and checkpoints](https://github.com/tinaudio/synth-setter/issues/99)
+  - [#107 — training pipeline & ops](https://github.com/tinaudio/synth-setter/issues/107)
+  - [#114 — codebase modernization](https://github.com/tinaudio/synth-setter/issues/114)
+  - [#148 — CI & automation platform](https://github.com/tinaudio/synth-setter/issues/148)
+  - [#149 — test infrastructure & coverage](https://github.com/tinaudio/synth-setter/issues/149)
+- **Key milestones:** [data-pipeline v1.0.0](https://github.com/tinaudio/synth-setter/milestone/1), [evaluation v1.0.0](https://github.com/tinaudio/synth-setter/milestone/2), [training v1.0.0](https://github.com/tinaudio/synth-setter/milestone/3)
+
 ## Documentation
 
-- Getting started guide (coming soon)
-- [Design documents](docs/design/)
-- Contributing guidelines (coming soon)
-- Run `make help` for available commands
+New to the project? These are the docs worth skimming first, in order:
 
-## Acknowledgments
+1. **[Getting started](docs/getting-started.md)** — setup, running the test
+   suite, training your first model, and configuring the external dependencies
+   needed for the full data pipeline.
+2. **[Architecture overview](docs/architecture.md)** — system diagram and how
+   the `generate → finalize → train → evaluate` stages fit together.
+3. **[Glossary](docs/glossary.md)** — domain terms (synth inversion, flow
+   matching, `param_spec`, mel spectrogram, VST, …). Useful as a dictionary
+   while reading the other docs.
+4. **[Data pipeline design](docs/design/data-pipeline.md)** — the canonical
+   design doc for the distributed data pipeline, referenced throughout the
+   codebase.
 
-This project builds on prior work by Ben Hayes (Queen Mary University of London),
-whose research and generation infrastructure provided the foundation for the
-synthesizer parameter estimation pipeline. The accompanying paper is available at
-[benhayes.net/synth-perm](https://benhayes.net/synth-perm/).
+Further reading (mostly for contributors and maintainers):
 
-[Surge XT](https://surge-synthesizer.github.io/) is developed by the
-Surge Synth Team and is used in this project under the GPL-3.0 license.
+- [`docs/design/`](docs/design/) — training pipeline, evaluation pipeline,
+  storage provenance spec, SkyPilot integration, implementation plans
+- [`docs/reference/`](docs/reference/) — configuration reference, Docker,
+  GitHub Actions, W&B integration
+
+Run `make help` for available commands.
 
 ## License
 
-License information will be added soon. See the repository for updates.
+Released under the [GNU General Public License v3.0](LICENSE). Note that
+Surge XT, which this project integrates with, is also GPL-3.0.
