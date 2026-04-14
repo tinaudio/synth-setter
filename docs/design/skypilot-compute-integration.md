@@ -11,7 +11,7 @@ The data pipeline's compute backend abstraction (Phase 4-6 of [data-pipeline-imp
 
 Three factors motivate switching to SkyPilot before implementation begins:
 
-1. **Multi-provider flexibility** — Vast.ai + RunPod + Lambda without writing each backend.
+1. **Multi-provider flexibility** — Vast.ai + RunPod without writing each backend.
 2. **RunPod friction** — sshd-in-Docker requirement, env var bugs in SSH sessions, no native SSH. These are constant paper cuts for a development workflow that relies on Tailscale + VS Code tunnels + Claude Code.
 3. **Reduced scope** — SkyPilot handles provisioning, spot recovery, and job lifecycle; less code to write and maintain.
 
@@ -108,8 +108,7 @@ compute_config: null
 ```
 configs/compute/
 ├── vast-spot.yaml          # Vast.ai interruptible instances (cheapest)
-├── vast-ondemand.yaml      # Vast.ai on-demand (reliable, more expensive)
-└── lambda-ondemand.yaml    # Lambda Labs (alternative provider)
+└── vast-ondemand.yaml      # Vast.ai on-demand (reliable, more expensive)
 ```
 
 Example `configs/compute/vast-spot.yaml`:
