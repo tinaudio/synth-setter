@@ -24,7 +24,7 @@ it. Built on PyTorch Lightning with Hydra configs.
 
 ## Prerequisites
 
-- **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI runs on `ubuntu-latest` and `macos-latest` only.
+- **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only; no Windows.
 - **Python 3.10+**
 - **uv** (recommended) -- [install uv](https://docs.astral.sh/uv/getting-started/installation/)
 - **Git**
