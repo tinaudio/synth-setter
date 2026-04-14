@@ -8,9 +8,10 @@ ______________________________________________________________________
 
 ## 1. Prerequisites
 
+- **Linux or macOS** — Windows is not supported (see the project README).
 - **Python 3.10+** (check with `python --version`)
 - **Git**
-- **make** (ships with macOS/Linux; on Windows use WSL)
+- **make** (ships with macOS/Linux)
 - **A CUDA GPU** is recommended for training. CPU and MPS (Apple Silicon) trainers
   are available but significantly slower.
 
@@ -29,8 +30,7 @@ cd synth-setter
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate   # Windows
+source .venv/bin/activate
 ```
 
 ### 2c. Install dependencies
