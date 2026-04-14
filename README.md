@@ -21,15 +21,11 @@ it. Built on PyTorch Lightning with Hydra configs.
 partially implemented or not yet wired end-to-end, and the end-to-end MVP
 pipeline is still being built out (see [Project Tracking](#project-tracking)
 below). Expect breaking changes to APIs, configs, and on-disk data formats.
-This repository is published to share ongoing research and invite discussion,
-not for production use.
+This repository is published to share ongoing research and invite discussion.
 
 ## Acknowledgments
 
-This project builds directly on prior work by **Ben Hayes** (Queen Mary
-University of London). The synthesizer parameter estimation approach and
-generation infrastructure are grounded in his research, published at
-[benhayes.net/synth-perm](https://benhayes.net/synth-perm/) with companion
+This project builds directly on SOTA prior work in audio synthesizer inversion by [Ben Hayes et al](https://benhayes.net): [Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching](https://benhayes.net/synth-perm/) with companion
 code at [ben-hayes/synth-permutations](https://github.com/ben-hayes/synth-permutations).
 
 [Surge XT](https://surge-synthesizer.github.io/), developed by the Surge
@@ -39,7 +35,7 @@ under the GPL-3.0 license.
 ## Features
 
 - **Flow matching models** for synthesizer parameter estimation
-- **Distributed data pipeline** for VST audio dataset generation (RunPod + Cloudflare R2)
+- **Distributed data pipeline** for VST audio dataset generation (multi cloud via [skypilot](https://github.com/skypilot-org/skypilot))
 - **W&B integration** for experiment tracking and model checkpointing
 - **Docker support** for reproducible training and generation environments
 - **Hydra configs** for flexible experiment management
