@@ -27,7 +27,7 @@ This repository is published to share ongoing research and invite discussion.
 ## Acknowledgments
 
 This project builds on [*Audio synthesizer inversion in symmetric parameter spaces with approximately equivariant flow matching*](https://benhayes.net/synth-perm/)
-by [Ben Hayes et al.](https://benhayes.net) Original code [here](https://github.com/ben-hayes/synth-permutations).
+by [Ben Hayes et al.](https://benhayes.net). The original code is available [here](https://github.com/ben-hayes/synth-permutations).
 
 [Surge XT](https://surge-synthesizer.github.io/), developed by the Surge
 Synth Team, is the synthesizer used for dataset generation and is integrated
