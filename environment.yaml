@@ -8,8 +8,11 @@
 name: myenv
 
 channels:
-  - pytorch
+  # conda-forge first so shared deps (pillow, libtiff, etc.) come from the
+  # well-maintained community channel with bundled system libs. The pytorch
+  # channel is kept as a fallback for torch-specific builds.
   - conda-forge
+  - pytorch
   - defaults
 
 # Split of responsibilities between conda and pip:
