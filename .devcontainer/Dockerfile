@@ -29,3 +29,21 @@ RUN mkdir -p /home/$USERNAME/.config \
        fi
 
 USER $USERNAME
+
+# Claude Code CLI (userspace install via nvm — no root, no sudo).
+# Anthropic's reference devcontainer installs Claude Code globally as root
+# and adds a scoped sudoers grant for a firewall script. We install under
+# the dev user's home instead so this Dockerfile stays root-free. Firewall
+# + scoped sudo are tracked separately (#549).
+ARG NVM_VERSION=0.40.1
+ARG NODE_VERSION=20.18.0
+ARG CLAUDE_CODE_VERSION=2.1.105
+
+ENV NVM_DIR="/home/$USERNAME/.nvm"
+ENV PATH="$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH"
+
+RUN wget -qO- "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh" | bash \
+    && . "$NVM_DIR/nvm.sh" \
+    && nvm install "$NODE_VERSION" \
+    && nvm alias default "$NODE_VERSION" \
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
