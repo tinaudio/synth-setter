@@ -14,7 +14,7 @@ overrides = ["logger=[]", "~callbacks.lr_monitor"]
 
 # TODO(#514): migrate from mnist configs to ksin. test_experiments globs every
 # experiment config including example.yaml, which overrides model=mnist — but
-# configs/model/mnist.yaml does not exist in this repo.
+# configs/model/mnist.yaml doesn't exist in this repo.
 @pytest.mark.skip(reason="Blocked on #514 — example.yaml references missing model=mnist")
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
