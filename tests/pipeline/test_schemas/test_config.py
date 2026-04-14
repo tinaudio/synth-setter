@@ -12,9 +12,6 @@ class TestLoadDatasetConfig:
     """Tests for loading DatasetConfig from YAML files."""
 
     def test_load_dataset_config_valid_yaml_returns_model(self, write_config_yaml):
-        # plumb:req-3cfbf391
-        # plumb:req-74aa845b
-        # plumb:req-5a8d3cae
         """Valid YAML produces a fully populated DatasetConfig."""
         path = write_config_yaml()
         cfg = load_dataset_config(path)
@@ -74,7 +71,6 @@ class TestDatasetConfigValidation:
     """Tests for DatasetConfig field validation."""
 
     def test_dataset_config_splits_must_sum_to_num_shards(self, valid_config_dict):
-        # plumb:req-f4f7b220
         """Splits that do not sum to num_shards raise ValidationError."""
         valid_config_dict["splits"] = {"train": 10, "val": 2, "test": 2}
         valid_config_dict["num_shards"] = 48
@@ -82,10 +78,6 @@ class TestDatasetConfigValidation:
             DatasetConfig(**valid_config_dict)
 
     def test_dataset_config_output_format_defaults_to_hdf5(self, valid_config_dict):
-        # plumb:req-706a57a8
-        # plumb:req-c8dabc9b
-        # plumb:req-17055172
-        # plumb:req-f1a9ffe7
         """Omitting output_format defaults to hdf5."""
         del valid_config_dict["output_format"]
         cfg = DatasetConfig(**valid_config_dict)
@@ -98,7 +90,6 @@ class TestDatasetConfigValidation:
             DatasetConfig(**valid_config_dict)
 
     def test_dataset_config_rejects_negative_shard_size(self, valid_config_dict):
-        # plumb:req-62ea16c1
         """Negative shard_size raises ValidationError."""
         valid_config_dict["shard_size"] = -1
         with pytest.raises(ValidationError, match="shard_size must be positive"):
@@ -136,7 +127,6 @@ class TestDatasetConfigIdFromPath:
     """Tests for dataset_config_id_from_path."""
 
     def test_dataset_config_id_from_path_extracts_stem(self):
-        # plumb:req-fc5acded
         """Extracts the filename stem as the config ID."""
         path = Path("configs/dataset/surge-simple-480k-10k.yaml")
         assert dataset_config_id_from_path(path) == "surge-simple-480k-10k"
@@ -146,7 +136,6 @@ class TestDatasetConfigRoundTrip:
     """Tests for DatasetConfig serialization round-trip."""
 
     def test_dataset_config_round_trip_json(self, valid_config_dict):
-        # plumb:req-470fb0bc
         """model_dump_json followed by model_validate_json produces an equal model."""
         original = DatasetConfig(**valid_config_dict)
         json_str = original.model_dump_json()

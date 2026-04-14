@@ -166,6 +166,3 @@ plugins/
 
 # Claude Code
 .claude/
-
-# Plumb (all files force-added; gitignore prevents accidental staging)
-.plumb/

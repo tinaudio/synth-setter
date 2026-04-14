@@ -104,10 +104,6 @@ class TestRun:
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_writes_spec_json_to_metadata_dir(
-        # plumb:req-5bd551a7
-        # plumb:req-470fb0bc
-        # plumb:req-3e671363
-        # plumb:req-4cdfd71a
         self,
         mock_materialize: MagicMock,
         mock_rclone: MagicMock,
@@ -131,9 +127,6 @@ class TestRun:
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_uploads_spec_to_r2_before_generation(
-        # plumb:req-6e69d1c2
-        # plumb:req-d0135b99
-        # plumb:req-c0a8e86f
         self,
         mock_materialize: MagicMock,
         mock_rclone: MagicMock,
@@ -167,8 +160,6 @@ class TestRun:
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_calls_generate_vst_dataset(
-        # plumb:req-1cb78576
-        # plumb:req-eee4f671
         self,
         mock_materialize: MagicMock,
         mock_rclone: MagicMock,
@@ -215,7 +206,6 @@ class TestRun:
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     @patch("pipeline.entrypoints.generate_dataset.materialize_spec")
     def test_subprocess_failure_propagates(
-        # plumb:req-51993a38
         self,
         mock_materialize: MagicMock,
         mock_rclone: MagicMock,
@@ -253,8 +243,6 @@ class TestRun:
             run(config_path, metadata_dir, _TEST_R2_BUCKET)
 
     def test_num_shards_greater_than_one_raises(self, tmp_path: Path) -> None:
-        # plumb:req-bbe52a4d
-        # plumb:req-c52244a4
         """num_shards > 1 raises NotImplementedError."""
         config_path = _write_config(
             tmp_path,
@@ -283,7 +271,6 @@ class TestBuildGenerateArgs:
     """build_generate_args() produces correct CLI arg lists from spec + shard."""
 
     def test_output_file_uses_shard_filename(self, real_spec: object, tmp_path: Path) -> None:
-        # plumb:req-9f751e55
         """Output file path is {output_dir}/{shard.filename}."""
         shard = real_spec.shards[0]  # type: ignore[union-attr]
 
@@ -292,7 +279,6 @@ class TestBuildGenerateArgs:
         assert args[2] == str(tmp_path / "shard-000000.h5")
 
     def test_num_samples_is_shard_size(self, real_spec: object) -> None:
-        # plumb:req-e2d52f55
         """num_samples arg comes from spec.shard_size."""
         shard = real_spec.shards[0]  # type: ignore[union-attr]
 
@@ -301,8 +287,6 @@ class TestBuildGenerateArgs:
         assert args[3] == "10000"
 
     def test_all_spec_fields_passed_as_options(self, real_spec: object) -> None:
-        # plumb:req-2b453be4
-        # plumb:req-37250f13
         """All generation parameters from spec are passed as --key value options."""
         shard = real_spec.shards[0]  # type: ignore[union-attr]
 
@@ -350,9 +334,6 @@ class TestMainEnvVars:
     """Main() reads DATASET_CONFIG and RUN_METADATA_DIR from environment."""
 
     def test_missing_dataset_config_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # plumb:req-a7360ffe
-        # plumb:req-d1239d1d
-        # plumb:req-34cac29a
         """Missing DATASET_CONFIG env var raises KeyError."""
         monkeypatch.delenv("DATASET_CONFIG", raising=False)
         monkeypatch.delenv("RUN_METADATA_DIR", raising=False)
@@ -376,8 +357,6 @@ class TestMainEnvVars:
 
     @patch("pipeline.entrypoints.generate_dataset.run")
     def test_default_metadata_dir(
-        # plumb:req-84ebde7c
-        # plumb:req-34509493
         self,
         mock_run: MagicMock,
         tmp_path: Path,
@@ -395,7 +374,6 @@ class TestMainEnvVars:
 
     @patch("pipeline.entrypoints.generate_dataset.run")
     def test_custom_metadata_dir(
-        # plumb:req-6569ee0e
         self,
         mock_run: MagicMock,
         tmp_path: Path,

@@ -4,7 +4,6 @@ from omegaconf import DictConfig, OmegaConf
 
 
 def test_train_config(cfg_train: DictConfig) -> None:
-    # plumb:req-74aa845b
     """Tests the training configuration provided by the `cfg_train` pytest fixture.
 
     :param cfg_train: A DictConfig containing a valid training configuration.
@@ -42,24 +41,18 @@ class TestWandbConfigResolvesFromEnv:
     """Verify wandb entity/project resolve from env vars (#265)."""
 
     def test_wandb_entity_resolves_from_env(self, monkeypatch):
-        # plumb:req-5e3fcfe3
-        # plumb:req-86fb2d53
-        # plumb:req-e12fa149
         """OmegaConf resolves WANDB_ENTITY from environment."""
         monkeypatch.setenv("WANDB_ENTITY", "test-entity")
         cfg = OmegaConf.load("configs/logger/wandb.yaml")
         assert OmegaConf.select(cfg, "wandb.entity") == "test-entity"
 
     def test_wandb_project_resolves_from_env(self, monkeypatch):
-        # plumb:req-7c8e90f7
-        # plumb:req-27369d64
         """OmegaConf resolves WANDB_PROJECT from environment."""
         monkeypatch.setenv("WANDB_PROJECT", "test-project")
         cfg = OmegaConf.load("configs/logger/wandb.yaml")
         assert OmegaConf.select(cfg, "wandb.project") == "test-project"
 
     def test_wandb_defaults_when_env_unset(self, monkeypatch):
-        # plumb:req-1755adf6
         """Falls back to tinaudio/synth-setter when env vars unset."""
         monkeypatch.delenv("WANDB_ENTITY", raising=False)
         monkeypatch.delenv("WANDB_PROJECT", raising=False)
