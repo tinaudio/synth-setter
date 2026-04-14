@@ -42,7 +42,18 @@ ARG CLAUDE_CODE_VERSION=2.1.105
 ENV NVM_DIR="/home/$USERNAME/.nvm"
 ENV PATH="$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH"
 
-RUN wget -qO- "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh" | bash \
+# nvm.sh is intended for bash/zsh. It happens to source under Ubuntu's
+# /bin/sh (dash) today because nvm maintains POSIX compatibility, but the
+# dependency on bash is implicit and could break if nvm's internals change.
+# Set SHELL explicitly so the source + nvm install + npm install chain
+# runs under bash, and enable pipefail so any stage failure aborts the
+# layer cleanly.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Clone nvm at a pinned tag instead of piping install.sh through bash.
+# The cloned tree is auditable on disk, the tag is immutable upstream,
+# and we never execute unverified network content during the image build.
+RUN git clone --depth 1 --branch "v${NVM_VERSION}" https://github.com/nvm-sh/nvm.git "$NVM_DIR" \
     && . "$NVM_DIR/nvm.sh" \
     && nvm install "$NODE_VERSION" \
     && nvm alias default "$NODE_VERSION" \
