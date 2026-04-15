@@ -41,35 +41,8 @@ on:
       - "tests/docker/**"
 
 jobs:
-  visibility-check:
-    name: Verify Docker Hub repo is private
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Check tinaudio/perm visibility
-        run: |
-          set -euo pipefail
-
-          REPO_URL="https://hub.docker.com/v2/repositories/tinaudio/perm/"
-
-          # Query WITHOUT credentials: if an anonymous user can see the repo,
-          # it's public and leaking baked-in secrets. A 404 means the repo is
-          # private (or doesn't exist — either way, not publicly exposed).
-          HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$REPO_URL")
-
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "::error::Docker Hub repository tinaudio/perm is PUBLIC (HTTP 200). Dev-snapshot images contain baked-in R2 and W&B credentials. Set the repo to private immediately."
-            exit 1
-          elif [ "$HTTP_CODE" = "404" ]; then
-            echo "Docker Hub repository tinaudio/perm is not publicly visible (HTTP 404)."
-          else
-            echo "::error::Unexpected HTTP ${HTTP_CODE} from Docker Hub API at ${REPO_URL}."
-            exit 1
-          fi
-
   docker-build:
     name: Build and push Docker image
-    needs: visibility-check
     runs-on: ubuntu-latest-4core
     timeout-minutes: 60
 
@@ -138,6 +111,7 @@ jobs:
           tags: |
             type=raw,value=dev-snapshot
             type=raw,value=dev-snapshot-${{ steps.source.outputs.sha }}
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -158,12 +132,8 @@ jobs:
             R2_BUCKET=${{ steps.config.outputs.r2_bucket }}
           secrets: |
             git_pat=${{ secrets.GIT_PAT }}
-            r2_access_key_id=${{ secrets.R2_ACCESS_KEY_ID }}
-            r2_secret_access_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
-            r2_endpoint=${{ secrets.R2_ENDPOINT }}
-            wandb_api_key=${{ secrets.WANDB_API_KEY }}
-          cache-from: type=registry,ref=tinaudio/perm:buildcache
-          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=tinaudio/perm:buildcache,mode=max' || '' }}
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=tinaudio/synth-setter:buildcache,mode=max' || '' }}
 
       - name: Smoke test — container starts and Python imports work
         if: github.event_name != 'pull_request'

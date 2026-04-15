@@ -72,18 +72,15 @@ jobs:
         with:
           name: test-run-metadata
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Install PyYAML for config parsing
         run: pip install pyyaml
 
       - name: Download shard from R2 and validate
         env:
-          IMAGE: tinaudio/perm:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+          IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
           # Read R2 bucket from image config YAML (single source of truth)
           R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
@@ -94,11 +91,16 @@ jobs:
           echo "R2 prefix: ${R2_PREFIX}"
           echo "Shard file: ${SHARD_FILE}"
 
-          # Download shard from R2 via Docker (has rclone + R2 credentials)
+          # Download shard from R2 via Docker (has rclone)
           mkdir -p /tmp/shard-download
           docker pull "$IMAGE"
           docker run --rm \
             -e MODE=passthrough \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
             -v /tmp/shard-download:/download \
             "$IMAGE" \
             rclone copy --checksum \
