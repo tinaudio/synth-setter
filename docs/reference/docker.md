@@ -272,10 +272,16 @@ If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                        | Mutable? | Purpose                           |
-| ------------------------------------------ | -------- | --------------------------------- |
-| `tinaudio/synth-setter:dev-snapshot`       | Yes      | Latest dev-snapshot (convenience) |
-| `tinaudio/synth-setter:dev-snapshot-<sha>` | No       | Immutable, used for smoke tests   |
+| Tag                                        | Mutable? | Purpose                                                     |
+| ------------------------------------------ | -------- | ----------------------------------------------------------- |
+| `tinaudio/synth-setter:latest`             | Yes      | Convenience pointer to the most recent default-branch build |
+| `tinaudio/synth-setter:dev-snapshot`       | Yes      | Latest dev-snapshot (convenience)                           |
+| `tinaudio/synth-setter:dev-snapshot-<sha>` | No       | Immutable, used for smoke tests                             |
+
+Mutable tags (`latest`, `dev-snapshot`) are only published on dispatch/schedule
+runs — not on pull-request build validations. `latest` is additionally gated
+to schedule runs or to `workflow_dispatch` with `git_ref=main`, so dispatching
+from main with a non-main `git_ref` does not overwrite `latest`.
 
 Smoke tests pull the SHA-pinned tag to avoid race conditions with concurrent
 workflow runs.

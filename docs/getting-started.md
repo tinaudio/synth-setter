@@ -121,8 +121,12 @@ container.
   either the VS Code
   [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
   or the [`devcontainer` CLI](https://github.com/devcontainers/cli).
-- A local `.env` with R2 + W&B credentials (see [§4b](#4b-rclone--cloudflare-r2)
-  and [§4c](#4c-weights--biases-wb)). The dev container reads this at runtime.
+- R2 + W&B credentials (see [§4b](#4b-rclone--cloudflare-r2) and
+  [§4c](#4c-weights--biases-wb)). The checked-in dev container configs
+  do **not** automatically load `.env` — after opening the container,
+  source the vars inside the container shell (`set -a && source .env && set +a`)
+  or set them via Codespaces secrets / Dev Container environment settings
+  so rclone and W&B can access them.
 - Apple Silicon: set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (the image is
   amd64-only).
 
