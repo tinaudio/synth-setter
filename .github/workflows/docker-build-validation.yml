@@ -108,10 +108,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.config.outputs.image }}
+          # `latest` is gated to schedule runs or dispatches that explicitly
+          # target the default branch. Dispatching with git_ref pointed at a
+          # non-main ref must NOT publish that ref as latest — the workflow
+          # ref can be main while the baked SHA is something else entirely.
           tags: |
             type=raw,value=dev-snapshot
             type=raw,value=dev-snapshot-${{ steps.source.outputs.sha }}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.git_ref == 'main') }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
