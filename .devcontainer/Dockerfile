@@ -4,12 +4,28 @@ ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  jq \
+  gh \
+  && rm -rf /var/lib/apt/lists/*
+
 # Non-root dev user with bash as the login shell. No sudo: passwordless
 # sudo is security theatre (dev becomes root trivially), and the escape
 # hatch for missing system packages is adding them to the base image
 # (docker/ubuntu22_04/Dockerfile) and rebuilding.
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
+
+# Fix ownership of any repo content the base image left as root
+RUN chown -R $USER_UID:$USER_GID .git
 
 USER $USERNAME
 

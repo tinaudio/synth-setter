@@ -3,26 +3,31 @@
   "build": {
     "dockerfile": "../Dockerfile",
     "context": "..",
-    "options": ["--platform=linux/amd64"]
+    "options": [
+      "--platform=linux/amd64"
+    ]
   },
-
-  "runArgs": ["--gpus", "all"],
-
+  "runArgs": [
+    "--gpus",
+    "all",
+    "--shm-size=16g",
+    "--env-file",
+    ".env"
+  ],
   "containerEnv": {
     "MODE": "idle"
   },
-
+  "mounts": [
+    "source=${localEnv:HOME}/.claude/.credentials.json,target=/home/dev/.claude/.credentials.json,type=bind,readonly"
+  ],
   "remoteUser": "dev",
   "updateRemoteUserUID": true,
   "workspaceFolder": "/home/build/synth-setter",
   "workspaceMount": "type=bind,source=${localWorkspaceFolder},target=/home/build/synth-setter,consistency=cached",
-
   "postCreateCommand": ".devcontainer/post-create.sh",
-
   "features": {
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
-
   "customizations": {
     "vscode": {
       "extensions": [
@@ -54,7 +59,9 @@
         "python.terminal.activateEnvironment": false,
         "editor.formatOnSave": true,
         "python.testing.pytestEnabled": true,
-        "python.testing.pytestArgs": ["tests"]
+        "python.testing.pytestArgs": [
+          "tests"
+        ]
       }
     }
   }
