@@ -347,13 +347,19 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /home/build/synth-setter
 
-# The repository is public, so git clone works anonymously. No credential
-# needs to enter or leave the image. Using `git clone` (instead of the
-# equivalent init+remote+fetch dance) leaves a local `main` branch with
-# upstream tracking config already wired up, so shelling into the image
-# for interactive development — `git switch main`, `git pull`,
-# `git rebase origin/main` — works without extra setup.
-RUN git clone "https://github.com/tinaudio/synth-setter.git" . && \
+# The repository is public, so git fetch works anonymously. No credential
+# needs to enter or leave the image.
+#
+# We use init+remote+fetch instead of `git clone .` because an upstream
+# stage (`builder-install-synth-setter-deps`, inherited by this target)
+# already creates `plugins/Surge XT.vst3` under this WORKDIR. `git clone`
+# refuses to clone into a non-empty directory, whereas `git init` is
+# happy to create `.git/` alongside the existing plugins symlink.
+# See: https://github.com/tinaudio/synth-setter/pull/567 commit 8143856
+# which attempted the clone refactor and failed with curl exit 128.
+RUN git init && \
+    git remote add origin "https://github.com/tinaudio/synth-setter.git" && \
+    git fetch origin && \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.
