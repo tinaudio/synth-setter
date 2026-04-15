@@ -83,6 +83,7 @@ All secrets are repo-scoped (no workflow uses an `environment:` block). No custo
 | `GIT_PAT`                  | `docker-build-validation`, `flush-investigation`                        | GitHub PAT consumed as a BuildKit secret to fetch the source tarball at build time.                               |
 | `R2_ACCESS_KEY_ID`         | `dataset-generation`, `spec-materialization`, `test-dataset-generation` | Cloudflare R2 credentials passed as runtime env vars to `docker run` (`RCLONE_CONFIG_R2_*`).                      |
 | `R2_SECRET_ACCESS_KEY`     | same as above                                                           | Paired with `R2_ACCESS_KEY_ID`.                                                                                   |
+| `R2_ENDPOINT`              | `dataset-generation`, `spec-materialization`, `test-dataset-generation` | R2 endpoint URL (runtime).                                                                                        |
 | `WANDB_API_KEY`            | `dataset-generation`                                                    | W&B credentials passed as runtime env var to `docker run`.                                                        |
 
 ## Common operations
