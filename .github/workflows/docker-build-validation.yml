@@ -136,7 +136,6 @@ jobs:
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
             TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
             SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
-            R2_BUCKET=${{ steps.config.outputs.r2_bucket }}
           # No BuildKit secrets: the repo is public (no GIT_PAT needed) and
           # R2/W&B credentials flow in at runtime, not build time.
           secrets: ""

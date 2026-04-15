@@ -13,8 +13,6 @@ ARG BASE_IMAGE=ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146
 # TODO(ktinubu): Check for unset TARGETARCH or TARGETPLATFORM. Fallback to amd, linux/amd but add tag to container
 # TODO(ktinubu): Add appropriate image labels.
 ARG IMAGE=dev-snapshot
-# R2 bucket name baked into the image (used by entrypoint + rclone)
-ARG R2_BUCKET=
 
 FROM ${BASE_IMAGE} AS amd64-vars
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
@@ -328,23 +326,17 @@ RUN mkdir -p /home/build/synth-setter/plugins && \
 WORKDIR /home/build/synth-setter
 
 # ==========================================
-# Runtime config: bake only non-sensitive R2 bucket name. Callers provide
-# R2 credentials and W&B API key at runtime via env vars (see
-# docs/reference/docker.md § Runtime secrets).
-#
-# This image contains NO baked credentials and is safe to publish on
-# public registries.
-# ==========================================
-FROM builder-install-synth-setter-deps AS runtime-base
-ARG R2_BUCKET
-ENV R2_BUCKET=${R2_BUCKET}
-
-# ==========================================
 # dev-snapshot: deps + live git clone at SYNTH_PERMUTATIONS_GIT_REF.
+#
+# This image contains NO baked credentials and no R2 bucket binding —
+# it is safe to publish on public registries. Callers provide R2 +
+# W&B credentials and the target R2 bucket at runtime via env vars
+# (see docs/reference/docker.md § Runtime secrets).
+#
 # Useful for CI or one-off runs without mounting local source.
 # Usage: make docker-build-dev-snapshot GIT_REF=<sha>
 # ==========================================
-FROM runtime-base AS dev-snapshot
+FROM builder-install-synth-setter-deps AS dev-snapshot
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}

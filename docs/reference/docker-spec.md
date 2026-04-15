@@ -60,11 +60,11 @@ ______________________________________________________________________
 | -------------- | ---------------------- | ---------------------- | -------------- |
 | `dev-snapshot` | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs |
 
-The `dev-snapshot` target inherits from `runtime-base`, which sets only
-the non-sensitive `R2_BUCKET` env var. R2 credentials and the W&B API
-key are provided at runtime via env vars (see
-`docs/reference/docker.md` § Runtime secrets). The image contains no
-baked credentials.
+The `dev-snapshot` target inherits directly from
+`builder-install-synth-setter-deps`. It contains no baked credentials
+and no baked runtime configuration. R2 credentials, the W&B API key,
+and the target R2 bucket name are all provided at runtime via env vars
+(see `docs/reference/docker.md` § Runtime secrets).
 
 ## 3. Environment Variables
 
@@ -76,23 +76,22 @@ baked credentials.
 | `SYNTH_PERMUTATIONS_GIT_REF` | `main`         | Git ref for source code                       |
 | `SURGE_GIT_REF`              | *(pinned SHA)* | Surge XT release commit                       |
 | `BUILD_MODE`                 | `source`       | `source` or `prebuilt` (Surge install method) |
-| `R2_BUCKET`                  | *(empty)*      | Cloudflare R2 bucket name                     |
 | `TORCH_BACKEND`              | `cu128`        | PyTorch backend for uv (e.g. cu128, cpu)      |
 
 ### Baked ENV vars (available at runtime)
 
-| Variable                     | Set in targets                      | Value                                |
-| ---------------------------- | ----------------------------------- | ------------------------------------ |
-| `SYNTH_PERMUTATIONS_GIT_REF` | `dev-snapshot`                      | The git ref the image was built from |
-| `R2_BUCKET`                  | `dev-snapshot` (via `runtime-base`) | Cloudflare R2 bucket name            |
-| `VIRTUAL_ENV`                | `dev-snapshot`                      | `/venv/main`                         |
-| `PATH`                       | `dev-snapshot`                      | `$VIRTUAL_ENV/bin:$PATH`             |
+| Variable                     | Set in targets | Value                                |
+| ---------------------------- | -------------- | ------------------------------------ |
+| `SYNTH_PERMUTATIONS_GIT_REF` | `dev-snapshot` | The git ref the image was built from |
+| `VIRTUAL_ENV`                | `dev-snapshot` | `/venv/main`                         |
+| `PATH`                       | `dev-snapshot` | `$VIRTUAL_ENV/bin:$PATH`             |
 
 ### MODE=generate_dataset env vars
 
 | Variable           | Required | Default         | Purpose                                    |
 | ------------------ | -------- | --------------- | ------------------------------------------ |
 | `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container   |
+| `R2_BUCKET`        | Yes      | —               | Cloudflare R2 bucket to upload spec/shard  |
 | `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where input_spec.json is written |
 
 The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
