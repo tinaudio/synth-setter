@@ -80,7 +80,6 @@ All secrets are repo-scoped (no workflow uses an `environment:` block). No custo
 | `APPROVAL_BOT_PRIVATE_KEY` | `auto-approve`, `release`                                               | GitHub App private key paired with `APPROVAL_BOT_APP_ID`.                                                         |
 | `DOCKERHUB_USERNAME`       | `docker-build-validation`                                               | Docker Hub login for pushing the public image (pulls are anonymous).                                              |
 | `DOCKERHUB_TOKEN`          | same as above                                                           | Docker Hub token paired with `DOCKERHUB_USERNAME`.                                                                |
-| `GIT_PAT`                  | `docker-build-validation`, `flush-investigation`                        | GitHub PAT consumed as a BuildKit secret to fetch the source tarball at build time.                               |
 | `R2_ACCESS_KEY_ID`         | `dataset-generation`, `spec-materialization`, `test-dataset-generation` | Cloudflare R2 credentials passed as runtime env vars to `docker run` (`RCLONE_CONFIG_R2_*`).                      |
 | `R2_SECRET_ACCESS_KEY`     | same as above                                                           | Paired with `R2_ACCESS_KEY_ID`.                                                                                   |
 | `R2_ENDPOINT`              | `dataset-generation`, `spec-materialization`, `test-dataset-generation` | R2 endpoint URL (runtime).                                                                                        |
@@ -124,7 +123,7 @@ Only `release` uses a concurrency group (`release-${{ github.ref }}`, `cancel-in
 
 ### Public image, runtime secrets
 
-`docker-build-validation` publishes `tinaudio/synth-setter` as a public image. The image contains no baked credentials: `GIT_PAT` is consumed as a BuildKit secret at build time (never persisted), and R2 + W&B credentials are passed in at runtime as env vars (`RCLONE_CONFIG_R2_*` and `WANDB_API_KEY`). Pipeline workflows (`dataset-generation`, `spec-materialization`, `test-dataset-generation`) pull the image anonymously and pipe credentials via `docker run --env-file` or `-e`.
+`docker-build-validation` publishes `tinaudio/synth-setter` as a public image. The image contains no baked credentials and the build uses no BuildKit secrets — the public repo is fetched anonymously. R2 + W&B credentials and the target R2 bucket name are passed in at runtime as env vars (`RCLONE_CONFIG_R2_*`, `WANDB_API_KEY`, `R2_BUCKET`). Pipeline workflows (`dataset-generation`, `spec-materialization`, `test-dataset-generation`) pull the image anonymously and pipe credentials via `docker run --env-file` or `-e`.
 
 ### Mount-as-volume pattern
 

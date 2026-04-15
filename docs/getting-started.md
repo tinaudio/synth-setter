@@ -288,9 +288,10 @@ When you run the image with `docker run --env-file .env`, rclone inside
 the container picks them up and auto-configures the `r2` remote — no
 baked `rclone.conf` required.
 
-The only additional variable the Docker build itself needs is
-`GIT_PAT` (for fetching source), and the `R2_BUCKET` name (passed as a
-non-sensitive build arg; see [§7](#7-docker-workflow)).
+Also put the target bucket name in your `.env` as `R2_BUCKET=<bucket-name>` —
+the pipeline entrypoint reads it at runtime. The Docker build itself
+requires no credentials or secrets: the repo is public, so source is
+fetched anonymously.
 
 **Verify:**
 
@@ -427,34 +428,27 @@ ______________________________________________________________________
 
 A Dockerfile is provided for reproducible environments (training, CI, cloud
 deployment). The image bakes in the source code, dependencies, and Surge XT.
-R2 and W&B credentials are **not** baked in — they are supplied at runtime
-via `docker run --env-file .env`.
+No credentials — R2, W&B, or otherwise — are baked in.
 
 **Build the image:**
 
-The Makefile reads `GIT_PAT` from the environment and passes it as a BuildKit
-secret (for fetching the source tarball). Load your `.env` first so `GIT_PAT`
-is available.
+The build takes no credentials at all. The repo is public, so source is
+fetched anonymously.
 
 > **Note:** The image is public and ships no baked credentials. R2 + W&B
-> creds flow in at runtime via `docker run --env-file .env` — see
+> creds and the target R2 bucket name flow in at runtime via
+> `docker run --env-file .env` — see
 > [docs/reference/docker.md § Runtime secrets](reference/docker.md#runtime-secrets).
 
 ```bash
-# Load secrets from .env into the current shell
-set -a
-source .env
-set +a
-
 make docker-build-dev-snapshot \
   GIT_REF=$(git rev-parse HEAD) \
   DOCKER_BUILD_FLAGS=--load
 ```
 
-The target expects `GIT_PAT` (for source tarball fetch) and `R2_BUCKET`
-(non-sensitive build arg) in the environment. Runtime R2 + W&B credentials
-are not baked and are not needed at build time -- they are supplied to
-`docker run` from `.env` at runtime (see [section 4b](#4b-rclone--cloudflare-r2)).
+The only required input is `GIT_REF` — the commit to bake into the image.
+All R2 + W&B credentials and `R2_BUCKET` are supplied to `docker run` from
+`.env` at runtime (see [section 4b](#4b-rclone--cloudflare-r2)).
 
 See `make help` for the full list of Docker-related variables and targets. The
 `GIT_REF` argument controls which commit is baked into the image (use a full

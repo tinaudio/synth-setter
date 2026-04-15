@@ -15,9 +15,9 @@ ______________________________________________________________________
 ### Prerequisites
 
 - Docker with [BuildKit](https://docs.docker.com/build/buildkit/) enabled
-  (Docker Desktop 23+ or `DOCKER_BUILDKIT=1`). BuildKit adds secret mounts
-  and multi-stage caching — both used heavily in this project.
-- Build-time secrets in `.env`: `GIT_PAT` (BuildKit secret for fetching source)
+  (Docker Desktop 23+ or `DOCKER_BUILDKIT=1`). BuildKit provides multi-stage
+  caching used heavily in this project.
+- Build-time secrets: none. The repo is public, source is fetched anonymously.
 - Runtime secrets in `.env` (passed to `docker run --env-file`):
   `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
   `RCLONE_CONFIG_R2_ENDPOINT`, `WANDB_API_KEY`, `R2_BUCKET`
@@ -30,7 +30,7 @@ set -a && source .env && set +a
 ### Runtime secrets
 
 The image contains no baked credentials and is safe to publish on public
-registries. Cloudflare R2 credentials and the W&B API key flow in at
+registries. All credentials and the target R2 bucket name flow in at
 runtime via environment variables:
 
 | Env var                                | Consumer   | Source             |
@@ -41,23 +41,15 @@ runtime via environment variables:
 | `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`   | rclone     | `.env`             |
 | `RCLONE_CONFIG_R2_ENDPOINT`            | rclone     | `.env`             |
 | `WANDB_API_KEY`                        | wandb      | `.env`             |
-| `R2_BUCKET`                            | entrypoint | baked (non-secret) |
+| `R2_BUCKET`                            | entrypoint | `.env`             |
 
 rclone's native env-var config automatically builds the `r2` remote
 inside the container from the `RCLONE_CONFIG_R2_*` variables — no
 `rclone.conf` file is needed.
 
-The only BuildKit secret is `git_pat`, consumed by the build to fetch the
-source tarball. It is never persisted to the image filesystem.
-
-| BuildKit secret | Source env var | Persisted to      | Purpose                              |
-| --------------- | -------------- | ----------------- | ------------------------------------ |
-| `git_pat`       | `GIT_PAT`      | *(not persisted)* | GitHub API access for source tarball |
-
-> **Note:** `R2_BUCKET` is passed as `--build-arg` (not a BuildKit secret) and
-> set as an `ENV` in the image. Its value is sourced from
-> `configs/image/dev-snapshot.yaml` (single source of truth). It appears in
-> `docker history` — this is intentional since the bucket name is not sensitive.
+The build uses **no** BuildKit secrets. The repository is public, so
+source fetches (both the tarball and the in-image git clone) happen
+anonymously. There is no `GIT_PAT` in the build pipeline.
 
 The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-setter/issues/310)).
 
@@ -68,7 +60,6 @@ specific git ref.
 
 ```bash
 make docker-build-dev-snapshot \
-  GIT_PAT="$GIT_PAT" \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
   # --load: imports the built image into your local Docker daemon
@@ -94,13 +85,11 @@ ______________________________________________________________________
 | -------------- | ---------------------- | --------------------- |
 | `dev-snapshot` | Git clone at `GIT_REF` | CI, cloud, evaluation |
 
-The target requires `GIT_PAT`. Set `GIT_REF` for reproducible builds
-(defaults to `main` if omitted):
+Set `GIT_REF` for reproducible builds (defaults to `main` if omitted):
 
 ```bash
 # dev-snapshot — self-contained image at a specific commit
 make docker-build-dev-snapshot \
-  GIT_PAT="$GIT_PAT" \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 ```
@@ -303,15 +292,14 @@ gh workflow run docker-build-validation.yml --ref main
 
 ### Required secrets
 
-| Secret                 | Purpose                                                     |
-| ---------------------- | ----------------------------------------------------------- |
-| `GIT_PAT`              | GitHub API access for source tarball (build-time, BuildKit) |
-| `DOCKERHUB_USERNAME`   | Docker Hub login (push-only; pulls are anonymous)           |
-| `DOCKERHUB_TOKEN`      | Docker Hub access token (push-only)                         |
-| `R2_ACCESS_KEY_ID`     | R2 credentials (runtime; passed via `docker run -e`)        |
-| `R2_SECRET_ACCESS_KEY` | R2 credentials                                              |
-| `R2_ENDPOINT`          | R2 endpoint (runtime)                                       |
-| `WANDB_API_KEY`        | W&B auth (runtime)                                          |
+| Secret                 | Purpose                                              |
+| ---------------------- | ---------------------------------------------------- |
+| `DOCKERHUB_USERNAME`   | Docker Hub login (push-only; pulls are anonymous)    |
+| `DOCKERHUB_TOKEN`      | Docker Hub access token (push-only)                  |
+| `R2_ACCESS_KEY_ID`     | R2 credentials (runtime; passed via `docker run -e`) |
+| `R2_SECRET_ACCESS_KEY` | R2 credentials                                       |
+| `R2_ENDPOINT`          | R2 endpoint (runtime)                                |
+| `WANDB_API_KEY`        | W&B auth (runtime)                                   |
 
 ______________________________________________________________________
 

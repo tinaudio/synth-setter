@@ -83,13 +83,6 @@ RUN case "${IMAGE}" in \
       "dev-snapshot") ;; \
       *) echo "ERROR: IMAGE must be dev-snapshot (got '${IMAGE}')" >&2; exit 1 ;; \
     esac
-RUN --mount=type=secret,id=git_pat \
-    set -eu; \
-    if [ ! -s /run/secrets/git_pat ]; then \
-        echo "ERROR: git_pat secret is missing or empty" >&2; \
-        exit 1; \
-    fi;
-
 # Install base build tools (gcc-12, g++-12, ninja, flex) shared by all builder stages.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
@@ -247,11 +240,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     curl
 WORKDIR /home/build/synth-setter
 # Best practice: use a commit SHA for SYNTH_PERMUTATIONS_GIT_REF for deterministic builds.
-RUN --mount=type=secret,id=git_pat \
-    set +x; \
-    token="$(cat /run/secrets/git_pat)"; \
-    curl -fsSL \
-      -H "Authorization: Bearer ${token}" \
+# Anonymous API access — the repository is public.
+RUN curl -fsSL \
       "https://api.github.com/repos/tinaudio/synth-setter/tarball/${SYNTH_PERMUTATIONS_GIT_REF}" \
       -o /tmp/src.tgz && \
     tar -xzf /tmp/src.tgz --strip-components=1 && \
@@ -352,7 +342,7 @@ ENV R2_BUCKET=${R2_BUCKET}
 # ==========================================
 # dev-snapshot: deps + live git clone at SYNTH_PERMUTATIONS_GIT_REF.
 # Useful for CI or one-off runs without mounting local source.
-# Usage: make docker-build-dev-snapshot GIT_REF=<sha> GIT_PAT=<token>
+# Usage: make docker-build-dev-snapshot GIT_REF=<sha>
 # ==========================================
 FROM runtime-base AS dev-snapshot
 
@@ -365,21 +355,12 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /home/build/synth-setter
 
-# Fetch source using GIT_PAT, then scrub the token from .git/config via
-# `git remote set-url`. The credential-embedded URL is used for the fetch
-# (GitHub's HTTPS auth requires HTTP Basic with x-access-token:TOKEN),
-# but the final .git/config contains only the bare URL. Git's FETCH_HEAD
-# auto-strips credentials from fetched URLs, so no other file in .git/
-# retains the token.
-# This is required for the image to be safe to publish on public registries.
-RUN --mount=type=secret,id=git_pat \
-    set +x; \
-    token="$(cat /run/secrets/git_pat)"; \
-    git init && \
-    git remote add origin "https://x-access-token:${token}@github.com/tinaudio/synth-setter.git" && \
+# The repository is public, so git fetch works anonymously. No credential
+# needs to enter or leave the image.
+RUN git init && \
+    git remote add origin "https://github.com/tinaudio/synth-setter.git" && \
     git fetch origin && \
-    git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}" && \
-    git remote set-url origin "https://github.com/tinaudio/synth-setter.git"
+    git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.
 # --no-deps: all runtime deps already installed via uv pip install above.

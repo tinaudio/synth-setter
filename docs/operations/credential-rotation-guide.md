@@ -27,7 +27,6 @@ ______________________________________________________________________
 | `R2_SECRET_ACCESS_KEY`     | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
 | `R2_ENDPOINT`              | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
 | `WANDB_API_KEY`            | Training, evaluation, promotion (runtime env var) | GitHub Secrets, `.env`     |
-| `GIT_PAT`                  | Docker builds, CI workflows                       | GitHub Secrets, `.env`     |
 | `GITHUB_TOKEN`             | CI workflows (automatic)                          | Automatic per workflow run |
 | `RUNPOD_API_KEY`           | Pipeline orchestration                            | GitHub Secrets, `.env`     |
 | `DOCKERHUB_USERNAME`       | CI image push workflows                           | GitHub Secrets             |
@@ -115,41 +114,6 @@ ______________________________________________________________________
 # Test W&B authentication (assumes WANDB_API_KEY is already exported, e.g. from .env)
 wandb login --verify
 ```
-
-______________________________________________________________________
-
-### GitHub PAT (`GIT_PAT`)
-
-**What:** Fine-grained personal access token used in Docker builds and CI
-workflows for accessing the repository source tarball.
-
-**Where stored:**
-
-- GitHub Secrets: `GIT_PAT`
-- Local `.env` files
-
-**Rotation steps:**
-
-1. Go to **GitHub > Settings > Developer settings > Fine-grained personal access
-   tokens**.
-2. Click **Generate new token** (or **Regenerate** on the existing token).
-3. Set the required repository access and permissions (repository contents: read).
-4. Copy the new token.
-5. Update GitHub Secrets:
-   - Update `GIT_PAT` with the new token value.
-6. Update local `.env` files on developer machines that use Docker builds.
-7. If the old token was not regenerated (i.e., you created a new one), delete the
-   old token.
-
-**Verification:**
-
-```bash
-# Ensure GIT_PAT is already exported in your environment (for example, via `.env`)
-# Then test Docker build with new PAT
-make docker-build-dev-snapshot GIT_REF=main
-```
-
-Confirm the `docker-build-validation.yml` workflow passes.
 
 ______________________________________________________________________
 
@@ -292,8 +256,6 @@ audit):
   revoke old token
 - [ ] **W&B:** Regenerate API key, update `WANDB_API_KEY` in GitHub Secrets and
   `.env`
-- [ ] **GitHub PAT:** Generate new fine-grained token, update `GIT_PAT` in
-  GitHub Secrets and `.env`, delete old token
 - [ ] **RunPod:** Create new API key, update `RUNPOD_API_KEY` in GitHub Secrets
   and `.env`, delete old key
 - [ ] **Docker Hub:** Create new access token, update `DOCKERHUB_TOKEN` (and
@@ -346,5 +308,5 @@ ______________________________________________________________________
   `docker run --env-file .env`. Rotating them does not require rebuilding
   images — update `.env` (and GitHub Secrets for CI) and restart containers.
 - Never store credentials in code, config files checked into git, or CI logs.
-  Use environment variables (runtime) or BuildKit `--secret` (build-time only,
-  currently just `GIT_PAT`).
+  Use environment variables at runtime. The Docker build uses no BuildKit
+  secrets — the repository is public and source is fetched anonymously.

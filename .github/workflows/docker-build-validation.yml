@@ -137,8 +137,9 @@ jobs:
             TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
             SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
             R2_BUCKET=${{ steps.config.outputs.r2_bucket }}
-          secrets: |
-            git_pat=${{ secrets.GIT_PAT }}
+          # No BuildKit secrets: the repo is public (no GIT_PAT needed) and
+          # R2/W&B credentials flow in at runtime, not build time.
+          secrets: ""
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
           cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=tinaudio/synth-setter:buildcache,mode=max' || '' }}
 
