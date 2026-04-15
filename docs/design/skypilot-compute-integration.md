@@ -121,7 +121,7 @@ resources:
   disk_size: 100
   # Use the existing CI image name and an immutable tag (for example, a git SHA).
   # In practice, the pinned tag can be injected by CI or at launch time.
-  image_id: docker:tinaudio/perm:<git-sha>
+  image_id: docker:tinaudio/synth-setter:<git-sha>
 
 setup: |
   # Worker setup runs inside the container
