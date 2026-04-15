@@ -17,47 +17,47 @@ ______________________________________________________________________
 - Docker with [BuildKit](https://docs.docker.com/build/buildkit/) enabled
   (Docker Desktop 23+ or `DOCKER_BUILDKIT=1`). BuildKit adds secret mounts
   and multi-stage caching — both used heavily in this project.
-- Secrets in `.env`: `GIT_PAT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-  `R2_ENDPOINT`, `R2_BUCKET`, `WANDB_API_KEY`
+- Build-time secrets in `.env`: `GIT_PAT` (BuildKit secret for fetching source)
+- Runtime secrets in `.env` (passed to `docker run --env-file`):
+  `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
+  `RCLONE_CONFIG_R2_ENDPOINT`, `WANDB_API_KEY`, `R2_BUCKET`
 
 ```bash
 # Source credentials into current shell
 set -a && source .env && set +a
 ```
 
-### BuildKit secrets
+### Runtime secrets
 
-Credentials are injected at build time via `--mount=type=secret`. The secret
-data is available only during the `RUN` instruction and never appears in
-`docker history`. However, the build writes some secrets into config files
-that persist in the final image:
+The image contains no baked credentials and is safe to publish on public
+registries. Cloudflare R2 credentials and the W&B API key flow in at
+runtime via environment variables:
 
-| Secret                 | Source env var         | Persisted to                       | Purpose                                |
-| ---------------------- | ---------------------- | ---------------------------------- | -------------------------------------- |
-| `git_pat`              | `GIT_PAT`              | *(not persisted)*                  | GitHub API access for source tarball   |
-| `r2_access_key_id`     | `R2_ACCESS_KEY_ID`     | `/root/.config/rclone/rclone.conf` | R2 rclone config                       |
-| `r2_secret_access_key` | `R2_SECRET_ACCESS_KEY` | `/root/.config/rclone/rclone.conf` | R2 rclone config                       |
-| `r2_endpoint`          | `R2_ENDPOINT`          | `/root/.config/rclone/rclone.conf` | R2 rclone config (Cloudflare endpoint) |
-| `wandb_api_key`        | `WANDB_API_KEY`        | `/root/.netrc`                     | W&B auth                               |
+| Env var                                | Consumer   | Source             |
+| -------------------------------------- | ---------- | ------------------ |
+| `RCLONE_CONFIG_R2_TYPE=s3`             | rclone     | fixed (set in run) |
+| `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` | rclone     | fixed (set in run) |
+| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`       | rclone     | `.env`             |
+| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`   | rclone     | `.env`             |
+| `RCLONE_CONFIG_R2_ENDPOINT`            | rclone     | `.env`             |
+| `WANDB_API_KEY`                        | wandb      | `.env`             |
+| `R2_BUCKET`                            | entrypoint | baked (non-secret) |
+
+rclone's native env-var config automatically builds the `r2` remote
+inside the container from the `RCLONE_CONFIG_R2_*` variables — no
+`rclone.conf` file is needed.
+
+The only BuildKit secret is `git_pat`, consumed by the build to fetch the
+source tarball. It is never persisted to the image filesystem.
+
+| BuildKit secret | Source env var | Persisted to      | Purpose                              |
+| --------------- | -------------- | ----------------- | ------------------------------------ |
+| `git_pat`       | `GIT_PAT`      | *(not persisted)* | GitHub API access for source tarball |
 
 > **Note:** `R2_BUCKET` is passed as `--build-arg` (not a BuildKit secret) and
 > set as an `ENV` in the image. Its value is sourced from
 > `configs/image/dev-snapshot.yaml` (single source of truth). It appears in
 > `docker history` — this is intentional since the bucket name is not sensitive.
-
-> [!WARNING]
-> R2 and W&B credentials persist in the final image filesystem (`rclone.conf`,
-> `.netrc`). The secrets are injected securely at build time (never in
-> `docker history`), but the resulting config files **are baked into the image**.
-> Push only to private registries. Rotate R2 tokens after each build campaign.
-
-> [!IMPORTANT]
-> **Invariant: The Docker Hub repository `tinaudio/perm` must remain private.**
-> Dev-snapshot images contain baked-in R2 and W&B credentials. If the repository
-> were public, anyone could pull the image and extract these secrets. CI enforces
-> this via a visibility check in the `docker-build-validation` workflow
-> ([docker-build-validation.yml](../../.github/workflows/docker-build-validation.yml))
-> that queries the Docker Hub API and fails the build if `is_private` is not `true`.
 
 The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-setter/issues/310)).
 
@@ -136,7 +136,7 @@ keys, invalid types, and malformed values at load time.
 ```yaml
 # configs/image/dev-snapshot.yaml
 dockerfile: docker/ubuntu22_04/Dockerfile
-image: tinaudio/perm
+image: tinaudio/synth-setter
 base_image: "ubuntu@sha256:3ba65aa..."
 base_image_tag: ubuntu22_04
 build_mode: prebuilt
@@ -179,13 +179,16 @@ docker stop debug && docker rm debug
 ### MODE=passthrough — run a command
 
 ```bash
-# Run a one-off command
+# Run a one-off command (no creds needed — just a torch import)
 docker run --rm -e MODE=passthrough synth-setter:dev-snapshot \
   python -c "import torch; print(torch.cuda.is_available())"
 
 # No-op (exits 0) — useful for CI health checks
 docker run --rm -e MODE=passthrough synth-setter:dev-snapshot
 ```
+
+> **Note:** add `--env-file .env` to any passthrough invocation that needs
+> R2 (`rclone` operations) or W&B logging.
 
 ### MODE=generate_dataset — VST dataset generation
 
@@ -204,6 +207,7 @@ The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
 
 ```bash
 docker run --rm \
+  --env-file .env \
   -e MODE=generate_dataset \
   -e DATASET_CONFIG=configs/dataset/ci-smoke-test.yaml \
   -v "$(pwd)/run-metadata:/run-metadata" \
@@ -279,10 +283,10 @@ If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                | Mutable? | Purpose                           |
-| ---------------------------------- | -------- | --------------------------------- |
-| `tinaudio/perm:dev-snapshot`       | Yes      | Latest dev-snapshot (convenience) |
-| `tinaudio/perm:dev-snapshot-<sha>` | No       | Immutable, used for smoke tests   |
+| Tag                                        | Mutable? | Purpose                           |
+| ------------------------------------------ | -------- | --------------------------------- |
+| `tinaudio/synth-setter:dev-snapshot`       | Yes      | Latest dev-snapshot (convenience) |
+| `tinaudio/synth-setter:dev-snapshot-<sha>` | No       | Immutable, used for smoke tests   |
 
 Smoke tests pull the SHA-pinned tag to avoid race conditions with concurrent
 workflow runs.
@@ -299,15 +303,15 @@ gh workflow run docker-build-validation.yml --ref main
 
 ### Required secrets
 
-| Secret                 | Purpose                                 |
-| ---------------------- | --------------------------------------- |
-| `GIT_PAT`              | GitHub API access for source tarball    |
-| `DOCKERHUB_USERNAME`   | Docker Hub login                        |
-| `DOCKERHUB_TOKEN`      | Docker Hub access token                 |
-| `R2_ACCESS_KEY_ID`     | R2 credentials (baked via BuildKit)     |
-| `R2_SECRET_ACCESS_KEY` | R2 credentials                          |
-| `R2_ENDPOINT`          | R2 endpoint (baked via BuildKit secret) |
-| `WANDB_API_KEY`        | W&B auth                                |
+| Secret                 | Purpose                                                     |
+| ---------------------- | ----------------------------------------------------------- |
+| `GIT_PAT`              | GitHub API access for source tarball (build-time, BuildKit) |
+| `DOCKERHUB_USERNAME`   | Docker Hub login (push-only; pulls are anonymous)           |
+| `DOCKERHUB_TOKEN`      | Docker Hub access token (push-only)                         |
+| `R2_ACCESS_KEY_ID`     | R2 credentials (runtime; passed via `docker run -e`)        |
+| `R2_SECRET_ACCESS_KEY` | R2 credentials                                              |
+| `R2_ENDPOINT`          | R2 endpoint (runtime)                                       |
+| `WANDB_API_KEY`        | W&B auth (runtime)                                          |
 
 ______________________________________________________________________
 
@@ -343,7 +347,7 @@ Headless X11 issues — check in order:
 ### BuildKit cache
 
 The GHA workflow uses Docker Hub registry cache (`type=registry`). Cache layers
-are stored as `tinaudio/perm:buildcache`.
+are stored as `tinaudio/synth-setter:buildcache`.
 
 To clear local builder cache:
 

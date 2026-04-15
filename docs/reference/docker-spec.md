@@ -60,7 +60,11 @@ ______________________________________________________________________
 | -------------- | ---------------------- | ---------------------- | -------------- |
 | `dev-snapshot` | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs |
 
-The `dev-snapshot` target inherits from `r2-config-base`. R2 credentials are baked only when BuildKit secrets are provided at build time (placeholder rclone config otherwise). W&B auth is baked into `~/.netrc` when the `wandb_api_key` BuildKit secret is provided at build time; if the secret is missing, `WANDB_API_KEY` is required at runtime.
+The `dev-snapshot` target inherits from `runtime-base`, which sets only
+the non-sensitive `R2_BUCKET` env var. R2 credentials and the W&B API
+key are provided at runtime via env vars (see
+`docs/reference/docker.md` § Runtime secrets). The image contains no
+baked credentials.
 
 ## 3. Environment Variables
 
@@ -77,12 +81,12 @@ The `dev-snapshot` target inherits from `r2-config-base`. R2 credentials are bak
 
 ### Baked ENV vars (available at runtime)
 
-| Variable                     | Set in targets                        | Value                                |
-| ---------------------------- | ------------------------------------- | ------------------------------------ |
-| `SYNTH_PERMUTATIONS_GIT_REF` | `dev-snapshot`                        | The git ref the image was built from |
-| `R2_BUCKET`                  | `dev-snapshot` (via `r2-config-base`) | Cloudflare R2 bucket name            |
-| `VIRTUAL_ENV`                | `dev-snapshot`                        | `/venv/main`                         |
-| `PATH`                       | `dev-snapshot`                        | `$VIRTUAL_ENV/bin:$PATH`             |
+| Variable                     | Set in targets                      | Value                                |
+| ---------------------------- | ----------------------------------- | ------------------------------------ |
+| `SYNTH_PERMUTATIONS_GIT_REF` | `dev-snapshot`                      | The git ref the image was built from |
+| `R2_BUCKET`                  | `dev-snapshot` (via `runtime-base`) | Cloudflare R2 bucket name            |
+| `VIRTUAL_ENV`                | `dev-snapshot`                      | `/venv/main`                         |
+| `PATH`                       | `dev-snapshot`                      | `$VIRTUAL_ENV/bin:$PATH`             |
 
 ### MODE=generate_dataset env vars
 
