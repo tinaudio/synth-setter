@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Dev container first-run setup for both Codespaces and local devcontainers.
 # Runs once after the container is created. The base image
-# (tinaudio/perm:dev-snapshot) already ships all deps, Surge XT, xvfb,
-# rclone, and baked R2/W&B credentials — so this script only wires up the
-# workspace checkout to the image's venv.
+# (tinaudio/synth-setter:dev-snapshot) already ships all deps, Surge XT,
+# xvfb, and rclone — but NOT credentials. R2 and W&B creds must be
+# provided at runtime via Codespaces secrets or a mounted .env file.
 set -euo pipefail
 
 # Locate the workspace root via the .project-root anchor, not by hardcoded
