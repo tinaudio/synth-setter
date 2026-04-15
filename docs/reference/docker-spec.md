@@ -86,18 +86,36 @@ and the target R2 bucket name are all provided at runtime via env vars
 | `VIRTUAL_ENV`                | `dev-snapshot` | `/venv/main`                         |
 | `PATH`                       | `dev-snapshot` | `$VIRTUAL_ENV/bin:$PATH`             |
 
-### MODE=generate_dataset env vars
+### Runtime env vars (full enumeration)
 
-| Variable           | Required | Default         | Purpose                                    |
-| ------------------ | -------- | --------------- | ------------------------------------------ |
-| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container   |
-| `R2_BUCKET`        | Yes      | —               | Cloudflare R2 bucket to upload spec/shard  |
-| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where input_spec.json is written |
+This table is canonical: every env var the image consumes at runtime is
+listed here. Identical to `docs/reference/docker.md` § Runtime environment
+variables — kept in sync as the single source of truth.
 
-The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
-`input_spec.json` is written to `RUN_METADATA_DIR`. The entrypoint generates
-`shard_size` samples (one shard per invocation). Multi-shard generation
+| Env var                              | Consumer              | Required for                  | Notes                                       |
+| ------------------------------------ | --------------------- | ----------------------------- | ------------------------------------------- |
+| `MODE`                               | entrypoint dispatcher | all modes                     | Set via `-e MODE=<mode>`; required          |
+| `DATASET_CONFIG`                     | `generate_dataset`    | `MODE=generate_dataset`       | Path to dataset config YAML (in image)      |
+| `RUN_METADATA_DIR`                   | `generate_dataset`    | `MODE=generate_dataset` (opt) | Defaults to `/run-metadata`                 |
+| `R2_BUCKET`                          | `generate_dataset`    | any rclone-to-R2 upload       | Bucket name (non-secret); from `.env`       |
+| `RCLONE_CONFIG_R2_TYPE`              | rclone                | any rclone R2 op              | Constant: `s3`; from `.env` or `-e`         |
+| `RCLONE_CONFIG_R2_PROVIDER`          | rclone                | any rclone R2 op              | Constant: `Cloudflare`; from `.env` or `-e` |
+| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
+| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
+| `RCLONE_CONFIG_R2_ENDPOINT`          | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
+| `WANDB_API_KEY`                      | wandb SDK             | any W&B-logging op            | **Secret**; from `.env`                     |
+
+For `MODE=generate_dataset` specifically, the container materializes a
+DatasetPipelineSpec, uploads spec and shard to R2. `input_spec.json` is
+written to `RUN_METADATA_DIR`. The entrypoint generates `shard_size`
+samples (one shard per invocation). Multi-shard generation
 (`num_shards > 1`) raises `NotImplementedError`.
+
+rclone's native env-var config synthesizes the `r2` remote in-memory from
+the 5 `RCLONE_CONFIG_R2_*` vars — no `rclone.conf` file is read or written.
+`R2_BUCKET` is separate from the rclone remote config: it is a bucket-name
+argument interpolated into upload paths by `generate_dataset.py`
+(`r2:${R2_BUCKET}/...`).
 
 ______________________________________________________________________
 

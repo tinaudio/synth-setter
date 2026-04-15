@@ -18,34 +18,45 @@ ______________________________________________________________________
   (Docker Desktop 23+ or `DOCKER_BUILDKIT=1`). BuildKit provides multi-stage
   caching used heavily in this project.
 - Build-time secrets: none. The repo is public, source is fetched anonymously.
-- Runtime secrets in `.env` (passed to `docker run --env-file`):
-  `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
-  `RCLONE_CONFIG_R2_ENDPOINT`, `WANDB_API_KEY`, `R2_BUCKET`
+- Runtime env vars: see § Runtime environment variables below for the full
+  enumeration. At minimum, a `.env` file containing:
+  - `RCLONE_CONFIG_R2_TYPE=s3`, `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` (constants)
+  - `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
+    `RCLONE_CONFIG_R2_ENDPOINT` (R2 credentials)
+  - `WANDB_API_KEY` (W&B credential)
+  - `R2_BUCKET` (target bucket name)
 
 ```bash
 # Source credentials into current shell
 set -a && source .env && set +a
 ```
 
-### Runtime secrets
+### Runtime environment variables
 
 The image contains no baked credentials and is safe to publish on public
-registries. All credentials and the target R2 bucket name flow in at
-runtime via environment variables:
+registries. All credentials, mode selection, and mode-specific config
+flow in at runtime via environment variables. This is the **single source
+of truth** for what the image expects at `docker run` time.
 
-| Env var                                | Consumer   | Source             |
-| -------------------------------------- | ---------- | ------------------ |
-| `RCLONE_CONFIG_R2_TYPE=s3`             | rclone     | fixed (set in run) |
-| `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` | rclone     | fixed (set in run) |
-| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`       | rclone     | `.env`             |
-| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`   | rclone     | `.env`             |
-| `RCLONE_CONFIG_R2_ENDPOINT`            | rclone     | `.env`             |
-| `WANDB_API_KEY`                        | wandb      | `.env`             |
-| `R2_BUCKET`                            | entrypoint | `.env`             |
+| Env var                              | Consumer              | Required for                  | Notes                                       |
+| ------------------------------------ | --------------------- | ----------------------------- | ------------------------------------------- |
+| `MODE`                               | entrypoint dispatcher | all modes                     | Set via `-e MODE=<mode>`; required          |
+| `DATASET_CONFIG`                     | `generate_dataset`    | `MODE=generate_dataset`       | Path to dataset config YAML (in image)      |
+| `RUN_METADATA_DIR`                   | `generate_dataset`    | `MODE=generate_dataset` (opt) | Defaults to `/run-metadata`                 |
+| `R2_BUCKET`                          | `generate_dataset`    | any rclone-to-R2 upload       | Bucket name (non-secret); from `.env`       |
+| `RCLONE_CONFIG_R2_TYPE`              | rclone                | any rclone R2 op              | Constant: `s3`; from `.env` or `-e`         |
+| `RCLONE_CONFIG_R2_PROVIDER`          | rclone                | any rclone R2 op              | Constant: `Cloudflare`; from `.env` or `-e` |
+| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
+| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
+| `RCLONE_CONFIG_R2_ENDPOINT`          | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
+| `WANDB_API_KEY`                      | wandb SDK             | any W&B-logging op            | **Secret**; from `.env`                     |
 
 rclone's native env-var config automatically builds the `r2` remote
 inside the container from the `RCLONE_CONFIG_R2_*` variables — no
-`rclone.conf` file is needed.
+`rclone.conf` file is read or written. The 5 `RCLONE_CONFIG_R2_*` vars
+are sufficient to define the rclone remote; `R2_BUCKET` is **not** part
+of the rclone remote config, it is a separate bucket-name argument that
+`generate_dataset.py` interpolates into upload paths (`r2:${R2_BUCKET}/...`).
 
 The build uses **no** BuildKit secrets. The repository is public, so
 source fetches (both the tarball and the in-image git clone) happen
@@ -189,10 +200,11 @@ and invokes `generate_vst_dataset.py` with the resolved dataset config.
 The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
 `input_spec.json` is written to `RUN_METADATA_DIR`.
 
-| Env var            | Required | Default         | Purpose                                    |
-| ------------------ | -------- | --------------- | ------------------------------------------ |
-| `DATASET_CONFIG`   | Yes      | —               | Path to dataset config YAML in container   |
-| `RUN_METADATA_DIR` | No       | `/run-metadata` | Directory where input_spec.json is written |
+**Required env vars:** See § Runtime environment variables above for the
+canonical enumeration. For this mode you need the 5 `RCLONE_CONFIG_R2_*`
+vars (for rclone auth), `WANDB_API_KEY` (if W&B logging is enabled in the
+dataset config), `R2_BUCKET` (target bucket), and the per-invocation
+`MODE=generate_dataset` + `DATASET_CONFIG` flags.
 
 ```bash
 docker run --rm \
@@ -202,6 +214,11 @@ docker run --rm \
   -v "$(pwd)/run-metadata:/run-metadata" \
   synth-setter:dev-snapshot
 ```
+
+The example assumes your `.env` already contains the 5 `RCLONE_CONFIG_R2_*`
+vars plus `WANDB_API_KEY` and `R2_BUCKET`. If you prefer to keep the
+`TYPE`/`PROVIDER` constants out of `.env`, add them inline:
+`-e RCLONE_CONFIG_R2_TYPE=s3 -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare`.
 
 ### Workflow artifact bundle (generate_dataset)
 

@@ -276,26 +276,33 @@ rclone config
 
 Follow the prompts to create a new remote named `r2` with provider
 `Cloudflare R2` (or `S3` with the R2 endpoint). Alternatively, set these
-environment variables in your `.env` file so rclone can auto-configure the `r2`
-remote:
+environment variables in your `.env` file so rclone can auto-configure
+the `r2` remote — and so `docker run --env-file .env` will work out of
+the box for the synth-setter image. This is the canonical `.env`
+template:
 
 ```
+# --- rclone (R2) remote definition: type/provider are constants ---
 RCLONE_CONFIG_R2_TYPE=s3
 RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+# --- R2 credentials (secrets) ---
 RCLONE_CONFIG_R2_ACCESS_KEY_ID=<your-access-key>
 RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<your-secret-key>
 RCLONE_CONFIG_R2_ENDPOINT=<your-r2-endpoint-url>
+# --- Target bucket name (read by pipeline entrypoints) ---
+R2_BUCKET=<bucket-name>
+# --- W&B logging ---
+WANDB_API_KEY=<your-wandb-api-key>
 ```
 
-These `RCLONE_CONFIG_R2_*` env vars also serve the Docker image at runtime.
-When you run the image with `docker run --env-file .env`, rclone inside
-the container picks them up and auto-configures the `r2` remote — no
-baked `rclone.conf` required.
+rclone's native env-var auto-config synthesizes the `r2` remote in-memory
+from the 5 `RCLONE_CONFIG_R2_*` vars each time you invoke `rclone` (locally
+or inside the container). No `rclone.conf` file is written. See
+[docs/reference/docker.md § Runtime environment variables](reference/docker.md#runtime-environment-variables)
+for the canonical enumeration of every var the image expects at runtime.
 
-Also put the target bucket name in your `.env` as `R2_BUCKET=<bucket-name>` —
-the pipeline entrypoint reads it at runtime. The Docker build itself
-requires no credentials or secrets: the repo is public, so source is
-fetched anonymously.
+The Docker build itself requires no credentials or secrets: the repo is
+public, so source is fetched anonymously at build time.
 
 **Verify:**
 
