@@ -37,12 +37,10 @@ jobs:
 
       - name: Build Docker image (dev-snapshot target)
         env:
-          GIT_PAT: ${{ secrets.GIT_PAT }}
           DOCKER_BUILDKIT: "1"
         run: |
           make docker-build-dev-snapshot \
             GIT_REF=${{ steps.meta.outputs.sha }} \
-            GIT_PAT=${{ secrets.GIT_PAT }} \
             DOCKER_BUILD_FLAGS="--load"
 
       - name: Run notebook inside Docker

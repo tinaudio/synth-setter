@@ -34,16 +34,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Pull image
-        run: docker pull tinaudio/perm:${{ inputs.image_tag }}
+        run: docker pull tinaudio/synth-setter:${{ inputs.image_tag }}
+
+      - name: Read R2 bucket from image config
+        id: r2
+        run: |
+          pip install --quiet pyyaml
+          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
+          echo "bucket=${R2_BUCKET}" >> "$GITHUB_OUTPUT"
 
       - name: Generate dataset
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          R2_BUCKET: ${{ steps.r2.outputs.bucket }}
         # Mount the PR's code into the container so we test THIS branch's code
         # against the image's environment (Surge XT, Python, pedalboard, etc.).
         # The image was built earlier and has dependencies but stale code — the
@@ -56,8 +63,15 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -v "${METADATA_DIR}:/run-metadata" \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+            -e WANDB_API_KEY="${WANDB_API_KEY}" \
+            -e R2_BUCKET="${R2_BUCKET}" \
             --entrypoint bash \
-            tinaudio/perm:${{ inputs.image_tag }} \
+            tinaudio/synth-setter:${{ inputs.image_tag }} \
             -c "
               cd /home/build/synth-setter && \
               git config --global --add safe.directory /home/build/synth-setter && \

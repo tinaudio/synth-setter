@@ -131,7 +131,7 @@ CLI (compute/storage are not in config):
 ```bash
 python -m pipeline generate \
   --config configs/dataset/surge-simple-480k-10k.yaml \
-  --workers 10 --backend runpod --image tinaudio/perm:dev-snapshot-abc1234
+  --workers 10 --backend runpod --image tinaudio/synth-setter:dev-snapshot-abc1234
 ```
 
 **Renderer version:** Auto-extracted at materialization from VST3 bundle

@@ -4,7 +4,7 @@
 # not stored in this file. See pipeline/schemas/image_config.py for the schema.
 
 dockerfile: docker/ubuntu22_04/Dockerfile
-image: tinaudio/perm
+image: tinaudio/synth-setter
 base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
 base_image_tag: ubuntu22_04
 build_mode: prebuilt

@@ -10,15 +10,15 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 ### CI & quality
 
-| Workflow                  | Purpose                                                                                         | Gotcha                                                                                                                         |
-| ------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `test`                    | Runs non-slow pytest on Ubuntu + macOS across Python 3.10/3.11, plus a coverage job.            | Static MNIST cache key (`mnist-dataset-v1`); macOS excludes `test_mnist_datamodule`. See [Caching](#caching).                  |
-| `test-expensive`          | Runs GPU-marked pytest on the `gpu-x64` GitHub-hosted GPU runner.                               | Pins `torch<2.7.0` for CUDA 12.8 compatibility. See [GPU runner torch pin](#gpu-runner-torch-pin).                             |
-| `code-quality-pr`         | Runs pre-commit hooks on files changed in the PR.                                               |                                                                                                                                |
-| `code-quality-main`       | Runs pre-commit hooks on all files after merge to main.                                         | Skips `no-commit-to-branch` hook (would reject main commits).                                                                  |
-| `pr-metadata-gate`        | Enforces that every PR links a taxonomy-compliant issue (type, label, milestone, Epic lineage). | Walks issue parent chain up to 4 levels; falls back to Epic check if GraphQL parent field unavailable.                         |
-| `bats-tests`              | Runs BATS tests against shell scripts under `scripts/` and `tests/`.                            |                                                                                                                                |
-| `docker-build-validation` | Builds the dev-snapshot Docker image, optionally pushes to Docker Hub, runs smoke tests.        | Aborts if repo is public (baked-in credentials would leak). See [Docker build visibility gate](#docker-build-visibility-gate). |
+| Workflow                  | Purpose                                                                                         | Gotcha                                                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test`                    | Runs non-slow pytest on Ubuntu + macOS across Python 3.10/3.11, plus a coverage job.            | Static MNIST cache key (`mnist-dataset-v1`); macOS excludes `test_mnist_datamodule`. See [Caching](#caching).                                  |
+| `test-expensive`          | Runs GPU-marked pytest on the `gpu-x64` GitHub-hosted GPU runner.                               | Pins `torch<2.7.0` for CUDA 12.8 compatibility. See [GPU runner torch pin](#gpu-runner-torch-pin).                                             |
+| `code-quality-pr`         | Runs pre-commit hooks on files changed in the PR.                                               |                                                                                                                                                |
+| `code-quality-main`       | Runs pre-commit hooks on all files after merge to main.                                         | Skips `no-commit-to-branch` hook (would reject main commits).                                                                                  |
+| `pr-metadata-gate`        | Enforces that every PR links a taxonomy-compliant issue (type, label, milestone, Epic lineage). | Walks issue parent chain up to 4 levels; falls back to Epic check if GraphQL parent field unavailable.                                         |
+| `bats-tests`              | Runs BATS tests against shell scripts under `scripts/` and `tests/`.                            |                                                                                                                                                |
+| `docker-build-validation` | Builds the dev-snapshot Docker image, optionally pushes to Docker Hub, runs smoke tests.        | Image is public and ships no credentials; R2/W&B creds flow in at runtime. See [Public image, runtime secrets](#public-image-runtime-secrets). |
 
 ### Pipeline
 
@@ -73,17 +73,17 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 All secrets are repo-scoped (no workflow uses an `environment:` block). No custom variables (`${{ vars.* }}`) are in use.
 
-| Name                       | Used by                                                                                            | Purpose                                                                                                           |
-| -------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`        | (currently unused)                                                                                 | Previously consumed by `claude-review`, which was removed. Secret is kept registered for possible future revival. |
-| `APPROVAL_BOT_APP_ID`      | `auto-approve`, `release`                                                                          | GitHub App ID for the approval-bot (issues approval reviews; writes release commits past branch protection).      |
-| `APPROVAL_BOT_PRIVATE_KEY` | `auto-approve`, `release`                                                                          | GitHub App private key paired with `APPROVAL_BOT_APP_ID`.                                                         |
-| `DOCKERHUB_USERNAME`       | `dataset-generation`, `spec-materialization`, `test-dataset-generation`, `docker-build-validation` | Docker Hub login for pulling/pushing pipeline images.                                                             |
-| `DOCKERHUB_TOKEN`          | same as above                                                                                      | Docker Hub token paired with `DOCKERHUB_USERNAME`.                                                                |
-| `GIT_PAT`                  | `docker-build-validation`, `flush-investigation`                                                   | PAT baked into images for private-repo access at container runtime.                                               |
-| `R2_ACCESS_KEY_ID`         | `docker-build-validation`                                                                          | Cloudflare R2 credentials baked into image for smoke tests.                                                       |
-| `R2_SECRET_ACCESS_KEY`     | `docker-build-validation`                                                                          | Paired with `R2_ACCESS_KEY_ID`.                                                                                   |
-| `WANDB_API_KEY`            | `docker-build-validation`                                                                          | W&B credentials baked into image for smoke tests.                                                                 |
+| Name                       | Used by                                                                 | Purpose                                                                                                           |
+| -------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`        | (currently unused)                                                      | Previously consumed by `claude-review`, which was removed. Secret is kept registered for possible future revival. |
+| `APPROVAL_BOT_APP_ID`      | `auto-approve`, `release`                                               | GitHub App ID for the approval-bot (issues approval reviews; writes release commits past branch protection).      |
+| `APPROVAL_BOT_PRIVATE_KEY` | `auto-approve`, `release`                                               | GitHub App private key paired with `APPROVAL_BOT_APP_ID`.                                                         |
+| `DOCKERHUB_USERNAME`       | `docker-build-validation`                                               | Docker Hub login for pushing the public image (pulls are anonymous).                                              |
+| `DOCKERHUB_TOKEN`          | same as above                                                           | Docker Hub token paired with `DOCKERHUB_USERNAME`.                                                                |
+| `R2_ACCESS_KEY_ID`         | `dataset-generation`, `spec-materialization`, `test-dataset-generation` | Cloudflare R2 credentials passed as runtime env vars to `docker run` (`RCLONE_CONFIG_R2_*`).                      |
+| `R2_SECRET_ACCESS_KEY`     | same as above                                                           | Paired with `R2_ACCESS_KEY_ID`.                                                                                   |
+| `R2_ENDPOINT`              | `dataset-generation`, `spec-materialization`, `test-dataset-generation` | R2 endpoint URL (runtime).                                                                                        |
+| `WANDB_API_KEY`            | `dataset-generation`                                                    | W&B credentials passed as runtime env var to `docker run`.                                                        |
 
 ## Common operations
 
@@ -121,9 +121,9 @@ Only `release` uses a concurrency group (`release-${{ github.ref }}`, `cancel-in
 
 `test-expensive` runs on `gpu-x64`, a GitHub-hosted GPU larger runner (NVIDIA driver 12080 / CUDA 12.8). It pins `torch<2.7.0` via a constraint file passed to `uv pip install --constraint`, because torch 2.7+ requires CUDA 13.x. The pin is applied at install time so `requirements-torch.txt` doesn't need to change. If the runner's driver is upgraded to CUDA 13.x, drop the pin.
 
-### Docker build visibility gate
+### Public image, runtime secrets
 
-`docker-build-validation` aborts immediately if the GitHub repo is public. The image bakes in `GIT_PAT`, R2 credentials, and `WANDB_API_KEY`, so a public repo would leak them via image registry metadata. If the repo is ever made public, this workflow (and the private-registry push) need redesigning.
+`docker-build-validation` publishes `tinaudio/synth-setter` as a public image. The image contains no baked credentials and the build uses no BuildKit secrets — the public repo is fetched anonymously. R2 + W&B credentials and the target R2 bucket name are passed in at runtime as env vars (`RCLONE_CONFIG_R2_*`, `WANDB_API_KEY`, `R2_BUCKET`). Pipeline workflows (`dataset-generation`, `spec-materialization`, `test-dataset-generation`) pull the image anonymously and pipe credentials via `docker run --env-file` or `-e`.
 
 ### Mount-as-volume pattern
 

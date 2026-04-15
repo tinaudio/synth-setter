@@ -72,16 +72,22 @@ the virtual environment is active and dependencies installed correctly.
 ### 2f. Alternative: GitHub Codespaces
 
 Instead of setting up locally, you can open the repo in a GitHub Codespace. The
-Codespace uses the same Docker image (`tinaudio/perm:dev-snapshot`) we run on
+Codespace uses the same Docker image (`tinaudio/synth-setter:dev-snapshot`) we run on
 RunPod, so VST-dependent tests, `generate_dataset` → R2 uploads, and CPU
 training all work identically — no local Surge XT, rclone, or R2 setup needed.
 GPU training still runs on RunPod.
 
-**Prerequisites** (one-time, org admin):
+**Prerequisites:**
 
-- Docker Hub registry credentials configured as org-level Codespace registry
-  secrets (`*_CONTAINER_REGISTRY_USER`, `*_CONTAINER_REGISTRY_PASSWORD`) so
-  Codespaces can pull the private image.
+Configure these as Codespaces user/org secrets so they're forwarded into
+the container at runtime:
+
+- `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
+  `RCLONE_CONFIG_R2_ENDPOINT` — for R2 uploads/downloads via rclone
+- `WANDB_API_KEY` — for W&B logging
+
+The image itself is public and pulls anonymously; no Docker Hub
+credentials are required.
 
 **Open a Codespace:**
 
@@ -104,8 +110,8 @@ sizes) and multi-hour runs.
 
 ### 2g. Alternative: Local Dev Container
 
-If you want the same image Codespaces uses (VST plugins, rclone, baked R2/W&B
-credentials) but prefer to work on your own machine, open the dev container
+If you want the same image Codespaces uses (VST plugins, rclone, Python
+deps) but prefer to work on your own machine, open the dev container
 locally **on the main working tree** and create git worktrees *inside* the
 container.
 
@@ -115,7 +121,12 @@ container.
   either the VS Code
   [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
   or the [`devcontainer` CLI](https://github.com/devcontainers/cli).
-- Docker Hub credentials (`docker login`) — the image is private.
+- R2 + W&B credentials (see [§4b](#4b-rclone--cloudflare-r2) and
+  [§4c](#4c-weights--biases-wb)). The checked-in dev container configs
+  do **not** automatically load `.env` — after opening the container,
+  source the vars inside the container shell (`set -a && source .env && set +a`)
+  or set them via Codespaces secrets / Dev Container environment settings
+  so rclone and W&B can access them.
 - Apple Silicon: set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (the image is
   amd64-only).
 
@@ -265,28 +276,33 @@ rclone config
 
 Follow the prompts to create a new remote named `r2` with provider
 `Cloudflare R2` (or `S3` with the R2 endpoint). Alternatively, set these
-environment variables in your `.env` file so rclone can auto-configure the `r2`
-remote:
+environment variables in your `.env` file so rclone can auto-configure
+the `r2` remote — and so `docker run --env-file .env` will work out of
+the box for the synth-setter image. This is the canonical `.env`
+template:
 
 ```
+# --- rclone (R2) remote definition: type/provider are constants ---
 RCLONE_CONFIG_R2_TYPE=s3
 RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+# --- R2 credentials (secrets) ---
 RCLONE_CONFIG_R2_ACCESS_KEY_ID=<your-access-key>
 RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<your-secret-key>
 RCLONE_CONFIG_R2_ENDPOINT=<your-r2-endpoint-url>
-```
-
-The Docker build uses a different set of variable names (`R2_ACCESS_KEY_ID`,
-`R2_SECRET_ACCESS_KEY`, etc.) which are passed as BuildKit secrets. Add these
-to `.env` as well if you plan to build Docker images (see
-[section 7](#7-docker-workflow)):
-
-```
-R2_ACCESS_KEY_ID=<your-access-key>
-R2_SECRET_ACCESS_KEY=<your-secret-key>
-R2_ENDPOINT=<your-r2-endpoint-url>
+# --- Target bucket name (read by pipeline entrypoints) ---
 R2_BUCKET=<bucket-name>
+# --- W&B logging ---
+WANDB_API_KEY=<your-wandb-api-key>
 ```
+
+rclone's native env-var auto-config synthesizes the `r2` remote in-memory
+from the 5 `RCLONE_CONFIG_R2_*` vars each time you invoke `rclone` (locally
+or inside the container). No `rclone.conf` file is written. See
+[docs/reference/docker.md § Runtime environment variables](reference/docker.md#runtime-environment-variables)
+for the canonical enumeration of every var the image expects at runtime.
+
+The Docker build itself requires no credentials or secrets: the repo is
+public, so source is fetched anonymously at build time.
 
 **Verify:**
 
@@ -422,34 +438,28 @@ ______________________________________________________________________
 ## 7. Docker Workflow
 
 A Dockerfile is provided for reproducible environments (training, CI, cloud
-deployment). The image bakes in the source code, dependencies, Surge XT, and
-rclone/R2 configuration.
+deployment). The image bakes in the source code, dependencies, and Surge XT.
+No credentials — R2, W&B, or otherwise — are baked in.
 
 **Build the image:**
 
-The Makefile reads secrets from environment variables and passes them as
-BuildKit secrets. Load your `.env` first to avoid leaking credentials in shell
-history or process listings.
+The build takes no credentials at all. The repo is public, so source is
+fetched anonymously.
 
-> **Warning:** Although BuildKit secrets are not stored in build cache layers,
-> the Dockerfile writes some injected credentials (for example, R2 and W&B
-> config) into files that persist in the final image filesystem. Treat built
-> images as sensitive artifacts and do **not** push them to public registries.
+> **Note:** The image is public and ships no baked credentials. R2 + W&B
+> creds and the target R2 bucket name flow in at runtime via
+> `docker run --env-file .env` — see
+> [docs/reference/docker.md § Runtime secrets](reference/docker.md#runtime-secrets).
 
 ```bash
-# Load secrets from .env into the current shell
-set -a
-source .env
-set +a
-
 make docker-build-dev-snapshot \
   GIT_REF=$(git rev-parse HEAD) \
   DOCKER_BUILD_FLAGS=--load
 ```
 
-The target expects `GIT_PAT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-`R2_ENDPOINT`, and `R2_BUCKET` to be set in the environment (all of which
-should be in your `.env` file -- see [section 4b](#4b-rclone--cloudflare-r2)).
+The only required input is `GIT_REF` — the commit to bake into the image.
+All R2 + W&B credentials and `R2_BUCKET` are supplied to `docker run` from
+`.env` at runtime (see [section 4b](#4b-rclone--cloudflare-r2)).
 
 See `make help` for the full list of Docker-related variables and targets. The
 `GIT_REF` argument controls which commit is baked into the image (use a full

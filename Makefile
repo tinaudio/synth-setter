@@ -56,26 +56,26 @@ train: ## Train the model
 # =====================================================================
 #
 # Build mode:
-#   docker-build-dev-snapshot — self-contained image. Clones repo at GIT_REF,
-#                               bakes source + deps + Surge XT + rclone/R2 config.
-#                               Run it anywhere (CI, cloud, vast.ai).
+#   docker-build-dev-snapshot — self-contained image. Clones the public
+#                               repo at GIT_REF and bakes source + deps +
+#                               Surge XT. Runs anywhere (CI, cloud, vast.ai).
 #
 # Required variables (pass on the command line):
-#   GIT_PAT             GitHub personal access token with repo read access.
 #   GIT_REF             Git ref to bake. Used twice by the Dockerfile: the
 #                       `synth-setter-src` stage downloads a GitHub tarball
 #                       at this ref, and the `dev-snapshot` stage runs
 #                       `git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"`
 #                       after `git fetch origin`. A full 40-char SHA reachable
 #                       from a pushed branch/tag satisfies both and pins the
-#                       build deterministically.
+#                       build deterministically. Since the repo is public,
+#                       no credentials are needed for either fetch.
 #                       (The CI workflow's `git_ref` input is different: it
 #                       checks out locally and resolves any ref to a SHA via
 #                       `git rev-parse HEAD` before the build.)
 #
 # Optional overrides:
 #   DOCKER_FILE         Path to Dockerfile          (default: docker/ubuntu22_04/Dockerfile)
-#   DOCKER_IMAGE        Image name                  (default: tinaudio/perm)
+#   DOCKER_IMAGE        Image name                  (default: synth-setter)
 #   DOCKER_BUILD_MODE   "source" or "prebuilt"       (default: prebuilt)
 #   DOCKER_TARGETPLATFORM   "linux/amd64" or "linux/arm64" (default: linux/amd64)
 #   DOCKER_TORCH_BACKEND  PyTorch backend (e.g. cu128, cpu) (default: cu128)
@@ -93,27 +93,11 @@ DOCKER_BUILD_FLAGS ?=
 _INTERNAL_BUILD_FLAGS :=
 CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse HEAD))
 
-# R2 / rclone configuration — passed as BuildKit secrets + build-arg.
-R2_ACCESS_KEY_ID     ?=
-R2_SECRET_ACCESS_KEY ?=
-R2_ENDPOINT          ?=
-WANDB_API_KEY        ?=
-
-DOCKER_SECRETS = \
-	--secret id=r2_access_key_id,env=R2_ACCESS_KEY_ID \
-	--secret id=r2_secret_access_key,env=R2_SECRET_ACCESS_KEY \
-	--secret id=r2_endpoint,env=R2_ENDPOINT \
-	--secret id=wandb_api_key,env=WANDB_API_KEY
-
-docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_PAT)
+docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF)
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi
-	$(eval R2_BUCKET := $(shell python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])"))
 	DOCKER_BUILDKIT=1 docker buildx build \
 		-f $(DOCKER_FILE) \
 		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
-		--secret id=git_pat,env=GIT_PAT \
-		$(DOCKER_SECRETS) \
-		--build-arg R2_BUCKET=$(R2_BUCKET) \
 		--platform $(DOCKER_TARGETPLATFORM) \
 		--build-arg IMAGE="dev-snapshot" \
 		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \

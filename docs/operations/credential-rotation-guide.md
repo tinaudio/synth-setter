@@ -7,33 +7,33 @@ project. Rotation is required when:
 
 - The repository transitions from private to public (pre-public security audit).
 - A credential is suspected of being exposed (CI logs, local `.env` files on
-  contributor machines, Docker images containing baked secrets).
+  contributor machines).
 - A team member with access leaves the project.
 - A credential reaches its scheduled expiration or age threshold.
 - A dependency or upstream provider reports a breach.
 
 All credentials listed below are stored as **GitHub Actions repository secrets**
-unless otherwise noted. Some are also present in local developer `.env` files
-and/or baked into Docker images at build time.
+unless otherwise noted. Some are also present in local developer `.env` files.
+Runtime R2 and W&B credentials are supplied to Docker containers at run time
+via `docker run --env-file .env`; they are not baked into images.
 
 ______________________________________________________________________
 
 ## Credential Inventory
 
-| Credential                 | Where Used                                     | Storage Locations                                    |
-| -------------------------- | ---------------------------------------------- | ---------------------------------------------------- |
-| `R2_ACCESS_KEY_ID`         | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
-| `R2_SECRET_ACCESS_KEY`     | Docker builds, pipeline workers, rclone        | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
-| `R2_ENDPOINT`              | Docker builds (BuildKit secret)                | GitHub Secrets, `.env`, Docker image (`rclone.conf`) |
-| `WANDB_API_KEY`            | Training, evaluation, promotion, Docker images | GitHub Secrets, `.env`, Docker image (`~/.netrc`)    |
-| `GIT_PAT`                  | Docker builds, CI workflows                    | GitHub Secrets, `.env`                               |
-| `GITHUB_TOKEN`             | CI workflows (automatic)                       | Automatic per workflow run                           |
-| `RUNPOD_API_KEY`           | Pipeline orchestration                         | GitHub Secrets, `.env`                               |
-| `DOCKERHUB_USERNAME`       | CI image push workflows                        | GitHub Secrets                                       |
-| `DOCKERHUB_TOKEN`          | CI image push workflows                        | GitHub Secrets                                       |
-| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow        | GitHub Secrets                                       |
-| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow        | GitHub Secrets                                       |
-| `ANTHROPIC_API_KEY`        | Claude review workflow                         | GitHub Secrets                                       |
+| Credential                 | Where Used                                        | Storage Locations          |
+| -------------------------- | ------------------------------------------------- | -------------------------- |
+| `R2_ACCESS_KEY_ID`         | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
+| `R2_SECRET_ACCESS_KEY`     | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
+| `R2_ENDPOINT`              | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
+| `WANDB_API_KEY`            | Training, evaluation, promotion (runtime env var) | GitHub Secrets, `.env`     |
+| `GITHUB_TOKEN`             | CI workflows (automatic)                          | Automatic per workflow run |
+| `RUNPOD_API_KEY`           | Pipeline orchestration                            | GitHub Secrets, `.env`     |
+| `DOCKERHUB_USERNAME`       | CI image push workflows                           | GitHub Secrets             |
+| `DOCKERHUB_TOKEN`          | CI image push workflows                           | GitHub Secrets             |
+| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow           | GitHub Secrets             |
+| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow           | GitHub Secrets             |
+| `ANTHROPIC_API_KEY`        | Claude review workflow                            | GitHub Secrets             |
 
 ______________________________________________________________________
 
@@ -47,7 +47,6 @@ ______________________________________________________________________
 
 - GitHub Secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
 - Local `.env` files on developer machines
-- Baked into Docker images via BuildKit secrets (written to `rclone.conf`)
 
 **Rotation steps:**
 
@@ -61,12 +60,7 @@ ______________________________________________________________________
    - Update `R2_ACCESS_KEY_ID` with the new access key ID.
    - Update `R2_SECRET_ACCESS_KEY` with the new secret access key.
 6. Update local `.env` files on all developer machines.
-7. Rebuild Docker images (existing images contain old baked credentials):
-   ```bash
-   # Ensure GIT_PAT is set in your environment (for example, via `.env`)
-   make docker-build-dev-snapshot GIT_REF=<sha>
-   ```
-8. Revoke the old API token in the Cloudflare dashboard.
+7. Revoke the old API token in the Cloudflare dashboard.
 
 **Verification:**
 
@@ -83,13 +77,12 @@ ______________________________________________________________________
 
 **What:** The Cloudflare R2 S3-compatible endpoint URL. Contains the
 permanent Cloudflare account ID — treated as a secret to avoid exposing
-the account ID in git history or `docker history`.
+the account ID in git history.
 
 **Where stored:**
 
-- GitHub Secrets (`R2_ENDPOINT`) — passed as BuildKit secret at build time
+- GitHub Secrets (`R2_ENDPOINT`) — forwarded to jobs and containers at runtime
 - Local `.env` files
-- Baked into Docker images (written to `rclone.conf`)
 
 **Rotation:** Only changes if the Cloudflare account ID changes. Update the
 GitHub Secret and `.env` files if the account is migrated.
@@ -104,7 +97,6 @@ ______________________________________________________________________
 
 - GitHub Secrets: `WANDB_API_KEY`
 - Local `.env` files
-- Baked into Docker images (written to `~/.netrc`)
 
 **Rotation steps:**
 
@@ -115,7 +107,6 @@ ______________________________________________________________________
 4. Update GitHub Secrets:
    - Update `WANDB_API_KEY` with the new key.
 5. Update local `.env` files on all developer machines.
-6. Rebuild Docker images (old images contain the previous key in `~/.netrc`).
 
 **Verification:**
 
@@ -123,41 +114,6 @@ ______________________________________________________________________
 # Test W&B authentication (assumes WANDB_API_KEY is already exported, e.g. from .env)
 wandb login --verify
 ```
-
-______________________________________________________________________
-
-### GitHub PAT (`GIT_PAT`)
-
-**What:** Fine-grained personal access token used in Docker builds and CI
-workflows for accessing the repository source tarball.
-
-**Where stored:**
-
-- GitHub Secrets: `GIT_PAT`
-- Local `.env` files
-
-**Rotation steps:**
-
-1. Go to **GitHub > Settings > Developer settings > Fine-grained personal access
-   tokens**.
-2. Click **Generate new token** (or **Regenerate** on the existing token).
-3. Set the required repository access and permissions (repository contents: read).
-4. Copy the new token.
-5. Update GitHub Secrets:
-   - Update `GIT_PAT` with the new token value.
-6. Update local `.env` files on developer machines that use Docker builds.
-7. If the old token was not regenerated (i.e., you created a new one), delete the
-   old token.
-
-**Verification:**
-
-```bash
-# Ensure GIT_PAT is already exported in your environment (for example, via `.env`)
-# Then test Docker build with new PAT
-make docker-build-dev-snapshot GIT_REF=main
-```
-
-Confirm the `docker-build-validation.yml` workflow passes.
 
 ______________________________________________________________________
 
@@ -296,12 +252,10 @@ Use this checklist when performing a full credential rotation (e.g., pre-public
 audit):
 
 - [ ] **Cloudflare R2:** Create new API token, update `R2_ACCESS_KEY_ID` and
-  `R2_SECRET_ACCESS_KEY` in GitHub Secrets and `.env`, rebuild Docker images,
+  `R2_SECRET_ACCESS_KEY` in GitHub Secrets and `.env`,
   revoke old token
 - [ ] **W&B:** Regenerate API key, update `WANDB_API_KEY` in GitHub Secrets and
-  `.env`, rebuild Docker images
-- [ ] **GitHub PAT:** Generate new fine-grained token, update `GIT_PAT` in
-  GitHub Secrets and `.env`, delete old token
+  `.env`
 - [ ] **RunPod:** Create new API key, update `RUNPOD_API_KEY` in GitHub Secrets
   and `.env`, delete old key
 - [ ] **Docker Hub:** Create new access token, update `DOCKERHUB_TOKEN` (and
@@ -310,10 +264,6 @@ audit):
   `APPROVAL_BOT_PRIVATE_KEY` in GitHub Secrets, delete old key
 - [ ] **Anthropic:** Create new API key, update `ANTHROPIC_API_KEY` in GitHub
   Secrets, revoke old key
-- [ ] **Docker images:** Rebuild all Docker images to replace baked credentials
-  (R2 in `rclone.conf`, W&B in `~/.netrc`)
-- [ ] **Old Docker images:** Delete or de-list any published images that contain
-  old baked credentials
 - [ ] **CI verification:** Run a full CI pass to confirm all workflows succeed
   with new credentials
 - [ ] **Local `.env` files:** Notify all developers to update their local `.env`
@@ -336,15 +286,15 @@ workflows.
 2. Revoke/delete/regenerate it at its source (Cloudflare, W&B, GitHub, RunPod,
    Docker Hub, Anthropic). For credentials that support regeneration (e.g., W&B),
    regenerating simultaneously revokes the old key.
-3. If the credential is baked into Docker images (R2, W&B), note that the old
-   credential in those images is now invalid. Running containers using those
-   images will fail on the next API call.
+3. Running containers that loaded the old credential via `--env-file .env` will
+   fail on the next API call. Restart them with an updated `.env` once the
+   replacement is issued.
 
 ### 2. Issue replacement credentials
 
 1. Create the new credential at its source.
-2. Update GitHub Secrets.
-3. Rebuild Docker images if the credential was baked in.
+2. Update GitHub Secrets and local `.env` files.
+3. Restart any running containers so they pick up the new `.env`.
 
 ### 3. Create a github issue assigned to ktinubu@ documenting that rotation took place.
 
@@ -354,8 +304,9 @@ ______________________________________________________________________
 
 - **`GITHUB_TOKEN`** is automatically provisioned per workflow run and does not
   require manual rotation.
-- **Docker images with baked credentials** are a secondary exposure surface.
-  After rotating R2 or W&B credentials, always rebuild images and ensure old
-  images are removed from Docker Hub.
+- **Runtime credentials** (R2, W&B) are supplied to Docker containers via
+  `docker run --env-file .env`. Rotating them does not require rebuilding
+  images — update `.env` (and GitHub Secrets for CI) and restart containers.
 - Never store credentials in code, config files checked into git, or CI logs.
-  Use `--secret` (BuildKit) or environment variables.
+  Use environment variables at runtime. The Docker build uses no BuildKit
+  secrets — the repository is public and source is fetched anonymously.
