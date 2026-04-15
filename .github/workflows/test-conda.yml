@@ -49,6 +49,7 @@ jobs:
           environment-file: environment.yaml
           environment-name: myenv
           cache-environment: true
+          cache-environment-key: env-${{ hashFiles('environment.yaml', 'requirements-app.txt') }}
           init-shell: bash
 
       - name: List dependencies
