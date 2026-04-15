@@ -78,8 +78,17 @@ jobs:
             --issue-number '${{ github.event.pull_request.number || github.event.inputs.issue_number || 311 }}'
 
       - name: Log in to Docker Hub
-        # Only needed for push; PR runs are build-only validation so fork PRs
-        # (which don't receive repository secrets) can exercise the Dockerfile.
+        # Only needed for push; PR runs are build-only validation. Gating
+        # this step prevents same-repo PRs from failing if DOCKERHUB_*
+        # secrets are temporarily unavailable, and matches the existing
+        # gate on the Verify Docker Hub push access step below.
+        #
+        # Note: fork PRs still can't build this Dockerfile even with the
+        # gate in place, because the in-image `git fetch origin` resolves
+        # SYNTH_PERMUTATIONS_GIT_REF against upstream tinaudio/synth-setter,
+        # not the fork. A proper fork-PR build would need to fetch from
+        # github.event.pull_request.head.repo.html_url; that's not
+        # implemented here.
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
