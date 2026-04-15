@@ -347,11 +347,13 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /home/build/synth-setter
 
-# The repository is public, so git fetch works anonymously. No credential
-# needs to enter or leave the image.
-RUN git init && \
-    git remote add origin "https://github.com/tinaudio/synth-setter.git" && \
-    git fetch origin && \
+# The repository is public, so git clone works anonymously. No credential
+# needs to enter or leave the image. Using `git clone` (instead of the
+# equivalent init+remote+fetch dance) leaves a local `main` branch with
+# upstream tracking config already wired up, so shelling into the image
+# for interactive development — `git switch main`, `git pull`,
+# `git rebase origin/main` — works without extra setup.
+RUN git clone "https://github.com/tinaudio/synth-setter.git" . && \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.
