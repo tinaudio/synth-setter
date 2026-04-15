@@ -365,12 +365,16 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /home/build/synth-setter
 
+# Fetch source using GIT_PAT. The token is passed via `git -c ... fetch`
+# (ephemeral — only that invocation), so it is NEVER persisted to
+# /home/build/synth-setter/.git/config. The origin URL stores no credentials.
+# This is required for the image to be safe to publish on public registries.
 RUN --mount=type=secret,id=git_pat \
     set +x; \
     token="$(cat /run/secrets/git_pat)"; \
     git init && \
-    git remote add origin "https://${token}@github.com/tinaudio/synth-setter.git" && \
-    git fetch origin && \
+    git remote add origin "https://github.com/tinaudio/synth-setter.git" && \
+    git -c "http.https://github.com/.extraheader=Authorization: Bearer ${token}" fetch origin && \
     git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
 
 # Install the project package so `import src` works from any working directory.
