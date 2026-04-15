@@ -75,7 +75,7 @@ train: ## Train the model
 #
 # Optional overrides:
 #   DOCKER_FILE         Path to Dockerfile          (default: docker/ubuntu22_04/Dockerfile)
-#   DOCKER_IMAGE        Image name                  (default: tinaudio/perm)
+#   DOCKER_IMAGE        Image name                  (default: synth-setter)
 #   DOCKER_BUILD_MODE   "source" or "prebuilt"       (default: prebuilt)
 #   DOCKER_TARGETPLATFORM   "linux/amd64" or "linux/arm64" (default: linux/amd64)
 #   DOCKER_TORCH_BACKEND  PyTorch backend (e.g. cu128, cpu) (default: cu128)
@@ -93,18 +93,6 @@ DOCKER_BUILD_FLAGS ?=
 _INTERNAL_BUILD_FLAGS :=
 CURRENT_LOCAL_GIT_REF := $(strip $(shell git rev-parse HEAD))
 
-# R2 / rclone configuration — passed as BuildKit secrets + build-arg.
-R2_ACCESS_KEY_ID     ?=
-R2_SECRET_ACCESS_KEY ?=
-R2_ENDPOINT          ?=
-WANDB_API_KEY        ?=
-
-DOCKER_SECRETS = \
-	--secret id=r2_access_key_id,env=R2_ACCESS_KEY_ID \
-	--secret id=r2_secret_access_key,env=R2_SECRET_ACCESS_KEY \
-	--secret id=r2_endpoint,env=R2_ENDPOINT \
-	--secret id=wandb_api_key,env=WANDB_API_KEY
-
 docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_PAT)
 	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi
 	$(eval R2_BUCKET := $(shell python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])"))
@@ -112,7 +100,6 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF, GIT_
 		-f $(DOCKER_FILE) \
 		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
 		--secret id=git_pat,env=GIT_PAT \
-		$(DOCKER_SECRETS) \
 		--build-arg R2_BUCKET=$(R2_BUCKET) \
 		--platform $(DOCKER_TARGETPLATFORM) \
 		--build-arg IMAGE="dev-snapshot" \

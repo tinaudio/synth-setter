@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 _COMPLETE_YAML = """\
 dockerfile: docker/ubuntu22_04/Dockerfile
-image: tinaudio/perm
+image: tinaudio/synth-setter
 base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
 base_image_tag: ubuntu22_04
 build_mode: prebuilt
@@ -32,7 +32,7 @@ r2_bucket: test-bucket
 
 _EXPECTED_LINES = [
     "dockerfile=docker/ubuntu22_04/Dockerfile",
-    "image=tinaudio/perm",
+    "image=tinaudio/synth-setter",
     "base_image=ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751",
     "base_image_tag=ubuntu22_04",
     "build_mode=prebuilt",
@@ -242,7 +242,7 @@ class TestNewlineInjection:
         """A config value containing a newline raises ValueError."""
         yaml_with_newline = """\
 dockerfile: docker/ubuntu22_04/Dockerfile
-image: "tinaudio/perm\\nevil_key=evil_value"
+image: "tinaudio/synth-setter\\nevil_key=evil_value"
 base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
 base_image_tag: ubuntu22_04
 build_mode: prebuilt
@@ -276,7 +276,7 @@ r2_bucket: test-bucket
         """A config value containing a carriage return raises ValueError."""
         yaml_with_cr = """\
 dockerfile: docker/ubuntu22_04/Dockerfile
-image: "tinaudio/perm\\revil_key=evil_value"
+image: "tinaudio/synth-setter\\revil_key=evil_value"
 base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
 base_image_tag: ubuntu22_04
 build_mode: prebuilt

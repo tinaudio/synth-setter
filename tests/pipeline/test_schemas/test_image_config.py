@@ -19,7 +19,7 @@ VALID_ISSUE = 266
 
 _COMPLETE_YAML = """\
 dockerfile: docker/ubuntu22_04/Dockerfile
-image: tinaudio/perm
+image: tinaudio/synth-setter
 base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
 base_image_tag: ubuntu22_04
 build_mode: prebuilt
@@ -219,7 +219,7 @@ class TestLoadImageConfigErrors:
         # Write config missing r2_bucket
         config_path.write_text(
             "dockerfile: docker/ubuntu22_04/Dockerfile\n"
-            "image: tinaudio/perm\n"
+            "image: tinaudio/synth-setter\n"
             'base_image: "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"\n'
             "base_image_tag: ubuntu22_04\n"
             "build_mode: prebuilt\n"
@@ -268,7 +268,7 @@ class TestStaticFieldsAndYamlMerge:
         result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
         assert result.dockerfile == "docker/ubuntu22_04/Dockerfile"
-        assert result.image == "tinaudio/perm"
+        assert result.image == "tinaudio/synth-setter"
         assert result.base_image == (
             "ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146afb8c525a9751"
         )

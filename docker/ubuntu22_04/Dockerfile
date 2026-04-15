@@ -338,67 +338,23 @@ RUN mkdir -p /home/build/synth-setter/plugins && \
 WORKDIR /home/build/synth-setter
 
 # ==========================================
-# R2 config: bake Cloudflare R2 credentials into rclone config using BuildKit
-# secrets. Secrets never appear in image layers or `docker history`, but the
-# resulting /root/.config/rclone/rclone.conf IS stored in the image filesystem.
+# Runtime config: bake only non-sensitive R2 bucket name. Callers provide
+# R2 credentials and W&B API key at runtime via env vars (see
+# docs/reference/docker.md § Runtime secrets).
 #
-# SECURITY: This image contains baked cloud storage credentials.
-#     - Push ONLY to a private registry (Docker Hub private repo, GHCR private package, etc.)
-#     - Anyone who can pull this image has read/write access to the R2 bucket
-#     - Rotate R2 API tokens after each build campaign (tokens can't be revoked per-image)
-#     - See future hardening TODOs in the project README
+# This image contains NO baked credentials and is safe to publish on
+# public registries.
 # ==========================================
-FROM builder-install-synth-setter-deps AS r2-config-base
+FROM builder-install-synth-setter-deps AS runtime-base
 ARG R2_BUCKET
 ENV R2_BUCKET=${R2_BUCKET}
-RUN --mount=type=secret,id=r2_access_key_id \
-    --mount=type=secret,id=r2_secret_access_key \
-    --mount=type=secret,id=r2_endpoint \
-    set -eu; \
-    if [ ! -s /run/secrets/r2_access_key_id ] || [ ! -s /run/secrets/r2_secret_access_key ] || [ ! -s /run/secrets/r2_endpoint ]; then \
-        echo "WARNING: R2 secrets (r2_access_key_id, r2_secret_access_key, r2_endpoint) are missing or empty." >&2; \
-        echo "         R2 upload/download will not be available in this image." >&2; \
-        mkdir -p /root/.config/rclone; \
-        printf '[r2]\ntype = s3\nprovider = Cloudflare\n# credentials not configured\n' \
-            > /root/.config/rclone/rclone.conf; \
-    else \
-        mkdir -p /root/.config/rclone; \
-        printf '[r2]\ntype = s3\nprovider = Cloudflare\naccess_key_id = %s\nsecret_access_key = %s\nendpoint = %s\n' \
-            "$(cat /run/secrets/r2_access_key_id)" \
-            "$(cat /run/secrets/r2_secret_access_key)" \
-            "$(cat /run/secrets/r2_endpoint)" \
-            > /root/.config/rclone/rclone.conf; \
-        echo "R2 rclone config written." >&2; \
-    fi; \
-    chmod 600 /root/.config/rclone/rclone.conf
-
-# ==========================================
-# W&B auth: bake Weights & Biases API key into ~/.netrc using BuildKit
-# secrets. The key never appears in image layers or `docker history`, but
-# the resulting ~/.netrc IS stored in the image filesystem.
-#
-# W&B reads ~/.netrc automatically (same mechanism as `wandb login`).
-# ==========================================
-RUN --mount=type=secret,id=wandb_api_key \
-    set -eu; \
-    if [ ! -s /run/secrets/wandb_api_key ]; then \
-        echo "WARNING: wandb_api_key secret is missing or empty." >&2; \
-        echo "         W&B logging will require WANDB_API_KEY at runtime." >&2; \
-    else \
-        printf 'machine api.wandb.ai\n  login user\n  password %s\n' \
-            "$(cat /run/secrets/wandb_api_key)" \
-            >> /root/.netrc; \
-        chmod 600 /root/.netrc; \
-        echo "W&B netrc config written." >&2; \
-    fi
 
 # ==========================================
 # dev-snapshot: deps + live git clone at SYNTH_PERMUTATIONS_GIT_REF.
-# Contains baked R2 credentials — keep registry PRIVATE.
 # Useful for CI or one-off runs without mounting local source.
 # Usage: make docker-build-dev-snapshot GIT_REF=<sha> GIT_PAT=<token>
 # ==========================================
-FROM r2-config-base AS dev-snapshot
+FROM runtime-base AS dev-snapshot
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
