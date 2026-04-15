@@ -6,6 +6,7 @@ import torch
 from src.data.mnist_datamodule import MNISTDataModule
 
 
+@pytest.mark.skip(reason="Blocked on #243 — flaky MNIST download from public mirror")
 @pytest.mark.parametrize("batch_size", [32, 128])
 def test_mnist_datamodule(batch_size: int) -> None:
     """Tests `MNISTDataModule` to verify that it can be downloaded correctly, that the necessary
