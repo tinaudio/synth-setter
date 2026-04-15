@@ -78,6 +78,9 @@ jobs:
             --issue-number '${{ github.event.pull_request.number || github.event.inputs.issue_number || 311 }}'
 
       - name: Log in to Docker Hub
+        # Only needed for push; PR runs are build-only validation so fork PRs
+        # (which don't receive repository secrets) can exercise the Dockerfile.
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
