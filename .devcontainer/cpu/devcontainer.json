@@ -7,7 +7,7 @@
       "--platform=linux/amd64"
     ]
   },
-  "initializeCommand": "[ -f .env ] || touch .env",
+  "initializeCommand": "[ -f .env ] || touch .env; mkdir -p ~/.claude && { [ -f ~/.claude/.credentials.json ] || echo '{}' > ~/.claude/.credentials.json; }",
   "runArgs": [
     "--env-file",
     ".env"

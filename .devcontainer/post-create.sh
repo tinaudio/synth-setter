@@ -30,9 +30,12 @@ cd "$dir"
 git config --global --add safe.directory "$(pwd)"
 
 if [ -n "${RESTRICTED_AGENT_GIT_PAT:-}" ]; then
-  echo "$RESTRICTED_AGENT_GIT_PAT" | gh auth login --with-token
-  gh auth setup-git
-  echo "Git configured with RESTRICTED_AGENT_GIT_PAT"
+  if echo "$RESTRICTED_AGENT_GIT_PAT" | gh auth login --with-token; then
+    gh auth setup-git
+    echo "Git configured with RESTRICTED_AGENT_GIT_PAT"
+  else
+    echo "WARNING: gh auth login failed — token may be invalid. Continuing without git credential config." >&2
+  fi
 else
   echo "RESTRICTED_AGENT_GIT_PAT not set, skipping git credential config"
 fi
