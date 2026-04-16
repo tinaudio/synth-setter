@@ -29,6 +29,17 @@ cd "$dir"
 # before later git config calls and pre-commit install.
 git config --global --add safe.directory "$(pwd)"
 
+if [ -n "${RESTRICTED_AGENT_GIT_PAT:-}" ]; then
+  if echo "$RESTRICTED_AGENT_GIT_PAT" | gh auth login --with-token; then
+    gh auth setup-git
+    echo "Git configured with RESTRICTED_AGENT_GIT_PAT"
+  else
+    echo "WARNING: gh auth login failed — token may be invalid. Continuing without git credential config." >&2
+  fi
+else
+  echo "RESTRICTED_AGENT_GIT_PAT not set, skipping git credential config"
+fi
+
 # Pre-commit hooks (pre-commit itself is in the image's deps). Strip any
 # absolute host-path core.hooksPath that may leak from the host .git/config
 # (harmless in Codespaces; bites local devcontainer users).
