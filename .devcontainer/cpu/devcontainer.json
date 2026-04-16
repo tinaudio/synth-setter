@@ -23,9 +23,6 @@
   "workspaceFolder": "/home/build/synth-setter",
   "workspaceMount": "type=bind,source=${localWorkspaceFolder},target=/home/build/synth-setter,consistency=cached",
   "postCreateCommand": ".devcontainer/post-create.sh",
-  "features": {
-    "ghcr.io/devcontainers/features/github-cli:1": {}
-  },
   "customizations": {
     "vscode": {
       "extensions": [

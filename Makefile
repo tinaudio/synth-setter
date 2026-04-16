@@ -99,7 +99,6 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF)
 		-f $(DOCKER_FILE) \
 		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
 		--platform $(DOCKER_TARGETPLATFORM) \
-		--build-arg IMAGE="dev-snapshot" \
 		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
 		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
 		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
@@ -108,4 +107,19 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF)
 		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
 		-t $(DOCKER_IMAGE):dev-snapshot \
+		.
+
+docker-build-devcontainer-tools: ## Build devcontainer-tools image
+	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi
+	DOCKER_BUILDKIT=1 docker buildx build \
+		-f $(DOCKER_FILE) \
+		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
+		--platform $(DOCKER_TARGETPLATFORM) \
+		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
+		--build-arg TORCH_BACKEND=$(DOCKER_TORCH_BACKEND) \
+		--build-arg TARGETARCH=$(TARGETARCH) \
+		--target devcontainer-tools \
+		-t $(DOCKER_IMAGE):devcontainer-tools \
 		.
