@@ -151,6 +151,27 @@ jobs:
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
           cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=tinaudio/synth-setter:buildcache,mode=max' || '' }}
 
+      - name: Build and push devcontainer-tools image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: devcontainer-tools
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ steps.config.outputs.image }}:devcontainer-tools
+            ${{ steps.config.outputs.image }}:devcontainer-tools-${{ steps.source.outputs.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
+          secrets: ""
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+          cache-to: ""
+
       - name: Smoke test — container starts and Python imports work
         if: github.event_name != 'pull_request'
         env:

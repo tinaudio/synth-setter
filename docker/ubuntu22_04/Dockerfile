@@ -12,8 +12,6 @@ ARG BASE_IMAGE=ubuntu@sha256:3ba65aa20f86a0fad9df2b2c259c613df006b2e6d0bfcc8a146
 # TODO(ktinubu): Rename to something more useful and distrinct from BASE_IMAGE
 # TODO(ktinubu): Check for unset TARGETARCH or TARGETPLATFORM. Fallback to amd, linux/amd but add tag to container
 # TODO(ktinubu): Add appropriate image labels.
-ARG IMAGE=dev-snapshot
-
 FROM ${BASE_IMAGE} AS amd64-vars
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 WORKDIR /tmp-artifacts
@@ -67,7 +65,6 @@ RUN { echo 'tzdata tzdata/Areas select Etc'; echo 'tzdata tzdata/Zones/Etc selec
 
 ARG TARGETARCH
 ARG BUILD_MODE
-ARG IMAGE
 # Validate build args
 RUN case "${TARGETARCH:-}" in \
       amd64|arm64) ;; \
@@ -76,10 +73,6 @@ RUN case "${TARGETARCH:-}" in \
 RUN case "${BUILD_MODE}" in \
       source|prebuilt) ;; \
       *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
-    esac
-RUN case "${IMAGE}" in \
-      "dev-snapshot") ;; \
-      *) echo "ERROR: IMAGE must be dev-snapshot (got '${IMAGE}')" >&2; exit 1 ;; \
     esac
 # Install base build tools (gcc-12, g++-12, ninja, flex) shared by all builder stages.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
@@ -326,7 +319,7 @@ RUN mkdir -p /home/build/synth-setter/plugins && \
 WORKDIR /home/build/synth-setter
 
 # ==========================================
-# dev-snapshot: deps + live git clone at SYNTH_PERMUTATIONS_GIT_REF.
+# dev-base: deps + live git clone at SYNTH_PERMUTATIONS_GIT_REF.
 #
 # This image contains NO baked credentials and no R2 bucket binding —
 # it is safe to publish on public registries. Callers provide R2 +
@@ -336,7 +329,7 @@ WORKDIR /home/build/synth-setter
 # Useful for CI or one-off runs without mounting local source.
 # Usage: make docker-build-dev-snapshot GIT_REF=<sha>
 # ==========================================
-FROM builder-install-synth-setter-deps AS dev-snapshot
+FROM builder-install-synth-setter-deps AS dev-base
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
@@ -374,8 +367,53 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD []
 
-FROM ${IMAGE} AS freeze-deps
+# ==========================================
+# devcontainer-tools: dev-base + CLI tools + non-root user.
+# Published as tinaudio/synth-setter:devcontainer-tools.
+# ==========================================
+FROM dev-base AS devcontainer-tools
+
+# --- CLI tools (as root) ---
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+      curl \
+      jq \
+  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update && apt-get install -y --no-install-recommends gh
+
+# --- Non-root dev user ---
+ARG USERNAME=dev
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+RUN groupadd --gid $USER_GID $USERNAME \
+    && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
+RUN chown -R $USER_UID:$USER_GID .git
+USER $USERNAME
+
+# --- Claude Code CLI (userspace install via nvm) ---
+ARG NVM_VERSION=0.40.1
+ARG NODE_VERSION=20.18.0
+ARG CLAUDE_CODE_VERSION=2.1.105
+
+ENV NVM_DIR="/home/$USERNAME/.nvm"
+ENV PATH="$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH"
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN git clone --depth 1 --branch "v${NVM_VERSION}" https://github.com/nvm-sh/nvm.git "$NVM_DIR" \
+    && . "$NVM_DIR/nvm.sh" \
+    && nvm install "$NODE_VERSION" \
+    && nvm alias default "$NODE_VERSION" \
+    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+FROM dev-base AS freeze-deps
 # Record package versions for audit / reproducibility
 RUN mkdir -p /usr/local/share/audit && \
     uv pip freeze | sort > /usr/local/share/audit/pip-freeze.txt && \
     dpkg-query -W -f='${Package}=${Version}\n' | sort > /usr/local/share/audit/dpkg.txt
+
+FROM dev-base AS dev-snapshot
