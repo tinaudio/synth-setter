@@ -15,9 +15,6 @@
   "containerEnv": {
     "MODE": "idle"
   },
-  "mounts": [
-    "source=${localEnv:HOME}/.claude/.credentials.json,target=/home/dev/.claude/.credentials.json,type=bind,readonly"
-  ],
   "remoteUser": "dev",
   "updateRemoteUserUID": true,
   "workspaceFolder": "/home/build/synth-setter",
