@@ -36,7 +36,7 @@ if [ -n "${RESTRICTED_AGENT_GIT_PAT:-}" ]; then
   RESTRICTED_AGENT_GIT_PAT="${RESTRICTED_AGENT_GIT_PAT#\"}"
   RESTRICTED_AGENT_GIT_PAT="${RESTRICTED_AGENT_GIT_PAT%\'}"
   RESTRICTED_AGENT_GIT_PAT="${RESTRICTED_AGENT_GIT_PAT#\'}"
-  if echo "$RESTRICTED_AGENT_GIT_PAT" | gh auth login --with-token; then
+  if printf '%s' "$RESTRICTED_AGENT_GIT_PAT" | gh auth login --with-token; then
     gh auth setup-git
     echo "Git configured with RESTRICTED_AGENT_GIT_PAT"
   else
