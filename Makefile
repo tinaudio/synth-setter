@@ -104,6 +104,7 @@ docker-build-dev-snapshot: ## Build self-contained image (requires GIT_REF)
 		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
 		--build-arg TORCH_BACKEND=$(DOCKER_TORCH_BACKEND) \
 		--build-arg TARGETARCH=$(TARGETARCH) \
+        --target dev-snapshot \
 		--label org.opencontainers.image.base.name=$(DOCKER_BASE_IMAGE) \
 		-t $(DOCKER_IMAGE):$(DOCKER_BASE_IMAGE_TAG)-dev-snapshot-$(GIT_REF) \
 		-t $(DOCKER_IMAGE):dev-snapshot \
