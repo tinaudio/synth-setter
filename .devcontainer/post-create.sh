@@ -30,7 +30,13 @@ cd "$dir"
 git config --global --add safe.directory "$(pwd)"
 
 if [ -n "${RESTRICTED_AGENT_GIT_PAT:-}" ]; then
-  if echo "$RESTRICTED_AGENT_GIT_PAT" | gh auth login --with-token; then
+  # Strip surrounding double or single quotes if present
+  # (Docker's --env-file doesn't strip them like shell `source` does)
+  RESTRICTED_AGENT_GIT_PAT="${RESTRICTED_AGENT_GIT_PAT%\"}"
+  RESTRICTED_AGENT_GIT_PAT="${RESTRICTED_AGENT_GIT_PAT#\"}"
+  RESTRICTED_AGENT_GIT_PAT="${RESTRICTED_AGENT_GIT_PAT%\'}"
+  RESTRICTED_AGENT_GIT_PAT="${RESTRICTED_AGENT_GIT_PAT#\'}"
+  if printf '%s' "$RESTRICTED_AGENT_GIT_PAT" | gh auth login --with-token; then
     gh auth setup-git
     echo "Git configured with RESTRICTED_AGENT_GIT_PAT"
   else

@@ -7,7 +7,7 @@
       "--platform=linux/amd64"
     ]
   },
-  "initializeCommand": "[ -f .env ] || touch .env; mkdir -p ~/.claude && { [ -f ~/.claude/.credentials.json ] || ( umask 077 && echo '{}' > ~/.claude/.credentials.json ); }",
+  "initializeCommand": "[ -f .env ] || touch .env",
   "runArgs": [
     "--env-file",
     ".env"
@@ -15,9 +15,6 @@
   "containerEnv": {
     "MODE": "idle"
   },
-  "mounts": [
-    "source=${localEnv:HOME}/.claude/.credentials.json,target=/home/dev/.claude/.credentials.json,type=bind,readonly"
-  ],
   "remoteUser": "dev",
   "updateRemoteUserUID": true,
   "workspaceFolder": "/home/build/synth-setter",
