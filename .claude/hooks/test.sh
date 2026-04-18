@@ -78,6 +78,17 @@ else
   fail "non-matching command exits 0 silently" "$out"
 fi
 
+# 1b. Substring-only match (e.g. 'gh pr create' inside echo text) → no match.
+reset_sandbox
+export GH_STUB_PR=42
+out=$(echo '{"tool_input":{"command":"echo testing the gh pr create matcher"}}' | bash .claude/hooks/doc-drift.sh 2>&1; echo "EXIT:$?")
+if [[ "$out" == *"EXIT:0"* ]] && [ ! -d .agent-reviews ]; then
+  pass "quoted 'gh pr create' substring inside echo does NOT trigger (word-boundary match)"
+else
+  fail "quoted substring should not trigger" "$out"
+fi
+unset GH_STUB_PR
+
 # 2. gh pr create with no PR found → exit 0 silently.
 reset_sandbox
 unset GH_STUB_PR
@@ -121,6 +132,15 @@ if [[ "$out" == *"EXIT:0"* ]] && [ ! -d .agent-reviews ]; then
   pass "non-matching command exits 0 silently"
 else
   fail "non-matching command exits 0 silently" "$out"
+fi
+
+# 5b. Commit message containing 'git push' substring → no match.
+reset_sandbox
+out=$(echo '{"tool_input":{"command":"git commit -m \"fix git push bug\""}}' | bash .claude/hooks/pr-review-resolver.sh 2>&1; echo "EXIT:$?")
+if [[ "$out" == *"EXIT:0"* ]] && [ ! -d .agent-reviews ]; then
+  pass "quoted 'git push' substring inside commit message does NOT trigger"
+else
+  fail "quoted substring should not trigger resolver" "$out"
 fi
 
 # 6. Push while on main → exit 0 before the sleep.

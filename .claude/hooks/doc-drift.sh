@@ -33,10 +33,9 @@ source "${SCRIPT_DIR}/_lib.sh"
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 
-case "$COMMAND" in
-  *"gh pr create"*) ;;
-  *) exit 0 ;;
-esac
+if ! echo "$COMMAND" | grep -qE '(^|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+  exit 0
+fi
 
 ensure_reviews_dir
 log "matched: ${COMMAND}"
