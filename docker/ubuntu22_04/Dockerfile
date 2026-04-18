@@ -386,12 +386,22 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
 # --- Node.js + Claude Code CLI (system-wide) ---
-ARG CLAUDE_CODE_VERSION=2.1.105
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
- && apt-get install -y --no-install-recommends nodejs \
+COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/
+COPY --from=node:20-bullseye-slim /usr/local/bin/npm /usr/local/bin/
+COPY --from=node:20-bullseye-slim /usr/local/bin/npx /usr/local/bin/
+COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+RUN node --version && npm --version \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+# Persist bash history.
+RUN mkdir -p /commandhistory \
+ && touch /commandhistory/.bash_history \
+ && chown -R "$USERNAME:$USERNAME" /commandhistory \
+ && printf '%s\n' \
+      "export PROMPT_COMMAND='history -a'" \
+      "export HISTFILE=/commandhistory/.bash_history" \
+      >> "/home/$USERNAME/.bashrc"
 
 # --- Non-root dev user ---
 ARG USERNAME=dev
