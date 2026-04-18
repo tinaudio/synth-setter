@@ -16,7 +16,9 @@ docs:
     description: Docker build, run, debug reference
     sources:
       - pattern: "docker/**"
-        covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts"
+        covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts, devcontainer-tools stage"
+      - pattern: ".devcontainer/Dockerfile"
+        covers: "Dev container wrapper over devcontainer-tools stage, per-developer customization"
       - pattern: "scripts/docker_entrypoint.sh"
         covers: "All MODE values (idle, passthrough, generate_dataset), env var dispatch, error messages"
       - pattern: "pipeline/schemas/image_config.py"
@@ -24,12 +26,12 @@ docs:
       - pattern: "configs/image/**"
         covers: "YAML field names and values, build parameters, defaults"
       - pattern: "Makefile"
-        covers: "docker-build-* targets, DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
+        covers: "docker-build-* targets (dev-snapshot, devcontainer-tools), DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
         scope: "docker"
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
-        covers: "CI steps, required secrets, tag scheme, smoke test flow"
+        covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools publish"
 
   # ── Docker spec (the contract doc) ──────────────────────────────
   - doc: docs/reference/docker-spec.md
@@ -150,6 +152,17 @@ docs:
         covers: "Checkpoint download from W&B, artifact resolution for eval"
       - pattern: "scripts/audio_dirs/*.txt"
         covers: "Audio directory lists for metric computation reference sets"
+
+  # ── Getting started ─────────────────────────────────────────────
+  - doc: docs/getting-started.md
+    description: Onboarding — local dev, Codespaces, and dev container flows
+    sources:
+      - pattern: ".devcontainer/cpu/devcontainer.json"
+        covers: "CPU dev container config — remoteUser, mounts, postCreateCommand"
+      - pattern: ".devcontainer/gpu/devcontainer.json"
+        covers: "GPU dev container config — remoteUser, mounts, postCreateCommand"
+      - pattern: ".devcontainer/post-create.sh"
+        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop"
 
   # ── GitHub taxonomy ─────────────────────────────────────────────
   - doc: docs/design/github-taxonomy.md

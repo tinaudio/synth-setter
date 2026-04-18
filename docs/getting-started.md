@@ -93,9 +93,12 @@ credentials are required.
 
 1. On GitHub, click **Code → Codespaces → Create codespace on main**.
 2. First start takes ~5 min (image pull). Subsequent starts are fast.
-3. `.devcontainer/post-create.sh` initializes submodules, installs the
-   workspace editable, and wires up pre-commit hooks — then the terminal is
-   ready.
+3. `.devcontainer/post-create.sh` configures git safety settings,
+   optionally authenticates with `RESTRICTED_AGENT_GIT_PAT`, and installs
+   pre-commit hooks. If invoked as root (Codespaces default, or opt-in
+   `DEVCONTAINER_USER=root` locally), it drops to the `dev` user first so
+   workspace mutations under `.git/` land with dev ownership. Then the
+   terminal is ready.
 
 **Verify:**
 
