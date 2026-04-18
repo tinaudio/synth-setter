@@ -19,14 +19,15 @@
 
 set -euo pipefail
 
-export XAUTHORITY=${XAUTHORITY:-/tmp/.Xauthority}
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+export XAUTHORITY="${XAUTHORITY:-$TMP_DIR/.Xauthority}"
 
 export LIBGL_ALWAYS_SOFTWARE=1
 export NO_AT_BRIDGE=1
 export JUCE_USE_XINPUT2=0
 
 # Create temp dir for display number coordination
-TMP_DIR=$(mktemp -d)
 DISPLAY_FILE="$TMP_DIR/display_num"
 
 cleanup() {
@@ -48,7 +49,7 @@ trap cleanup EXIT
 # Start Xvfb (let it pick a display)
 # -displayfd 3 writes the chosen display number to file descriptor 3
 # 3>"$DISPLAY_FILE" redirects FD 3 to our temp file so we can read it later
-Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp 3>"$DISPLAY_FILE" 2>/tmp/xvfb.log &
+Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
 XVFB_PID=$!
 
 # Wait for Xvfb to output the display number
@@ -58,13 +59,13 @@ while [ ! -s "$DISPLAY_FILE" ]; do
   count=$((count+1))
   if [ "$count" -ge 100 ]; then
      echo "Timeout waiting for Xvfb to start" >&2
-     cat /tmp/xvfb.log >&2
+     cat "$TMP_DIR/xvfb.log" >&2
      exit 1
   fi
   # Check if Xvfb died
   if ! kill -0 "$XVFB_PID" 2>/dev/null; then
     echo "Xvfb died unexpectedly" >&2
-    cat /tmp/xvfb.log >&2
+    cat "$TMP_DIR/xvfb.log" >&2
     exit 1
   fi
 done
@@ -79,14 +80,14 @@ for _ in {1..50}; do
   fi
   sleep 0.1
 done
-xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || { echo "Xvfb did not start"; cat /tmp/xvfb.log || true; exit 1; }
+xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || { echo "Xvfb did not start"; cat "$TMP_DIR/xvfb.log" || true; exit 1; }
 
 # Start an XSettings manager
-xsettingsd --config /dev/null >/tmp/xsettingsd.log 2>&1 &
+xsettingsd --config /dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
 XSETTINGS_PID=$!
 
 # Start a lightweight window manager (important for many plugins)
-openbox-session >/tmp/openbox.log 2>&1 &
+openbox-session >"$TMP_DIR/openbox.log" 2>&1 &
 OPENBOX_PID=$!
 
 # Run the actual command inside a D-Bus session
