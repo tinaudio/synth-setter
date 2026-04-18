@@ -8,6 +8,14 @@
 # configuration, or sourced manually inside the container shell.
 set -euo pipefail
 
+# Drop to `dev` when invoked as root so workspace mutations (git config
+# --local, pre-commit install → .git/hooks/*) don't land root-owned in the
+# bind-mounted workspace. Both opt-in DEVCONTAINER_USER=root sessions and
+# Codespaces (which runs postCreateCommand as root) hit this path.
+if [ "$(id -u)" -eq 0 ]; then
+  exec runuser -u dev -- bash "$(readlink -f "${BASH_SOURCE[0]}")"
+fi
+
 # Locate the workspace root via the .project-root anchor, not by hardcoded
 # path. GitHub Codespaces mounts at /workspaces/synth-setter, but locally the
 # devcontainer CLI uses the host directory basename (e.g. a git worktree
