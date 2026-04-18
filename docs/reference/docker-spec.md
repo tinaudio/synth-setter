@@ -54,17 +54,24 @@ ______________________________________________________________________
 
 ## 2. Image Targets
 
-`docker/ubuntu22_04/Dockerfile` defines a single target via `--target`:
+`docker/ubuntu22_04/Dockerfile` defines two consumable targets via `--target`:
 
-| Target         | Entrypoint             | Source code            | Use case       |
-| -------------- | ---------------------- | ---------------------- | -------------- |
-| `dev-snapshot` | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs |
+| Target               | Entrypoint             | Source code            | Use case                                          |
+| -------------------- | ---------------------- | ---------------------- | ------------------------------------------------- |
+| `dev-snapshot`       | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs                                    |
+| `devcontainer-tools` | *(inherits)*           | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root `dev`)   |
 
 The `dev-snapshot` target inherits directly from
 `builder-install-synth-setter-deps`. It contains no baked credentials
 and no baked runtime configuration. R2 credentials, the W&B API key,
 and the target R2 bucket name are all provided at runtime via env vars
 (see `docs/reference/docker.md` § Runtime secrets).
+
+The `devcontainer-tools` target extends `dev-base` with `gh`, `jq`, Node.js
++ `@anthropic-ai/claude-code` (installed system-wide), a non-root `dev` user,
+and a `/commandhistory` directory for persisted bash history. It is consumed
+by `.devcontainer/Dockerfile` as the base for local and Codespaces dev
+containers.
 
 ## 3. Environment Variables
 
