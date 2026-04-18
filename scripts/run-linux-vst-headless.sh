@@ -20,14 +20,12 @@
 set -euo pipefail
 
 TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT
 export XAUTHORITY="${XAUTHORITY:-$TMP_DIR/.Xauthority}"
 
 export LIBGL_ALWAYS_SOFTWARE=1
 export NO_AT_BRIDGE=1
 export JUCE_USE_XINPUT2=0
 
-# Create temp dir for display number coordination
 DISPLAY_FILE="$TMP_DIR/display_num"
 
 cleanup() {
