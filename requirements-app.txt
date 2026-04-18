@@ -26,6 +26,7 @@ loguru
 matplotlib
 mutmut==3.5.*
 mido
+pandas
 pedalboard
 POT
 pre-commit
