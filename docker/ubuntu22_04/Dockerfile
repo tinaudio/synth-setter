@@ -386,6 +386,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
 # --- Node.js + Claude Code CLI (system-wide) ---
+ARG CLAUDE_CODE_VERSION=latest
 COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
