@@ -396,7 +396,14 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && npm --version \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
-# Persist bash history.
+ARG USERNAME=dev
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+RUN groupadd --gid $USER_GID $USERNAME \
+    && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
+RUN chown -R $USER_UID:$USER_GID .git
+
+# Persist bash history for non-root dev: user
 RUN mkdir -p /commandhistory \
  && touch /commandhistory/.bash_history \
  && chown -R "$USERNAME:$USERNAME" /commandhistory \
@@ -406,12 +413,6 @@ RUN mkdir -p /commandhistory \
       >> "/home/$USERNAME/.bashrc"
 
 # --- Non-root dev user ---
-ARG USERNAME=dev
-ARG USER_UID=1000
-ARG USER_GID=$USER_UID
-RUN groupadd --gid $USER_GID $USERNAME \
-    && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
-RUN chown -R $USER_UID:$USER_GID .git
 USER $USERNAME
 
 FROM dev-base AS freeze-deps
