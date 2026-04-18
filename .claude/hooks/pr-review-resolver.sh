@@ -57,7 +57,7 @@ ensure_reviews_dir
 log "matched: ${COMMAND} (branch=${BRANCH})"
 
 LOCKFILE="${REVIEWS_DIR}/.resolver-${BRANCH//\//_}.lock"
-TOKEN="$$-$(date +%s%N)"
+TOKEN=$(gen_id)
 echo "$TOKEN" > "$LOCKFILE"
 log "wrote lock token ${TOKEN}"
 
@@ -85,7 +85,9 @@ else
   PROMPT="PR #${PR} on branch ${BRANCH}. Fetch review comments with 'gh pr view ${PR} --json reviews,comments' and 'gh api repos/{owner}/{repo}/pulls/${PR}/comments'. Address each actionable comment; reply inline to each comment you addressed with the fix commit SHA. Ignore nits unless trivial."
 fi
 
-REVIEW_FILE="${REVIEWS_DIR}/pr-review-resolver-$(gen_id).md"
+REVIEW_ID=$(gen_id)
+REVIEW_FILE="${REVIEWS_DIR}/pr-review-resolver-${REVIEW_ID}.md"
+STDERR_FILE="${REVIEWS_DIR}/pr-review-resolver-${REVIEW_ID}.stderr"
 
 if [ "${RESOLVER_DRY_RUN:-0}" = "1" ]; then
   log "DRY_RUN: writing stub report"
@@ -93,10 +95,22 @@ if [ "${RESOLVER_DRY_RUN:-0}" = "1" ]; then
     "$PR" "$BRANCH" "$PROMPT" > "$REVIEW_FILE"
 else
   log "invoking claude -p (headless)"
-  claude -p "$PROMPT" > "$REVIEW_FILE" 2>/dev/null || {
-    log "claude -p failed"
-    exit 0
-  }
+  if ! claude -p "$PROMPT" > "$REVIEW_FILE" 2>"$STDERR_FILE"; then
+    CLAUDE_EXIT=$?
+    log "claude -p failed (exit ${CLAUDE_EXIT})"
+    {
+      printf '# pr-review-resolver (FAILED)\n\n'
+      printf 'PR: #%s\nBranch: %s\n\n' "$PR" "$BRANCH"
+      printf '## claude -p exit code\n%s\n\n' "$CLAUDE_EXIT"
+      # shellcheck disable=SC2016  # backticks here are literal markdown fences
+      printf '## Prompt\n```\n%s\n```\n\n' "$PROMPT"
+      # shellcheck disable=SC2016
+      printf '## Stderr (tail)\n```\n'
+      tail -40 "$STDERR_FILE" 2>/dev/null || true
+      printf '\n```\n'
+    } > "$REVIEW_FILE"
+  fi
+  rm -f "$STDERR_FILE"
 fi
 
 log "wrote ${REVIEW_FILE}"

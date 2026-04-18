@@ -3,7 +3,8 @@
 # test.sh — unit harness for .claude/hooks/
 # =============================================================================
 #
-# Tests run each hook script with canned stdin and PATH-stubbed `claude`/`gh`/`git`,
+# Tests run each hook script with canned stdin and PATH-stubbed `claude`/`gh`
+# (`git` is intentionally real — the tests operate inside a sandbox git repo),
 # asserting exit codes, stderr pointers, report files, and logged decisions.
 #
 # Run from repo root:   bash .claude/hooks/test.sh
@@ -36,6 +37,10 @@ STUBS="$TEST_DIR/stubs"
 mkdir -p "$STUBS"
 cat > "$STUBS/claude" <<'EOF'
 #!/usr/bin/env bash
+if [ "${CLAUDE_STUB_FAIL:-0}" = "1" ]; then
+  echo "simulated claude -p auth failure" >&2
+  exit 3
+fi
 echo "# STUB claude -p output"
 echo "# prompt was: $*"
 EOF
@@ -117,6 +122,23 @@ if grep -q "docs/doc-map.yaml" "$report"; then
 else
   fail "doc-drift fallback references docs/doc-map.yaml" "report: $(cat "$report")"
 fi
+
+# 4b. claude -p failure → verbose FAILED report with exit code, prompt, stderr tail.
+reset_sandbox
+export GH_STUB_PR=42 CLAUDE_STUB_FAIL=1
+unset DOC_DRIFT_DRY_RUN
+out=$(echo '{"tool_input":{"command":"gh pr create --title x"}}' | bash .claude/hooks/doc-drift.sh 2>&1; echo "EXIT:$?")
+report=$(find .agent-reviews -maxdepth 1 -name 'doc-drift-*.md' 2>/dev/null | head -1)
+if [[ "$out" == *"EXIT:2"* ]] && [ -n "$report" ] \
+   && grep -q "FAILED" "$report" \
+   && grep -q "exit code" "$report" \
+   && grep -q "simulated claude -p auth failure" "$report"; then
+  pass "claude -p failure → verbose FAILED report (exit code + stderr captured)"
+else
+  fail "claude -p failure → verbose FAILED report" "out=$out report=$(cat "$report" 2>/dev/null)"
+fi
+unset CLAUDE_STUB_FAIL
+export DOC_DRIFT_DRY_RUN=1
 
 # -----------------------------------------------------------------------------
 # pr-review-resolver.sh

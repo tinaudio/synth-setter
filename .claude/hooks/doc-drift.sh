@@ -48,34 +48,50 @@ if [ -z "$PR" ]; then
   exit 0
 fi
 
-DIFF_FILES=$(git diff main...HEAD --name-only 2>/dev/null | head -50 || true)
+BASE_BRANCH=$(default_branch)
+log "base branch resolved to: ${BASE_BRANCH}"
+DIFF_FILES=$(git diff "origin/${BASE_BRANCH}...HEAD" --name-only 2>/dev/null | head -50 || true)
 
 if has_skill doc-drift; then
   log "using doc-drift skill"
-  PROMPT="Use the doc-drift skill to review PR #${PR} on branch ${BRANCH}. Cross-reference docs/doc-map.yaml if present. Changed files:
+  PROMPT="Use the doc-drift skill to review PR #${PR} on branch ${BRANCH} against base ${BASE_BRANCH}. Cross-reference docs/doc-map.yaml if present. Changed files:
 ${DIFF_FILES}
 
 Report findings as \"file:line — issue — suggested fix\". If no drift is found, state that explicitly."
 else
   log "doc-drift skill not found, using fallback prompt"
-  PROMPT="Review the diff 'git diff main...HEAD' for documentation drift on PR #${PR}, branch ${BRANCH}. Cross-reference docs/doc-map.yaml if present. Check for: references to renamed/removed files, stale signatures, missing docs for new public APIs, out-of-date examples. Changed files:
+  PROMPT="Review the diff 'git diff origin/${BASE_BRANCH}...HEAD' for documentation drift on PR #${PR}, branch ${BRANCH}. Cross-reference docs/doc-map.yaml if present. Check for: references to renamed/removed files, stale signatures, missing docs for new public APIs, out-of-date examples. Changed files:
 ${DIFF_FILES}
 
 Report findings as \"file:line — issue — suggested fix\". If no drift is found, state that explicitly."
 fi
 
-REVIEW_FILE="${REVIEWS_DIR}/doc-drift-$(gen_id).md"
+REVIEW_ID=$(gen_id)
+REVIEW_FILE="${REVIEWS_DIR}/doc-drift-${REVIEW_ID}.md"
+STDERR_FILE="${REVIEWS_DIR}/doc-drift-${REVIEW_ID}.stderr"
 
 if [ "${DOC_DRIFT_DRY_RUN:-0}" = "1" ]; then
   log "DRY_RUN: writing stub report"
-  printf '# doc-drift (dry-run)\nPR: #%s\nBranch: %s\n\n## Prompt\n%s\n' \
-    "$PR" "$BRANCH" "$PROMPT" > "$REVIEW_FILE"
+  printf '# doc-drift (dry-run)\nPR: #%s\nBranch: %s\nBase: %s\n\n## Prompt\n%s\n' \
+    "$PR" "$BRANCH" "$BASE_BRANCH" "$PROMPT" > "$REVIEW_FILE"
 else
   log "invoking claude -p (headless)"
-  claude -p "$PROMPT" > "$REVIEW_FILE" 2>/dev/null || {
-    log "claude -p failed"
-    exit 0
-  }
+  if ! claude -p "$PROMPT" > "$REVIEW_FILE" 2>"$STDERR_FILE"; then
+    CLAUDE_EXIT=$?
+    log "claude -p failed (exit ${CLAUDE_EXIT})"
+    {
+      printf '# doc-drift (FAILED)\n\n'
+      printf 'PR: #%s\nBranch: %s\nBase: %s\n\n' "$PR" "$BRANCH" "$BASE_BRANCH"
+      printf '## claude -p exit code\n%s\n\n' "$CLAUDE_EXIT"
+      # shellcheck disable=SC2016  # backticks here are literal markdown fences
+      printf '## Prompt\n```\n%s\n```\n\n' "$PROMPT"
+      # shellcheck disable=SC2016
+      printf '## Stderr (tail)\n```\n'
+      tail -40 "$STDERR_FILE" 2>/dev/null || true
+      printf '\n```\n'
+    } > "$REVIEW_FILE"
+  fi
+  rm -f "$STDERR_FILE"
 fi
 
 log "wrote ${REVIEW_FILE}"

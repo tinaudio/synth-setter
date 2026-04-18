@@ -75,7 +75,8 @@
       },
       {
         "matcher": "Bash",
-        "description": "Doc-drift advisory review: on gh pr create, runs a headless claude -p session invoking the doc-drift skill (or an inline fallback referencing docs/doc-map.yaml) against git diff main...HEAD. Output saved to .agent-reviews/doc-drift-<uuid>.md. asyncRewake wakes the active session with a pointer so it can read the report and apply doc updates as appropriate. Advisory only — does not block.",
+        "if": "jq -r '.tool_input.command // \"\"' | grep -qE '(^|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'",
+        "description": "Doc-drift advisory review: on gh pr create, runs a headless claude -p session invoking the doc-drift skill (or an inline fallback referencing docs/doc-map.yaml) against git diff against the default branch. Output saved to .agent-reviews/doc-drift-<uuid>.md. On claude -p failure, writes a verbose error report (stderr tail + exit code) and still wakes the session. The `if` guard is a cheap pre-filter matching gh pr create at start-of-line or after a shell operator; doc-drift.sh re-validates with the same regex. asyncRewake. Advisory only — does not block.",
         "hooks": [
           {
             "type": "command",
@@ -88,7 +89,8 @@
       },
       {
         "matcher": "Bash",
-        "description": "PR review resolver: on git push (excluding main/master), waits RESOLVER_SLEEP_SECS (default 360s) for CI and reviewers to settle, then runs the pr-review-resolver skill (or inline fallback) headlessly. Per-branch lockfile dedupes stacked pushes (last push wins). Output saved to .agent-reviews/pr-review-resolver-<uuid>.md. asyncRewake wakes the active session with a pointer. Advisory only — does not block.",
+        "if": "jq -r '.tool_input.command // \"\"' | grep -qE '(^|[;|&`(][[:space:]]*)git[[:space:]]+push([[:space:]]|$)'",
+        "description": "PR review resolver: on git push (excluding main/master), waits RESOLVER_SLEEP_SECS (default 360s) for CI and reviewers to settle, then runs the pr-review-resolver skill (or inline fallback) headlessly. Per-branch lockfile dedupes stacked pushes (last push wins). On claude -p failure, writes a verbose error report and still wakes the session. The `if` guard is a cheap pre-filter matching git push at shell-word boundaries; pr-review-resolver.sh re-validates with the same regex. asyncRewake. Advisory only — does not block.",
         "hooks": [
           {
             "type": "command",
