@@ -72,6 +72,32 @@
             "statusMessage": "Checking for PR creation..."
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "description": "Doc-drift advisory review: on gh pr create, runs a headless claude -p session invoking the doc-drift skill (or an inline fallback referencing docs/doc-map.yaml) against git diff main...HEAD. Output saved to .agent-reviews/doc-drift-<uuid>.md. asyncRewake wakes the active session with a pointer so it can read the report and apply doc updates as appropriate. Advisory only — does not block.",
+        "hooks": [
+          {
+            "type": "command",
+            "asyncRewake": true,
+            "timeout": 900,
+            "statusMessage": "doc-drift reviewing PR...",
+            "command": "bash .claude/hooks/doc-drift.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "description": "PR review resolver: on git push (excluding main/master), waits RESOLVER_SLEEP_SECS (default 360s) for CI and reviewers to settle, then runs the pr-review-resolver skill (or inline fallback) headlessly. Per-branch lockfile dedupes stacked pushes (last push wins). Output saved to .agent-reviews/pr-review-resolver-<uuid>.md. asyncRewake wakes the active session with a pointer. Advisory only — does not block.",
+        "hooks": [
+          {
+            "type": "command",
+            "asyncRewake": true,
+            "timeout": 1200,
+            "statusMessage": "pr-review-resolver scheduled (6 min delay)...",
+            "command": "bash .claude/hooks/pr-review-resolver.sh"
+          }
+        ]
       }
     ]
   }
