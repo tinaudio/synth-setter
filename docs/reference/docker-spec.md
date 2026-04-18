@@ -67,8 +67,8 @@ and no baked runtime configuration. R2 credentials, the W&B API key,
 and the target R2 bucket name are all provided at runtime via env vars
 (see `docs/reference/docker.md` § Runtime secrets).
 
-The `devcontainer-tools` target extends `dev-base` with `gh`, `jq`, Node.js
-+ `@anthropic-ai/claude-code` (installed system-wide), a non-root `dev` user,
+The `devcontainer-tools` target extends `dev-base` with `gh`, `jq`, Node.js,
+`@anthropic-ai/claude-code` (installed system-wide), a non-root `dev` user,
 and a `/commandhistory` directory for persisted bash history. It is consumed
 by `.devcontainer/Dockerfile` as the base for local and Codespaces dev
 containers.
