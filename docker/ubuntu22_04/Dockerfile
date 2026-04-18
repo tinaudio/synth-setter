@@ -385,30 +385,35 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# --- Non-root dev user ---
+# --- Node.js + Claude Code CLI (system-wide) ---
+ARG CLAUDE_CODE_VERSION=latest
+COPY --from=node:20-bullseye-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:20-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && node --version \
+ && npm --version \
+ && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
 ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
 RUN chown -R $USER_UID:$USER_GID .git
+
+# Persist bash history for non-root dev: user
+RUN mkdir -p /commandhistory \
+ && touch /commandhistory/.bash_history \
+ && chown -R "$USERNAME:$USERNAME" /commandhistory \
+ && printf '%s\n' \
+      "export PROMPT_COMMAND='history -a'" \
+      "export HISTFILE=/commandhistory/.bash_history" \
+      >> "/home/$USERNAME/.bashrc"
+
+# --- Non-root dev user ---
 USER $USERNAME
-
-# --- Claude Code CLI (userspace install via nvm) ---
-ARG NVM_VERSION=0.40.1
-ARG NODE_VERSION=20.18.0
-ARG CLAUDE_CODE_VERSION=2.1.105
-
-ENV NVM_DIR="/home/$USERNAME/.nvm"
-ENV PATH="$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH"
-
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-RUN git clone --depth 1 --branch "v${NVM_VERSION}" https://github.com/nvm-sh/nvm.git "$NVM_DIR" \
-    && . "$NVM_DIR/nvm.sh" \
-    && nvm install "$NODE_VERSION" \
-    && nvm alias default "$NODE_VERSION" \
-    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
 FROM dev-base AS freeze-deps
 # Record package versions for audit / reproducibility
