@@ -56,10 +56,10 @@ ______________________________________________________________________
 
 `docker/ubuntu22_04/Dockerfile` defines two consumable targets via `--target`:
 
-| Target               | Entrypoint             | Source code            | Use case                                          |
-| -------------------- | ---------------------- | ---------------------- | ------------------------------------------------- |
-| `dev-snapshot`       | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs                                    |
-| `devcontainer-tools` | *(inherits)*           | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root `dev`)   |
+| Target               | Entrypoint             | Source code            | Use case                                        |
+| -------------------- | ---------------------- | ---------------------- | ----------------------------------------------- |
+| `dev-snapshot`       | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs                                  |
+| `devcontainer-tools` | *(inherits)*           | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root `dev`) |
 
 The `dev-snapshot` target inherits directly from
 `builder-install-synth-setter-deps`. It contains no baked credentials
