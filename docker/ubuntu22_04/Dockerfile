@@ -385,6 +385,14 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
+# --- Node.js + Claude Code CLI (system-wide) ---
+ARG CLAUDE_CODE_VERSION=2.1.105
+RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
 # --- Non-root dev user ---
 ARG USERNAME=dev
 ARG USER_UID=1000
@@ -393,22 +401,6 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
 RUN chown -R $USER_UID:$USER_GID .git
 USER $USERNAME
-
-# --- Claude Code CLI (userspace install via nvm) ---
-ARG NVM_VERSION=0.40.1
-ARG NODE_VERSION=20.18.0
-ARG CLAUDE_CODE_VERSION=2.1.105
-
-ENV NVM_DIR="/home/$USERNAME/.nvm"
-ENV PATH="$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH"
-
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
-RUN git clone --depth 1 --branch "v${NVM_VERSION}" https://github.com/nvm-sh/nvm.git "$NVM_DIR" \
-    && . "$NVM_DIR/nvm.sh" \
-    && nvm install "$NODE_VERSION" \
-    && nvm alias default "$NODE_VERSION" \
-    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 
 FROM dev-base AS freeze-deps
 # Record package versions for audit / reproducibility

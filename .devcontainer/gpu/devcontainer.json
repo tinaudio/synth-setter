@@ -18,7 +18,7 @@
   "containerEnv": {
     "MODE": "idle"
   },
-  "remoteUser": "dev",
+  "remoteUser": "${localEnv:DEVCONTAINER_USER:dev}",
   "updateRemoteUserUID": true,
   "workspaceFolder": "/home/build/synth-setter",
   "workspaceMount": "type=bind,source=${localWorkspaceFolder},target=/home/build/synth-setter,consistency=cached",
