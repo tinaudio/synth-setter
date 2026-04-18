@@ -10,7 +10,7 @@
 #
 #
 # See https://tart.run/faq/ for ssh troubleshooting information.
-# run tart --help for additional commands
+# Run `tart --help` for additional commands.
 # To build and publish a new image yourself, see the instructions at the
 # bottom of this file.
 # ==============================================================================
@@ -76,10 +76,9 @@ build {
   # (.vst3 installed to /Library/Audio/Plug-Ins/VST3/Surge XT.vst3).
   provisioner "shell" {
     inline = [
-      "source ~/.zprofile",
+      ". ~/.zprofile",
       "brew --version",
       "brew update",
-      "brew upgrade",
       "brew install git gh jq rclone uv codex bats-core",
       "brew install --cask claude-code",
       "brew install --cask surge-xt",
@@ -89,7 +88,7 @@ build {
   # Install and pin Python via uv.
   provisioner "shell" {
     inline = [
-      "source ~/.zprofile",
+      ". ~/.zprofile",
       "uv python install ${var.python_version}",
       "uv python pin ${var.python_version}",
     ]
@@ -99,7 +98,7 @@ build {
   # stage).
   provisioner "shell" {
     inline = [
-      "source ~/.zprofile",
+      ". ~/.zprofile",
       "git clone https://github.com/tinaudio/synth-setter.git ~/synth-setter",
       "cd ~/synth-setter && git checkout ${var.synth_setter_git_ref}",
       "cd ~/synth-setter && uv venv --python ${var.python_version}",
@@ -116,7 +115,7 @@ build {
   # is needed; the macOS VM has a native window server.
   provisioner "shell" {
     inline = [
-      "source ~/.zprofile",
+      ". ~/.zprofile",
       "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from src.data.vst.core import load_plugin; load_plugin('/Library/Audio/Plug-Ins/VST3/Surge XT.vst3')\"",
       "cd ~/synth-setter && .venv/bin/pytest -k 'not slow' -v",
     ]
