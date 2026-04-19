@@ -166,3 +166,6 @@ plugins/
 
 # Claude Code
 .claude/
+
+# Advisory reports written by .claude/hooks/doc-drift.sh and pr-review-resolver.sh
+.agent-reviews/

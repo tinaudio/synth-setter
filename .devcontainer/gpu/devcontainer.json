@@ -7,7 +7,7 @@
       "--platform=linux/amd64"
     ]
   },
-  "initializeCommand": "[ -f .env ] || touch .env",
+  "initializeCommand": "bash .devcontainer/initialize.sh",
   "runArgs": [
     "--gpus",
     "all",
@@ -20,7 +20,8 @@
   },
   "remoteUser": "${localEnv:DEVCONTAINER_USER:dev}",
   "mounts": [
-    "source=synth-setter-bashhistory,target=/commandhistory,type=volume"
+    "source=synth-setter-bashhistory,target=/commandhistory,type=volume",
+    "target=/home/build/synth-setter/plugins,type=volume"
   ],
   "updateRemoteUserUID": true,
   "workspaceFolder": "/home/build/synth-setter",
