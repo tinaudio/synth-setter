@@ -305,8 +305,9 @@ and runs smoke tests against `dev-snapshot`.
 5. Runs smoke tests against the SHA-pinned `dev-snapshot` tag
    (dispatch/schedule only — `devcontainer-tools` is not smoke-tested in CI)
 
-On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
-as build validation — no push, no smoke tests.
+On **pull requests** (Docker-related paths only), the workflow runs steps 1–3
+as build validation — both images are built but neither is pushed, and no
+smoke tests run.
 
 If the YAML violates the schema, the workflow fails before any build starts.
 
