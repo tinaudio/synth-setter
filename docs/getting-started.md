@@ -150,6 +150,9 @@ This is the supported local pattern. Mounting a worktree directly from the
 host does not work — the worktree's `.git` file points to
 `<repo>/.git/worktrees/<name>/` on the host, which is outside the container's
 bind mount, so git submodule/hook operations fail to resolve their gitdir.
+`.devcontainer/initialize.sh` detects this case on the host and aborts the
+build with a clear error before the container is created, so the failure
+surfaces immediately rather than partway through `post-create`.
 
 **Caveats:**
 
