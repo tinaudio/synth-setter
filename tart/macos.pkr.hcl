@@ -96,7 +96,7 @@ build {
       "touch ~/.zprofile && . ~/.zprofile",
       "brew --version",
       "brew update",
-      "brew install git gh jq rclone codex bats-core",
+      "brew install git gh jq rclone bats-core",
       # Install uv from Astral's versioned installer rather than `brew install uv`.
       # Homebrew's uv formula is rolling, so it cannot reliably hold a specific
       # version; the Astral installer URL embeds the version and is reproducible.

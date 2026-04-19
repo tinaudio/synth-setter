@@ -204,12 +204,15 @@ on first boot.
 
 **Build the image yourself (advanced):**
 
-If you need a custom build (pinned repo ref, different torch backend, etc.),
-the Packer template at [`tart/macos.pkr.hcl`](../tart/macos.pkr.hcl) builds
-the same image locally. See the bottom of the file for the full publishing
-workflow to Docker Hub. Overridable packer vars: `synth_setter_git_ref`
-(default `main`), `torch_backend` (default `cpu`), `python_version` (default
-`3.10`), `vm_name` (default `synth-setter-macos`).
+If you need a custom build (pinned repo ref, different torch backend, pinned
+base image, updated `uv`, updated Surge XT, etc.), the Packer template at
+[`tart/macos.pkr.hcl`](../tart/macos.pkr.hcl) builds the same image locally.
+See the bottom of the file for the full publishing workflow to Docker Hub.
+The template's `variable` blocks are the authoritative source for supported
+overrides. User-overridable packer vars: `synth_setter_git_ref` (default
+`main`), `torch_backend` (default `cpu`), `python_version` (default `3.10`),
+`vm_name` (default `synth-setter-macos`), `base_image_digest`, `uv_version`,
+and `surge_xt_version`.
 
 ```bash
 brew install cirruslabs/cli/tart packer
