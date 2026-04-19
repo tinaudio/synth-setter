@@ -22,7 +22,7 @@ if [ -f .git ]; then
     gitdir:*)
       cat >&2 <<'ERR'
 ERROR: This devcontainer cannot be opened from a workspace whose `.git` is a
-pointer file. See github isse #593 for details.
+pointer file. See github issue #593 for details.
 
 Pointer-file `.git` shows up for git worktrees (the common case),
 submodules, and `git clone --separate-git-dir` repositories. The pointer
