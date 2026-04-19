@@ -166,10 +166,12 @@ bind mount, so git submodule/hook operations fail to resolve their gitdir.
 
 ### 2h. Alternative: macOS VM (Tart)
 
-If you want full dev parity on Apple Silicon inside a reproducible, throwaway
-VM — Python 3.10 venv, Surge XT (native .vst3 via cask), Claude Code
-installed, auto-activated venv — pull the prebuilt Tart image published at
-`docker.io/tinaudio/synth-setter-macos`.
+If you want full dev parity on Apple Silicon inside a throwaway, mostly
+reproducible VM — Python 3.10 venv, Surge XT (native .vst3 via cask), Claude
+Code installed, auto-activated venv — pull the prebuilt Tart image published
+at `docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
+fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
+even if you pin the base image digest and git SHA.
 
 **Prerequisites:**
 
@@ -184,6 +186,12 @@ tart clone docker.io/tinaudio/synth-setter-macos:latest synth-setter-macos
 tart run synth-setter-macos                       # opens a GUI window
 ssh admin@$(tart ip synth-setter-macos)           # password: admin
 ```
+
+> **Security note:** the VM inherits the cirruslabs base image's well-known
+> `admin`/`admin` credentials. Treat it as a local-only dev VM. On a shared or
+> untrusted network, change the password in the GUI on first boot, or add an
+> SSH key to `~admin/.ssh/authorized_keys` and disable `PasswordAuthentication`
+> in `/etc/ssh/sshd_config` before exposing port 22.
 
 The image ships with the repo cloned at `~/synth-setter`, a venv with all
 `requirements.txt` deps (CPU torch wheels — Tart VMs have no GPU), Surge XT

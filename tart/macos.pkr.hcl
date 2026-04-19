@@ -8,6 +8,11 @@
 #   # In another terminal:
 #   ssh admin@$(tart ip synth-setter-macos)              # password: admin
 #
+# Security note: the VM inherits the cirruslabs base image's well-known
+# admin/admin credentials. Treat this as a local-only dev VM. If the host is
+# on a shared or untrusted network, change the password in the GUI on first
+# boot, or add an SSH key to ~admin/.ssh/authorized_keys and disable
+# PasswordAuthentication in /etc/ssh/sshd_config before exposing port 22.
 #
 # See https://tart.run/faq/ for ssh troubleshooting information.
 # Run `tart --help` for additional commands.
@@ -79,7 +84,11 @@ build {
       ". ~/.zprofile",
       "brew --version",
       "brew update",
-      "brew install git gh jq rclone uv codex bats-core",
+      "brew install git gh jq rclone codex bats-core",
+      "brew install uv",
+      # Pin uv to match the Docker dev-base image (docker/ubuntu22_04/Dockerfile).
+      # Prevents drift in `uv pip install --torch-backend` behavior between envs.
+      "test \"$(uv --version | awk '{print $2}')\" = \"0.11.2\"",
       "brew install --cask claude-code",
       "brew install --cask surge-xt",
     ]
@@ -107,7 +116,7 @@ build {
       # Auto-activate the venv for every interactive shell so tools installed
       # into .venv/bin (pre-commit, pyright, pytest, ruff, etc.) are on PATH
       # from login without a manual `source .venv/bin/activate`.
-      "printf '\\nsource ~/synth-setter/.venv/bin/activate\\n' >> ~/.zshrc",
+      "touch ~/.zshrc && (grep -qxF 'source ~/synth-setter/.venv/bin/activate' ~/.zshrc || printf '\\nsource ~/synth-setter/.venv/bin/activate\\n' >> ~/.zshrc)",
     ]
   }
 
@@ -127,8 +136,9 @@ build {
 #   https://hub.docker.com/repository/docker/tinaudio/synth-setter-macos/general
 #
 #   # 1. One-time: create a Docker Hub personal access token with
-#   #    Read, Write, Delete scopes at https://hub.docker.com/settings/security
-#   #    and use it as your password in step 2.
+#   #    Read, Write scopes at https://hub.docker.com/settings/security
+#   #    and use it as your password in step 2. Delete is not required
+#   #    for the push flow documented here.
 #
 #   # 2. Log in (credentials are stored by tart for subsequent pushes).
 #   tart login docker.io
