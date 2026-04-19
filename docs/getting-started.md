@@ -164,6 +164,62 @@ bind mount, so git submodule/hook operations fail to resolve their gitdir.
   git's credential helper with a PAT. Exporting `GITHUB_TOKEN` alone is not
   sufficient — git will not use it without a credential helper configured.
 
+### 2h. Alternative: macOS VM (Tart)
+
+If you want full dev parity on Apple Silicon inside a throwaway, mostly
+reproducible VM — Python 3.10 venv, Surge XT (native .vst3 via cask), Claude
+Code installed, auto-activated venv — pull the prebuilt Tart image published
+at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
+fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
+even if you pin the base image digest and git SHA.
+
+**Prerequisites:**
+
+- Apple Silicon Mac (M1 or later)
+- [Homebrew](https://brew.sh/)
+
+**Pull and run the prebuilt image (recommended):**
+
+```bash
+brew install cirruslabs/cli/tart
+tart clone registry-1.docker.io/tinaudio/synth-setter-macos:latest synth-setter-macos
+tart run synth-setter-macos                       # opens a GUI window
+ssh admin@$(tart ip synth-setter-macos)           # password: admin
+```
+
+> **Security note:** the VM inherits the cirruslabs base image's well-known
+> `admin`/`admin` credentials. Treat it as a local-only dev VM. On a shared or
+> untrusted network, change the password in the GUI on first boot, or add an
+> SSH key to `~admin/.ssh/authorized_keys` and disable `PasswordAuthentication`
+> in `/etc/ssh/sshd_config` before exposing port 22.
+
+The image ships with the repo cloned at `~/synth-setter`, a venv with all
+`requirements.txt` deps (CPU torch wheels — Tart VMs have no GPU), Surge XT
+at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`, and
+`source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
+interactive shell has the venv active from login.
+
+Credentials for Claude Code, `gh`, R2, and W&B are **not** baked in — log in
+on first boot.
+
+**Build the image yourself (advanced):**
+
+If you need a custom build (pinned repo ref, different torch backend, pinned
+base image, updated `uv`, updated Surge XT, etc.), the Packer template at
+[`tart/macos.pkr.hcl`](../tart/macos.pkr.hcl) builds the same image locally.
+See the bottom of the file for the full publishing workflow to Docker Hub.
+The template's `variable` blocks are the authoritative source for supported
+overrides. User-overridable packer vars: `synth_setter_git_ref` (default
+`main`), `torch_backend` (default `cpu`), `python_version` (default `3.10`),
+`vm_name` (default `synth-setter-macos`), `base_image_digest`, `uv_version`,
+and `surge_xt_version`.
+
+```bash
+brew install cirruslabs/cli/tart packer
+packer init tart/macos.pkr.hcl
+packer build -var "synth_setter_git_ref=$(git rev-parse HEAD)" tart/macos.pkr.hcl
+```
+
 ______________________________________________________________________
 
 ## 3. k-osc Quickstart (No External Dependencies)
