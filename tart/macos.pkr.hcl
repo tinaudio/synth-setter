@@ -119,8 +119,8 @@ build {
   provisioner "shell" {
     inline = [
       "touch ~/.zprofile && . ~/.zprofile",
-      "uv python install ${var.python_version}",
-      "uv python pin ${var.python_version}",
+      "uv python install \"${var.python_version}\"",
+      "uv python pin \"${var.python_version}\"",
     ]
   }
 
@@ -130,9 +130,9 @@ build {
     inline = [
       "touch ~/.zprofile && . ~/.zprofile",
       "git clone https://github.com/tinaudio/synth-setter.git ~/synth-setter",
-      "cd ~/synth-setter && git checkout ${var.synth_setter_git_ref}",
-      "cd ~/synth-setter && uv venv --python ${var.python_version}",
-      "cd ~/synth-setter && uv pip install --torch-backend ${var.torch_backend} -r requirements.txt",
+      "cd ~/synth-setter && git checkout --detach \"${var.synth_setter_git_ref}\"",
+      "cd ~/synth-setter && uv venv --python \"${var.python_version}\"",
+      "cd ~/synth-setter && uv pip install --torch-backend \"${var.torch_backend}\" -r requirements.txt",
       "cd ~/synth-setter && uv pip install --no-deps -e .",
       # Mirror the Docker dev-base convention: symlink the cask-installed
       # VST3 bundle to the repo-relative `plugins/Surge XT.vst3` path that
