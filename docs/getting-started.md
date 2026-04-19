@@ -125,11 +125,14 @@ container.
   [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
   or the [`devcontainer` CLI](https://github.com/devcontainers/cli).
 - R2 + W&B credentials (see [§4b](#4b-rclone--cloudflare-r2) and
-  [§4c](#4c-weights--biases-wb)). Local dev containers load `.env`
-  automatically via `--env-file .env` (`.devcontainer/initialize.sh`
-  creates an empty one if missing), so rclone and W&B pick up creds
-  on container start. **Codespaces** does not have a host `.env` —
-  forward R2/W&B vars via Codespaces user/org secrets instead.
+  [§4c](#4c-weights--biases-wb)). Both local dev containers and
+  Codespaces use `--env-file .env`, and `.devcontainer/initialize.sh`
+  ensures the file exists (creating an empty one if missing). Locally,
+  populate `.env` on the host before opening the container so rclone
+  and W&B pick up creds on container start. In **Codespaces** the
+  newly-touched `.env` is empty, so populate the same vars via
+  Codespaces user/org secrets — they're injected into the container
+  environment at runtime.
 - Apple Silicon: set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (the image is
   amd64-only).
 

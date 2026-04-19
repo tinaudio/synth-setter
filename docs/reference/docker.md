@@ -291,15 +291,19 @@ ______________________________________________________________________
 
 ## 4. CI Workflow
 
-The GHA workflow `.github/workflows/docker-build-validation.yml` builds a
-dev-snapshot image, pushes to Docker Hub, and runs smoke tests.
+The GHA workflow `.github/workflows/docker-build-validation.yml` builds the
+`dev-snapshot` and `devcontainer-tools` images, pushes both to Docker Hub,
+and runs smoke tests against `dev-snapshot`.
 
 ### What it does
 
 1. Validates the image config (`configs/image/dev-snapshot.yaml` via Pydantic)
-2. Builds the image using Docker Buildx
-3. Pushes tagged images to Docker Hub (dispatch/schedule only)
-4. Runs smoke tests against the SHA-pinned tag (dispatch/schedule only)
+2. Builds the `dev-snapshot` image using Docker Buildx
+3. Builds the `devcontainer-tools` image (separate step, same Dockerfile,
+   different `--target`)
+4. Pushes both images' tags to Docker Hub (dispatch/schedule only)
+5. Runs smoke tests against the SHA-pinned `dev-snapshot` tag
+   (dispatch/schedule only — `devcontainer-tools` is not smoke-tested in CI)
 
 On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
 as build validation — no push, no smoke tests.
@@ -316,10 +320,11 @@ If the YAML violates the schema, the workflow fails before any build starts.
 | `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)    |
 | `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`         |
 
-Mutable tags (`latest`, `dev-snapshot`) are only published on dispatch/schedule
-runs — not on pull-request build validations. `latest` is additionally gated
-to schedule runs or to `workflow_dispatch` with `git_ref=main`, so dispatching
-from main with a non-main `git_ref` does not overwrite `latest`.
+All mutable tags (`latest`, `dev-snapshot`, `devcontainer-tools`) are only
+published on dispatch/schedule runs — not on pull-request build validations.
+`latest` is additionally gated to schedule runs or to `workflow_dispatch`
+with `git_ref=main`, so dispatching from main with a non-main `git_ref`
+does not overwrite `latest`.
 
 Smoke tests pull the SHA-pinned tag to avoid race conditions with concurrent
 workflow runs.
