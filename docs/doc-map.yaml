@@ -158,9 +158,11 @@ docs:
     description: Onboarding — local dev, Codespaces, and dev container flows
     sources:
       - pattern: ".devcontainer/cpu/devcontainer.json"
-        covers: "CPU dev container config — remoteUser, mounts, postCreateCommand"
+        covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand"
       - pattern: ".devcontainer/gpu/devcontainer.json"
-        covers: "GPU dev container config — remoteUser, mounts, postCreateCommand"
+        covers: "GPU dev container config — remoteUser, mounts (bash-history named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand"
+      - pattern: ".devcontainer/initialize.sh"
+        covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
         covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop"
 

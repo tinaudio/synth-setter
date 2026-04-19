@@ -115,8 +115,12 @@ The `devcontainer-tools` stage extends `dev-snapshot` with CLI tooling
 (`gh`, `jq`), Node.js + `@anthropic-ai/claude-code` installed system-wide, a
 non-root `dev` user, and a `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
-history survives container rebuilds. `.devcontainer/Dockerfile` consumes it
-via `FROM tinaudio/synth-setter:devcontainer-tools`.
+history survives container rebuilds. The same devcontainer configs also
+overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
+baked `plugins/Surge XT.vst3` symlink survives the workspace bind mount —
+without it, the host's gitignored `plugins/` would shadow the baked file and
+VST-dependent tests would fail. `.devcontainer/Dockerfile` consumes the
+stage via `FROM tinaudio/synth-setter:devcontainer-tools`.
 
 ### Build variables
 
