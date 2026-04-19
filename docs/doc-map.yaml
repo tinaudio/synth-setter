@@ -187,6 +187,14 @@ docs:
       - pattern: "pipeline/constants.py"
         covers: "R2 bucket name, INPUT_SPEC_FILENAME constant"
 
+  # ── macOS VM provisioning (Tart) ────────────────────────────────
+  - doc: docs/getting-started.md
+    description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ 2h)
+    sources:
+      - pattern: "tart/**"
+        covers: "Packer template, packer variables (synth_setter_git_ref/torch_backend/python_version/vm_name), provisioner steps, brew packages, venv layout, VST3 path, smoke tests, .zshrc auto-activation, prebuilt image at docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow"
+        scope: "tart"
+
   # ── rclone reference (placeholder — doc does not exist yet) ─────
   # - doc: docs/reference/rclone.md
   #   description: rclone R2 operations reference
