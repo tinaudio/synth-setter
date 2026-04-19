@@ -93,9 +93,12 @@ credentials are required.
 
 1. On GitHub, click **Code → Codespaces → Create codespace on main**.
 2. First start takes ~5 min (image pull). Subsequent starts are fast.
-3. `.devcontainer/post-create.sh` initializes submodules, installs the
-   workspace editable, and wires up pre-commit hooks — then the terminal is
-   ready.
+3. `.devcontainer/post-create.sh` configures git safety settings,
+   optionally authenticates with `RESTRICTED_AGENT_GIT_PAT`, and installs
+   pre-commit hooks. If invoked as root (Codespaces default, or opt-in
+   `DEVCONTAINER_USER=root` locally), it drops to the `dev` user first so
+   workspace mutations under `.git/` land with dev ownership. Then the
+   terminal is ready.
 
 **Verify:**
 
@@ -122,11 +125,11 @@ container.
   [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
   or the [`devcontainer` CLI](https://github.com/devcontainers/cli).
 - R2 + W&B credentials (see [§4b](#4b-rclone--cloudflare-r2) and
-  [§4c](#4c-weights--biases-wb)). The checked-in dev container configs
-  do **not** automatically load `.env` — after opening the container,
-  source the vars inside the container shell (`set -a && source .env && set +a`)
-  or set them via Codespaces secrets / Dev Container environment settings
-  so rclone and W&B can access them.
+  [§4c](#4c-weights--biases-wb)). Local dev containers load `.env`
+  automatically via `--env-file .env` (`.devcontainer/initialize.sh`
+  creates an empty one if missing), so rclone and W&B pick up creds
+  on container start. **Codespaces** does not have a host `.env` —
+  forward R2/W&B vars via Codespaces user/org secrets instead.
 - Apple Silicon: set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (the image is
   amd64-only).
 
@@ -149,10 +152,10 @@ cd .claude/worktrees/my-feature
 This is the supported local pattern. Mounting a worktree directly from the
 host does not work — the worktree's `.git` file points to
 `<repo>/.git/worktrees/<name>/` on the host, which is outside the container's
-bind mount, so git submodule/hook operations fail to resolve their gitdir.
-`.devcontainer/initialize.sh` detects this case on the host and aborts the
-build with a clear error before the container is created, so the failure
-surfaces immediately rather than partway through `post-create`.
+bind mount, so git hook operations (and anything else needing the gitdir)
+fail to resolve. `.devcontainer/initialize.sh` detects this case on the host
+and aborts the build with a clear error before the container is created, so
+the failure surfaces immediately rather than partway through `post-create`.
 
 **Caveats:**
 
@@ -160,12 +163,13 @@ surfaces immediately rather than partway through `post-create`.
   `prunable` (their host paths don't resolve inside the mount). Do **not**
   run `git worktree prune` inside the container — it will drop registry
   entries for worktrees that are still valid on the host.
-- `git submodule update` for the private `tinaudio/skills` submodule needs
-  GitHub credentials available to git inside the container. VS Code's git
-  credential helper usually forwards these automatically. For the CLI, run
-  `gh auth login && gh auth setup-git` inside the container, or configure
-  git's credential helper with a PAT. Exporting `GITHUB_TOKEN` alone is not
-  sufficient — git will not use it without a credential helper configured.
+- `plugins/` inside the container is an anonymous Docker volume seeded
+  from the base image, which ships `plugins/Surge XT.vst3` as a symlink
+  to `/usr/lib/vst3/Surge XT.vst3`. Without this overlay, the host
+  workspace bind mount would shadow the baked symlink and break
+  VST-dependent tests. Host edits under `plugins/` are not visible
+  inside the container; container edits under `plugins/` are not
+  visible on the host.
 
 ### 2h. Alternative: macOS VM (Tart)
 
