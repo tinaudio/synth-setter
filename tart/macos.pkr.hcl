@@ -53,6 +53,12 @@ variable "python_version" {
   description = "Python interpreter version installed and pinned via uv."
 }
 
+variable "uv_version" {
+  type        = string
+  default     = "0.11.2"
+  description = "uv version installed via Astral's versioned installer (https://astral.sh/uv/<version>/install.sh). Keep in sync with docker/ubuntu22_04/Dockerfile (`ghcr.io/astral-sh/uv:<version>`) so Tart and Docker dev-base resolve identical wheels."
+}
+
 variable "vm_name" {
   type        = string
   default     = "synth-setter-macos"
@@ -85,10 +91,15 @@ build {
       "brew --version",
       "brew update",
       "brew install git gh jq rclone codex bats-core",
-      "brew install uv",
-      # Pin uv to match the Docker dev-base image (docker/ubuntu22_04/Dockerfile).
-      # Prevents drift in `uv pip install --torch-backend` behavior between envs.
-      "test \"$(uv --version | awk '{print $2}')\" = \"0.11.2\"",
+      # Install uv from Astral's versioned installer rather than `brew install uv`.
+      # Homebrew's uv formula is rolling, so it cannot reliably hold a specific
+      # version; the Astral installer URL embeds the version and is reproducible.
+      # Keep ${var.uv_version} in sync with docker/ubuntu22_04/Dockerfile so
+      # `uv pip install --torch-backend` resolves identically in Docker and Tart.
+      "curl -LsSf https://astral.sh/uv/${var.uv_version}/install.sh | sh",
+      "grep -qxF 'export PATH=\"$HOME/.local/bin:$PATH\"' ~/.zprofile || printf '\\nexport PATH=\"$HOME/.local/bin:$PATH\"\\n' >> ~/.zprofile",
+      ". ~/.zprofile",
+      "test \"$(uv --version | awk '{print $2}')\" = \"${var.uv_version}\"",
       "brew install --cask claude-code",
       "brew install --cask surge-xt",
     ]
