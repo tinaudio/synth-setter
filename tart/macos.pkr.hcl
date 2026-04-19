@@ -65,6 +65,12 @@ variable "vm_name" {
   description = "Name of the built Tart VM. Used with `tart run <name>` and `tart ip <name>`."
 }
 
+variable "surge_xt_version" {
+  type        = string
+  default     = "1.3.4"
+  description = "Required Surge XT version. Asserted after `brew install --cask surge-xt` so the build fails loudly if Homebrew's cask has rolled past this — bump only after validating the new release against the pipeline."
+}
+
 source "tart-cli" "tart" {
   vm_base_name = "ghcr.io/cirruslabs/macos-tahoe-base@${var.base_image_digest}"
   vm_name      = var.vm_name
@@ -102,6 +108,10 @@ build {
       "test \"$(uv --version | awk '{print $2}')\" = \"${var.uv_version}\"",
       "brew install --cask claude-code",
       "brew install --cask surge-xt",
+      # Hard-fail if Homebrew's cask resolves to a Surge XT version we haven't
+      # qualified against the pipeline. `brew list --cask --versions` prints
+      # `surge-xt <version>`; extract the second field and assert equality.
+      "test \"$(brew list --cask --versions surge-xt | awk '{print $2}')\" = \"${var.surge_xt_version}\"",
     ]
   }
 
