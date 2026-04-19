@@ -124,6 +124,12 @@ build {
       "cd ~/synth-setter && uv venv --python ${var.python_version}",
       "cd ~/synth-setter && uv pip install --torch-backend ${var.torch_backend} -r requirements.txt",
       "cd ~/synth-setter && uv pip install --no-deps -e .",
+      # Mirror the Docker dev-base convention: symlink the cask-installed
+      # VST3 bundle to the repo-relative `plugins/Surge XT.vst3` path that
+      # configs, CLI `--plugin_path` defaults, and tests all assume. See
+      # docker/ubuntu22_04/Dockerfile step `ln -s "/usr/lib/vst3/Surge XT.vst3" ...`.
+      "mkdir -p ~/synth-setter/plugins",
+      "ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' ~/synth-setter/'plugins/Surge XT.vst3'",
       # Auto-activate the venv for every interactive shell so tools installed
       # into .venv/bin (pre-commit, pyright, pytest, ruff, etc.) are on PATH
       # from login without a manual `source .venv/bin/activate`.
@@ -136,7 +142,7 @@ build {
   provisioner "shell" {
     inline = [
       ". ~/.zprofile",
-      "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from src.data.vst.core import load_plugin; load_plugin('/Library/Audio/Plug-Ins/VST3/Surge XT.vst3')\"",
+      "cd ~/synth-setter && .venv/bin/python -X faulthandler -c \"from src.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')\"",
       "cd ~/synth-setter && .venv/bin/pytest -k 'not slow' -v",
     ]
   }
