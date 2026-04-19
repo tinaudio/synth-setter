@@ -2,7 +2,7 @@
 # Quick start — pull and run the prebuilt VM:
 #
 #   brew install cirruslabs/cli/tart
-#   tart clone docker.io/tinaudio/synth-setter-macos:latest synth-setter-macos
+#   tart clone registry-1.docker.io/tinaudio/synth-setter-macos:latest synth-setter-macos
 #   tart run synth-setter-macos                          # GUI window opens
 #
 #   # In another terminal:
@@ -141,7 +141,7 @@ build {
 #   #    for the push flow documented here.
 #
 #   # 2. Log in (credentials are stored by tart for subsequent pushes).
-#   tart login docker.io
+#   tart login registry-1.docker.io
 #   # Username: <your-dockerhub-username>
 #   # Password: <access-token-from-step-1>
 #
@@ -179,8 +179,8 @@ build {
 #   # 4. Push two tags — :latest as the moving pointer, and a dated tag as
 #   #    an immutable rollback point. The local VM name comes from var.vm_name.
 #   DATE_TAG="$(date -u +%Y-%m-%d)"
-#   tart push synth-setter-macos docker.io/tinaudio/synth-setter-macos:${DATE_TAG}
-#   tart push synth-setter-macos docker.io/tinaudio/synth-setter-macos:latest
+#   tart push synth-setter-macos registry-1.docker.io/tinaudio/synth-setter-macos:${DATE_TAG}
+#   tart push synth-setter-macos registry-1.docker.io/tinaudio/synth-setter-macos:latest
 #
 #   # 5. (Optional) Free local disk once the push succeeds.
 #   tart delete synth-setter-macos

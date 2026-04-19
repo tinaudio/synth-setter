@@ -169,7 +169,7 @@ bind mount, so git submodule/hook operations fail to resolve their gitdir.
 If you want full dev parity on Apple Silicon inside a throwaway, mostly
 reproducible VM — Python 3.10 venv, Surge XT (native .vst3 via cask), Claude
 Code installed, auto-activated venv — pull the prebuilt Tart image published
-at `docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
+at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
 fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
 even if you pin the base image digest and git SHA.
 
@@ -182,7 +182,7 @@ even if you pin the base image digest and git SHA.
 
 ```bash
 brew install cirruslabs/cli/tart
-tart clone docker.io/tinaudio/synth-setter-macos:latest synth-setter-macos
+tart clone registry-1.docker.io/tinaudio/synth-setter-macos:latest synth-setter-macos
 tart run synth-setter-macos                       # opens a GUI window
 ssh admin@$(tart ip synth-setter-macos)           # password: admin
 ```
