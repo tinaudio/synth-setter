@@ -105,15 +105,17 @@ make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 
-# devcontainer-tools — dev-snapshot + gh, jq, Node.js, Claude Code, dev user
+# devcontainer-tools — dev-base + gh, jq, Node.js, Claude Code, dev user
 make docker-build-devcontainer-tools \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 ```
 
-The `devcontainer-tools` stage extends `dev-snapshot` with CLI tooling
-(`gh`, `jq`), Node.js + `@anthropic-ai/claude-code` installed system-wide, a
-non-root `dev` user, and a `/commandhistory` directory (owned by `dev`) that
+The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
+build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
+the synth-setter source. `devcontainer-tools` adds CLI tooling (`gh`, `jq`),
+Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
+`dev` user, and a `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
 history survives container rebuilds. The same devcontainer configs also
 overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
