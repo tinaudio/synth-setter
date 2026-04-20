@@ -155,5 +155,9 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     assert "epoch_001.ckpt" in files
     assert "epoch_002.ckpt" not in files
 
-    assert metric_dict_1["train/acc"] < metric_dict_2["train/acc"]
-    assert metric_dict_1["val/acc"] < metric_dict_2["val/acc"]
+    # `ksin_ff_module.training_step` logs `train/loss` with `on_step=True, on_epoch=True`, which
+    # populates `train/loss_epoch` in `trainer.callback_metrics`. `validation_step` logs `val/loss`
+    # with `on_epoch=True` only. Resuming for another epoch should drive both losses down, so we
+    # expect strict decrease (note: reversed direction vs. the legacy `train/acc < ...` assertion).
+    assert metric_dict_1["train/loss_epoch"] > metric_dict_2["train/loss_epoch"]
+    assert metric_dict_1["val/loss"] > metric_dict_2["val/loss"]
