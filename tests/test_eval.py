@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 
@@ -52,8 +53,9 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
 
     # `ksin_ff_module.test_step` logs `test/loss` (MSE), not `test/acc`. Use loss for the sanity
     # bound and parity check — the train-time test phase and the standalone eval should produce
-    # identical `test/loss` on the same checkpoint and data.
-    assert test_metric_dict["test/loss"] < float("inf")
+    # identical `test/loss` on the same checkpoint and data. `math.isfinite` rejects `+inf`,
+    # `-inf`, and NaN; `< float("inf")` would silently accept `-inf`.
+    assert math.isfinite(test_metric_dict["test/loss"].item())
     assert (
         abs(train_metric_dict["test/loss"].item() - test_metric_dict["test/loss"].item()) < 0.001
     )
@@ -95,5 +97,5 @@ def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictCon
     HydraConfig().set_config(cfg_eval)
     val_metric_dict, _ = evaluate(cfg_eval)
 
-    assert val_metric_dict["val/loss"] < float("inf")
+    assert math.isfinite(val_metric_dict["val/loss"].item())
     assert abs(train_metric_dict["val/loss"].item() - val_metric_dict["val/loss"].item()) < 0.001
