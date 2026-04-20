@@ -52,10 +52,14 @@ class TestWandbConfigResolvesFromEnv:
         cfg = OmegaConf.load("configs/logger/wandb.yaml")
         assert OmegaConf.select(cfg, "wandb.project") == "test-project"
 
-    def test_wandb_defaults_when_env_unset(self, monkeypatch):
-        """Falls back to tinaudio/synth-setter when env vars unset."""
+    def test_wandb_entity_defaults_to_none_when_env_unset(self, monkeypatch):
+        """Entity falls back to None (user's default W&B entity) when env var unset."""
         monkeypatch.delenv("WANDB_ENTITY", raising=False)
+        cfg = OmegaConf.load("configs/logger/wandb.yaml")
+        assert OmegaConf.select(cfg, "wandb.entity") is None
+
+    def test_wandb_project_defaults_to_synth_setter_when_env_unset(self, monkeypatch):
+        """Project falls back to synth-setter when env var unset."""
         monkeypatch.delenv("WANDB_PROJECT", raising=False)
         cfg = OmegaConf.load("configs/logger/wandb.yaml")
-        assert OmegaConf.select(cfg, "wandb.entity") == "tinaudio"
         assert OmegaConf.select(cfg, "wandb.project") == "synth-setter"

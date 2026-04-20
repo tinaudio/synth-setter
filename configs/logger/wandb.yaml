@@ -10,7 +10,7 @@ wandb:
   project: "${oc.env:WANDB_PROJECT,synth-setter}"
   log_model: "all" # upload every checkpoint as W&B artifact (crash-resilient)
   prefix: "" # a string to put at the beginning of metric keys
-  entity: "${oc.env:WANDB_ENTITY,tinaudio}" # set to name of your wandb team
+  entity: ${oc.env:WANDB_ENTITY,null} # set to name of your wandb team (defaults to user's default entity)
   group: ""
   tags: []
   job_type: ""

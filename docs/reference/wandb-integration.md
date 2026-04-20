@@ -18,14 +18,15 @@ ______________________________________________________________________
 
 ## 1. Initialization
 
-| Concern           | How it works                                                                                                   | File                              |
-| ----------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| W&B run creation  | `WandbLogger` instantiated by Hydra                                                                            | `configs/logger/wandb.yaml`       |
-| Entity / project  | Env-var driven: `entity: "${oc.env:WANDB_ENTITY,tinaudio}"`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"` | `configs/logger/wandb.yaml:10,13` |
-| Run ID            | `null` (W&B auto-generates)                                                                                    | `configs/logger/wandb.yaml:8`     |
-| Checkpoint upload | `log_model: "all"`                                                                                             | `configs/logger/wandb.yaml:11`    |
-| Code saving       | `wandb.Settings(code_dir=".")`                                                                                 | `configs/logger/wandb.yaml:17-19` |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                               | `src/utils/utils.py:102-107`      |
+| Concern           | How it works                                                                                                | File                              |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| W&B run creation  | `WandbLogger` instantiated by Hydra (opt-in: requires `logger=wandb` override or `WANDB_API_KEY` set)       | `configs/logger/wandb.yaml`       |
+| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"`    | `configs/logger/wandb.yaml:10,13` |
+| API-key gate      | `instantiate_loggers()` skips `WandbLogger` if `WANDB_API_KEY` is unset — no anonymous runs, no auth prompt | `src/utils/instantiators.py`      |
+| Run ID            | `null` (W&B auto-generates)                                                                                 | `configs/logger/wandb.yaml:8`     |
+| Checkpoint upload | `log_model: "all"`                                                                                          | `configs/logger/wandb.yaml:11`    |
+| Code saving       | `wandb.Settings(code_dir=".")`                                                                              | `configs/logger/wandb.yaml:17-19` |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                            | `src/utils/utils.py:102-107`      |
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 

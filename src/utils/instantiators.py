@@ -1,3 +1,5 @@
+import os
+
 import hydra
 from lightning import Callback
 from lightning.pytorch.loggers import Logger
@@ -6,6 +8,8 @@ from omegaconf import DictConfig
 from src.utils import pylogger
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
+
+_WANDB_TARGET = "lightning.pytorch.loggers.wandb.WandbLogger"
 
 
 def instantiate_callbacks(callbacks_cfg: DictConfig) -> list[Callback]:
@@ -48,6 +52,12 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
 
     for _, lg_conf in logger_cfg.items():
         if isinstance(lg_conf, DictConfig) and "_target_" in lg_conf:
+            if lg_conf._target_ == _WANDB_TARGET and not os.environ.get("WANDB_API_KEY"):
+                log.info(
+                    "WANDB_API_KEY not set — skipping WandbLogger. "
+                    "Set WANDB_API_KEY to enable W&B logging."
+                )
+                continue
             log.info(f"Instantiating logger <{lg_conf._target_}>")
             logger.append(hydra.utils.instantiate(lg_conf))
 
