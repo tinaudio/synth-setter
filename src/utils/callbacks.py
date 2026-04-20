@@ -20,13 +20,19 @@ from src.models.surge_flow_matching_module import SurgeFlowMatchingModule
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:
     """Log a matplotlib figure to whichever Lightning loggers support images.
 
-    Dispatches per-logger since Lightning loggers don't share a uniform image API:
-    WandbLogger exposes ``log_image``; TensorBoardLogger wraps a SummaryWriter
-    with ``add_figure``. Loggers without image support (CSV) are skipped.
+    Lightning's base ``Logger`` only standardizes scalar metrics; image APIs
+    differ per backend, so dispatch is required:
+    ``WandbLogger.log_image`` vs ``TensorBoardLogger.experiment.add_figure``.
 
-    Only rank 0 emits — TensorBoard's ``SummaryWriter`` is not rank-safe, and
-    duplicate emissions from every DDP worker would corrupt event files or
-    log the same figure N times.
+    Any logger outside the two handled here is **intentionally skipped**
+    (silent no-op) — ``CSVLogger`` has no image API, and callers treat that
+    as expected. If a new image-capable logger is introduced (MLflow,
+    Comet, Neptune, ...), add an ``isinstance`` branch below rather than
+    adding the call at the callback site.
+
+    Only rank 0 emits — TensorBoard's ``SummaryWriter`` is not rank-safe,
+    and duplicate emissions from every DDP worker would corrupt event
+    files or log the same figure N times.
     """
     if not trainer.is_global_zero:
         return
