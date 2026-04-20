@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH", "plugins/Surge XT.vst3")
+PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 
 skip_no_pedalboard = pytest.mark.skipif(
     not __import__("importlib").util.find_spec("pedalboard"),
