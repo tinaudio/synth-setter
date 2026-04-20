@@ -3,8 +3,10 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import wandb
+from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import BasePredictionWriter, Callback
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+from matplotlib.figure import Figure
 
 from src.data.vst import param_specs
 from src.models.components.transformer import (
@@ -13,6 +15,20 @@ from src.models.components.transformer import (
 )
 from src.models.ksin_flow_matching_module import KSinFlowMatchingModule
 from src.models.surge_flow_matching_module import SurgeFlowMatchingModule
+
+
+def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:
+    """Log a matplotlib figure to whichever Lightning loggers support images.
+
+    Dispatches per-logger since Lightning loggers don't share a uniform image API:
+    WandbLogger exposes ``log_image``; TensorBoardLogger wraps a SummaryWriter
+    with ``add_figure``. Loggers without image support (CSV) are skipped.
+    """
+    for logger in trainer.loggers:
+        if isinstance(logger, WandbLogger):
+            logger.log_image(key=key, images=[fig], step=trainer.global_step)
+        elif isinstance(logger, TensorBoardLogger):
+            logger.experiment.add_figure(key, fig, global_step=trainer.global_step)
 
 
 class PlotLossPerTimestep(Callback):
@@ -73,8 +89,7 @@ class PlotLossPerTimestep(Callback):
         return fig
 
     def _log_plot(self, fig, trainer):
-        plot = wandb.Image(fig)
-        wandb.log({"plot": plot}, step=trainer.global_step)
+        _log_figure(trainer, "plot", fig)
         plt.close(fig)
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:
@@ -131,8 +146,7 @@ class PlotPositionalEncodingSimilarity(Callback):
             return self._plot_multiple_similarities(sim)
 
     def _log_plot(self, fig, trainer):
-        plot = wandb.Image(fig)
-        wandb.log({"pos_enc_similarity": plot}, step=trainer.global_step)
+        _log_figure(trainer, "pos_enc_similarity", fig)
         plt.close(fig)
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:
@@ -254,9 +268,8 @@ class PlotLearntProjection(Callback):
         return fig
 
     def _log_plots(self, fig_ass, fig_value, trainer):
-        plot_ass = wandb.Image(fig_ass)
-        plot_value = wandb.Image(fig_value)
-        wandb.log({"assignment": plot_ass, "value": plot_value}, step=trainer.global_step)
+        _log_figure(trainer, "assignment", fig_ass)
+        _log_figure(trainer, "value", fig_value)
 
         plt.close(fig_ass)
         plt.close(fig_value)
