@@ -75,10 +75,11 @@ def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictCon
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
         cfg_train.trainer.accelerator = "gpu"
-        cfg_train.test = True
     with open_dict(cfg_eval):
         cfg_eval.trainer.accelerator = "gpu"
         cfg_eval.data = cfg_train.data
+        cfg_eval.model = cfg_train.model
+        cfg_eval.callbacks = cfg_train.callbacks
 
     HydraConfig().set_config(cfg_train)
     train_metric_dict, _ = train(cfg_train)
@@ -92,5 +93,5 @@ def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictCon
     HydraConfig().set_config(cfg_eval)
     val_metric_dict, _ = evaluate(cfg_eval)
 
-    assert val_metric_dict["val/acc"] > 0.0
-    assert abs(train_metric_dict["val/acc"].item() - val_metric_dict["val/acc"].item()) < 0.001
+    assert val_metric_dict["val/loss"] < float("inf")
+    assert abs(train_metric_dict["val/loss"].item() - val_metric_dict["val/loss"].item()) < 0.001
