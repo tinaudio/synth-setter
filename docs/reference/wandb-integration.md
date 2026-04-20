@@ -10,9 +10,12 @@ ______________________________________________________________________
 
 W&B runs are created via Lightning's `WandbLogger` — there are no direct
 `wandb.init()` calls in training or eval code. The logger is instantiated via
-Hydra config and passed to the `Trainer`. Most metric logging goes through
-Lightning's `self.log()` / `self.log_dict()` API; a handful of visualization
-callbacks additionally call `wandb.log()` directly for image uploads.
+Hydra config and passed to the `Trainer`. Metric logging goes through
+Lightning's `self.log()` / `self.log_dict()` API; visualization callbacks
+route matplotlib figures through a small logger-dispatch helper
+(`_log_figure` in `src/utils/callbacks.py`) that calls
+`WandbLogger.log_image` or `TensorBoardLogger.experiment.add_figure`
+depending on which loggers are attached.
 
 ______________________________________________________________________
 
@@ -87,14 +90,21 @@ Logged via `self.log()` in each LightningModule:
 |                           | `val/loss`, `val/acc`, `val/acc_best`                    | —    | yes   |
 |                           | `test/loss`, `test/acc`                                  | —    | yes   |
 
-### 2c. Callbacks — Visualization (direct `wandb.log()`)
+### 2c. Callbacks — Visualization (via Lightning logger dispatch)
+
+Image-producing callbacks route figures through `_log_figure` in
+`src/utils/callbacks.py`, which dispatches to `WandbLogger.log_image` and/or
+`TensorBoardLogger.experiment.add_figure` depending on the attached loggers.
+Under the default `many_loggers` composition (CSV + TB), plots land in
+TensorBoard; with `logger=wandb` they go to W&B; with both attached they go
+to both.
 
 | Callback                           | Logged key                       | Trigger                                         | File                             |
 | ---------------------------------- | -------------------------------- | ----------------------------------------------- | -------------------------------- |
-| `PlotLossPerTimestep`              | `plot` (image)                   | `on_validation_epoch_end`                       | `src/utils/callbacks.py:77`      |
-| `PlotPositionalEncodingSimilarity` | `pos_enc_similarity` (image)     | `on_validation_epoch_end`                       | `src/utils/callbacks.py:135`     |
-| `PlotLearntProjection`             | `assignment`, `value` (images)   | `on_validation_epoch_end` or every N steps      | `src/utils/callbacks.py:259`     |
-| `LogPerParamMSE`                   | `per_param_mse/{name}` per param | `on_validation_epoch_end` (via `self.log_dict`) | `src/utils/callbacks.py:376-378` |
+| `PlotLossPerTimestep`              | `plot` (image)                   | `on_validation_epoch_end`                       | `src/utils/callbacks.py:91-93`   |
+| `PlotPositionalEncodingSimilarity` | `pos_enc_similarity` (image)     | `on_validation_epoch_end`                       | `src/utils/callbacks.py:148-150` |
+| `PlotLearntProjection`             | `assignment`, `value` (images)   | `on_validation_epoch_end` or every N steps      | `src/utils/callbacks.py:270-273` |
+| `LogPerParamMSE`                   | `per_param_mse/{name}` per param | `on_validation_epoch_end` (via `self.log_dict`) | `src/utils/callbacks.py:389-391` |
 
 ### 2d. Callbacks — Non-W&B
 
@@ -104,7 +114,7 @@ Logged via `self.log()` in each LightningModule:
 | `LearningRateMonitor` | Logs LR to Lightning logger                            | `configs/callbacks/lr_monitor.yaml`        |
 | `RichProgressBar`     | Terminal display only                                  | `configs/callbacks/rich_progress_bar.yaml` |
 | `ModelSummary`        | Prints param summary to console                        | `configs/callbacks/model_summary.yaml`     |
-| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/utils/callbacks.py:307-342`           |
+| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/utils/callbacks.py:320-355`           |
 
 ### 2e. Gradient Watching
 
@@ -160,13 +170,13 @@ ______________________________________________________________________
 
 ## 5. Known Gaps
 
-| #   | Gap                                                                                                                                                                                                                           | Impact                                                                                              | Tracking |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------- |
-| 1   | ~~**Entity/project hardcoded** to `benhayes`/`synth-permutations`~~ **RESOLVED** — env-var driven (`WANDB_ENTITY`/`WANDB_PROJECT`); entity defaults to `null` (user's W&B default entity), project defaults to `synth-setter` | ~~Runs log to wrong account~~                                                                       | #133     |
-| 2   | **No `wandb.config` for env vars** — W&B captures `sys.argv` but not env vars like `TRAINING_ARGS`. **Partially resolved:** `IMAGE_TAG` is now captured by `log_wandb_provenance()`.                                          | Config passed via env vars is silently missing from W&B (except `IMAGE_TAG`)                        | #252     |
-| 3   | ~~**No `github_sha` in `wandb.config`**~~ **RESOLVED** — `log_wandb_provenance()` now logs `github_sha` via `git rev-parse HEAD`                                                                                              | ~~Can't reliably link a run to the exact code that produced it~~                                    | —        |
-| 4   | **No GitHub issue integration** — train job doesn't post run ID back to GitHub                                                                                                                                                | Manual lookup to match runs to issues                                                               | #263     |
-| 5   | ~~**`log_model: true` vs `"all"`**~~ **RESOLVED** — changed to `log_model: "all"` for crash resilience (every checkpoint uploaded immediately)                                                                                | —                                                                                                   | —        |
-| 6   | **Visualization callbacks use `wandb.log()` directly** — bypasses Lightning logger abstraction                                                                                                                                | Breaks if logger is swapped; step alignment relies on `trainer.global_step`                         | —        |
-| 7   | **`torch.compile` crashes test-stage `setup()`** — eval after training fails                                                                                                                                                  | Post-training test metrics never logged to W&B                                                      | #248     |
-| 8   | **No structured run ID convention** — `id: null` means W&B generates random IDs                                                                                                                                               | Can't reconstruct run lineage from ID alone; design doc specifies `{config_id}-{timestamp}` pattern | —        |
+| #   | Gap                                                                                                                                                                                                                                                                           | Impact                                                                                              | Tracking |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------- |
+| 1   | ~~**Entity/project hardcoded** to `benhayes`/`synth-permutations`~~ **RESOLVED** — env-var driven (`WANDB_ENTITY`/`WANDB_PROJECT`); entity defaults to `null` (user's W&B default entity), project defaults to `synth-setter`                                                 | ~~Runs log to wrong account~~                                                                       | #133     |
+| 2   | **No `wandb.config` for env vars** — W&B captures `sys.argv` but not env vars like `TRAINING_ARGS`. **Partially resolved:** `IMAGE_TAG` is now captured by `log_wandb_provenance()`.                                                                                          | Config passed via env vars is silently missing from W&B (except `IMAGE_TAG`)                        | #252     |
+| 3   | ~~**No `github_sha` in `wandb.config`**~~ **RESOLVED** — `log_wandb_provenance()` now logs `github_sha` via `git rev-parse HEAD`                                                                                                                                              | ~~Can't reliably link a run to the exact code that produced it~~                                    | —        |
+| 4   | **No GitHub issue integration** — train job doesn't post run ID back to GitHub                                                                                                                                                                                                | Manual lookup to match runs to issues                                                               | #263     |
+| 5   | ~~**`log_model: true` vs `"all"`**~~ **RESOLVED** — changed to `log_model: "all"` for crash resilience (every checkpoint uploaded immediately)                                                                                                                                | —                                                                                                   | —        |
+| 6   | ~~**Visualization callbacks use `wandb.log()` directly** — bypasses Lightning logger abstraction~~ **RESOLVED** — callbacks now dispatch through `_log_figure` to whichever Lightning loggers are attached (WandbLogger and/or TensorBoardLogger); CSV-only setups are silent | ~~Breaks if logger is swapped; step alignment relies on `trainer.global_step`~~                     | #614     |
+| 7   | **`torch.compile` crashes test-stage `setup()`** — eval after training fails                                                                                                                                                                                                  | Post-training test metrics never logged to W&B                                                      | #248     |
+| 8   | **No structured run ID convention** — `id: null` means W&B generates random IDs                                                                                                                                                                                               | Can't reconstruct run lineage from ID alone; design doc specifies `{config_id}-{timestamp}` pattern | —        |
