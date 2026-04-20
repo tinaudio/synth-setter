@@ -48,11 +48,11 @@ under the GPL-3.0 license.
 ## Prerequisites
 
 - **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
-- **Python 3.10+**
-- **uv** (recommended) — [install uv](https://docs.astral.sh/uv/getting-started/installation/)
-- **Git**
+- **Git**, **curl**, **make** (for the canonical install path)
 - **[Surge XT](https://github.com/surge-synthesizer/surge) 1.3.4** — the VST synthesizer used for dataset generation. See the [Surge XT downloads page](https://surge-synthesizer.github.io/downloads/) for installation instructions.
 - **System dependencies for VST rendering** — see the project documentation for details
+
+`make install` handles uv and Python 3.10 for you — no pre-existing Python interpreter needed.
 
 ## Installation
 
@@ -61,28 +61,24 @@ under the GPL-3.0 license.
 git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 
-# 2. Install uv (if you don't have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 3. Create and activate a Python 3.10 venv
-uv venv --python 3.10 .venv
-source .venv/bin/activate
-
-# 4. Install the project and all dev tooling
+# 2. Install uv, create .venv (Python 3.10), install deps, set up pre-commit
 make install
 
-# 5. Symlink the Surge XT VST3 into plugins/
+# 3. Activate the venv
+source .venv/bin/activate
+
+# 4. Symlink the Surge XT VST3 into plugins/
 make link-plugins
 
-# 6. Export environment variables (R2, W&B — see §4b in getting-started)
+# 5. Export environment variables (R2, W&B — see §4b in getting-started)
 set -a && source .env && set +a
 ```
 
-> **pip / conda users:** If you manage your own Python environment, you can
-> skip steps 2-3 and run `make install` directly
-> (or `pip install -r requirements.txt -e .`).
-> See [docs/getting-started.md &sect;2](docs/getting-started.md#2-installation)
-> for the full walkthrough and alternatives.
+> **Prefer pip or conda?** If you'd rather manage the Python interpreter and
+> venv yourself, see
+> [docs/getting-started.md Appendix A](docs/getting-started.md#appendix-a-manual-environment-setup)
+> for a walkthrough using `pip install -r requirements.txt -e .` inside your
+> own environment.
 
 ### GPU vs CPU
 

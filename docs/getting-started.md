@@ -9,11 +9,14 @@ ______________________________________________________________________
 ## 1. Prerequisites
 
 - **Linux or macOS** — Windows is not supported (see the project README).
-- **Python 3.10+** (check with `python --version`)
-- **Git**
-- **make** (ships with macOS/Linux)
+- **Git**, **curl**, **make** (all ship with macOS/Linux)
 - **A CUDA GPU** is recommended for training. CPU and MPS (Apple Silicon) trainers
   are available but significantly slower.
+
+`make install` installs [uv](https://docs.astral.sh/uv/) and a managed
+Python 3.10 interpreter for you — you do not need to install Python
+yourself. If you prefer to manage the interpreter and venv manually, see
+[Appendix A](#appendix-a-manual-environment-setup).
 
 ______________________________________________________________________
 
@@ -26,54 +29,41 @@ git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 ```
 
-### 2b. Create a virtual environment
+### 2b. Install
 
-The recommended approach uses [uv](https://docs.astral.sh/uv/getting-started/installation/)
-to create a venv with a pinned Python version:
+`make install` is the canonical end-to-end install. It:
 
-```bash
-# Install uv (if you don't have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Create and activate a Python 3.10 venv
-uv venv --python 3.10 .venv
-source .venv/bin/activate
-```
-
-Alternatively, if you already have Python 3.10+ installed:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-### 2c. Install dependencies
-
-`make install` is the canonical command. It installs uv, all dependencies from
-`requirements.txt` (including pre-commit and dev tooling), and the project in
-editable mode:
+1. Installs [uv](https://docs.astral.sh/uv/) if it is not already on your PATH.
+2. Creates `.venv/` using a managed Python 3.10 interpreter (downloaded by uv
+   if you do not have one locally). The venv prompt label is `synth-setter`.
+3. Installs everything in `requirements.txt` plus the project itself in
+   editable mode (`pip install -e .`).
+4. Registers the pre-commit hooks.
 
 ```bash
 make install
 ```
 
-Or with plain pip:
+Re-running `make install` is safe: it reuses `.venv/` if it already exists and
+is Python 3.10, and refreshes the installed packages. If `.venv/` exists with a
+different Python version, `make install` errors and asks you to remove it
+first.
+
+The pre-commit hooks run Ruff (linting + formatting), pyright (type checking),
+mdformat, codespell, and several other checks automatically on each commit.
+
+> **Prefer pip or conda?** See
+> [Appendix A](#appendix-a-manual-environment-setup) for a
+> walkthrough using your own Python interpreter and environment tooling.
+
+### 2c. Activate the venv
 
 ```bash
-pip install -r requirements.txt
-pip install -e .
+source .venv/bin/activate
 ```
 
-(Drop `-e` for a non-editable install.)
-
-After installing, activate pre-commit hooks:
-
-```bash
-pre-commit install
-```
-
-The hooks run Ruff (linting + formatting), pyright (type checking), mdformat,
-codespell, and several other checks automatically on each commit.
+Your prompt should change to `(synth-setter)`. All subsequent commands in this
+guide assume the venv is active.
 
 ### 2d. Symlink the Surge XT VST3
 
@@ -577,3 +567,72 @@ ______________________________________________________________________
   [docs/reference/configuration-reference.md](reference/configuration-reference.md)
   covers all config layers in detail.
 - **Available make targets:** Run `make help` to see all commands.
+
+______________________________________________________________________
+
+## Appendix A: Manual environment setup
+
+`make install` is the canonical path for most users — it installs uv, a
+managed Python 3.10 interpreter, the venv, dependencies, and pre-commit.
+This appendix is for users who want to manage Python and the environment
+themselves (pip, conda, pyenv, system Python, etc.).
+
+**Requirement:** Python 3.10 or newer (the project declares
+`requires-python = ">=3.10"` in `pyproject.toml`; `pip` enforces this).
+
+### A.1. Plain pip + venv
+
+```bash
+# Use any Python 3.10+ interpreter
+python3.10 -m venv .venv
+source .venv/bin/activate
+
+pip install -r requirements.txt
+pip install -e .
+pre-commit install
+```
+
+Drop `-e` on the second line for a non-editable install.
+
+### A.2. conda
+
+```bash
+conda create -n synth-setter python=3.10
+conda activate synth-setter
+
+pip install -r requirements.txt
+pip install -e .
+pre-commit install
+```
+
+`requirements.txt` contains pip-only packages (torch, lightning, hydra-core,
+etc.), so we install them with pip inside the conda environment rather than
+through conda-forge.
+
+### A.3. uv pip without `make install`
+
+If you want to drive uv directly (e.g., to point at a specific interpreter
+you manage yourself):
+
+```bash
+uv venv --python 3.10 --prompt synth-setter .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt -e .
+pre-commit install
+```
+
+This is what `make install` does under the hood.
+
+### A.4. GPU vs CPU PyTorch
+
+`requirements.txt` pins `torch>=2.0.0` without fixing the CPU/CUDA build.
+After installing requirements, override with the wheel you want from the
+[PyTorch install matrix](https://pytorch.org/get-started/locally/):
+
+```bash
+# Example: CUDA 12.1 wheel
+pip install --index-url https://download.pytorch.org/whl/cu121 torch
+```
+
+`make install` inherits the same CPU/CUDA choice — it does not pick a wheel
+for you.
