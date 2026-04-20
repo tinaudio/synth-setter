@@ -8,8 +8,10 @@ ______________________________________________________________________
 
 ## 1. Prerequisites
 
-- **Linux or macOS** — Windows is not supported (see the project README).
-- **Git**, **curl**, **make** (all ship with macOS/Linux)
+- **Linux (x86_64) or macOS** — Windows is not supported (see the project README).
+- **Git**, **curl**, **make** — standard on most macOS and Linux developer
+  machines, but not guaranteed on minimal/server images. Install via your
+  package manager (`apt`, `brew`, etc.) if missing.
 - **A CUDA GPU** is recommended for training. CPU and MPS (Apple Silicon) trainers
   are available but significantly slower.
 
@@ -38,7 +40,11 @@ cd synth-setter
    if you do not have one locally). The venv prompt label is `synth-setter`.
 3. Installs everything in `requirements.txt` plus the project itself in
    editable mode (`pip install -e .`).
-4. Registers the pre-commit hooks.
+4. Registers the pre-commit hooks — **unless** `git config core.hooksPath`
+   is set (as it is in the dev container, where hooks are managed by the
+   image). In that case `make install` prints a skip note and leaves the
+   configured hooks path untouched; run `.venv/bin/pre-commit install`
+   manually if you want to override.
 
 ```bash
 make install
@@ -68,7 +74,7 @@ guide assume the venv is active.
 ### 2d. Install the Surge XT VST3
 
 The test suite and data pipeline need the [Surge XT](https://surge-synthesizer.github.io/)
-VST3 at `plugins/Surge XT.vst3`. The canonical path downloads the pinned
+VST3 at `plugins/Surge XT.vst3`. `make install-surge-xt` downloads the pinned
 release directly from GitHub:
 
 ```bash
@@ -83,14 +89,34 @@ have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
 `plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
 first to reinstall.
 
-> **Already have Surge XT installed system-wide?** `make link-plugins`
-> symlinks an existing install (`/usr/lib/vst3/Surge XT.vst3` on Linux,
-> `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3` on macOS) into `plugins/`
-> instead of downloading a second copy.
+> **Already have Surge XT installed system-wide?** Skip
+> `make install-surge-xt` and symlink your existing install into `plugins/`:
+>
+> ```bash
+> # Linux
+> ln -s "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+>
+> # macOS
+> ln -s "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3" "plugins/Surge XT.vst3"
+> ```
+>
+> The project used to ship a `make link-plugins` wrapper for this; it was
+> removed in favour of this one-line symlink so the discovery path stays
+> explicit and there's only one way to populate `plugins/`.
 >
 > **On arm64 Linux?** The official Surge XT release only ships an x86_64
 > Linux build. Install via your package manager (`apt install surge-xt`) or
-> build from source, then run `make link-plugins`.
+> build from source, then use the manual symlink above.
+
+> **Heads-up — VST tests still hardcode the Linux install path:**
+> `tests/data/vst/test_preset_params.py` and `tests/docker/test_smoke.py`
+> currently hardcode `/usr/lib/vst3/Surge XT.vst3` as the VST3 location, so
+> even after `plugins/Surge XT.vst3` exists, `pytest -m requires_vst` will
+> still skip on macOS (and on Linux installs where the VST3 lives somewhere
+> other than `/usr/lib/vst3/`). Tracked in
+> [#631](https://github.com/tinaudio/synth-setter/issues/631) — the fix
+> will default the tests to `plugins/Surge XT.vst3` with an env-var
+> override for CI.
 
 ### 2e. Export environment variables
 
@@ -189,8 +215,8 @@ used for audio dataset generation. The data pipeline renders audio by
 programmatically driving this plugin.
 
 Installation is covered in [section 2d](#2d-install-the-surge-xt-vst3) —
-`make install-surge-xt` is the canonical path, with `make link-plugins` as an
-alternative for users who already have a system-wide install.
+`make install-surge-xt` is the canonical path; a manual symlink from a
+system-wide install is an alternative.
 
 **Verify:**
 

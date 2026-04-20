@@ -158,7 +158,7 @@ docs:
     description: Onboarding — local dev, Codespaces, and dev container flows
     sources:
       - pattern: "Makefile"
-        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (symlink system-wide Surge XT), SURGE_XT_VERSION + related vars"
+        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), SURGE_XT_VERSION + related vars"
         scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
         covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand"

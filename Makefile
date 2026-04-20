@@ -34,7 +34,8 @@ test-bats: ## Run BATS shell tests
 install: ## End-to-end: install uv, create .venv (Python 3.10), install deps, set up pre-commit
 	@command -v uv >/dev/null 2>&1 || [ -x "$$HOME/.local/bin/uv" ] || \
 		{ echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
-	@UV=$$(command -v uv 2>/dev/null || echo "$$HOME/.local/bin/uv"); \
+	@set -e; \
+	UV=$$(command -v uv 2>/dev/null || echo "$$HOME/.local/bin/uv"); \
 	[ -x "$$UV" ] || { echo "ERROR: uv not found at $$UV"; exit 1; }; \
 	if [ -d .venv ]; then \
 		PY_VER=$$(.venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null); \
@@ -60,7 +61,8 @@ SURGE_XT_MACOS_ASSET := surge-xt-macos-$(SURGE_XT_VERSION)-pluginsonly.zip
 SURGE_XT_MACOS_MD5 := 8afca4159d9b417c5e07ebc1a5e96ed3
 
 install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already present)
-	@DEST="plugins/Surge XT.vst3"; \
+	@set -e; \
+	DEST="plugins/Surge XT.vst3"; \
 	if [ -e "$$DEST" ]; then \
 		echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
 		exit 0; \
@@ -71,7 +73,7 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 			if [ "$$ARCH" != "x86_64" ]; then \
 				echo "ERROR: the Surge XT Linux release only ships an x86_64 build (detected: $$ARCH)."; \
 				echo "Install via your package manager (e.g. apt install surge-xt) or build from source,"; \
-				echo "then run: make link-plugins"; \
+				echo "then symlink it: ln -s /path/to/Surge XT.vst3 plugins/"; \
 				exit 1; \
 			fi; \
 			ASSET="$(SURGE_XT_LINUX_ASSET)"; EXPECTED_MD5="$(SURGE_XT_LINUX_MD5)" ;; \
@@ -89,8 +91,11 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 	fi; \
 	if command -v md5sum >/dev/null 2>&1; then \
 		ACTUAL_MD5=$$(md5sum "$$ARCHIVE" | awk '{print $$1}'); \
-	else \
+	elif command -v md5 >/dev/null 2>&1; then \
 		ACTUAL_MD5=$$(md5 -q "$$ARCHIVE"); \
+	else \
+		echo "ERROR: neither 'md5sum' (Linux) nor 'md5' (macOS) is available — cannot verify checksum"; \
+		exit 1; \
 	fi; \
 	if [ "$$ACTUAL_MD5" != "$$EXPECTED_MD5" ]; then \
 		echo "ERROR: md5 mismatch for $$ARCHIVE"; \
@@ -105,43 +110,6 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 		Darwin) unzip -q "$$ARCHIVE" "Surge XT.vst3/*" -d plugins/ ;; \
 	esac; \
 	echo "Installed $$DEST"
-
-link-plugins: ## Symlink an existing system-wide Surge XT VST3 into plugins/
-	@PLUGIN_NAME="Surge XT.vst3"; \
-	OS=$$(uname -s); \
-	FOUND=""; \
-	if [ "$$OS" = "Linux" ]; then \
-		if [ -e "/usr/lib/vst3/$$PLUGIN_NAME" ]; then FOUND="/usr/lib/vst3/$$PLUGIN_NAME"; fi; \
-	elif [ "$$OS" = "Darwin" ]; then \
-		for p in "/Library/Audio/Plug-Ins/VST3/$$PLUGIN_NAME" "$$HOME/Library/Audio/Plug-Ins/VST3/$$PLUGIN_NAME"; do \
-			if [ -e "$$p" ]; then FOUND="$$p"; break; fi; \
-		done; \
-	else \
-		echo "ERROR: Unsupported platform: $$OS"; exit 1; \
-	fi; \
-	if [ -z "$$FOUND" ]; then \
-		echo "ERROR: $$PLUGIN_NAME not found. Searched:"; \
-		if [ "$$OS" = "Linux" ]; then \
-			echo "  /usr/lib/vst3/$$PLUGIN_NAME"; \
-		else \
-			echo "  /Library/Audio/Plug-Ins/VST3/$$PLUGIN_NAME"; \
-			echo "  $$HOME/Library/Audio/Plug-Ins/VST3/$$PLUGIN_NAME"; \
-		fi; \
-		echo "Install Surge XT from https://surge-synthesizer.github.io/"; \
-		exit 1; \
-	fi; \
-	mkdir -p plugins; \
-	DEST="plugins/$$PLUGIN_NAME"; \
-	if [ -L "$$DEST" ]; then \
-		rm -f "$$DEST"; \
-	elif [ -d "$$DEST" ]; then \
-		echo "ERROR: $$DEST exists as a directory; remove it before linking."; \
-		exit 1; \
-	elif [ -e "$$DEST" ]; then \
-		rm -f "$$DEST"; \
-	fi; \
-	ln -s "$$FOUND" "$$DEST"; \
-	echo "Linked $$DEST -> $$FOUND"
 
 # coverage runs serially (no -n auto): GPU tests require exclusive device
 # access and VRAM contention causes flaky failures with xdist parallelism.

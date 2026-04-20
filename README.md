@@ -61,7 +61,9 @@ to install Surge XT yourself.
 git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 
-# 2. Install uv, create .venv (Python 3.10), install deps, set up pre-commit
+# 2. Install uv, create .venv (Python 3.10), install deps, register pre-commit
+#    (pre-commit install is skipped if core.hooksPath is set, e.g. in the dev
+#    container)
 make install
 
 # 3. Activate the venv
@@ -74,9 +76,10 @@ make install-surge-xt
 set -a && source .env && set +a
 ```
 
-> **Already have Surge XT installed system-wide?** Use `make link-plugins`
-> instead of `make install-surge-xt` to symlink the existing install into
-> `plugins/`. See [docs/getting-started.md &sect;2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
+> **Already have Surge XT installed system-wide?** Skip `make install-surge-xt`
+> and symlink it manually:
+> `ln -s "/path/to/Surge XT.vst3" "plugins/Surge XT.vst3"`.
+> See [docs/getting-started.md &sect;2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
 > venv yourself, see
