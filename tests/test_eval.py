@@ -57,3 +57,40 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     assert (
         abs(train_metric_dict["test/loss"].item() - test_metric_dict["test/loss"].item()) < 0.001
     )
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+@pytest.mark.slow
+def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig) -> None:
+    """Tests training and validation by training for 1 epoch with `train.py` then validating with
+    `eval.py` using `mode=validate`.
+
+    :param tmp_path: The temporary logging path.
+    :param cfg_train: A DictConfig containing a valid training configuration.
+    :param cfg_eval: A DictConfig containing a valid evaluation configuration.
+    """
+    assert str(tmp_path) == cfg_train.paths.output_dir == cfg_eval.paths.output_dir
+
+    with open_dict(cfg_train):
+        cfg_train.trainer.max_epochs = 1
+        cfg_train.trainer.accelerator = "gpu"
+        cfg_train.test = True
+    with open_dict(cfg_eval):
+        cfg_eval.trainer.accelerator = "gpu"
+        cfg_eval.data = cfg_train.data
+
+    HydraConfig().set_config(cfg_train)
+    train_metric_dict, _ = train(cfg_train)
+
+    assert "last.ckpt" in os.listdir(tmp_path / "checkpoints")
+
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
+        cfg_eval.mode = "validate"
+
+    HydraConfig().set_config(cfg_eval)
+    val_metric_dict, _ = evaluate(cfg_eval)
+
+    assert val_metric_dict["val/acc"] > 0.0
+    assert abs(train_metric_dict["val/acc"].item() - val_metric_dict["val/acc"].item()) < 0.001
