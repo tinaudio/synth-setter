@@ -35,6 +35,34 @@ install: ## Install project in editable mode with dev deps
 	pip install uv
 	uv pip install -r requirements.txt -e .
 
+link-plugins: ## Symlink Surge XT VST3 into plugins/
+	@PLUGIN_NAME="Surge XT.vst3"; \
+	OS=$$(uname -s); \
+	FOUND=""; \
+	if [ "$$OS" = "Linux" ]; then \
+		if [ -e "/usr/lib/vst3/$$PLUGIN_NAME" ]; then FOUND="/usr/lib/vst3/$$PLUGIN_NAME"; fi; \
+	elif [ "$$OS" = "Darwin" ]; then \
+		for p in "/Library/Audio/Plug-Ins/VST3/$$PLUGIN_NAME" "$$HOME/Library/Audio/Plug-Ins/VST3/$$PLUGIN_NAME"; do \
+			if [ -e "$$p" ]; then FOUND="$$p"; break; fi; \
+		done; \
+	else \
+		echo "ERROR: Unsupported platform: $$OS"; exit 1; \
+	fi; \
+	if [ -z "$$FOUND" ]; then \
+		echo "ERROR: $$PLUGIN_NAME not found. Searched:"; \
+		if [ "$$OS" = "Linux" ]; then \
+			echo "  /usr/lib/vst3/$$PLUGIN_NAME"; \
+		else \
+			echo "  /Library/Audio/Plug-Ins/VST3/$$PLUGIN_NAME"; \
+			echo "  $$HOME/Library/Audio/Plug-Ins/VST3/$$PLUGIN_NAME"; \
+		fi; \
+		echo "Install Surge XT from https://surge-synthesizer.github.io/"; \
+		exit 1; \
+	fi; \
+	mkdir -p plugins; \
+	ln -sfn "$$FOUND" "plugins/$$PLUGIN_NAME"; \
+	echo "Linked plugins/$$PLUGIN_NAME -> $$FOUND"
+
 # coverage runs serially (no -n auto): GPU tests require exclusive device
 # access and VRAM contention causes flaky failures with xdist parallelism.
 coverage: ## Run tests with coverage report

@@ -26,7 +26,21 @@ git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
 ```
 
-### 2b. Create a virtual environment (recommended)
+### 2b. Create a virtual environment
+
+The recommended approach uses [uv](https://docs.astral.sh/uv/getting-started/installation/)
+to create a venv with a pinned Python version:
+
+```bash
+# Install uv (if you don't have it)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create and activate a Python 3.10 venv
+uv venv --python 3.10 .venv
+source .venv/bin/activate
+```
+
+Alternatively, if you already have Python 3.10+ installed:
 
 ```bash
 python -m venv .venv
@@ -35,31 +49,56 @@ source .venv/bin/activate
 
 ### 2c. Install dependencies
 
-The project uses [uv](https://docs.astral.sh/uv/getting-started/installation/)
-for fast dependency resolution:
+`make install` is the canonical command. It installs uv, all dependencies from
+`requirements.txt` (including pre-commit and dev tooling), and the project in
+editable mode:
 
 ```bash
-pip install uv
-uv pip install -r requirements.txt -e .
+make install
 ```
 
-Or with plain pip:
+Or with plain pip (no editable install):
 
 ```bash
-pip install -r requirements.txt -e .
+pip install -r requirements.txt
 ```
 
-### 2d. Install pre-commit hooks
+After installing, activate pre-commit hooks:
 
 ```bash
-pip install pre-commit
 pre-commit install
 ```
 
 The hooks run Ruff (linting + formatting), pyright (type checking), mdformat,
 codespell, and several other checks automatically on each commit.
 
-### 2e. Verify the installation
+### 2d. Symlink the Surge XT VST3
+
+If you have [Surge XT](https://surge-synthesizer.github.io/) installed, symlink
+it into `plugins/` so the test suite and data pipeline can find it:
+
+```bash
+make link-plugins
+```
+
+This detects your platform (Linux / macOS) and creates a symlink at
+`plugins/Surge XT.vst3`. See [section 4a](#4a-surge-xt-vst-plugin) for
+installation instructions if you don't have Surge XT yet.
+
+### 2e. Export environment variables
+
+The project reads R2 credentials, W&B keys, and other config from a `.env` file.
+After creating your `.env` (see [section 4b](#4b-rclone--cloudflare-r2) for the
+template), export the variables into your shell:
+
+```bash
+set -a && source .env && set +a
+```
+
+> Environment variable management is being consolidated under
+> [#563](https://github.com/tinaudio/synth-setter/issues/563).
+
+### 2f. Verify the installation
 
 ```bash
 make test
@@ -69,7 +108,7 @@ This runs the quick test suite (excluding slow tests and tests that require a
 VST plugin). All tests should pass. If you see import errors, double-check that
 the virtual environment is active and dependencies installed correctly.
 
-### 2f. Alternative: GitHub Codespaces
+### 2g. Alternative: GitHub Codespaces
 
 Instead of setting up locally, you can open the repo in a GitHub Codespace. The
 Codespace uses the same Docker image (`tinaudio/synth-setter:dev-snapshot`) we run on
@@ -108,7 +147,7 @@ rclone lsd r2:intermediate-data
 **Fall back to RunPod for** full GPU training (CUDA kernels, large batch
 sizes) and multi-hour runs.
 
-### 2g. Alternative: Local Dev Container
+### 2h. Alternative: Local Dev Container
 
 If you want the same image Codespaces uses (VST plugins, rclone, Python
 deps) but prefer to work on your own machine, open the dev container

@@ -56,37 +56,33 @@ under the GPL-3.0 license.
 
 ## Installation
 
-Clone the repository:
-
 ```bash
+# 1. Clone
 git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
-```
 
-### Using uv (recommended)
+# 2. Install uv (if you don't have it)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-```bash
-uv pip install -r requirements.txt
-```
+# 3. Create and activate a Python 3.10 venv
+uv venv --python 3.10 .venv
+source .venv/bin/activate
 
-### Using pip
-
-```bash
-pip install -r requirements.txt
-```
-
-### Using conda
-
-```bash
-conda env create -f environment.yaml  # creates the "myenv" environment by default
-conda activate myenv
-```
-
-### Editable install
-
-```bash
+# 4. Install the project and all dev tooling
 make install
+
+# 5. Symlink the Surge XT VST3 into plugins/
+make link-plugins
+
+# 6. Export environment variables (R2, W&B — see §4b in getting-started)
+set -a && source .env && set +a
 ```
+
+> **pip / conda users:** If you manage your own Python environment, you can
+> skip steps 2-3 and run `make install` (or `pip install -r requirements.txt
+> -e .`) directly. See [docs/getting-started.md
+> &sect;2](docs/getting-started.md#2-installation) for the full walkthrough and
+> alternatives.
 
 ### GPU vs CPU
 
@@ -183,6 +179,21 @@ Further reading (mostly for contributors and maintainers):
   GitHub Actions, W&B integration
 
 Run `make help` for available commands.
+
+## Codespaces & Docker
+
+GitHub Codespaces and local dev containers provide a pre-built environment with
+Surge XT, rclone, and all Python dependencies already installed. See
+[docs/getting-started.md &sect;2g](docs/getting-started.md#2g-alternative-github-codespaces)
+(Codespaces) and
+[&sect;2h](docs/getting-started.md#2h-alternative-local-dev-container)
+(local dev container) for setup instructions.
+
+> **Devcontainer as root:** The default dev container runs as a non-root user.
+> If your workflow requires root (e.g., installing system packages), set
+> `"remoteUser": "root"` in `.devcontainer/devcontainer.json`. See the
+> [devcontainer docs](https://containers.dev/implementors/json_reference/)
+> for details.
 
 ## License
 
