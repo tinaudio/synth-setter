@@ -136,6 +136,11 @@ This runs the quick test suite (excluding slow tests and tests that require a
 VST plugin). All tests should pass. If you see import errors, double-check that
 the virtual environment is active and dependencies installed correctly.
 
+> **Writing or reading tests?** See
+> [docs/reference/testing.md](reference/testing.md) for the fixtures,
+> marker conventions, and canonical train→eval pattern — scoped to what
+> you need before editing `tests/`.
+
 > **Prefer a container- or VM-based setup?** GitHub Codespaces, the local
 > dev container, and the Tart macOS VM all come with Python, Surge XT,
 > and rclone pre-installed. See
