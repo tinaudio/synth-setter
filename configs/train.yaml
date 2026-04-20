@@ -7,7 +7,7 @@ defaults:
   - data: ksin
   - model: ffn
   - callbacks: default
-  - logger: tensorboard # set logger here or use command line (e.g. `python train.py logger=wandb`)
+  - logger: many_loggers # set logger here or use command line (e.g. `python train.py logger=wandb`)
   - trainer: gpu
   - paths: default
   - extras: default
