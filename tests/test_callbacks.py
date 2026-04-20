@@ -13,11 +13,16 @@ from matplotlib.figure import Figure
 from src.utils.callbacks import _log_figure
 
 
-def _make_trainer(loggers: list[object], global_step: int = 42) -> MagicMock:
-    """Build a stand-in ``Trainer`` exposing only ``loggers`` and ``global_step``."""
+def _make_trainer(
+    loggers: list[object],
+    global_step: int = 42,
+    is_global_zero: bool = True,
+) -> MagicMock:
+    """Build a stand-in ``Trainer`` exposing ``loggers``, ``global_step``, and rank."""
     trainer = MagicMock()
     trainer.loggers = loggers
     trainer.global_step = global_step
+    trainer.is_global_zero = is_global_zero
     return trainer
 
 
@@ -68,3 +73,16 @@ def test_log_figure_is_noop_when_no_image_capable_loggers_present():
 
     # CSVLogger has no image API; ensure we didn't accidentally invoke anything.
     assert not csv_logger.method_calls
+
+
+def test_log_figure_is_noop_on_non_zero_rank():
+    """Under DDP, only rank 0 should emit — SummaryWriter is not rank-safe."""
+    wandb_logger = MagicMock(spec=WandbLogger)
+    tb_logger = MagicMock(spec=TensorBoardLogger)
+    trainer = _make_trainer([wandb_logger, tb_logger], is_global_zero=False)
+    fig = MagicMock(spec=Figure)
+
+    _log_figure(trainer, "plot", fig)
+
+    wandb_logger.log_image.assert_not_called()
+    tb_logger.experiment.add_figure.assert_not_called()

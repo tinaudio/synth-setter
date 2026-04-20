@@ -23,7 +23,13 @@ def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:
     Dispatches per-logger since Lightning loggers don't share a uniform image API:
     WandbLogger exposes ``log_image``; TensorBoardLogger wraps a SummaryWriter
     with ``add_figure``. Loggers without image support (CSV) are skipped.
+
+    Only rank 0 emits — TensorBoard's ``SummaryWriter`` is not rank-safe, and
+    duplicate emissions from every DDP worker would corrupt event files or
+    log the same figure N times.
     """
+    if not trainer.is_global_zero:
+        return
     for logger in trainer.loggers:
         if isinstance(logger, WandbLogger):
             logger.log_image(key=key, images=[fig], step=trainer.global_step)
