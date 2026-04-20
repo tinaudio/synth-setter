@@ -24,7 +24,7 @@ Browse [`tests/`](../../tests) for the current layout. The tree has several **di
 | VST integration tests                             | [`tests/data/vst/test_preset_params.py`](../../tests/data/vst/test_preset_params.py)                                               | Requires a Surge XT VST3 binary on disk                                                | `requires_vst`                                                |
 | Test helpers                                      | [`tests/helpers/`](../../tests/helpers) — `RunIf`, `run_sh_command`, `package_available`                                           | Not tests themselves — import from `tests.helpers.<name>`                              | —                                                             |
 
-Two top-level conftests: [`tests/conftest.py`](../../tests/conftest.py) (Hydra `cfg_train` / `cfg_eval` fixtures) and [`tests/pipeline/conftest.py`](../../tests/pipeline/conftest.py) (pipeline-specific fixtures). They don't interact — pipeline tests don't see `cfg_train`.
+Two top-level conftests: [`tests/conftest.py`](../../tests/conftest.py) (Hydra `cfg_train` / `cfg_eval` fixtures) and [`tests/pipeline/conftest.py`](../../tests/pipeline/conftest.py) (pipeline-specific fixtures). Pytest resolves parent conftests, so the Hydra fixtures are reachable under `tests/pipeline/` too; pipeline tests typically don't use them and lean on their own fixtures.
 
 ______________________________________________________________________
 
@@ -40,8 +40,8 @@ CI selectors live in [`.github/workflows/`](../../.github/workflows):
 
 - [`test.yml`](../../.github/workflows/test.yml) — CPU tests on every PR.
 - [`test-expensive.yml`](../../.github/workflows/test-expensive.yml) — GPU-gated tests on a GPU runner.
-- [`test-conda.yml`](../../.github/workflows/test-conda.yml) — conda-env matrix.
-- [`nightly.yml`](../../.github/workflows/nightly.yml) — the expensive-runs-only suite.
+- [`test-conda.yml`](../../.github/workflows/test-conda.yml) — single conda-env run (micromamba from `environment.yaml`) on `ubuntu-latest`; covers the non-slow suite under the locked conda deps.
+- [`nightly.yml`](../../.github/workflows/nightly.yml) — scheduled full `pytest` run on CPU (`ubuntu-latest`); no marker filter, so GPU-gated tests skip via `RunIf`.
 
 CI and `make` selectors are **not identical** — CI may use different marker combinations to partition work across runners. Source of truth is always the file, not this doc.
 
@@ -101,7 +101,7 @@ from tests.helpers.run_if import RunIf
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
-def test_train_<what>(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig) -> None:
+def test_train_e2e(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig) -> None:  # rename `_e2e` to describe your case
     assert str(tmp_path) == cfg_train.paths.output_dir == cfg_eval.paths.output_dir
 
     # 1. Override cfg_train for this run
