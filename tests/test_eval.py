@@ -81,6 +81,7 @@ def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictCon
         cfg_eval.data = cfg_train.data
         cfg_eval.model = cfg_train.model
         cfg_eval.callbacks = cfg_train.callbacks
+        cfg_eval.trainer.limit_val_batches = cfg_train.trainer.limit_val_batches
 
     HydraConfig().set_config(cfg_train)
     train_metric_dict, _ = train(cfg_train)
