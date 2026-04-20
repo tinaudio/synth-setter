@@ -77,8 +77,8 @@ set -a && source .env && set +a
 ```
 
 > **Experiment tracking:** the default training run logs to CSV + TensorBoard
-> (no external account needed). W&B is **opt-in** — `python src/train.py
-> ... logger=wandb` after `wandb login` (or setting `WANDB_API_KEY`). See
+> (no external account needed). W&B is **opt-in** — run training with
+> `logger=wandb` after `wandb login` (or setting `WANDB_API_KEY`). See
 > [getting-started §4c](docs/getting-started.md#4c-weights--biases-wb) for
 > the full enable/disable workflow.
 
