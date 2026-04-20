@@ -41,7 +41,7 @@ under the GPL-3.0 license.
 
 - **Flow matching and baseline models** for synthesizer parameter estimation
 - **Distributed data pipeline** for VST audio dataset generation with cloud support
-- **W&B integration** for experiment tracking and model checkpointing
+- **W&B integration** (opt-in) for experiment tracking and model checkpointing — fresh installs log to CSV + TensorBoard; pass `logger=wandb` to enable W&B
 - **Docker support** for reproducible training and generation environments
 - **Hydra configs** for flexible experiment management
 
@@ -75,6 +75,12 @@ make install-surge-xt
 # 5. Export environment variables (R2, W&B — see §4b in getting-started)
 set -a && source .env && set +a
 ```
+
+> **Experiment tracking:** the default training run logs to CSV + TensorBoard
+> (no external account needed). W&B is **opt-in** — `python src/train.py
+> ... logger=wandb` after `wandb login` (or setting `WANDB_API_KEY`). See
+> [getting-started §4c](docs/getting-started.md#4c-weights--biases-wb) for
+> the full enable/disable workflow.
 
 > **Already have Surge XT installed system-wide?** Skip `make install-surge-xt`
 > and symlink it manually:
