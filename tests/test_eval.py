@@ -75,6 +75,7 @@ def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictCon
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
         cfg_train.trainer.accelerator = "gpu"
+        cfg_train.test = False
     with open_dict(cfg_eval):
         cfg_eval.trainer.accelerator = "gpu"
         cfg_eval.data = cfg_train.data
