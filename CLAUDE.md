@@ -150,7 +150,7 @@ nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
 python3 -c "import torch; print('cuda:', torch.cuda.is_available(), 'count:', torch.cuda.device_count())"
 ```
 
-Only skip if `nvidia-smi` exits non-zero or `torch.cuda.is_available()` returns `False`. "I assumed there's no GPU" is not justification — the assumption has been wrong before.
+Only skip as "no GPU available" if both probes indicate no usable CUDA GPU: `nvidia-smi` exits non-zero and `torch.cuda.is_available()` returns `False`. If the probes disagree, do not call it "no GPU available" — document it as an environment/setup mismatch (for example, driver/tooling visibility vs. PyTorch CUDA availability) and include both outputs in the rationale. "I assumed there's no GPU" is not justification — the assumption has been wrong before.
 
 ### PR Review Comments
 
