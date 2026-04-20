@@ -85,6 +85,7 @@ ______________________________________________________________________
 Reference implementation: [`tests/test_eval.py::test_train_eval`](../../tests/test_eval.py). The shape is four phases: override `cfg_train`, train + assert checkpoint, align `cfg_eval` with `cfg_train`, evaluate + assert metrics.
 
 ```python
+import math
 import os
 from pathlib import Path
 
@@ -126,7 +127,10 @@ def test_train_<what>(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfi
     # 4. Evaluate; assert metrics
     HydraConfig().set_config(cfg_eval)
     eval_metric_dict, _ = evaluate(cfg_eval)
-    assert eval_metric_dict["val/loss"] < float("inf")
+    # `math.isfinite` rejects +inf, -inf, and NaN. `< float("inf")` silently
+    # accepts -inf — safe for non-negative losses like MSE but a copy-paste
+    # hazard for losses that can go negative (log-likelihood, reward, ...).
+    assert math.isfinite(eval_metric_dict["val/loss"].item())
     # Optional parity check: train's in-fit val vs. standalone eval's val
     assert abs(train_metric_dict["val/loss"].item() - eval_metric_dict["val/loss"].item()) < 0.001
 ```
