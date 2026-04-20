@@ -99,12 +99,12 @@ Under the default `many_loggers` composition (CSV + TB), plots land in
 TensorBoard; with `logger=wandb` they go to W&B; with both attached they go
 to both.
 
-| Callback                           | Logged key                       | Trigger                                         | File                             |
-| ---------------------------------- | -------------------------------- | ----------------------------------------------- | -------------------------------- |
-| `PlotLossPerTimestep`              | `plot` (image)                   | `on_validation_epoch_end`                       | `src/utils/callbacks.py:91-93`   |
-| `PlotPositionalEncodingSimilarity` | `pos_enc_similarity` (image)     | `on_validation_epoch_end`                       | `src/utils/callbacks.py:148-150` |
-| `PlotLearntProjection`             | `assignment`, `value` (images)   | `on_validation_epoch_end` or every N steps      | `src/utils/callbacks.py:270-273` |
-| `LogPerParamMSE`                   | `per_param_mse/{name}` per param | `on_validation_epoch_end` (via `self.log_dict`) | `src/utils/callbacks.py:389-391` |
+| Callback                           | Logged key                       | Trigger                                         | Symbol                                                               |
+| ---------------------------------- | -------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------- |
+| `PlotLossPerTimestep`              | `plot` (image)                   | `on_validation_epoch_end`                       | `src/utils/callbacks.py::PlotLossPerTimestep._log_plot`              |
+| `PlotPositionalEncodingSimilarity` | `pos_enc_similarity` (image)     | `on_validation_epoch_end`                       | `src/utils/callbacks.py::PlotPositionalEncodingSimilarity._log_plot` |
+| `PlotLearntProjection`             | `assignment`, `value` (images)   | `on_validation_epoch_end` or every N steps      | `src/utils/callbacks.py::PlotLearntProjection._log_plots`            |
+| `LogPerParamMSE`                   | `per_param_mse/{name}` per param | `on_validation_epoch_end` (via `self.log_dict`) | `src/utils/callbacks.py::LogPerParamMSE`                             |
 
 ### 2d. Callbacks — Non-W&B
 
@@ -114,7 +114,7 @@ to both.
 | `LearningRateMonitor` | Logs LR to Lightning logger                            | `configs/callbacks/lr_monitor.yaml`        |
 | `RichProgressBar`     | Terminal display only                                  | `configs/callbacks/rich_progress_bar.yaml` |
 | `ModelSummary`        | Prints param summary to console                        | `configs/callbacks/model_summary.yaml`     |
-| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/utils/callbacks.py:320-355`           |
+| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/utils/callbacks.py::PredictionWriter` |
 
 ### 2e. Gradient Watching
 
