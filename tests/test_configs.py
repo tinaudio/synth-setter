@@ -60,7 +60,8 @@ def test_cfg_train_trainer_keys_coherent_with_test_mode(cfg_train: DictConfig) -
 
 def test_cfg_train_t_max_interpolation_resolves() -> None:
     """Guard: ``${trainer.max_steps}`` interpolation used by surge model configs
-    still resolves when the test-mode fixture nulls ``trainer.max_steps``.
+    still resolves when the test-mode fixture sets ``trainer.max_steps = -1``
+    (Lightning's unbounded sentinel).
 
     Several ``configs/model/surge_*.yaml`` files interpolate
     ``T_max: ${trainer.max_steps}``. If a future test forgets to guard this,
