@@ -30,6 +30,13 @@ def cfg_train_global() -> DictConfig:
         with open_dict(cfg):
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
             cfg.trainer.max_epochs = 1
+            cfg.trainer.min_steps = None
+            # Lightning 2.x uses ``-1`` as the sentinel for "unbounded" max_steps;
+            # passing ``None`` triggers an internal ``None < int`` comparison. We
+            # want the epoch-based ``max_epochs=1`` to drive termination.
+            cfg.trainer.max_steps = -1
+            cfg.trainer.val_check_interval = None
+            cfg.trainer.check_val_every_n_epoch = 1
             cfg.trainer.limit_train_batches = 0.01
             cfg.trainer.limit_val_batches = 0.1
             cfg.trainer.limit_test_batches = 0.1
@@ -61,6 +68,13 @@ def cfg_eval_global() -> DictConfig:
         with open_dict(cfg):
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
             cfg.trainer.max_epochs = 1
+            cfg.trainer.min_steps = None
+            # Lightning 2.x uses ``-1`` as the sentinel for "unbounded" max_steps;
+            # passing ``None`` triggers an internal ``None < int`` comparison. We
+            # want the epoch-based ``max_epochs=1`` to drive termination.
+            cfg.trainer.max_steps = -1
+            cfg.trainer.val_check_interval = None
+            cfg.trainer.check_val_every_n_epoch = 1
             cfg.trainer.limit_test_batches = 0.1
             cfg.trainer.accelerator = "cpu"
             cfg.trainer.devices = 1
