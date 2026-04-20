@@ -80,7 +80,6 @@ def test_train_epoch_gpu_amp(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
-# TODO: fix val_check_interval incompatibility with check_val_every_n_epoch=None (#47)
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
 @pytest.mark.slow
@@ -93,6 +92,7 @@ def test_train_epoch_double_val_loop(cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
         cfg_train.trainer.accelerator = "gpu"
+        cfg_train.trainer.check_val_every_n_epoch = 1
         cfg_train.trainer.val_check_interval = 0.5
     train(cfg_train)
 
