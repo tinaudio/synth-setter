@@ -108,15 +108,10 @@ first to reinstall.
 > Linux build. Install via your package manager (`apt install surge-xt`) or
 > build from source, then use the manual symlink above.
 
-> **Heads-up — VST tests still hardcode the Linux install path:**
-> `tests/data/vst/test_preset_params.py` and `tests/docker/test_smoke.py`
-> currently hardcode `/usr/lib/vst3/Surge XT.vst3` as the VST3 location, so
-> even after `plugins/Surge XT.vst3` exists, `pytest -m requires_vst` will
-> still skip on macOS (and on Linux installs where the VST3 lives somewhere
-> other than `/usr/lib/vst3/`). Tracked in
-> [#631](https://github.com/tinaudio/synth-setter/issues/631) — the fix
-> will default the tests to `plugins/Surge XT.vst3` with an env-var
-> override for CI.
+> **Pointing the VST tests at a non-default install:** `pytest -m requires_vst`
+> resolves the plugin at `plugins/Surge XT.vst3` by default. If your install
+> lives elsewhere, set `SYNTH_SETTER_PLUGIN_PATH` to the absolute path of the
+> `.vst3` bundle before invoking pytest.
 
 ### 2e. Export environment variables
 

@@ -9,11 +9,12 @@ load_preset().
 Regression for: https://github.com/tinaudio/synth-setter/issues/225
 """
 
+import os
 from pathlib import Path
 
 import pytest
 
-PLUGIN_PATH = "/usr/lib/vst3/Surge XT.vst3"
+PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 PRESET_PATH = "presets/surge-base.vstpreset"
 
 # pedalboard.VST3Plugin.parameters is a dynamic C extension attribute that
