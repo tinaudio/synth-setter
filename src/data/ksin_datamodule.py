@@ -209,6 +209,15 @@ class KSinDataModule(LightningDataModule):
                 False,
                 self.train_seed,
             )
+            self.train = torch.utils.data.DataLoader(
+                train_ds,
+                batch_size=self.batch_size,
+                shuffle=True,
+                collate_fn=ot_collate_fn if self.ot else regular_collate_fn,
+                num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
+            )
+        if stage in ("fit", "validate"):
             val_ds = KSinDataset(
                 self.k,
                 self.signal_length,
@@ -219,14 +228,6 @@ class KSinDataModule(LightningDataModule):
                 False,
                 self.val_seed,
             )
-            self.train = torch.utils.data.DataLoader(
-                train_ds,
-                batch_size=self.batch_size,
-                shuffle=True,
-                collate_fn=ot_collate_fn if self.ot else regular_collate_fn,
-                num_workers=self.num_workers,
-                pin_memory=self.pin_memory,
-            )
             self.val = torch.utils.data.DataLoader(
                 val_ds,
                 batch_size=self.batch_size,
@@ -235,7 +236,7 @@ class KSinDataModule(LightningDataModule):
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
             )
-        else:
+        if stage in ("test", "predict"):
             test_ds = KSinDataset(
                 self.k,
                 self.signal_length,
