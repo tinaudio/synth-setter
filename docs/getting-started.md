@@ -288,10 +288,10 @@ rclone lsd r2:<bucket-name>/
 
 You should see top-level directories like `data/`, `train/`, and `eval/`.
 
-### 4c. Weights & Biases (W&B) — opt-in
+### 4c. Weights & Biases (W&B)
 
-[Weights & Biases](https://wandb.ai/) provides experiment tracking, metric
-logging, and model checkpoint storage. **It is opt-in.** The default training
+**W&B is opt-in.** [Weights & Biases](https://wandb.ai/) provides experiment
+tracking, metric logging, and model checkpoint storage. The default training
 logger (`configs/logger/many_loggers.yaml`) composes CSV + TensorBoard, so
 `python src/train.py ...` works out of the box with no W&B account and no
 `wandb login` prompt. The integration is handled through Lightning's
