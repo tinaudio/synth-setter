@@ -137,6 +137,12 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
         cfg_train.trainer.accelerator = "gpu"
+        # Force validation to run once per epoch so ModelCheckpoint (which
+        # monitors val/loss) fires and writes epoch_NNN.ckpt. The shared
+        # fixture's limit_train_batches=0.01 would otherwise keep the
+        # trainer below the default val_check_interval=10_000.
+        cfg_train.trainer.check_val_every_n_epoch = 1
+        cfg_train.trainer.val_check_interval = None
 
     HydraConfig().set_config(cfg_train)
     metric_dict_1, _ = train(cfg_train)
