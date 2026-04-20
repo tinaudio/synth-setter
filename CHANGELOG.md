@@ -1,6 +1,1280 @@
 # CHANGELOG
 
 
+## v0.2.1 (2026-04-20)
+
+### Bug Fixes
+
+- **training**: Pass weights_only=False to Trainer ckpt_path loads (PyTorch 2.6+)
+  ([#634](https://github.com/tinaudio/synth-setter/pull/634),
+  [`461774e`](https://github.com/tinaudio/synth-setter/commit/461774e88fb423d7d69a6460483cffbc4c4d1164))
+
+* fix(training): pass weights_only=False to Trainer ckpt_path loads
+
+PyTorch 2.6 flipped torch.load's default to weights_only=True, which rejects our user-defined
+  checkpoint classes and breaks every Lightning trainer.fit/test/validate/predict(ckpt_path=...) in
+  src/train.py and src/eval.py. Lightning 2.6.1 exposes weights_only as a public kwarg on all four
+  Trainer entry points, so the minimal clean fix is to opt out at the five call sites that load our
+  own (trusted) checkpoints.
+
+A follow-up refactor tracked in #633 will centralize the policy in a TrustedLocalCheckpointIO plugin
+  so future call sites inherit it.
+
+Fixes #627
+
+* build(deps): bump lightning minimum to 2.6.0 for weights_only kwarg
+
+The Trainer.fit/test/validate/predict `weights_only` kwarg was introduced in Lightning 2.6.0.
+  Previous pin `>=2.0.0` would hard-fail with TypeError on any install that resolved to 2.5.x or
+  earlier.
+
+Refs #627
+
+### Build System
+
+- Migrate skills from submodule to plugin marketplace
+  ([#546](https://github.com/tinaudio/synth-setter/pull/546),
+  [`eb7b36a`](https://github.com/tinaudio/synth-setter/commit/eb7b36a15aacdffcd33991d74bcea7b30393f9a0))
+
+* build: migrate skills from submodule to plugin marketplace
+
+* build: correct plugin name to tinaudio-synth-setter-skills
+
+Upstream tinaudio/skills main marketplace.json renamed the plugin from synth-setter-skills to
+  tinaudio-synth-setter-skills. The submodule pin we were removing was on an older branch that still
+  used the old name, so the previous commit's settings.json would have silently failed to resolve
+  the plugin against upstream main.
+
+* build: update project-standards skill reference for plugin rename
+
+Upstream tinaudio/skills main renamed the project-standards skill to synth-setter-project-standards
+  (both directory path and the skill's own name frontmatter). The upstream review skill's
+  orchestration list already uses the new name; update CLAUDE.md's code-review section to match so
+  /review resolves correctly after the plugin migration.
+
+* build: address Copilot review feedback on PR #546
+
+- .devcontainer/post-create.sh: drop stale 'submodule update' from the comment describing why we
+  mark the repo safe.directory (comment #3074807644) - .github/workflows/auto-approve.yml: remove
+  'Claude Code Review' from workflow_run.workflows trigger list; the consumer workflow was deleted
+  earlier in this PR but the trigger list still referenced it, which contradicted the updated
+  docs/reference/github-actions.md dependency map (comments #3074807707 and #3074859911) -
+  docs/operations/credential-rotation-guide.md: update What: to past tense and Verification: to note
+  the smoke test is stale, so the section no longer contradicts the TODO added above it (comment
+  #3074807731). Full rotation-procedure rewrite is still deferred to a follow-up.
+
+- Synth-setter macOS VM ([#590](https://github.com/tinaudio/synth-setter/pull/590),
+  [`5377b28`](https://github.com/tinaudio/synth-setter/commit/5377b285ab5013e8f555a7634554f8f1bf104d53))
+
+* internal-feat(pipeline): add Tart macOS VM provisioner
+
+Adds tart/macos.pkr.hcl — a Packer template that builds a macOS Tart VM mirroring the
+  docker/ubuntu22_04 dev-base runtime: Surge XT via Homebrew cask, Python 3.10 via uv, all
+  requirements.txt deps installed into a venv auto-activated on shell login, and the same smoke-test
+  gates used in Docker (VST3 load check + pytest -k "not slow").
+
+The template produces a VM that can be published manually to docker.io/tinaudio/synth-setter-macos
+  for downstream dev consumption. Quick-start consumer commands live at the top of the file; full
+  build and publish commands live at the bottom.
+
+Refs #380
+
+* internal-fix(tart): address review feedback on macos.pkr.hcl
+
+- Drop `brew upgrade` from Homebrew bootstrap. Running it during image build makes the resulting VM
+  non-reproducible: two builds on different days can diverge based on upstream formula updates. The
+  subsequent `brew install` already pulls current versions for everything we need. (comment
+  #3105522698) - Replace `source ~/.zprofile` with POSIX `. ~/.zprofile` in all four provisioners.
+  Packer's shell provisioner default shebang is `/bin/sh`, where `source` is a bash/zsh-ism; `.`
+  works in every POSIX shell. (comments #3105522713, #3105522716, #3105522720, #3105522726) -
+  Capitalize and code-format the `tart --help` line in the quick-start header. (comment #3105522708)
+
+* docs(getting-started): document Tart macOS VM path
+
+Adds a "2h. Alternative: macOS VM (Tart)" section to the getting-started guide covering the prebuilt
+  `docker.io/tinaudio/synth-setter-macos` image, prerequisites, and the advanced Packer build flow
+  with overridable vars. Registers `tart/**` as a source for getting-started.md in the doc-map so
+  doc-drift will flag future changes.
+
+* internal-fix(tart): address round-2 review feedback on macos.pkr.hcl
+
+- Pin uv to 0.11.2 via post-install assertion for parity with the Docker dev-base image. - Make the
+  ~/.zshrc venv-activation append idempotent (touch + grep guard). - Drop Delete scope from the
+  Docker Hub PAT recommendation (least-priv). - Soften "reproducible" wording in getting-started.md;
+  spell out that brew formulas are not version-pinned. - Add security notes (template + docs)
+  flagging that the VM inherits the cirruslabs base image's well-known admin/admin credentials and
+  should be treated as local-only.
+
+* internal-fix(tart): use registry-1.docker.io for Docker Hub references
+
+Tart 2.32.1 takes the registry hostname literally and does not alias the canonical `docker.io` short
+  name to `registry-1.docker.io` the way the Docker CLI does. `https://docker.io/v2/...` 302s to
+  `www.docker.com/...` which returns HTML, breaking `tart clone`/`tart login`/`tart push` with:
+
+Error: DecodingError.dataCorrupted ... Unexpected character '<' ...
+
+Replaces every Docker Hub reference (quick-start clone, login, both push commands, docs
+  getting-started.md pull command + image slug, doc-map sources entry) with
+  `registry-1.docker.io/...`, which matches what actually works with Tart and what earlier drafts of
+  the template used.
+
+Tart 2.32.1 takes the registry hostname literally and does not alias the canonical 'docker.io' short
+  name to 'registry-1.docker.io' the way the Docker CLI does. https://docker.io/v2/... 302s to
+  www.docker.com/... which returns HTML, breaking tart clone/login/push with:
+
+Replaces every Docker Hub reference (quick-start clone, login, both push commands, docs
+  getting-started.md pull command + image slug, doc-map sources entry) with
+  registry-1.docker.io/..., which matches what actually works with Tart and what earlier drafts of
+  the template used.
+
+* internal-fix(tart): pin uv via Astral installer instead of Homebrew
+
+Homebrew's uv formula is rolling and can't reliably serve a specific historical version, so `brew
+  install uv` + an exact-version assertion would start failing as soon as Homebrew bumped past
+  0.11.2. Replace it with Astral's versioned installer URL (`https://astral.sh/uv/<v>/install.sh`),
+  which embeds the version and is reproducible. Expose the pin as a new `uv_version` variable so the
+  update path alongside docker/ubuntu22_04/Dockerfile is explicit.
+
+Addresses review comment on PR #590.
+
+* internal-feat(tart): symlink Surge XT into repo plugins/ dir
+
+Matches the Docker dev-base convention (docker/ubuntu22_04/Dockerfile): after cloning the repo,
+  symlink the cask-installed VST3 bundle to the repo-relative 'plugins/Surge XT.vst3' path. This is
+  what the pipeline configs (configs/dataset/*.yaml), CLI --plugin_path defaults
+  (src/data/vst/generate_vst_dataset.py, scripts/predict_vst_audio.py,
+  scripts/surge_xt_interactive.py) and tests all assume, so users can run commands from
+  ~/synth-setter without passing an absolute path.
+
+Smoke test updated to exercise the same relative path users will hit.
+
+* internal-fix(tart): touch ~/.zprofile before sourcing in all provisioners
+
+Each shell provisioner sources `~/.zprofile` first, but the cirruslabs base image does not guarantee
+  the file exists. Under `set -e` (Packer's default), `. ~/.zprofile` would abort provisioning
+  before the build can seed the file. Prepend `touch ~/.zprofile` so the source is always safe and
+  the four provisioners stay uniform.
+
+* internal-fix(tart): hard-fail Tart build if Surge XT is not 1.3.4
+
+Homebrew casks are rolling, so `brew install --cask surge-xt` silently upgrades to whatever the cask
+  definition resolves at build time. A new Surge XT release could change parameter layout, preset
+  format, or default values and silently diverge from the parameter specs in
+  src/data/vst/surge_xt.py / configs.
+
+Adds a `surge_xt_version` packer variable (default `1.3.4`) and a post-install assertion using the
+  same `brew list --cask --versions` pattern the uv pin uses, so the build fails loudly when the
+  cask rolls past the qualified version. Bump only after validating the new release against the
+  pipeline.
+
+* docs(tart): push both tags in a single tart push invocation
+
+tart push accepts multiple remote refs positionally; combining :${DATE_TAG} and :latest into one
+  call uploads the VM once instead of twice. The second push previously re-uploaded ~29 GB just to
+  move the :latest pointer.
+
+* internal-fix(tart): address round-3 review feedback on macos.pkr.hcl
+
+- Drop unused `codex` Homebrew formula; it has no callers in the repo and is not part of the Docker
+  dev-base parity baseline (Copilot, comment #3107388564). - Expand the `getting-started.md` vars
+  list to enumerate all seven user-overridable packer variables and point readers at the template's
+  `variable` blocks as the authoritative source (Copilot, comment #3107388557).
+
+Left as-is: the uv Astral installer `curl | sh` invocation (comment #3107388568). The URL is HTTPS,
+  embeds the pinned version, and the post-install `uv --version` assertion catches tampering that
+  alters the resolved version; SHA256-pinning the bootstrap script would add ongoing maintenance
+  cost disproportionate to a local-only dev VM's risk.
+
+- **devcontainer**: Consolidate Dockerfile into main image stages
+  ([#574](https://github.com/tinaudio/synth-setter/pull/574),
+  [`6c2d22a`](https://github.com/tinaudio/synth-setter/commit/6c2d22afa307f56084619aae12b73ce020403b26))
+
+* build(devcontainer): consolidate Dockerfile into main image stages
+
+Move all devcontainer tooling (curl, jq, gh, nvm, node, claude-code, non-root dev user) into a new
+  devcontainer-tools stage in the main Dockerfile. The .devcontainer/Dockerfile becomes a thin FROM
+  extension point, eliminating three redundant apt-get update calls and the github-cli devcontainer
+  feature.
+
+Stage graph: dev-base → devcontainer-tools (new) + freeze-deps + dev-snapshot (no-op alias).
+
+* Add target 'dev-snapshot' to Docker build args
+
+- **devcontainer**: Enable Claude Code agent workflows in CPU+GPU containers
+  ([#572](https://github.com/tinaudio/synth-setter/pull/572),
+  [`75c7a7b`](https://github.com/tinaudio/synth-setter/commit/75c7a7b063b13d63fbb40ced0cf20f97f721c4fa))
+
+* build(devcontainer): enable Claude Code agent workflows in CPU+GPU containers
+
+Make the CPU and GPU devcontainers usable for Claude-Code-driven agent work.
+
+- .devcontainer/Dockerfile: install curl, jq, and gh (from the official apt repo) at image build
+  time, and chown -R dev:dev .git so the non-root dev user can run git against the baked repo tree.
+  - .devcontainer/cpu/devcontainer.json: add runArgs --env-file .env and a read-only bind-mount of
+  ~/.claude/.credentials.json into the container (copy-pasting the Claude auth challenge through
+  remote -> host -> container was unreliable). - .devcontainer/gpu/devcontainer.json: same as CPU,
+  plus --gpus all and --shm-size=16g. - .devcontainer/post-create.sh: when RESTRICTED_AGENT_GIT_PAT
+  is set, pipe it through `gh auth login --with-token && gh auth setup-git`. Use
+  ${RESTRICTED_AGENT_GIT_PAT:-} for set -u safety so the else branch is reachable when the var is
+  unset and pre-commit install still runs. - .env.example: replace the now-dead GIT_PAT stub
+  (removed from all consumers in #567) with a RESTRICTED_AGENT_GIT_PAT block documenting it as the
+  scoped in-container agent token.
+
+BREAKING: opening the CPU or GPU devcontainer now requires a .env file in the workspace root.
+  --env-file .env makes Docker refuse to start the container otherwise. Copy .env.example to .env
+  before first open.
+
+Closes #571
+
+* build(devcontainer): auto-create empty .env via initializeCommand
+
+Remove the hard .env requirement introduced alongside --env-file .env. The initializeCommand runs on
+  the host before the container is created, so `[ -f .env ] || touch .env` ensures .env always
+  exists. An empty --env-file is a no-op for Docker, so users without a populated .env get a working
+  container and users with one get their vars injected as before.
+
+POSIX-compatible shell; the README already declares Windows unsupported.
+
+Refs #571
+
+* fix(devcontainer): non-fatal gh auth and ensure credentials file exists
+
+- Wrap gh auth login in an inner conditional so a bad or placeholder token warns instead of aborting
+  the entire post-create setup under set -e. This ensures pre-commit install always runs. - Extend
+  initializeCommand to create ~/.claude/.credentials.json on the host if absent, preventing Docker
+  from bind-mounting a directory when the file doesn't exist.
+
+* fix(devcontainer): restrict credentials file permissions to 0600
+
+Create ~/.claude/.credentials.json inside a subshell with umask 077 so the file gets 0600
+  permissions instead of the default 0644.
+
+- **devcontainer**: Fix git and claude auth issues
+  ([#575](https://github.com/tinaudio/synth-setter/pull/575),
+  [`3fd9a85`](https://github.com/tinaudio/synth-setter/commit/3fd9a858ce0361fca849e1ac5f5279f187e6d0fe))
+
+* build(devcontainer): fix git and claude auth issues
+
+* build(devcontainer): address copilot review on #575
+
+- Remove dead ~/.claude/.credentials.json creation from initializeCommand in both cpu and gpu
+  devcontainer configs (no longer mounted after this PR, so the mkdir+touch of the credentials stub
+  was dead work). - Use printf '%s' instead of echo when piping RESTRICTED_AGENT_GIT_PAT into gh
+  auth login --with-token, so a token starting with '-' can't be interpreted as an echo option.
+
+Refs #575
+
+- **devcontainer**: Install Claude Code CLI via userspace nvm
+  ([#550](https://github.com/tinaudio/synth-setter/pull/550),
+  [`f513102`](https://github.com/tinaudio/synth-setter/commit/f513102c51e96c70fcea11b880410906c1ae11fa))
+
+* build(devcontainer): install Claude Code CLI via userspace nvm
+
+Install @anthropic-ai/claude-code 2.1.105 inside .devcontainer/Dockerfile via a userspace nvm
+  install, as the existing non-root dev user. Zero root, zero sudo, zero base-image changes —
+  respects the existing "no sudo" and "system packages go in the base image" policies already
+  documented in this Dockerfile.
+
+Pins: NVM_VERSION=0.40.1, NODE_VERSION=20.18.0 (matches Anthropic's reference devcontainer),
+  CLAUDE_CODE_VERSION=2.1.105.
+
+An explicit ENV PATH entry makes `claude` resolve in any shell mode (interactive, non-interactive,
+  docker exec, VSCode tasks), not just bashrc-sourcing interactive shells.
+
+Firewall + scoped sudo (Anthropic's init-firewall.sh pattern) are deferred to #549.
+
+Closes #548
+
+* build(devcontainer): clone nvm at pinned tag; explicit bash SHELL
+
+Address review feedback on PR #550:
+
+- Clone nvm at a pinned tag instead of piping install.sh through bash. Resolves the supply-chain
+  concern in pull/550#discussion_r3076693266: the cloned tree is auditable on disk, the tag is
+  immutable upstream, and no unverified network content is executed during the image build.
+
+- Set SHELL to bash -o pipefail for the nvm install layer. Resolves the implicit bash dependency in
+  pull/550#discussion_r3076693291. nvm.sh currently sources under Ubuntu's /bin/sh (dash) because of
+  upstream POSIX compatibility, but the dependency on bash is load-bearing and should be explicit;
+  pipefail also catches any pipeline-stage failure in the clone + source + install chain.
+
+Side effect: ~/.bashrc no longer contains nvm sourcing lines (those were written by install.sh,
+  which is now skipped). This makes the verification strictly stronger — 'claude' still resolves in
+  every shell mode, proving ENV PATH is independently sufficient. Users who want the 'nvm' shell
+  function for ad-hoc use can source it manually with 'source $NVM_DIR/nvm.sh'.
+
+Refs #548
+
+- **devcontainer**: Overlay plugins/ with anonymous volume
+  ([#592](https://github.com/tinaudio/synth-setter/pull/592),
+  [`854bee1`](https://github.com/tinaudio/synth-setter/commit/854bee114dfa2d28b3073efb352b01f40fc114e4))
+
+The base image bakes plugins/Surge XT.vst3 -> /usr/lib/vst3/Surge XT.vst3, but the devcontainer's
+  workspaceMount shadows it with the host repo, and plugins/ is gitignored. Add an anonymous-volume
+  mount at /home/build/synth-setter/plugins so Docker auto-seeds the directory from the image
+  contents on container creation, without writing to the host filesystem.
+
+Fixes #591
+
+- **devcontainer**: Refuse to open from a git worktree
+  ([#594](https://github.com/tinaudio/synth-setter/pull/594),
+  [`4a99c59`](https://github.com/tinaudio/synth-setter/commit/4a99c59a2a8e51c3100fcb75e927a784566630f9))
+
+* fix(devcontainer): refuse to open from a git worktree
+
+A linked worktree's .git is a pointer file referencing an absolute host path into the parent repo's
+  admin directory. That path is not mounted into the container, so post-create.sh fails
+  mid-provision with a cryptic "not a git repository" error and leaves the container half-configured
+  (no pre-commit install, no safe.directory config).
+
+Move the .env touch into a new .devcontainer/initialize.sh that also detects the worktree pointer
+  and exits with a clear error naming the two supported branch-isolation workflows: host-only
+  worktree or devcontainer-from-root with `git checkout -B`. The parallel-devcontainer edge case
+  (rare, not targeted by CLAUDE.md) is documented inline as a local-only patch.
+
+Fail fast in initializeCommand, before any image build.
+
+Fixes #593
+
+* docs(getting-started): note the worktree hardstop in §2g
+
+Existing doc prescient-ly warned that mounting a worktree directly does not work. Append a sentence
+  noting that as of the hardstop change, the failure now surfaces as an explicit error at
+  `initializeCommand` time rather than partway through `post-create`.
+
+Refs #593
+
+* fix(devcontainer): point initialize.sh message at docs, reference #593
+
+The previous error suggested `git checkout -B <branch>` as workflow 2, which was technically correct
+  but too narrow — docs/getting-started.md §2g already documents the recommended pattern (create a
+  worktree INSIDE the container), and that works because the in-container .git is a real directory
+  resolving normally.
+
+Rephrase both the error and the adjacent comment to point at the docs rather than prescribe one
+  command, and add an explicit reference to #593 for the tradeoff analysis and escape hatch.
+
+* fix(devcontainer): reorder initialize.sh, broaden pointer-file wording
+
+Address Copilot review feedback on PR #594:
+
+1. Reorder: move `.env` touch below the pointer-file guard. An aborted run
+  (worktree/submodule/--separate-git-dir case) no longer leaves a stray empty .env in the workspace.
+
+2. Generalize wording: the `gitdir:*` guard actually matches any pointer-file .git (worktrees are
+  just the common case; submodules and `git clone --separate-git-dir` repos have the same failure
+  mode). Update the header comment and error heredoc to say "pointer file" and name worktree as the
+  common case, so the error reads correctly in the rarer cases too.
+
+Guard logic unchanged — still exits 1 for any `gitdir:` prefix, preserving the existing Level 1
+  behavior verified in the initial PR comment.
+
+* Clean up comments in initialize.sh
+
+Removed detailed comments regarding the pointer-file .git and its implications for devcontainer
+  usage.
+
+- **devcontainer**: Split into cpu and gpu flavors
+  ([#553](https://github.com/tinaudio/synth-setter/pull/553),
+  [`a631c78`](https://github.com/tinaudio/synth-setter/commit/a631c788f518c785947ec8f3e5b050a28777787b))
+
+Replace the single .devcontainer/devcontainer.json with two flavors under .devcontainer/cpu/ and
+  .devcontainer/gpu/ sharing the existing Dockerfile and post-create.sh. The only difference is
+  runArgs: the gpu flavor passes --gpus all so NVIDIA Container Toolkit hosts get device access.
+  Both keep MODE=idle so the entrypoint runs `sleep infinity` and VS Code can attach shells.
+
+Refs #538
+
+- **devcontainer**: System-wide Claude Code, parameterize remoteUser, persist bash history
+  ([#581](https://github.com/tinaudio/synth-setter/pull/581),
+  [`0d49325`](https://github.com/tinaudio/synth-setter/commit/0d493251a398a4f7f021536c57d248e082976d52))
+
+* build(devcontainer): move Claude Code to system-wide install and parameterize remoteUser
+
+- docker/ubuntu22_04/Dockerfile: install Node.js (apt via NodeSource) and @anthropic-ai/claude-code
+  system-wide as root before the USER dev switch. Binary lives at /usr/local/bin/claude; both root
+  and dev run the same binary, each with its own $HOME/.claude state. Drops the per-user nvm install
+  so root can also `npm install -g` to update. - .devcontainer/{cpu,gpu}/devcontainer.json:
+  parameterize remoteUser via ${localEnv:DEVCONTAINER_USER:dev}. Default behavior unchanged (dev).
+  Set DEVCONTAINER_USER=root on the host before reopening the folder in container to run sessions as
+  root. dev remains unprivileged (no sudo).
+
+* refactor Node.js Claude Code installation and persistent bash history
+
+Updated Dockerfile to install Node.js and Claude Code CLI from NodeSource and added bash history
+  persistence.
+
+* Refactor Node.js and npm installation commands
+
+Updated Node.js and npm installation in Dockerfile.
+
+* Add Claude Code CLI version argument to Dockerfile
+
+* Add volume mount for command history
+
+* Create non-root user and set up command history
+
+Add non-root user for development and persist bash history.
+
+* build(devcontainer): drop post-create.sh privileges to dev when invoked as root
+
+Prevents root-owned .git/hooks/* and .git/config landing in the bind-mounted workspace when
+  DEVCONTAINER_USER=root or under Codespaces (both run postCreateCommand as root). Guard re-execs
+  via runuser -u dev.
+
+Refs #580
+
+- **docker**: Publish public tinaudio/synth-setter image
+  ([#567](https://github.com/tinaudio/synth-setter/pull/567),
+  [`dbc8f85`](https://github.com/tinaudio/synth-setter/commit/dbc8f85ca977a5ee9d6b7f384dd7cc8a9b105c71))
+
+* build(docker): rename to tinaudio/synth-setter and strip baked secrets
+
+Delete the r2-config-base Dockerfile stage and W&B netrc bake block so the image contains no
+  embedded credentials. R2_BUCKET remains as a non-sensitive build arg. Callers now provide R2
+  credentials and WANDB_API_KEY at runtime via env vars.
+
+Refs #564
+
+* ci: switch workflows to public synth-setter image with runtime secrets
+
+Drop BuildKit R2/W&B secret mounts from docker-build-validation, remove the private-registry
+  visibility gate, add the 'latest' tag on main, and switch cache refs to
+  tinaudio/synth-setter:buildcache.
+
+Dataset and spec workflows now pipe R2 credentials into docker run via RCLONE_CONFIG_R2_* env vars.
+  Docker Hub login is dropped from pull-only steps since the image is public.
+
+* build(devcontainer): use public synth-setter image, drop baked-cred copy
+
+The base image no longer ships credentials, so the /root -> /home/dev copy block is dead code.
+  Document that R2/W&B creds must come from runtime env vars (Codespaces secrets or mounted .env).
+
+* docs(reference): document runtime secret piping for public image
+
+Update docker.md, docker-spec.md, and github-actions.md to reflect that R2 and W&B credentials are
+  no longer baked into the image; they flow in at runtime via env vars. Remove the 'must remain
+  private' invariant.
+
+* docs(reference): add missing R2_ENDPOINT row to github-actions secrets table
+
+All three pipeline workflows (dataset-generation, spec-materialization, test-dataset-generation)
+  consume secrets.R2_ENDPOINT, but the table previously omitted the row. Follow-up to 9e3c2e6a.
+
+* docs: document public image and runtime credential flow
+
+Update getting-started and credential-rotation to reflect that the public image does not bake R2/W&B
+  credentials. Rotation no longer requires rebuilding images.
+
+* docs(design): rename tinaudio/perm refs and add migration plan
+
+Update design docs to use tinaudio/synth-setter. Commit the implementation plan that drove this
+  migration.
+
+* fix(docker): stop persisting GIT_PAT in .git/config inside the image
+
+The dev-snapshot stage previously fetched source via `git remote add origin
+  "https://${token}@github.com/...`, which wrote the token into .git/config. Anyone pulling the
+  public image could extract a live GitHub PAT from /home/build/synth-setter/.git/config.
+
+Switch to `git -c http.<url>.extraheader=Authorization: Bearer ...` which passes the token
+  ephemerally (only that invocation) and never persists it to config. The origin URL now stores no
+  credentials.
+
+Required for #564 — without this fix the image cannot be safely published publicly.
+
+* fix(ci): tighten latest tag gate for workflow_dispatch
+
+{{is_default_branch}} only checks github.ref (the branch the workflow dispatched from), not the
+  git_ref input that determines which commit actually gets baked. Dispatching from main with
+  git_ref=feature/foo would previously have tagged that feature branch's build as latest.
+
+Restrict latest to: - schedule events (always on main) - workflow_dispatch where git_ref=main
+
+* fix(docker): use x-access-token for git fetch, scrub config post-fetch
+
+bb37dd4 attempted to avoid persisting GIT_PAT via `git -c http.<url>.extraheader=Authorization:
+  Bearer ${token}`, but GitHub's git HTTPS endpoint rejects Bearer tokens (they're accepted for API
+  calls but not for git operations, which require HTTP Basic). The buildx run failed with exit code
+  128 on the fetch step.
+
+Switch to the standard GitHub pattern: embed `x-access-token:${token}` in the remote URL for the
+  fetch, then overwrite the URL via `git remote set-url` to scrub credentials from .git/config.
+  Verified locally that (a) git's FETCH_HEAD auto-strips credentials from fetched URLs, and (b)
+  after set-url, no trace of the token or x-access-token username remains in .git/.
+
+* Delete docs/superpowers/plans/2026-04-15-public-docker-image.md
+
+* fix(ci): gate Docker Hub login to non-PR events
+
+On PR runs the workflow only build-validates (push: false), so the Docker Hub login is unused.
+  Gating it on non-PR events means fork PRs (which never receive DOCKERHUB_USERNAME/TOKEN) can still
+  exercise the Dockerfile without hitting a failure before the build starts.
+
+Matches the existing gate on the adjacent Verify Docker Hub push access step.
+
+* build(docker): drop GIT_PAT requirement (public repo)
+
+The repository is being made public, so fetching the source tarball and cloning the repo inside the
+  dev-snapshot stage can both happen anonymously. Remove:
+
+- The two BuildKit secret mounts that consumed git_pat (sanity check in builder-base and the
+  dev-snapshot git fetch block) - The Authorization: Bearer header on the synth-setter-src tarball
+  download; curl now hits the public tarball endpoint directly - The --secret id=git_pat line from
+  the Makefile recipe and the GIT_PAT variable from its usage docs - The git_pat entry from the
+  docker-build-validation BuildKit secrets block (now empty — no build-time secrets at all) - The
+  GIT_PAT env + make arg from the flush-investigation workflow - The GIT_PAT row from
+  credential-rotation-guide, docker.md, and github-actions.md; the rotation runbook no longer
+  mentions it
+
+One less credential to rotate, one less secret to leak, and zero plumbing overhead for external
+  contributors who want to build the image themselves.
+
+* build(docker): move R2_BUCKET from build-arg to runtime env var
+
+R2_BUCKET is non-sensitive but baking it into the image at build time freezes each published image
+  to one specific bucket. Moving it to a runtime env var lets the same public image point at any
+  bucket — useful for external users pointing at their own R2 account and for avoiding a rebuild
+  every time the CI bucket changes.
+
+Changes:
+
+- Dockerfile: drop the top-level ARG R2_BUCKET and the runtime-base stage that baked it.
+  dev-snapshot now inherits directly from builder-install-synth-setter-deps. - Makefile: already had
+  no R2_BUCKET plumbing (cleaned up as part of the GIT_PAT removal commit). -
+  docker-build-validation.yml: drop R2_BUCKET from build-args. The image_config.r2_bucket GH output
+  is still generated by load_image_config but no longer consumed by the build. -
+  dataset-generation.yml: read r2_bucket from configs/image/dev-snapshot.yaml at workflow time and
+  pass it to docker run via -e R2_BUCKET=... This mirrors the pattern already used by
+  test-dataset-generation.yml for its validate-shard job. - docs: update docker-spec.md §2/§3
+  (runtime-base → direct inheritance, drop R2_BUCKET row from build-args and baked-env tables, add
+  R2_BUCKET as a required env var for MODE=generate_dataset).
+
+The pydantic ImageConfig schema still validates r2_bucket because the YAML is still the single
+  source of truth for the CI bucket name — just not via a build-arg anymore.
+
+* docs: document latest tag, correct devcontainer .env story
+
+Three Copilot review findings on #567:
+
+- docs/reference/docker.md Tags table: add tinaudio/synth-setter:latest row and note that
+  latest/dev-snapshot are only published on dispatch/schedule (not PR builds), and latest is
+  additionally gated to main-branch builds (matches the gate in 703b618). - docs/getting-started.md
+  §2g: the dev container configs do NOT forward .env automatically. Users must source it manually or
+  set the vars via Codespaces / Dev Container env settings. - .devcontainer/post-create.sh header:
+  match the same reality — .env is not auto-loaded.
+
+* docs: unify runtime env var enumeration across docker/spec/getting-started
+
+The three docs had three incomplete views of the same information:
+
+- docker.md § Runtime secrets listed 7 vars (complete) but §3.3 MODE=generate_dataset listed only
+  DATASET_CONFIG + RUN_METADATA_DIR, silently omitting R2_BUCKET / RCLONE_CONFIG_R2_* /
+  WANDB_API_KEY. - docker-spec.md §3.3 had R2_BUCKET but not rclone/wandb vars. - getting-started.md
+  §4b told users to put RCLONE_CONFIG_R2_TYPE and RCLONE_CONFIG_R2_PROVIDER in .env, while docker.md
+  said they were "fixed — set in run". Both work but the source-of-truth was mixed.
+
+Consolidate to a single 10-row table as the canonical enumeration:
+
+- MODE, DATASET_CONFIG, RUN_METADATA_DIR (mode dispatch + args) - R2_BUCKET (runtime bucket config,
+  non-secret) - RCLONE_CONFIG_R2_TYPE, _PROVIDER (rclone constants) -
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID, _SECRET_ACCESS_KEY, _ENDPOINT (secrets) - WANDB_API_KEY (secret)
+
+docker.md § Runtime environment variables is the canonical table. docker-spec.md mirrors it (with a
+  note that it's kept in sync). docker.md §3.3 MODE=generate_dataset now points to the canonical
+  table rather than having its own partial version. getting-started.md §4b has a complete .env
+  template covering all user-provided vars in one place.
+
+Also clarifies in all three docs that R2_BUCKET is not part of the rclone remote config — it's a
+  separate bucket-name argument that generate_dataset.py interpolates into upload paths.
+
+* refactor(docker): use git clone instead of init+remote+fetch
+
+Functionally equivalent to the previous init+remote+fetch dance, but:
+
+- 2 commands instead of 4 (more idiomatic, less for a reader to parse) - git clone creates a local
+  `main` branch with upstream tracking wired up automatically, so shelling into the image for
+  interactive development — git switch main, git pull, git rebase origin/main — just works instead
+  of requiring `git checkout -b main origin/main` then `git branch --set-upstream-to=origin/main`.
+
+The image's checkout is still pinned to SYNTH_PERMUTATIONS_GIT_REF via the detached-HEAD checkout,
+  so reproducibility of the baked source is unchanged. The only runtime cost is one redundant
+  working-tree write (git clone checks out main before the detach overwrites it), which is
+  sub-second on synth-setter's tree size.
+
+* revert: use git clone instead of init+remote+fetch
+
+Reverts the git-clone refactor from 8143856. The refactor broke the build because an upstream stage
+  (builder-install-synth-setter-deps, inherited by the dev-snapshot target) creates
+  /home/build/synth-setter/ plugins/Surge XT.vst3 before the git step runs. `git clone URL .` aborts
+  with "destination path '.' already exists and is not an empty directory", whereas `git init`
+  happily creates .git/ alongside the existing plugins symlink.
+
+docker-build-validation run 24451167961 confirmed the failure with buildx exit code 128 on the git
+  clone step.
+
+Left an inline comment in the Dockerfile explaining why we can't use `git clone .` here, so nobody
+  re-attempts this refactor without first relocating the plugins symlink to the dev-snapshot stage.
+
+* docs(ci): tighten the login-gate comment about fork PRs
+
+The original comment claimed gating the Docker Hub login step would let fork PRs "exercise the
+  Dockerfile". That's imprecise — the gate only prevents a spurious credential failure at the login
+  step. Fork PRs still fail later because the in-image git fetch resolves SYNTH_PERMUTATIONS_GIT_REF
+  against upstream tinaudio/synth-setter, not the fork's origin. A real fork-PR build would need to
+  fetch from github.event.pull_request.head.repo.html_url; not implemented here.
+
+The gate is still valuable: it matches the existing gate on the Verify Docker Hub push access step,
+  and it prevents same-repo PRs from hitting a spurious login failure if DOCKERHUB_* secrets are
+  temporarily unavailable.
+
+Surfaced by Copilot review.
+
+- **evaluation**: Add pandas to requirements-app.txt
+  ([#579](https://github.com/tinaudio/synth-setter/pull/579),
+  [`1bf8d3b`](https://github.com/tinaudio/synth-setter/commit/1bf8d3b2b77b553f68bd984c61a5895c2d67aacd))
+
+scripts/predict_vst_audio.py imports pandas but it was missing from the app requirements, causing
+  ModuleNotFoundError when running the synth matching CLI in a fresh app env.
+
+Fixes #578
+
+- **evaluation**: Pin eval metric dependencies
+  ([#611](https://github.com/tinaudio/synth-setter/pull/611),
+  [`a53c9c9`](https://github.com/tinaudio/synth-setter/commit/a53c9c91e7a9ea98a653b5dd8745b8c291a40a43))
+
+* build(evaluation): pin eval metric dependencies
+
+Add pesto-pitch, dtw-python, kymatio, and loguru to requirements-app.txt so
+  scripts/compute_audio_metrics.py can run on a fresh checkout.
+
+Closes #605
+
+* build(evaluation): move loguru pin out of eval-metrics group
+
+loguru is used broadly across the repo (src/data/vst/, several scripts), not just eval metrics. Move
+  the pin into the general requirements block alphabetically and keep the eval-metrics group for
+  eval-specific deps.
+
+Addresses Copilot review feedback on #611.
+
+### Chores
+
+- Correct 'isse' typo in initialize.sh error message
+  ([#596](https://github.com/tinaudio/synth-setter/pull/596),
+  [`b5690c4`](https://github.com/tinaudio/synth-setter/commit/b5690c4cd8e8f22c89959479f85f0503f600b628))
+
+- Gitignore .worktrees/ and /worktrees/ directories
+  ([#616](https://github.com/tinaudio/synth-setter/pull/616),
+  [`159ae1e`](https://github.com/tinaudio/synth-setter/commit/159ae1e36df2bcb7fcb380071f1d1d4315c35eea))
+
+Users regularly run `git worktree add` into `.worktrees/` and `/worktrees/` subdirectories of the
+  repo (per CLAUDE.md's isolated-worktree workflow). Git currently reports these as untracked, which
+  creates noise on every `git status` and risks accidental staging.
+
+Ignore both directories under a new 'Git worktrees' section.
+
+Closes #615
+
+- **ci**: Add Claude Code hooks for doc-drift and pr-review-resolver
+  ([#587](https://github.com/tinaudio/synth-setter/pull/587),
+  [`d737bca`](https://github.com/tinaudio/synth-setter/commit/d737bcae92e3ba04e90dff8c24dfe48250d5a1fb))
+
+* chore(ci): add Claude Code hooks for doc-drift and pr-review-resolver
+
+Two PostToolUse hooks that fire after Claude runs gh pr create or git push. Both are advisory
+  (asyncRewake, exit 2 with a pointer), run a headless claude -p session invoking the matching skill
+  (or an inline fallback if the skill is missing), and write the report under
+  .agent-reviews/<uuid>.md.
+
+- doc-drift on gh pr create (timeout 900s). Fallback references docs/doc-map.yaml. -
+  pr-review-resolver on git push (timeout 1200s). Skips main/master; waits RESOLVER_SLEEP_SECS
+  (default 360s) for CI and reviewers to settle; per-branch lockfile dedupes stacked pushes (last
+  wins).
+
+.claude/hooks/test.sh is a 10-assertion unit harness (canned stdin, PATH-stubbed claude/gh)
+  covering: match/no-match, skill-missing fallback text, main-push early-exit, no-PR silent skip,
+  lockfile dedupe.
+
+.agent-reviews/ added to .gitignore.
+
+Closes #586
+
+* chore(ci): make hooks worktree-aware and robust to malformed stdin
+
+Two findings from live verification on PR 587:
+
+1. has_skill() only looked at .claude/skills/ relative to CWD, but .claude/ is gitignored and the
+  plugin installs skills to the main repo checkout. From a worktree, detection always missed. Added
+  lookup via git --git-common-dir so worktrees find the skills installed in the parent repo.
+
+2. Malformed tool-input JSON (e.g. empty or truncated) caused jq to fail, and set -e + pipefail
+  propagated the exit. The hook runner will never send bad JSON in practice, but fail-closed on
+  malformed input is the right posture: silence, not noise.
+
+* chore(ci): tighten hook matchers to shell-word boundaries
+
+Live Level-1 verification (fresh claude -p session firing the real hook runner) surfaced that
+  substring matching on 'gh pr create' and 'git push' also fires when those phrases appear inside an
+  echo's quoted argument or a git commit message. The headless Claude itself noticed the misfire and
+  declined to act on the advisory report — which is the correct defensive behavior, but the hook
+  should not be triggering in the first place.
+
+Replace the case-*substring* match with a POSIX regex that requires the phrase to sit at
+  start-of-line or right after a shell operator (;, |, &, backtick, open-paren). Plain-whitespace
+  prefix no longer counts, so 'echo "testing gh pr create"' no longer triggers.
+
+Two new unit assertions cover the word-boundary behaviour (12/12). The pre-existing pr-checkbox and
+  taxonomy trigger hooks in settings.json still use loose substring matching — intentionally not
+  touched in this PR (out of scope).
+
+* chore(ci): address Copilot review on PR hooks
+
+Eight review comments from Copilot, all actionable:
+
+- Add `if` guards at the settings.json level (comments #1, #2) so the hook commands no-op for
+  unrelated Bash calls. Reuses the tight shell-word-boundary regex already in the scripts, not
+  Copilot's suggested whitespace-only form — Level-1 testing proved the looser version misfires on
+  quoted text inside echo args and commit messages. - Harden has_skill against unset/empty HOME and
+  spaces in paths (comment #3). Skip user-global checks when HOME is empty. - Resolve the default
+  branch via origin/HEAD instead of hardcoding `main` in the doc-drift diff command (comment #4).
+  Exposes a new default_branch helper in _lib.sh. The Level-1 no-dry-run run surfaced the same bug:
+  `git diff main...HEAD` returned files from already-merged PRs because local main was stale vs
+  origin/main. - Verbose failure report on nested `claude -p` errors (comments #5, #7). Capture
+  stderr, write a FAILED report with exit code, prompt, and stderr tail, and still exit 2 so the
+  session is woken. New unit assertion covers the failure path. - Switch the resolver lock TOKEN
+  from `$$-$(date +%s%N)` to gen_id for portability (comment #6). - Fix test.sh header comment — git
+  is real, only claude/gh are stubbed (comment #8). - Add gen_id to the _lib.sh helper list in the
+  header comment — a drift finding surfaced by the Level-1 doc-drift report itself.
+
+- **ci-automation**: One-shot conda env and conda test workflow
+  ([#558](https://github.com/tinaudio/synth-setter/pull/558),
+  [`0b2354c`](https://github.com/tinaudio/synth-setter/commit/0b2354cb48cc309d2c04397cff00b1eef22166d5))
+
+* chore(ci-automation): include requirements.txt from environment.yaml and add conda test workflow
+
+Consolidates the conda dev flow so a single `conda env create -f environment.yaml` installs both the
+  conda deps and the pip deps from requirements.txt — no more manual two-step setup. Adds a
+  test-conda.yml workflow that exercises this path in CI so the conda env stays functional alongside
+  the existing uv-based tests.
+
+Refs #557
+
+* chore(ci-automation): pip-install requirements-app.txt directly, not requirements.txt
+
+conda already provides torch/torchvision/lightning/torchmetrics via precompiled binaries (the reason
+  to use the conda path at all). Pulling in requirements.txt also pulls in requirements-torch.txt,
+  which would redundantly re-install the torch stack through pip and risks pip/conda conflicts on
+  the same packages. Swap to -r requirements-app.txt so conda owns the torch stack and pip owns
+  everything else.
+
+* chore(ci-automation): align conda torch stack specs with pip and drop overlap
+
+Two fixes for the conda env layout:
+
+1. Align torch-stack version specs with requirements-torch.txt. Previous conda specs
+  (torchvision=0.*, torchmetrics=0.*, pytorch=2.*) allowed the resolver to pick versions older than
+  the pip specs require (e.g. torchvision 0.14.x when pip wants >=0.15.0). Tighten conda to >=2.0.0
+  / >=0.15.0 / >=0.11.4 / >=2.0.0 so the two installers agree on a common lower bound.
+
+2. Drop hydra-core, rich, pre-commit, and pytest from the conda dependency list. They're already
+  pulled in by `-r requirements-app.txt`, so the conda block was just duplicating them. After this
+  change the conda and pip sets are non-overlapping by construction — conda owns the torch stack,
+  pip owns everything else.
+
+Also add setuptools to the conda deps so torchmetrics' import of `pkg_resources` works on a minimal
+  conda env.
+
+* chore(ci-automation): prioritize conda-forge channel to fix libtiff.so.5 import error
+
+With `pytorch` listed first, conda was pulling pillow (a torchvision dep) from the pytorch channel,
+  which ships a build that dynamically links libtiff.so.5. That lib isn't present in the minimal
+  conda env, so `import PIL` blew up during torchmetrics import in the test-conda workflow:
+
+ImportError: libtiff.so.5: cannot open shared object file: No such file or directory
+
+Reordering the channels so `conda-forge` wins for shared deps fixes this — conda-forge's pillow
+  bundles its own libtiff. The pytorch channel stays as a fallback for torch-stack builds that only
+  live there.
+
+- **code-health**: Disable plumb hooks and workflow docs
+  ([#554](https://github.com/tinaudio/synth-setter/pull/554),
+  [`da34fb1`](https://github.com/tinaudio/synth-setter/commit/da34fb1a58a57da6b898d1d327b7ca0707428fd6))
+
+Light disable: remove the devcontainer plumb init, the CLAUDE.md plumb workflow block, and the
+  CONTRIBUTING.md plumb section so the tool stops intercepting commits and directing contributors to
+  a disabled flow.
+
+Intentionally preserved for a follow-up decision (see #552): - plumb-dev pin in requirements-app.txt
+  - docs/plumb_spec.md - .plumbignore and .plumb/ gitignore block - # plumb:req-* tags across tests/
+
+Closes #551. Refs #552. Part of #466.
+
+- **code-health**: Fully remove plumb tooling and artifacts
+  ([#566](https://github.com/tinaudio/synth-setter/pull/566),
+  [`77e2a72`](https://github.com/tinaudio/synth-setter/commit/77e2a7268b09309fae91c36b5d9119cf2f3e9c53))
+
+Removes the plumb spec/test/code sync tool and all its artifacts from the repo. Drops the .plumb/
+  metadata dir, .plumbignore, docs/plumb_spec.md, the plumb-dev dependency, and the orphan hatchling
+  build-backend dep that only existed to build plumb-dev. Strips the 122 plumb:req-<hash>
+  requirement annotations across 15 test files.
+
+Closes #552
+
+- **vst**: Isolate VST headless runtime files in mktemp dir
+  ([#582](https://github.com/tinaudio/synth-setter/pull/582),
+  [`7e9a252`](https://github.com/tinaudio/synth-setter/commit/7e9a2523cb45ddd5dcd1f6b28f7f906c4828eb48))
+
+* fix(scripts): isolate VST headless runtime files in mktemp dir
+
+Move XAUTHORITY and xvfb/xsettingsd/openbox log paths from shared /tmp/*.log (hardcoded) into the
+  script's own mktemp TMP_DIR so concurrent invocations don't race on the same files. The existing
+  EXIT trap already cleans up TMP_DIR, so logs and the Xauthority file are removed automatically on
+  shutdown.
+
+Refs #528
+
+* fix(scripts): drop redundant EXIT trap and stale comment in VST headless
+
+The initial `trap 'rm -rf "$TMP_DIR"' EXIT` is overwritten by the later `trap cleanup EXIT`, so the
+  first handler never runs. `cleanup()` already calls `rm -rf "$TMP_DIR"` on its own, so removing
+  the redundant trap is a pure simplification. Also drop the now-misleading "# Create temp dir for
+  display number coordination" comment since TMP_DIR holds more than just the display number file.
+
+Review feedback from copilot-pull-request-reviewer on #582.
+
+### Continuous Integration
+
+- Hash requirements-app.txt in test-conda cache key
+  ([#570](https://github.com/tinaudio/synth-setter/pull/570),
+  [`c21fde8`](https://github.com/tinaudio/synth-setter/commit/c21fde8b7bd4a6c147dcbd579d1a25171e5d0e0f))
+
+setup-micromamba's default cache-environment key only hashes environment.yaml and does not follow
+  the pip `-r requirements-app.txt` reference inside it. So PRs that change only
+  requirements-app.txt leave environment.yaml byte-identical, the cached env is reused, and the
+  pip-dep change is never actually installed or tested.
+
+Set cache-environment-key explicitly to hash both environment.yaml and requirements-app.txt so the
+  cache invalidates whenever either file changes. requirements-torch.txt is intentionally excluded:
+  the torch specs are inlined directly in environment.yaml's conda section, so any torch version
+  change already touches environment.yaml and invalidates the default key.
+
+Closes #569
+
+- Run devcontainer as non-root dev user ([#540](https://github.com/tinaudio/synth-setter/pull/540),
+  [`c8bb6f6`](https://github.com/tinaudio/synth-setter/commit/c8bb6f62a721154e875d9a7c5ba3b35ec6eabeaa))
+
+* ci: run devcontainer as non-root dev user with passwordless sudo
+
+Claude Code refuses to run with --dangerously-skip-permissions as root, which blocks using it inside
+  the devcontainer. Switch to the official VS Code non-root user pattern.
+
+Add .devcontainer/Dockerfile extending tinaudio/perm:dev-snapshot with: - dev user (UID 1000) with
+  passwordless sudo - chown /venv/main so `uv pip install -e .` works without sudo - copy baked R2
+  (rclone.conf) and W&B (.netrc) credentials from /root into /home/dev so runtime tooling keeps
+  working
+
+Update .devcontainer/devcontainer.json to build from the Dockerfile, set remoteUser=dev, and enable
+  updateRemoteUserUID so the container UID is remapped to the host user on Linux hosts.
+
+post-create.sh needs no changes — the /venv/main chown is sufficient for `uv pip install --no-deps
+  -e .` to succeed as the dev user.
+
+Refs #539
+
+* fix(devcontainer): scope chown, guard credential copy, --no-install-recommends
+
+Addresses Copilot PR review feedback on #540:
+
+- scope /venv/main chown to bin/ and site-packages/ instead of recursive (comment 3070307915) -
+  avoids copy-up of the entire prebuilt ~2.5GB venv layer into a new image layer - guard
+  /root/.netrc and /root/.config/rclone copies with existence checks (comment 3070307921) -
+  base-image builds without the wandb_api_key BuildKit secret previously broke the devcontainer
+  build - apt-get install sudo with --no-install-recommends to keep the layer small (comment
+  3070307924)
+
+* fix(devcontainer): pin base image to linux/amd64 for arm64 builders
+
+tinaudio/perm:dev-snapshot is published only as linux/amd64. With the PR's switch from 'image:' to
+  'build:', BuildKit resolves the FROM step against the builder's target platform and fails on Apple
+  Silicon with "no match for platform in manifest". The old 'image:' path silently pulled amd64 and
+  ran it under Rosetta; pinning --platform=linux/amd64 preserves that behavior explicitly.
+
+Multi-arch publishing of the base image is the long-term fix and will be tracked separately; this
+  unblocks arm64 devs on PR #540 today.
+
+* fix(devcontainer): pin build target platform via devcontainer.json build.options
+
+The FROM --platform=linux/amd64 pin added in ab252af only controlled which base-image manifest
+  variant gets pulled — it does not change the build target platform. On
+  cloud-tinaudio-tinaudio-builder (a multi-node Build Cloud builder with separate linux-amd64 and
+  linux-arm64 workers), buildx still scheduled RUN steps on the arm64 node per the host's default
+  target, and the RUN failed with "exec /bin/bash: exec format error" because the pulled amd64
+  binaries cannot execute on an arm64 worker with no emulation.
+
+Pass --platform=linux/amd64 to docker buildx build itself via devcontainer.json's build.options
+  field. That sets the build target platform, so BuildKit routes the whole build (FROM pull + RUN
+  steps) to an amd64-capable worker: the native linux-amd64 node on Build Cloud (no emulation, full
+  speed) or Docker Desktop's local builder (amd64 RUN steps via Rosetta-for-Linux at the daemon
+  level).
+
+The FROM --platform pin is now redundant and triggered the FromPlatformFlagConstDisallowed BuildKit
+  lint warning, so drop it. devcontainer.json's build.options is the single source of truth for
+  platform routing, with a short comment in the Dockerfile pointing there.
+
+* fix(devcontainer): set dev user login shell to /bin/bash
+
+useradd defaults to /bin/sh (dash on Ubuntu) when no --shell is specified, which would give VS
+  Code's integrated terminal a dash shell instead of bash — a hidden dev-UX regression vs. the
+  pre-PR root user (which has /bin/bash on the base image). Automation pipelines are unaffected
+  because post-create.sh, pre-commit hooks, and Makefile recipes all specify their own interpreter;
+  this is strictly about the interactive terminal experience for devs using the rebuilt container.
+
+Addresses Copilot review comment 3075047386.
+
+* fix(devcontainer): mount workspace at baked-install path, drop chown and sudo
+
+The base image already does 'uv pip install --no-deps -e .' from /home/build/synth-setter at bake
+  time (docker/ubuntu22_04/Dockerfile:422), writing a .pth file that points at that path. The
+  previous approach (cd951fc, 053b43c) mounted the workspace at /workspaces/{basename} and then
+  rewrote the .pth file via a second editable install in post-create.sh — which required chowning
+  /venv/main/bin and site-packages to dev so the rewrite could succeed.
+
+Mount the host workspace at /home/build/synth-setter directly instead. The existing baked .pth is
+  already correct — zero rewrites, no chown, no PYTHONPATH hack, no re-install. CI and production
+  (which run the image without a mount) keep working against the baked clone; the devcontainer
+  shadows the baked clone with the live workspace at the same path so Python imports resolve to the
+  workspace without any consumer-side machinery.
+
+Also drop sudo entirely. Passwordless sudo is security theatre (dev becomes root trivially), and the
+  ergonomic escape hatch for missing system packages is adding them to the base image and
+  rebuilding, not granting unrestricted root to the dev user.
+
+Net Dockerfile change: 40 lines to 26 lines. Removes the scoped chown (053b43c fix #1), removes sudo
+  install (053b43c fix #3), removes the FROM --platform pin comment block (c69f30c was already moved
+  to devcontainer.json build.options). Keeps the credential copy with a TODO for eventual removal
+  when the base image bakes credentials into /home/dev directly.
+
+### Documentation
+
+- Readme + getting-started install overhaul, add make link-plugins
+  ([#613](https://github.com/tinaudio/synth-setter/pull/613),
+  [`0fd4b03`](https://github.com/tinaudio/synth-setter/commit/0fd4b03325e6d280f8730f7974a6fb7927089cc1))
+
+* docs(documentation): README + getting-started install overhaul, add make link-plugins
+
+Rewrite README install section to promote `make install` as the canonical path, frame uv/pip/conda
+  as interchangeable alternatives, and deduplicate against docs/getting-started.md §2.
+
+Add `make link-plugins` target that detects Linux/macOS and symlinks the installed Surge XT VST3
+  into plugins/.
+
+Move Codespaces and Docker content to the bottom of the README. Add env-var export section and
+  devcontainer-as-root note.
+
+Closes #601 Closes #487
+
+* docs: address review feedback on install overhaul
+
+- README.md pip/conda note: keep each inline code span on a single line - README.md
+  devcontainer-as-root note: point to the real config paths
+  (.devcontainer/{cpu,gpu}/devcontainer.json); there is no .devcontainer/devcontainer.json -
+  docs/getting-started.md plain-pip alternative: also run `pip install -e .` so the project itself
+  is installed, matching `make install` - Makefile link-plugins: explicit destination handling —
+  replace symlinks/files, error out if destination is a real directory (previously `ln -sfn` could
+  create the symlink inside an existing real directory)
+
+* feat: end-to-end make install (uv + Python 3.10 venv + deps + pre-commit)
+
+- make install now installs uv (if missing), creates .venv/ with uv-managed Python 3.10 and --prompt
+  synth-setter, installs requirements plus the project in editable mode, and registers pre-commit
+  hooks (skipped when core.hooksPath is set, e.g. in the dev container). Errors out if .venv/ exists
+  with a different Python version so the contract stays predictable. - Drop uv.lock: we are
+  committing to `uv pip` rather than `uv sync`. uv's pyproject-driven resolution has known edge
+  cases around torch indexes, transitive-dep resolution, and CPU/CUDA backend wheels that make sync
+  unsuitable for this project today. The lock file would only drift. - README install flow shrinks
+  from 6 steps to 5: users no longer need to install uv or create the venv manually. make install
+  handles both, including fetching a Python 3.10 interpreter via uv if the user does not have one. -
+  Prerequisites no longer list Python as a hard requirement — only git, curl, make, and the platform
+  deps. - getting-started §2 rewritten to the uv-first canonical flow; the pip/conda/plain-venv
+  walkthrough moves to a new Appendix A.
+
+* feat: add make install-surge-xt, restructure getting-started appendices
+
+- New target: make install-surge-xt downloads the pinned Surge XT 1.3.4 "pluginsonly" archive from
+  GitHub releases, verifies md5 against the upstream checksum, caches at
+  ~/.cache/synth-setter/surge-xt-1.3.4/, and extracts Surge XT.vst3 into plugins/. Skip-if-exists
+  for idempotency. Linux x86_64 + macOS universal; arm64 Linux errors with a pointer to system
+  install + link-plugins. - link-plugins becomes the fallback for users with a system-wide Surge XT,
+  not the primary path. README + getting-started §2d updated to match. - getting-started §2d
+  rewritten around install-surge-xt. §4a shrinks to a pointer at §2d (no more duplicate install
+  walkthrough). - §2g (Codespaces) and §2h (Dev Container) move out of §2 into a new Appendix B:
+  Container-based setup at the end of the doc. §2 now has a short pointer to Appendix B. Keeps §2
+  the canonical local-setup flow and puts specialized container paths in one place alongside
+  Appendix A (Manual environment setup). - README: drop Surge XT from prerequisites
+  (install-surge-xt handles it); swap link-plugins for install-surge-xt in the 5-step flow; add a
+  "already have Surge XT installed system-wide?" note pointing at link-plugins; update the
+  Codespaces & Docker section link target to Appendix B.
+
+* refactor: drop make link-plugins, harden install recipes, doc fixes
+
+Addresses PR #613 Copilot review round 2.
+
+Makefile: - Remove make link-plugins target entirely. `make install-surge-xt` covers the download
+  path; users who already have a system-wide Surge XT install can run `ln -s "/path/to/Surge
+  XT.vst3" "plugins/"` as a one-liner. Keeping two make paths for the same `plugins/` population was
+  marginal value and accumulated review nits (missing search locations, shell-safety holes around
+  `ln; echo`). - Prepend `set -e` to the install and install-surge-xt recipes so a failure in uv,
+  pip, tar, or unzip does not get masked by a trailing `echo` (comments #3, #10). - Add an explicit
+  elif/else for md5 detection: if neither `md5sum` nor `md5` is available, fail with a clear error
+  instead of silent empty comparison (comment #7).
+
+Docs: - §1 prerequisites: soften "all ship with macOS/Linux" — make/curl/git are standard on
+  developer machines but missing on minimal/server images (comment #5). - §2b: note that pre-commit
+  install is skipped when `core.hooksPath` is set (dev container case), with instructions for manual
+  override (comments #1, #2). - §2d: drop the make link-plugins mention; replace with a one-line
+  manual `ln -s` example for users with a system install. Add a "heads-up" call-out that
+  `tests/data/vst/test_preset_params.py` and `tests/docker/test_smoke.py` still hardcode
+  `/usr/lib/vst3/Surge XT.vst3`, so `pytest -m requires_vst` skips on macOS even with plugins/
+  populated. Tracked in #631 (comment #6 + follow-up issue). - §4a: same link-plugins wording
+  cleanup. - README: inline pre-commit skip caveat in step 4 comment; rewrite the "already have
+  Surge XT system-wide" blockquote as a manual symlink one-liner. doc-map.yaml: drop link-plugins
+  from the Makefile covers string.
+
+---------
+
+Co-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>
+
+- Reflect devcontainer-tools stage, bash-history volume, post-create privilege drop
+  ([#585](https://github.com/tinaudio/synth-setter/pull/585),
+  [`a8cc3ed`](https://github.com/tinaudio/synth-setter/commit/a8cc3edcc1fce30bda560e22f6d1d9b7965eba4f))
+
+* docs: reflect devcontainer-tools stage, bash-history volume, post-create privilege drop
+
+PR #581 added a second consumable Dockerfile target (devcontainer-tools), new Makefile/CI build
+  paths, bash-history persistence under /commandhistory, and a root-to-dev privilege drop in
+  .devcontainer/post-create.sh. Bring the reference docs in line.
+
+- docs/reference/docker.md: new target + tag rows, build-target example -
+  docs/reference/docker-spec.md: two-target table with devcontainer-tools - docs/getting-started.md:
+  accurate post-create.sh description (submodule init and workspace-editable install claims were
+  already stale pre-#581) - docs/doc-map.yaml: cover .devcontainer/** under getting-started.md and
+  .devcontainer/Dockerfile under docker.md
+
+Refs #580
+
+* fix(docs): remove accidental markdown list in docker-spec.md paragraph
+
+mdformat parsed the line-starting '+' as a list bullet and rewrote the paragraph into a detached
+  list item. Rewrite as a comma-separated inline list to restore paragraph flow.
+
+Refs #584
+
+* fix(docs): normalize docker-spec.md target table column widths for mdformat
+
+mdformat trims trailing whitespace in table cells to the minimum width needed by the longest cell.
+  Match that convention.
+
+* docs: cover post-merge devcontainer drift (initialize.sh, plugins overlay, .env, submodule
+  cleanup)
+
+Four post-#581 PRs landed while #585 was open and introduced new doc drift in the same files this PR
+  already touches. Fold those fixes in rather than open a follow-up:
+
+- doc-map.yaml: add `.devcontainer/initialize.sh` (added in #594) so the worktree-hardstop file is
+  auto-tracked for future drift. Update both devcontainer.json `covers:` strings to mention the new
+  initializeCommand, --env-file .env, and the plugins/ anonymous overlay (#592). -
+  getting-started.md §2g Prerequisites: rewrite the .env paragraph. The prior text claimed configs
+  do not auto-load .env, but runArgs: ["--env-file", ".env"] has been in the configs since well
+  before #581. Distinguish local (auto via --env-file) from Codespaces (forward via secrets)
+  explicitly. - getting-started.md §2g Caveats: add a caveat for the plugins/ anonymous overlay
+  added in #592 — without this note, a user whose host plugins/ is gitignored is surprised that
+  Surge XT.vst3 still appears inside the container, and may try to drop their own plugin in plugins/
+  on the host. - getting-started.md §2g: drop the stale `git submodule update` / `tinaudio/skills`
+  caveat — the skills submodule was migrated to a plugin marketplace in #546, so the caveat no
+  longer applies. Adjacent paragraph reworded to drop the "submodule" half of "submodule/hook
+  operations". - docker.md §2 devcontainer-tools prose: name the plugins/ anonymous overlay
+  alongside the /commandhistory bash-history volume, since the prose already crosses the
+  docker/devcontainer boundary by enumerating one of the two mounts.
+
+* fix(docs): correct devcontainer-tools stage parent (dev-base, not dev-snapshot)
+
+Copilot review on PR #585 caught that two passages described `devcontainer-tools` as extending
+  `dev-snapshot`, but the Dockerfile defines them as siblings — both `FROM dev-base AS <stage>`
+  (docker/ubuntu22_04/Dockerfile:374 and :424). dev-base is the shared parent that holds Surge XT,
+  the venv, and the synth-setter source.
+
+Fix: - Inline comment in the make example: `dev-base + ...` instead of `dev-snapshot + ...`. -
+  Surrounding prose: spell out the sibling relationship explicitly so a reader of just docker.md
+  isn't surprised by the Dockerfile graph.
+
+docs/reference/docker-spec.md already had the correct wording ("extends `dev-base`" at §2 line 70),
+  so no change there.
+
+- Update readme ([#562](https://github.com/tinaudio/synth-setter/pull/562),
+  [`d8b5eff`](https://github.com/tinaudio/synth-setter/commit/d8b5eff9021bdf8a0d5d35cfe06941722f664047))
+
+* docs: update readme
+
+Updated acknowledgments and clarify project status.
+
+* Update README.md
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+* Apply suggestions from code review
+
+---------
+
+- **documentation**: Update README for public
+  ([#556](https://github.com/tinaudio/synth-setter/pull/556),
+  [`8c81560`](https://github.com/tinaudio/synth-setter/commit/8c8156083a2b16c03b8ee1a716ac8ad40b905f04))
+
+* docs(documentation): prepare README for public
+
+Add a Status callout flagging the project as early-stage WIP, move the Ben Hayes acknowledgment up
+  near the overview and link the companion ben-hayes/synth-permutations repo, add a Project Tracking
+  section with real links to the project board, MVP epic, active epics, and key milestones, and
+  replace the placeholder License section with a proper GPL-3.0 statement and badge.
+
+Refs #555
+
+* docs(documentation): curate README Documentation section with skim list
+
+Replace the stale "coming soon" placeholders with a curated four-item skim list: getting-started,
+  architecture, glossary, and the data pipeline design doc. Add pointers to docs/design/ and
+  docs/reference/ for further reading.
+
+* Revise README for acknowledgments and features
+
+Updated acknowledgments and features sections for clarity and accuracy.
+
+* docs(documentation): tighten README grammar, soften overclaims, add Surge XT requirement
+
+Grammar fixes: add missing period in "et al.", replace ASCII double hyphens with em-dashes for
+  consistency, drop redundant "no Windows" clause in Prerequisites.
+
+Soften overclaims: "SOTA prior work" → "recent prior work"; "multi cloud via skypilot" → "with cloud
+  support" (keeps the README from going stale mid-week while compute backend work lands); "Flow
+  matching models" → "Flow matching and baseline models" to reflect VAE+RealNVP, DiT/AST, residual
+  MLP, and CNN variants that also ship.
+
+Add Surge XT 1.3.4 to Prerequisites with links to the upstream repo and the official downloads page.
+
+- **pipeline**: Skypilot compute integration design doc
+  ([#537](https://github.com/tinaudio/synth-setter/pull/537),
+  [`8aeec04`](https://github.com/tinaudio/synth-setter/commit/8aeec042048b9a92a175d0e642433c3883bc63db))
+
+* docs(pipeline): add SkyPilot compute integration design doc
+
+Proposes replacing the planned ComputeBackend protocol and RunPodBackend with SkyPilot managed jobs
+  for multi-provider GPU provisioning. Covers schema changes (compute_config field across
+  DatasetConfig, train, eval), worker identity via UUID, and SkyPilot task YAML configs.
+
+Refs #534
+
+* docs(pipeline): address review feedback on SkyPilot design doc
+
+- normalize header metadata to match data-pipeline.md (Status/Author/Last Updated/Tracking) - fix
+  image_config.py path reference (pipeline/schemas/, not CI/) - use real CI image name tinaudio/perm
+  with git-sha placeholder instead of synth-setter:latest - fix loop variable name mismatch
+  (shard_batch) and clarify dict-vs-path construction
+
+* Update SkyPilot compute integration design document
+
+Removed mention of Lambda as an alternative provider and adjusted the multi-provider flexibility
+  point.
+
+- **readme**: Declare Windows unsupported
+  ([#547](https://github.com/tinaudio/synth-setter/pull/547),
+  [`84b3f74`](https://github.com/tinaudio/synth-setter/commit/84b3f74f6cb74cc9340d25c45c62d404ffe9f308))
+
+* docs(readme): declare Windows unsupported
+
+The sh test dependency and VST rendering tooling are POSIX-only, and CI only covers ubuntu-latest
+  and macos-latest. Document this explicitly under Prerequisites so contributors don't try to set up
+  the project on Windows expecting it to work.
+
+Closes #32
+
+* docs(getting-started): remove Windows install instructions
+
+PR follow-up to the README Supported Platforms statement: getting-started.md still told Windows
+  users to use WSL/.venv\Scripts\activate, contradicting the README. Replace the WSL note with an
+  explicit "Linux or macOS only" prerequisite that points back to the README.
+
+* Update README.md
+
+Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+### Testing
+
+- **datamodules**: Skip flaky test_mnist_datamodule
+  ([#568](https://github.com/tinaudio/synth-setter/pull/568),
+  [`fff19d6`](https://github.com/tinaudio/synth-setter/commit/fff19d62b62221d4228a6d6266d8c31a238ef4e1))
+
+Public MNIST mirror download is unreliable; `make test` fails locally with `RuntimeError: Error
+  downloading train-images-idx3-ubyte.gz`. Skip the test at the function level (covers both
+  parametrizations) until the un-skip tracked by #243 lands.
+
+Refs #243
+
+- **testing**: Wire sweep tests to GPU runner; skip mnist-dependent tests
+  ([#513](https://github.com/tinaudio/synth-setter/pull/513),
+  [`b45973f`](https://github.com/tinaudio/synth-setter/commit/b45973f5787fc7b3c46cd34c0105ae7cdf979709))
+
+* test(testing): wire sweep tests to GPU runner; skip mnist-dependent tests
+
+test_sweeps.py had 5 tests that have never executed in any CI workflow: they were gated by
+  @RunIf(sh=True) while `sh` was not in requirements, and while `test-expensive.yml` does install
+  `sh` ad-hoc, it selects tests via `-m gpu` — and sweep tests had no @pytest.mark.gpu.
+
+Furthermore, the tests shell out to `src/train.py` which inherits `trainer: gpu` via the default
+  Hydra stack, so they require a GPU.
+
+Changes: - Add `sh` to requirements-app.txt (no longer an ad-hoc install). - Replace @RunIf(sh=True)
+  with @pytest.mark.gpu + @RunIf(min_gpus=1) on all 5 sweep tests — so they run on the twice-weekly
+  GPU runner and skip on the nightly CPU runner. - Skip 3 of the 5 tests with a TODO(#514) pointing
+  to the follow-up issue that tracks migrating them from Lightning-Hydra-Template mnist configs to
+  ksin: * test_experiments — globs configs/experiment/*.yaml, pulling in example.yaml which
+  overrides model=mnist. configs/model/mnist.yaml does not exist. * test_optuna_sweep +
+  test_optuna_sweep_ddp_sim_wandb — use hparams_search=mnist_optuna, which sweeps
+  model.net.lin{1,2,3}_size — fields only defined on SimpleDenseNet, which is not referenced by any
+  active model config.
+
+The tests themselves are legitimate coverage (experiment-compose smoke test, Optuna sweeper
+  integration, Optuna+ddp_sim+wandb integration) — they just need their configs migrated.
+
+Kept running: test_hydra_sweep and test_hydra_sweep_ddp_sim — these use the default train.yaml stack
+  (data=ksin, model=ffn) and are valid.
+
+Refs #510
+
+* test(testing): workaround #517 — delete callbacks.lr_monitor in sweep tests
+
+The sweep tests shell out to src/train.py with logger=[]. The default callbacks stack includes
+  LearningRateMonitor, which raises MisconfigurationException at on_train_start when the trainer has
+  no logger. This surfaced on the GPU runner in the test-expensive.yml run triggered against PR
+  #513.
+
+Add ~callbacks.lr_monitor to the subprocess overrides as a workaround. The fixture-based in-process
+  tests avoid this via `del callbacks.lr_monitor` in conftest.py; the subprocess tests don't use the
+  fixture.
+
+Refs #517 — root-cause fix (make LearningRateMonitor a no-op without a logger) is tracked
+  separately.
+
+* no-op comment change to trigger ci
+
+Corrected the comment about the missing mnist.yaml file.
+
+---------
+
+Co-authored-by: a <a@as-mac-mini.taile31224.ts.net>
+
+
 ## v0.2.0 (2026-04-09)
 
 ### Chores
