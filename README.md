@@ -47,46 +47,45 @@ under the GPL-3.0 license.
 
 ## Prerequisites
 
-- **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
-- **Python 3.10+**
-- **uv** (recommended) — [install uv](https://docs.astral.sh/uv/getting-started/installation/)
-- **Git**
-- **[Surge XT](https://github.com/surge-synthesizer/surge) 1.3.4** — the VST synthesizer used for dataset generation. See the [Surge XT downloads page](https://surge-synthesizer.github.io/downloads/) for installation instructions.
-- **System dependencies for VST rendering** — see the project documentation for details
+- **Supported platforms**: Linux (x86_64) and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
+- **Git**, **curl**, **make** (for the canonical install path)
+
+`make install` handles uv, Python 3.10, and all dependencies for you.
+`make install-surge-xt` fetches the pinned Surge XT VST3 release — no need
+to install Surge XT yourself.
 
 ## Installation
 
-Clone the repository:
-
 ```bash
+# 1. Clone
 git clone https://github.com/tinaudio/synth-setter.git
 cd synth-setter
-```
 
-### Using uv (recommended)
-
-```bash
-uv pip install -r requirements.txt
-```
-
-### Using pip
-
-```bash
-pip install -r requirements.txt
-```
-
-### Using conda
-
-```bash
-conda env create -f environment.yaml  # creates the "myenv" environment by default
-conda activate myenv
-```
-
-### Editable install
-
-```bash
+# 2. Install uv, create .venv (Python 3.10), install deps, register pre-commit
+#    (pre-commit install is skipped if core.hooksPath is set, e.g. in the dev
+#    container)
 make install
+
+# 3. Activate the venv
+source .venv/bin/activate
+
+# 4. Download the Surge XT VST3 into plugins/
+make install-surge-xt
+
+# 5. Export environment variables (R2, W&B — see §4b in getting-started)
+set -a && source .env && set +a
 ```
+
+> **Already have Surge XT installed system-wide?** Skip `make install-surge-xt`
+> and symlink it manually:
+> `ln -s "/path/to/Surge XT.vst3" "plugins/Surge XT.vst3"`.
+> See [docs/getting-started.md &sect;2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
+
+> **Prefer pip or conda?** If you'd rather manage the Python interpreter and
+> venv yourself, see
+> [docs/getting-started.md Appendix A](docs/getting-started.md#appendix-a-manual-environment-setup)
+> for a walkthrough using `pip install -r requirements.txt -e .` inside your
+> own environment.
 
 ### GPU vs CPU
 
@@ -183,6 +182,21 @@ Further reading (mostly for contributors and maintainers):
   GitHub Actions, W&B integration
 
 Run `make help` for available commands.
+
+## Codespaces & Docker
+
+GitHub Codespaces and local dev containers provide a pre-built environment with
+Surge XT, rclone, and all Python dependencies already installed. See
+[docs/getting-started.md Appendix B](docs/getting-started.md#appendix-b-container-based-setup)
+for setup instructions covering both paths.
+
+> **Devcontainer as root:** The default dev container runs as a non-root user.
+> If your workflow requires root (e.g., installing system packages), set
+> `"remoteUser": "root"` in the devcontainer config you use
+> (`.devcontainer/cpu/devcontainer.json` or
+> `.devcontainer/gpu/devcontainer.json`). See the
+> [devcontainer docs](https://containers.dev/implementors/json_reference/)
+> for details.
 
 ## License
 

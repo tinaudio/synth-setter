@@ -157,6 +157,9 @@ docs:
   - doc: docs/getting-started.md
     description: Onboarding — local dev, Codespaces, and dev container flows
     sources:
+      - pattern: "Makefile"
+        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), SURGE_XT_VERSION + related vars"
+        scope: "local-dev"
       - pattern: ".devcontainer/cpu/devcontainer.json"
         covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand"
       - pattern: ".devcontainer/gpu/devcontainer.json"
@@ -204,7 +207,7 @@ docs:
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md
-    description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ 2h)
+    description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)
     sources:
       - pattern: "tart/**"
         covers: "Packer template, packer variables (synth_setter_git_ref/torch_backend/python_version/vm_name), provisioner steps, brew packages, venv layout, VST3 path, smoke tests, .zshrc auto-activation, prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow"
