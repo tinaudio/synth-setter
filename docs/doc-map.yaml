@@ -16,7 +16,9 @@ docs:
     description: Docker build, run, debug reference
     sources:
       - pattern: "docker/**"
-        covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts"
+        covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts, devcontainer-tools stage"
+      - pattern: ".devcontainer/Dockerfile"
+        covers: "Dev container wrapper over devcontainer-tools stage, per-developer customization"
       - pattern: "scripts/docker_entrypoint.sh"
         covers: "All MODE values (idle, passthrough, generate_dataset), env var dispatch, error messages"
       - pattern: "pipeline/schemas/image_config.py"
@@ -24,12 +26,12 @@ docs:
       - pattern: "configs/image/**"
         covers: "YAML field names and values, build parameters, defaults"
       - pattern: "Makefile"
-        covers: "docker-build-* targets, DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
+        covers: "docker-build-* targets (dev-snapshot, devcontainer-tools), DOCKER_SECRETS, DOCKER_BUILD_FLAGS"
         scope: "docker"
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless X11 bootstrap, Xvfb setup, LIBGL_ALWAYS_SOFTWARE"
       - pattern: ".github/workflows/docker-build-validation.yml"
-        covers: "CI steps, required secrets, tag scheme, smoke test flow"
+        covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools publish"
 
   # ── Docker spec (the contract doc) ──────────────────────────────
   - doc: docs/reference/docker-spec.md
@@ -151,6 +153,22 @@ docs:
       - pattern: "scripts/audio_dirs/*.txt"
         covers: "Audio directory lists for metric computation reference sets"
 
+  # ── Getting started ─────────────────────────────────────────────
+  - doc: docs/getting-started.md
+    description: Onboarding — local dev, Codespaces, and dev container flows
+    sources:
+      - pattern: "Makefile"
+        covers: "Local dev targets — install (uv + .venv + deps + pre-commit), install-surge-xt (download + md5 verify + extract Surge XT VST3), link-plugins (symlink system-wide Surge XT), SURGE_XT_VERSION + related vars"
+        scope: "local-dev"
+      - pattern: ".devcontainer/cpu/devcontainer.json"
+        covers: "CPU dev container config — remoteUser, mounts (bash-history named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand"
+      - pattern: ".devcontainer/gpu/devcontainer.json"
+        covers: "GPU dev container config — remoteUser, mounts (bash-history named volume + plugins/ anonymous overlay), --env-file .env, initializeCommand, postCreateCommand"
+      - pattern: ".devcontainer/initialize.sh"
+        covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
+      - pattern: ".devcontainer/post-create.sh"
+        covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop"
+
   # ── GitHub taxonomy ─────────────────────────────────────────────
   - doc: docs/design/github-taxonomy.md
     description: Issue types, labels, milestones, project board, CI metadata gate
@@ -186,6 +204,14 @@ docs:
         covers: "DatasetConfigId, DatasetRunId, R2Prefix, make_r2_prefix()"
       - pattern: "pipeline/constants.py"
         covers: "R2 bucket name, INPUT_SPEC_FILENAME constant"
+
+  # ── macOS VM provisioning (Tart) ────────────────────────────────
+  - doc: docs/getting-started.md
+    description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)
+    sources:
+      - pattern: "tart/**"
+        covers: "Packer template, packer variables (synth_setter_git_ref/torch_backend/python_version/vm_name), provisioner steps, brew packages, venv layout, VST3 path, smoke tests, .zshrc auto-activation, prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow"
+        scope: "tart"
 
   # ── rclone reference (placeholder — doc does not exist yet) ─────
   # - doc: docs/reference/rclone.md

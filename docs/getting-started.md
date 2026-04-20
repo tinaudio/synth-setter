@@ -115,8 +115,9 @@ This runs the quick test suite (excluding slow tests and tests that require a
 VST plugin). All tests should pass. If you see import errors, double-check that
 the virtual environment is active and dependencies installed correctly.
 
-> **Prefer a container-based setup?** GitHub Codespaces and the local dev
-> container come with Python, Surge XT, and rclone pre-installed. See
+> **Prefer a container- or VM-based setup?** GitHub Codespaces, the local
+> dev container, and the Tart macOS VM all come with Python, Surge XT,
+> and rclone pre-installed. See
 > [Appendix B: Container-based setup](#appendix-b-container-based-setup).
 
 ______________________________________________________________________
@@ -564,7 +565,7 @@ ______________________________________________________________________
 
 The canonical local flow in [section 2](#2-installation) works on any
 POSIX machine. If you'd rather skip installing Surge XT, rclone, and
-Python deps yourself, the project also ships a dev container image with
+Python deps yourself, the project ships three container/VM images with
 all of these pre-installed.
 
 ### B.1. GitHub Codespaces
@@ -591,9 +592,12 @@ credentials are required.
 
 1. On GitHub, click **Code → Codespaces → Create codespace on main**.
 2. First start takes ~5 min (image pull). Subsequent starts are fast.
-3. `.devcontainer/post-create.sh` initializes submodules, installs the
-   workspace editable, and wires up pre-commit hooks — then the terminal is
-   ready.
+3. `.devcontainer/post-create.sh` configures git safety settings,
+   optionally authenticates with `RESTRICTED_AGENT_GIT_PAT`, and installs
+   pre-commit hooks. If invoked as root (Codespaces default, or opt-in
+   `DEVCONTAINER_USER=root` locally), it drops to the `dev` user first so
+   workspace mutations under `.git/` land with dev ownership. Then the
+   terminal is ready.
 
 **Verify:**
 
@@ -620,11 +624,11 @@ container.
   [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
   or the [`devcontainer` CLI](https://github.com/devcontainers/cli).
 - R2 + W&B credentials (see [§4b](#4b-rclone--cloudflare-r2) and
-  [§4c](#4c-weights--biases-wb)). The checked-in dev container configs
-  do **not** automatically load `.env` — after opening the container,
-  source the vars inside the container shell (`set -a && source .env && set +a`)
-  or set them via Codespaces secrets / Dev Container environment settings
-  so rclone and W&B can access them.
+  [§4c](#4c-weights--biases-wb)). Local dev containers load `.env`
+  automatically via `--env-file .env` (`.devcontainer/initialize.sh`
+  creates an empty one if missing), so rclone and W&B pick up creds
+  on container start. **Codespaces** does not have a host `.env` —
+  forward R2/W&B vars via Codespaces user/org secrets instead.
 - Apple Silicon: set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (the image is
   amd64-only).
 
@@ -647,7 +651,10 @@ cd .claude/worktrees/my-feature
 This is the supported local pattern. Mounting a worktree directly from the
 host does not work — the worktree's `.git` file points to
 `<repo>/.git/worktrees/<name>/` on the host, which is outside the container's
-bind mount, so git submodule/hook operations fail to resolve their gitdir.
+bind mount, so git hook operations (and anything else needing the gitdir)
+fail to resolve. `.devcontainer/initialize.sh` detects this case on the host
+and aborts the build with a clear error before the container is created, so
+the failure surfaces immediately rather than partway through `post-create`.
 
 **Caveats:**
 
@@ -655,9 +662,66 @@ bind mount, so git submodule/hook operations fail to resolve their gitdir.
   `prunable` (their host paths don't resolve inside the mount). Do **not**
   run `git worktree prune` inside the container — it will drop registry
   entries for worktrees that are still valid on the host.
-- `git submodule update` for the private `tinaudio/skills` submodule needs
-  GitHub credentials available to git inside the container. VS Code's git
-  credential helper usually forwards these automatically. For the CLI, run
-  `gh auth login && gh auth setup-git` inside the container, or configure
-  git's credential helper with a PAT. Exporting `GITHUB_TOKEN` alone is not
-  sufficient — git will not use it without a credential helper configured.
+- `plugins/` inside the container is an anonymous Docker volume seeded
+  from the base image, which ships `plugins/Surge XT.vst3` as a symlink
+  to `/usr/lib/vst3/Surge XT.vst3`. Without this overlay, the host
+  workspace bind mount would shadow the baked symlink and break
+  VST-dependent tests. Host edits under `plugins/` are not visible
+  inside the container; container edits under `plugins/` are not
+  visible on the host.
+
+### B.3. macOS VM (Tart)
+
+If you want full dev parity on Apple Silicon inside a throwaway, mostly
+reproducible VM — Python 3.10 venv, Surge XT (native .vst3 via cask), Claude
+Code installed, auto-activated venv — pull the prebuilt Tart image published
+at `registry-1.docker.io/tinaudio/synth-setter-macos`. Rebuilds from the template are not
+fully pinned: Homebrew formulas/casks may resolve to newer versions over time,
+even if you pin the base image digest and git SHA.
+
+**Prerequisites:**
+
+- Apple Silicon Mac (M1 or later)
+- [Homebrew](https://brew.sh/)
+
+**Pull and run the prebuilt image (recommended):**
+
+```bash
+brew install cirruslabs/cli/tart
+tart clone registry-1.docker.io/tinaudio/synth-setter-macos:latest synth-setter-macos
+tart run synth-setter-macos                       # opens a GUI window
+ssh admin@$(tart ip synth-setter-macos)           # password: admin
+```
+
+> **Security note:** the VM inherits the cirruslabs base image's well-known
+> `admin`/`admin` credentials. Treat it as a local-only dev VM. On a shared or
+> untrusted network, change the password in the GUI on first boot, or add an
+> SSH key to `~admin/.ssh/authorized_keys` and disable `PasswordAuthentication`
+> in `/etc/ssh/sshd_config` before exposing port 22.
+
+The image ships with the repo cloned at `~/synth-setter`, a venv with all
+`requirements.txt` deps (CPU torch wheels — Tart VMs have no GPU), Surge XT
+at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`, and
+`source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
+interactive shell has the venv active from login.
+
+Credentials for Claude Code, `gh`, R2, and W&B are **not** baked in — log in
+on first boot.
+
+**Build the image yourself (advanced):**
+
+If you need a custom build (pinned repo ref, different torch backend, pinned
+base image, updated `uv`, updated Surge XT, etc.), the Packer template at
+[`tart/macos.pkr.hcl`](../tart/macos.pkr.hcl) builds the same image locally.
+See the bottom of the file for the full publishing workflow to Docker Hub.
+The template's `variable` blocks are the authoritative source for supported
+overrides. User-overridable packer vars: `synth_setter_git_ref` (default
+`main`), `torch_backend` (default `cpu`), `python_version` (default `3.10`),
+`vm_name` (default `synth-setter-macos`), `base_image_digest`, `uv_version`,
+and `surge_xt_version`.
+
+```bash
+brew install cirruslabs/cli/tart packer
+packer init tart/macos.pkr.hcl
+packer build -var "synth_setter_git_ref=$(git rev-parse HEAD)" tart/macos.pkr.hcl
+```

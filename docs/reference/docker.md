@@ -92,9 +92,10 @@ ______________________________________________________________________
 
 ### Make targets
 
-| Target         | Source code            | Typical use           |
-| -------------- | ---------------------- | --------------------- |
-| `dev-snapshot` | Git clone at `GIT_REF` | CI, cloud, evaluation |
+| Target               | Source code            | Typical use                                   |
+| -------------------- | ---------------------- | --------------------------------------------- |
+| `dev-snapshot`       | Git clone at `GIT_REF` | CI, cloud, evaluation                         |
+| `devcontainer-tools` | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root dev) |
 
 Set `GIT_REF` for reproducible builds (defaults to `main` if omitted):
 
@@ -103,7 +104,25 @@ Set `GIT_REF` for reproducible builds (defaults to `main` if omitted):
 make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
+
+# devcontainer-tools — dev-base + gh, jq, Node.js, Claude Code, dev user
+make docker-build-devcontainer-tools \
+  GIT_REF="$(git rev-parse HEAD)" \
+  DOCKER_BUILD_FLAGS="--load"
 ```
+
+The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
+build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
+the synth-setter source. `devcontainer-tools` adds CLI tooling (`gh`, `jq`),
+Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
+`dev` user, and a `/commandhistory` directory (owned by `dev`) that
+`.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
+history survives container rebuilds. The same devcontainer configs also
+overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
+baked `plugins/Surge XT.vst3` symlink survives the workspace bind mount —
+without it, the host's gitignored `plugins/` would shadow the baked file and
+VST-dependent tests would fail. `.devcontainer/Dockerfile` consumes the
+stage via `FROM tinaudio/synth-setter:devcontainer-tools`.
 
 ### Build variables
 
@@ -289,11 +308,13 @@ If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                        | Mutable? | Purpose                                                     |
-| ------------------------------------------ | -------- | ----------------------------------------------------------- |
-| `tinaudio/synth-setter:latest`             | Yes      | Convenience pointer to the most recent default-branch build |
-| `tinaudio/synth-setter:dev-snapshot`       | Yes      | Latest dev-snapshot (convenience)                           |
-| `tinaudio/synth-setter:dev-snapshot-<sha>` | No       | Immutable, used for smoke tests                             |
+| Tag                                              | Mutable? | Purpose                                                     |
+| ------------------------------------------------ | -------- | ----------------------------------------------------------- |
+| `tinaudio/synth-setter:latest`                   | Yes      | Convenience pointer to the most recent default-branch build |
+| `tinaudio/synth-setter:dev-snapshot`             | Yes      | Latest dev-snapshot (convenience)                           |
+| `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                             |
+| `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)    |
+| `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`         |
 
 Mutable tags (`latest`, `dev-snapshot`) are only published on dispatch/schedule
 runs — not on pull-request build validations. `latest` is additionally gated

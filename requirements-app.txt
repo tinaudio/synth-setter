@@ -22,7 +22,7 @@ h5py
 hypothesis
 hdf5plugin
 librosa
-loguru
+loguru==0.7.3
 matplotlib
 mutmut==3.5.*
 mido
@@ -41,3 +41,8 @@ rootutils
 runpod==1.8.1
 scipy==1.14.1
 threadpoolctl
+
+# --------- eval metrics --------- #
+pesto-pitch==2.0.1
+dtw-python==1.7.4
+kymatio==0.3.0
