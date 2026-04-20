@@ -33,6 +33,11 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
         # path that does not exist on the CI GPU runner. Reuse the training data config so the
         # test exercises a self-consistent train->eval roundtrip.
         cfg_eval.data = cfg_train.data
+        # `configs/eval.yaml` also defaults `model: surge_flow` and `callbacks: eval_surge`, which
+        # do not match the checkpoint produced by `cfg_train` (ksin feedforward). Align both so the
+        # evaluator loads the same LightningModule the trainer just saved.
+        cfg_eval.model = cfg_train.model
+        cfg_eval.callbacks = cfg_train.callbacks
 
     HydraConfig().set_config(cfg_train)
     train_metric_dict, _ = train(cfg_train)
@@ -45,5 +50,10 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     HydraConfig().set_config(cfg_eval)
     test_metric_dict, _ = evaluate(cfg_eval)
 
-    assert test_metric_dict["test/acc"] > 0.0
-    assert abs(train_metric_dict["test/acc"].item() - test_metric_dict["test/acc"].item()) < 0.001
+    # `ksin_ff_module.test_step` logs `test/loss` (MSE), not `test/acc`. Use loss for the sanity
+    # bound and parity check — the train-time test phase and the standalone eval should produce
+    # identical `test/loss` on the same checkpoint and data.
+    assert test_metric_dict["test/loss"] < float("inf")
+    assert (
+        abs(train_metric_dict["test/loss"].item() - test_metric_dict["test/loss"].item()) < 0.001
+    )
