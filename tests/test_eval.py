@@ -29,6 +29,10 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
         cfg_train.test = True
     with open_dict(cfg_eval):
         cfg_eval.trainer.accelerator = "gpu"
+        # `configs/eval.yaml` defaults to `data: surge_mini`, which hardcodes a researcher-local
+        # path that does not exist on the CI GPU runner. Reuse the training data config so the
+        # test exercises a self-consistent train->eval roundtrip.
+        cfg_eval.data = cfg_train.data
 
     HydraConfig().set_config(cfg_train)
     train_metric_dict, _ = train(cfg_train)
