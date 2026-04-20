@@ -65,18 +65,32 @@ source .venv/bin/activate
 Your prompt should change to `(synth-setter)`. All subsequent commands in this
 guide assume the venv is active.
 
-### 2d. Symlink the Surge XT VST3
+### 2d. Install the Surge XT VST3
 
-If you have [Surge XT](https://surge-synthesizer.github.io/) installed, symlink
-it into `plugins/` so the test suite and data pipeline can find it:
+The test suite and data pipeline need the [Surge XT](https://surge-synthesizer.github.io/)
+VST3 at `plugins/Surge XT.vst3`. The canonical path downloads the pinned
+release directly from GitHub:
 
 ```bash
-make link-plugins
+make install-surge-xt
 ```
 
-This detects your platform (Linux / macOS) and creates a symlink at
-`plugins/Surge XT.vst3`. See [section 4a](#4a-surge-xt-vst-plugin) for
-installation instructions if you don't have Surge XT yet.
+This downloads the `pluginsonly` archive for your platform (Linux x86_64 or
+macOS universal) from the [Surge XT 1.3.4 release](https://github.com/surge-synthesizer/releases-xt/releases/tag/1.3.4),
+verifies its md5 checksum, and extracts `Surge XT.vst3` into `plugins/`. The
+archive is cached at `~/.cache/synth-setter/surge-xt-1.3.4/`, so re-runs that
+have to re-extract (e.g. after `rm -rf plugins/`) skip the download. If
+`plugins/Surge XT.vst3` already exists, the target is a no-op — remove it
+first to reinstall.
+
+> **Already have Surge XT installed system-wide?** `make link-plugins`
+> symlinks an existing install (`/usr/lib/vst3/Surge XT.vst3` on Linux,
+> `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3` on macOS) into `plugins/`
+> instead of downloading a second copy.
+>
+> **On arm64 Linux?** The official Surge XT release only ships an x86_64
+> Linux build. Install via your package manager (`apt install surge-xt`) or
+> build from source, then run `make link-plugins`.
 
 ### 2e. Export environment variables
 
@@ -101,100 +115,9 @@ This runs the quick test suite (excluding slow tests and tests that require a
 VST plugin). All tests should pass. If you see import errors, double-check that
 the virtual environment is active and dependencies installed correctly.
 
-### 2g. Alternative: GitHub Codespaces
-
-Instead of setting up locally, you can open the repo in a GitHub Codespace. The
-Codespace uses the same Docker image (`tinaudio/synth-setter:dev-snapshot`) we run on
-RunPod, so VST-dependent tests, `generate_dataset` → R2 uploads, and CPU
-training all work identically — no local Surge XT, rclone, or R2 setup needed.
-GPU training still runs on RunPod.
-
-**Prerequisites:**
-
-Configure these as Codespaces user/org secrets so they're forwarded into
-the container at runtime:
-
-- `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
-  `RCLONE_CONFIG_R2_ENDPOINT` — for R2 uploads/downloads via rclone
-- `WANDB_API_KEY` — for W&B logging
-
-The image itself is public and pulls anonymously; no Docker Hub
-credentials are required.
-
-**Open a Codespace:**
-
-1. On GitHub, click **Code → Codespaces → Create codespace on main**.
-2. First start takes ~5 min (image pull). Subsequent starts are fast.
-3. `.devcontainer/post-create.sh` initializes submodules, installs the
-   workspace editable, and wires up pre-commit hooks — then the terminal is
-   ready.
-
-**Verify:**
-
-```bash
-make test
-python -c "import torch; print(torch.cuda.is_available())"   # False (CPU)
-rclone lsd r2:intermediate-data
-```
-
-**Fall back to RunPod for** full GPU training (CUDA kernels, large batch
-sizes) and multi-hour runs.
-
-### 2h. Alternative: Local Dev Container
-
-If you want the same image Codespaces uses (VST plugins, rclone, Python
-deps) but prefer to work on your own machine, open the dev container
-locally **on the main working tree** and create git worktrees *inside* the
-container.
-
-**Prerequisites:**
-
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) and
-  either the VS Code
-  [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-  or the [`devcontainer` CLI](https://github.com/devcontainers/cli).
-- R2 + W&B credentials (see [§4b](#4b-rclone--cloudflare-r2) and
-  [§4c](#4c-weights--biases-wb)). The checked-in dev container configs
-  do **not** automatically load `.env` — after opening the container,
-  source the vars inside the container shell (`set -a && source .env && set +a`)
-  or set them via Codespaces secrets / Dev Container environment settings
-  so rclone and W&B can access them.
-- Apple Silicon: set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (the image is
-  amd64-only).
-
-**Open the container on main:**
-
-```bash
-cd /path/to/synth-setter
-devcontainer up --workspace-folder .
-# or in VS Code: "Dev Containers: Reopen in Container"
-```
-
-**Create worktrees from inside the container:**
-
-```bash
-# Inside the container, starting from the workspace root on main:
-git worktree add .claude/worktrees/my-feature -b feat/my-feature
-cd .claude/worktrees/my-feature
-```
-
-This is the supported local pattern. Mounting a worktree directly from the
-host does not work — the worktree's `.git` file points to
-`<repo>/.git/worktrees/<name>/` on the host, which is outside the container's
-bind mount, so git submodule/hook operations fail to resolve their gitdir.
-
-**Caveats:**
-
-- `git worktree list` inside the container marks host-created worktrees as
-  `prunable` (their host paths don't resolve inside the mount). Do **not**
-  run `git worktree prune` inside the container — it will drop registry
-  entries for worktrees that are still valid on the host.
-- `git submodule update` for the private `tinaudio/skills` submodule needs
-  GitHub credentials available to git inside the container. VS Code's git
-  credential helper usually forwards these automatically. For the CLI, run
-  `gh auth login && gh auth setup-git` inside the container, or configure
-  git's credential helper with a PAT. Exporting `GITHUB_TOKEN` alone is not
-  sufficient — git will not use it without a credential helper configured.
+> **Prefer a container-based setup?** GitHub Codespaces and the local dev
+> container come with Python, Surge XT, and rclone pre-installed. See
+> [Appendix B: Container-based setup](#appendix-b-container-based-setup).
 
 ______________________________________________________________________
 
@@ -264,11 +187,9 @@ experiments. **None of these are needed for the k-osc quickstart above.**
 used for audio dataset generation. The data pipeline renders audio by
 programmatically driving this plugin.
 
-**Install:**
-
-1. Download the installer from [surge-synthesizer.github.io](https://surge-synthesizer.github.io/)
-2. Run the installer and follow the prompts
-3. Note the installation path (the test suite needs to find the plugin binary)
+Installation is covered in [section 2d](#2d-install-the-surge-xt-vst3) —
+`make install-surge-xt` is the canonical path, with `make link-plugins` as an
+alternative for users who already have a system-wide install.
 
 **Verify:**
 
@@ -636,3 +557,107 @@ pip install --index-url https://download.pytorch.org/whl/cu121 torch
 
 `make install` inherits the same CPU/CUDA choice — it does not pick a wheel
 for you.
+
+______________________________________________________________________
+
+## Appendix B: Container-based setup
+
+The canonical local flow in [section 2](#2-installation) works on any
+POSIX machine. If you'd rather skip installing Surge XT, rclone, and
+Python deps yourself, the project also ships a dev container image with
+all of these pre-installed.
+
+### B.1. GitHub Codespaces
+
+Instead of setting up locally, you can open the repo in a GitHub Codespace. The
+Codespace uses the same Docker image (`tinaudio/synth-setter:dev-snapshot`) we run on
+RunPod, so VST-dependent tests, `generate_dataset` → R2 uploads, and CPU
+training all work identically — no local Surge XT, rclone, or R2 setup needed.
+GPU training still runs on RunPod.
+
+**Prerequisites:**
+
+Configure these as Codespaces user/org secrets so they're forwarded into
+the container at runtime:
+
+- `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
+  `RCLONE_CONFIG_R2_ENDPOINT` — for R2 uploads/downloads via rclone
+- `WANDB_API_KEY` — for W&B logging
+
+The image itself is public and pulls anonymously; no Docker Hub
+credentials are required.
+
+**Open a Codespace:**
+
+1. On GitHub, click **Code → Codespaces → Create codespace on main**.
+2. First start takes ~5 min (image pull). Subsequent starts are fast.
+3. `.devcontainer/post-create.sh` initializes submodules, installs the
+   workspace editable, and wires up pre-commit hooks — then the terminal is
+   ready.
+
+**Verify:**
+
+```bash
+make test
+python -c "import torch; print(torch.cuda.is_available())"   # False (CPU)
+rclone lsd r2:intermediate-data
+```
+
+**Fall back to RunPod for** full GPU training (CUDA kernels, large batch
+sizes) and multi-hour runs.
+
+### B.2. Local dev container
+
+If you want the same image Codespaces uses (VST plugins, rclone, Python
+deps) but prefer to work on your own machine, open the dev container
+locally **on the main working tree** and create git worktrees *inside* the
+container.
+
+**Prerequisites:**
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) and
+  either the VS Code
+  [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+  or the [`devcontainer` CLI](https://github.com/devcontainers/cli).
+- R2 + W&B credentials (see [§4b](#4b-rclone--cloudflare-r2) and
+  [§4c](#4c-weights--biases-wb)). The checked-in dev container configs
+  do **not** automatically load `.env` — after opening the container,
+  source the vars inside the container shell (`set -a && source .env && set +a`)
+  or set them via Codespaces secrets / Dev Container environment settings
+  so rclone and W&B can access them.
+- Apple Silicon: set `DOCKER_DEFAULT_PLATFORM=linux/amd64` (the image is
+  amd64-only).
+
+**Open the container on main:**
+
+```bash
+cd /path/to/synth-setter
+devcontainer up --workspace-folder .
+# or in VS Code: "Dev Containers: Reopen in Container"
+```
+
+**Create worktrees from inside the container:**
+
+```bash
+# Inside the container, starting from the workspace root on main:
+git worktree add .claude/worktrees/my-feature -b feat/my-feature
+cd .claude/worktrees/my-feature
+```
+
+This is the supported local pattern. Mounting a worktree directly from the
+host does not work — the worktree's `.git` file points to
+`<repo>/.git/worktrees/<name>/` on the host, which is outside the container's
+bind mount, so git submodule/hook operations fail to resolve their gitdir.
+
+**Caveats:**
+
+- `git worktree list` inside the container marks host-created worktrees as
+  `prunable` (their host paths don't resolve inside the mount). Do **not**
+  run `git worktree prune` inside the container — it will drop registry
+  entries for worktrees that are still valid on the host.
+- `git submodule update` for the private `tinaudio/skills` submodule needs
+  GitHub credentials available to git inside the container. VS Code's git
+  credential helper usually forwards these automatically. For the CLI, run
+  `gh auth login && gh auth setup-git` inside the container, or configure
+  git's credential helper with a PAT. Exporting `GITHUB_TOKEN` alone is not
+  sufficient — git will not use it without a credential helper configured.

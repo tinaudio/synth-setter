@@ -47,12 +47,12 @@ under the GPL-3.0 license.
 
 ## Prerequisites
 
-- **Supported platforms**: Linux and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
+- **Supported platforms**: Linux (x86_64) and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
 - **Git**, **curl**, **make** (for the canonical install path)
-- **[Surge XT](https://github.com/surge-synthesizer/surge) 1.3.4** — the VST synthesizer used for dataset generation. See the [Surge XT downloads page](https://surge-synthesizer.github.io/downloads/) for installation instructions.
-- **System dependencies for VST rendering** — see the project documentation for details
 
-`make install` handles uv and Python 3.10 for you — no pre-existing Python interpreter needed.
+`make install` handles uv, Python 3.10, and all dependencies for you.
+`make install-surge-xt` fetches the pinned Surge XT VST3 release — no need
+to install Surge XT yourself.
 
 ## Installation
 
@@ -67,12 +67,16 @@ make install
 # 3. Activate the venv
 source .venv/bin/activate
 
-# 4. Symlink the Surge XT VST3 into plugins/
-make link-plugins
+# 4. Download the Surge XT VST3 into plugins/
+make install-surge-xt
 
 # 5. Export environment variables (R2, W&B — see §4b in getting-started)
 set -a && source .env && set +a
 ```
+
+> **Already have Surge XT installed system-wide?** Use `make link-plugins`
+> instead of `make install-surge-xt` to symlink the existing install into
+> `plugins/`. See [docs/getting-started.md &sect;2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
 > venv yourself, see
@@ -180,10 +184,8 @@ Run `make help` for available commands.
 
 GitHub Codespaces and local dev containers provide a pre-built environment with
 Surge XT, rclone, and all Python dependencies already installed. See
-[docs/getting-started.md &sect;2g](docs/getting-started.md#2g-alternative-github-codespaces)
-(Codespaces) and
-[&sect;2h](docs/getting-started.md#2h-alternative-local-dev-container)
-(local dev container) for setup instructions.
+[docs/getting-started.md Appendix B](docs/getting-started.md#appendix-b-container-based-setup)
+for setup instructions covering both paths.
 
 > **Devcontainer as root:** The default dev container runs as a non-root user.
 > If your workflow requires root (e.g., installing system packages), set

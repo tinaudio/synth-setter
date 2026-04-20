@@ -51,7 +51,62 @@ install: ## End-to-end: install uv, create .venv (Python 3.10), install deps, se
 	@echo ""
 	@echo "Next: source .venv/bin/activate"
 
-link-plugins: ## Symlink Surge XT VST3 into plugins/
+SURGE_XT_VERSION := 1.3.4
+SURGE_XT_CACHE := $(HOME)/.cache/synth-setter/surge-xt-$(SURGE_XT_VERSION)
+SURGE_XT_RELEASE_URL := https://github.com/surge-synthesizer/releases-xt/releases/download/$(SURGE_XT_VERSION)
+SURGE_XT_LINUX_ASSET := surge-xt-linux-$(SURGE_XT_VERSION)-pluginsonly.tar.gz
+SURGE_XT_LINUX_MD5 := 0180f06ec7a8445b1c749471e29c702b
+SURGE_XT_MACOS_ASSET := surge-xt-macos-$(SURGE_XT_VERSION)-pluginsonly.zip
+SURGE_XT_MACOS_MD5 := 8afca4159d9b417c5e07ebc1a5e96ed3
+
+install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already present)
+	@DEST="plugins/Surge XT.vst3"; \
+	if [ -e "$$DEST" ]; then \
+		echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
+		exit 0; \
+	fi; \
+	OS=$$(uname -s); ARCH=$$(uname -m); \
+	case "$$OS" in \
+		Linux) \
+			if [ "$$ARCH" != "x86_64" ]; then \
+				echo "ERROR: the Surge XT Linux release only ships an x86_64 build (detected: $$ARCH)."; \
+				echo "Install via your package manager (e.g. apt install surge-xt) or build from source,"; \
+				echo "then run: make link-plugins"; \
+				exit 1; \
+			fi; \
+			ASSET="$(SURGE_XT_LINUX_ASSET)"; EXPECTED_MD5="$(SURGE_XT_LINUX_MD5)" ;; \
+		Darwin) \
+			ASSET="$(SURGE_XT_MACOS_ASSET)"; EXPECTED_MD5="$(SURGE_XT_MACOS_MD5)" ;; \
+		*) echo "ERROR: Unsupported platform: $$OS"; exit 1 ;; \
+	esac; \
+	mkdir -p "$(SURGE_XT_CACHE)" plugins; \
+	ARCHIVE="$(SURGE_XT_CACHE)/$$ASSET"; \
+	if [ ! -f "$$ARCHIVE" ]; then \
+		echo "Downloading $(SURGE_XT_RELEASE_URL)/$$ASSET"; \
+		curl -fSL -o "$$ARCHIVE" "$(SURGE_XT_RELEASE_URL)/$$ASSET"; \
+	else \
+		echo "Using cached $$ARCHIVE"; \
+	fi; \
+	if command -v md5sum >/dev/null 2>&1; then \
+		ACTUAL_MD5=$$(md5sum "$$ARCHIVE" | awk '{print $$1}'); \
+	else \
+		ACTUAL_MD5=$$(md5 -q "$$ARCHIVE"); \
+	fi; \
+	if [ "$$ACTUAL_MD5" != "$$EXPECTED_MD5" ]; then \
+		echo "ERROR: md5 mismatch for $$ARCHIVE"; \
+		echo "  expected: $$EXPECTED_MD5"; \
+		echo "  actual:   $$ACTUAL_MD5"; \
+		echo "Remove the cached file and retry: rm '$$ARCHIVE'"; \
+		exit 1; \
+	fi; \
+	echo "md5 OK. Extracting Surge XT.vst3 into plugins/..."; \
+	case "$$OS" in \
+		Linux) tar -xzf "$$ARCHIVE" -C plugins/ "./Surge XT.vst3" ;; \
+		Darwin) unzip -q "$$ARCHIVE" "Surge XT.vst3/*" -d plugins/ ;; \
+	esac; \
+	echo "Installed $$DEST"
+
+link-plugins: ## Symlink an existing system-wide Surge XT VST3 into plugins/
 	@PLUGIN_NAME="Surge XT.vst3"; \
 	OS=$$(uname -s); \
 	FOUND=""; \
