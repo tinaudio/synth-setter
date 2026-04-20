@@ -141,6 +141,17 @@ Before implementing a new abstraction or design pattern, confirm the scope and a
 - Size output appropriately: small (\<20 lines) inline, medium (20-100) in a PR comment, large (100+) in a Gist linked from a comment.
 - Only tick `[x]` if the result unambiguously passes.
 
+### GPU Verification
+
+Before skipping a GPU-gated check with "no GPU available" or similar, run BOTH probes and paste their output into the SKIP rationale:
+
+```bash
+nvidia-smi --query-gpu=name,memory.free --format=csv,noheader
+python3 -c "import torch; print('cuda:', torch.cuda.is_available(), 'count:', torch.cuda.device_count())"
+```
+
+Only skip as "no GPU available" if both probes indicate no usable CUDA GPU: `nvidia-smi` exits non-zero and `torch.cuda.is_available()` returns `False`. If the probes disagree, do not call it "no GPU available" — document it as an environment/setup mismatch (for example, driver/tooling visibility vs. PyTorch CUDA availability) and include both outputs in the rationale. "I assumed there's no GPU" is not justification — the assumption has been wrong before.
+
 ### PR Review Comments
 
 - Always reply to PR review comments after pushing a fix — never push silently.
