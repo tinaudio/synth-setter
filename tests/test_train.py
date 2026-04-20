@@ -137,6 +137,8 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.max_epochs = 1
         cfg_train.trainer.accelerator = "gpu"
+        cfg_train.seed = 42
+        cfg_train.trainer.deterministic = True
 
     HydraConfig().set_config(cfg_train)
     metric_dict_1, _ = train(cfg_train)
