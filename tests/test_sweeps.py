@@ -66,7 +66,7 @@ def test_hydra_sweep_ddp_sim(tmp_path: Path) -> None:
         "-m",
         "hydra.sweep.dir=" + str(tmp_path),
         "trainer=ddp_sim",
-        "trainer.max_epochs=3",
+        "+trainer.max_epochs=3",
         "+trainer.limit_train_batches=0.01",
         "+trainer.limit_val_batches=0.1",
         "+trainer.limit_test_batches=0.1",
