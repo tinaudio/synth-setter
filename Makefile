@@ -60,8 +60,17 @@ link-plugins: ## Symlink Surge XT VST3 into plugins/
 		exit 1; \
 	fi; \
 	mkdir -p plugins; \
-	ln -sfn "$$FOUND" "plugins/$$PLUGIN_NAME"; \
-	echo "Linked plugins/$$PLUGIN_NAME -> $$FOUND"
+	DEST="plugins/$$PLUGIN_NAME"; \
+	if [ -L "$$DEST" ]; then \
+		rm -f "$$DEST"; \
+	elif [ -d "$$DEST" ]; then \
+		echo "ERROR: $$DEST exists as a directory; remove it before linking."; \
+		exit 1; \
+	elif [ -e "$$DEST" ]; then \
+		rm -f "$$DEST"; \
+	fi; \
+	ln -s "$$FOUND" "$$DEST"; \
+	echo "Linked $$DEST -> $$FOUND"
 
 # coverage runs serially (no -n auto): GPU tests require exclusive device
 # access and VRAM contention causes flaky failures with xdist parallelism.

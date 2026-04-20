@@ -57,11 +57,14 @@ editable mode:
 make install
 ```
 
-Or with plain pip (no editable install):
+Or with plain pip:
 
 ```bash
 pip install -r requirements.txt
+pip install -e .
 ```
+
+(Drop `-e` for a non-editable install.)
 
 After installing, activate pre-commit hooks:
 

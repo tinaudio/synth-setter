@@ -79,10 +79,10 @@ set -a && source .env && set +a
 ```
 
 > **pip / conda users:** If you manage your own Python environment, you can
-> skip steps 2-3 and run `make install` (or `pip install -r requirements.txt
-> -e .`) directly. See [docs/getting-started.md
-> &sect;2](docs/getting-started.md#2-installation) for the full walkthrough and
-> alternatives.
+> skip steps 2-3 and run `make install` directly
+> (or `pip install -r requirements.txt -e .`).
+> See [docs/getting-started.md &sect;2](docs/getting-started.md#2-installation)
+> for the full walkthrough and alternatives.
 
 ### GPU vs CPU
 
@@ -191,7 +191,9 @@ Surge XT, rclone, and all Python dependencies already installed. See
 
 > **Devcontainer as root:** The default dev container runs as a non-root user.
 > If your workflow requires root (e.g., installing system packages), set
-> `"remoteUser": "root"` in `.devcontainer/devcontainer.json`. See the
+> `"remoteUser": "root"` in the devcontainer config you use
+> (`.devcontainer/cpu/devcontainer.json` or
+> `.devcontainer/gpu/devcontainer.json`). See the
 > [devcontainer docs](https://containers.dev/implementors/json_reference/)
 > for details.
 
