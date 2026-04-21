@@ -8,6 +8,7 @@ sample_rate: 16000
 shard_size: 32
 num_shards: 1
 base_seed: 42
+r2_bucket: intermediate-data
 
 splits:
   train: 1

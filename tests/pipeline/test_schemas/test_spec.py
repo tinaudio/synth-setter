@@ -93,6 +93,7 @@ class TestDatasetPipelineSpec:
             "shard_size": 100,
             "base_seed": 42,
             "num_params": 92,
+            "r2_bucket": "intermediate-data",
             "splits": SplitsConfig(train=1, val=0, test=0),
             "plugin_path": str(patch_materialize_io),
             "preset_path": "presets/test.vstpreset",
@@ -105,6 +106,81 @@ class TestDatasetPipelineSpec:
             "extra_field": "oops",
         }
         with pytest.raises(ValidationError):
+            DatasetPipelineSpec(**kwargs)
+
+    def test_pipeline_spec_r2_bucket_blank_raises_validation_error(
+        self,
+        patch_materialize_io: Path,
+    ) -> None:
+        """r2_bucket empty / whitespace-only raises ValidationError.
+
+        Mirrors the same validator on DatasetConfig — a spec loaded from outside the config path
+        (hand-edited, externally materialized) can't slip a blank bucket through and produce
+        malformed `r2:/{prefix}` destinations.
+        """
+        base_kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
+            "created_at": FIXED_NOW,
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "hdf5",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "base_seed": 42,
+            "num_params": 92,
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "plugin_path": str(patch_materialize_io),
+            "preset_path": "presets/test.vstpreset",
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
+        }
+        for blank in ("", "   ", "\t\n"):
+            with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
+                DatasetPipelineSpec(**base_kwargs, r2_bucket=blank)
+
+    def test_pipeline_spec_r2_prefix_missing_trailing_slash_raises(
+        self,
+        patch_materialize_io: Path,
+    ) -> None:
+        """r2_prefix without a trailing slash raises ValidationError.
+
+        Upload paths concatenate r2_prefix with filenames; a missing slash silently
+        produces the wrong key (e.g. `.../prefixinput_spec.json`). The invariant is
+        enforced at the model boundary so hand-edited / externally-materialized
+        specs can't slip through.
+        """
+        kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "r2_prefix": "data/test/test-run",  # missing trailing slash
+            "created_at": FIXED_NOW,
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "hdf5",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "base_seed": 42,
+            "num_params": 92,
+            "r2_bucket": "intermediate-data",
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "plugin_path": str(patch_materialize_io),
+            "preset_path": "presets/test.vstpreset",
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
+        }
+        with pytest.raises(ValidationError, match="r2_prefix must end with"):
             DatasetPipelineSpec(**kwargs)
 
     def test_pipeline_spec_output_format_rejects_invalid_literal(
@@ -125,6 +201,7 @@ class TestDatasetPipelineSpec:
             "shard_size": 100,
             "base_seed": 42,
             "num_params": 92,
+            "r2_bucket": "intermediate-data",
             "splits": SplitsConfig(train=1, val=0, test=0),
             "plugin_path": str(patch_materialize_io),
             "preset_path": "presets/test.vstpreset",
@@ -157,6 +234,7 @@ class TestDatasetPipelineSpec:
             "shard_size": 100,
             "base_seed": 42,
             "num_params": 92,
+            "r2_bucket": "intermediate-data",
             "plugin_path": "/nonexistent/plugin.vst3",
             "preset_path": "presets/test.vstpreset",
             "channels": 2,
@@ -185,6 +263,7 @@ class TestDatasetPipelineSpec:
             "shard_size": 100,
             "base_seed": 42,
             "num_params": 92,
+            "r2_bucket": "intermediate-data",
             "plugin_path": "/nonexistent/plugin.vst3",
             "preset_path": "presets/test.vstpreset",
             "channels": 2,

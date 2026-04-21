@@ -25,6 +25,7 @@ on:
       - "configs/dataset/**"
       - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.sh"
+      - "scripts/docker_entrypoint.py"
       - ".github/workflows/dataset-generation.yml"
       - ".github/workflows/test-dataset-generation.yml"
       - "requirements*.txt"

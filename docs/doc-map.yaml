@@ -21,6 +21,8 @@ docs:
         covers: "Dev container wrapper over devcontainer-tools stage, per-developer customization"
       - pattern: "scripts/docker_entrypoint.sh"
         covers: "All MODE values (idle, passthrough, generate_dataset), env var dispatch, error messages"
+      - pattern: "scripts/docker_entrypoint.py"
+        covers: "Click-based Python entrypoint (unhooked, see #526) — subcommand dispatch with per-mode --spec parsing; diverges from shell MODE env-var contract"
       - pattern: "pipeline/schemas/image_config.py"
         covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
       - pattern: "configs/image/**"
@@ -39,6 +41,8 @@ docs:
     sources:
       - pattern: "scripts/docker_entrypoint.sh"
         covers: "All MODE values, env var contract, exit codes, error handling"
+      - pattern: "scripts/docker_entrypoint.py"
+        covers: "Click-based Python entrypoint (unhooked, see #526) — subcommand dispatch with per-mode --spec"
       - pattern: "docker/**"
         covers: "Target names, stage dependencies, what each target produces"
       - pattern: "pipeline/schemas/image_config.py"
@@ -217,13 +221,13 @@ docs:
   # - doc: docs/reference/rclone.md
   #   description: rclone R2 operations reference
   #   sources:
-  #     - pattern: "scripts/docker_entrypoint.sh"
-  #       covers: "rclone download/upload commands, --stats-one-line, SKIP_UPLOAD"
+  #     - pattern: "pipeline/entrypoints/generate_dataset.py"
+  #       covers: "rclone copy --checksum for spec + shard uploads"
   #       scope: "rclone"
   #     - pattern: "scripts/r2_shard_report.py"
   #       covers: "rclone ls command, --size-threshold-gib, CLI usage"
-  #     - pattern: "scripts/entrypoint_generate_dataset.py"
-  #       covers: "Post-shard-validation upload trigger"
+  #     - pattern: "scripts/docker_entrypoint.py"
+  #       covers: "Post-shard-validation upload trigger (future)"
   #     - pattern: "docs/design/storage-provenance-spec.md"
   #       covers: "R2 bucket layout, path conventions, --checksum rule"
   #       scope: "rclone-rules"

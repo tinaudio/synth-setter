@@ -56,6 +56,9 @@ ignore = ["E501", "S101"]
 "scripts/paramspec_to_table.py" = ["E402", "T201"]
 "scripts/plot_param2tok.py" = ["E402", "E741", "F841", "T201"]
 "scripts/predict_vst_audio.py" = ["E402", "F841"]
+# S603/S606/S607: idle/passthrough use os.execvp by design — replace-process
+# semantics so Docker SIGTERM reaches the exec'd PID 1.
+"scripts/docker_entrypoint.py" = ["S603", "S606", "S607"]
 # S603/S607: rclone subprocess calls use CLI args (user-controlled, not untrusted input).
 # T201: click.echo used for CLI output.
 "scripts/r2_shard_report.py" = ["S603", "S607", "T201"]

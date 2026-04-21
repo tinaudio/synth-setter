@@ -1,30 +1,24 @@
-"""Entrypoint helper for MODE=generate_dataset.
-
-Materializes a DatasetPipelineSpec from config, uploads spec to R2, generates a
-single shard, and uploads the shard to R2.
+"""Spec-driven single-shard generate_dataset runner.
 
 Public API:
-    run(): full flow — materialize spec, upload, generate, upload shard
-    build_generate_args(): builds CLI args from a spec + shard + output_dir
-    main(): reads env vars and delegates to run()
+    run(spec): Full flow — upload spec to R2, generate shard, upload shard to R2.
+    build_generate_args(spec, shard, output_dir): Build CLI args for
+        src/data/vst/generate_vst_dataset.py.
 
-Expected env vars:
-    DATASET_CONFIG   (required): Path to dataset config YAML inside the container.
-    R2_BUCKET        (required): Cloudflare R2 bucket name for uploads.
-    RUN_METADATA_DIR (optional): Dir for input_spec.json output. Default: /run-metadata.
+This module is no longer invocable via ``python -m``; the container's CLI
+entrypoint (``scripts/docker_entrypoint.py generate_dataset --spec <path>``)
+parses the spec and calls ``run(spec)`` in-process.
 """
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
-from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec, materialize_spec
+from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
 
 
 def _rclone_copy(src: str, dest: str) -> None:
@@ -71,60 +65,65 @@ def build_generate_args(
     return args
 
 
-def run(config_path: Path, metadata_dir: Path, r2_bucket: str) -> None:
-    """Full generate_dataset flow: materialize, upload spec, generate, upload shard.
+def run(spec: DatasetPipelineSpec) -> None:
+    """Materialized-spec driven run: upload spec to R2, generate shard, upload shard.
+
+    Single-shard only. Multi-shard generation is tracked in
+    https://github.com/tinaudio/synth-setter/issues/407 (``generate-shards``)
+    and requires the distributed pipeline. This entrypoint fails fast with
+    ``NotImplementedError`` on ``spec.num_shards > 1`` so callers don't
+    silently get a partial dataset.
+
+    HDF5-only. Other output formats (e.g. WebDataset) are not yet wired into
+    the downstream generator.
 
     Args:
-        config_path: Path to dataset config YAML.
-        metadata_dir: Dir for input_spec.json (bind-mounted, host reads this).
-        r2_bucket: Cloudflare R2 bucket name for uploads.
+        spec: Pre-materialized DatasetPipelineSpec.
 
     Raises:
-        NotImplementedError: If num_shards > 1.
-        ValueError: If output_format is not 'hdf5'.
+        NotImplementedError: If ``spec.num_shards > 1`` (tracked in #407).
+        ValueError: If ``spec.output_format != "hdf5"``.
     """
-    cfg = load_dataset_config(config_path)
-    config_id = dataset_config_id_from_path(config_path)
-
-    if cfg.num_shards > 1:
+    # Single-shard fail-fast. The downstream generator, the shard-upload
+    # step, and build_generate_args all assume exactly one shard; see #407
+    # for the multi-shard rewrite.
+    if spec.num_shards > 1:
         raise NotImplementedError(
-            f"num_shards > 1 not yet supported (got {cfg.num_shards}). "
-            "Multi-shard generation requires the distributed pipeline."
+            f"num_shards > 1 not yet supported (got {spec.num_shards}). "
+            "Multi-shard generation is tracked in #407 "
+            "(https://github.com/tinaudio/synth-setter/issues/407)."
         )
 
-    if cfg.output_format != "hdf5":
+    if spec.output_format != "hdf5":
         raise ValueError(
-            f"generate_vst_dataset.py only supports hdf5 output, got: {cfg.output_format}"
+            f"generate_vst_dataset.py only supports hdf5 output, got: {spec.output_format}"
         )
 
-    spec = materialize_spec(cfg, config_id)
+    r2_dest_prefix = f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
-    # Write spec to metadata dir (host reads this via bind mount)
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    spec_path = metadata_dir / INPUT_SPEC_FILENAME
-    spec_path.write_text(spec.model_dump_json(indent=2))
+    with tempfile.TemporaryDirectory() as work_dir_str:
+        work_dir = Path(work_dir_str)
 
-    # Upload spec to R2 before generation
-    r2_dest = f"r2:{r2_bucket}/{spec.r2_prefix}"
-    _rclone_copy(str(spec_path), r2_dest)
+        # `rclone copy` treats the destination as a directory and preserves
+        # the source's basename. The local spec file is already named
+        # INPUT_SPEC_FILENAME, so uploading to the prefix directory lands
+        # the object at `{prefix}{INPUT_SPEC_FILENAME}` without the
+        # double-name issue a full object-key destination would cause.
+        spec_path = work_dir / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json(indent=2))
+        _rclone_copy(str(spec_path), r2_dest_prefix)
 
-    # Generate shard in temp dir, then upload to R2
-    shard = spec.shards[0]
-    with tempfile.TemporaryDirectory() as shard_dir:
-        args = build_generate_args(spec, shard, Path(shard_dir))
+        # Single-shard only: picks spec.shards[0] unconditionally. Guarded by
+        # the fail-fast check above; multi-shard support tracked in #407.
+        shard = spec.shards[0]
+        args = build_generate_args(spec, shard, work_dir)
         subprocess.check_call(args)  # noqa: S603 — args built from validated spec
-        shard_path = Path(shard_dir) / shard.filename
-        _rclone_copy(str(shard_path), r2_dest)
-
-
-def main() -> None:
-    """Read env vars and run."""
-    config_path = Path(os.environ["DATASET_CONFIG"])
-    r2_bucket = os.environ["R2_BUCKET"]
-    metadata_dir = Path(os.environ.get("RUN_METADATA_DIR", "/run-metadata"))
-
-    run(config_path, metadata_dir, r2_bucket)
+        shard_path = work_dir / shard.filename
+        _rclone_copy(str(shard_path), r2_dest_prefix)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(
+        "pipeline.entrypoints.generate_dataset is no longer invocable via `python -m`. "
+        "Use `scripts/docker_entrypoint.py generate_dataset --spec <path>` instead."
+    )

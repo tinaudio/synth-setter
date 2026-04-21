@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import (
@@ -47,6 +47,7 @@ class DatasetPipelineSpec(BaseModel):
     shard_size: int  # rows (samples) per shard
     base_seed: int  # deterministic seed base; per-shard seed = base_seed + shard_id
     num_params: int  # total encoded param count from param_spec registry
+    r2_bucket: str  # Cloudflare R2 bucket name for spec + shard uploads
     splits: SplitsConfig  # train/val/test shard counts
     plugin_path: str  # VST3 plugin to render through
     preset_path: str  # VST preset to load
@@ -61,6 +62,25 @@ class DatasetPipelineSpec(BaseModel):
     def num_shards(self) -> int:
         """Number of shards, derived from the shards tuple length."""
         return len(self.shards)
+
+    @field_validator("r2_prefix")
+    @classmethod
+    def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
+        # Upload paths concat r2_prefix with filenames (e.g. f"{prefix}{INPUT_SPEC_FILENAME}");
+        # missing trailing slash silently produces a wrong key like ".../prefixinput_spec.json".
+        if not value.endswith("/"):
+            raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
+        return value
+
+    @field_validator("r2_bucket")
+    @classmethod
+    def _r2_bucket_must_not_be_blank(cls, value: str) -> str:
+        # DatasetConfig.r2_bucket has the same validator; this mirror enforces the
+        # invariant when specs come from a non-config path (hand-edited, externally
+        # materialized) so rclone never receives a malformed `r2:/...` destination.
+        if not value.strip():
+            raise ValueError("r2_bucket must not be blank")
+        return value
 
 
 def extract_renderer_version(plugin_path: Path) -> str:
@@ -183,6 +203,7 @@ def _build_pipeline_spec(
         shard_size=config.shard_size,
         base_seed=config.base_seed,
         num_params=len(param_specs[config.param_spec]),
+        r2_bucket=config.r2_bucket,
         splits=config.splits,
         plugin_path=config.plugin_path,
         preset_path=config.preset_path,
