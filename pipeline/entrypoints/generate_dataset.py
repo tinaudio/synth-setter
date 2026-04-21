@@ -20,6 +20,13 @@ from pathlib import Path
 from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
 
+# Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
+# to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
+# X11 wrapping lives at the audio-rendering boundary (this subprocess call),
+# not at the container entrypoint — the click CLI stays X11-agnostic so idle
+# and passthrough don't pay the Xvfb startup cost.
+VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
+
 
 def _rclone_copy(src: str, dest: str) -> None:
     """Upload a file to R2 via rclone with checksum verification."""
@@ -116,7 +123,7 @@ def run(spec: DatasetPipelineSpec) -> None:
         # Single-shard only: picks spec.shards[0] unconditionally. Guarded by
         # the fail-fast check above; multi-shard support tracked in #407.
         shard = spec.shards[0]
-        args = build_generate_args(spec, shard, work_dir)
+        args = [VST_HEADLESS_WRAPPER, *build_generate_args(spec, shard, work_dir)]
         subprocess.check_call(args)  # noqa: S603 — args built from validated spec
         shard_path = work_dir / shard.filename
         _rclone_copy(str(shard_path), r2_dest_prefix)

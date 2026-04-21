@@ -1,32 +1,9 @@
 # Docker Specification Reference
 
-> **Status**: Spec — describes target behavior; see § Current vs. Planned for delta from `main`
-> **Tracking**: #265, #272, #273, #287, #288
+> **Status**: Reference — describes the live `ENTRYPOINT` in `dev-snapshot`.
+> **Tracking**: #265, #272, #273
 
 ______________________________________________________________________
-
-## Current vs. Planned
-
-Two entrypoint implementations currently ship in the image tree:
-
-1. **`scripts/docker_entrypoint.sh`** — the image's live `ENTRYPOINT`. Dispatches
-   on `MODE` env var; supports `idle`, `passthrough`, and (temporarily broken)
-   `generate_dataset`. The `MODE=generate_dataset` path still reads
-   `DATASET_CONFIG` / `RUN_METADATA_DIR` / `R2_BUCKET`, but the Python
-   entrypoint it shells out to no longer honours those variables (see
-   **Transitional note** below).
-2. **`scripts/docker_entrypoint.py`** — a click-group rewrite. Not yet the
-   container's `ENTRYPOINT`; [#647](https://github.com/tinaudio/synth-setter/issues/647)
-   will do the in-place swap.
-
-> **Transitional note:** after [#645](https://github.com/tinaudio/synth-setter/pull/645)
-> merges, `MODE=generate_dataset` through the bash entrypoint is **temporarily
-> broken** — `pipeline.entrypoints.generate_dataset` no longer exposes a
-> `__main__` callable that reads env vars. The break heals when
-> [#647](https://github.com/tinaudio/synth-setter/issues/647) lands the
-> Dockerfile `ENTRYPOINT` swap and the workflows move to the CLI form
-> (`docker run ... generate_dataset --spec <path>`). Deploy #645 and #647
-> back-to-back.
 
 Naming convention: **CLI is snake_case throughout.** Subcommands (`idle`,
 `passthrough`, `generate_dataset`, `render_eval`, `train`) and CLI flags
@@ -34,50 +11,48 @@ Naming convention: **CLI is snake_case throughout.** Subcommands (`idle`,
 
 ______________________________________________________________________
 
-## 1. Entrypoint MODE Dispatch
+## 1. Entrypoint — click group with per-mode spec
 
-### 1a. Bash entrypoint (live)
+`scripts/docker_entrypoint.py` is the image's live `ENTRYPOINT`: a click
+group with five subcommands. Each spec-taking subcommand deserializes its
+`--spec` into a mode-specific pydantic model at the container boundary
+(parse-don't-validate), then hands off to the downstream.
 
-`scripts/docker_entrypoint.sh` dispatches on the `MODE` env var. MODE is
-required — container errors if unset.
+| Subcommand         | Args                     | Behavior                                                                                        |
+| ------------------ | ------------------------ | ----------------------------------------------------------------------------------------------- |
+| `idle`             | none                     | `exec sleep infinity`                                                                           |
+| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                    |
+| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetPipelineSpec`, call `pipeline.entrypoints.generate_dataset.run(spec)`     |
+| `render_eval`      | `--spec PATH`            | `click.ClickException` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410) |
+| `train`            | `--spec PATH`            | `click.ClickException` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409) |
 
-| MODE               | Args    | Behavior                                                                                   | Use case                                       |
-| ------------------ | ------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| `idle`             | ignored | `exec sleep infinity`                                                                      | Attach bash to debug container                 |
-| `passthrough`      | given   | `exec "$@"`                                                                                | CI smoke tests, ad-hoc commands, training/eval |
-| `passthrough`      | none    | exit 0                                                                                     | CI steps that just need success                |
-| `generate_dataset` | none    | Runs VST dataset generation via `pipeline.entrypoints.generate_dataset` under headless X11 | CI dataset generation workflow                 |
-| *(unset)*          | any     | error                                                                                      | Footgun prevention                             |
-| *(unknown)*        | any     | error                                                                                      | Typo prevention                                |
-
-### 1b. Python click entrypoint (rewrite, not yet hooked)
-
-`scripts/docker_entrypoint.py` is a click group with five subcommands. Each
-spec-taking subcommand deserializes its `--spec` into a mode-specific pydantic
-model at the container boundary (parse-don't-validate).
-
-| Subcommand         | Args                     | Behavior                                                                                       |
-| ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `idle`             | none                     | `exec sleep infinity`                                                                          |
-| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                   |
-| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetPipelineSpec`, call `pipeline.entrypoints.generate_dataset.run(spec)`    |
-| `render_eval`      | `--spec PATH`            | `NotImplementedError` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410) |
-| `train`            | `--spec PATH`            | `NotImplementedError` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409) |
-
-Under this CLI, `generate_dataset` does **not** consume `DATASET_CONFIG`,
-`RUN_METADATA_DIR`, or `R2_BUCKET`. All dataset-run configuration flows in
-through the materialized spec at `--spec`. The R2 bucket is carried inside
-the spec itself (`DatasetPipelineSpec.r2_bucket`).
+`generate_dataset` does **not** consume any env vars for its dispatch
+inputs. All dataset-run configuration — including the R2 bucket
+(`DatasetPipelineSpec.r2_bucket`) — flows in through the materialized
+spec at `--spec`.
 
 > **Note:** `generate_dataset` is the current single-shard MVP. It will be deprecated when `generate-shards` lands on main ([#411](https://github.com/tinaudio/synth-setter/issues/411)).
 
+### Headless X11
+
+`generate_dataset` invokes `generate_vst_dataset.py` wrapped in
+`scripts/run-linux-vst-headless.sh` from inside `run()` (the
+audio-rendering layer). The click CLI itself does not start Xvfb —
+`idle` and `passthrough` don't pay the bootstrap cost. Callers that
+need X11 via `passthrough` (notebook execution, spec materialization
+that imports pedalboard) should prepend `scripts/run-linux-vst-headless.sh`
+to their command.
+
 ### Exit codes
 
-| Condition                  | Exit code |
-| -------------------------- | --------- |
-| Unset or empty MODE        | 1         |
-| Unknown MODE value         | 1         |
-| `passthrough` with no args | 0         |
+| Condition                                   | Exit code |
+| ------------------------------------------- | --------- |
+| No subcommand                               | non-zero  |
+| Unknown subcommand                          | non-zero  |
+| `passthrough` with no args                  | non-zero  |
+| `passthrough` exec failure (missing binary) | non-zero  |
+| `generate_dataset` missing/unreadable spec  | non-zero  |
+| `generate_dataset` invalid spec             | non-zero  |
 
 ### Next modes
 
@@ -94,22 +69,17 @@ ______________________________________________________________________
 
 `docker/ubuntu22_04/Dockerfile` defines two consumable targets via `--target`:
 
-| Target               | Entrypoint             | Source code            | Use case                                        |
-| -------------------- | ---------------------- | ---------------------- | ----------------------------------------------- |
-| `dev-snapshot`       | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs                                  |
-| `devcontainer-tools` | *(inherits)*           | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root `dev`) |
-
-> **Parallel Python implementation (unhooked):** `scripts/docker_entrypoint.py`
-> ships in the image tree alongside the shell entrypoint but is not the
-> container's `ENTRYPOINT`. It is a click-group rewrite with per-mode pydantic
-> spec parsing, being stabilised before the in-place swap in
-> [#647](https://github.com/tinaudio/synth-setter/issues/647). See #526.
+| Target               | Entrypoint                    | Source code            | Use case                                        |
+| -------------------- | ----------------------------- | ---------------------- | ----------------------------------------------- |
+| `dev-snapshot`       | `python docker_entrypoint.py` | Git clone at `GIT_REF` | CI, cloud runs                                  |
+| `devcontainer-tools` | *(inherits)*                  | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root `dev`) |
 
 The `dev-snapshot` target inherits directly from
 `builder-install-synth-setter-deps`. It contains no baked credentials
-and no baked runtime configuration. R2 credentials, the W&B API key,
-and the target R2 bucket name are all provided at runtime via env vars
-(see `docs/reference/docker.md` § Runtime secrets).
+and no baked runtime configuration. R2 credentials and the W&B API key
+are provided at runtime via env vars (see `docs/reference/docker.md`
+§ Runtime env vars). The target R2 bucket is carried in the
+DatasetPipelineSpec supplied to `generate_dataset --spec`, not an env var.
 
 The `devcontainer-tools` target extends `dev-base` with `gh`, `jq`, Node.js,
 `@anthropic-ai/claude-code` (installed system-wide), a non-root `dev` user,
@@ -143,43 +113,32 @@ This table is canonical: every env var the image consumes at runtime is
 listed here. Identical to `docs/reference/docker.md` § Runtime environment
 variables — kept in sync as the single source of truth.
 
-| Env var                              | Consumer              | Required for                  | Notes                                       |
-| ------------------------------------ | --------------------- | ----------------------------- | ------------------------------------------- |
-| `MODE`                               | entrypoint dispatcher | all modes                     | Set via `-e MODE=<mode>`; required          |
-| `DATASET_CONFIG`                     | `generate_dataset`    | `MODE=generate_dataset`       | Path to dataset config YAML (in image)      |
-| `RUN_METADATA_DIR`                   | `generate_dataset`    | `MODE=generate_dataset` (opt) | Defaults to `/run-metadata`                 |
-| `R2_BUCKET`                          | `generate_dataset`    | any rclone-to-R2 upload       | Bucket name (non-secret); from `.env`       |
-| `RCLONE_CONFIG_R2_TYPE`              | rclone                | any rclone R2 op              | Constant: `s3`; from `.env` or `-e`         |
-| `RCLONE_CONFIG_R2_PROVIDER`          | rclone                | any rclone R2 op              | Constant: `Cloudflare`; from `.env` or `-e` |
-| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
-| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
-| `RCLONE_CONFIG_R2_ENDPOINT`          | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
-| `WANDB_API_KEY`                      | wandb SDK             | any W&B-logging op            | **Secret**; from `.env`                     |
+| Env var                              | Consumer  | Required for       | Notes                                       |
+| ------------------------------------ | --------- | ------------------ | ------------------------------------------- |
+| `RCLONE_CONFIG_R2_TYPE`              | rclone    | any rclone R2 op   | Constant: `s3`; from `.env` or `-e`         |
+| `RCLONE_CONFIG_R2_PROVIDER`          | rclone    | any rclone R2 op   | Constant: `Cloudflare`; from `.env` or `-e` |
+| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
+| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
+| `RCLONE_CONFIG_R2_ENDPOINT`          | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
+| `WANDB_API_KEY`                      | wandb SDK | any W&B-logging op | **Secret**; from `.env`                     |
 
-For `MODE=generate_dataset` specifically, the container materializes a
-DatasetPipelineSpec, uploads spec and shard to R2. `input_spec.json` is
-written to `RUN_METADATA_DIR`. The entrypoint generates `shard_size`
-samples (one shard per invocation). Multi-shard generation
-(`num_shards > 1`) raises `NotImplementedError`.
+Dispatch and dataset-run configuration flow via CLI, not env vars: the
+subcommand (`generate_dataset`, `idle`, `passthrough`, …) is a positional
+arg; the pipeline spec — including the R2 bucket — is read from the JSON
+file passed via `--spec`. `input_spec.json` is written by the caller (the
+`pipeline.ci.materialize_spec` bootstrap step in CI) to a bind-mounted
+directory. Multi-shard generation (`num_shards > 1`) raises
+`NotImplementedError`.
 
 rclone's native env-var config synthesizes the `r2` remote in-memory from
 the 5 `RCLONE_CONFIG_R2_*` vars — no `rclone.conf` file is read or written.
-`R2_BUCKET` is separate from the rclone remote config: it is a bucket-name
-argument interpolated into upload paths by `generate_dataset.py`
-(`r2:${R2_BUCKET}/...`).
+The bucket name is **not** part of the rclone remote config: it comes
+from `DatasetPipelineSpec.r2_bucket` and is interpolated into upload
+paths by `generate_dataset.py` (`r2:${spec.r2_bucket}/...`).
 
 ______________________________________________________________________
 
-## 4. Known Design Issues
-
-| #   | Issue                                                      | Impact                            | Tracking |
-| --- | ---------------------------------------------------------- | --------------------------------- | -------- |
-| 1   | CI workflows use `--entrypoint bash`, bypassing entrypoint | Setup logic skipped in CI         | #287     |
-| 2   | BATS entrypoint tests not in CI                            | Entrypoint regressions undetected | #288     |
-
-______________________________________________________________________
-
-## 5. Cross-references
+## 4. Cross-references
 
 - `docs/design/storage-provenance-spec.md` -- R2 paths, W&B artifacts, secrets
 - `docs/design/data-pipeline-implementation-plan.md` -- `MODE=generate-shards` ([#407](https://github.com/tinaudio/synth-setter/issues/407))

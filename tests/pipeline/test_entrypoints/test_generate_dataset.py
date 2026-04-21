@@ -20,7 +20,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.entrypoints.generate_dataset import build_generate_args, run
+from pipeline.entrypoints.generate_dataset import (
+    VST_HEADLESS_WRAPPER,
+    build_generate_args,
+    run,
+)
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
 
 
@@ -119,8 +123,31 @@ class TestRun:
 
         mock_check_call.assert_called_once()
         args = mock_check_call.call_args[0][0]
-        assert "generate_vst_dataset.py" in args[1]
+        # args = [VST_HEADLESS_WRAPPER, python, generate_vst_dataset.py, ...]
+        assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.shard_size) in args
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_shard_generation_runs_under_headless_vst_wrapper(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        spec: DatasetPipelineSpec,
+    ) -> None:
+        """The VST subprocess is prefixed with scripts/run-linux-vst-headless.sh.
+
+        X11 bootstrap lives at the audio-rendering boundary (this subprocess) so the
+        docker_entrypoint click CLI can stay X11-agnostic — idle and passthrough modes don't pay
+        the Xvfb startup cost.
+        """
+        run(spec)
+
+        args = mock_check_call.call_args[0][0]
+        assert args[0] == VST_HEADLESS_WRAPPER
+        # Wrapper prefixes the original generate_vst_dataset.py invocation,
+        # so the python interpreter + script must appear immediately after.
+        assert args[2] == "src/data/vst/generate_vst_dataset.py"
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")

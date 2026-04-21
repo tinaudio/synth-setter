@@ -19,10 +19,12 @@ Subcommands:
     ``pipeline.entrypoints.generate_dataset.run(spec)`` in-process.
 
   render_eval --spec <path>
-    Placeholder — raises NotImplementedError (tracked in #410).
+    Placeholder — raises ``click.ClickException`` with a clean error
+    message and no traceback (tracked in #410).
 
   train --spec <path>
-    Placeholder — raises NotImplementedError (tracked in #409).
+    Placeholder — raises ``click.ClickException`` with a clean error
+    message and no traceback (tracked in #409).
 
 See also:
   docs/reference/docker-spec.md — full runtime spec for the container.

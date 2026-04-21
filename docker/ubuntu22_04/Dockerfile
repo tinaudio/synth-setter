@@ -362,9 +362,9 @@ RUN uv pip install --no-deps -e .
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
 
-COPY scripts/docker_entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+COPY scripts/docker_entrypoint.py /usr/local/bin/entrypoint.py
+RUN chmod +x /usr/local/bin/entrypoint.py
+ENTRYPOINT ["python", "/usr/local/bin/entrypoint.py"]
 CMD []
 
 # ==========================================

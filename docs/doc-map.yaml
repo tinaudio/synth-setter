@@ -19,10 +19,8 @@ docs:
         covers: "Dockerfile stages, base images, layer structure, BuildKit secret mounts, devcontainer-tools stage"
       - pattern: ".devcontainer/Dockerfile"
         covers: "Dev container wrapper over devcontainer-tools stage, per-developer customization"
-      - pattern: "scripts/docker_entrypoint.sh"
-        covers: "All MODE values (idle, passthrough, generate_dataset), env var dispatch, error messages"
       - pattern: "scripts/docker_entrypoint.py"
-        covers: "Click-based Python entrypoint (unhooked, see #526) — subcommand dispatch with per-mode --spec parsing; diverges from shell MODE env-var contract"
+        covers: "Click-based Python ENTRYPOINT — subcommand dispatch (idle, passthrough, generate_dataset, render_eval, train) with per-mode --spec parsing"
       - pattern: "pipeline/schemas/image_config.py"
         covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
       - pattern: "configs/image/**"
@@ -39,10 +37,8 @@ docs:
   - doc: docs/reference/docker-spec.md
     description: Image target contract, entrypoint modes, env var spec
     sources:
-      - pattern: "scripts/docker_entrypoint.sh"
-        covers: "All MODE values, env var contract, exit codes, error handling"
       - pattern: "scripts/docker_entrypoint.py"
-        covers: "Click-based Python entrypoint (unhooked, see #526) — subcommand dispatch with per-mode --spec"
+        covers: "Click-based Python ENTRYPOINT — subcommand dispatch with per-mode --spec, exit codes, error handling"
       - pattern: "docker/**"
         covers: "Target names, stage dependencies, what each target produces"
       - pattern: "pipeline/schemas/image_config.py"

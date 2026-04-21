@@ -37,45 +37,61 @@ jobs:
       - name: Pull image
         run: docker pull tinaudio/synth-setter:${{ inputs.image_tag }}
 
+      - name: Prepare run-metadata mount
+        run: mkdir -p /tmp/run-metadata
+
+      # Bootstrap steps that can't run from inside the click entrypoint
+      # (git safe.directory + plugin symlink depend on the bind mount + runner
+      # UID mismatch). Done via `passthrough` so we still exercise the real
+      # ENTRYPOINT (python click CLI) instead of `--entrypoint bash`.
+      # CONFIG_PATH is passed as a positional arg to `bash -c`, not expanded
+      # into the script text, to avoid quoting hazards if the workflow input
+      # ever contains shell metacharacters.
+      - name: Bootstrap workspace + materialize spec
+        env:
+          CONFIG_PATH: ${{ inputs.config_path }}
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v /tmp/run-metadata:/run-metadata \
+            -e CONFIG_PATH \
+            tinaudio/synth-setter:${{ inputs.image_tag }} \
+            passthrough bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              mkdir -p plugins
+              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              # materialize_spec imports pedalboard (via param_specs) which
+              # needs a live X display — wrap the materialize invocation, not
+              # the whole container, so the click entrypoint stays X11-agnostic.
+              scripts/run-linux-vst-headless.sh \
+                python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
+            '
+
       - name: Generate dataset
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-          CONFIG_PATH: ${{ inputs.config_path }}
         # Mount the PR's code into the container so we test THIS branch's code
-        # against the image's environment (Surge XT, Python, pedalboard, etc.).
-        # The image was built earlier and has dependencies but stale code — the
-        # volume mount overlays fresh code from the checkout.
+        # against the image's environment. Dispatch goes through the default
+        # ENTRYPOINT (python click CLI) — no `--entrypoint bash` override.
         run: |
           set -o pipefail
-          METADATA_DIR="/tmp/run-metadata"
-          mkdir -p "$METADATA_DIR"
-
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
-            -v "${METADATA_DIR}:/run-metadata" \
+            -v /tmp/run-metadata:/run-metadata \
             -e RCLONE_CONFIG_R2_TYPE=s3 \
             -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
             -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
             -e WANDB_API_KEY="${WANDB_API_KEY}" \
-            -e CONFIG_PATH="${CONFIG_PATH}" \
-            --entrypoint bash \
             tinaudio/synth-setter:${{ inputs.image_tag }} \
-            -c '
-              cd /home/build/synth-setter && \
-              git config --global --add safe.directory /home/build/synth-setter && \
-              mkdir -p plugins && \
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3" && \
-              export PYTHONPATH=/home/build/synth-setter && \
-              scripts/run-linux-vst-headless.sh bash -c "
-                python -m pipeline.ci.materialize_spec \"$CONFIG_PATH\" /run-metadata && \
-                python scripts/docker_entrypoint.py generate_dataset --spec /run-metadata/input_spec.json
-              "
-            ' 2>&1 | tee "${METADATA_DIR}/generate.log"
+            generate_dataset --spec /run-metadata/input_spec.json \
+            2>&1 | tee /tmp/run-metadata/generate.log
 
       - name: Validate spec exists
         run: |

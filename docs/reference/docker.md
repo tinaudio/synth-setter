@@ -24,7 +24,10 @@ ______________________________________________________________________
   - `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`,
     `RCLONE_CONFIG_R2_ENDPOINT` (R2 credentials)
   - `WANDB_API_KEY` (W&B credential)
-  - `R2_BUCKET` (target bucket name)
+
+The target R2 bucket is **not** an env var — it is a required field on
+`DatasetConfig` / `DatasetPipelineSpec` and flows into the container via
+the materialized spec passed to `generate_dataset --spec`.
 
 ```bash
 # Source credentials into current shell
@@ -34,29 +37,26 @@ set -a && source .env && set +a
 ### Runtime environment variables
 
 The image contains no baked credentials and is safe to publish on public
-registries. All credentials, mode selection, and mode-specific config
-flow in at runtime via environment variables. This is the **single source
-of truth** for what the image expects at `docker run` time.
+registries. All credentials flow in at runtime via environment variables;
+dispatch and dataset-run configuration flow via CLI args (subcommand +
+`--spec`). This is the **single source of truth** for what the image
+expects at `docker run` time.
 
-| Env var                              | Consumer              | Required for                  | Notes                                       |
-| ------------------------------------ | --------------------- | ----------------------------- | ------------------------------------------- |
-| `MODE`                               | entrypoint dispatcher | all modes                     | Set via `-e MODE=<mode>`; required          |
-| `DATASET_CONFIG`                     | `generate_dataset`    | `MODE=generate_dataset`       | Path to dataset config YAML (in image)      |
-| `RUN_METADATA_DIR`                   | `generate_dataset`    | `MODE=generate_dataset` (opt) | Defaults to `/run-metadata`                 |
-| `R2_BUCKET`                          | `generate_dataset`    | any rclone-to-R2 upload       | Bucket name (non-secret); from `.env`       |
-| `RCLONE_CONFIG_R2_TYPE`              | rclone                | any rclone R2 op              | Constant: `s3`; from `.env` or `-e`         |
-| `RCLONE_CONFIG_R2_PROVIDER`          | rclone                | any rclone R2 op              | Constant: `Cloudflare`; from `.env` or `-e` |
-| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
-| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
-| `RCLONE_CONFIG_R2_ENDPOINT`          | rclone                | any rclone R2 op              | **Secret**; from `.env`                     |
-| `WANDB_API_KEY`                      | wandb SDK             | any W&B-logging op            | **Secret**; from `.env`                     |
+| Env var                              | Consumer  | Required for       | Notes                                       |
+| ------------------------------------ | --------- | ------------------ | ------------------------------------------- |
+| `RCLONE_CONFIG_R2_TYPE`              | rclone    | any rclone R2 op   | Constant: `s3`; from `.env` or `-e`         |
+| `RCLONE_CONFIG_R2_PROVIDER`          | rclone    | any rclone R2 op   | Constant: `Cloudflare`; from `.env` or `-e` |
+| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
+| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
+| `RCLONE_CONFIG_R2_ENDPOINT`          | rclone    | any rclone R2 op   | **Secret**; from `.env`                     |
+| `WANDB_API_KEY`                      | wandb SDK | any W&B-logging op | **Secret**; from `.env`                     |
 
 rclone's native env-var config automatically builds the `r2` remote
 inside the container from the `RCLONE_CONFIG_R2_*` variables — no
-`rclone.conf` file is read or written. The 5 `RCLONE_CONFIG_R2_*` vars
-are sufficient to define the rclone remote; `R2_BUCKET` is **not** part
-of the rclone remote config, it is a separate bucket-name argument that
-`generate_dataset.py` interpolates into upload paths (`r2:${R2_BUCKET}/...`).
+`rclone.conf` file is read or written. The bucket name is **not** part
+of the rclone remote config: it lives in `DatasetPipelineSpec.r2_bucket`
+and `generate_dataset.py` interpolates it into upload paths
+(`r2:${spec.r2_bucket}/...`).
 
 The build uses **no** BuildKit secrets. The repository is public, so
 source fetches (both the tarball and the in-image git clone) happen
@@ -82,8 +82,8 @@ make docker-build-dev-snapshot \
 After building, verify the image works:
 
 ```bash
-docker run --rm -e MODE=passthrough synth-setter:dev-snapshot \
-  python -c "import torch; print('torch', torch.__version__)"
+docker run --rm synth-setter:dev-snapshot \
+  passthrough python -c "import torch; print('torch', torch.__version__)"
 ```
 
 ______________________________________________________________________
@@ -175,67 +175,68 @@ ______________________________________________________________________
 
 ### Entrypoint
 
-`dev-snapshot` includes `docker_entrypoint.sh` with MODE dispatch. MODE is
-required — the container exits with an error if unset. There is no default
-to avoid silent misconfiguration.
+`dev-snapshot` runs `python docker_entrypoint.py` as its `ENTRYPOINT`: a
+click group with five subcommands (`idle`, `passthrough`,
+`generate_dataset`, `render_eval`, `train`). A subcommand is required —
+the container fails loudly if invoked with none. See
+[docker-spec.md](docker-spec.md) for the full table.
 
 Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
 polluting your host shell:
 
 ```bash
-docker run --rm --env-file .env -e MODE=passthrough synth-setter:dev-snapshot ...
+docker run --rm --env-file .env synth-setter:dev-snapshot passthrough ...
 ```
 
-### MODE=idle — debug shell
+### `idle` — debug shell
 
 ```bash
-docker run -d --name debug -e MODE=idle synth-setter:dev-snapshot
+docker run -d --name debug synth-setter:dev-snapshot idle
 docker exec -it debug bash
 # Clean up when done
 docker stop debug && docker rm debug
 ```
 
-### MODE=passthrough — run a command
+### `passthrough` — run a command
 
 ```bash
 # Run a one-off command (no creds needed — just a torch import)
-docker run --rm -e MODE=passthrough synth-setter:dev-snapshot \
-  python -c "import torch; print(torch.cuda.is_available())"
-
-# No-op (exits 0) — useful for CI health checks
-docker run --rm -e MODE=passthrough synth-setter:dev-snapshot
+docker run --rm synth-setter:dev-snapshot \
+  passthrough python -c "import torch; print(torch.cuda.is_available())"
 ```
 
 > **Note:** add `--env-file .env` to any passthrough invocation that needs
-> R2 (`rclone` operations) or W&B logging.
+> R2 (`rclone` operations) or W&B logging. `passthrough` with no trailing
+> argv fails loudly (non-zero exit) — there is no silent-no-op mode.
 
-### MODE=generate_dataset — VST dataset generation
+### `generate_dataset` — VST dataset generation
 
-Generates a VST dataset shard via `generate_vst_dataset.py` under headless X11
-(Xvfb). X11 bootstrapping (Xvfb/dbus/xsettings) is handled by
-`scripts/run-linux-vst-headless.sh` (invoked from the Docker entrypoint);
-the entrypoint module `pipeline/entrypoints/generate_dataset.py` reads env/config
-and invokes `generate_vst_dataset.py` with the resolved dataset config.
-The container materializes a DatasetPipelineSpec, uploads spec and shard to R2.
-`input_spec.json` is written to `RUN_METADATA_DIR`.
+Generates a VST dataset shard via `generate_vst_dataset.py` under
+headless X11 (Xvfb). The click entrypoint itself is X11-agnostic; the
+headless bootstrap (`scripts/run-linux-vst-headless.sh`) is applied
+inside `pipeline.entrypoints.generate_dataset.run()` at the
+audio-rendering boundary, wrapping only the generator subprocess — so
+`idle` and `passthrough` don't pay the Xvfb startup cost.
 
-**Required env vars:** See § Runtime environment variables above for the
-canonical enumeration. For this mode you need the 5 `RCLONE_CONFIG_R2_*`
-vars (for rclone auth), `WANDB_API_KEY` (if W&B logging is enabled in the
-dataset config), `R2_BUCKET` (target bucket), and the per-invocation
-`MODE=generate_dataset` + `DATASET_CONFIG` flags.
+Pass the materialized spec via `--spec <path>`. All dataset-run
+configuration, including the target R2 bucket, lives in that spec
+(`DatasetPipelineSpec.r2_bucket`).
+
+**Required env vars:** See § Runtime environment variables above. For
+this subcommand you need the 5 `RCLONE_CONFIG_R2_*` vars (for rclone
+auth) and `WANDB_API_KEY` (if W&B logging is enabled in the dataset
+config).
 
 ```bash
 docker run --rm \
   --env-file .env \
-  -e MODE=generate_dataset \
-  -e DATASET_CONFIG=configs/dataset/ci-smoke-test.yaml \
   -v "$(pwd)/run-metadata:/run-metadata" \
-  synth-setter:dev-snapshot
+  synth-setter:dev-snapshot \
+  generate_dataset --spec /run-metadata/input_spec.json
 ```
 
 The example assumes your `.env` already contains the 5 `RCLONE_CONFIG_R2_*`
-vars plus `WANDB_API_KEY` and `R2_BUCKET`. If you prefer to keep the
+vars plus `WANDB_API_KEY`. If you prefer to keep the
 `TYPE`/`PROVIDER` constants out of `.env`, add them inline:
 `-e RCLONE_CONFIG_R2_TYPE=s3 -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare`.
 
@@ -244,10 +245,10 @@ vars plus `WANDB_API_KEY` and `R2_BUCKET`. If you prefer to keep the
 When the test workflow runs, it uploads an artifact bundle named
 `test-run-metadata`. The bundle contains two files:
 
-| File              | Contents                                                           |
-| ----------------- | ------------------------------------------------------------------ |
-| `input_spec.json` | DatasetPipelineSpec written by the container to `RUN_METADATA_DIR` |
-| `generate.log`    | Full container stdout/stderr from generation                       |
+| File              | Contents                                                                         |
+| ----------------- | -------------------------------------------------------------------------------- |
+| `input_spec.json` | DatasetPipelineSpec written by the workflow to the bind-mounted run-metadata dir |
+| `generate.log`    | Full container stdout/stderr from generation                                     |
 
 **Download:**
 
@@ -272,14 +273,14 @@ jq .r2_prefix input_spec.json
 
 ### Headless VST
 
-VST3 plugins (Surge XT) require an X11 display. The headless bootstrap script
-starts Xvfb automatically:
+VST3 plugins (Surge XT) require an X11 display. For `generate_dataset`,
+X11 is bootstrapped automatically around the generator subprocess inside
+`run()`. For ad-hoc VST work through `passthrough`, prepend the headless
+wrapper to your command:
 
 ```bash
-docker run --rm \
-  -e MODE=passthrough \
-  synth-setter:dev-snapshot \
-  scripts/run-linux-vst-headless.sh \
+docker run --rm synth-setter:dev-snapshot \
+  passthrough scripts/run-linux-vst-headless.sh \
     python -c "
       from pedalboard import VST3Plugin
       p = VST3Plugin('/usr/lib/vst3/Surge XT.vst3')
@@ -356,7 +357,7 @@ ______________________________________________________________________
 docker exec -it <container> bash
 
 # Start a fresh interactive debug session (drops into a shell)
-docker run --rm -it -e MODE=idle synth-setter:dev-snapshot bash
+docker run --rm -it synth-setter:dev-snapshot passthrough bash
 ```
 
 ### OOM during builds
@@ -392,10 +393,13 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 
 ### Entrypoint errors
 
-| Error              | Cause                | Fix                                                                      |
-| ------------------ | -------------------- | ------------------------------------------------------------------------ |
-| `MODE is required` | MODE env var not set | Add `-e MODE=idle`, `-e MODE=passthrough`, or `-e MODE=generate_dataset` |
-| `unknown MODE 'X'` | Typo in MODE value   | Use `idle`, `passthrough`, or `generate_dataset`                         |
+| Error                                    | Cause                               | Fix                                                                          |
+| ---------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
+| `Missing subcommand`                     | Ran the image with no subcommand    | Append one of: `idle`, `passthrough <cmd>`, `generate_dataset --spec <path>` |
+| `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train` |
+| `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                          |
+| `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)         |
+| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `pipeline.ci.materialize_spec`                  |
 
 ______________________________________________________________________
 

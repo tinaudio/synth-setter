@@ -450,7 +450,7 @@ Sub-issue: [#7](https://github.com/tinaudio/synth-setter/issues/7) (buildx TARGE
 **Files to port from `experiment`:**
 
 - `docker/ubuntu22_04/Dockerfile` — multi-stage build with BuildKit secrets
-- `scripts/docker_entrypoint.sh` — container dispatch (existing modes only for now)
+- `scripts/docker_entrypoint.py` — container dispatch (existing subcommands only for now)
 - `scripts/run-linux-vst-headless.sh` — Xvfb wrapper for headless VST
 - `Makefile` additions — `docker-build-dev-snapshot`
 
@@ -806,7 +806,7 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `scripts/docker_entrypoint.sh` — add `MODE=generate-shards`
+- `scripts/docker_entrypoint.py` — add `generate-shards` subcommand
 - `Makefile` — `make pipeline-generate`, `pipeline-status`, `pipeline-finalize`
 
 **RunPodBackend:** `runpod.create_pod()` with env vars, auth check, dry-run. Tags all
@@ -874,7 +874,7 @@ These tests are written incrementally as each PR lands.
 
 ### Worker Hard Timeout & RunPod Auto-stop ([#77](https://github.com/tinaudio/synth-setter/issues/77))
 
-- Hard timeout in `scripts/docker_entrypoint.sh` — kill worker process after
+- Hard timeout in `scripts/docker_entrypoint.py` — kill worker process after
   configurable max duration (`WORKER_TIMEOUT_SECONDS`)
 - EXIT trap fires on SIGTERM timeout kill (debug log + error.json uploaded).
   **Note:** EXIT traps do NOT fire on SIGKILL (OOM-killer, `kill -9`). For hard kills,

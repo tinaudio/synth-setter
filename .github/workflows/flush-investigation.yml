@@ -49,14 +49,14 @@ jobs:
         run: |
           mkdir -p reports
           docker run --rm \
-            --entrypoint bash \
             -v "${{ github.workspace }}/notebooks:/workspace/notebooks" \
             -v "${{ github.workspace }}/reports:/reports" \
             -e SURGE_VST3_PATH="${SURGE_VST3_PATH}" \
             synth-setter:dev-snapshot \
-            -c "
-              uv pip install -q jupyter nbconvert auraloss librosa &&
-              cd /home/build/synth-setter &&
+            passthrough bash -c '
+              set -euo pipefail
+              uv pip install -q jupyter nbconvert auraloss librosa
+              cd /home/build/synth-setter
               scripts/run-linux-vst-headless.sh \
                 jupyter nbconvert \
                   --to html \
@@ -64,7 +64,7 @@ jobs:
                   --ExecutePreprocessor.timeout=600 \
                   --output-dir=/reports \
                   /workspace/notebooks/flush-investigation.ipynb
-            "
+            '
 
       - name: Add provenance metadata to report
         run: |
