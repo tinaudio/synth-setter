@@ -177,9 +177,7 @@ jobs:
         env:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
-          docker run --rm \
-            -e PYTHONPATH=/home/build/synth-setter \
-            "$SMOKE_IMAGE" \
+          docker run --rm "$SMOKE_IMAGE" \
             passthrough pytest tests/docker/test_smoke.py::test_pedalboard_importable -v
 
       - name: Smoke test — VST loads under headless X11
@@ -187,8 +185,6 @@ jobs:
         env:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
-          docker run --rm \
-            -e PYTHONPATH=/home/build/synth-setter \
-            "$SMOKE_IMAGE" \
+          docker run --rm "$SMOKE_IMAGE" \
             passthrough scripts/run-linux-vst-headless.sh \
               pytest tests/docker/test_smoke.py::test_surge_xt_loads -v
