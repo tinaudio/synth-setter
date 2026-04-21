@@ -362,13 +362,6 @@ RUN uv pip install --no-deps -e .
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
 
-# `pipeline` is not shipped by the editable install (setup.py excludes it
-# from find_packages), so running the entrypoint via its absolute path —
-# which puts /usr/local/bin on sys.path, not the repo root — would fail
-# to import `pipeline.entrypoints.generate_dataset`. Putting the repo on
-# PYTHONPATH mirrors what callers used to export explicitly and keeps the
-# ENTRYPOINT self-sufficient.
-ENV PYTHONPATH=/home/build/synth-setter
 COPY scripts/docker_entrypoint.py /usr/local/bin/entrypoint.py
 RUN chmod +x /usr/local/bin/entrypoint.py
 ENTRYPOINT ["python", "/usr/local/bin/entrypoint.py"]
