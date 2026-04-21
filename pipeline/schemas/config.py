@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from pipeline.schemas.prefix import DatasetConfigId
 
@@ -31,6 +31,7 @@ class DatasetConfig(BaseModel):
     shard_size: int
     num_shards: int
     base_seed: int
+    r2_bucket: str
     splits: SplitsConfig
     preset_path: str
     channels: int
@@ -38,6 +39,14 @@ class DatasetConfig(BaseModel):
     signal_duration_seconds: float
     min_loudness: float
     sample_batch_size: int
+
+    @field_validator("r2_bucket")
+    @classmethod
+    def _r2_bucket_must_not_be_blank(cls, v: str) -> str:
+        """Reject empty or whitespace-only strings."""
+        if not v.strip():
+            raise ValueError("r2_bucket must not be blank")
+        return v
 
     @model_validator(mode="after")
     def _splits_sum_to_num_shards(self) -> DatasetConfig:

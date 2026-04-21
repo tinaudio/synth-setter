@@ -14,6 +14,7 @@ VALID_CONFIG = {
     "shard_size": 10000,
     "num_shards": 48,
     "base_seed": 42,
+    "r2_bucket": "intermediate-data",
     "splits": {"train": 44, "val": 2, "test": 2},
     "preset_path": "presets/surge-base.vstpreset",
     "channels": 2,

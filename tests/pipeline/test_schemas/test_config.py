@@ -24,6 +24,7 @@ class TestLoadDatasetConfig:
         assert cfg.shard_size == 10000
         assert cfg.num_shards == 48
         assert cfg.base_seed == 42
+        assert cfg.r2_bucket == "intermediate-data"
         assert cfg.splits.train == 44
         assert cfg.splits.val == 2
         assert cfg.splits.test == 2
@@ -106,6 +107,16 @@ class TestDatasetConfigValidation:
         """Extra fields are rejected by the strict model."""
         valid_config_dict["unexpected_field"] = "surprise"
         with pytest.raises(ValidationError):
+            DatasetConfig(**valid_config_dict)
+
+    def test_r2_bucket_blank_raises_validation_error(self, valid_config_dict):
+        """Empty or whitespace-only r2_bucket raises ValidationError."""
+        valid_config_dict["r2_bucket"] = ""
+        with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
+            DatasetConfig(**valid_config_dict)
+
+        valid_config_dict["r2_bucket"] = "   "
+        with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
             DatasetConfig(**valid_config_dict)
 
     def test_dataset_config_velocity_bounds(self, valid_config_dict):

@@ -7,18 +7,39 @@ ______________________________________________________________________
 
 ## Current vs. Planned
 
-MODE dispatch is fully implemented in `scripts/docker_entrypoint.sh` on `main`.
-MODE dispatch was implemented as part of [#265](https://github.com/tinaudio/synth-setter/issues/265).
-The entrypoint supports three modes (`idle`, `passthrough`, `generate_dataset`),
-exits with an error if MODE is unset or unknown, and exits 0 for `passthrough`
-with no arguments. The spec below matches the current implementation.
+Two entrypoint implementations currently ship in the image tree:
+
+1. **`scripts/docker_entrypoint.sh`** — the image's live `ENTRYPOINT`. Dispatches
+   on `MODE` env var; supports `idle`, `passthrough`, and (temporarily broken)
+   `generate_dataset`. The `MODE=generate_dataset` path still reads
+   `DATASET_CONFIG` / `RUN_METADATA_DIR` / `R2_BUCKET`, but the Python
+   entrypoint it shells out to no longer honours those variables (see
+   **Transitional note** below).
+2. **`scripts/docker_entrypoint.py`** — a click-group rewrite. Not yet the
+   container's `ENTRYPOINT`; [#647](https://github.com/tinaudio/synth-setter/issues/647)
+   will do the in-place swap.
+
+> **Transitional note:** after [#645](https://github.com/tinaudio/synth-setter/pull/645)
+> merges, `MODE=generate_dataset` through the bash entrypoint is **temporarily
+> broken** — `pipeline.entrypoints.generate_dataset` no longer exposes a
+> `__main__` callable that reads env vars. The break heals when
+> [#647](https://github.com/tinaudio/synth-setter/issues/647) lands the
+> Dockerfile `ENTRYPOINT` swap and the workflows move to the CLI form
+> (`docker run ... generate_dataset --spec <path>`). Deploy #645 and #647
+> back-to-back.
+
+Naming convention: **CLI is snake_case throughout.** Subcommands (`idle`,
+`passthrough`, `generate_dataset`, `render_eval`, `train`) and CLI flags
+(`--spec`) use snake_case. No kebab-case.
 
 ______________________________________________________________________
 
 ## 1. Entrypoint MODE Dispatch
 
-The entrypoint (`scripts/docker_entrypoint.sh`) dispatches on the `MODE` env var.
-MODE is required -- container errors if unset.
+### 1a. Bash entrypoint (live)
+
+`scripts/docker_entrypoint.sh` dispatches on the `MODE` env var. MODE is
+required — container errors if unset.
 
 | MODE               | Args    | Behavior                                                                                   | Use case                                       |
 | ------------------ | ------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------- |
@@ -29,7 +50,24 @@ MODE is required -- container errors if unset.
 | *(unset)*          | any     | error                                                                                      | Footgun prevention                             |
 | *(unknown)*        | any     | error                                                                                      | Typo prevention                                |
 
-`generate_dataset` uses env vars instead of CLI args — see § MODE=generate_dataset env vars below.
+### 1b. Python click entrypoint (rewrite, not yet hooked)
+
+`scripts/docker_entrypoint.py` is a click group with five subcommands. Each
+spec-taking subcommand deserializes its `--spec` into a mode-specific pydantic
+model at the container boundary (parse-don't-validate).
+
+| Subcommand         | Args                     | Behavior                                                                                       |
+| ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `idle`             | none                     | `exec sleep infinity`                                                                          |
+| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                   |
+| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetPipelineSpec`, call `pipeline.entrypoints.generate_dataset.run(spec)`    |
+| `render_eval`      | `--spec PATH`            | `NotImplementedError` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410) |
+| `train`            | `--spec PATH`            | `NotImplementedError` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409) |
+
+Under this CLI, `generate_dataset` does **not** consume `DATASET_CONFIG`,
+`RUN_METADATA_DIR`, or `R2_BUCKET`. All dataset-run configuration flows in
+through the materialized spec at `--spec`. The R2 bucket is carried inside
+the spec itself (`DatasetPipelineSpec.r2_bucket`).
 
 > **Note:** `generate_dataset` is the current single-shard MVP. It will be deprecated when `generate-shards` lands on main ([#411](https://github.com/tinaudio/synth-setter/issues/411)).
 
@@ -60,6 +98,12 @@ ______________________________________________________________________
 | -------------------- | ---------------------- | ---------------------- | ----------------------------------------------- |
 | `dev-snapshot`       | `docker_entrypoint.sh` | Git clone at `GIT_REF` | CI, cloud runs                                  |
 | `devcontainer-tools` | *(inherits)*           | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root `dev`) |
+
+> **Parallel Python implementation (unhooked):** `scripts/docker_entrypoint.py`
+> ships in the image tree alongside the shell entrypoint but is not the
+> container's `ENTRYPOINT`. It is a click-group rewrite with per-mode pydantic
+> spec parsing, being stabilised before the in-place swap in
+> [#647](https://github.com/tinaudio/synth-setter/issues/647). See #526.
 
 The `dev-snapshot` target inherits directly from
 `builder-install-synth-setter-deps`. It contains no baked credentials

@@ -63,6 +63,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[
         shard_size=10,
         num_shards=1,
         base_seed=42,
+        r2_bucket="intermediate-data",
         splits=SplitsConfig(train=1, val=0, test=0),
         preset_path="presets/surge-base.vstpreset",
         channels=2,
