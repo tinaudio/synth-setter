@@ -1,4 +1,5 @@
 import hydra
+import pytest
 from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -88,6 +89,52 @@ def test_cfg_train_t_max_interpolation_resolves() -> None:
         # without pulling in unrelated env-var resolvers.
         assert OmegaConf.select(cfg, "model.scheduler.T_max") == -1
     GlobalHydra.instance().clear()
+
+
+@pytest.mark.parametrize("debug_name", ["default", "limit", "overfit", "profiler"])
+def test_debug_config_has_no_step_conflict_with_max_epochs(debug_name: str) -> None:
+    """Regression guard for #628.
+
+    Every config under ``configs/debug/`` overrides ``trainer.max_epochs`` to a
+    small value, intending runs to terminate after one (or a handful of) epochs.
+    But ``configs/trainer/default.yaml`` sets ``min_steps: 400_000``. In
+    Lightning, ``min_steps`` is a floor: training refuses to stop at the
+    ``max_epochs`` boundary until ``min_steps`` is reached. The result is a
+    silent conflict — a smoke/overfit run meant to finish in seconds would run
+    until 400k steps are taken (e.g. ``debug/overfit.yaml`` expects 20 epochs x
+    3 batches = 60 steps; it actually runs 400_000).
+
+    A debug config that caps ``max_epochs`` must also null out the step budget.
+    """
+    GlobalHydra.instance().clear()
+    try:
+        with initialize(version_base="1.3", config_path="../configs"):
+            cfg = compose(
+                config_name="train.yaml",
+                return_hydra_config=True,
+                overrides=[f"debug={debug_name}"],
+            )
+
+        max_epochs = OmegaConf.select(cfg, "trainer.max_epochs")
+        min_steps = OmegaConf.select(cfg, "trainer.min_steps")
+        max_steps = OmegaConf.select(cfg, "trainer.max_steps")
+
+        assert max_epochs is not None, f"debug={debug_name} is expected to set trainer.max_epochs"
+        assert min_steps in (None, 0), (
+            f"debug={debug_name} sets trainer.max_epochs={max_epochs} but "
+            f"leaves trainer.min_steps={min_steps}. Lightning treats min_steps "
+            f"as a floor, so training runs past max_epochs until min_steps is "
+            f"reached. See #628."
+        )
+        # ``-1`` is Lightning's sentinel for "unbounded"; ``None`` triggers an
+        # internal ``None < int`` comparison on Trainer init. Either makes the
+        # epoch budget the sole terminator.
+        assert max_steps in (None, -1), (
+            f"debug={debug_name} sets trainer.max_epochs={max_epochs} but "
+            f"leaves trainer.max_steps={max_steps}. See #628."
+        )
+    finally:
+        GlobalHydra.instance().clear()
 
 
 class TestWandbConfigResolvesFromEnv:
