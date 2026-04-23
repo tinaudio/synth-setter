@@ -1,10 +1,15 @@
 import os
 from pathlib import Path
 
+import pandas as pd
 import pytest
+from click.testing import CliRunner
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
+from scripts.compute_audio_metrics import main as compute_audio_metrics_main
+from scripts.predict_vst_audio import main as predict_vst_audio_main
+from src.eval import evaluate
 from src.train import train
 from tests.helpers.run_if import RunIf
 
@@ -163,3 +168,100 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     # expect strict decrease (note: reversed direction vs. the legacy `train/acc < ...` assertion).
     assert metric_dict_1["train/loss_epoch"] > metric_dict_2["train/loss_epoch"]
     assert metric_dict_1["val/loss"] > metric_dict_2["val/loss"]
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+def test_train_surge_xt_one_step(cfg_surge_xt: DictConfig) -> None:
+    """Run one training step of the Surge XT flow-matching model on the 5-sample fixture.
+
+    :param cfg_surge_xt: One-step Surge XT training config.
+    """
+    HydraConfig().set_config(cfg_surge_xt)
+    _, object_dict = train(cfg_surge_xt)
+    assert object_dict["trainer"].global_step == 1
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+def test_train_eval_surge_xt(
+    tmp_path: Path, cfg_surge_xt: DictConfig, cfg_surge_xt_eval: DictConfig
+) -> None:
+    """Train Surge XT for one step, then run standalone eval on the saved checkpoint.
+
+    :param tmp_path: The temporary logging path.
+    :param cfg_surge_xt: One-step Surge XT training config.
+    :param cfg_surge_xt_eval: Matching eval config (ckpt_path set by this test).
+    """
+    HydraConfig().set_config(cfg_surge_xt)
+    train(cfg_surge_xt)
+
+    ckpt_path = tmp_path / "checkpoints" / "last.ckpt"
+    assert ckpt_path.exists()
+
+    with open_dict(cfg_surge_xt_eval):
+        cfg_surge_xt_eval.ckpt_path = str(ckpt_path)
+        cfg_surge_xt_eval.mode = "predict"
+
+    HydraConfig().set_config(cfg_surge_xt_eval)
+    evaluate(cfg_surge_xt_eval)
+
+    # `PredictionWriter` (`src/utils/callbacks.py:332`) with `write_interval=batch` saves three
+    # tensors per predict batch: `pred-{i}.pt`, `target-audio-{i}.pt`, `target-params-{i}.pt`.
+    # With `limit_predict_batches=1` we expect exactly one batch's worth of files.
+    predictions_dir = tmp_path / "predictions"
+    assert predictions_dir.is_dir()
+    assert sorted(p.name for p in predictions_dir.iterdir()) == [
+        "pred-0.pt",
+        "target-audio-0.pt",
+        "target-params-0.pt",
+    ]
+
+    # `predict_vst_audio.py` defaults to `plugins/Surge XT.vst3` relative to CWD (= repo root).
+    # Mirror the main tree's symlink to the system VST bundle so the test runs without
+    # committing a binary.
+    repo_root = Path(cfg_surge_xt.paths.root_dir)
+    plugin_link = repo_root / "plugins" / "Surge XT.vst3"
+    plugin_link.parent.mkdir(parents=True, exist_ok=True)
+    if not plugin_link.exists():
+        plugin_link.symlink_to("/usr/lib/vst3/Surge XT.vst3")
+
+    # Render predicted params through the Surge XT VST to per-sample audio directories.
+    # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
+    # of the saved target audio. Also works around an `UnboundLocalError` in
+    # `scripts/predict_vst_audio.py:220` where `target_synth_params` is referenced in the default
+    # path without being defined outside the `rerender_target` branch.
+    audio_dir = tmp_path / "audio"
+    runner = CliRunner()
+    result = runner.invoke(
+        predict_vst_audio_main,
+        [str(predictions_dir), str(audio_dir), "-t"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    # batch_size=2 * limit_predict_batches=1 → 2 rendered samples.
+    sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
+    assert [d.name for d in sample_dirs] == ["sample_0", "sample_1"]
+    for sample_dir in sample_dirs:
+        assert (sample_dir / "target.wav").is_file()
+        assert (sample_dir / "pred.wav").is_file()
+        assert (sample_dir / "spec.png").is_file()
+        assert (sample_dir / "params.csv").is_file()
+
+    # Compute audio distance metrics (MSS, wMFCC, SOT, RMS) on the rendered pairs.
+    metrics_dir = tmp_path / "metrics"
+    result = runner.invoke(
+        compute_audio_metrics_main,
+        [str(audio_dir), str(metrics_dir), "-w", "1"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    metrics_csv = metrics_dir / "metrics.csv"
+    assert metrics_csv.is_file()
+    assert (metrics_dir / "aggregated_metrics.csv").is_file()
+
+    metrics_df = pd.read_csv(metrics_csv)
+    assert len(metrics_df) == 2
+    assert {"mss", "wmfcc", "sot", "rms"}.issubset(metrics_df.columns)
