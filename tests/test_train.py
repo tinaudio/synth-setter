@@ -1,14 +1,10 @@
 import os
 from pathlib import Path
 
-import pandas as pd
 import pytest
-from click.testing import CliRunner
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from scripts.compute_audio_metrics import main as compute_audio_metrics_main
-from scripts.predict_vst_audio import main as predict_vst_audio_main
 from src.eval import evaluate
 from src.train import train
 from tests.helpers.run_if import RunIf
@@ -225,6 +221,16 @@ def test_train_eval_surge_xt(
     plugin_link.parent.mkdir(parents=True, exist_ok=True)
     if not plugin_link.exists():
         plugin_link.symlink_to("/usr/lib/vst3/Surge XT.vst3")
+
+    # Deferred imports: `scripts.compute_audio_metrics` transitively loads `torchaudio`, which
+    # fails binary load in the conda CI env. Keep these out of module scope so test collection
+    # doesn't break on envs that don't have a working torchaudio — this GPU-gated test is
+    # skipped there anyway.
+    import pandas as pd
+    from click.testing import CliRunner
+
+    from scripts.compute_audio_metrics import main as compute_audio_metrics_main
+    from scripts.predict_vst_audio import main as predict_vst_audio_main
 
     # Render predicted params through the Surge XT VST to per-sample audio directories.
     # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
