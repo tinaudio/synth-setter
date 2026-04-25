@@ -150,15 +150,3 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "instead of pytest's tmp_path so the files survive between runs."
         ),
     )
-    parser.addoption(
-        "--compare-baseline-configs-baseline-ref",
-        action="store",
-        # Update on PR merge to the merged commit on main (main is branch-protected;
-        # merge SHAs don't get rewritten).
-        default="624ea3c0d91698c53c7fad478294594f37854610",
-        metavar="REF",
-        help=(
-            "Git ref (sha/tag/branch) to materialize as the baseline worktree "
-            "for ref-comparison tests. Must exist locally; run `git fetch` if not."
-        ),
-    )

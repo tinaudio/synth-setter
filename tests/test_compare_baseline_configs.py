@@ -11,6 +11,7 @@ is a ``(baseline_repo, current_repo, script_rel)`` triple.
 
 from __future__ import annotations
 
+import copy
 import os
 import re
 import shutil
@@ -30,6 +31,14 @@ FIXTURE_CURRENT_REPO = FIXTURES / "current_repo"
 FIXTURE_DIFF_REPO = FIXTURES / "current_diff_repo"
 FIXTURE_SCRIPT_REL = "scripts/baseline_app.sh"
 FIXTURE_TASKS = 4
+
+# Baseline refs for ref-comparison tests. Update on PR merge to the merged
+# commit on main (main is branch-protected; merge SHAs don't get rewritten).
+# FIXTURE_BASELINE pins the synthetic-fixture equality + inequality tests.
+# MODEL_BASELINE pins the K-OSC + SURGE train.sh tests against a known-good
+# model-config snapshot.
+FIXTURE_BASELINE = "624ea3c0d91698c53c7fad478294594f37854610"
+MODEL_BASELINE = "79552d2b4d94688738b430f8776bfaab9a867a0b"
 
 
 @dataclass(frozen=True)
@@ -200,27 +209,48 @@ def _run_under_shim(
     )
 
 
-# Hydra config keys whose values are derived from the invocation cwd
-# (rootutils.find_root + ${paths.root_dir} interpolations) and therefore
-# always differ between the baseline worktree and the live REPO_ROOT.
-# Stripped before equality comparison so the assertion catches schema/value
-# drift, not mechanical path divergence.
-INVOCATION_PATH_KEYS = ("root_dir", "data_dir", "log_dir", "work_dir")
+# Dotted-path keys stripped before the equality comparison so the assertion
+# catches schema/value drift, not noise. Two named groups for self-documentation:
+
+# Derived from rootutils + invocation cwd; always differ between the baseline
+# worktree and the live REPO_ROOT.
+INVOCATION_PATH_KEYS: tuple[str, ...] = (
+    "paths.root_dir",
+    "paths.data_dir",
+    "paths.log_dir",
+    "paths.work_dir",
+)
+
+# Vary by deployment / user / project setup, not by code intent. wandb is
+# always on; entity, project, and log_model are owned by whoever ships the run.
+ACCEPTED_DIFFS: tuple[str, ...] = (
+    "logger.tensorboard",
+    "logger.wandb.entity",
+    "logger.wandb.log_model",
+    "logger.wandb.project",
+)
 
 
-def _strip_invocation_paths(cfg: dict) -> dict:
-    """Return a copy of ``cfg`` with invocation-derived path keys removed from ``paths``."""
-    result = dict(cfg)
-    paths = result.get("paths")
-    if isinstance(paths, dict):
-        result["paths"] = {k: v for k, v in paths.items() if k not in INVOCATION_PATH_KEYS}
+def _strip_dotted_keys(cfg: dict, dotted_paths: tuple[str, ...]) -> dict:
+    """Return a deep-copy of ``cfg`` with each dotted key path removed."""
+    result = copy.deepcopy(cfg)
+    for path in dotted_paths:
+        parts = path.split(".")
+        node = result
+        for part in parts[:-1]:
+            node = node.get(part) if isinstance(node, dict) else None
+            if not isinstance(node, dict):
+                break
+        else:
+            node.pop(parts[-1], None)
     return result
 
 
 def _assert_resolved_configs_equal(baseline: dict, current: dict) -> None:
-    """Assert the resolved configs match modulo invocation-derived path keys."""
-    base = _strip_invocation_paths(baseline)
-    cur = _strip_invocation_paths(current)
+    """Assert the resolved configs match modulo invocation/deployment-volatile keys."""
+    keys = INVOCATION_PATH_KEYS + ACCEPTED_DIFFS
+    base = _strip_dotted_keys(baseline, keys)
+    cur = _strip_dotted_keys(current, keys)
     assert base == cur, (base, cur)
 
 
@@ -352,40 +382,13 @@ def _build_surge_train_cases(baseline_ref: str) -> list[RefCompareCase]:
     )
 
 
-def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    """Build ``case`` parametrize lists for ref-based tests at collection time.
-
-    Ref-comparison tests need ``baseline_ref`` baked into each parametrized
-    case, but the ref comes from ``--compare-baseline-configs-baseline-ref``
-    — a CLI option that isn't available at module-import time, so the usual
-    ``@pytest.mark.parametrize(..., EQUAL_CASES)`` decorator can't construct
-    the cases. Pytest's collection hook fires *after* CLI parsing and *before*
-    any test runs, exposing ``metafunc.config.getoption(...)`` and
-    ``metafunc.parametrize(...)`` — the exact bridge needed.
-
-    The hook fires for every collected test, so it filters: tests without a
-    ``case`` parameter are skipped, and tests with one are dispatched by
-    function name. As more tests migrate from path-based ``CompareCase`` to
-    ``RefCompareCase`` (Step 7 of the migration), they get added here.
-    """
-    if "case" not in metafunc.fixturenames:
-        return
-    baseline_ref = metafunc.config.getoption("--compare-baseline-configs-baseline-ref")
-    name = metafunc.function.__name__
-    if name == "test_baseline_and_current_resolved_hydra_configs_are_equal":
-        cases = _build_equal_cases(baseline_ref)
-        metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
-    elif name == "test_baseline_and_current_resolved_hydra_configs_differ":
-        cases = _build_diff_cases(baseline_ref)
-        metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
-    elif name == "test_kosc_train_configs_are_equal":
-        cases = _build_kosc_train_cases(baseline_ref)
-        metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
-    elif name == "test_surge_train_configs_are_equal":
-        cases = _build_surge_train_cases(baseline_ref)
-        metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
+EQUAL_CASES = _build_equal_cases(FIXTURE_BASELINE)
+DIFF_CASES = _build_diff_cases(FIXTURE_BASELINE)
+KOSC_CASES = _build_kosc_train_cases(MODEL_BASELINE)
+SURGE_CASES = _build_surge_train_cases(MODEL_BASELINE)
 
 
+@pytest.mark.parametrize("case", EQUAL_CASES, ids=[c.id() for c in EQUAL_CASES])
 def test_baseline_and_current_resolved_hydra_configs_are_equal(
     shim_factory, worktree_for_ref, case: RefCompareCase
 ) -> None:
@@ -405,15 +408,15 @@ def test_baseline_and_current_resolved_hydra_configs_are_equal(
 
 def test_k_osc_train_cases() -> None:
     """Sanity-check K-OSC train case fan-out matches experiments.txt line count."""
-    cases = _build_kosc_train_cases("placeholder-ref")
     expected_tasks = 44
-    assert len(cases) == expected_tasks
-    for case in cases:
+    assert len(KOSC_CASES) == expected_tasks
+    for case in KOSC_CASES:
         assert case.task_id <= expected_tasks, (
             f"unexpected task_id {case.task_id} in case {case.id()}"
         )
 
 
+@pytest.mark.parametrize("case", KOSC_CASES, ids=[c.id() for c in KOSC_CASES])
 def test_kosc_train_configs_are_equal(
     shim_factory, worktree_for_ref, case: RefCompareCase
 ) -> None:
@@ -432,15 +435,15 @@ def test_kosc_train_configs_are_equal(
 
 def test_surge_train_cases() -> None:
     """Sanity-check SURGE train case fan-out matches experiments.txt line count."""
-    cases = _build_surge_train_cases("placeholder-ref")
     expected_tasks = 8
-    assert len(cases) == expected_tasks
-    for case in cases:
+    assert len(SURGE_CASES) == expected_tasks
+    for case in SURGE_CASES:
         assert case.task_id <= expected_tasks, (
             f"unexpected task_id {case.task_id} in case {case.id()}"
         )
 
 
+@pytest.mark.parametrize("case", SURGE_CASES, ids=[c.id() for c in SURGE_CASES])
 def test_surge_train_configs_are_equal(
     shim_factory, worktree_for_ref, case: RefCompareCase
 ) -> None:
@@ -457,6 +460,7 @@ def test_surge_train_configs_are_equal(
     _assert_resolved_configs_equal(baseline_cfg, current_cfg)
 
 
+@pytest.mark.parametrize("case", DIFF_CASES, ids=[c.id() for c in DIFF_CASES])
 def test_baseline_and_current_resolved_hydra_configs_differ(
     shim_factory, worktree_for_ref, case: RefCompareCase
 ) -> None:
@@ -470,10 +474,11 @@ def test_baseline_and_current_resolved_hydra_configs_differ(
         case.task_id,
         shim_factory,
     )
-    # Strip invocation paths so the inequality reflects real content drift,
-    # not the unavoidable worktree-vs-live path divergence.
-    base = _strip_invocation_paths(baseline_cfg)
-    cur = _strip_invocation_paths(current_cfg)
+    # Strip volatile keys so the inequality reflects real content drift, not
+    # the unavoidable worktree-vs-live path divergence or per-deployment noise.
+    keys = INVOCATION_PATH_KEYS + ACCEPTED_DIFFS
+    base = _strip_dotted_keys(baseline_cfg, keys)
+    cur = _strip_dotted_keys(current_cfg, keys)
     assert base != cur, (base, cur)
 
 

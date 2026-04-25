@@ -89,8 +89,8 @@ def worktree_for_ref(
         if not _ref_exists(ref):
             raise pytest.UsageError(
                 f"baseline ref {ref!r} not found locally; "
-                f"run `git fetch origin {ref}` or override with "
-                f"pytest --compare-baseline-configs-baseline-ref=<other>"
+                f"run `git fetch origin {ref}` or update the relevant "
+                f"BASELINE constant in tests/test_compare_baseline_configs.py"
             )
 
         # Clear any stale worktree entries left by killed prior runs before adding ours.
