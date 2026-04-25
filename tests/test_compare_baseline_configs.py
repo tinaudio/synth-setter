@@ -37,27 +37,22 @@ class RefCompareCase:
     """A single (baseline_ref, current_ref, scripts, task_id) tuple for parametrize.
 
     ``current_ref=None`` means "compare against the live working tree."
-    ``current_script_rel=None`` means "use the same script as ``baseline_script_rel``";
-    set it explicitly only when comparing two *different* scripts at the same ref
-    (the inequality fixture pattern).
+    Both ``baseline_script_rel`` and ``current_script_rel`` are always set;
+    set them to the same path for equality cases, different paths for the
+    inequality fixture pattern.
     """
 
     baseline_ref: str
     current_ref: str | None
     baseline_script_rel: str
-    current_script_rel: str | None = None
+    current_script_rel: str
     task_id: int = 0
-
-    @property
-    def effective_current_script_rel(self) -> str:
-        """Return the script path the current side should resolve under."""
-        return self.current_script_rel or self.baseline_script_rel
 
     def id(self) -> str:
         """Filesystem-safe parametrize id derived from this case's fields."""
         cmp = (
             ""
-            if self.current_script_rel is None
+            if self.current_script_rel == self.baseline_script_rel
             else f"__cmp_{Path(self.current_script_rel).parent.name}"
         )
         cur = self.current_ref[:7] if self.current_ref else "live"
@@ -84,22 +79,14 @@ class CompareCase:
         )
 
 
-def test_ref_compare_case_id_and_effective_script() -> None:
-    """RefCompareCase.id() and effective_current_script_rel render correctly."""
-    c1 = RefCompareCase("abc1234", None, "scripts/foo.sh", task_id=1)
-    assert c1.effective_current_script_rel == "scripts/foo.sh"
+def test_ref_compare_case_id_renders_correctly() -> None:
+    """RefCompareCase.id() collapses the cmp suffix when both script_rels match."""
+    c1 = RefCompareCase("abc1234", None, "scripts/foo.sh", "scripts/foo.sh", task_id=1)
     assert "abc1234_vs_live" in c1.id()
-    assert "scripts" in c1.id()
+    assert "cmp_" not in c1.id()
     assert "task1" in c1.id()
 
-    c2 = RefCompareCase(
-        "abc1234",
-        "def5678",
-        "a/foo.sh",
-        current_script_rel="b/bar.sh",
-        task_id=2,
-    )
-    assert c2.effective_current_script_rel == "b/bar.sh"
+    c2 = RefCompareCase("abc1234", "def5678", "a/foo.sh", "b/bar.sh", task_id=2)
     assert "abc1234_vs_def5678" in c2.id()
     assert "cmp_b" in c2.id()
     assert "task2" in c2.id()
@@ -266,11 +253,32 @@ def test_get_num_experiments() -> None:
 
 def _build_equal_cases(baseline_ref: str) -> list[RefCompareCase]:
     """Build the equality fixture's case list against ``baseline_ref``."""
+    script_rel = "tests/fixtures/baseline_repo/scripts/hydra_app.sh"
+    return [
+        RefCompareCase(
+            baseline_ref=baseline_ref,
+            current_ref=None,
+            baseline_script_rel=script_rel,
+            current_script_rel=script_rel,
+            task_id=t,
+        )
+        for t in range(1, FIXTURE_TASKS + 1)
+    ]
+
+
+def _build_diff_cases(baseline_ref: str) -> list[RefCompareCase]:
+    """Build the inequality fixture's case list against ``baseline_ref``.
+
+    Baseline side runs ``baseline_repo`` (port 5432); current side runs
+    ``current_diff_repo`` (port 6543) so the resolved configs deterministically
+    differ. ``current_diff_repo`` is renamed to ``diff_repo`` in Step 8.
+    """
     return [
         RefCompareCase(
             baseline_ref=baseline_ref,
             current_ref=None,
             baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
+            current_script_rel="tests/fixtures/current_diff_repo/scripts/hydra_app.sh",
             task_id=t,
         )
         for t in range(1, FIXTURE_TASKS + 1)
@@ -278,13 +286,30 @@ def _build_equal_cases(baseline_ref: str) -> list[RefCompareCase]:
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    """Inject CLI --compare-baseline-configs-baseline-ref into ref-based test cases."""
+    """Build ``case`` parametrize lists for ref-based tests at collection time.
+
+    Ref-comparison tests need ``baseline_ref`` baked into each parametrized
+    case, but the ref comes from ``--compare-baseline-configs-baseline-ref``
+    — a CLI option that isn't available at module-import time, so the usual
+    ``@pytest.mark.parametrize(..., EQUAL_CASES)`` decorator can't construct
+    the cases. Pytest's collection hook fires *after* CLI parsing and *before*
+    any test runs, exposing ``metafunc.config.getoption(...)`` and
+    ``metafunc.parametrize(...)`` — the exact bridge needed.
+
+    The hook fires for every collected test, so it filters: tests without a
+    ``case`` parameter are skipped, and tests with one are dispatched by
+    function name. As more tests migrate from path-based ``CompareCase`` to
+    ``RefCompareCase`` (Step 7 of the migration), they get added here.
+    """
     if "case" not in metafunc.fixturenames:
         return
     baseline_ref = metafunc.config.getoption("--compare-baseline-configs-baseline-ref")
     name = metafunc.function.__name__
     if name == "test_baseline_and_current_resolved_hydra_configs_are_equal":
         cases = _build_equal_cases(baseline_ref)
+        metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
+    elif name == "test_baseline_and_current_resolved_hydra_configs_differ":
+        cases = _build_diff_cases(baseline_ref)
         metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
 
 
@@ -298,7 +323,7 @@ def test_baseline_and_current_resolved_hydra_configs_are_equal(
         baseline_path,
         current_path,
         case.baseline_script_rel,
-        case.effective_current_script_rel,
+        case.current_script_rel,
         case.task_id,
         shim_factory,
     )
@@ -371,22 +396,16 @@ def test_surge_train_configs_are_equal(shim_factory, case: CompareCase) -> None:
     assert baseline_cfg == current_cfg, (baseline_cfg, current_cfg)
 
 
-DIFF_CASES: list[CompareCase] = [
-    CompareCase(FIXTURE_BASELINE_REPO, FIXTURE_DIFF_REPO, FIXTURE_SCRIPT_REL, t)
-    for t in range(1, FIXTURE_TASKS + 1)
-]
-
-
-@pytest.mark.parametrize("case", DIFF_CASES, ids=[c.id() for c in DIFF_CASES])
 def test_baseline_and_current_resolved_hydra_configs_differ(
-    shim_factory, case: CompareCase
+    shim_factory, worktree_for_ref, case: RefCompareCase
 ) -> None:
     """Inequality sanity-check: divergent fixture must produce a different config."""
+    baseline_path = worktree_for_ref(case.baseline_ref)
     baseline_cfg, current_cfg = _resolve_pair(
-        case.baseline,
-        case.current,
-        case.script_rel,
-        case.script_rel,
+        baseline_path,
+        REPO_ROOT,
+        case.baseline_script_rel,
+        case.current_script_rel,
         case.task_id,
         shim_factory,
     )
