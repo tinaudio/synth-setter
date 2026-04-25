@@ -25,11 +25,11 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
 
-DEFAULT_BASELINE_REPO = FIXTURES / "baseline_repo"
-DEFAULT_CURRENT_REPO = FIXTURES / "current_repo"
-DEFAULT_DIFF_REPO = FIXTURES / "current_diff_repo"
-DEFAULT_SCRIPT_REL = "scripts/hydra_app.sh"
-DEFAULT_TASKS = 4
+FIXTURE_BASELINE_REPO = FIXTURES / "baseline_repo"
+FIXTURE_CURRENT_REPO = FIXTURES / "current_repo"
+FIXTURE_DIFF_REPO = FIXTURES / "current_diff_repo"
+FIXTURE_SCRIPT_REL = "scripts/hydra_app.sh"
+FIXTURE_TASKS = 4
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,20 @@ class CompareCase:
         )
 
 
+def test_worktree_for_ref_smoke(worktree_for_ref) -> None:
+    """worktree_for_ref materializes a real worktree at HEAD."""
+    head = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],  # noqa: S607 — git on PATH
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    wt = worktree_for_ref(head)
+    assert wt.is_dir()
+    # Linked worktrees have a .git file (not a directory) pointing back to the main repo.
+    assert (wt / ".git").exists()
+
+
 @pytest.fixture
 def real_python() -> str:
     """Resolve the system ``python`` interpreter the shim should forward to."""
@@ -56,8 +70,7 @@ def real_python() -> str:
     return py
 
 
-_ROLE_BY_INDEX = ("base", "curr")
-_KEEP_YAML_DIR_ENV = "KEEP_YAML_DIR"
+ROLE_LABELS = {1: "base", 2: "curr"}
 _NOOP_SHIMS = ("mamba", "module")
 
 
@@ -69,16 +82,17 @@ def shim_factory(tmp_path: Path, real_python: str, request: pytest.FixtureReques
     appends ``--cfg job --resolve`` to whatever python invocation the script
     under test makes, redirecting stdout to ``out_yaml``.
 
-    When the ``KEEP_YAML_DIR`` env var is set, captured YAMLs are written to
-    ``${KEEP_YAML_DIR}/<sanitized-test-id>__<role>.yaml`` so they survive
+    When the ``--compare-baseline-configs-keep-yaml-dir`` CLI option is set,
+    captured YAMLs are written to
+    ``<keep-yaml-dir>/<sanitized-test-id>__<role>.yaml`` so they survive
     pytest's tmp cleanup and have descriptive filenames. Role is ``base`` for
-    the first call in a test, ``curr`` for the second, ``out{n}`` for any
+    the first call in a test, ``curr`` for the second, and ``out{n}`` for any
     additional calls.
     """
     counter = {"n": 0}
-    keep_dir_str = os.environ.get(_KEEP_YAML_DIR_ENV)
+    keep_dir_str = request.config.getoption("--compare-baseline-configs-keep-yaml-dir")
     # Resolve to an absolute path: the shim runs after the subprocess cd's into
-    # the repo root, so a relative KEEP_YAML_DIR would be interpreted there.
+    # the repo root, so a relative keep-yaml-dir would be interpreted there.
     keep_dir = Path(keep_dir_str).resolve() if keep_dir_str else None
     if keep_dir is not None:
         keep_dir.mkdir(parents=True, exist_ok=True)
@@ -92,7 +106,7 @@ def shim_factory(tmp_path: Path, real_python: str, request: pytest.FixtureReques
         if keep_dir is None:
             out_yaml = tmp_path / f"out-{idx}.yaml"
         else:
-            role = _ROLE_BY_INDEX[idx - 1] if idx <= len(_ROLE_BY_INDEX) else f"out{idx}"
+            role = ROLE_LABELS.get(idx, f"out{idx}")
             out_yaml = keep_dir / f"{safe_node}__{role}.yaml"
         shim = shim_dir / "python"
         shim.write_text(
@@ -185,8 +199,8 @@ def test_get_num_experiments() -> None:
 
 
 EQUAL_CASES: list[CompareCase] = [
-    CompareCase(DEFAULT_BASELINE_REPO, DEFAULT_CURRENT_REPO, DEFAULT_SCRIPT_REL, t)
-    for t in range(1, DEFAULT_TASKS + 1)
+    CompareCase(FIXTURE_BASELINE_REPO, FIXTURE_CURRENT_REPO, FIXTURE_SCRIPT_REL, t)
+    for t in range(1, FIXTURE_TASKS + 1)
 ]
 
 
@@ -252,8 +266,8 @@ def test_surge_train_configs_are_equal(shim_factory, case: CompareCase) -> None:
 
 
 DIFF_CASES: list[CompareCase] = [
-    CompareCase(DEFAULT_BASELINE_REPO, DEFAULT_DIFF_REPO, DEFAULT_SCRIPT_REL, t)
-    for t in range(1, DEFAULT_TASKS + 1)
+    CompareCase(FIXTURE_BASELINE_REPO, FIXTURE_DIFF_REPO, FIXTURE_SCRIPT_REL, t)
+    for t in range(1, FIXTURE_TASKS + 1)
 ]
 
 
@@ -281,8 +295,8 @@ def test_resolve_pair_rejects_empty_yaml(shim_factory) -> None:
 
 def test_injected_host_name_propagates_into_resolved_hydra_config(shim_factory) -> None:
     """INJECTED_HOST_NAME env var must reach the resolved Hydra config and its interpolations."""
-    baseline = DEFAULT_BASELINE_REPO
-    script_rel = DEFAULT_SCRIPT_REL
+    baseline = FIXTURE_BASELINE_REPO
+    script_rel = FIXTURE_SCRIPT_REL
     assert (baseline / script_rel).is_file()
 
     shim_dir, out_yaml = shim_factory()
