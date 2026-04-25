@@ -1,12 +1,24 @@
-"""Compare resolved Hydra configs across two repo roots via a python PATH shim.
+"""Sanity-check that current Hydra configs haven't silently drifted from a baseline ref.
 
-Each script under test must invoke a `@hydra.main` python app exactly once.
-A PATH shim intercepts that python call, appends `--cfg job --resolve` (so
-Hydra dumps the fully-resolved config to stdout instead of running main()),
-and captures the YAML for comparison.
+Baseline results in this repo were produced by running the scripts under
+``jobs/train/...``. Those scripts compose Hydra configs that determine model
+architecture, optimizer settings, callbacks, logger setup, and so on. If a
+config edit lands that silently changes what those scripts resolve to, future
+runs will only match the baseline numbers by accident. This test is the
+guardrail against that — when it fails, either the change was intentional
+(bump the baseline) or it wasn't (investigate before merging).
 
-Add cases by appending to ``EQUAL_CASES`` or ``DIFF_CASES`` below — each case
-is a ``(baseline_repo, current_repo, script_rel)`` triple.
+Mechanism: for each pinned ref, materialize a detached worktree at that ref,
+run the script there under a PATH shim that captures the resolved Hydra YAML
+(``python ... --cfg job --resolve``), run the same script in the live tree,
+and assert the two YAMLs match modulo invocation/deployment-volatile keys
+(``INVOCATION_PATH_KEYS``, ``ACCEPTED_DIFFS``).
+
+Two pinned constants below: ``FIXTURE_BASELINE`` covers the synthetic-fixture
+sanity tests, and ``MODEL_BASELINE`` pins the ``jobs/train/{kosc,surge}/train.sh``
+configs against a known-good model snapshot. When a config change is
+intentional and is what we want future runs to inherit, bump the relevant
+constant forward to a SHA on ``main`` that includes the change.
 """
 
 from __future__ import annotations
@@ -27,8 +39,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
 
 FIXTURE_BASELINE_REPO = FIXTURES / "baseline_repo"
-FIXTURE_CURRENT_REPO = FIXTURES / "current_repo"
-FIXTURE_DIFF_REPO = FIXTURES / "current_diff_repo"
 FIXTURE_SCRIPT_REL = "scripts/baseline_app.sh"
 FIXTURE_TASKS = 4
 
@@ -69,22 +79,6 @@ class RefCompareCase:
             f"{self.baseline_ref[:7]}_vs_{cur}"
             f"__{Path(self.baseline_script_rel).parent.name}{cmp}"
             f"__task{self.task_id}"
-        )
-
-
-@dataclass(frozen=True)
-class CompareCase:
-    """A single (baseline, current, script, task_id) tuple for parametrize."""
-
-    baseline: Path
-    current: Path
-    script_rel: str
-    task_id: int
-
-    def id(self) -> str:
-        """Filesystem-safe parametrize id derived from this case's fields."""
-        return (
-            f"{self.baseline.name}__vs__{self.current.name}__{self.script_rel}__task{self.task_id}"
         )
 
 
@@ -330,18 +324,17 @@ def _build_diff_cases(baseline_ref: str) -> list[RefCompareCase]:
     """Build the inequality fixture's case list against ``baseline_ref``.
 
     Baseline side runs ``baseline_repo`` (port 5432); current side runs
-    ``current_diff_repo`` (port 6543) so the resolved configs deterministically
-    differ. The baseline-side path uses the pre-rename basename
-    (``hydra_app.sh``) because that's what exists at the baseline ref; the
-    current side uses the renamed ``diff_app.sh``. ``current_diff_repo`` is
-    further renamed to ``diff_repo`` in Step 8.
+    ``diff_repo`` (port 6543) so the resolved configs deterministically differ.
+    The baseline-side path uses the pre-rename basename (``hydra_app.sh``)
+    because that's what exists at the baseline ref; the current side uses the
+    renamed ``diff_app.sh`` under the renamed ``diff_repo``.
     """
     return [
         RefCompareCase(
             baseline_ref=baseline_ref,
             current_ref=None,
             baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
-            current_script_rel="tests/fixtures/current_diff_repo/scripts/diff_app.sh",
+            current_script_rel="tests/fixtures/diff_repo/scripts/diff_app.sh",
             task_id=t,
         )
         for t in range(1, FIXTURE_TASKS + 1)
