@@ -11,11 +11,6 @@ from omegaconf import DictConfig, open_dict
 from src.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
-# Skip the fixture Hydra apps under tests/fixtures/*/scripts/hydra_app.py during
-# collection. They share a basename, which collides with --doctest-modules
-# (configured in pyproject.toml [tool.pytest.ini_options]).
-collect_ignore_glob = ["fixtures/**/*.py"]
-
 # Register custom OmegaConf resolvers (mul, div) needed to parse Hydra configs.
 # This import pulls in torch/lightning transitively via src.utils.utils, but every
 # test in this suite already requires those dependencies, so there is no benefit to

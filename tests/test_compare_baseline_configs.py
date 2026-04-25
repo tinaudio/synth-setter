@@ -28,7 +28,7 @@ FIXTURES = REPO_ROOT / "tests" / "fixtures"
 FIXTURE_BASELINE_REPO = FIXTURES / "baseline_repo"
 FIXTURE_CURRENT_REPO = FIXTURES / "current_repo"
 FIXTURE_DIFF_REPO = FIXTURES / "current_diff_repo"
-FIXTURE_SCRIPT_REL = "scripts/hydra_app.sh"
+FIXTURE_SCRIPT_REL = "scripts/baseline_app.sh"
 FIXTURE_TASKS = 4
 
 
@@ -200,6 +200,30 @@ def _run_under_shim(
     )
 
 
+# Hydra config keys whose values are derived from the invocation cwd
+# (rootutils.find_root + ${paths.root_dir} interpolations) and therefore
+# always differ between the baseline worktree and the live REPO_ROOT.
+# Stripped before equality comparison so the assertion catches schema/value
+# drift, not mechanical path divergence.
+INVOCATION_PATH_KEYS = ("root_dir", "data_dir", "log_dir", "work_dir")
+
+
+def _strip_invocation_paths(cfg: dict) -> dict:
+    """Return a copy of ``cfg`` with invocation-derived path keys removed from ``paths``."""
+    result = dict(cfg)
+    paths = result.get("paths")
+    if isinstance(paths, dict):
+        result["paths"] = {k: v for k, v in paths.items() if k not in INVOCATION_PATH_KEYS}
+    return result
+
+
+def _assert_resolved_configs_equal(baseline: dict, current: dict) -> None:
+    """Assert the resolved configs match modulo invocation-derived path keys."""
+    base = _strip_invocation_paths(baseline)
+    cur = _strip_invocation_paths(current)
+    assert base == cur, (base, cur)
+
+
 def _resolve_pair(
     baseline_path: Path,
     current_path: Path,
@@ -252,14 +276,20 @@ def test_get_num_experiments() -> None:
 
 
 def _build_equal_cases(baseline_ref: str) -> list[RefCompareCase]:
-    """Build the equality fixture's case list against ``baseline_ref``."""
-    script_rel = "tests/fixtures/baseline_repo/scripts/hydra_app.sh"
+    """Build the equality fixture's case list against ``baseline_ref``.
+
+    The two sides reference the script under different basenames because the
+    fixture was renamed (``hydra_app.sh`` → ``baseline_app.sh``) on this
+    branch. The baseline ref still has the old name; the live tree has the
+    new one. Once this PR merges and the default ref flips to the merge SHA,
+    both fields collapse to the same path.
+    """
     return [
         RefCompareCase(
             baseline_ref=baseline_ref,
             current_ref=None,
-            baseline_script_rel=script_rel,
-            current_script_rel=script_rel,
+            baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
+            current_script_rel="tests/fixtures/baseline_repo/scripts/baseline_app.sh",
             task_id=t,
         )
         for t in range(1, FIXTURE_TASKS + 1)
@@ -271,18 +301,55 @@ def _build_diff_cases(baseline_ref: str) -> list[RefCompareCase]:
 
     Baseline side runs ``baseline_repo`` (port 5432); current side runs
     ``current_diff_repo`` (port 6543) so the resolved configs deterministically
-    differ. ``current_diff_repo`` is renamed to ``diff_repo`` in Step 8.
+    differ. The baseline-side path uses the pre-rename basename
+    (``hydra_app.sh``) because that's what exists at the baseline ref; the
+    current side uses the renamed ``diff_app.sh``. ``current_diff_repo`` is
+    further renamed to ``diff_repo`` in Step 8.
     """
     return [
         RefCompareCase(
             baseline_ref=baseline_ref,
             current_ref=None,
             baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
-            current_script_rel="tests/fixtures/current_diff_repo/scripts/hydra_app.sh",
+            current_script_rel="tests/fixtures/current_diff_repo/scripts/diff_app.sh",
             task_id=t,
         )
         for t in range(1, FIXTURE_TASKS + 1)
     ]
+
+
+def _build_train_cases(
+    baseline_ref: str, script_rel: str, experiments_path: Path
+) -> list[RefCompareCase]:
+    """Build a train-script case list with one case per line in ``experiments_path``."""
+    return [
+        RefCompareCase(
+            baseline_ref=baseline_ref,
+            current_ref=None,
+            baseline_script_rel=script_rel,
+            current_script_rel=script_rel,
+            task_id=t,
+        )
+        for t in range(1, get_num_experiments(experiments_path) + 1)
+    ]
+
+
+def _build_kosc_train_cases(baseline_ref: str) -> list[RefCompareCase]:
+    """Build the K-OSC train fixture's case list against ``baseline_ref``."""
+    return _build_train_cases(
+        baseline_ref,
+        "jobs/train/kosc/train.sh",
+        REPO_ROOT / "jobs" / "train" / "kosc" / "experiments.txt",
+    )
+
+
+def _build_surge_train_cases(baseline_ref: str) -> list[RefCompareCase]:
+    """Build the SURGE train fixture's case list against ``baseline_ref``."""
+    return _build_train_cases(
+        baseline_ref,
+        "jobs/train/surge/train.sh",
+        REPO_ROOT / "jobs" / "train" / "surge" / "experiments.txt",
+    )
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -311,6 +378,12 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     elif name == "test_baseline_and_current_resolved_hydra_configs_differ":
         cases = _build_diff_cases(baseline_ref)
         metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
+    elif name == "test_kosc_train_configs_are_equal":
+        cases = _build_kosc_train_cases(baseline_ref)
+        metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
+    elif name == "test_surge_train_configs_are_equal":
+        cases = _build_surge_train_cases(baseline_ref)
+        metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
 
 
 def test_baseline_and_current_resolved_hydra_configs_are_equal(
@@ -327,73 +400,61 @@ def test_baseline_and_current_resolved_hydra_configs_are_equal(
         case.task_id,
         shim_factory,
     )
-    assert baseline_cfg == current_cfg, (baseline_cfg, current_cfg)
-
-
-K_OSC_TRAIN_CASES: list[CompareCase] = [
-    CompareCase(REPO_ROOT, REPO_ROOT, "jobs/train/kosc/train.sh", t)
-    for t in range(
-        1,
-        get_num_experiments(REPO_ROOT / "jobs" / "train" / "kosc" / "experiments.txt") + 1,
-    )
-]
+    _assert_resolved_configs_equal(baseline_cfg, current_cfg)
 
 
 def test_k_osc_train_cases() -> None:
     """Sanity-check K-OSC train case fan-out matches experiments.txt line count."""
+    cases = _build_kosc_train_cases("placeholder-ref")
     expected_tasks = 44
-    assert len(K_OSC_TRAIN_CASES) == expected_tasks
-    for case in K_OSC_TRAIN_CASES:
+    assert len(cases) == expected_tasks
+    for case in cases:
         assert case.task_id <= expected_tasks, (
             f"unexpected task_id {case.task_id} in case {case.id()}"
         )
 
 
-@pytest.mark.parametrize("case", K_OSC_TRAIN_CASES, ids=[c.id() for c in K_OSC_TRAIN_CASES])
-def test_kosc_train_configs_are_equal(shim_factory, case: CompareCase) -> None:
-    """Resolved K-OSC train Hydra config must be stable across repo states."""
+def test_kosc_train_configs_are_equal(
+    shim_factory, worktree_for_ref, case: RefCompareCase
+) -> None:
+    """Resolved K-OSC train Hydra config at ``baseline_ref`` must match the live tree."""
+    baseline_path = worktree_for_ref(case.baseline_ref)
     baseline_cfg, current_cfg = _resolve_pair(
-        case.baseline,
-        case.current,
-        case.script_rel,
-        case.script_rel,
+        baseline_path,
+        REPO_ROOT,
+        case.baseline_script_rel,
+        case.current_script_rel,
         case.task_id,
         shim_factory,
     )
-    assert baseline_cfg == current_cfg, (baseline_cfg, current_cfg)
-
-
-SURGE_TRAIN_CASES: list[CompareCase] = [
-    CompareCase(REPO_ROOT, REPO_ROOT, "jobs/train/surge/train.sh", t)
-    for t in range(
-        1,
-        get_num_experiments(REPO_ROOT / "jobs" / "train" / "surge" / "experiments.txt") + 1,
-    )
-]
+    _assert_resolved_configs_equal(baseline_cfg, current_cfg)
 
 
 def test_surge_train_cases() -> None:
     """Sanity-check SURGE train case fan-out matches experiments.txt line count."""
+    cases = _build_surge_train_cases("placeholder-ref")
     expected_tasks = 8
-    assert len(SURGE_TRAIN_CASES) == expected_tasks
-    for case in SURGE_TRAIN_CASES:
+    assert len(cases) == expected_tasks
+    for case in cases:
         assert case.task_id <= expected_tasks, (
             f"unexpected task_id {case.task_id} in case {case.id()}"
         )
 
 
-@pytest.mark.parametrize("case", SURGE_TRAIN_CASES, ids=[c.id() for c in SURGE_TRAIN_CASES])
-def test_surge_train_configs_are_equal(shim_factory, case: CompareCase) -> None:
-    """Resolved SURGE train Hydra config must be stable across repo states."""
+def test_surge_train_configs_are_equal(
+    shim_factory, worktree_for_ref, case: RefCompareCase
+) -> None:
+    """Resolved SURGE train Hydra config at ``baseline_ref`` must match the live tree."""
+    baseline_path = worktree_for_ref(case.baseline_ref)
     baseline_cfg, current_cfg = _resolve_pair(
-        case.baseline,
-        case.current,
-        case.script_rel,
-        case.script_rel,
+        baseline_path,
+        REPO_ROOT,
+        case.baseline_script_rel,
+        case.current_script_rel,
         case.task_id,
         shim_factory,
     )
-    assert baseline_cfg == current_cfg, (baseline_cfg, current_cfg)
+    _assert_resolved_configs_equal(baseline_cfg, current_cfg)
 
 
 def test_baseline_and_current_resolved_hydra_configs_differ(
@@ -409,7 +470,11 @@ def test_baseline_and_current_resolved_hydra_configs_differ(
         case.task_id,
         shim_factory,
     )
-    assert baseline_cfg != current_cfg, (baseline_cfg, current_cfg)
+    # Strip invocation paths so the inequality reflects real content drift,
+    # not the unavoidable worktree-vs-live path divergence.
+    base = _strip_invocation_paths(baseline_cfg)
+    cur = _strip_invocation_paths(current_cfg)
+    assert base != cur, (base, cur)
 
 
 def test_resolve_pair_rejects_empty_yaml(shim_factory) -> None:
@@ -420,7 +485,7 @@ def test_resolve_pair_rejects_empty_yaml(shim_factory) -> None:
     None == None.
     """
     noop_repo = FIXTURES / "noop_repo"
-    script_rel = "scripts/hydra_app.sh"
+    script_rel = "scripts/noop_app.sh"
     with pytest.raises(AssertionError, match="empty resolved YAML"):
         _resolve_pair(noop_repo, noop_repo, script_rel, script_rel, 1, shim_factory)
 
