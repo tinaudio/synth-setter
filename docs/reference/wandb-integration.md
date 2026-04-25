@@ -1,6 +1,6 @@
 # W&B Integration Reference
 
-> **Code version**: `0b55a9e` (2026-04-20, `feat/wandb-optional-by-default`)
+> **Code version**: `1970388` (2026-04-25, `feat/wandb-default-logger`)
 > **PyTorch**: see `requirements.txt` · **Lightning**: see `requirements.txt`
 > **Tracking**: #252, #263
 

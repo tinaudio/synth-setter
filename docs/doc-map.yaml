@@ -170,6 +170,9 @@ docs:
         covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
         covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop"
+      - pattern: "configs/logger/many_loggers.yaml"
+        covers: "Default logger compose — referenced in §4c for enable/disable workflow"
+        scope: "wandb-config"
 
   # ── GitHub taxonomy ─────────────────────────────────────────────
   - doc: docs/design/github-taxonomy.md
