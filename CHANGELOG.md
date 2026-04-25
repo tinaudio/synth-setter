@@ -1,6 +1,54 @@
 # CHANGELOG
 
 
+## v0.6.0 (2026-04-25)
+
+### Features
+
+- **monitoring**: Enable W&B logger by default in many_loggers compose
+  ([#677](https://github.com/tinaudio/synth-setter/pull/677),
+  [`9072185`](https://github.com/tinaudio/synth-setter/commit/907218574eca9fe950da09e7e2b89ef37b7f818c))
+
+* feat(monitoring): enable W&B logger by default in many_loggers compose
+
+Re-enable W&B in the default `many_loggers` compose so fresh installs log to W&B + CSV + TensorBoard
+  out of the box. Reverses #612's opt-in switch.
+
+Users without a W&B account can drop the `- wandb` line from `configs/logger/many_loggers.yaml` or
+  override per run with `logger=csv` or `logger=tensorboard`.
+
+Doc updates (via /doc-drift): - README.md: drop "opt-in" framing from features bullet and tracking
+  note - docs/getting-started.md §4c: rewrite as "enabled by default" + how to disable -
+  docs/reference/wandb-integration.md: update default-compose table rows and callback dispatch
+  description - docs/doc-map.yaml: add `configs/logger/many_loggers.yaml` to the wandb integration
+  mapping so future drift catches default-compose changes
+
+Closes #676.
+
+* docs(monitoring): address doc-drift report on wandb-default PR
+
+Two findings from the post-PR /doc-drift review:
+
+1. wandb-integration.md: bump stale "Code version" stamp from `0b55a9e`
+  (`feat/wandb-optional-by-default`) to this PR's SHA/branch — the body was rewritten for
+  W&B-by-default but the version pointer still named the opposite-direction branch.
+
+2. doc-map.yaml: add `configs/logger/many_loggers.yaml` under the getting-started entry so future
+  drift in the default compose is caught against §4c (which has detailed enable/disable
+  instructions), not only against the wandb-integration reference.
+
+Refs #676.
+
+* docs: fix inverted disable-wandb instruction in README
+
+Copilot caught that the README said to "drop W&B from the default compose by uncommenting `- wandb`"
+  — but with wandb now enabled by default, the disable action is to comment it OUT (or remove the
+  entry), not uncomment.
+
+The corresponding instruction in docs/getting-started.md §4c was already correct ("comment out `-
+  wandb`"); only README needed the fix.
+
+
 ## v0.5.0 (2026-04-21)
 
 ### Features
