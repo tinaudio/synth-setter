@@ -33,6 +33,42 @@ FIXTURE_TASKS = 4
 
 
 @dataclass(frozen=True)
+class RefCompareCase:
+    """A single (baseline_ref, current_ref, scripts, task_id) tuple for parametrize.
+
+    ``current_ref=None`` means "compare against the live working tree."
+    ``current_script_rel=None`` means "use the same script as ``baseline_script_rel``";
+    set it explicitly only when comparing two *different* scripts at the same ref
+    (the inequality fixture pattern).
+    """
+
+    baseline_ref: str
+    current_ref: str | None
+    baseline_script_rel: str
+    current_script_rel: str | None = None
+    task_id: int = 0
+
+    @property
+    def effective_current_script_rel(self) -> str:
+        """Return the script path the current side should resolve under."""
+        return self.current_script_rel or self.baseline_script_rel
+
+    def id(self) -> str:
+        """Filesystem-safe parametrize id derived from this case's fields."""
+        cmp = (
+            ""
+            if self.current_script_rel is None
+            else f"__cmp_{Path(self.current_script_rel).parent.name}"
+        )
+        cur = self.current_ref[:7] if self.current_ref else "live"
+        return (
+            f"{self.baseline_ref[:7]}_vs_{cur}"
+            f"__{Path(self.baseline_script_rel).parent.name}{cmp}"
+            f"__task{self.task_id}"
+        )
+
+
+@dataclass(frozen=True)
 class CompareCase:
     """A single (baseline, current, script, task_id) tuple for parametrize."""
 
@@ -46,6 +82,27 @@ class CompareCase:
         return (
             f"{self.baseline.name}__vs__{self.current.name}__{self.script_rel}__task{self.task_id}"
         )
+
+
+def test_ref_compare_case_id_and_effective_script() -> None:
+    """RefCompareCase.id() and effective_current_script_rel render correctly."""
+    c1 = RefCompareCase("abc1234", None, "scripts/foo.sh", task_id=1)
+    assert c1.effective_current_script_rel == "scripts/foo.sh"
+    assert "abc1234_vs_live" in c1.id()
+    assert "scripts" in c1.id()
+    assert "task1" in c1.id()
+
+    c2 = RefCompareCase(
+        "abc1234",
+        "def5678",
+        "a/foo.sh",
+        current_script_rel="b/bar.sh",
+        task_id=2,
+    )
+    assert c2.effective_current_script_rel == "b/bar.sh"
+    assert "abc1234_vs_def5678" in c2.id()
+    assert "cmp_b" in c2.id()
+    assert "task2" in c2.id()
 
 
 def test_worktree_for_ref_smoke(worktree_for_ref) -> None:
@@ -156,22 +213,31 @@ def _run_under_shim(
     )
 
 
-def _resolve_pair(case: CompareCase, shim_factory) -> tuple[dict, dict]:
+def _resolve_pair(
+    baseline_path: Path,
+    current_path: Path,
+    baseline_script_rel: str,
+    current_script_rel: str,
+    task_id: int,
+    shim_factory,
+) -> tuple[dict, dict]:
     """Run baseline and current scripts under shims and return loaded YAMLs."""
-    assert (case.baseline / case.script_rel).is_file(), (
-        f"missing: {case.baseline / case.script_rel}"
+    assert (baseline_path / baseline_script_rel).is_file(), (
+        f"missing: {baseline_path / baseline_script_rel}"
     )
-    assert (case.current / case.script_rel).is_file(), f"missing: {case.current / case.script_rel}"
+    assert (current_path / current_script_rel).is_file(), (
+        f"missing: {current_path / current_script_rel}"
+    )
 
     base_dir, base_yaml = shim_factory()
     curr_dir, curr_yaml = shim_factory()
-    case_env = {"SGE_TASK_ID": str(case.task_id)}
+    case_env = {"SGE_TASK_ID": str(task_id)}
 
-    base_proc = _run_under_shim(base_dir, case.baseline, case.script_rel, extra_env=case_env)
+    base_proc = _run_under_shim(base_dir, baseline_path, baseline_script_rel, extra_env=case_env)
     assert base_proc.returncode == 0, base_proc.stderr
     assert "python args:" in base_proc.stdout
 
-    curr_proc = _run_under_shim(curr_dir, case.current, case.script_rel, extra_env=case_env)
+    curr_proc = _run_under_shim(curr_dir, current_path, current_script_rel, extra_env=case_env)
     assert curr_proc.returncode == 0, curr_proc.stderr
     assert "python args:" in curr_proc.stdout
 
@@ -198,18 +264,44 @@ def test_get_num_experiments() -> None:
     assert actual == expected, f"expected {expected} experiments, got {actual}"
 
 
-EQUAL_CASES: list[CompareCase] = [
-    CompareCase(FIXTURE_BASELINE_REPO, FIXTURE_CURRENT_REPO, FIXTURE_SCRIPT_REL, t)
-    for t in range(1, FIXTURE_TASKS + 1)
-]
+def _build_equal_cases(baseline_ref: str) -> list[RefCompareCase]:
+    """Build the equality fixture's case list against ``baseline_ref``."""
+    return [
+        RefCompareCase(
+            baseline_ref=baseline_ref,
+            current_ref=None,
+            baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
+            task_id=t,
+        )
+        for t in range(1, FIXTURE_TASKS + 1)
+    ]
 
 
-@pytest.mark.parametrize("case", EQUAL_CASES, ids=[c.id() for c in EQUAL_CASES])
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    """Inject CLI --compare-baseline-configs-baseline-ref into ref-based test cases."""
+    if "case" not in metafunc.fixturenames:
+        return
+    baseline_ref = metafunc.config.getoption("--compare-baseline-configs-baseline-ref")
+    name = metafunc.function.__name__
+    if name == "test_baseline_and_current_resolved_hydra_configs_are_equal":
+        cases = _build_equal_cases(baseline_ref)
+        metafunc.parametrize("case", cases, ids=[c.id() for c in cases])
+
+
 def test_baseline_and_current_resolved_hydra_configs_are_equal(
-    shim_factory, case: CompareCase
+    shim_factory, worktree_for_ref, case: RefCompareCase
 ) -> None:
-    """Resolved Hydra config from baseline and current repos must match."""
-    baseline_cfg, current_cfg = _resolve_pair(case, shim_factory)
+    """Resolved Hydra config at ``baseline_ref`` must match the live working tree."""
+    baseline_path = worktree_for_ref(case.baseline_ref)
+    current_path = REPO_ROOT
+    baseline_cfg, current_cfg = _resolve_pair(
+        baseline_path,
+        current_path,
+        case.baseline_script_rel,
+        case.effective_current_script_rel,
+        case.task_id,
+        shim_factory,
+    )
     assert baseline_cfg == current_cfg, (baseline_cfg, current_cfg)
 
 
@@ -235,7 +327,14 @@ def test_k_osc_train_cases() -> None:
 @pytest.mark.parametrize("case", K_OSC_TRAIN_CASES, ids=[c.id() for c in K_OSC_TRAIN_CASES])
 def test_kosc_train_configs_are_equal(shim_factory, case: CompareCase) -> None:
     """Resolved K-OSC train Hydra config must be stable across repo states."""
-    baseline_cfg, current_cfg = _resolve_pair(case, shim_factory)
+    baseline_cfg, current_cfg = _resolve_pair(
+        case.baseline,
+        case.current,
+        case.script_rel,
+        case.script_rel,
+        case.task_id,
+        shim_factory,
+    )
     assert baseline_cfg == current_cfg, (baseline_cfg, current_cfg)
 
 
@@ -261,7 +360,14 @@ def test_surge_train_cases() -> None:
 @pytest.mark.parametrize("case", SURGE_TRAIN_CASES, ids=[c.id() for c in SURGE_TRAIN_CASES])
 def test_surge_train_configs_are_equal(shim_factory, case: CompareCase) -> None:
     """Resolved SURGE train Hydra config must be stable across repo states."""
-    baseline_cfg, current_cfg = _resolve_pair(case, shim_factory)
+    baseline_cfg, current_cfg = _resolve_pair(
+        case.baseline,
+        case.current,
+        case.script_rel,
+        case.script_rel,
+        case.task_id,
+        shim_factory,
+    )
     assert baseline_cfg == current_cfg, (baseline_cfg, current_cfg)
 
 
@@ -276,7 +382,14 @@ def test_baseline_and_current_resolved_hydra_configs_differ(
     shim_factory, case: CompareCase
 ) -> None:
     """Inequality sanity-check: divergent fixture must produce a different config."""
-    baseline_cfg, current_cfg = _resolve_pair(case, shim_factory)
+    baseline_cfg, current_cfg = _resolve_pair(
+        case.baseline,
+        case.current,
+        case.script_rel,
+        case.script_rel,
+        case.task_id,
+        shim_factory,
+    )
     assert baseline_cfg != current_cfg, (baseline_cfg, current_cfg)
 
 
@@ -288,9 +401,9 @@ def test_resolve_pair_rejects_empty_yaml(shim_factory) -> None:
     None == None.
     """
     noop_repo = FIXTURES / "noop_repo"
-    case = CompareCase(noop_repo, noop_repo, "scripts/hydra_app.sh", 1)
+    script_rel = "scripts/hydra_app.sh"
     with pytest.raises(AssertionError, match="empty resolved YAML"):
-        _resolve_pair(case, shim_factory)
+        _resolve_pair(noop_repo, noop_repo, script_rel, script_rel, 1, shim_factory)
 
 
 def test_injected_host_name_propagates_into_resolved_hydra_config(shim_factory) -> None:
