@@ -78,8 +78,8 @@ set -a && source .env && set +a
 
 > **Experiment tracking:** the default training run logs to W&B + CSV +
 > TensorBoard. Run `wandb login` (or set `WANDB_API_KEY`) before your first
-> training run, or drop W&B from the default compose by uncommenting `- wandb`
-> in `configs/logger/many_loggers.yaml`. See
+> training run, or drop W&B from the default compose by commenting out (or
+> removing) `- wandb` in `configs/logger/many_loggers.yaml`. See
 > [getting-started §4c](docs/getting-started.md#4c-weights--biases-wb) for
 > the full configuration workflow.
 
