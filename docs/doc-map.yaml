@@ -50,6 +50,8 @@ docs:
     sources:
       - pattern: "configs/logger/wandb.yaml"
         covers: "Entity, project, log_model setting, offline mode"
+      - pattern: "configs/logger/many_loggers.yaml"
+        covers: "Default logger compose — which loggers are enabled out of the box"
       - pattern: "src/train.py"
         covers: "WandbLogger instantiation, trainer integration, run lifecycle"
       - pattern: "src/eval.py"
