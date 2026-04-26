@@ -3,7 +3,7 @@ _target_: lightning.pytorch.trainer.Trainer
 default_root_dir: ${paths.output_dir}
 
 log_every_n_steps: 100
-val_check_interval: 1000
+val_check_interval: 10_000
 gradient_clip_val: 1.0
 
 accelerator: cpu
