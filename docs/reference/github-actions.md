@@ -10,16 +10,16 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 ### CI & quality
 
-| Workflow                  | Purpose                                                                                         | Gotcha                                                                                                                                                                        |
-| ------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test`                    | Runs non-slow pytest on Ubuntu + macOS across Python 3.10/3.11, plus a coverage job.            | Static MNIST cache key (`mnist-dataset-v1`); macOS excludes `test_mnist_datamodule`. See [Caching](#caching).                                                                 |
-| `test-gpu`                | Runs GPU-marked pytest on the `gpu-x64` GitHub-hosted GPU runner.                               | Pins `torch<2.7.0` for CUDA 12.8 compatibility. See [GPU runner torch pin](#gpu-runner-torch-pin).                                                                            |
-| `test-expensive`          | Runs `slow`-marked pytest (excluding `gpu`) on `ubuntu-latest`, post-merge on `main`.           | Skips docs-only merges (`paths-ignore`). Concurrency-grouped to queue overlapping runs. Shares MNIST cache with `test`. See [Concurrency](#concurrency), [Caching](#caching). |
-| `code-quality-pr`         | Runs pre-commit hooks on files changed in the PR.                                               |                                                                                                                                                                               |
-| `code-quality-main`       | Runs pre-commit hooks on all files after merge to main.                                         | Skips `no-commit-to-branch` hook (would reject main commits).                                                                                                                 |
-| `pr-metadata-gate`        | Enforces that every PR links a taxonomy-compliant issue (type, label, milestone, Epic lineage). | Walks issue parent chain up to 4 levels; falls back to Epic check if GraphQL parent field unavailable.                                                                        |
-| `bats-tests`              | Runs BATS tests against shell scripts under `scripts/` and `tests/`.                            |                                                                                                                                                                               |
-| `docker-build-validation` | Builds the dev-snapshot Docker image, optionally pushes to Docker Hub, runs smoke tests.        | Image is public and ships no credentials; R2/W&B creds flow in at runtime. See [Public image, runtime secrets](#public-image-runtime-secrets).                                |
+| Workflow                  | Purpose                                                                                         | Gotcha                                                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test`                    | Runs non-slow pytest on Ubuntu + macOS across Python 3.10/3.11, plus a coverage job.            |                                                                                                                                                |
+| `test-gpu`                | Runs GPU-marked pytest on the `gpu-x64` GitHub-hosted GPU runner.                               | Pins `torch<2.7.0` for CUDA 12.8 compatibility. See [GPU runner torch pin](#gpu-runner-torch-pin).                                             |
+| `test-expensive`          | Runs `slow`-marked pytest (excluding `gpu`) on `ubuntu-latest`, post-merge on `main`.           | Skips docs-only merges (`paths-ignore`). Concurrency-grouped to queue overlapping runs. See [Concurrency](#concurrency).                       |
+| `code-quality-pr`         | Runs pre-commit hooks on files changed in the PR.                                               |                                                                                                                                                |
+| `code-quality-main`       | Runs pre-commit hooks on all files after merge to main.                                         | Skips `no-commit-to-branch` hook (would reject main commits).                                                                                  |
+| `pr-metadata-gate`        | Enforces that every PR links a taxonomy-compliant issue (type, label, milestone, Epic lineage). | Walks issue parent chain up to 4 levels; falls back to Epic check if GraphQL parent field unavailable.                                         |
+| `bats-tests`              | Runs BATS tests against shell scripts under `scripts/` and `tests/`.                            |                                                                                                                                                |
+| `docker-build-validation` | Builds the dev-snapshot Docker image, optionally pushes to Docker Hub, runs smoke tests.        | Image is public and ships no credentials; R2/W&B creds flow in at runtime. See [Public image, runtime secrets](#public-image-runtime-secrets). |
 
 ### Pipeline
 
@@ -113,10 +113,6 @@ Or use the Actions tab UI.
 ### Concurrency
 
 `release` and `test-expensive` use concurrency groups (both `cancel-in-progress: false`). Runs **queue** rather than cancel — back-to-back pushes to main produce sequential releases and sequential slow-test runs, not coalesced ones. No other workflow uses concurrency, so multiple pushes can run multiple CI matrices simultaneously.
-
-### Caching
-
-`test` and `test-expensive` both cache the MNIST dataset under the static key `mnist-dataset-v1` (identical across all three `test` jobs and the `test-expensive` job — they share the same cache entry). The key is **not** derived from a lockfile or dataset hash — bump the `v1` suffix by hand if the MNIST source changes. Because the key is stable, dependency upgrades don't invalidate this cache.
 
 ### GPU runner torch pin
 

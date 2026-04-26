@@ -86,9 +86,6 @@ Logged via `self.log()` in each LightningModule:
 | `KSinFeedForwardModule`   | `train/loss`                                             | yes  | yes   |
 |                           | `val/lsd`, `val/chamfer`, `val/loss`                     | —    | yes   |
 |                           | `test/*` metrics                                         | —    | yes   |
-| `MNISTLitModule`          | `train/loss`, `train/acc`                                | —    | yes   |
-|                           | `val/loss`, `val/acc`, `val/acc_best`                    | —    | yes   |
-|                           | `test/loss`, `test/acc`                                  | —    | yes   |
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 

@@ -56,7 +56,6 @@ repos:
             scripts/rewrite_dataset_to_latest\.py|
             src/data/fm_datamodule\.py|
             src/data/kosc_datamodule\.py|
-            src/data/mnist_datamodule\.py|
             src/data/ot\.py|
             src/data/surge_datamodule\.py|
             src/data/vst/core\.py|
@@ -70,7 +69,6 @@ repos:
             src/models/components/vector_field\.py|
             src/models/ksin_ff_module\.py|
             src/models/ksin_flow_matching_module\.py|
-            src/models/mnist_module\.py|
             src/models/surge_ff_module\.py|
             src/models/surge_flow_matching_module\.py|
             src/models/surge_flowvae_module\.py|

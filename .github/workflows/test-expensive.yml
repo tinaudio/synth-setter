@@ -45,12 +45,6 @@ jobs:
       - name: List dependencies
         run: uv pip list --system
 
-      - name: Cache MNIST dataset
-        uses: actions/cache@v4
-        with:
-          path: data/MNIST
-          key: mnist-dataset-v1
-
       - name: Run slow (non-GPU) tests
         env:
           HYDRA_FULL_ERROR: "1"

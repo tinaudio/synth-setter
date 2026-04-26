@@ -61,12 +61,6 @@ jobs:
       - name: List dependencies
         run: uv pip list --system
 
-      - name: Cache MNIST dataset
-        uses: actions/cache@v4
-        with:
-          path: data/MNIST
-          key: mnist-dataset-v1
-
       - name: Run pytest
         env:
           HYDRA_FULL_ERROR: "1"
@@ -106,16 +100,10 @@ jobs:
       - name: List dependencies
         run: uv pip list --system
 
-      - name: Cache MNIST dataset
-        uses: actions/cache@v4
-        with:
-          path: data/MNIST
-          key: mnist-dataset-v1
-
       - name: Run pytest
         env:
           HYDRA_FULL_ERROR: "1"
-        run: pytest -n auto -m "not slow" -k "not test_mnist_datamodule" -vv -s
+        run: pytest -n auto -m "not slow" -vv -s
 
   # upload code coverage report
   code-coverage:
@@ -140,12 +128,6 @@ jobs:
           uv pip install --system -r requirements.txt
           uv pip install --system pytest-cov[toml]
           uv pip install --system sh
-
-      - name: Cache MNIST dataset
-        uses: actions/cache@v4
-        with:
-          path: data/MNIST
-          key: mnist-dataset-v1
 
       - name: Run tests and collect coverage
         env:

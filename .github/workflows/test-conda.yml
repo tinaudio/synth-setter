@@ -57,12 +57,6 @@ jobs:
           micromamba list
           pip list
 
-      - name: Cache MNIST dataset
-        uses: actions/cache@v4
-        with:
-          path: data/MNIST
-          key: mnist-dataset-v1
-
       - name: Run pytest
         env:
           HYDRA_FULL_ERROR: "1"
