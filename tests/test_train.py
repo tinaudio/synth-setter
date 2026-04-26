@@ -13,14 +13,16 @@ from tests.helpers.run_if import RunIf
 
 
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
-    """Run for 1 train, val and test step with small batch size, no compile.
+    """Run 1 train, val, and test step on CPU with `fast_dev_run`.
+
+    Dataset/batch size constraints come from the shared `cfg_train` fixture
+    (`batch_size=1`, `train_val_test_sizes=[2, 2, 2]`). This test only adds
+    `fast_dev_run=True` to cap the loops at one batch each.
 
     :param cfg_train: A DictConfig containing a valid training configuration.
     """
     HydraConfig().set_config(cfg_train)
     with open_dict(cfg_train):
-        # Prevent CPU unittest OOM by shrinking model,
-        # batch, training example, dataset size.
         cfg_train.trainer.fast_dev_run = True
     train(cfg_train)
 

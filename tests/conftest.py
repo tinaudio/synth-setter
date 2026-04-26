@@ -97,12 +97,7 @@ def cfg_eval_global() -> DictConfig:
             # Other defaults
             cfg.model.compile = False
             cfg.logger = None
-            cfg.callbacks.model_checkpoint.save_top_k = -1
-            cfg.callbacks.model_checkpoint.save_last = True
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
-            callbacks = cfg.get("callbacks")
-            if callbacks is not None and "lr_monitor" in callbacks:
-                del callbacks.lr_monitor
     return cfg
 
 
