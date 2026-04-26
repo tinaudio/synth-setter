@@ -28,20 +28,32 @@ def cfg_train_global() -> DictConfig:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["data=ksin", "model=ffn", "trainer=test", "logger=wandb"],
+            overrides=["data=ksin", "model=ffn", "trainer=cpu"],
         )
 
         # set defaults for all tests
         with open_dict(cfg):
+            # Trainer defaults
+            cfg.trainer.check_val_every_n_epoch = 1
+            cfg.trainer.val_check_interval = 1
+            cfg.trainer.max_epochs = 1
+            cfg.trainer.num_sanity_val_steps = 0
+            cfg.trainer.log_every_n_steps = 1
+            cfg.trainer.devices = 1
+            cfg.trainer.deterministic = True
+            # DataLoader defaults
             cfg.data.num_workers = 0
             cfg.data.pin_memory = False
-            cfg.data.batch_size = 4
+            cfg.data.batch_size = 1
             cfg.data.pin_memory = False
             cfg.data.train_val_test_sizes = [2, 2, 2]
-            # cfg.data.signal_length = 64
+            cfg.data.break_symmetry = True
+            # Other defaults
             cfg.model.compile = False
-            # cfg.logger = None
+            cfg.logger = None
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
+            cfg.callbacks.model_checkpoint.save_top_k = -1
+            cfg.callbacks.model_checkpoint.save_last = True
             callbacks = cfg.get("callbacks")
             if callbacks is not None and "lr_monitor" in callbacks:
                 del callbacks.lr_monitor
@@ -59,19 +71,37 @@ def cfg_eval_global() -> DictConfig:
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["data=ksin", "model=ffn", "trainer=test", "ckpt_path=."],
+            overrides=[
+                "data=ksin",
+                "model=ffn",
+                "trainer=cpu",
+                "ckpt_path=.",
+                "logger=wandb",
+            ],
         )
 
         # set defaults for all tests
         with open_dict(cfg):
+            # Trainer defaults
+            cfg.trainer.check_val_every_n_epoch = 1
+            cfg.trainer.val_check_interval = 1
+            cfg.trainer.max_epochs = 1
+            cfg.trainer.num_sanity_val_steps = 0
+            cfg.trainer.log_every_n_steps = 1
+            cfg.trainer.devices = 1
+            cfg.trainer.deterministic = True
+            # DataLoader defaults
             cfg.data.num_workers = 0
             cfg.data.pin_memory = False
-            cfg.data.batch_size = 4
+            cfg.data.batch_size = 1
             cfg.data.pin_memory = False
             cfg.data.train_val_test_sizes = [2, 2, 2]
-            # cfg.data.signal_length = 64
+            cfg.data.break_symmetry = True
+            # Other defaults
             cfg.model.compile = False
-            cfg.logger = None
+            # cfg.logger = None
+            cfg.callbacks.model_checkpoint.save_top_k = -1
+            cfg.callbacks.model_checkpoint.save_last = True
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
             callbacks = cfg.get("callbacks")
             if callbacks is not None and "lr_monitor" in callbacks:
@@ -92,7 +122,6 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
     :return: A DictConfig with updated output and log directories corresponding to `tmp_path`.
     """
     cfg = cfg_train_global.copy()
-
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
