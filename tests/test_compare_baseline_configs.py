@@ -116,19 +116,28 @@ def test_worktree_for_ref_smoke(worktree_for_ref: Callable[[str], Path]) -> None
     assert (wt / ".git").exists()
 
 
+@pytest.mark.network
 def test_pinned_baselines_resolve(worktree_for_ref: Callable[[str], Path]) -> None:
-    """Both pinned BASELINE constants resolve to fetchable refs (collection-time guard).
+    """Both pinned BASELINE constants resolve to materializable worktrees.
 
     Without this, a stale FIXTURE_BASELINE or MODEL_BASELINE only surfaces deep
-    inside a parametrized test failure. This test fails fast and loudly on the
-    first cheap call to ``worktree_for_ref`` for each ref.
+    inside a parametrized test failure. This test fails fast and loudly by
+    verifying each pinned ref is fetchable AND can be materialized by
+    ``worktree_for_ref`` end-to-end.
     """
     if not _ref_exists(FIXTURE_BASELINE):
         _try_fetch_ref(FIXTURE_BASELINE)
     assert _ref_exists(FIXTURE_BASELINE), f"FIXTURE_BASELINE {FIXTURE_BASELINE!r} unfetchable"
+    fixture_wt = worktree_for_ref(FIXTURE_BASELINE)
+    assert fixture_wt.is_dir()
+    assert (fixture_wt / ".git").exists()
+
     if not _ref_exists(MODEL_BASELINE):
         _try_fetch_ref(MODEL_BASELINE)
     assert _ref_exists(MODEL_BASELINE), f"MODEL_BASELINE {MODEL_BASELINE!r} unfetchable"
+    model_wt = worktree_for_ref(MODEL_BASELINE)
+    assert model_wt.is_dir()
+    assert (model_wt / ".git").exists()
 
 
 @pytest.fixture
@@ -174,7 +183,9 @@ def shim_factory(
     keep_dir = Path(keep_dir_str).resolve() if keep_dir_str else None
     if keep_dir is not None:
         keep_dir.mkdir(parents=True, exist_ok=True)
-    safe_node = re.sub(r"[^A-Za-z0-9._-]+", "_", request.node.name)
+    # Use nodeid rather than name so filenames remain unique across modules and
+    # parametrized tests when writing into a shared keep directory.
+    safe_node = re.sub(r"[^A-Za-z0-9._-]+", "_", request.node.nodeid)
 
     def _make() -> tuple[Path, Path]:
         counter["n"] += 1
@@ -295,7 +306,9 @@ def _assert_resolved_configs_equal(baseline: dict, current: dict) -> None:
     keys = INVOCATION_PATH_KEYS + ACCEPTED_DIFFS
     base = _strip_dotted_keys(baseline, keys)
     cur = _strip_dotted_keys(current, keys)
-    assert base == cur, (base, cur)
+    # No custom message: pytest renders a structured dict-diff for ==/!= on
+    # bare assertions, which is what we want for ~150-line config dicts.
+    assert base == cur
 
 
 def _assert_resolved_configs_differ(baseline: dict, current: dict) -> None:
@@ -308,7 +321,7 @@ def _assert_resolved_configs_differ(baseline: dict, current: dict) -> None:
     keys = INVOCATION_PATH_KEYS + ACCEPTED_DIFFS
     base = _strip_dotted_keys(baseline, keys)
     cur = _strip_dotted_keys(current, keys)
-    assert base != cur, (base, cur)
+    assert base != cur
 
 
 def _resolve_pair(

@@ -16,6 +16,8 @@ fixture pays zero git I/O.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import re
 import shutil
@@ -27,6 +29,26 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextlib.contextmanager
+def _git_lock(lock_path: Path) -> Iterator[None]:
+    """Process-wide exclusive lock around git fetch + worktree operations.
+
+    Without this, multiple xdist workers can race on shared git state
+    (``.git/config.lock``, ``FETCH_HEAD.lock``) when concurrently fetching
+    refs or registering worktrees. Worker-id-suffixed worktree paths solve
+    the path/name collision but don't help with the per-repo locks git
+    grabs internally. The lock is held only across the fetch + add block,
+    not the whole test, so contention is brief.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def _git(*argv: str, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -125,51 +147,57 @@ def worktree_for_ref(
         base_dir = tmp_path_factory.mktemp("baseline-worktrees")
 
     cache: dict[str, Path] = {}
+    # Process-wide lock file shared across all xdist workers. Lives next to
+    # `.git/` so it's always on the same filesystem as the repo metadata it
+    # protects. The path is stable across runs (not per-session) so workers
+    # in different pytest invocations also serialize through it.
+    lock_path = REPO_ROOT / ".git" / "baseline_worktree.lock"
 
     def _get(ref: str) -> Path:
         if ref in cache:
             return cache[ref]
 
-        fetch_stderrs: list[str] = []
-        if not _ref_exists(ref):
-            # Try to fetch it from origin (handles CI shallow clones and freshly-
-            # cut tags). If fetch fails, raise RuntimeError per-test (not
-            # pytest.UsageError, which would abort the whole session).
-            fetch_stderrs = _try_fetch_ref(ref)
-        if not _ref_exists(ref):
-            attempts = "\n".join(
-                f"  attempt {i + 1} stderr: {s}" for i, s in enumerate(fetch_stderrs)
-            )
-            raise RuntimeError(
-                f"baseline ref {ref!r} not found locally and `git fetch` did not "
-                f"resolve it.\n{attempts}\n"
-                f"Update the relevant BASELINE constant in "
-                f"tests/test_compare_baseline_configs.py, or check network access "
-                f"to origin."
-            )
+        with _git_lock(lock_path):
+            fetch_stderrs: list[str] = []
+            if not _ref_exists(ref):
+                # Try to fetch it from origin (handles CI shallow clones and freshly-
+                # cut tags). If fetch fails, raise RuntimeError per-test (not
+                # pytest.UsageError, which would abort the whole session).
+                fetch_stderrs = _try_fetch_ref(ref)
+            if not _ref_exists(ref):
+                attempts = "\n".join(
+                    f"  attempt {i + 1} stderr: {s}" for i, s in enumerate(fetch_stderrs)
+                )
+                raise RuntimeError(
+                    f"baseline ref {ref!r} not found locally and `git fetch` did "
+                    f"not resolve it.\n{attempts}\n"
+                    f"Update the relevant BASELINE constant in "
+                    f"tests/test_compare_baseline_configs.py, or check network "
+                    f"access to origin."
+                )
 
-        # Clear any stale worktree entries left by killed prior runs before adding ours.
-        _git("worktree", "prune")
+            # Clear any stale worktree entries left by killed prior runs before adding ours.
+            _git("worktree", "prune")
 
-        path = base_dir / _sanitize_ref(ref)
-        # If a previous run with --compare-baseline-configs-keep-yaml-dir left
-        # this path behind, remove it before re-adding so `git worktree add`
-        # doesn't fail on conflict.
-        if path.exists():
-            _git("worktree", "remove", "--force", str(path))
-            # Defensive: `git worktree remove` no-ops if the path isn't a
-            # registered worktree (e.g., directory left behind by an interrupted
-            # prior run, or a manually deleted .git/worktrees/X entry). Nuke
-            # the directory so the subsequent `git worktree add` doesn't fail
-            # with "already exists".
+            path = base_dir / _sanitize_ref(ref)
+            # If a previous run with --compare-baseline-configs-keep-yaml-dir left
+            # this path behind, remove it before re-adding so `git worktree add`
+            # doesn't fail on conflict.
             if path.exists():
-                shutil.rmtree(path, ignore_errors=True)
+                _git("worktree", "remove", "--force", str(path))
+                # Defensive: `git worktree remove` no-ops if the path isn't a
+                # registered worktree (e.g., directory left behind by an interrupted
+                # prior run, or a manually deleted .git/worktrees/X entry). Nuke
+                # the directory so the subsequent `git worktree add` doesn't fail
+                # with "already exists".
+                if path.exists():
+                    shutil.rmtree(path, ignore_errors=True)
 
-        result = _git("worktree", "add", "--detach", str(path), ref)
-        if result.returncode != 0:
-            raise pytest.UsageError(
-                f"git worktree add failed for ref {ref!r}: {result.stderr.strip()}"
-            )
+            result = _git("worktree", "add", "--detach", str(path), ref)
+            if result.returncode != 0:
+                raise pytest.UsageError(
+                    f"git worktree add failed for ref {ref!r}: {result.stderr.strip()}"
+                )
 
         cache[ref] = path
         return path
@@ -179,12 +207,13 @@ def worktree_for_ref(
     if skip_cleanup:
         return
 
-    for path in cache.values():
-        result = _git("worktree", "remove", "--force", str(path))
-        if result.returncode != 0:
-            # Surface stale-worktree leakage through pytest's warnings summary
-            # (instead of swallowing stderr silently).
-            warnings.warn(
-                f"git worktree remove --force {path} failed: {result.stderr.strip()}",
-                stacklevel=2,
-            )
+    with _git_lock(lock_path):
+        for path in cache.values():
+            result = _git("worktree", "remove", "--force", str(path))
+            if result.returncode != 0:
+                # Surface stale-worktree leakage through pytest's warnings summary
+                # (instead of swallowing stderr silently).
+                warnings.warn(
+                    f"git worktree remove --force {path} failed: {result.stderr.strip()}",
+                    stacklevel=2,
+                )
