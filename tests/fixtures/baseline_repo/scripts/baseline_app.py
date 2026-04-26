@@ -1,3 +1,5 @@
+"""Synthetic Hydra app used as the equality fixture for the shim harness."""
+
 from dataclasses import dataclass
 
 import hydra

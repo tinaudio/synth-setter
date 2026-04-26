@@ -29,11 +29,14 @@ import re
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import yaml
+
+from tests._baseline_worktree import _git, _ref_exists, _try_fetch_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
@@ -41,6 +44,13 @@ FIXTURES = REPO_ROOT / "tests" / "fixtures"
 FIXTURE_BASELINE_REPO = FIXTURES / "baseline_repo"
 FIXTURE_SCRIPT_REL = "scripts/baseline_app.sh"
 FIXTURE_TASKS = 4
+
+# Expected per-experiments-list line counts. These are the contract: changing
+# experiments.txt without bumping these intentionally surfaces as a failed
+# sanity test. Compare against the constant, not against `get_num_experiments`,
+# so the assertion isn't tautological.
+EXPECTED_KOSC_TASKS = 44
+EXPECTED_SURGE_TASKS = 8
 
 # Baseline refs for ref-comparison tests. Prefer tags over SHAs so CI can
 # fetch the baseline cheaply via `fetch-tags: true` on actions/checkout.
@@ -69,7 +79,7 @@ class RefCompareCase:
     current_script_rel: str
     task_id: int = 0
 
-    def id(self) -> str:
+    def slug(self) -> str:
         """Filesystem-safe parametrize id derived from this case's fields."""
         cmp = (
             ""
@@ -84,31 +94,41 @@ class RefCompareCase:
         )
 
 
-def test_ref_compare_case_id_renders_correctly() -> None:
-    """RefCompareCase.id() collapses the cmp suffix when both script_rels match."""
+def test_ref_compare_case_slug_renders_correctly() -> None:
+    """RefCompareCase.slug() collapses the cmp suffix when both script_rels match."""
     c1 = RefCompareCase("abc1234", None, "scripts/foo.sh", "scripts/foo.sh", task_id=1)
-    assert "abc1234_vs_live" in c1.id()
-    assert "cmp_" not in c1.id()
-    assert "task1" in c1.id()
+    assert "abc1234_vs_live" in c1.slug()
+    assert "cmp_" not in c1.slug()
+    assert "task1" in c1.slug()
 
     c2 = RefCompareCase("abc1234", "def5678", "a/foo.sh", "b/bar.sh", task_id=2)
-    assert "abc1234_vs_def5678" in c2.id()
-    assert "cmp_b" in c2.id()
-    assert "task2" in c2.id()
+    assert "abc1234_vs_def5678" in c2.slug()
+    assert "cmp_b" in c2.slug()
+    assert "task2" in c2.slug()
 
 
-def test_worktree_for_ref_smoke(worktree_for_ref) -> None:
+def test_worktree_for_ref_smoke(worktree_for_ref: Callable[[str], Path]) -> None:
     """worktree_for_ref materializes a real worktree at HEAD."""
-    head = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],  # noqa: S607 — git on PATH
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    head = _git("rev-parse", "HEAD", check=True).stdout.strip()
     wt = worktree_for_ref(head)
     assert wt.is_dir()
     # Linked worktrees have a .git file (not a directory) pointing back to the main repo.
     assert (wt / ".git").exists()
+
+
+def test_pinned_baselines_resolve(worktree_for_ref: Callable[[str], Path]) -> None:
+    """Both pinned BASELINE constants resolve to fetchable refs (collection-time guard).
+
+    Without this, a stale FIXTURE_BASELINE or MODEL_BASELINE only surfaces deep
+    inside a parametrized test failure. This test fails fast and loudly on the
+    first cheap call to ``worktree_for_ref`` for each ref.
+    """
+    if not _ref_exists(FIXTURE_BASELINE):
+        _try_fetch_ref(FIXTURE_BASELINE)
+    assert _ref_exists(FIXTURE_BASELINE), f"FIXTURE_BASELINE {FIXTURE_BASELINE!r} unfetchable"
+    if not _ref_exists(MODEL_BASELINE):
+        _try_fetch_ref(MODEL_BASELINE)
+    assert _ref_exists(MODEL_BASELINE), f"MODEL_BASELINE {MODEL_BASELINE!r} unfetchable"
 
 
 @pytest.fixture
@@ -124,11 +144,16 @@ def real_python() -> str:
 
 
 ROLE_LABELS = {1: "base", 2: "curr"}
+# Production train.sh scripts call `mamba activate` and `module load`; the shim
+# directory ships no-op stubs for both so the script doesn't fail before reaching
+# the python invocation that the harness wants to intercept.
 _NOOP_SHIMS = ("mamba", "module")
 
 
 @pytest.fixture
-def shim_factory(tmp_path: Path, real_python: str, request: pytest.FixtureRequest):
+def shim_factory(
+    tmp_path: Path, real_python: str, request: pytest.FixtureRequest
+) -> Callable[[], tuple[Path, Path]]:
     """Yield a callable that builds a per-invocation `python` PATH shim.
 
     Each call returns ``(shim_dir, out_yaml)`` for an isolated shim that
@@ -258,6 +283,9 @@ def _strip_dotted_keys(cfg: dict, dotted_paths: tuple[str, ...]) -> dict:
             if not isinstance(node, dict):
                 break
         else:
+            # for-else: this branch runs only when the inner loop completed
+            # without `break` — i.e., the full intermediate path was
+            # traversable. Pop the leaf key off the resolved parent dict.
             node.pop(parts[-1], None)
     return result
 
@@ -270,13 +298,26 @@ def _assert_resolved_configs_equal(baseline: dict, current: dict) -> None:
     assert base == cur, (base, cur)
 
 
+def _assert_resolved_configs_differ(baseline: dict, current: dict) -> None:
+    """Assert the resolved configs differ modulo invocation/deployment-volatile keys.
+
+    Mirror of ``_assert_resolved_configs_equal`` for the inequality fixture
+    pattern. Strips the same volatile keys before comparing so the inequality
+    reflects real content drift, not unavoidable worktree-vs-live noise.
+    """
+    keys = INVOCATION_PATH_KEYS + ACCEPTED_DIFFS
+    base = _strip_dotted_keys(baseline, keys)
+    cur = _strip_dotted_keys(current, keys)
+    assert base != cur, (base, cur)
+
+
 def _resolve_pair(
     baseline_path: Path,
     current_path: Path,
     baseline_script_rel: str,
     current_script_rel: str,
     task_id: int,
-    shim_factory,
+    shim_factory: Callable[[], tuple[Path, Path]],
 ) -> tuple[dict, dict]:
     """Run baseline and current scripts under shims and return loaded YAMLs."""
     assert (baseline_path / baseline_script_rel).is_file(), (
@@ -314,16 +355,17 @@ def get_num_experiments(path: Path) -> int:
     """
     assert path.is_file(), f"missing: {path}"
     assert path.suffix == ".txt", f"unexpected experiment txt file type: {path}"
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         n = sum(1 for line in f if line.strip())
     return n
 
 
 def test_get_num_experiments() -> None:
     """Sanity-check that experiment counting matches the surge experiments.txt."""
-    expected = 8
     actual = get_num_experiments(REPO_ROOT / "jobs" / "train" / "surge" / "experiments.txt")
-    assert actual == expected, f"expected {expected} experiments, got {actual}"
+    assert actual == EXPECTED_SURGE_TASKS, (
+        f"expected {EXPECTED_SURGE_TASKS} experiments, got {actual}"
+    )
 
 
 def _build_equal_cases(baseline_ref: str) -> list[RefCompareCase]:
@@ -332,8 +374,8 @@ def _build_equal_cases(baseline_ref: str) -> list[RefCompareCase]:
     The two sides reference the script under different basenames because the
     fixture was renamed (``hydra_app.sh`` → ``baseline_app.sh``) on this
     branch. The baseline ref still has the old name; the live tree has the
-    new one. Once this PR merges and the default ref flips to the merge SHA,
-    both fields collapse to the same path.
+    new one. When ``FIXTURE_BASELINE`` is bumped to a SHA that has the
+    rename, both fields collapse to the same path.
     """
     return [
         RefCompareCase(
@@ -409,9 +451,11 @@ SURGE_CASES = _build_surge_train_cases(MODEL_BASELINE)
 
 
 @pytest.mark.network
-@pytest.mark.parametrize("case", EQUAL_CASES, ids=[c.id() for c in EQUAL_CASES])
+@pytest.mark.parametrize("case", EQUAL_CASES, ids=[c.slug() for c in EQUAL_CASES])
 def test_baseline_and_current_resolved_hydra_configs_are_equal(
-    shim_factory, worktree_for_ref, case: RefCompareCase
+    shim_factory: Callable[[], tuple[Path, Path]],
+    worktree_for_ref: Callable[[str], Path],
+    case: RefCompareCase,
 ) -> None:
     """Resolved Hydra config at ``baseline_ref`` must match the live working tree."""
     baseline_path = worktree_for_ref(case.baseline_ref)
@@ -429,19 +473,16 @@ def test_baseline_and_current_resolved_hydra_configs_are_equal(
 
 def test_k_osc_train_cases() -> None:
     """Sanity-check K-OSC train case fan-out matches experiments.txt line count."""
-    expected_tasks = 44
-    assert len(KOSC_CASES) == expected_tasks
-    for case in KOSC_CASES:
-        assert case.task_id <= expected_tasks, (
-            f"unexpected task_id {case.task_id} in case {case.id()}"
-        )
+    assert len(KOSC_CASES) == EXPECTED_KOSC_TASKS
 
 
 @pytest.mark.slow
 @pytest.mark.network
-@pytest.mark.parametrize("case", KOSC_CASES, ids=[c.id() for c in KOSC_CASES])
+@pytest.mark.parametrize("case", KOSC_CASES, ids=[c.slug() for c in KOSC_CASES])
 def test_kosc_train_configs_are_equal(
-    shim_factory, worktree_for_ref, case: RefCompareCase
+    shim_factory: Callable[[], tuple[Path, Path]],
+    worktree_for_ref: Callable[[str], Path],
+    case: RefCompareCase,
 ) -> None:
     """Resolved K-OSC train Hydra config at ``baseline_ref`` must match the live tree."""
     baseline_path = worktree_for_ref(case.baseline_ref)
@@ -458,19 +499,16 @@ def test_kosc_train_configs_are_equal(
 
 def test_surge_train_cases() -> None:
     """Sanity-check SURGE train case fan-out matches experiments.txt line count."""
-    expected_tasks = 8
-    assert len(SURGE_CASES) == expected_tasks
-    for case in SURGE_CASES:
-        assert case.task_id <= expected_tasks, (
-            f"unexpected task_id {case.task_id} in case {case.id()}"
-        )
+    assert len(SURGE_CASES) == EXPECTED_SURGE_TASKS
 
 
 @pytest.mark.slow
 @pytest.mark.network
-@pytest.mark.parametrize("case", SURGE_CASES, ids=[c.id() for c in SURGE_CASES])
+@pytest.mark.parametrize("case", SURGE_CASES, ids=[c.slug() for c in SURGE_CASES])
 def test_surge_train_configs_are_equal(
-    shim_factory, worktree_for_ref, case: RefCompareCase
+    shim_factory: Callable[[], tuple[Path, Path]],
+    worktree_for_ref: Callable[[str], Path],
+    case: RefCompareCase,
 ) -> None:
     """Resolved SURGE train Hydra config at ``baseline_ref`` must match the live tree."""
     baseline_path = worktree_for_ref(case.baseline_ref)
@@ -486,9 +524,11 @@ def test_surge_train_configs_are_equal(
 
 
 @pytest.mark.network
-@pytest.mark.parametrize("case", DIFF_CASES, ids=[c.id() for c in DIFF_CASES])
+@pytest.mark.parametrize("case", DIFF_CASES, ids=[c.slug() for c in DIFF_CASES])
 def test_baseline_and_current_resolved_hydra_configs_differ(
-    shim_factory, worktree_for_ref, case: RefCompareCase
+    shim_factory: Callable[[], tuple[Path, Path]],
+    worktree_for_ref: Callable[[str], Path],
+    case: RefCompareCase,
 ) -> None:
     """Inequality sanity-check: divergent fixture must produce a different config."""
     baseline_path = worktree_for_ref(case.baseline_ref)
@@ -500,15 +540,12 @@ def test_baseline_and_current_resolved_hydra_configs_differ(
         case.task_id,
         shim_factory,
     )
-    # Strip volatile keys so the inequality reflects real content drift, not
-    # the unavoidable worktree-vs-live path divergence or per-deployment noise.
-    keys = INVOCATION_PATH_KEYS + ACCEPTED_DIFFS
-    base = _strip_dotted_keys(baseline_cfg, keys)
-    cur = _strip_dotted_keys(current_cfg, keys)
-    assert base != cur, (base, cur)
+    _assert_resolved_configs_differ(baseline_cfg, current_cfg)
 
 
-def test_resolve_pair_rejects_empty_yaml(shim_factory) -> None:
+def test_resolve_pair_rejects_empty_yaml(
+    shim_factory: Callable[[], tuple[Path, Path]],
+) -> None:
     """A no-op script produces no stdout, so the captured YAML is empty.
 
     `_resolve_pair` must surface that as an assertion failure rather than
@@ -521,7 +558,9 @@ def test_resolve_pair_rejects_empty_yaml(shim_factory) -> None:
         _resolve_pair(noop_repo, noop_repo, script_rel, script_rel, 1, shim_factory)
 
 
-def test_injected_host_name_propagates_into_resolved_hydra_config(shim_factory) -> None:
+def test_injected_host_name_propagates_into_resolved_hydra_config(
+    shim_factory: Callable[[], tuple[Path, Path]],
+) -> None:
     """INJECTED_HOST_NAME env var must reach the resolved Hydra config and its interpolations."""
     baseline = FIXTURE_BASELINE_REPO
     script_rel = FIXTURE_SCRIPT_REL

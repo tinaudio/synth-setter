@@ -1,3 +1,5 @@
+"""Synthetic Hydra app used as the inequality fixture (diverges by port=6543)."""
+
 from dataclasses import dataclass
 
 import hydra
