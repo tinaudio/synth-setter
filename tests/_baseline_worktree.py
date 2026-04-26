@@ -16,6 +16,7 @@ fixture pays zero git I/O.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -27,9 +28,23 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _xdist_worker_id() -> str:
+    """Return the pytest-xdist worker id, or ``"master"`` if not under xdist."""
+    return os.environ.get("PYTEST_XDIST_WORKER", "master")
+
+
 def _sanitize_ref(ref: str) -> str:
-    """Return a filesystem-safe slug for ``ref`` suitable as a directory name."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", ref).strip("-") or "ref"
+    """Return a filesystem-safe slug for ``ref``, suffixed per xdist worker.
+
+    The suffix matters under ``pytest -n auto`` — without it, every worker
+    that requests the same ref produces an identical basename, and
+    ``git worktree add`` registers them under the same name in
+    ``.git/worktrees/<name>/``, which collides on the second worker. Per-
+    worker suffixing gives each worker its own worktree namespace.
+    """
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", ref).strip("-") or "ref"
+    worker = _xdist_worker_id()
+    return slug if worker == "master" else f"{slug}-{worker}"
 
 
 def _ref_exists(ref: str) -> bool:

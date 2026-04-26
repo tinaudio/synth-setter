@@ -26,8 +26,8 @@ from __future__ import annotations
 import copy
 import os
 import re
-import shutil
 import subprocess
+import sys
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,10 +113,14 @@ def test_worktree_for_ref_smoke(worktree_for_ref) -> None:
 
 @pytest.fixture
 def real_python() -> str:
-    """Resolve the system ``python`` interpreter the shim should forward to."""
-    py = shutil.which("python")
-    assert py, "python not on PATH"
-    return py
+    """Return the interpreter the shim should forward to.
+
+    Uses ``sys.executable`` so the shim runs the same Python that pytest is
+    running under (with all the test deps installed). ``shutil.which("python")``
+    would pick up whatever ``python`` is on PATH, which can be a different
+    interpreter (system Python without hydra/yaml/etc.) under venv/uv/conda.
+    """
+    return sys.executable
 
 
 ROLE_LABELS = {1: "base", 2: "curr"}
@@ -228,13 +232,18 @@ INVOCATION_PATH_KEYS: tuple[str, ...] = (
     "paths.work_dir",
 )
 
-# Vary by deployment / user / project setup, not by code intent. wandb is
-# always on; entity, project, and log_model are owned by whoever ships the run.
+# Each entry below is an explicit, audit-able claim that this divergence from
+# the published-results resolved config doesn't change model behavior. Strip
+# is asymmetric: `_strip_dotted_keys` pops the key where present and no-ops
+# where absent, so a key that exists on current but not on baseline (e.g.
+# `logger.tensorboard` — added to many_loggers.yaml after v0.0.0) becomes
+# silently equal. Keep this list short and reviewable; bump the baseline
+# rather than expanding it whenever possible.
 ACCEPTED_DIFFS: tuple[str, ...] = (
-    "logger.tensorboard",
-    "logger.wandb.entity",
-    "logger.wandb.log_model",
-    "logger.wandb.project",
+    "logger.tensorboard",  # added post-v0.0.0; observability only, no model impact
+    "logger.wandb.entity",  # env-derived (${oc.env:WANDB_ENTITY,null})
+    "logger.wandb.log_model",  # changed `true` → "all" (artifact upload policy, not training)
+    "logger.wandb.project",  # env-derived (${oc.env:WANDB_PROJECT,synth-setter})
 )
 
 
@@ -297,7 +306,12 @@ def _resolve_pair(
 
 
 def get_num_experiments(path: Path) -> int:
-    """Count the number of experiments a script will run by parsing its SGE_TASK_ID usage."""
+    """Return the number of non-empty lines in an ``experiments.txt`` file.
+
+    The train scripts use SGE array indexing (``SGE_TASK_ID``) to pick one
+    line per task, so the line count = the number of experiments / parametrize
+    cases the test should generate.
+    """
     assert path.is_file(), f"missing: {path}"
     assert path.suffix == ".txt", f"unexpected experiment txt file type: {path}"
     with open(path) as f:
@@ -423,6 +437,7 @@ def test_k_osc_train_cases() -> None:
         )
 
 
+@pytest.mark.slow
 @pytest.mark.network
 @pytest.mark.parametrize("case", KOSC_CASES, ids=[c.id() for c in KOSC_CASES])
 def test_kosc_train_configs_are_equal(
@@ -451,6 +466,7 @@ def test_surge_train_cases() -> None:
         )
 
 
+@pytest.mark.slow
 @pytest.mark.network
 @pytest.mark.parametrize("case", SURGE_CASES, ids=[c.id() for c in SURGE_CASES])
 def test_surge_train_configs_are_equal(
