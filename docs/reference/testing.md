@@ -71,11 +71,9 @@ ______________________________________________________________________
 
 Only needed for tests that exercise Hydra-composed configs (test_configs, test_train, test_eval, test_benchmarks, etc.).
 
-Both defined in [`tests/conftest.py`](../../tests/conftest.py) as package-scoped `*_global` fixtures wrapped by function-scoped fixtures that inject `tmp_path`. Each `*_global` fixture's `open_dict(cfg):` block shows the test-friendly overrides applied on top of `configs/train.yaml` / `configs/eval.yaml`. Read that block for today's presets — they change as the fixtures evolve.
+Both defined in [`tests/conftest.py`](../../tests/conftest.py) as package-scoped `*_global` fixtures wrapped by function-scoped fixtures that inject `tmp_path`. Each `*_global` fixture composes the corresponding entry-point YAML with explicit `data=` / `model=` / `trainer=` overrides at compose time, then applies test-friendly tweaks via an `open_dict(cfg):` block. Read both blocks for today's presets — they change as the fixtures evolve.
 
-**Key asymmetry to know:** `cfg_eval_global` does **not** mirror `cfg_train_global`'s preset list. Notably, several `limit_*_batches` knobs are set on `cfg_train` but not on `cfg_eval`. If your test cares about val-loop or train-loop batch counts on the eval side, pin them explicitly — see gotcha #3.
-
-`cfg_eval`'s `data` / `model` / `callbacks` defaults come from `configs/eval.yaml` and differ from `cfg_train`'s (composed from `configs/train.yaml`). For a train→eval round-trip, align them — see gotcha #2.
+`cfg_train_global` and `cfg_eval_global` compose with the **same** `data=ksin model=ffn trainer=cpu` overrides, and dataset shape is pinned via integer `train_val_test_sizes=[2,2,2]` rather than fractional `limit_*_batches`. A train→eval round-trip no longer needs to copy `data` / `model` / `callbacks` from one config to the other.
 
 Both fixtures clear global Hydra state on teardown via `GlobalHydra.instance().clear()`.
 
@@ -83,7 +81,7 @@ ______________________________________________________________________
 
 ## 5. The train → eval E2E template
 
-Reference implementation: [`tests/test_eval.py::test_train_eval`](../../tests/test_eval.py). The shape is four phases: override `cfg_train`, train + assert checkpoint, align `cfg_eval` with `cfg_train`, evaluate + assert metrics.
+Reference implementation: [`tests/test_eval.py::test_train_eval`](../../tests/test_eval.py). The shape is three phases: override `cfg_train`, train + assert checkpoint, point `cfg_eval` at the checkpoint and evaluate. Because `cfg_train` and `cfg_eval` are composed with the same `data` / `model` / `trainer` overrides in `conftest.py`, no manual alignment is needed.
 
 ```python
 import math
@@ -115,17 +113,12 @@ def test_train_e2e(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig) 
     train_metric_dict, _ = train(cfg_train)
     assert "last.ckpt" in os.listdir(tmp_path / "checkpoints")
 
-    # 3. Align cfg_eval with cfg_train so the checkpoint loads
+    # 3. Point cfg_eval at the checkpoint and evaluate
     with open_dict(cfg_eval):
         cfg_eval.trainer.accelerator = "gpu"
-        cfg_eval.trainer.limit_val_batches = cfg_train.trainer.limit_val_batches  # gotcha #3
-        cfg_eval.data      = cfg_train.data                                        # gotcha #2
-        cfg_eval.model     = cfg_train.model
-        cfg_eval.callbacks = cfg_train.callbacks
         cfg_eval.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
         cfg_eval.mode = "validate"             # or "test", or "predict"
 
-    # 4. Evaluate; assert metrics
     HydraConfig().set_config(cfg_eval)
     eval_metric_dict, _ = evaluate(cfg_eval)
     # `math.isfinite` rejects +inf, -inf, and NaN. `< float("inf")` silently
@@ -146,15 +139,13 @@ ______________________________________________________________________
 
 1. **DataModule `setup(stage)` must cover every stage you invoke.** Lightning passes one of `{"fit", "validate", "test", "predict"}` depending on which Trainer method runs. A `setup()` that only handles `"fit"` silently builds the wrong (or no) dataloader for the others. See Lightning's [DataModule docs](https://lightning.ai/docs/pytorch/stable/data/datamodule.html) for the contract, and [`src/data/ksin_datamodule.py`](../../src/data/ksin_datamodule.py) for the canonical three-branch pattern in this repo.
 
-2. **`cfg_eval` and `cfg_train` defaults don't agree.** `configs/train.yaml` and `configs/eval.yaml` compose different `data` / `model` / `callbacks` defaults. For a checkpoint round-trip, align them explicitly before calling `evaluate()` or Lightning refuses to restore state into a differently-shaped module.
+2. **`configs/train.yaml` and `configs/eval.yaml` require explicit `data=` / `model=`.** Both entry points use `???` for `data` and `model`, so Hydra fails fast if either is missing. Production runs pass them via an `experiment=` config; tests pass them at compose time inside `conftest.py`. There is no fallback to a researcher-local default.
 
-3. **Pin trainer `limit_*_batches` when doing train→val parity checks.** `cfg_train_global` presets several `limit_*` values; `cfg_eval_global` presets a subset (read the conftest for the current asymmetry). Without explicit pinning, train's in-fit val loop and a standalone `evaluate()` can iterate over different batch counts, making any parity assertion unreliable.
+3. **GPU tests use a three-marker stack.** `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` each do distinct things. The CI selector for GPU tests lives in [`.github/workflows/test-gpu.yml`](../../.github/workflows/test-gpu.yml); local `make test` filter lives in the Makefile. If the CI filter changes, the docs don't need updating — the code does.
 
-4. **GPU tests use a three-marker stack.** `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` each do distinct things. The CI selector for GPU tests lives in [`.github/workflows/test-gpu.yml`](../../.github/workflows/test-gpu.yml); local `make test` filter lives in the Makefile. If the CI filter changes, the docs don't need updating — the code does.
+4. **`weights_only=False` when loading a checkpoint for eval.** PyTorch 2.6 tightened `torch.load`'s default to `weights_only=True`, which refuses Lightning checkpoint metadata. `src/eval.py` passes `weights_only=False` explicitly to `trainer.test/validate/predict(ckpt_path=...)`. New standalone loader code needs the same.
 
-5. **`weights_only=False` when loading a checkpoint for eval.** PyTorch 2.6 tightened `torch.load`'s default to `weights_only=True`, which refuses Lightning checkpoint metadata. `src/eval.py` passes `weights_only=False` explicitly to `trainer.test/validate/predict(ckpt_path=...)`. New standalone loader code needs the same.
-
-6. **Adding a new `cfg.mode=<x>` dispatch?** Audit every DataModule's `setup()` for that stage. `src/eval.py` routes `mode` to `trainer.test/validate/predict`, each passing a different `stage` string. Gotcha #1 bites if a DataModule doesn't handle the new stage.
+5. **Adding a new `cfg.mode=<x>` dispatch?** Audit every DataModule's `setup()` for that stage. `src/eval.py` routes `mode` to `trainer.test/validate/predict`, each passing a different `stage` string. Gotcha #1 bites if a DataModule doesn't handle the new stage.
 
 ______________________________________________________________________
 
