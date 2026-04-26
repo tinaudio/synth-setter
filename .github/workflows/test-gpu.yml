@@ -7,6 +7,9 @@ on:
   schedule:
     - cron: "0 6 * * 1,4" # Mon + Thu 06:00 UTC
 
+permissions:
+  contents: read
+
 jobs:
   run_tests:
     runs-on: gpu-x64
