@@ -17,6 +17,7 @@ fixture pays zero git I/O.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -118,6 +119,13 @@ def worktree_for_ref(
                 text=True,
                 check=False,
             )
+            # Defensive: `git worktree remove` no-ops if the path isn't a
+            # registered worktree (e.g., directory left behind by an interrupted
+            # prior run, or a manually deleted .git/worktrees/X entry). Nuke
+            # the directory so the subsequent `git worktree add` doesn't fail
+            # with "already exists".
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=True)
 
         result = subprocess.run(  # noqa: S603 — fixed argv, no shell
             ["git", "-C", str(REPO_ROOT), "worktree", "add", "--detach", str(path), ref],  # noqa: S607 — git on PATH

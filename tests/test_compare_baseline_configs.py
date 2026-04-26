@@ -191,9 +191,20 @@ def _run_under_shim(
     script_rel: str,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``script_rel`` from ``repo`` with ``shim_dir`` prepended on PATH."""
+    """Run ``script_rel`` from ``repo`` with ``shim_dir`` prepended on PATH.
+
+    Sandboxes ``HOME``/``XDG_CACHE_HOME``/``XDG_CONFIG_HOME`` to a subdir of
+    ``shim_dir`` so any ``rm -rf ~/...`` in the script under test (e.g. the
+    ``rm -rf ~/.triton/cache`` line in ``jobs/train/*/train.sh``) targets the
+    sandbox, not the developer's real home.
+    """
+    home_sandbox = shim_dir / "home"
+    home_sandbox.mkdir(exist_ok=True)
     env = os.environ.copy()
     env["PATH"] = f"{shim_dir}:{env['PATH']}"
+    env["HOME"] = str(home_sandbox)
+    env["XDG_CACHE_HOME"] = str(home_sandbox / ".cache")
+    env["XDG_CONFIG_HOME"] = str(home_sandbox / ".config")
     if extra_env:
         env.update(extra_env)
     return subprocess.run(  # noqa: S603 — args are local Path/str values, not user-controlled
