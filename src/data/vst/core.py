@@ -1,6 +1,7 @@
 import _thread
 import threading
 import time
+from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 import mido
@@ -36,6 +37,8 @@ def _prepare_plugin(plugin: VST3Plugin) -> None:
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
+    if not Path(plugin_path).exists():
+        raise FileNotFoundError(f"VST3 plugin not found at {plugin_path}")
     logger.info(f"Loading plugin {plugin_path}")
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")

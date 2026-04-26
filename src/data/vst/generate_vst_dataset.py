@@ -285,7 +285,7 @@ def make_dataset(
 @click.command()
 @click.argument("data_file", type=str, required=True)
 @click.argument("num_samples", type=int, required=True)
-@click.option("--plugin_path", "-p", type=str, default="plugins/Surge XT.vst3")
+@click.option("--plugin_path", "-p", type=str, required=True)
 @click.option("--preset_path", "-r", type=str, default="presets/surge-base.vstpreset")
 @click.option("--sample_rate", "-s", type=float, default=44100.0)
 @click.option("--channels", "-c", type=int, default=2)
@@ -297,7 +297,7 @@ def make_dataset(
 def main(
     data_file: str,
     num_samples: int,
-    plugin_path: str = "plugins/Surge XT.vst3",
+    plugin_path: str,
     preset_path: str = "presets/surge-base.vstpreset",
     sample_rate: float = 44100.0,
     channels: int = 2,

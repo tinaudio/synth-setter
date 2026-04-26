@@ -16,3 +16,7 @@ output_dir: ${hydra:runtime.output_dir}
 
 # path to working directory
 work_dir: ${hydra:runtime.cwd}
+
+# path to VST3 plugin bundle
+# override via SYNTH_SETTER_PLUGIN_PATH env var
+vst_plugin_path: ${oc.env:SYNTH_SETTER_PLUGIN_PATH,plugins/Surge XT.vst3}
