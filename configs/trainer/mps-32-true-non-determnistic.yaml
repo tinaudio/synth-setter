@@ -1,0 +1,12 @@
+defaults:
+  - default
+
+accelerator: mps
+devices: 1
+
+# MPS fp16 is inconsistent across PyTorch versions; 32-true is the safest default.
+# bf16-mixed is viable on newer PyTorch + Apple Silicon if you want the speedup.
+precision: "32-true"
+
+# MPS has limited deterministic op coverage — leave off to avoid runtime errors.
+deterministic: false

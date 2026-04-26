@@ -6,7 +6,7 @@
 defaults:
   - override /data: kosc
   - override /callbacks: default
-  - override /trainer: gpu
+  - override /trainer: gpu_400k_steps
   - _self_
 
 # all parameters below will be merged with parameters from default configurations set above

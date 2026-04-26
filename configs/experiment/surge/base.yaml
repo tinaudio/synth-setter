@@ -36,3 +36,5 @@ trainer:
   precision: bf16-mixed
   min_steps: 1_000_000
   max_steps: 1_000_000
+  log_every_n_steps: 100
+  val_check_interval: 10_000

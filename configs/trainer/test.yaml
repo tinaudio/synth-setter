@@ -1,0 +1,12 @@
+defaults:
+  - default
+
+max_epochs: 1
+limit_train_batches: 40
+limit_val_batches: 2
+limit_test_batches: 2
+num_sanity_val_steps: 0
+log_every_n_steps: 1
+accelerator: ???
+devices: 1
+deterministic: true
