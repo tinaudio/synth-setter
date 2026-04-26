@@ -250,7 +250,7 @@ class SurgeFlowMatchingModule(LightningModule):
         self.vector_field = torch.compile(self.vector_field)
         self.encoder = torch.compile(self.encoder)
 
-    def on_before_optimizer_step(self, optimizer) -> None:
+    def on_before_optimizer_step(self, optimizer) -> None:  # noqa: ANN001
         vf_norms = grad_norm(self.vector_field, 2.0)
         encoder_norms = grad_norm(self.encoder, 2.0)
 

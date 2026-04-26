@@ -78,7 +78,7 @@ class SurgeFeedForwardModule(LightningModule):
 
         self.net = torch.compile(self.net)
 
-    def on_before_optimizer_step(self, optimizer) -> None:
+    def on_before_optimizer_step(self, optimizer) -> None:  # noqa: ANN001
         norms = grad_norm(self.net, 2.0)
         norms = {f"net/{k}": v for k, v in norms.items()}
         self.log_dict(norms, on_step=True, on_epoch=False)

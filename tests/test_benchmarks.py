@@ -7,7 +7,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 
 @pytest.mark.benchmark
 @pytest.mark.slow
-def test_config_resolution_speed(benchmark, cfg_train: DictConfig) -> None:
+def test_config_resolution_speed(benchmark, cfg_train: DictConfig) -> None:  # noqa: ANN001
     """Benchmark Hydra config resolution speed.
 
     Mirrors the production resolution path: Hydra strips its own `hydra` section

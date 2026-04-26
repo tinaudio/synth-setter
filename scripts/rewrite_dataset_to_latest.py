@@ -48,7 +48,7 @@ def rewrite_shard(shard: Path, output_dir: Path) -> (Path, bool, str):
 @click.option(
     "--workers", "-w", type=int, default=4, help="Number of worker processes to run in parallel."
 )
-def main(input_dir, output_dir, pattern, workers):
+def main(input_dir, output_dir, pattern, workers):  # noqa: ANN001
     """Rewrite each HDF5 file matching the given pattern in INPUT_DIR so that it is created with
     libver="latest" (i.e. with a superblock version >= 3) and write the new files to OUTPUT_DIR."""
     input_dir = Path(input_dir)

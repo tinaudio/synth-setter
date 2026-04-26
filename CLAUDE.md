@@ -13,7 +13,7 @@ synth-setter: Synth inversion, sound matching and preset exploration tools
 ### Formatting & Linting (enforced by pre-commit)
 
 - **Ruff format** (line-length=99)
-- **Ruff** (rules: E, F, I, S, T, UP, W)
+- **Ruff** (rules: E, F, I, S, T, UP, W, ANN001)
 - Run `make format` before committing
 
 ### Commit Messages

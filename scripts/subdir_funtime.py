@@ -74,7 +74,7 @@ def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
     show_default=True,
     help="Output file name for storing sorted results.",
 )
-def main(root_dir, n_subdirs, output_txt):
+def main(root_dir, n_subdirs, output_txt):  # noqa: ANN001
     """Script that computes the MSS metric for up to N subdirectories (each containing 'pred.wav'
     and 'target.wav') and writes a text file containing the subdir names sorted by ascending MSS
     value."""

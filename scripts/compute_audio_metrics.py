@@ -136,7 +136,7 @@ def compute_wmfcc(target: np.ndarray, pred: np.ndarray) -> float:
     target_mfcc = target_mfcc.reshape(-1, target_mfcc.shape[-1])
     pred_mfcc = pred_mfcc.reshape(-1, pred_mfcc.shape[-1])
 
-    def l1(a, b):
+    def l1(a, b):  # noqa: ANN001
         return np.mean(np.abs(a - b))
 
     dist = dtw(target_mfcc.T, pred_mfcc.T, dist_method=l1, distance_only=True)

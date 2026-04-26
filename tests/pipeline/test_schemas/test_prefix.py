@@ -23,7 +23,7 @@ class TestMakeDatasetWandbRunId:
         assert result == "surge-simple-480k-10k-20260313T100000Z"
 
     @patch("pipeline.schemas.prefix.datetime")
-    def test_make_run_id_default_timestamp_is_utc(self, mock_datetime):
+    def test_make_run_id_default_timestamp_is_utc(self, mock_datetime):  # noqa: ANN001
         """Default (no timestamp) uses datetime.now(UTC) and produces the expected ID."""
         mock_datetime.now.return_value = FIXED_NOW
         mock_datetime.side_effect = lambda *a, **kw: datetime(*a, **kw)

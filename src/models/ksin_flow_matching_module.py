@@ -17,13 +17,13 @@ from src.metrics import (
 from src.utils.math import divmod
 
 
-def late_curve(x, a):
+def late_curve(x, a):  # noqa: ANN001
     if a == 0.0:
         return x
     return (1 - torch.exp(-a * x)) / (1 - math.exp(-a))
 
 
-def cosine_curve(x):
+def cosine_curve(x):  # noqa: ANN001
     return 0.5 + 0.5 * torch.cos(torch.pi * (1 + x))
 
 
@@ -465,7 +465,7 @@ class KSinFlowMatchingModule(LightningModule):
             self.vector_field = torch.compile(self.vector_field)
             self.encoder = torch.compile(self.encoder)
 
-    def on_before_optimizer_step(self, optimizer) -> None:
+    def on_before_optimizer_step(self, optimizer) -> None:  # noqa: ANN001
         encoder_norms = grad_norm(self.encoder, 2.0)
         vf_norms = grad_norm(self.vector_field, 2.0)
 

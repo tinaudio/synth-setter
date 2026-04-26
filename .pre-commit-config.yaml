@@ -21,7 +21,7 @@ repos:
       - id: check-json
       - id: debug-statements
 
-  # ruff: linting (E/F/I/S/T/UP/W rules) and formatting for Python & Jupyter.
+  # ruff: linting (E/F/I/S/T/UP/W/ANN001 rules) and formatting for Python & Jupyter.
   # Config lives in pyproject.toml under [tool.ruff]. Legacy src/ files are
   # excluded via per-file-ignores there (see issue #25).
   - repo: https://github.com/astral-sh/ruff-pre-commit

@@ -95,7 +95,7 @@ class SinkhornAttention(nn.Module):
 
         self.sinkhorn_reg = sinkhorn_reg
 
-    def forward(self, q, k, v):
+    def forward(self, q, k, v):  # noqa: ANN001
         q = q @ self.Q
         k = k @ self.K
         v = v @ self.V

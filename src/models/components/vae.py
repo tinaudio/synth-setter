@@ -28,15 +28,15 @@ class CustomRealNVP(CompositeTransform):
 
     def __init__(
         self,
-        features,
-        hidden_features,
-        num_layers,
-        num_blocks_per_layer,
-        use_volume_preserving=False,
-        activation=nn.functional.relu,
-        dropout_probability=0.0,
-        batch_norm_within_layers=False,
-        batch_norm_between_layers=False,
+        features,  # noqa: ANN001
+        hidden_features,  # noqa: ANN001
+        num_layers,  # noqa: ANN001
+        num_blocks_per_layer,  # noqa: ANN001
+        use_volume_preserving=False,  # noqa: ANN001
+        activation=nn.functional.relu,  # noqa: ANN001
+        dropout_probability=0.0,  # noqa: ANN001
+        batch_norm_within_layers=False,  # noqa: ANN001
+        batch_norm_between_layers=False,  # noqa: ANN001
     ):
 
         if use_volume_preserving:
@@ -51,7 +51,7 @@ class CustomRealNVP(CompositeTransform):
             True  # Quick and dirty: 'global' variable, as seen by the create_resnet function
         )
 
-        def create_resnet(in_features, out_features):
+        def create_resnet(in_features, out_features):  # noqa: ANN001
             return nets.ResidualNet(
                 in_features,
                 out_features,
@@ -105,7 +105,7 @@ class EncoderBlock(nn.Module):
         )
         self.final_act = nn.LeakyReLU(0.1)
 
-    def forward(self, x):
+    def forward(self, x):  # noqa: ANN001
         x = self.conv1(x)
         x = self.inner_layers(x) + x
         x = self.final_act(x)
@@ -137,7 +137,7 @@ class Encoder(nn.Module):
             nn.Linear(num_features, latent_dim * 2), nn.BatchNorm1d(latent_dim * 2)
         )
 
-    def forward(self, x):
+    def forward(self, x):  # noqa: ANN001
         x = self.cnn(x)
         x = x.view(x.shape[0], -1)
         x = self.out(x)
@@ -181,7 +181,7 @@ class DecoderBlock(nn.Module):
         )
         self.final_act = nn.LeakyReLU(0.1)
 
-    def forward(self, x):
+    def forward(self, x):  # noqa: ANN001
         x = self.conv1(x)
         x = self.inner_layers(x) + x
         x = self.final_act(x)
@@ -203,7 +203,7 @@ class Decoder(nn.Module):
             DecoderBlock(16, 2, (3, 5), (2, 2), (1, 2), output_padding=(1, 0)),
         )
 
-    def forward(self, x):
+    def forward(self, x):  # noqa: ANN001
         x = self.in_proj(x)
         x = x.reshape(-1, 512, 2, 2)
         x = self.cnn(x)

@@ -34,7 +34,7 @@ class ResidualMLPBlock(nn.Module):
             nn.Identity() if in_dim == out_dim else nn.Linear(in_dim, out_dim, bias=False)
         )
 
-    def forward(self, x):
+    def forward(self, x):  # noqa: ANN001
         return self.residual(x) + self.net(x)
 
 

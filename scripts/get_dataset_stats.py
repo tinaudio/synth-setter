@@ -13,7 +13,7 @@ from src.data.audio_datamodule import AudioFolderDataset
 from src.data.surge_datamodule import SurgeXTDataset
 
 
-def get_stats_hdf5(filename):
+def get_stats_hdf5(filename):  # noqa: ANN001
     dataset_name = "mel_spec"
 
     num_workers = 4
@@ -51,7 +51,7 @@ def get_stats_hdf5(filename):
     np.savez(out_file, mean=mean, std=std)
 
 
-def update(existing, new):
+def update(existing, new):  # noqa: ANN001
     count, mean, M2 = existing
     count += 1
     delta = new - mean
@@ -61,13 +61,13 @@ def update(existing, new):
     return count, mean, M2
 
 
-def finalize(existing):
+def finalize(existing):  # noqa: ANN001
     count, mean, M2 = existing
     variance = M2 / count if count > 1 else 0
     return mean, np.sqrt(variance)
 
 
-def get_stats_directory(directory):
+def get_stats_directory(directory):  # noqa: ANN001
     dataset = AudioFolderDataset(directory)
     out_file = AudioFolderDataset.get_stats_file_path(directory)
 

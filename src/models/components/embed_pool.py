@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 
-def make_sin_pos_enc(max_len, d_enc):
+def make_sin_pos_enc(max_len, d_enc):  # noqa: ANN001
     pe = torch.zeros(max_len, d_enc)
     position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
     div_term = torch.exp(
