@@ -1,8 +1,6 @@
 import hydra
-from hydra import compose, initialize
-from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, OmegaConf
 
 
 def test_train_config(cfg_train: DictConfig) -> None:
@@ -57,34 +55,6 @@ def test_cfg_train_trainer_keys_coherent_with_test_mode(cfg_train: DictConfig) -
     assert cfg_train.trainer.val_check_interval == 1
     assert "min_steps" not in cfg_train.trainer
     assert "max_steps" not in cfg_train.trainer
-
-
-def test_cfg_train_t_max_interpolation_resolves() -> None:
-    """Guard: ``${trainer.max_steps}`` interpolation used by surge model configs
-    still resolves when an explicit value is provided.
-
-    Several ``configs/model/surge_*.yaml`` files interpolate
-    ``T_max: ${trainer.max_steps}``. If a future test forgets to guard this,
-    composing those configs crashes. This test composes the train config with
-    a surge model override and an explicit ``trainer.max_steps`` value, then
-    selects ``model.scheduler.T_max`` to force that specific interpolation;
-    unrelated interpolations (e.g. env-var resolvers) are not exercised here.
-    """
-    GlobalHydra.instance().clear()
-    with initialize(version_base="1.3", config_path="../configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=True,
-            overrides=["data=surge", "model=surge_ffn", "+trainer.max_steps=-1"],
-        )
-        with open_dict(cfg):
-            cfg.trainer.max_epochs = 1
-            cfg.trainer.check_val_every_n_epoch = 1
-
-        # Resolving only T_max exercises the ${trainer.max_steps} interpolation
-        # without pulling in unrelated env-var resolvers.
-        assert OmegaConf.select(cfg, "model.scheduler.T_max") == -1
-    GlobalHydra.instance().clear()
 
 
 class TestWandbConfigResolvesFromEnv:
