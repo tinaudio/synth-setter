@@ -174,7 +174,7 @@ ______________________________________________________________________
 
 | Workflow        | File                     | Trigger               | Runner                          | Secrets             | Key Inputs                                                       |
 | --------------- | ------------------------ | --------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
-| Tests           | `test.yml`               | push, PR              | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
+| Tests           | `test.yml`               | push, PR, dispatch    | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
 | GPU Tests       | `test-gpu.yml`           | schedule, dispatch    | `gpu-x64`                       | —                   | —                                                                |
 | Slow Tests      | `test-expensive.yml`     | push (main), dispatch | `ubuntu-latest`                 | —                   | —                                                                |
 | Data Generation | `dataset-generation.yml` | `workflow_call`       | `ubuntu-latest-4core`           | DockerHub           | `image_tag`, `config_path`, `artifact_name`                      |
