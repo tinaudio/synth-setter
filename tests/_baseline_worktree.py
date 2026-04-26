@@ -148,7 +148,7 @@ def _is_git_checkout() -> bool:
 
 
 def _git_common_dir() -> Path:
-    """Return the shared ``.git`` directory for REPO_ROOT.
+    """Return the shared ``.git`` directory for REPO_ROOT (always absolute).
 
     Uses ``git rev-parse --git-common-dir`` so this works correctly when
     REPO_ROOT is a linked worktree (where ``.git`` is a *file* pointing back
@@ -156,8 +156,15 @@ def _git_common_dir() -> Path:
     All linked worktrees of the same repo resolve to the same path here, so
     a lock placed in this directory serializes across worktrees too — not
     just across xdist workers in one checkout.
+
+    git often returns a path relative to the repo root (e.g. ``.git``); we
+    explicitly anchor it under REPO_ROOT so the result doesn't depend on the
+    process's current working directory.
     """
-    return Path(git("rev-parse", "--git-common-dir", check=True).stdout.strip())
+    common_dir = Path(git("rev-parse", "--git-common-dir", check=True).stdout.strip())
+    if common_dir.is_absolute():
+        return common_dir
+    return REPO_ROOT / common_dir
 
 
 @pytest.fixture(scope="session")
@@ -179,7 +186,11 @@ def worktree_for_ref(
     if not _is_git_checkout():
         raise pytest.UsageError(f"REPO_ROOT ({REPO_ROOT}) is not a git checkout")
 
-    keep_dir = pytestconfig.getoption("--compare-baseline-configs-keep-yaml-dir")
+    # Truthy check (not `is not None`): pytest passes "" when the user writes
+    # `--compare-baseline-configs-keep-yaml-dir=` with no value, and
+    # `Path("").resolve()` would silently expand to the current working
+    # directory and litter it with worktrees.
+    keep_dir = pytestconfig.getoption("--compare-baseline-configs-keep-yaml-dir") or None
     skip_cleanup = keep_dir is not None
     if keep_dir is not None:
         base_dir = Path(keep_dir).resolve() / "worktrees"
