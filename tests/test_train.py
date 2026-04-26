@@ -115,7 +115,7 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.accelerator = "gpu"
     HydraConfig().set_config(cfg_train)
-    metric_dict_1, _ = train(cfg_train)
+    _, _ = train(cfg_train)
     files = os.listdir(tmp_path / "checkpoints")
     assert "last.ckpt" in files
     assert "epoch_000.ckpt" in files

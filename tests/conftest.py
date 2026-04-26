@@ -45,7 +45,6 @@ def cfg_train_global() -> DictConfig:
             cfg.data.num_workers = 0
             cfg.data.pin_memory = False
             cfg.data.batch_size = 1
-            cfg.data.pin_memory = False
             cfg.data.train_val_test_sizes = [2, 2, 2]
             cfg.data.break_symmetry = True
             # Other defaults
@@ -76,7 +75,6 @@ def cfg_eval_global() -> DictConfig:
                 "model=ffn",
                 "trainer=cpu",
                 "ckpt_path=.",
-                "logger=wandb",
             ],
         )
 
@@ -94,12 +92,11 @@ def cfg_eval_global() -> DictConfig:
             cfg.data.num_workers = 0
             cfg.data.pin_memory = False
             cfg.data.batch_size = 1
-            cfg.data.pin_memory = False
             cfg.data.train_val_test_sizes = [2, 2, 2]
             cfg.data.break_symmetry = True
             # Other defaults
             cfg.model.compile = False
-            # cfg.logger = None
+            cfg.logger = None
             cfg.callbacks.model_checkpoint.save_top_k = -1
             cfg.callbacks.model_checkpoint.save_last = True
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
