@@ -388,6 +388,13 @@ configs/
   dataset/            # Pipeline dataset configs
 ```
 
+`configs/train.yaml` and `configs/eval.yaml` require `data=` and `model=` to be
+specified — they have no default. The defaults for each model family
+(including required-for-training values like `trainer.max_steps` for surge's
+LR scheduler) live in `configs/experiment/`. Look there to see how a given
+model is meant to be trained — `configs/experiment/kosc/base.yaml` and
+`configs/experiment/surge/base.yaml` are the canonical starting points.
+
 ### 5b. Common overrides
 
 Override any config value from the command line:
