@@ -52,6 +52,31 @@ FIXTURE_TASKS = 4
 EXPECTED_KOSC_TASKS = 44
 EXPECTED_SURGE_TASKS = 8
 
+# Predict scripts under ``jobs/predict/``. These are single-shot (no SGE_TASK_ID
+# fan-out); each script invokes ``python src/eval.py`` once with a fixed set of
+# Hydra overrides. ``get-ckpt-from-wandb.sh`` is intentionally excluded — it's a
+# helper sourced by the others, not a standalone entrypoint.
+PREDICT_SCRIPTS: tuple[str, ...] = (
+    "jobs/predict/ffn-fsd50k.sh",
+    "jobs/predict/ffn-full.sh",
+    "jobs/predict/ffn-nsynth.sh",
+    "jobs/predict/ffn-simple.sh",
+    "jobs/predict/flow-fsd50k.sh",
+    "jobs/predict/flow-full-1.0.sh",
+    "jobs/predict/flow-full-4.0.sh",
+    "jobs/predict/flow-full.sh",
+    "jobs/predict/flow-nsynth.sh",
+    "jobs/predict/flow-simple.sh",
+    "jobs/predict/flowmlp-fsd50k.sh",
+    "jobs/predict/flowmlp-full.sh",
+    "jobs/predict/flowmlp-nsynth.sh",
+    "jobs/predict/flowmlp-simple.sh",
+    "jobs/predict/vae-fsd50k.sh",
+    "jobs/predict/vae-full.sh",
+    "jobs/predict/vae-nsynth.sh",
+    "jobs/predict/vae-simple.sh",
+)
+
 # Baseline refs for ref-comparison tests. Prefer tags over raw SHAs when
 # possible: they're more stable/discoverable for humans, and the harness
 # fetches the requested ref itself when needed (see `try_fetch_ref`).
@@ -60,14 +85,7 @@ EXPECTED_SURGE_TASKS = 8
 # model-config snapshot (tag v0.0.0, == 79552d2).
 # Update on PR merge: MODEL_BASELINE bumps when a published-results-relevant
 # config change lands and a new release tag is cut.
-#
-# IMPORTANT — FIXTURE_BASELINE is currently a SHA on PR #679's branch tip,
-# NOT yet reachable from main. Once PR #679 merges, bump this to the merge
-# SHA on main (or to a tag) — otherwise the SHA may eventually become
-# unreachable from origin if the branch is deleted and GitHub garbage-
-# collects the orphan commit. See PR #679's merge-followup comment for the
-# step-by-step bump procedure.
-FIXTURE_BASELINE = "624ea3c0d91698c53c7fad478294594f37854610"
+FIXTURE_BASELINE = "1bfa7ea9c4b237a4561a9ac546a3e241ecff5951"  # PR #679 merge commit on main
 MODEL_BASELINE = "v0.0.0"
 
 
@@ -95,9 +113,10 @@ class RefCompareCase:
             else f"__cmp_{Path(self.current_script_rel).parent.name}"
         )
         cur = self.current_ref[:7] if self.current_ref else "live"
+        baseline = Path(self.baseline_script_rel)
         return (
             f"{self.baseline_ref[:7]}_vs_{cur}"
-            f"__{Path(self.baseline_script_rel).parent.name}{cmp}"
+            f"__{baseline.parent.name}_{baseline.stem}{cmp}"
             f"__task{self.task_id}"
         )
 
@@ -106,11 +125,13 @@ def test_ref_compare_case_slug_renders_correctly() -> None:
     """RefCompareCase.slug() collapses the cmp suffix when both script_rels match."""
     c1 = RefCompareCase("abc1234", None, "scripts/foo.sh", "scripts/foo.sh", task_id=1)
     assert "abc1234_vs_live" in c1.slug()
+    assert "scripts_foo" in c1.slug()
     assert "cmp_" not in c1.slug()
     assert "task1" in c1.slug()
 
     c2 = RefCompareCase("abc1234", "def5678", "a/foo.sh", "b/bar.sh", task_id=2)
     assert "abc1234_vs_def5678" in c2.slug()
+    assert "a_foo" in c2.slug()
     assert "cmp_b" in c2.slug()
     assert "task2" in c2.slug()
 
@@ -339,8 +360,14 @@ def _resolve_pair(
     current_script_rel: str,
     task_id: int,
     shim_factory: Callable[[], tuple[Path, Path]],
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[dict, dict]:
-    """Run baseline and current scripts under shims and return loaded YAMLs."""
+    """Run baseline and current scripts under shims and return loaded YAMLs.
+
+    ``extra_env`` is merged on top of the default ``SGE_TASK_ID`` env so callers
+    can inject script-specific variables (e.g. ``CKPT_PATH`` for predict scripts
+    that source ``get-ckpt-from-wandb.sh``).
+    """
     assert (baseline_path / baseline_script_rel).is_file(), (
         f"missing: {baseline_path / baseline_script_rel}"
     )
@@ -351,6 +378,8 @@ def _resolve_pair(
     base_dir, base_yaml = shim_factory()
     curr_dir, curr_yaml = shim_factory()
     case_env = {"SGE_TASK_ID": str(task_id)}
+    if extra_env:
+        case_env.update(extra_env)
 
     base_proc = _run_under_shim(base_dir, baseline_path, baseline_script_rel, extra_env=case_env)
     assert base_proc.returncode == 0, base_proc.stderr
@@ -390,19 +419,12 @@ def test_get_num_experiments() -> None:
 
 
 def _build_equal_cases(baseline_ref: str) -> list[RefCompareCase]:
-    """Build the equality fixture's case list against ``baseline_ref``.
-
-    The two sides reference the script under different basenames because the
-    fixture was renamed (``hydra_app.sh`` → ``baseline_app.sh``) on this
-    branch. The baseline ref still has the old name; the live tree has the
-    new one. When ``FIXTURE_BASELINE`` is bumped to a SHA that has the
-    rename, both fields collapse to the same path.
-    """
+    """Build the equality fixture's case list against ``baseline_ref``."""
     return [
         RefCompareCase(
             baseline_ref=baseline_ref,
             current_ref=None,
-            baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
+            baseline_script_rel="tests/fixtures/baseline_repo/scripts/baseline_app.sh",
             current_script_rel="tests/fixtures/baseline_repo/scripts/baseline_app.sh",
             task_id=t,
         )
@@ -415,15 +437,12 @@ def _build_diff_cases(baseline_ref: str) -> list[RefCompareCase]:
 
     Baseline side runs ``baseline_repo`` (port 5432); current side runs
     ``diff_repo`` (port 6543) so the resolved configs deterministically differ.
-    The baseline-side path uses the pre-rename basename (``hydra_app.sh``)
-    because that's what exists at the baseline ref; the current side uses the
-    renamed ``diff_app.sh`` under the renamed ``diff_repo``.
     """
     return [
         RefCompareCase(
             baseline_ref=baseline_ref,
             current_ref=None,
-            baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
+            baseline_script_rel="tests/fixtures/baseline_repo/scripts/baseline_app.sh",
             current_script_rel="tests/fixtures/diff_repo/scripts/diff_app.sh",
             task_id=t,
         )
@@ -465,10 +484,25 @@ def _build_surge_train_cases(baseline_ref: str) -> list[RefCompareCase]:
     )
 
 
+def _build_predict_cases(baseline_ref: str) -> list[RefCompareCase]:
+    """One case per script in ``PREDICT_SCRIPTS``, both sides at the same path."""
+    return [
+        RefCompareCase(
+            baseline_ref=baseline_ref,
+            current_ref=None,
+            baseline_script_rel=script,
+            current_script_rel=script,
+            task_id=0,
+        )
+        for script in PREDICT_SCRIPTS
+    ]
+
+
 EQUAL_CASES = _build_equal_cases(FIXTURE_BASELINE)
 DIFF_CASES = _build_diff_cases(FIXTURE_BASELINE)
 KOSC_CASES = _build_kosc_train_cases(MODEL_BASELINE)
 SURGE_CASES = _build_surge_train_cases(MODEL_BASELINE)
+PREDICT_CASES = _build_predict_cases(MODEL_BASELINE)
 
 
 @pytest.mark.network
@@ -540,6 +574,45 @@ def test_surge_train_configs_are_equal(
         case.current_script_rel,
         case.task_id,
         shim_factory,
+    )
+    _assert_resolved_configs_equal(baseline_cfg, current_cfg)
+
+
+def test_predict_cases() -> None:
+    """Sanity-check predict case fan-out matches PREDICT_SCRIPTS."""
+    assert len(PREDICT_CASES) == len(PREDICT_SCRIPTS)
+
+
+@pytest.mark.slow
+@pytest.mark.network
+@pytest.mark.parametrize("case", PREDICT_CASES, ids=[c.slug() for c in PREDICT_CASES])
+def test_predict_configs_are_equal(
+    shim_factory: Callable[[], tuple[Path, Path]],
+    worktree_for_ref: Callable[[str], Path],
+    case: RefCompareCase,
+    tmp_path: Path,
+) -> None:
+    """Resolved predict-script Hydra config at ``baseline_ref`` must match the live tree.
+
+    The predict scripts source ``jobs/predict/get-ckpt-from-wandb.sh``, which
+    runs ``find logs/train ...`` and exits 1 if no checkpoint is located. We
+    pre-set ``CKPT_PATH`` to a real (empty) file so the sourced script's final
+    ``[ -f $CKPT_PATH ]`` guard passes without any real wandb resolution. The
+    path appears verbatim in the resolved Hydra config (``ckpt_path=$CKPT_PATH``),
+    so it must match between baseline and current — using a single per-test
+    sandbox file ensures that.
+    """
+    baseline_path = worktree_for_ref(case.baseline_ref)
+    fake_ckpt = tmp_path / "fake.ckpt"
+    fake_ckpt.touch()
+    baseline_cfg, current_cfg = _resolve_pair(
+        baseline_path,
+        REPO_ROOT,
+        case.baseline_script_rel,
+        case.current_script_rel,
+        case.task_id,
+        shim_factory,
+        extra_env={"CKPT_PATH": str(fake_ckpt)},
     )
     _assert_resolved_configs_equal(baseline_cfg, current_cfg)
 
