@@ -60,14 +60,7 @@ EXPECTED_SURGE_TASKS = 8
 # model-config snapshot (tag v0.0.0, == 79552d2).
 # Update on PR merge: MODEL_BASELINE bumps when a published-results-relevant
 # config change lands and a new release tag is cut.
-#
-# IMPORTANT — FIXTURE_BASELINE is currently a SHA on PR #679's branch tip,
-# NOT yet reachable from main. Once PR #679 merges, bump this to the merge
-# SHA on main (or to a tag) — otherwise the SHA may eventually become
-# unreachable from origin if the branch is deleted and GitHub garbage-
-# collects the orphan commit. See PR #679's merge-followup comment for the
-# step-by-step bump procedure.
-FIXTURE_BASELINE = "624ea3c0d91698c53c7fad478294594f37854610"
+FIXTURE_BASELINE = "1bfa7ea9c4b237a4561a9ac546a3e241ecff5951"  # PR #679 merge commit on main
 MODEL_BASELINE = "v0.0.0"
 
 
@@ -390,19 +383,12 @@ def test_get_num_experiments() -> None:
 
 
 def _build_equal_cases(baseline_ref: str) -> list[RefCompareCase]:
-    """Build the equality fixture's case list against ``baseline_ref``.
-
-    The two sides reference the script under different basenames because the
-    fixture was renamed (``hydra_app.sh`` → ``baseline_app.sh``) on this
-    branch. The baseline ref still has the old name; the live tree has the
-    new one. When ``FIXTURE_BASELINE`` is bumped to a SHA that has the
-    rename, both fields collapse to the same path.
-    """
+    """Build the equality fixture's case list against ``baseline_ref``."""
     return [
         RefCompareCase(
             baseline_ref=baseline_ref,
             current_ref=None,
-            baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
+            baseline_script_rel="tests/fixtures/baseline_repo/scripts/baseline_app.sh",
             current_script_rel="tests/fixtures/baseline_repo/scripts/baseline_app.sh",
             task_id=t,
         )
@@ -415,15 +401,12 @@ def _build_diff_cases(baseline_ref: str) -> list[RefCompareCase]:
 
     Baseline side runs ``baseline_repo`` (port 5432); current side runs
     ``diff_repo`` (port 6543) so the resolved configs deterministically differ.
-    The baseline-side path uses the pre-rename basename (``hydra_app.sh``)
-    because that's what exists at the baseline ref; the current side uses the
-    renamed ``diff_app.sh`` under the renamed ``diff_repo``.
     """
     return [
         RefCompareCase(
             baseline_ref=baseline_ref,
             current_ref=None,
-            baseline_script_rel="tests/fixtures/baseline_repo/scripts/hydra_app.sh",
+            baseline_script_rel="tests/fixtures/baseline_repo/scripts/baseline_app.sh",
             current_script_rel="tests/fixtures/diff_repo/scripts/diff_app.sh",
             task_id=t,
         )
