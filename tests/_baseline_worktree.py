@@ -113,21 +113,30 @@ def ref_exists(ref: str) -> bool:
 def try_fetch_ref(ref: str) -> list[str]:
     """Best-effort ``git fetch`` to acquire ``ref`` locally; return per-attempt stderr.
 
-    Two-step: first tries ``git fetch --depth=1 origin <ref>``, which works
-    for SHAs and branch tips on remotes with ``uploadpack.allowAnySHA1InWant``
-    (GitHub default) — but importantly does NOT create a local ``refs/tags/X``
-    when ``ref`` is a tag name, so tag lookups by name still fail. If the ref
-    still isn't resolvable, falls back to an explicit tag refspec that does
+    Two-step: first tries ``git fetch origin <ref>``, which works for SHAs and
+    branch tips on remotes with ``uploadpack.allowAnySHA1InWant`` (GitHub
+    default) — but importantly does NOT create a local ``refs/tags/X`` when
+    ``ref`` is a tag name, so tag lookups by name still fail. If the ref is
+    still not resolvable, falls back to an explicit tag refspec that does
     create the local tag ref. Returns the trimmed stderr from each attempt
     so the caller can include it in a diagnostic error message.
+
+    No ``--depth=1``: shallow SHA fetches into already-shallow CI clones hit a
+    pack-negotiation bug where the server omits subtree objects whose SHAs
+    differ from the client's HEAD (it assumes "client has HEAD, probably has
+    these subtrees too" — but a depth-1 client has only HEAD's specific tree).
+    The fetch then succeeds at returning a commit object, ``ref_exists``
+    returns True, but ``git worktree add`` fails with ``unable to read tree``.
+    Without ``--depth=1``, git negotiates a complete pack relative to the
+    client's haves (still incremental — only sends objects the client lacks).
     """
     stderrs: list[str] = []
-    r1 = git("fetch", "--depth=1", "origin", ref)
+    r1 = git("fetch", "origin", ref)
     stderrs.append(r1.stderr.strip() or "(empty)")
     if ref_exists(ref):
         return stderrs
     refspec = f"+refs/tags/{ref}:refs/tags/{ref}"
-    r2 = git("fetch", "--depth=1", "origin", refspec)
+    r2 = git("fetch", "origin", refspec)
     stderrs.append(r2.stderr.strip() or "(empty)")
     return stderrs
 
