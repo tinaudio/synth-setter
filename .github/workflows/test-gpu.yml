@@ -1,0 +1,46 @@
+name: GPU Tests
+
+# Runs only @pytest.mark.gpu tests on a GPU runner.
+# Twice-weekly schedule (Mon + Thu) and manual dispatch.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1,4" # Mon + Thu 06:00 UTC
+
+jobs:
+  run_tests:
+    runs-on: gpu-x64
+
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        # GitHub GPU runner ships NVIDIA driver 12080 (CUDA 12.8).
+        # torch >=2.7.0 requires CUDA 13.x — cap it via --constraint
+        # so CI stays compatible without changing requirements-torch.txt.
+        run: |
+          echo 'torch<2.7.0' > /tmp/torch-constraint.txt
+          uv pip install --system --constraint /tmp/torch-constraint.txt -r requirements.txt
+          uv pip install --system sh
+
+      - name: List dependencies
+        run: uv pip list --system
+
+      - name: Run GPU tests
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: |
+          pytest -vv -s -m gpu

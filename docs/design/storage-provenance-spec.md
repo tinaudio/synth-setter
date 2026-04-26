@@ -175,7 +175,8 @@ ______________________________________________________________________
 | Workflow        | File                     | Trigger             | Runner                          | Secrets             | Key Inputs                                                       |
 | --------------- | ------------------------ | ------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
 | Tests           | `test.yml`               | push, PR            | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
-| Full Tests      | `test-expensive.yml`     | schedule, dispatch  | `gpu-x64`                       | —                   | —                                                                |
+| GPU Tests       | `test-gpu.yml`           | schedule, dispatch  | `gpu-x64`                       | —                   | —                                                                |
+| Slow Tests      | `test-expensive.yml`     | push (main)         | `ubuntu-latest`                 | —                   | —                                                                |
 | Data Generation | `dataset-generation.yml` | `workflow_call`     | `ubuntu-latest-4core`           | DockerHub           | `image_tag`, `config_path`, `artifact_name`                      |
 | Training        | TBD                      | `workflow_dispatch` | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
 | Evaluation      | TBD                      | `workflow_dispatch` | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |

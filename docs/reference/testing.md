@@ -39,7 +39,8 @@ All common selectors are defined as Makefile targets — read [`Makefile`](../..
 CI selectors live in [`.github/workflows/`](../../.github/workflows):
 
 - [`test.yml`](../../.github/workflows/test.yml) — CPU tests on every PR.
-- [`test-expensive.yml`](../../.github/workflows/test-expensive.yml) — GPU-gated tests on a GPU runner.
+- [`test-gpu.yml`](../../.github/workflows/test-gpu.yml) — GPU-gated tests on a GPU runner.
+- [`test-expensive.yml`](../../.github/workflows/test-expensive.yml) — slow (non-GPU) pytest suite, post-merge on `main`.
 - [`test-conda.yml`](../../.github/workflows/test-conda.yml) — single conda-env run (micromamba from `environment.yaml`) on `ubuntu-latest`; covers the non-slow suite under the locked conda deps.
 - [`nightly.yml`](../../.github/workflows/nightly.yml) — scheduled full `pytest` run on CPU (`ubuntu-latest`); no marker filter, so GPU-gated tests skip via `RunIf`.
 
@@ -149,7 +150,7 @@ ______________________________________________________________________
 
 3. **Pin trainer `limit_*_batches` when doing train→val parity checks.** `cfg_train_global` presets several `limit_*` values; `cfg_eval_global` presets a subset (read the conftest for the current asymmetry). Without explicit pinning, train's in-fit val loop and a standalone `evaluate()` can iterate over different batch counts, making any parity assertion unreliable.
 
-4. **GPU tests use a three-marker stack.** `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` each do distinct things. The CI selector for GPU tests lives in [`.github/workflows/test-expensive.yml`](../../.github/workflows/test-expensive.yml); local `make test` filter lives in the Makefile. If the CI filter changes, the docs don't need updating — the code does.
+4. **GPU tests use a three-marker stack.** `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` each do distinct things. The CI selector for GPU tests lives in [`.github/workflows/test-gpu.yml`](../../.github/workflows/test-gpu.yml); local `make test` filter lives in the Makefile. If the CI filter changes, the docs don't need updating — the code does.
 
 5. **`weights_only=False` when loading a checkpoint for eval.** PyTorch 2.6 tightened `torch.load`'s default to `weights_only=True`, which refuses Lightning checkpoint metadata. `src/eval.py` passes `weights_only=False` explicitly to `trainer.test/validate/predict(ckpt_path=...)`. New standalone loader code needs the same.
 
