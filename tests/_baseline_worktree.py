@@ -44,14 +44,27 @@ def _ref_exists(ref: str) -> bool:
 
 
 def _try_fetch_ref(ref: str) -> None:
-    """Best-effort ``git fetch --depth=1 origin <ref>`` to acquire ``ref`` locally.
+    """Best-effort ``git fetch`` to acquire ``ref`` locally.
 
-    Works for tags, branch tips, and arbitrary SHAs on remotes with
-    ``uploadpack.allowAnySHA1InWant=true`` (the GitHub default). Silent on
-    failure — caller re-checks ``_ref_exists`` and raises if still missing.
+    Two-step: first tries ``git fetch --depth=1 origin <ref>``, which works
+    for SHAs and branch tips on remotes with ``uploadpack.allowAnySHA1InWant``
+    (GitHub default) — but importantly does NOT create a local ``refs/tags/X``
+    when ``ref`` is a tag name, so tag lookups by name still fail. If the ref
+    still isn't resolvable, falls back to an explicit tag refspec that does
+    create the local tag ref. Silent on failure — caller re-checks
+    ``_ref_exists`` and raises if still missing.
     """
     subprocess.run(  # noqa: S603 — fixed argv, no shell
         ["git", "-C", str(REPO_ROOT), "fetch", "--depth=1", "origin", ref],  # noqa: S607 — git on PATH
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if _ref_exists(ref):
+        return
+    refspec = f"+refs/tags/{ref}:refs/tags/{ref}"
+    subprocess.run(  # noqa: S603 — fixed argv, no shell
+        ["git", "-C", str(REPO_ROOT), "fetch", "--depth=1", "origin", refspec],  # noqa: S607
         capture_output=True,
         text=True,
         check=False,
