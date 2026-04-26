@@ -138,6 +138,19 @@ def _is_git_checkout() -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
+def _git_common_dir() -> Path:
+    """Return the shared ``.git`` directory for REPO_ROOT.
+
+    Uses ``git rev-parse --git-common-dir`` so this works correctly when
+    REPO_ROOT is a linked worktree (where ``.git`` is a *file* pointing back
+    to the main repo's ``.git/worktrees/<name>/`` rather than a directory).
+    All linked worktrees of the same repo resolve to the same path here, so
+    a lock placed in this directory serializes across worktrees too — not
+    just across xdist workers in one checkout.
+    """
+    return Path(git("rev-parse", "--git-common-dir", check=True).stdout.strip())
+
+
 @pytest.fixture(scope="session")
 def worktree_for_ref(
     pytestconfig: pytest.Config,
@@ -166,11 +179,12 @@ def worktree_for_ref(
         base_dir = tmp_path_factory.mktemp("baseline-worktrees")
 
     cache: dict[str, Path] = {}
-    # Process-wide lock file shared across all xdist workers. Lives next to
-    # `.git/` so it's always on the same filesystem as the repo metadata it
-    # protects. The path is stable across runs (not per-session) so workers
-    # in different pytest invocations also serialize through it.
-    lock_path = REPO_ROOT / ".git" / "baseline_worktree.lock"
+    # Process-wide lock file in the shared `.git/` (resolved via
+    # `git rev-parse --git-common-dir` so this works from a linked worktree
+    # where REPO_ROOT/.git is a *file*, not a directory). All linked worktrees
+    # of the same repo land on the same lock path, so the lock serializes
+    # across worktrees — not just across xdist workers in one checkout.
+    lock_path = _git_common_dir() / "baseline_worktree.lock"
 
     def _get(ref: str) -> Path:
         if ref in cache:

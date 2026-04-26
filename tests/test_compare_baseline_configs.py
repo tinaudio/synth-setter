@@ -52,14 +52,22 @@ FIXTURE_TASKS = 4
 EXPECTED_KOSC_TASKS = 44
 EXPECTED_SURGE_TASKS = 8
 
-# Baseline refs for ref-comparison tests. Prefer tags over SHAs so CI can
-# fetch the baseline cheaply via `fetch-tags: true` on actions/checkout.
+# Baseline refs for ref-comparison tests. Prefer tags over raw SHAs when
+# possible: they're more stable/discoverable for humans, and the harness
+# fetches the requested ref itself when needed (see `try_fetch_ref`).
 # FIXTURE_BASELINE pins the synthetic-fixture equality + inequality tests.
 # MODEL_BASELINE pins the K-OSC + SURGE train.sh tests against a known-good
 # model-config snapshot (tag v0.0.0, == 79552d2).
 # Update on PR merge: MODEL_BASELINE bumps when a published-results-relevant
 # config change lands and a new release tag is cut.
-FIXTURE_BASELINE = "624ea3c0d91698c53c7fad478294594f37854610"  # branch tip, not on main yet
+#
+# IMPORTANT — FIXTURE_BASELINE is currently a SHA on PR #679's branch tip,
+# NOT yet reachable from main. Once PR #679 merges, bump this to the merge
+# SHA on main (or to a tag) — otherwise the SHA may eventually become
+# unreachable from origin if the branch is deleted and GitHub garbage-
+# collects the orphan commit. See PR #679's merge-followup comment for the
+# step-by-step bump procedure.
+FIXTURE_BASELINE = "624ea3c0d91698c53c7fad478294594f37854610"
 MODEL_BASELINE = "v0.0.0"
 
 
