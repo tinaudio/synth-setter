@@ -42,6 +42,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # Needed for tests/test_compare_baseline_configs.py — it materializes
+          # worktrees at MODEL_BASELINE (currently the v0.0.0 release tag).
+          fetch-tags: true
 
       - name: Set up conda env from environment.yaml
         uses: mamba-org/setup-micromamba@v2

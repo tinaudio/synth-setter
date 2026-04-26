@@ -87,10 +87,16 @@ def worktree_for_ref(
             return cache[ref]
 
         if not _ref_exists(ref):
-            raise pytest.UsageError(
+            # Raise RuntimeError (not pytest.UsageError) so the failure surfaces
+            # per-test instead of aborting the whole session. Tests using
+            # FIXTURE_BASELINE pre-skip via _FIXTURE_BASELINE_SKIP; tests using
+            # MODEL_BASELINE deliberately don't skip so a missing tag fails loudly.
+            raise RuntimeError(
                 f"baseline ref {ref!r} not found locally; "
-                f"run `git fetch origin {ref}` or update the relevant "
-                f"BASELINE constant in tests/test_compare_baseline_configs.py"
+                f"run `git fetch --tags origin` (or `git fetch origin {ref}`) or "
+                f"update the relevant BASELINE constant in "
+                f"tests/test_compare_baseline_configs.py. On CI, ensure "
+                f"actions/checkout uses `with: fetch-tags: true`."
             )
 
         # Clear any stale worktree entries left by killed prior runs before adding ours.

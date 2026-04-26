@@ -42,13 +42,15 @@ FIXTURE_BASELINE_REPO = FIXTURES / "baseline_repo"
 FIXTURE_SCRIPT_REL = "scripts/baseline_app.sh"
 FIXTURE_TASKS = 4
 
-# Baseline refs for ref-comparison tests. Update on PR merge to the merged
-# commit on main (main is branch-protected; merge SHAs don't get rewritten).
+# Baseline refs for ref-comparison tests. Prefer tags over SHAs so CI can
+# fetch the baseline cheaply via `fetch-tags: true` on actions/checkout.
 # FIXTURE_BASELINE pins the synthetic-fixture equality + inequality tests.
 # MODEL_BASELINE pins the K-OSC + SURGE train.sh tests against a known-good
-# model-config snapshot.
-FIXTURE_BASELINE = "624ea3c0d91698c53c7fad478294594f37854610"
-MODEL_BASELINE = "79552d2b4d94688738b430f8776bfaab9a867a0b"
+# model-config snapshot (tag v0.0.0, == 79552d2).
+# Update on PR merge: MODEL_BASELINE bumps when a published-results-relevant
+# config change lands and a new release tag is cut.
+FIXTURE_BASELINE = "624ea3c0d91698c53c7fad478294594f37854610"  # branch tip, not on main yet
+MODEL_BASELINE = "v0.0.0"
 
 
 @dataclass(frozen=True)
@@ -381,6 +383,34 @@ KOSC_CASES = _build_kosc_train_cases(MODEL_BASELINE)
 SURGE_CASES = _build_surge_train_cases(MODEL_BASELINE)
 
 
+def _fixture_baseline_skip_reason() -> str | None:
+    """Return a skip reason if FIXTURE_BASELINE isn't fetchable locally.
+
+    Only the FIXTURE_BASELINE pin gets the skip treatment — it's a feature-
+    branch SHA that CI's shallow clone may not include until the PR merges.
+    MODEL_BASELINE deliberately does NOT skip; if its ref is unreachable, the
+    underlying ``worktree_for_ref`` fixture will raise and the test will fail
+    loudly. Silent skips on the model baseline would defeat the whole drift-
+    detection purpose of this harness.
+    """
+    from tests._baseline_worktree import _ref_exists
+
+    if _ref_exists(FIXTURE_BASELINE):
+        return None
+    return (
+        f"FIXTURE_BASELINE ref {FIXTURE_BASELINE!r} not available locally — "
+        f"likely a CI shallow clone that hasn't fetched feature-branch refs. "
+        f"Skipping until ref is reachable on main."
+    )
+
+
+_FIXTURE_BASELINE_SKIP = pytest.mark.skipif(
+    _fixture_baseline_skip_reason() is not None,
+    reason=_fixture_baseline_skip_reason() or "",
+)
+
+
+@_FIXTURE_BASELINE_SKIP
 @pytest.mark.parametrize("case", EQUAL_CASES, ids=[c.id() for c in EQUAL_CASES])
 def test_baseline_and_current_resolved_hydra_configs_are_equal(
     shim_factory, worktree_for_ref, case: RefCompareCase
@@ -453,6 +483,7 @@ def test_surge_train_configs_are_equal(
     _assert_resolved_configs_equal(baseline_cfg, current_cfg)
 
 
+@_FIXTURE_BASELINE_SKIP
 @pytest.mark.parametrize("case", DIFF_CASES, ids=[c.id() for c in DIFF_CASES])
 def test_baseline_and_current_resolved_hydra_configs_differ(
     shim_factory, worktree_for_ref, case: RefCompareCase
