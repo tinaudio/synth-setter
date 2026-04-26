@@ -36,7 +36,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests._baseline_worktree import _git, _ref_exists, _try_fetch_ref
+from tests._baseline_worktree import git, ref_exists, try_fetch_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = REPO_ROOT / "tests" / "fixtures"
@@ -109,7 +109,7 @@ def test_ref_compare_case_slug_renders_correctly() -> None:
 
 def test_worktree_for_ref_smoke(worktree_for_ref: Callable[[str], Path]) -> None:
     """worktree_for_ref materializes a real worktree at HEAD."""
-    head = _git("rev-parse", "HEAD", check=True).stdout.strip()
+    head = git("rev-parse", "HEAD", check=True).stdout.strip()
     wt = worktree_for_ref(head)
     assert wt.is_dir()
     # Linked worktrees have a .git file (not a directory) pointing back to the main repo.
@@ -125,16 +125,16 @@ def test_pinned_baselines_resolve(worktree_for_ref: Callable[[str], Path]) -> No
     verifying each pinned ref is fetchable AND can be materialized by
     ``worktree_for_ref`` end-to-end.
     """
-    if not _ref_exists(FIXTURE_BASELINE):
-        _try_fetch_ref(FIXTURE_BASELINE)
-    assert _ref_exists(FIXTURE_BASELINE), f"FIXTURE_BASELINE {FIXTURE_BASELINE!r} unfetchable"
+    if not ref_exists(FIXTURE_BASELINE):
+        try_fetch_ref(FIXTURE_BASELINE)
+    assert ref_exists(FIXTURE_BASELINE), f"FIXTURE_BASELINE {FIXTURE_BASELINE!r} unfetchable"
     fixture_wt = worktree_for_ref(FIXTURE_BASELINE)
     assert fixture_wt.is_dir()
     assert (fixture_wt / ".git").exists()
 
-    if not _ref_exists(MODEL_BASELINE):
-        _try_fetch_ref(MODEL_BASELINE)
-    assert _ref_exists(MODEL_BASELINE), f"MODEL_BASELINE {MODEL_BASELINE!r} unfetchable"
+    if not ref_exists(MODEL_BASELINE):
+        try_fetch_ref(MODEL_BASELINE)
+    assert ref_exists(MODEL_BASELINE), f"MODEL_BASELINE {MODEL_BASELINE!r} unfetchable"
     model_wt = worktree_for_ref(MODEL_BASELINE)
     assert model_wt.is_dir()
     assert (model_wt / ".git").exists()

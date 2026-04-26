@@ -12,6 +12,11 @@ Per-ref results are cached for the session, so repeated requests for the
 same ref incur no additional ``git worktree add`` cost. Worktree creation is
 lazy — ``pytest --collect-only`` and any test run that doesn't request the
 fixture pays zero git I/O.
+
+Public API: ``worktree_for_ref`` (fixture), and the helpers ``git``,
+``git_or_warn``, ``ref_exists``, ``try_fetch_ref`` — exported without leading
+underscores so other test modules can import them without violating the
+"underscore = private" Python convention.
 """
 
 from __future__ import annotations
@@ -51,7 +56,7 @@ def _git_lock(lock_path: Path) -> Iterator[None]:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
-def _git(*argv: str, check: bool = False) -> subprocess.CompletedProcess[str]:
+def git(*argv: str, check: bool = False) -> subprocess.CompletedProcess[str]:
     """Run ``git -C REPO_ROOT <argv...>``, capture output, return the CompletedProcess.
 
     Centralizes the shape of every git invocation in this module so the
@@ -65,6 +70,20 @@ def _git(*argv: str, check: bool = False) -> subprocess.CompletedProcess[str]:
         text=True,
         check=check,
     )
+
+
+def git_or_warn(*argv: str, context: str) -> subprocess.CompletedProcess[str]:
+    """Run ``git(*argv)`` and emit ``warnings.warn`` on non-zero exit.
+
+    Use for best-effort cleanup steps where a failure is interesting (so it
+    surfaces in pytest's warnings summary) but shouldn't abort the test.
+    ``context`` is a short label included in the warning so a reader can
+    tell which call failed.
+    """
+    result = git(*argv)
+    if result.returncode != 0:
+        warnings.warn(f"{context}: {result.stderr.strip()}", stacklevel=2)
+    return result
 
 
 def _xdist_worker_id() -> str:
@@ -86,12 +105,12 @@ def _sanitize_ref(ref: str) -> str:
     return slug if worker == "master" else f"{slug}-{worker}"
 
 
-def _ref_exists(ref: str) -> bool:
+def ref_exists(ref: str) -> bool:
     """Return True iff ``ref`` resolves to a commit in the local repo."""
-    return _git("rev-parse", "--verify", f"{ref}^{{commit}}").returncode == 0
+    return git("rev-parse", "--verify", f"{ref}^{{commit}}").returncode == 0
 
 
-def _try_fetch_ref(ref: str) -> list[str]:
+def try_fetch_ref(ref: str) -> list[str]:
     """Best-effort ``git fetch`` to acquire ``ref`` locally; return per-attempt stderr.
 
     Two-step: first tries ``git fetch --depth=1 origin <ref>``, which works
@@ -103,19 +122,19 @@ def _try_fetch_ref(ref: str) -> list[str]:
     so the caller can include it in a diagnostic error message.
     """
     stderrs: list[str] = []
-    r1 = _git("fetch", "--depth=1", "origin", ref)
+    r1 = git("fetch", "--depth=1", "origin", ref)
     stderrs.append(r1.stderr.strip() or "(empty)")
-    if _ref_exists(ref):
+    if ref_exists(ref):
         return stderrs
     refspec = f"+refs/tags/{ref}:refs/tags/{ref}"
-    r2 = _git("fetch", "--depth=1", "origin", refspec)
+    r2 = git("fetch", "--depth=1", "origin", refspec)
     stderrs.append(r2.stderr.strip() or "(empty)")
     return stderrs
 
 
 def _is_git_checkout() -> bool:
     """Return True iff REPO_ROOT is inside a git working tree."""
-    result = _git("rev-parse", "--is-inside-work-tree")
+    result = git("rev-parse", "--is-inside-work-tree")
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
@@ -159,12 +178,12 @@ def worktree_for_ref(
 
         with _git_lock(lock_path):
             fetch_stderrs: list[str] = []
-            if not _ref_exists(ref):
+            if not ref_exists(ref):
                 # Try to fetch it from origin (handles CI shallow clones and freshly-
                 # cut tags). If fetch fails, raise RuntimeError per-test (not
                 # pytest.UsageError, which would abort the whole session).
-                fetch_stderrs = _try_fetch_ref(ref)
-            if not _ref_exists(ref):
+                fetch_stderrs = try_fetch_ref(ref)
+            if not ref_exists(ref):
                 attempts = "\n".join(
                     f"  attempt {i + 1} stderr: {s}" for i, s in enumerate(fetch_stderrs)
                 )
@@ -177,14 +196,20 @@ def worktree_for_ref(
                 )
 
             # Clear any stale worktree entries left by killed prior runs before adding ours.
-            _git("worktree", "prune")
+            git_or_warn("worktree", "prune", context="git worktree prune")
 
             path = base_dir / _sanitize_ref(ref)
             # If a previous run with --compare-baseline-configs-keep-yaml-dir left
             # this path behind, remove it before re-adding so `git worktree add`
             # doesn't fail on conflict.
             if path.exists():
-                _git("worktree", "remove", "--force", str(path))
+                git_or_warn(
+                    "worktree",
+                    "remove",
+                    "--force",
+                    str(path),
+                    context=f"git worktree remove --force {path}",
+                )
                 # Defensive: `git worktree remove` no-ops if the path isn't a
                 # registered worktree (e.g., directory left behind by an interrupted
                 # prior run, or a manually deleted .git/worktrees/X entry). Nuke
@@ -193,7 +218,7 @@ def worktree_for_ref(
                 if path.exists():
                     shutil.rmtree(path, ignore_errors=True)
 
-            result = _git("worktree", "add", "--detach", str(path), ref)
+            result = git("worktree", "add", "--detach", str(path), ref)
             if result.returncode != 0:
                 raise pytest.UsageError(
                     f"git worktree add failed for ref {ref!r}: {result.stderr.strip()}"
@@ -209,11 +234,10 @@ def worktree_for_ref(
 
     with _git_lock(lock_path):
         for path in cache.values():
-            result = _git("worktree", "remove", "--force", str(path))
-            if result.returncode != 0:
-                # Surface stale-worktree leakage through pytest's warnings summary
-                # (instead of swallowing stderr silently).
-                warnings.warn(
-                    f"git worktree remove --force {path} failed: {result.stderr.strip()}",
-                    stacklevel=2,
-                )
+            git_or_warn(
+                "worktree",
+                "remove",
+                "--force",
+                str(path),
+                context=f"git worktree remove --force {path}",
+            )
