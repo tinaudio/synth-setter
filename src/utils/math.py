@@ -2,4 +2,4 @@ import torch
 
 
 def divmod(a, b):  # noqa: ANN001
-    return torch.div(a, b, rounding_mode="floor"), torch.remainder(a, b)  # pyright: ignore[reportPrivateImportUsage]
+    return torch.div(a, b, rounding_mode="floor"), torch.remainder(a, b)

@@ -15,8 +15,8 @@ def sinkhorn_C(
 
     # we initialize our scaling vectors to ones
     num_tokens, num_params = costs.shape
-    u = torch.zeros(1, num_params, device=K.device, dtype=K.dtype)  # pyright: ignore[reportPrivateImportUsage]
-    v = torch.zeros(num_tokens, 1, device=K.device, dtype=K.dtype)  # pyright: ignore[reportPrivateImportUsage]
+    u = torch.zeros(1, num_params, device=K.device, dtype=K.dtype)
+    v = torch.zeros(num_tokens, 1, device=K.device, dtype=K.dtype)
 
     # we initialize our marginals proportionally to the number of tokens
     # a = num_tokens / num_params  # row marginal
@@ -27,11 +27,11 @@ def sinkhorn_C(
     log_b = math.log(b)
 
     for _ in range(iters):
-        u = log_a - torch.logsumexp(K + v, dim=0, keepdim=True)  # pyright: ignore[reportPrivateImportUsage]
-        v = log_b - torch.logsumexp(K + u, dim=1, keepdim=True)  # pyright: ignore[reportPrivateImportUsage]
+        u = log_a - torch.logsumexp(K + v, dim=0, keepdim=True)
+        v = log_b - torch.logsumexp(K + u, dim=1, keepdim=True)
 
     logPi = K + u + v
-    return torch.exp(logPi)  # pyright: ignore[reportPrivateImportUsage]
+    return torch.exp(logPi)
 
 
 def sinkhorn(
@@ -43,16 +43,14 @@ def sinkhorn(
 ) -> torch.Tensor:
     # q has shape (k d)
     # k has shape (b n d)
-    costs = torch.cdist(  # pyright: ignore[reportPrivateImportUsage]
-        query[None], key, p=2.0
-    )  # (b k n)
+    costs = torch.cdist(query[None], key, p=2.0)  # (b k n)
     K = -costs / reg
 
     # we initialize our scaling vectors to ones
     batch_size, num_params, _ = key.shape
     num_tokens, _ = query.shape
-    u = torch.zeros(batch_size, 1, num_params, device=K.device, dtype=K.dtype)  # pyright: ignore[reportPrivateImportUsage]
-    v = torch.zeros(batch_size, num_tokens, 1, device=K.device, dtype=K.dtype)  # pyright: ignore[reportPrivateImportUsage]
+    u = torch.zeros(batch_size, 1, num_params, device=K.device, dtype=K.dtype)
+    v = torch.zeros(batch_size, num_tokens, 1, device=K.device, dtype=K.dtype)
 
     # we initialize our marginals proportionally to the number of tokens
     a = 1 / num_params  # row marginal
@@ -61,11 +59,11 @@ def sinkhorn(
     log_b = math.log(b)
 
     for _ in range(iters):
-        u = log_a - torch.logsumexp(K + v, dim=1, keepdim=True)  # pyright: ignore[reportPrivateImportUsage]
-        v = log_b - torch.logsumexp(K + u, dim=2, keepdim=True)  # pyright: ignore[reportPrivateImportUsage]
+        u = log_a - torch.logsumexp(K + v, dim=1, keepdim=True)
+        v = log_b - torch.logsumexp(K + u, dim=2, keepdim=True)
 
     logPi = K + u + v
-    return torch.exp(logPi)  # pyright: ignore[reportPrivateImportUsage]
+    return torch.exp(logPi)
 
 
 class SinkhornAttention(nn.Module):
@@ -85,9 +83,9 @@ class SinkhornAttention(nn.Module):
     ):
         super().__init__()
 
-        self.Q = nn.Parameter(torch.empty(d_model, d_model))  # pyright: ignore[reportPrivateImportUsage]
-        self.K = nn.Parameter(torch.empty(kdim, d_model))  # pyright: ignore[reportPrivateImportUsage]
-        self.V = nn.Parameter(torch.empty(vdim, d_model))  # pyright: ignore[reportPrivateImportUsage]
+        self.Q = nn.Parameter(torch.empty(d_model, d_model))
+        self.K = nn.Parameter(torch.empty(kdim, d_model))
+        self.V = nn.Parameter(torch.empty(vdim, d_model))
 
         nn.init.xavier_uniform_(self.Q)
         nn.init.xavier_uniform_(self.K)
@@ -103,6 +101,6 @@ class SinkhornAttention(nn.Module):
         v = v @ self.V
 
         pi = sinkhorn(q, k, iters=self.sinkhorn_iters, reg=self.sinkhorn_reg)
-        x = torch.einsum("bkn,bnd->bkd", pi, v)  # pyright: ignore[reportPrivateImportUsage]
+        x = torch.einsum("bkn,bnd->bkd", pi, v)
 
         return x
