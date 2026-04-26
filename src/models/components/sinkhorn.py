@@ -43,9 +43,9 @@ def sinkhorn(
 ) -> torch.Tensor:
     # q has shape (k d)
     # k has shape (b n d)
-    costs = torch.cdist(
+    costs = torch.cdist(  # pyright: ignore[reportPrivateImportUsage]
         query[None], key, p=2.0
-    )  # (b k n)  # pyright: ignore[reportPrivateImportUsage]
+    )  # (b k n)
     K = -costs / reg
 
     # we initialize our scaling vectors to ones
