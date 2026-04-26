@@ -43,6 +43,21 @@ def _ref_exists(ref: str) -> bool:
     return result.returncode == 0
 
 
+def _try_fetch_ref(ref: str) -> None:
+    """Best-effort ``git fetch --depth=1 origin <ref>`` to acquire ``ref`` locally.
+
+    Works for tags, branch tips, and arbitrary SHAs on remotes with
+    ``uploadpack.allowAnySHA1InWant=true`` (the GitHub default). Silent on
+    failure — caller re-checks ``_ref_exists`` and raises if still missing.
+    """
+    subprocess.run(  # noqa: S603 — fixed argv, no shell
+        ["git", "-C", str(REPO_ROOT), "fetch", "--depth=1", "origin", ref],  # noqa: S607 — git on PATH
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def _is_git_checkout() -> bool:
     """Return True iff REPO_ROOT is inside a git working tree."""
     result = subprocess.run(  # noqa: S603 — fixed argv, no shell
@@ -88,16 +103,17 @@ def worktree_for_ref(
             return cache[ref]
 
         if not _ref_exists(ref):
-            # Raise RuntimeError (not pytest.UsageError) so the failure surfaces
-            # per-test instead of aborting the whole session. Tests using
-            # FIXTURE_BASELINE pre-skip via _FIXTURE_BASELINE_SKIP; tests using
-            # MODEL_BASELINE deliberately don't skip so a missing tag fails loudly.
+            # Try to fetch it from origin (handles CI shallow clones and freshly-
+            # cut tags). If fetch fails, raise RuntimeError per-test (not
+            # pytest.UsageError, which would abort the whole session).
+            _try_fetch_ref(ref)
+        if not _ref_exists(ref):
             raise RuntimeError(
-                f"baseline ref {ref!r} not found locally; "
-                f"run `git fetch --tags origin` (or `git fetch origin {ref}`) or "
-                f"update the relevant BASELINE constant in "
-                f"tests/test_compare_baseline_configs.py. On CI, ensure "
-                f"actions/checkout uses `with: fetch-tags: true`."
+                f"baseline ref {ref!r} not found locally and `git fetch "
+                f"--depth=1 origin {ref}` did not resolve it. Update the "
+                f"relevant BASELINE constant in "
+                f"tests/test_compare_baseline_configs.py, or check network "
+                f"access to origin."
             )
 
         # Clear any stale worktree entries left by killed prior runs before adding ours.

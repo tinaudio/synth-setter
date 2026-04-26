@@ -394,34 +394,7 @@ KOSC_CASES = _build_kosc_train_cases(MODEL_BASELINE)
 SURGE_CASES = _build_surge_train_cases(MODEL_BASELINE)
 
 
-def _fixture_baseline_skip_reason() -> str | None:
-    """Return a skip reason if FIXTURE_BASELINE isn't fetchable locally.
-
-    Only the FIXTURE_BASELINE pin gets the skip treatment — it's a feature-
-    branch SHA that CI's shallow clone may not include until the PR merges.
-    MODEL_BASELINE deliberately does NOT skip; if its ref is unreachable, the
-    underlying ``worktree_for_ref`` fixture will raise and the test will fail
-    loudly. Silent skips on the model baseline would defeat the whole drift-
-    detection purpose of this harness.
-    """
-    from tests._baseline_worktree import _ref_exists
-
-    if _ref_exists(FIXTURE_BASELINE):
-        return None
-    return (
-        f"FIXTURE_BASELINE ref {FIXTURE_BASELINE!r} not available locally — "
-        f"likely a CI shallow clone that hasn't fetched feature-branch refs. "
-        f"Skipping until ref is reachable on main."
-    )
-
-
-_FIXTURE_BASELINE_SKIP = pytest.mark.skipif(
-    _fixture_baseline_skip_reason() is not None,
-    reason=_fixture_baseline_skip_reason() or "",
-)
-
-
-@_FIXTURE_BASELINE_SKIP
+@pytest.mark.network
 @pytest.mark.parametrize("case", EQUAL_CASES, ids=[c.id() for c in EQUAL_CASES])
 def test_baseline_and_current_resolved_hydra_configs_are_equal(
     shim_factory, worktree_for_ref, case: RefCompareCase
@@ -450,6 +423,7 @@ def test_k_osc_train_cases() -> None:
         )
 
 
+@pytest.mark.network
 @pytest.mark.parametrize("case", KOSC_CASES, ids=[c.id() for c in KOSC_CASES])
 def test_kosc_train_configs_are_equal(
     shim_factory, worktree_for_ref, case: RefCompareCase
@@ -477,6 +451,7 @@ def test_surge_train_cases() -> None:
         )
 
 
+@pytest.mark.network
 @pytest.mark.parametrize("case", SURGE_CASES, ids=[c.id() for c in SURGE_CASES])
 def test_surge_train_configs_are_equal(
     shim_factory, worktree_for_ref, case: RefCompareCase
@@ -494,7 +469,7 @@ def test_surge_train_configs_are_equal(
     _assert_resolved_configs_equal(baseline_cfg, current_cfg)
 
 
-@_FIXTURE_BASELINE_SKIP
+@pytest.mark.network
 @pytest.mark.parametrize("case", DIFF_CASES, ids=[c.id() for c in DIFF_CASES])
 def test_baseline_and_current_resolved_hydra_configs_differ(
     shim_factory, worktree_for_ref, case: RefCompareCase
