@@ -249,7 +249,7 @@ The render stage loads each predicted parameter tensor, decodes it using the `Pa
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
 - On macOS: uses native display, no wrapper needed — `make render` calls the Python script directly
 - On headless Linux: launches Xvfb, sets `DISPLAY`, runs script, kills Xvfb
-- Plugin path default: `plugins/Surge XT.vst3` (overridable via `--plugin_path`)
+- `--plugin_path` is required (no default); `load_plugin` raises `FileNotFoundError` if the path does not exist. The Hydra paths group exposes the same value as `paths.vst_plugin_path`, sourced from `SYNTH_SETTER_PLUGIN_PATH` with fallback `plugins/Surge XT.vst3`.
 - Preset path default: `presets/surge-base.vstpreset` (overridable via `--preset_path`)
 - Parameters are denormalized from `[-1, 1]` → `[0, 1]` before decoding
 
