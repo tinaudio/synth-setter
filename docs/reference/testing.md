@@ -77,7 +77,7 @@ Both defined in [`tests/conftest.py`](../../tests/conftest.py) as package-scoped
 
 Both fixtures clear global Hydra state on teardown via `GlobalHydra.instance().clear()`.
 
-A third fixture group — `cfg_surge_xt_global` / `cfg_surge_xt` / `cfg_surge_xt_eval` — follows the same pattern for Surge XT flow-matching tests (`tests/test_train.py::test_train_surge_xt_*`). It composes `train.yaml` with `experiment=surge/flow_full`, points at the 5-sample fixture under `tests/fixtures/surge_xt/`, and bakes in the 1-step trainer knobs. `cfg_surge_xt_eval` additionally composes `eval.yaml` and copies `data` / `model` from `cfg_surge_xt` so the evaluator matches the trained checkpoint shape (see gotcha #2).
+A third fixture group — `cfg_surge_xt_global` / `cfg_surge_xt` / `cfg_surge_xt_eval` — follows the same pattern for Surge XT FFN tests (`tests/test_train.py::test_train_surge_xt_*`). It composes `train.yaml` with `experiment=surge/ffn_full`, points at the 5-sample dataset generated on demand by the `surge_xt_smoke_datasets` fixture, and bakes in the smoke-test trainer knobs. `cfg_surge_xt_eval` additionally composes `eval.yaml` and copies `data` / `model` from `cfg_surge_xt` so the evaluator matches the trained checkpoint shape (see gotcha #2).
 
 ______________________________________________________________________
 

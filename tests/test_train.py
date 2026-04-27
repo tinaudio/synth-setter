@@ -143,7 +143,7 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
 
 # @pytest.mark.slow
 def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
-    """Run training of the Surge XT flow-matching model on the smoke test fixture.
+    """Run training of the Surge XT FFN model on the smoke test fixture.
 
     :param cfg_surge_xt: Surge XT training config.
     """
