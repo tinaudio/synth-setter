@@ -1,6 +1,8 @@
 name: Slow Tests
 
-# Runs the @pytest.mark.slow suite while skipping GPU-marked tests.
+# Runs the @pytest.mark.slow suite while skipping GPU- and MPS-marked tests.
+# (Ubuntu runner has neither CUDA nor Apple MPS, so those parametrizations
+# would hard-fail the accelerator fixture.)
 # Triggered post-merge on main (and via manual dispatch).
 on:
   workflow_dispatch:
@@ -85,8 +87,8 @@ jobs:
       - name: List dependencies
         run: uv pip list --system
 
-      - name: Run slow (non-GPU) tests
+      - name: Run slow (non-GPU, non-MPS) tests
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
-          pytest -vv -s -m "slow and not gpu"
+          pytest -vv -s -m "slow and not gpu and not mps"
