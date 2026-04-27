@@ -183,10 +183,6 @@ def test_train_eval_surge_xt(
     assert Path(cfg_surge_xt_eval.ckpt_path).exists()
 
     HydraConfig().set_config(cfg_surge_xt_eval)
-    with open_dict(cfg_surge_xt_eval):
-        # Eval on the same training set the smoke run used — this is a wiring smoke test,
-        # not a generalization check, so train/predict overlap is intentional.
-        cfg_surge_xt_eval.data.predict_file = "tests/fixtures/surge_xt/train.h5"
     evaluate(cfg_surge_xt_eval)
 
     # `PredictionWriter` (`src/utils/callbacks.py:332`) with `write_interval=batch` saves three
