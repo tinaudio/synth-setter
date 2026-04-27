@@ -7,14 +7,16 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
-from click.testing import CliRunner
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
-from pedalboard.io import AudioFile
 
-from scripts.compute_audio_metrics import main as compute_audio_metrics_main
 from src.eval import evaluate
 from src.train import train
+from tests.conftest import (
+    _VST_SUBPROCESS_TIMEOUT_SECONDS,
+    NUM_FIXTURE_SAMPLES,
+    VST_HEADLESS_WRAPPER,
+)
 from tests.helpers.run_if import RunIf
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
@@ -124,7 +126,8 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.trainer.accelerator = "gpu"
     HydraConfig().set_config(cfg_train)
-    _, _ = train(cfg_train)
+    _, object_dict_1 = train(cfg_train)
+    step_after_first = object_dict_1["trainer"].global_step
     files = os.listdir(tmp_path / "checkpoints")
     assert "last.ckpt" in files
     assert "epoch_000.ckpt" in files
@@ -133,21 +136,48 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
         cfg_train.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
         cfg_train.trainer.max_epochs = 2
 
-    _, _ = train(cfg_train)
+    _, object_dict_2 = train(cfg_train)
+    step_after_resume = object_dict_2["trainer"].global_step
 
     files = os.listdir(tmp_path / "checkpoints")
     assert "epoch_001.ckpt" in files
     assert "epoch_002.ckpt" not in files
+
+    # The resume must actually train another epoch — `trainer.global_step` advancing
+    # past the post-first-train value is the cheapest signal that the second `train()`
+    # call did real work and didn't just load the checkpoint and exit. Replaces the
+    # earlier `train/loss_epoch` decrease assertion, which broke when the metric_dict
+    # keys changed.
+    assert step_after_resume > step_after_first, (
+        f"resume did not advance training: "
+        f"global_step before={step_after_first}, after={step_after_resume}"
+    )
 
 
 @pytest.mark.slow
 def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
     """Run training of the Surge XT FFN model on the smoke test fixture.
 
+    Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
+    no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not.
+
     :param cfg_surge_xt: Surge XT training config.
     """
     HydraConfig().set_config(cfg_surge_xt)
-    train(cfg_surge_xt)
+    metric_dict, object_dict = train(cfg_surge_xt)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+
+    # `surge_ff_module` logs `train/loss` with `on_step=True, on_epoch=True`, which
+    # populates `train/loss_step` (and `train/loss_epoch` if an epoch boundary was
+    # crossed) in `trainer.callback_metrics`. With `TRAINING_STEPS=1` only the
+    # step-level key is guaranteed; assert whichever is present is finite.
+    loss_keys = [k for k in metric_dict if k.startswith("train/loss")]
+    assert loss_keys, f"no train/loss* key in metric_dict: {sorted(metric_dict)}"
+    for key in loss_keys:
+        loss = metric_dict[key]
+        assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
 
 
 @pytest.mark.slow
@@ -161,7 +191,11 @@ def test_train_eval_surge_xt(
     :param cfg_surge_xt: Surge XT smoke-test training config.
     :param cfg_surge_xt_eval: Matching smoke-test eval config (ckpt_path set by this test).
     """
-    NUM_FIXTURE_SAMPLES = 5
+    from click.testing import CliRunner
+    from pedalboard.io import AudioFile
+
+    from scripts.compute_audio_metrics import main as compute_audio_metrics_main
+
     NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
     METRICS_FILE_EXPECTATIONS = {
         "aggregated_metrics.csv": {
@@ -184,29 +218,16 @@ def test_train_eval_surge_xt(
     HydraConfig().set_config(cfg_surge_xt_eval)
     evaluate(cfg_surge_xt_eval)
 
-    # `PredictionWriter` (`src/utils/callbacks.py:332`) with `write_interval=batch` saves three
+    # `PredictionWriter` (in `src/utils/callbacks.py`) with `write_interval=batch` saves three
     # tensors per predict batch: `pred-{i}.pt`, `target-audio-{i}.pt`, `target-params-{i}.pt`.
     predictions_dir = tmp_path / "predictions"
     assert predictions_dir.is_dir()
-    # Note that the fixture has 5 examples but ShiftedBatchSampler drops a batch per epoch,
-    # so we get 4 predictions + targets from the first epoch and 1 from the second.
-    assert sorted(p.name for p in predictions_dir.iterdir()) == [
-        "pred-0.pt",
-        "pred-1.pt",
-        "pred-2.pt",
-        "pred-3.pt",
-        "pred-4.pt",
-        "target-audio-0.pt",
-        "target-audio-1.pt",
-        "target-audio-2.pt",
-        "target-audio-3.pt",
-        "target-audio-4.pt",
-        "target-params-0.pt",
-        "target-params-1.pt",
-        "target-params-2.pt",
-        "target-params-3.pt",
-        "target-params-4.pt",
-    ]
+    expected_names = sorted(
+        f"{prefix}-{i}.pt"
+        for prefix in ("pred", "target-audio", "target-params")
+        for i in range(NUM_FIXTURE_SAMPLES)
+    )
+    assert sorted(p.name for p in predictions_dir.iterdir()) == expected_names
 
     for i in range(NUM_FIXTURE_SAMPLES):
         pred = torch.load(predictions_dir / f"pred-{i}.pt", weights_only=True)
@@ -215,17 +236,11 @@ def test_train_eval_surge_xt(
     # Render predicted params through the Surge XT VST to per-sample audio directories.
     # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
     # of the saved target audio. Also works around an `UnboundLocalError` in
-    # `scripts/predict_vst_audio.py:220` where `target_synth_params` is referenced in the default
-    # path without being defined outside the `rerender_target` branch.
+    # `scripts/predict_vst_audio.py` where `target_synth_params` is referenced in the default
+    # path without being defined outside the `rerender_target` branch (see #672).
     audio_dir = tmp_path / "audio"
     runner = CliRunner()
 
-    # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
-    # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
-    # X11 wrapping lives at the audio-rendering boundary (this subprocess call),
-    # not at the container entrypoint — the click CLI stays X11-agnostic so idle
-    # and passthrough don't pay the Xvfb startup cost.
-    VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
     args = []
     if sys.platform == "linux":
         args.append(VST_HEADLESS_WRAPPER)
@@ -237,7 +252,20 @@ def test_train_eval_surge_xt(
         str(audio_dir),
         "-t",
     ]
-    result = subprocess.run(args, text=True, check=False)  # noqa: S603, S607
+    try:
+        result = subprocess.run(  # noqa: S603, S607
+            args,
+            text=True,
+            check=False,
+            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"predict_vst_audio timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"command: {args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
     if result.returncode != 0:
         pytest.fail(
             f"predict_vst_audio failed (exit {result.returncode})\n"
@@ -247,15 +275,9 @@ def test_train_eval_surge_xt(
         )
 
     sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
-    assert [d.name for d in sample_dirs] == [
-        "sample_0",
-        "sample_1",
-        "sample_2",
-        "sample_3",
-        "sample_4",
-    ]
+    assert [d.name for d in sample_dirs] == [f"sample_{i}" for i in range(NUM_FIXTURE_SAMPLES)]
     # ~-80 dBFS — below this, librosa RMS norms underflow and `compute_rms`
-    # produces 0/0 → NaN (see `scripts/compute_audio_metrics.py:227`).
+    # produces 0/0 → NaN (see `compute_rms` in `scripts/compute_audio_metrics.py`).
     SILENCE_PEAK_THRESHOLD = 1e-4
     for sample_dir in sample_dirs:
         assert (sample_dir / "target.wav").is_file()

@@ -210,6 +210,30 @@ docs:
       - pattern: "pipeline/constants.py"
         covers: "R2 bucket name, INPUT_SPEC_FILENAME constant"
 
+  # ── Testing primer ──────────────────────────────────────────────
+  - doc: docs/reference/testing.md
+    description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
+    sources:
+      - pattern: "tests/conftest.py"
+        covers: "Hydra cfg_train/cfg_eval/cfg_surge_xt fixtures, accelerator parametrize, surge_xt_smoke_datasets, _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
+      - pattern: "tests/test_train.py"
+        covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
+      - pattern: "tests/test_eval.py"
+        covers: "Train→eval round-trip reference implementation"
+      - pattern: "tests/helpers/run_if.py"
+        covers: "RunIf decorator (min_gpus, etc.)"
+      - pattern: ".github/workflows/test.yml"
+        covers: "Default PR CI: -m 'not slow and not gpu and not mps'"
+      - pattern: ".github/workflows/test-expensive.yml"
+        covers: "Post-merge slow-non-accelerator lane (-m 'slow and not gpu and not mps') — runner sized to avoid PyTorch CPU OOM"
+      - pattern: ".github/workflows/test-mps.yml"
+        covers: "Pre-submit MPS lane on macos-latest (-m mps), triggered on src/ + configs/ PRs"
+      - pattern: ".github/workflows/test-gpu.yml"
+        covers: "Twice-weekly GPU lane on gpu-x64 (-m gpu)"
+      - pattern: "pyproject.toml"
+        covers: "Marker registration ([tool.pytest.ini_options].markers) and default selector"
+        scope: "pytest-config"
+
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md
     description: macOS VM dev-env path via Tart — prebuilt image or Packer build (§ B.3)

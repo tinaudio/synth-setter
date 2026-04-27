@@ -38,11 +38,14 @@ All common selectors are defined as Makefile targets — read [`Makefile`](../..
 
 CI selectors live in [`.github/workflows/`](../../.github/workflows):
 
-- [`test.yml`](../../.github/workflows/test.yml) — CPU tests on every PR.
-- [`test-gpu.yml`](../../.github/workflows/test-gpu.yml) — GPU-gated tests on a GPU runner.
-- [`test-expensive.yml`](../../.github/workflows/test-expensive.yml) — slow (non-GPU) pytest suite, post-merge on `main`.
+- [`test.yml`](../../.github/workflows/test.yml) — fast CPU tests on every PR (`-m "not slow and not gpu and not mps"`).
+- [`test-gpu.yml`](../../.github/workflows/test-gpu.yml) — GPU-marked tests on a GPU runner. Twice-weekly cron + manual dispatch.
+- [`test-mps.yml`](../../.github/workflows/test-mps.yml) — MPS-marked tests on a `macos-latest` (Apple Silicon) runner. Triggered on push to `main` **and** on PRs that touch `src/` or `configs/` — the closest thing to pre-submit coverage for slow Surge tests, since the macOS runner is large enough to host the FFN forward pass without OOM.
+- [`test-expensive.yml`](../../.github/workflows/test-expensive.yml) — slow non-GPU, non-MPS suite (`-m "slow and not gpu and not mps"`), post-merge on `main`. **Post-merge by design**: PyTorch CPU forward passes OOM the standard 2-core PR runner. The lane is sized to avoid that (see the workflow's `runs-on:` for the current label) and runs after merge so PR feedback isn't gated on it. PR-time coverage of these tests comes from `test-mps.yml`.
 - [`test-conda.yml`](../../.github/workflows/test-conda.yml) — single conda-env run (micromamba from `environment.yaml`) on `ubuntu-latest`; covers the non-slow suite under the locked conda deps.
 - [`nightly.yml`](../../.github/workflows/nightly.yml) — scheduled full `pytest` run on CPU (`ubuntu-latest`); no marker filter, so GPU-gated tests skip via `RunIf`.
+
+**Coverage strategy in one sentence:** `[cpu]` parametrizations of slow tests run post-merge on the large runner (`test-expensive.yml`); `[mps]` parametrizations run pre-submit on the macOS runner (`test-mps.yml`); `[gpu]` parametrizations run twice-weekly on the GPU runner (`test-gpu.yml`). A regression in the cpu path is caught after merge, not before — accepted because the cost of running CPU PyTorch on every PR is OOM failures, not just minutes.
 
 CI and `make` selectors are **not identical** — CI may use different marker combinations to partition work across runners. Source of truth is always the file, not this doc.
 

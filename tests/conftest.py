@@ -29,6 +29,22 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 # silent renders that would later poison metric computation.
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 
+# Hard ceiling for VST subprocess calls (dataset generation, audio rendering).
+# Picked at 10 minutes: comfortably above the observed runtime on the slowest
+# CI runner (macOS with brew-installed cask), well below the workflow timeout
+# so a hung VST surfaces as a clear test failure instead of a job kill. Eager
+# constant on purpose — both call sites pass it directly to `subprocess.run`,
+# no per-call tuning, no stack-distant default.
+_VST_SUBPROCESS_TIMEOUT_SECONDS = 600
+
+NUM_FIXTURE_SAMPLES = 5
+# Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
+# to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
+# X11 wrapping lives at the audio-rendering boundary (the subprocess call),
+# not at the container entrypoint — the click CLI stays X11-agnostic so idle
+# and passthrough don't pay the Xvfb startup cost.
+VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
+
 
 def _validate_surge_dataset(path: Path, num_samples: int) -> None:
     """Assert the generated Surge XT dataset is structurally sound.
@@ -260,7 +276,7 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/ffn_full", "callbacks=eval_surge"],
+            overrides=["experiment=surge/ffn_full", "callbacks=[default_surge,eval_surge]"],
         )
         TRAINING_STEPS = 1
         with open_dict(cfg):
@@ -272,7 +288,7 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
                 cfg.data.num_workers = 0
                 cfg.model.compile = False
                 cfg.trainer.precision = "32-true"
-            if accelerator == "mps":
+            elif accelerator == "mps":
                 cfg.data.num_workers = 0
                 cfg.trainer.precision = "32-true"
                 cfg.model.compile = False
@@ -283,9 +299,8 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
 
             # batch_size=1 is forced: ShiftedBatchSampler (used in the
             # SurgeDataModule's train_dataloader) drops one batch per epoch,
-            # so any: batch_size >  dataset_size // 2
-            # leaves the dataloader empty and Lightning aborts with:
-            # "Trainer.fit stopped: No training batches."
+            # so any batch_size > dataset_size // 2 leaves the dataloader empty
+            # and Lightning aborts with "Trainer.fit stopped: No training batches."
             cfg.data.batch_size = 1
             cfg.data.pin_memory = False
             cfg.data.ot = False
@@ -295,7 +310,7 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
 
             cfg.trainer.devices = 1
             cfg.trainer.max_steps = TRAINING_STEPS
-            cfg.trainer.check_val_every_n_epoch = 1  # validate every 5 epochs
+            cfg.trainer.check_val_every_n_epoch = 1  # validate at end of each epoch
             cfg.trainer.val_check_interval = 1.0  # default: end of (validating) epoch
             cfg.trainer.log_every_n_steps = TRAINING_STEPS
             cfg.trainer.enable_model_summary = False
@@ -305,12 +320,8 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
             cfg.model.scheduler = None
             cfg.logger = None
             cfg.test = False
-            cfg.callbacks.model_checkpoint = {
-                "_target_": "lightning.pytorch.callbacks.ModelCheckpoint",
-                "dirpath": "${paths.output_dir}/checkpoints",
-                "save_last": True,
-                "every_n_train_steps": TRAINING_STEPS,
-            }
+            mc = cfg.callbacks.model_checkpoint
+            mc.save_last = True
             callbacks = cfg.get("callbacks")
             if callbacks is not None and "lr_monitor" in callbacks:
                 del callbacks.lr_monitor
@@ -325,14 +336,6 @@ def surge_xt_smoke_datasets(tmp_path: Path) -> Path:
     :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
         dataset.
     """
-    NUM_FIXTURE_SAMPLES = 5
-    # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
-    # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
-    # X11 wrapping lives at the audio-rendering boundary (this subprocess call),
-    # not at the container entrypoint — the click CLI stays X11-agnostic so idle
-    # and passthrough don't pay the Xvfb startup cost.
-    VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
-
     smoke_dataset_dir = tmp_path / "data" / "smoke"
 
     Path(smoke_dataset_dir).mkdir(parents=True, exist_ok=True)
@@ -354,11 +357,20 @@ def surge_xt_smoke_datasets(tmp_path: Path) -> Path:
     # forever. Output flows to pytest's normal capture (visible with `-s` or on failure);
     # we lose `result.stdout/stderr` on the failure branch but keep the exit code, which
     # is what the failure branch needs to fail loud. See #695.
-    result = subprocess.run(  # noqa: S603
-        generate_dataset_args,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603
+            generate_dataset_args,
+            text=True,
+            check=False,
+            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"generate_vst_dataset timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"command: {generate_dataset_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
     if result.returncode != 0:
         pytest.fail(
             f"generate_vst_dataset failed (exit {result.returncode})\n"
