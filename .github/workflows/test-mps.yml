@@ -1,0 +1,78 @@
+name: MPS Tests
+
+# Runs only @pytest.mark.mps tests on a macOS Apple Silicon runner.
+# Triggers on changes that could affect MPS-path correctness: src/ and configs/.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "configs/**"
+      - ".github/workflows/test-mps.yml"
+  pull_request:
+    branches: [main, "release/*", "dev"]
+    paths:
+      - "src/**"
+      - "configs/**"
+      - ".github/workflows/test-mps.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  run_tests:
+    runs-on: macos-latest
+
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -r requirements.txt
+          uv pip install --system sh
+
+      # Install the Surge XT VST3 cask and symlink it into the repo-relative
+      # `plugins/Surge XT.vst3` path that configs, CLI `--plugin_path` defaults,
+      # and the smoke-test fixtures all assume. Mirrors the provisioning step in
+      # `tart/macos.pkr.hcl` (the macOS dev VM image) and `test.yml`'s macOS job.
+      - name: Install Surge XT VST3
+        run: |
+          brew install --cask surge-xt
+          mkdir -p plugins
+          ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' 'plugins/Surge XT.vst3'
+
+      # Mirrors the Tart-VM smoke check in `tart/macos.pkr.hcl` — fails fast if
+      # the cask install or symlink is broken before the full pytest run.
+      - name: Smoke-test Surge XT plugin load
+        run: |
+          python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
+
+      # Confirm MPS is actually visible to PyTorch — without this, the parametrized
+      # `accelerator` fixture in tests/conftest.py would hardfail every collected
+      # `[mps]` case with "MPS not available" and the runner would be misconfigured
+      # without the test suite being able to tell us why.
+      - name: Probe MPS availability
+        run: |
+          python -c "import torch; assert torch.backends.mps.is_available(), 'MPS not available on this runner'"
+
+      - name: List dependencies
+        run: uv pip list --system
+
+      - name: Run MPS tests
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: pytest -vv -s -m mps
