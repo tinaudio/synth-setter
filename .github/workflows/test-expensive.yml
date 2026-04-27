@@ -19,7 +19,12 @@ permissions:
 
 jobs:
   run_slow_tests:
-    runs-on: ubuntu-latest
+    # Larger runner: the slow CPU suite runs PyTorch forward passes on the FFN
+    # smoke fixtures, and the standard 2-core/7 GB `ubuntu-latest` OOMs during
+    # those passes. `ubuntu-latest-4core` (4 vCPU / 16 GB) is the smallest
+    # GitHub-hosted label that fits — see `docs/reference/github-actions.md`
+    # for the runner inventory. Don't downgrade without a CPU+memory probe.
+    runs-on: ubuntu-latest-4core
 
     timeout-minutes: 90
 
