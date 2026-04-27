@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import h5py
+import numpy as np
 import pytest
 import rootutils
 from hydra import compose, initialize
@@ -13,6 +15,69 @@ from omegaconf import DictConfig, open_dict
 
 from src.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
+
+# Defaults baked into `src/data/vst/generate_vst_dataset.py` (channels=2,
+# sample_rate=44100, signal_duration_seconds=4.0, mel shape (2, 128, 401)).
+# The fixture invokes the script with these defaults, so the generated H5
+# file must match.
+_SURGE_AUDIO_SAMPLES_PER_CLIP = int(44100 * 4.0)
+_SURGE_AUDIO_CHANNELS = 2
+_SURGE_MEL_SHAPE = (2, 128, 401)
+# ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
+# silent renders that would later poison metric computation.
+_SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
+
+
+def _validate_surge_dataset(path: Path, num_samples: int) -> None:
+    """Assert the generated Surge XT dataset is structurally sound.
+
+    Verifies the three required datasets exist with the expected shapes, that no NaN/Inf leaked in
+    from the VST/mel pipeline, and that every audio clip is above the silence floor — surface those
+    failures here rather than letting downstream training crash on opaque NaN losses.
+    """
+    with h5py.File(path, "r") as f:
+        for name in ("audio", "mel_spec", "param_array"):
+            assert name in f, f"missing dataset {name!r} in {path}"
+
+        audio = f["audio"]
+        mel = f["mel_spec"]
+        params = f["param_array"]
+        # `h5py.File.__getitem__` returns `Group | Dataset | Datatype`; the
+        # generator only writes Datasets, so narrow the type for shape access.
+        assert isinstance(audio, h5py.Dataset), f"'audio' is not a Dataset in {path}"
+        assert isinstance(mel, h5py.Dataset), f"'mel_spec' is not a Dataset in {path}"
+        assert isinstance(params, h5py.Dataset), f"'param_array' is not a Dataset in {path}"
+
+        expected_audio_shape = (
+            num_samples,
+            _SURGE_AUDIO_CHANNELS,
+            _SURGE_AUDIO_SAMPLES_PER_CLIP,
+        )
+        assert audio.shape == expected_audio_shape, (
+            f"audio shape {audio.shape} != expected {expected_audio_shape}"
+        )
+        assert mel.shape == (num_samples, *_SURGE_MEL_SHAPE), (
+            f"mel_spec shape {mel.shape} != expected {(num_samples, *_SURGE_MEL_SHAPE)}"
+        )
+        assert params.shape[0] == num_samples, (
+            f"param_array first dim {params.shape[0]} != num_samples {num_samples}"
+        )
+        assert params.ndim == 2, f"param_array must be 2D, got shape {params.shape}"
+
+        audio_arr = audio[...].astype(np.float32)
+        mel_arr = mel[...]
+        params_arr = params[...]
+        assert np.isfinite(audio_arr).all(), f"audio in {path} contains NaN/Inf"
+        assert np.isfinite(mel_arr).all(), f"mel_spec in {path} contains NaN/Inf"
+        assert np.isfinite(params_arr).all(), f"param_array in {path} contains NaN/Inf"
+
+        per_clip_peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
+        silent = np.where(per_clip_peak <= _SURGE_SILENCE_PEAK_THRESHOLD)[0]
+        assert silent.size == 0, (
+            f"audio clips {silent.tolist()} in {path} are silent "
+            f"(peaks={per_clip_peak[silent].tolist()})"
+        )
+
 
 # Register custom OmegaConf resolvers (mul, div) needed to parse Hydra configs.
 # This import pulls in torch/lightning transitively via src.utils.utils, but every
@@ -255,7 +320,7 @@ def surge_xt_smoke_datasets(tmp_path: Path) -> Path:
     assert (smoke_dataset_dir / "train.h5").exists(), (
         "Dataset generation failed to produce train.h5 fixture"
     )
-    # TODO(#INSERT ISSUE NUMBER): add validation for the generated audio and mel spectrograms
+    _validate_surge_dataset(smoke_dataset_dir / "train.h5", NUM_FIXTURE_SAMPLES)
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "val.h5")
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "test.h5")
     return Path(smoke_dataset_dir)
