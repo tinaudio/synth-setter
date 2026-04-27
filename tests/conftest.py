@@ -190,7 +190,7 @@ def cfg_surge_xt_global() -> DictConfig:
             cfg.trainer.log_every_n_steps = TRAINING_STEPS
             cfg.trainer.enable_model_summary = False
             cfg.trainer.limit_val_batches = 1.0
-            cfg.trainer.accelerator = "gpu"
+            cfg.trainer.accelerator = "cpu"
             cfg.model.compile = True
             cfg.model.scheduler = None
             cfg.logger = None
