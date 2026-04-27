@@ -58,6 +58,46 @@ jobs:
           uv pip install --system -r requirements.txt
           uv pip install --system sh
 
+      # Install the Surge XT VST3 prebuilt .deb plus the headless X11 / dbus
+      # runtime stack needed by `scripts/run-linux-vst-headless.sh` (Xvfb,
+      # xsettingsd, openbox, dbus-x11, mesa, x11-utils). Mirrors the steps in
+      # `docker/ubuntu22_04/Dockerfile` (prebuilt-install + headless-runtime
+      # apt block, lines 184-218 and 289-306) and the symlink at line 316-317.
+      # The .deb installs the bundle at /usr/lib/vst3/Surge XT.vst3, which is
+      # then symlinked into the repo-relative `plugins/Surge XT.vst3` path
+      # that configs, CLI defaults, and tests assume.
+      - name: Install Surge XT VST3 + headless X11 stack
+        env:
+          SURGE_XT_VERSION: "1.3.4"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb \
+            xauth \
+            dbus-x11 \
+            xsettingsd \
+            libgl1-mesa-dri \
+            mesa-utils \
+            openbox \
+            x11-utils \
+            x11-xserver-utils
+          deb="surge-xt-linux-x64-${SURGE_XT_VERSION}.deb"
+          curl -fsSL -o "/tmp/${deb}" \
+            "https://github.com/surge-synthesizer/releases-xt/releases/download/${SURGE_XT_VERSION}/${deb}"
+          sudo apt-get install -y --no-install-recommends "/tmp/${deb}"
+          rm "/tmp/${deb}"
+          test -d "/usr/lib/vst3/Surge XT.vst3"
+          mkdir -p plugins
+          ln -sfn "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+
+      # Mirrors the headless plugin-load smoke check in
+      # `docker/ubuntu22_04/Dockerfile:312-314` — fails fast if the .deb
+      # install, X11 stack, or symlink is broken before the full pytest run.
+      - name: Smoke-test Surge XT plugin load
+        run: |
+          ./scripts/run-linux-vst-headless.sh \
+            python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
+
       - name: List dependencies
         run: uv pip list --system
 
