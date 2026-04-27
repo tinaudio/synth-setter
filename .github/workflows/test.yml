@@ -97,6 +97,22 @@ jobs:
           uv pip install --system -r requirements.txt
           uv pip install --system sh
 
+      # Install the Surge XT VST3 cask and symlink it into the repo-relative
+      # `plugins/Surge XT.vst3` path that configs, CLI `--plugin_path` defaults,
+      # and the smoke-test fixtures all assume. Mirrors the provisioning step in
+      # `tart/macos.pkr.hcl` (the macOS dev VM image).
+      - name: Install Surge XT VST3
+        run: |
+          brew install --cask surge-xt
+          mkdir -p plugins
+          ln -sfn '/Library/Audio/Plug-Ins/VST3/Surge XT.vst3' 'plugins/Surge XT.vst3'
+
+      # Mirrors the Tart-VM smoke check in `tart/macos.pkr.hcl` — fails fast if
+      # the cask install or symlink is broken before the full pytest run.
+      - name: Smoke-test Surge XT plugin load
+        run: |
+          python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
+
       - name: List dependencies
         run: uv pip list --system
 

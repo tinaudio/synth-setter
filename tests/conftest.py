@@ -238,7 +238,20 @@ def surge_xt_smoke_datasets(tmp_path: Path) -> Path:
         str(NUM_FIXTURE_SAMPLES),
     ]
 
-    subprocess.check_call(generate_dataset_args)  # noqa: S603, S607
+    result = subprocess.run(  # noqa: S603
+        generate_dataset_args,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            f"generate_vst_dataset failed (exit {result.returncode})\n"
+            f"command: {generate_dataset_args}\n"
+            f"--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}",
+            pytrace=False,
+        )
     assert (smoke_dataset_dir / "train.h5").exists(), (
         "Dataset generation failed to produce train.h5 fixture"
     )
