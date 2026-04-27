@@ -1,5 +1,8 @@
 """This file prepares config fixtures for other tests."""
 
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +12,7 @@ from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
 from src.utils.utils import register_resolvers
+from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
 # Register custom OmegaConf resolvers (mul, div) needed to parse Hydra configs.
 # This import pulls in torch/lightning transitively via src.utils.utils, but every
@@ -24,30 +28,34 @@ def cfg_train_global() -> DictConfig:
     :return: A DictConfig object containing a default Hydra configuration for training.
     """
     with initialize(version_base="1.3", config_path="../configs"):
-        cfg = compose(config_name="train.yaml", return_hydra_config=True, overrides=[])
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["data=ksin", "model=ffn", "trainer=cpu"],
+        )
 
         # set defaults for all tests
         with open_dict(cfg):
-            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
-            cfg.trainer.max_epochs = 1
-            cfg.trainer.min_steps = None
-            # Lightning 2.x uses ``-1`` as the sentinel for "unbounded" max_steps;
-            # passing ``None`` triggers an internal ``None < int`` comparison. We
-            # want the epoch-based ``max_epochs=1`` to drive termination.
-            cfg.trainer.max_steps = -1
-            cfg.trainer.val_check_interval = None
+            # Trainer defaults
             cfg.trainer.check_val_every_n_epoch = 1
-            cfg.trainer.limit_train_batches = 0.01
-            cfg.trainer.limit_val_batches = 0.1
-            cfg.trainer.limit_test_batches = 0.1
-            cfg.trainer.accelerator = "cpu"
+            cfg.trainer.val_check_interval = 1
+            cfg.trainer.max_epochs = 1
+            cfg.trainer.num_sanity_val_steps = 0
+            cfg.trainer.log_every_n_steps = 1
             cfg.trainer.devices = 1
-            cfg.data.num_workers = 0
+            cfg.trainer.deterministic = True
+            # DataLoader defaults
+            cfg.data.num_workers = 4
             cfg.data.pin_memory = False
-            cfg.extras.print_config = False
-            cfg.extras.enforce_tags = False
+            cfg.data.batch_size = 1
+            cfg.data.train_val_test_sizes = [2, 2, 2]
+            cfg.data.break_symmetry = True
+            # Other defaults
             cfg.model.compile = False
             cfg.logger = None
+            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
+            cfg.callbacks.model_checkpoint.save_top_k = -1
+            cfg.callbacks.model_checkpoint.save_last = True
             callbacks = cfg.get("callbacks")
             if callbacks is not None and "lr_monitor" in callbacks:
                 del callbacks.lr_monitor
@@ -62,31 +70,37 @@ def cfg_eval_global() -> DictConfig:
     :return: A DictConfig containing a default Hydra configuration for evaluation.
     """
     with initialize(version_base="1.3", config_path="../configs"):
-        cfg = compose(config_name="eval.yaml", return_hydra_config=True, overrides=["ckpt_path=."])
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "data=ksin",
+                "model=ffn",
+                "trainer=cpu",
+                "ckpt_path=.",
+            ],
+        )
 
         # set defaults for all tests
         with open_dict(cfg):
-            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
-            cfg.trainer.max_epochs = 1
-            cfg.trainer.min_steps = None
-            # Lightning 2.x uses ``-1`` as the sentinel for "unbounded" max_steps;
-            # passing ``None`` triggers an internal ``None < int`` comparison. We
-            # want the epoch-based ``max_epochs=1`` to drive termination.
-            cfg.trainer.max_steps = -1
-            cfg.trainer.val_check_interval = None
+            # Trainer defaults
             cfg.trainer.check_val_every_n_epoch = 1
-            cfg.trainer.limit_test_batches = 0.1
-            cfg.trainer.accelerator = "cpu"
+            cfg.trainer.val_check_interval = 1
+            cfg.trainer.max_epochs = 1
+            cfg.trainer.num_sanity_val_steps = 0
+            cfg.trainer.log_every_n_steps = 1
             cfg.trainer.devices = 1
+            cfg.trainer.deterministic = True
+            # DataLoader defaults
             cfg.data.num_workers = 0
             cfg.data.pin_memory = False
-            cfg.extras.print_config = False
-            cfg.extras.enforce_tags = False
+            cfg.data.batch_size = 1
+            cfg.data.train_val_test_sizes = [2, 2, 2]
+            cfg.data.break_symmetry = True
+            # Other defaults
+            cfg.model.compile = False
             cfg.logger = None
-            callbacks = cfg.get("callbacks")
-            if callbacks is not None and "lr_monitor" in callbacks:
-                del callbacks.lr_monitor
-
+            cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
     return cfg
 
 
@@ -103,7 +117,6 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
     :return: A DictConfig with updated output and log directories corresponding to `tmp_path`.
     """
     cfg = cfg_train_global.copy()
-
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
@@ -120,7 +133,7 @@ def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
 
     This is called by each test which uses the `cfg_eval` arg. Each test generates its own temporary logging path.
 
-    :param cfg_train_global: The input DictConfig object to be modified.
+    :param cfg_eval_global: The input DictConfig object to be modified.
     :param tmp_path: The temporary logging path.
 
     :return: A DictConfig with updated output and log directories corresponding to `tmp_path`.
@@ -138,7 +151,7 @@ def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
 
 @pytest.fixture(scope="package")
 def cfg_surge_xt_global() -> DictConfig:
-    """A pytest fixture for a one-step Surge XT training config on the 5-sample test fixture.
+    """A pytest fixture for a one-step Surge XT training config on the N-sample test fixture.
 
     Composes `train.yaml` with `experiment=surge/flow_full` and bakes in the minimal overrides
     needed to train-smoke-test on `tests/fixtures/surge_xt/`. Tests can override any knob.
@@ -149,38 +162,44 @@ def cfg_surge_xt_global() -> DictConfig:
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/flow_full"],
+            overrides=["experiment=surge/ffn_full", "callbacks=eval_surge"],
         )
 
         with open_dict(cfg):
             cfg.paths.root_dir = str(rootutils.find_root(indicator=".project-root"))
 
             cfg.data.dataset_root = "tests/fixtures/surge_xt"
+            # batch_size=1 is forced: the fixture has 5 samples and the
+            # ShiftedBatchSampler drops one batch per epoch, so any batch_size > 1
+            # leaves the dataloader empty and Lightning aborts with
+            # "Trainer.fit stopped: No training batches."
             cfg.data.batch_size = 2
-            cfg.data.num_workers = 0
-            cfg.data.pin_memory = False
-            # `configs/data/surge.yaml` hardcodes a researcher-local predict_file that
-            # `SurgeDataModule.setup()` opens unconditionally.
+            cfg.data.num_workers = 10
+            cfg.data.pin_memory = True
+            cfg.data.ot = False
             cfg.data.predict_file = "tests/fixtures/surge_xt/test.h5"
             # The 5-sample fixture's stats.npz has zero-std mel bins that poison the batch
             # with NaN via (mel - mean) / std.
             cfg.data.use_saved_mean_and_variance = False
 
-            cfg.trainer.accelerator = "gpu"
             cfg.trainer.devices = 1
-            cfg.trainer.min_steps = 1
-            cfg.trainer.max_steps = 1
-            cfg.trainer.max_epochs = -1
-            cfg.trainer.limit_train_batches = 1
-            cfg.trainer.limit_val_batches = 0
-            cfg.trainer.limit_test_batches = 0
-
-            cfg.model.compile = False
-            cfg.extras.print_config = False
-            cfg.extras.enforce_tags = False
+            cfg.trainer.max_steps = 50
+            cfg.trainer.check_val_every_n_epoch = 50  # validate every 5 epochs
+            cfg.trainer.val_check_interval = 1.0  # default: end of (validating) epoch
+            cfg.trainer.log_every_n_steps = 50
+            cfg.trainer.enable_model_summary = False
+            cfg.trainer.limit_val_batches = 1.0
+            cfg.trainer.accelerator = "gpu"
+            cfg.model.compile = True
+            cfg.model.scheduler = None
             cfg.logger = None
             cfg.test = False
-
+            cfg.callbacks.model_checkpoint = {
+                "_target_": "lightning.pytorch.callbacks.ModelCheckpoint",
+                "dirpath": "${paths.output_dir}/checkpoints",
+                "save_last": True,
+                "every_n_train_steps": 50,
+            }
             callbacks = cfg.get("callbacks")
             if callbacks is not None and "lr_monitor" in callbacks:
                 del callbacks.lr_monitor
@@ -189,7 +208,47 @@ def cfg_surge_xt_global() -> DictConfig:
 
 
 @pytest.fixture(scope="function")
-def cfg_surge_xt(cfg_surge_xt_global: DictConfig, tmp_path: Path) -> DictConfig:
+def surge_xt_overfit_datasets(tmp_path: Path) -> Path:
+    """A pytest fixture for the N-sample Surge XT overfitting test fixture.
+
+    :return: A Path object pointing at the directory containing the N-sample Surge XT fixture.
+    """
+    NUM_FIXTURE_SAMPLES = 5
+    # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
+    # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
+    # X11 wrapping lives at the audio-rendering boundary (this subprocess call),
+    # not at the container entrypoint — the click CLI stays X11-agnostic so idle
+    # and passthrough don't pay the Xvfb startup cost.
+    VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
+
+    overfit_dataset_dir = tmp_path / "data" / "overfit"
+
+    Path(overfit_dataset_dir).mkdir(parents=True, exist_ok=True)
+
+    generate_dataset_args = []
+    if sys.platform == "linux":
+        generate_dataset_args.append(VST_HEADLESS_WRAPPER)
+
+    generate_dataset_args += [
+        sys.executable,
+        "src/data/vst/generate_vst_dataset.py",
+        str(overfit_dataset_dir / "train.h5"),
+        str(NUM_FIXTURE_SAMPLES),
+    ]
+
+    subprocess.check_call(generate_dataset_args)  # noqa: S603, S607
+    assert (overfit_dataset_dir / "train.h5").exists(), (
+        "Dataset generation failed to produce train.h5 fixture"
+    )
+    shutil.copy(overfit_dataset_dir / "train.h5", overfit_dataset_dir / "val.h5")
+    shutil.copy(overfit_dataset_dir / "train.h5", overfit_dataset_dir / "test.h5")
+    return Path(overfit_dataset_dir)
+
+
+@pytest.fixture(scope="function")
+def cfg_surge_xt(
+    cfg_surge_xt_global: DictConfig, tmp_path: Path, surge_xt_overfit_datasets: Path
+) -> DictConfig:
     """Per-test wrapper around `cfg_surge_xt_global` that sets `tmp_path`-scoped output dirs.
 
     :param cfg_surge_xt_global: The package-scoped Surge XT training config.
@@ -202,6 +261,8 @@ def cfg_surge_xt(cfg_surge_xt_global: DictConfig, tmp_path: Path) -> DictConfig:
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
+        cfg.data.dataset_root = str(surge_xt_overfit_datasets)
+        cfg.data.predict_file = str(surge_xt_overfit_datasets / "test.h5")
 
     yield cfg
 
@@ -209,48 +270,44 @@ def cfg_surge_xt(cfg_surge_xt_global: DictConfig, tmp_path: Path) -> DictConfig:
 
 
 @pytest.fixture(scope="function")
-def cfg_surge_xt_eval(cfg_surge_xt: DictConfig, tmp_path: Path) -> DictConfig:
-    """Eval config for the Surge XT one-step train->eval roundtrip.
+def cfg_surge_xt_eval(
+    cfg_surge_xt_global: DictConfig, tmp_path: Path, surge_xt_overfit_datasets: Path
+) -> DictConfig:
+    """Eval config for the Surge XT train->eval roundtrip.
 
-    Composes `eval.yaml` and copies `data`/`model`/`callbacks` from `cfg_surge_xt` so the
-    evaluator loads the same LightningModule shape the trainer just saved. The test body
-    must set `cfg.ckpt_path` before calling `evaluate`.
+    Inherits from `cfg_surge_xt_global` and points `ckpt_path` at the checkpoint
+    that `cfg_surge_xt`'s training run will write under the same `tmp_path`.
 
-    :param cfg_surge_xt: The one-step Surge XT training config.
-    :param tmp_path: The temporary logging path.
+    :param cfg_surge_xt_global: The package-scoped Surge XT training config.
+    :param tmp_path: The temporary logging path (shared with `cfg_surge_xt`).
 
     :return: A DictConfig configured to evaluate a Surge XT checkpoint on the test fixture.
     """
-    with initialize(version_base="1.3", config_path="../configs"):
-        cfg = compose(config_name="eval.yaml", return_hydra_config=True, overrides=[])
-
-        with open_dict(cfg):
-            cfg.paths.root_dir = cfg_surge_xt.paths.root_dir
-            cfg.paths.output_dir = str(tmp_path)
-            cfg.paths.log_dir = str(tmp_path)
-
-            # `configs/eval.yaml` defaults `data=surge_mini` (researcher-local path) and
-            # `model=surge_flow` without the `num_params=300` override. Copy from the training
-            # config so the evaluator loads the same datamodule and LightningModule shape the
-            # trainer just saved. `callbacks=eval_surge` (= `prediction_writer`) is already the
-            # eval default; keeping it avoids pulling in train-only callbacks like
-            # `model_checkpoint` / `plot_projii`.
-            cfg.data = cfg_surge_xt.data
-            cfg.model = cfg_surge_xt.model
-
-            cfg.trainer.accelerator = "gpu"
-            cfg.trainer.devices = 1
-            cfg.trainer.limit_test_batches = 1
-            cfg.trainer.limit_predict_batches = 1
-
-            # Flow-matching `test_step` runs `test_sample_steps` (default 200) sampling iterations
-            # per batch. Shrink for smoke tests.
-            cfg.model.test_sample_steps = 2
-
-            cfg.extras.print_config = False
-            cfg.extras.enforce_tags = False
-            cfg.logger = None
+    cfg = cfg_surge_xt_global.copy()
+    with open_dict(cfg):
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.data.batch_size = 1
+        cfg.data.dataset_root = str(surge_xt_overfit_datasets)
+        cfg.data.predict_file = str(surge_xt_overfit_datasets / "test.h5")
+        cfg.ckpt_path = str(tmp_path / "checkpoints" / "last.ckpt")
+        cfg.mode = "predict"
 
     yield cfg
 
     GlobalHydra.instance().clear()
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register custom CLI options for the test suite."""
+    parser.addoption(
+        "--compare-baseline-configs-keep-yaml-dir",
+        action="store",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Directory to capture resolved Hydra YAMLs into. When set, the "
+            "python-shim harness writes <test-id>__<role>.yaml into DIR "
+            "instead of pytest's tmp_path so the files survive between runs."
+        ),
+    )
