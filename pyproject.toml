@@ -22,6 +22,7 @@ log_cli = "True"
 markers = [
   "slow: slow tests",
   "gpu: tests requiring a GPU",
+  "mps: tests requiring Apple MPS (Metal)",
   "hypothesis: property-based tests (hypothesis)",
   "pipeline: pipeline integration tests",
   "benchmark: performance benchmarks",

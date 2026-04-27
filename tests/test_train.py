@@ -17,7 +17,6 @@ from src.eval import evaluate
 from src.train import train
 from tests.helpers.run_if import RunIf
 
-# TODO(#39): replace hardcoded accelerator overrides with --accelerator pytest flag
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 
 
@@ -238,7 +237,14 @@ def test_train_eval_surge_xt(
         str(audio_dir),
         "-t",
     ]
-    subprocess.check_call(args)  # noqa: S603, S607
+    result = subprocess.run(args, text=True, check=False)  # noqa: S603, S607
+    if result.returncode != 0:
+        pytest.fail(
+            f"predict_vst_audio failed (exit {result.returncode})\n"
+            f"command: {args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
 
     sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
     assert [d.name for d in sample_dirs] == [
