@@ -141,28 +141,26 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     assert "epoch_002.ckpt" not in files
 
 
-@pytest.mark.gpu
-@RunIf(min_gpus=1)
+@pytest.mark.slow
 def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
-    """Run training of the Surge XT flow-matching model on the 5-sample fixture.
+    """Run training of the Surge XT flow-matching model on the smoke test fixture.
 
     :param cfg_surge_xt: Surge XT training config.
     """
     HydraConfig().set_config(cfg_surge_xt)
-    _, object_dict = train(cfg_surge_xt)
+    train(cfg_surge_xt)
 
 
-@pytest.mark.gpu
-@RunIf(min_gpus=1)
-def test_overfit_surge_xt(
+@pytest.mark.slow
+def test_train_eval_surge_xt(
     tmp_path: Path, cfg_surge_xt: DictConfig, cfg_surge_xt_eval: DictConfig
 ) -> None:
-    """Overfit Surge XT on a small fixture dataset, then run standalone eval on the saved
-    checkpoint.
+    """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run
+    standalone eval on the saved checkpoint.
 
     :param tmp_path: The temporary logging path.
-    :param cfg_surge_xt: One-step Surge XT training config.
-    :param cfg_surge_xt_eval: Matching eval config (ckpt_path set by this test).
+    :param cfg_surge_xt: Surge XT smoke-test training config.
+    :param cfg_surge_xt_eval: Matching smoke-test eval config (ckpt_path set by this test).
     """
     NUM_FIXTURE_SAMPLES = 5
     NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
@@ -186,7 +184,8 @@ def test_overfit_surge_xt(
 
     HydraConfig().set_config(cfg_surge_xt_eval)
     with open_dict(cfg_surge_xt_eval):
-        # overtraining on training set during test
+        # Eval on the same training set the smoke run used — this is a wiring smoke test,
+        # not a generalization check, so train/predict overlap is intentional.
         cfg_surge_xt_eval.data.predict_file = "tests/fixtures/surge_xt/train.h5"
     evaluate(cfg_surge_xt_eval)
 
