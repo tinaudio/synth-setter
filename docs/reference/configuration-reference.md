@@ -194,7 +194,7 @@ Gaps are configuration inputs that design docs specify or that standard practice
 | `trainer.precision`               | string | Not set in most configs — should be explicit (e.g., `"bf16-mixed"`) | Lightning Trainer option    |
 | `trainer.accumulate_grad_batches` | int    | Effective batch size scaling                                        | Lightning Trainer option    |
 | `trainer.benchmark`               | bool   | cuDNN benchmark mode for performance                                | Lightning Trainer option    |
-| `data.pin_memory`                 | bool   | Only set in MNIST config — should be standard for GPU training      | Lightning DataLoader option |
+| `data.pin_memory`                 | bool   | Not set in active configs — should be standard for GPU training     | Lightning DataLoader option |
 | `data.persistent_workers`         | bool   | Keep workers alive between epochs — performance optimization        | Lightning DataLoader option |
 | `data.prefetch_factor`            | int    | DataLoader prefetch                                                 | Lightning DataLoader option |
 | `model.optimizer.fused`           | bool   | CUDA fused Adam — significant speedup on GPU                        | torch.optim.Adam option     |

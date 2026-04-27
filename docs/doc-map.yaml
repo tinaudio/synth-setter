@@ -50,6 +50,8 @@ docs:
     sources:
       - pattern: "configs/logger/wandb.yaml"
         covers: "Entity, project, log_model setting, offline mode"
+      - pattern: "configs/logger/many_loggers.yaml"
+        covers: "Default logger compose — which loggers are enabled out of the box"
       - pattern: "src/train.py"
         covers: "WandbLogger instantiation, trainer integration, run lifecycle"
       - pattern: "src/eval.py"
@@ -168,6 +170,9 @@ docs:
         covers: "Host-side initializeCommand — refuses pointer-file `.git` (worktree/submodule/--separate-git-dir), ensures .env exists"
       - pattern: ".devcontainer/post-create.sh"
         covers: "First-run setup — git safety, pre-commit install, root-to-dev privilege drop"
+      - pattern: "configs/logger/many_loggers.yaml"
+        covers: "Default logger compose — referenced in §4c for enable/disable workflow"
+        scope: "wandb-config"
 
   # ── GitHub taxonomy ─────────────────────────────────────────────
   - doc: docs/design/github-taxonomy.md

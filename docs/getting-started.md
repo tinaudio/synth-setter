@@ -178,9 +178,9 @@ with decreasing loss values.
 - Hydra composes the config from `configs/train.yaml` + the experiment override
 - Lightning sets up the data module, model, callbacks, and trainer
 - Checkpoints are saved under `logs/{task_name}/{experiment_name}/{run_name}-{timestamp}/checkpoints/` (for this command: `logs/train/kosc/ffn_mse-<timestamp>/checkpoints/`)
-- Metrics are logged locally to CSV + TensorBoard by default. If you opt into
-  W&B (see [section 4c](#4c-weights--biases-wb)), metrics also go to your W&B
-  dashboard
+- Metrics are logged to W&B + CSV + TensorBoard by default. W&B requires
+  `wandb login` (or `WANDB_API_KEY`) — see [section 4c](#4c-weights--biases-wb)
+  for credentials, or to drop W&B from the default compose
 
 ### 3b. Available k-osc experiments
 
@@ -295,17 +295,14 @@ You should see top-level directories like `data/`, `train/`, and `eval/`.
 
 ### 4c. Weights & Biases (W&B)
 
-**W&B is opt-in.** [Weights & Biases](https://wandb.ai/) provides experiment
-tracking, metric logging, and model checkpoint storage. The default training
-logger (`configs/logger/many_loggers.yaml`) composes CSV + TensorBoard, so
-`python src/train.py ...` works out of the box with no W&B account and no
-`wandb login` prompt. The integration is handled through Lightning's
-`WandbLogger` -- there are no direct `wandb.init()` calls in the codebase.
+**W&B is enabled by default.** [Weights & Biases](https://wandb.ai/) provides
+experiment tracking, metric logging, and model checkpoint storage. The default
+training logger (`configs/logger/many_loggers.yaml`) composes W&B + CSV +
+TensorBoard, so fresh runs log to all three. The integration is handled
+through Lightning's `WandbLogger` -- there are no direct `wandb.init()` calls
+in the codebase.
 
-**Disabled (default):** do nothing. Fresh runs log to CSV + TensorBoard only.
-No W&B account is required.
-
-**Enabled — per-run override (recommended):**
+**Enabled (default):** authenticate once before your first training run.
 
 1. Create an account at [wandb.ai](https://wandb.ai/).
 
@@ -321,19 +318,23 @@ No W&B account is required.
    WANDB_API_KEY=<your-api-key>
    ```
 
-4. Pass `logger=wandb` on the command line:
+4. Run training as usual — metrics flow to W&B + CSV + TensorBoard:
 
    ```bash
-   python src/train.py experiment=kosc/ffn_mse logger=wandb
+   python src/train.py experiment=kosc/ffn_mse
    ```
 
-   This replaces the default logger composition with W&B only. To log to
-   **both** CSV/TensorBoard **and** W&B, uncomment the `- wandb` line in
-   `configs/logger/many_loggers.yaml`.
+**Disabled — drop W&B from the default compose:** comment out `- wandb` in
+`configs/logger/many_loggers.yaml`, or override per run with `logger=csv`
+or `logger=tensorboard`:
 
-**Enabled — as the default:** edit `configs/logger/many_loggers.yaml` and
-uncomment `- wandb`, or change the `logger:` default in `configs/train.yaml`
-to `wandb`.
+```bash
+python src/train.py experiment=kosc/ffn_mse logger=csv
+```
+
+Without `wandb login` (or `WANDB_API_KEY`), the W&B logger will prompt for
+credentials at training start. If you don't want a W&B account, drop W&B
+from the compose as shown above.
 
 **Optional entity / project overrides:**
 
@@ -387,6 +388,13 @@ configs/
   dataset/            # Pipeline dataset configs
 ```
 
+`configs/train.yaml` and `configs/eval.yaml` require `data=` and `model=` to be
+specified — they have no default. The defaults for each model family
+(including required-for-training values like `trainer.max_steps` for surge's
+LR scheduler) live in `configs/experiment/`. Look there to see how a given
+model is meant to be trained — `configs/experiment/kosc/base.yaml` and
+`configs/experiment/surge/base.yaml` are the canonical starting points.
+
 ### 5b. Common overrides
 
 Override any config value from the command line:
@@ -401,8 +409,8 @@ python src/train.py experiment=kosc/ffn_mse model.optimizer.lr=1e-4
 # Use CPU trainer instead of GPU
 python src/train.py experiment=kosc/ffn_mse trainer=cpu
 
-# Enable W&B logging (opt-in; default logger is CSV + TensorBoard)
-python src/train.py experiment=kosc/ffn_mse logger=wandb
+# Override default logger compose (default is W&B + CSV + TensorBoard)
+python src/train.py experiment=kosc/ffn_mse logger=csv
 
 # Limit training steps
 python src/train.py experiment=kosc/ffn_mse trainer.max_steps=10000

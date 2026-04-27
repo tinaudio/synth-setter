@@ -2,14 +2,14 @@
 
 defaults:
   - _self_
-  - data: surge_mini # choose datamodule with `test_dataloader()` for evaluation
-  - model: surge_flow
+  - data: ??? # choose datamodule with `test_dataloader()` for evaluation
+  - model: ???
   - logger: null
   - trainer: gpu
   - paths: default
   - extras: default
   - hydra: default
-  - callbacks: eval_surge
+  - callbacks: none
   - experiment: null
 
 task_name: "eval"

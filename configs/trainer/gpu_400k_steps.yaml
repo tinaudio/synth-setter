@@ -1,0 +1,11 @@
+defaults:
+  - default
+
+min_steps: 400_000
+max_steps: 400_000
+
+log_every_n_steps: 100
+val_check_interval: 10_000
+
+accelerator: gpu
+devices: 1

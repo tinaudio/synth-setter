@@ -1,6 +1,6 @@
 # W&B Integration Reference
 
-> **Code version**: `0b55a9e` (2026-04-20, `feat/wandb-optional-by-default`)
+> **Code version**: `1970388` (2026-04-25, `feat/wandb-default-logger`)
 > **PyTorch**: see `requirements.txt` · **Lightning**: see `requirements.txt`
 > **Tracking**: #252, #263
 
@@ -23,9 +23,9 @@ ______________________________________________________________________
 
 | Concern           | How it works                                                                                             | File                               |
 | ----------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| W&B run creation  | `WandbLogger` instantiated by Hydra — opt-in via `logger=wandb` (the default `many_loggers` is CSV + TB) | `configs/logger/wandb.yaml`        |
+| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)    | `configs/logger/wandb.yaml`        |
 | Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"` | `configs/logger/wandb.yaml:10,13`  |
-| Default compose   | `many_loggers` composes `csv + tensorboard` (W&B excluded by default)                                    | `configs/logger/many_loggers.yaml` |
+| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                             | `configs/logger/many_loggers.yaml` |
 | Run ID            | `null` (W&B auto-generates)                                                                              | `configs/logger/wandb.yaml:8`      |
 | Checkpoint upload | `log_model: "all"`                                                                                       | `configs/logger/wandb.yaml:11`     |
 | Code saving       | `wandb.Settings(code_dir=".")`                                                                           | `configs/logger/wandb.yaml:17-19`  |
@@ -86,18 +86,15 @@ Logged via `self.log()` in each LightningModule:
 | `KSinFeedForwardModule`   | `train/loss`                                             | yes  | yes   |
 |                           | `val/lsd`, `val/chamfer`, `val/loss`                     | —    | yes   |
 |                           | `test/*` metrics                                         | —    | yes   |
-| `MNISTLitModule`          | `train/loss`, `train/acc`                                | —    | yes   |
-|                           | `val/loss`, `val/acc`, `val/acc_best`                    | —    | yes   |
-|                           | `test/loss`, `test/acc`                                  | —    | yes   |
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
 Image-producing callbacks route figures through `_log_figure` in
 `src/utils/callbacks.py`, which dispatches to `WandbLogger.log_image` and/or
 `TensorBoardLogger.experiment.add_figure` depending on the attached loggers.
-Under the default `many_loggers` composition (CSV + TB), plots land in
-TensorBoard; with `logger=wandb` they go to W&B; with both attached they go
-to both.
+Under the default `many_loggers` composition (W&B + CSV + TB), plots land in
+both W&B and TensorBoard; with `logger=tensorboard` they go to TensorBoard
+only; with `logger=wandb` they go to W&B only.
 
 | Callback                           | Logged key                       | Trigger                                         | Symbol                                                               |
 | ---------------------------------- | -------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------- |

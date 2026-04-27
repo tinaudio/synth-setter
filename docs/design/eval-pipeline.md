@@ -750,7 +750,7 @@ main ──●──────────────●───────
 
 | Task | Area                     | Already works                       | Actual change                      | Lines |
 | ---- | ------------------------ | ----------------------------------- | ---------------------------------- | ----- |
-| 1.1  | Data configs             | mnist.yaml uses `${paths.data_dir}` | Change 2 surge configs to match    | ~2    |
+| 1.1  | Data configs             | template uses `${paths.data_dir}`   | Change 2 surge configs to match    | ~2    |
 | 1.2  | Predict                  | src/eval.py works, `ckpt_path: ???` | Add Makefile target                | ~10   |
 | 1.3  | Rendering                | Xvfb auto-launch in renderscript.sh | Add macOS `$OSTYPE` conditional    | ~5    |
 | 1.4  | Metrics                  | All 4 metrics working, portable     | Add Makefile target                | ~5    |

@@ -1,8 +1,6 @@
 import hydra
-from hydra import compose, initialize
-from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, OmegaConf
 
 
 def test_train_config(cfg_train: DictConfig) -> None:
@@ -42,52 +40,21 @@ def test_eval_config(cfg_eval: DictConfig) -> None:
 def test_cfg_train_trainer_keys_coherent_with_test_mode(cfg_train: DictConfig) -> None:
     """Guard: ``cfg_train`` fixture produces a coherent epoch-based trainer config.
 
-    Regression guard for #625: the conftest fixture used to override only
-    ``max_epochs = 1`` while leaving ``configs/trainer/default.yaml`` step-based
-    keys (``min_steps``, ``max_steps``, ``val_check_interval``,
-    ``check_val_every_n_epoch=null``) untouched. That mismatch silently
-    suppressed validation under ``limit_train_batches=0.01``, breaking every
-    test that depends on ``val/loss`` (#47, #619, #620, #624).
+    Regression guard for #625: the original mismatch was that
+    ``configs/trainer/default.yaml`` shipped step-based keys (``min_steps``,
+    ``max_steps``) which the fixture never unset, silently suppressing
+    validation under ``limit_train_batches=0.01`` (#47, #619, #620, #624).
+
+    The fix on this branch removes those keys from ``trainer/default.yaml``
+    entirely and pins dataset shape via ``train_val_test_sizes`` instead of
+    fractional ``limit_*_batches``. The guard now asserts the structural
+    invariant: step-based keys must not be present in the composed trainer.
     """
     assert cfg_train.trainer.max_epochs == 1
-    assert cfg_train.trainer.min_steps is None
-    # ``-1`` is Lightning's "unbounded" sentinel; ``None`` trips an internal
-    # ``None < int`` comparison on Trainer init.
-    assert cfg_train.trainer.max_steps == -1
-    assert cfg_train.trainer.val_check_interval is None
     assert cfg_train.trainer.check_val_every_n_epoch == 1
-
-
-def test_cfg_train_t_max_interpolation_resolves() -> None:
-    """Guard: ``${trainer.max_steps}`` interpolation used by surge model configs
-    still resolves when the test-mode fixture sets ``trainer.max_steps = -1``
-    (Lightning's unbounded sentinel).
-
-    Several ``configs/model/surge_*.yaml`` files interpolate
-    ``T_max: ${trainer.max_steps}``. If a future test forgets to guard this,
-    composing those configs crashes. This test composes the train config with a
-    surge model override and selects ``model.scheduler.T_max`` to force that
-    specific interpolation; unrelated interpolations (e.g. env-var resolvers)
-    are not exercised here.
-    """
-    GlobalHydra.instance().clear()
-    with initialize(version_base="1.3", config_path="../configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=True,
-            overrides=["model=surge_ffn"],
-        )
-        with open_dict(cfg):
-            cfg.trainer.max_epochs = 1
-            cfg.trainer.min_steps = None
-            cfg.trainer.max_steps = -1
-            cfg.trainer.val_check_interval = None
-            cfg.trainer.check_val_every_n_epoch = 1
-
-        # Resolving only T_max exercises the ${trainer.max_steps} interpolation
-        # without pulling in unrelated env-var resolvers.
-        assert OmegaConf.select(cfg, "model.scheduler.T_max") == -1
-    GlobalHydra.instance().clear()
+    assert cfg_train.trainer.val_check_interval == 1
+    assert "min_steps" not in cfg_train.trainer
+    assert "max_steps" not in cfg_train.trainer
 
 
 class TestWandbConfigResolvesFromEnv:

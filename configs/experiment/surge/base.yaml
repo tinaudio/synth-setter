@@ -34,5 +34,10 @@ trainer:
   gradient_clip_val: 0.5
   limit_val_batches: 0
   precision: bf16-mixed
+  # Surge model configs interpolate ${trainer.max_steps} into the
+  # CosineAnnealingLR scheduler's T_max, so max_steps must be set for any
+  # surge_* model run. The values below are the default for surge experiments.
   min_steps: 1_000_000
   max_steps: 1_000_000
+  log_every_n_steps: 100
+  val_check_interval: 10_000
