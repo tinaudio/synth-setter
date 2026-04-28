@@ -68,10 +68,15 @@ def generate_sample(
     min_loudness: float,
     param_spec: ParamSpec,
     preset_path: str,
+    fixed_synth_params: dict[str, float] | None = None,
 ) -> VSTDataSample:
     while True:
         logger.debug("sampling params")
-        synth_params, note_params = param_spec.sample()
+        if fixed_synth_params is not None:
+            _, note_params = param_spec.sample()
+            synth_params = fixed_synth_params
+        else:
+            synth_params, note_params = param_spec.sample()
 
         logger.debug("sampling note")
 
@@ -223,6 +228,7 @@ def make_dataset(
     min_loudness: float,
     param_spec: ParamSpec,
     sample_batch_size: int,
+    fixed_synth_params_list: List[dict[str, float]] | None = None,
 ) -> None:
 
     audio_dataset, mel_dataset, param_dataset, start_idx = (
@@ -258,6 +264,7 @@ def make_dataset(
             min_loudness=min_loudness,
             param_spec=param_spec,
             preset_path=preset_path,
+            fixed_synth_params=fixed_synth_params_list[i] if fixed_synth_params_list else None,
         )
 
         sample_batch.append(sample)
