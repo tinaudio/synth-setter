@@ -1,7 +1,10 @@
 name: MPS Tests
 
 # Runs only @pytest.mark.mps tests on a macOS Apple Silicon runner.
-# Triggers on changes that could affect MPS-path correctness: src/ and configs/.
+# Triggers on changes that could affect MPS-path correctness: src/, configs/,
+# and the test files that drive the MPS-marked tests + their fixtures
+# (tests/test_train.py exercises the [mps] parametrize; tests/conftest.py
+# defines the accelerator fixture and surge_xt fixture group both consume).
 on:
   workflow_dispatch:
   push:
@@ -9,12 +12,16 @@ on:
     paths:
       - "src/**"
       - "configs/**"
+      - "tests/test_train.py"
+      - "tests/conftest.py"
       - ".github/workflows/test-mps.yml"
   pull_request:
     branches: [main, "release/*", "dev"]
     paths:
       - "src/**"
       - "configs/**"
+      - "tests/test_train.py"
+      - "tests/conftest.py"
       - ".github/workflows/test-mps.yml"
 
 permissions:

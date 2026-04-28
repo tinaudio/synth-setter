@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import h5py
-import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters infixtures
+import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters in fixtures
 import numpy as np
 import pytest
 import rootutils
@@ -285,15 +285,12 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
             cfg.trainer.accelerator = accelerator
             # MPS doesn't support float64 ops Lightning uses by default; pin to float32.
             if accelerator == "cpu":
-                cfg.data.num_workers = 0
                 cfg.model.compile = False
                 cfg.trainer.precision = "32-true"
             elif accelerator == "mps":
-                cfg.data.num_workers = 0
                 cfg.trainer.precision = "32-true"
                 cfg.model.compile = False
             elif accelerator == "gpu":
-                cfg.data.num_workers = 2
                 cfg.model.compile = True
                 cfg.trainer.precision = "16-mixed"
 
@@ -307,6 +304,7 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
             # The 5-sample fixture's stats.npz has zero-std mel bins that poison the batch
             # with NaN via (mel - mean) / std.
             cfg.data.use_saved_mean_and_variance = False
+            cfg.data.num_workers = 0
 
             cfg.trainer.devices = 1
             cfg.trainer.max_steps = TRAINING_STEPS
