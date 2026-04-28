@@ -1,18 +1,19 @@
 """Interactive Surge XT preview with real-time audio streaming via pedalboard."""
 
 import math
-import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 import h5py
+import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters in fixtures
 import numpy as np
 import rootutils
 import torch
 from pedalboard import VST3Plugin
-from pedalboard.io import AudioFile, AudioStream
+from pedalboard.io import AudioFile, AudioStream, StreamResampler
+from rich import print
 
 from src.data.vst import load_plugin, load_preset, param_specs
 from src.data.vst.core import set_params
@@ -23,6 +24,10 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 CHANNELS = 2
 SAMPLE_RATE = 44100
 BUFFER_SIZE = 512
+
+PLAYBACK_SAMPLE_RATE = (
+    44100  # Sample rate to use for real-time playback. Must be supported by the output device.
+)
 
 
 @dataclass(frozen=True)
@@ -89,22 +94,6 @@ class DatasetRefType(click.ParamType):
         except ValueError:
             self.fail(f"batch index must be an integer, got {idx_str!r}", param, ctx)
         return DatasetRef(path=Path(path_str), batch_idx=batch_idx)
-
-
-def play_audio(plugin: VST3Plugin) -> None:
-    """Stream silence through Surge XT and write synthesized audio to the output device."""
-    silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
-    output_device = None if sys.platform == "Linux" else AudioStream.default_output_device_name
-    with AudioStream(
-        output_device_name=output_device,
-        sample_rate=SAMPLE_RATE,
-        buffer_size=BUFFER_SIZE,
-    ) as stream:
-        with AudioFile("surge_xt_interactive_recording.wav", "w", SAMPLE_RATE, CHANNELS) as f:
-            while True:
-                synth_output = plugin(silence, SAMPLE_RATE, reset=False)
-                stream.write(synth_output, SAMPLE_RATE)
-                f.write(synth_output)
 
 
 def render_to_wav(plugin: VST3Plugin, output_path: Path, duration_seconds: float) -> None:
@@ -185,8 +174,16 @@ def load_dataset_synth_params(
     with h5py.File(ref.path, "r") as f:
         param_array = f["param_array"]
         assert isinstance(param_array, h5py.Dataset), "expected h5py.Dataset for 'param_array'"
+        print(
+            f"Loaded param_array from {ref.path}: shape={param_array.shape}, dtype={param_array.dtype}"
+        )
+        print(f"param array keys: {list(f.keys())}")
+        print(f"param_array : {param_array}")
         row = np.asarray(param_array[ref.batch_idx], dtype=np.float32)
+        print(f"Loaded row from {ref.path}: {row}")
+
     synth_params, _ = spec.decode(row)
+    print(f"Decoded synth params: {synth_params}")
     return synth_params
 
 
@@ -211,6 +208,47 @@ def load_prediction_synth_params(
     """
     pred_tensor = _load_pred_tensor(ref.path)
     return decode_prediction_row(pred_tensor, ref.batch_idx, param_spec_name)
+
+
+def play_audio(plugin: VST3Plugin, close_window_event: threading.Event) -> None:
+    """Stream silence through Surge XT and write synthesized audio to the output device."""
+    silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
+    # output_device = None if sys.platform == "Linux" else AudioStream.default_output_device_name
+    stream_resampler = None
+    with AudioStream(
+        output_device_name=AudioStream.default_output_device_name,
+        sample_rate=SAMPLE_RATE,
+        buffer_size=BUFFER_SIZE,
+    ) as stream:
+        while not close_window_event.is_set():
+            if SAMPLE_RATE != PLAYBACK_SAMPLE_RATE and stream_resampler is None:
+                stream_resampler = StreamResampler(SAMPLE_RATE, PLAYBACK_SAMPLE_RATE, CHANNELS)
+            synth_output = plugin(silence, SAMPLE_RATE, reset=False)
+            if stream_resampler:
+                resampled = stream_resampler.process(synth_output)
+                stream.write(resampled, PLAYBACK_SAMPLE_RATE)
+            else:
+                stream.write(synth_output, SAMPLE_RATE)
+
+
+def wait_and_watch(plugin: VST3Plugin, close_window_event: threading.Event) -> None:
+    def quit_action():
+        close_window_event.set()
+        return False  # stop loop
+
+    def show_params():
+        print(f"params: {dict(plugin.parameters)}")  # pyright: ignore[reportAttributeAccessIssue]
+        return True  # keep going
+
+    actions = {
+        "q": quit_action,
+        "p": show_params,
+    }
+    while not close_window_event.is_set():
+        ch = click.getchar()
+        action = actions.get(ch)
+        if action and not action():
+            return
 
 
 @click.command()
@@ -280,6 +318,13 @@ def main(
     """
     plugin = load_plugin(plugin_path)
     load_preset(plugin, preset_path)
+
+    # flush plugin to ensure that full parameter dict is populated.
+    plugin.process([], 32.0, SAMPLE_RATE, CHANNELS, 2048, True)  # flush
+    plugin.reset()
+    plugin.process([], 32.0, SAMPLE_RATE, CHANNELS, 2048, True)  # flush
+    plugin.reset()
+
     if dataset_ref is not None:
         synth_params = load_dataset_synth_params(dataset_ref, param_spec)
         set_params(plugin, synth_params)
@@ -293,10 +338,16 @@ def main(
         render_to_wav(plugin, output_wav, duration)
         return
 
-    t = threading.Thread(target=play_audio, args=(plugin,), daemon=True)
-    t.start()
+    close_window_event = threading.Event()
+    audio_thread = threading.Thread(
+        target=play_audio, args=(plugin, close_window_event), daemon=True
+    )
+    audio_thread.start()
+    threading.Thread(target=wait_and_watch, args=(plugin, close_window_event), daemon=True).start()
 
-    plugin.show_editor()
+    plugin.show_editor(close_window_event)
+    # editor closed manually → still shut down audio
+    audio_thread.join(timeout=2)
 
 
 if __name__ == "__main__":

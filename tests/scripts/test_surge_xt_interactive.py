@@ -262,6 +262,25 @@ class TestLoadDatasetSynthParams:
         with pytest.raises((IndexError, ValueError)):
             surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
+    @pytest.mark.slow
+    def test_loads_row_from_surge_xt_smoke_fixture(
+        self,
+        surge_xt_interactive,
+        surge_xt_smoke_datasets: Path,
+    ) -> None:
+        """Loads row 0 from the real ``surge_xt_smoke_datasets`` test.h5 via the surge_xt spec."""
+        ref = surge_xt_interactive.DatasetRef(
+            path=surge_xt_smoke_datasets / "test.h5", batch_idx=0
+        )
+
+        loaded = surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name="surge_xt")
+
+        expected_keys = {p.name for p in param_specs["surge_xt"].synth_params}
+        assert set(loaded.keys()) == expected_keys
+        for name, value in loaded.items():
+            assert isinstance(value, float), f"{name} is {type(value).__name__}, expected float"
+            assert np.isfinite(value), f"{name} = {value} is not finite"
+
 
 class _ConstantPlugin:
     """Stand-in plugin: returns a constant-valued buffer of the input shape.
