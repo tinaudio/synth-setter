@@ -135,6 +135,12 @@ jobs:
           output-file-path: bench.json
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
+          # ``gh-pages`` doesn't exist yet on first bootstrap. Without this,
+          # the action fails at ``git fetch ... gh-pages:gh-pages`` with
+          # "couldn't find remote ref gh-pages" instead of creating it.
+          # Safe to keep on after bootstrap — the action falls back to fetch
+          # when the local checkout doesn't have the branch yet.
+          skip-fetch-gh-pages: true
           auto-push: true
           alert-threshold: "150%"
           comment-on-alert: true
