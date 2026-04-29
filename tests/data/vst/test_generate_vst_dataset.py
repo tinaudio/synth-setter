@@ -2,6 +2,8 @@
 
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,7 +31,7 @@ _SPEC_NAME = "surge_xt"
 _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
 
-# Phase-robust audio similarity thresholds for fixed-params replay vs. candidates.
+# Phase-robust audio similarity thresholds for replayed-params vs. candidates.
 # Two independent renders of identical params differ at the sample level (Surge XT's
 # oscillator phase init is nondeterministic across the per-call plugin reloads in
 # ``render_params``), but should remain perceptually close. Tune downward if the
@@ -244,7 +246,7 @@ def _assert_h5_structure_is_valid(
     """Open ``out`` and assert dataset keys, shapes, dtypes, attrs, and finiteness.
 
     Returns materialized (audio, mel_spec, param_array) numpy arrays so callers can perform per-row
-    decode checks without re-opening the file. Shared by the fixed-params and random-sampling e2e
+    decode checks without re-opening the file. Shared by the round-trip and random-sampling e2e
     tests.
     """
     expected_audio_shape = (num_samples, _CHANNELS, int(_SAMPLE_RATE * _DURATION))
@@ -290,6 +292,35 @@ def _assert_h5_structure_is_valid(
         return audio_arr, mel[...], params[...]
 
 
+@contextmanager
+def _patched_sample(
+    spec: ParamSpec,
+    replay: list[tuple[dict[str, float], dict[str, int | tuple[float, float]]]],
+) -> Iterator[None]:
+    """Patch ``spec.sample`` with a deterministic replay over the lifetime of the block.
+
+    Each call to the patched ``sample`` yields the next ``(synth, note)`` tuple from
+    ``replay``. If the loudness ``while True`` loop in ``generate_sample`` retries (an
+    unexpected extra call), ``next(replay_iter)`` raises ``StopIteration`` which
+    surfaces as a test failure rather than a silent desync. On exit, asserts the
+    total pull count equals ``len(replay)``.
+    """
+    replay_iter = iter(replay)
+    pull_count = [0]
+
+    def fake_sample() -> tuple[dict[str, float], dict[str, int | tuple[float, float]]]:
+        pull_count[0] += 1
+        return next(replay_iter)
+
+    with patch.object(spec, "sample", side_effect=fake_sample):
+        yield
+
+    assert pull_count[0] == len(replay), (
+        f"expected exactly {len(replay)} param_spec.sample calls; got {pull_count[0]} "
+        "(loudness loop retried — replay may have desynced)"
+    )
+
+
 def _assert_round_trip_matches(
     actual_audio: np.ndarray,
     actual_mel: np.ndarray,
@@ -307,9 +338,9 @@ def _assert_round_trip_matches(
     Five checks: ``param_array`` exact equality, per-row phase-robust audio metrics
     (MSS / wMFCC / SOT / RMS-envelope cosine), mel mean-abs-diff, per-row decoded-params
     equality vs. the expected patches, and decoded shape/type sanity. Element-wise audio
-    equality is *not* a property of the system — see the docstring of
-    ``test_make_dataset_with_fixed_params_round_trips_per_row`` for the phase-init
-    nondeterminism background.
+    equality is *not* a property of the system: ``render_params`` reloads Surge XT per
+    call (work-around for the silent-output bug, commits 086d80f / 9ff7f16), and each
+    reload yields a different oscillator phase init.
 
     ``expected_synth_patches`` / ``expected_note_patches`` are length-``num_samples``
     lists. For tests that replay a single fixed patch across all rows, callers should
@@ -395,17 +426,12 @@ def test_make_dataset_replays_via_param_spec_sample_mock_with_hardcoded_params(
     """
     spec = param_specs[_SPEC_NAME]
     num_samples = 8
-
-    pull_count = [0]
-
-    def fake_sample() -> tuple[dict[str, float], dict[str, int | tuple[float, float]]]:
-        pull_count[0] += 1
-        return _HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS
+    replay = [(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * num_samples
 
     expected_dataset = tmp_path / "expected.h5"
     with (
         h5py.File(expected_dataset, "a") as f,
-        patch.object(spec, "sample", side_effect=fake_sample),
+        _patched_sample(spec, replay),
     ):
         make_dataset(
             hdf5_file=f,
@@ -420,21 +446,15 @@ def test_make_dataset_replays_via_param_spec_sample_mock_with_hardcoded_params(
             param_spec=spec,
             sample_batch_size=num_samples,
         )
-
-    assert pull_count[0] == num_samples, (
-        f"Stage 1: expected exactly {num_samples} param_spec.sample calls; got "
-        f"{pull_count[0]} (loudness loop retried — hardcoded params may be too quiet)"
-    )
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
         expected_dataset, spec, num_samples
     )
 
-    pull_count[0] = 0
     got_dataset = tmp_path / "replayed.h5"
     with (
         h5py.File(got_dataset, "a") as f,
-        patch.object(spec, "sample", side_effect=fake_sample),
+        _patched_sample(spec, replay),
     ):
         make_dataset(
             hdf5_file=f,
@@ -449,11 +469,6 @@ def test_make_dataset_replays_via_param_spec_sample_mock_with_hardcoded_params(
             param_spec=spec,
             sample_batch_size=num_samples,
         )
-
-    assert pull_count[0] == num_samples, (
-        f"Stage 2: expected exactly {num_samples} param_spec.sample calls; got "
-        f"{pull_count[0]} (loudness loop retried — hardcoded params may be too quiet)"
-    )
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
         got_dataset, spec, num_samples
@@ -475,21 +490,20 @@ def test_make_dataset_replays_via_param_spec_sample_mock_with_hardcoded_params(
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_make_dataset_with_fixed_params_round_trips_per_row(tmp_path: Path) -> None:
-    """make_dataset with fixed_*_params_list reproduces a previous dataset within audio metrics.
+def test_make_dataset_replays_via_param_spec_sample_mock(tmp_path: Path) -> None:
+    """make_dataset reproduces a previous dataset row-for-row when params are replayed.
 
     Two-stage e2e test:
 
-    1. Build a "candidates" dataset by calling ``make_dataset`` *without* any
-       ``fixed_*_params_list``. Internally ``generate_sample`` samples params via
-       ``param_spec.sample()`` and rejects renders below ``_MIN_LOUDNESS`` in a
-       ``while True`` loop. Each surviving row is therefore guaranteed to be
-       loud enough to pass the loudness gate.
+    1. Build a "candidates" dataset by calling ``make_dataset`` with the natural
+       random source. ``generate_sample`` samples params via ``param_spec.sample()``
+       and rejects renders below ``_MIN_LOUDNESS`` in a ``while True`` loop, so each
+       surviving row is guaranteed to be loud enough to pass the loudness gate.
     2. Decode the candidate ``param_array`` rows back into ``synth_patches`` /
-       ``note_patches`` and feed those into a second ``make_dataset`` call as
-       ``fixed_synth_params_list`` / ``fixed_note_params_list``. Because the
+       ``note_patches`` and replay them in Stage 2 by patching ``param_spec.sample``
+       (via ``_patched_sample``) to yield the candidate tuples in order. Because the
        params are guaranteed-loud (step 1), this run can't infinite-loop on the
-       loudness gate the way it would for arbitrary fixed params.
+       loudness gate.
 
     Assertions:
 
@@ -545,103 +559,12 @@ def test_make_dataset_with_fixed_params_round_trips_per_row(tmp_path: Path) -> N
     log.info("synth_patches: %s", synth_patches)
     log.info("note_patches: %s", note_patches)
 
-    # Stage 2: replay the candidates as fixed inputs and verify reproducibility.
-    got_dataset = tmp_path / "fixed.h5"
-    with h5py.File(got_dataset, "a") as f:
-        make_dataset(
-            hdf5_file=f,
-            num_samples=_NUM_SAMPLES,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=_NUM_SAMPLES,
-            fixed_synth_params_list=synth_patches,
-            fixed_note_params_list=note_patches,
-        )
-
-    actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
-        got_dataset, spec, _NUM_SAMPLES
-    )
-
-    _assert_round_trip_matches(
-        actual_audio=actual_audio,
-        actual_mel=actual_mel,
-        actual_params=actual_params,
-        expected_audio=expected_audio,
-        expected_mel=expected_mel,
-        expected_params=expected_params,
-        expected_synth_patches=synth_patches,
-        expected_note_patches=note_patches,
-        spec=spec,
-        num_samples=_NUM_SAMPLES,
-    )
-
-
-@pytest.mark.slow
-@pytest.mark.requires_vst
-@skip_no_vst
-def test_make_dataset_replays_via_param_spec_sample_mock(tmp_path: Path) -> None:
-    """make_dataset round-trips when the random source is patched, not via fixed_*_params_list.
-
-    Same two-stage e2e shape as ``test_make_dataset_with_fixed_params_round_trips_per_row``,
-    but the Stage 2 replay is driven by patching ``param_spec.sample`` to yield the Stage 1
-    candidate ``(synth, note)`` tuples in order, instead of feeding them through the public
-    ``fixed_synth_params_list`` / ``fixed_note_params_list`` API. ``generate_sample`` still
-    runs end-to-end (real ``render_params``, real loudness gate, real mel computation, real
-    writer) — only the random source is controlled. This pins the same reproducibility
-    invariant via the function's internal sampling seam.
-
-    The replay assumes ``generate_sample`` calls ``param_spec.sample`` exactly once per output
-    sample. If the loudness ``while True`` loop retries (a re-render of an already-survived
-    candidate dipping below ``_MIN_LOUDNESS``), the iterator would desync; we detect that by
-    asserting the total pull count equals ``_NUM_SAMPLES`` after the run.
-    """
-    spec = param_specs[_SPEC_NAME]
-
-    expected_dataset = tmp_path / "candidates.h5"
-    with h5py.File(expected_dataset, "a") as expected_file:
-        make_dataset(
-            hdf5_file=expected_file,
-            num_samples=_NUM_SAMPLES,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=_NUM_SAMPLES,
-        )
-
-    expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
-        expected_dataset, spec, _NUM_SAMPLES
-    )
-
-    synth_patches: list[dict[str, float]] = []
-    note_patches: list[dict[str, int | tuple[float, float]]] = []
-    for i in range(_NUM_SAMPLES):
-        decoded_synth_params, decoded_note_params = spec.decode(expected_params[i])
-        synth_patches.append(decoded_synth_params)
-        note_patches.append(decoded_note_params)
-
-    replay_iter = iter(zip(synth_patches, note_patches, strict=True))
-    pull_count = [0]
-
-    def fake_sample() -> tuple[dict[str, float], dict[str, int | tuple[float, float]]]:
-        pull_count[0] += 1
-        # Extra pulls (loudness retry) raise StopIteration, surfacing as a test failure.
-        return next(replay_iter)
-
+    # Stage 2: replay the candidates via ``_patched_sample`` and verify reproducibility.
     got_dataset = tmp_path / "replayed.h5"
+    replay = list(zip(synth_patches, note_patches, strict=True))
     with (
         h5py.File(got_dataset, "a") as f,
-        patch.object(spec, "sample", side_effect=fake_sample),
+        _patched_sample(spec, replay),
     ):
         make_dataset(
             hdf5_file=f,
@@ -656,11 +579,6 @@ def test_make_dataset_replays_via_param_spec_sample_mock(tmp_path: Path) -> None
             param_spec=spec,
             sample_batch_size=_NUM_SAMPLES,
         )
-
-    assert pull_count[0] == _NUM_SAMPLES, (
-        f"expected exactly {_NUM_SAMPLES} param_spec.sample calls; got {pull_count[0]} "
-        "(loudness loop retried — replay may have desynced)"
-    )
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
         got_dataset, spec, _NUM_SAMPLES
@@ -684,7 +602,7 @@ def test_make_dataset_replays_via_param_spec_sample_mock(tmp_path: Path) -> None
 @pytest.mark.requires_vst
 @skip_no_vst
 def test_make_dataset_with_random_sampling_produces_valid_h5(tmp_path: Path) -> None:
-    """make_dataset without fixed_*_params_list samples params internally and writes a valid h5."""
+    """make_dataset with the natural random source writes a valid h5."""
     out = tmp_path / "random.h5"
     spec = param_specs[_SPEC_NAME]
 
