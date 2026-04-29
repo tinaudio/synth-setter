@@ -10,7 +10,7 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 
-def _prepare_plugin(stop_event: threading.Event, sleep_time: float = 7.0) -> None:
+def _prepare_plugin(stop_event: threading.Event, sleep_time: float = 0.5) -> None:
     time.sleep(sleep_time)
     stop_event.set()
 
