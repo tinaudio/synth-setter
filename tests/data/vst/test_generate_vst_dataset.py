@@ -637,7 +637,6 @@ def test_datasets_from_hardcoded_params_are_identical(
     )
 
 
-@pytest.mark.xfail(strict=True, reason="bug #489")
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
