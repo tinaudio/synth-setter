@@ -1,5 +1,6 @@
 """Basic e2e test for src/data/vst/generate_vst_dataset.py — verifies HDF5 output."""
 
+import json
 import logging
 import os
 from collections.abc import Iterator
@@ -322,6 +323,114 @@ def _patched_sample(
     )
 
 
+def _audio_metrics(
+    target: np.ndarray, pred: np.ndarray
+) -> tuple[float, float, float, float]:
+    """Compute (mss, wmfcc, sot, rms_cos) for one (target, pred) audio pair."""
+    return (
+        compute_mss(target, pred),
+        compute_wmfcc(target, pred),
+        compute_sot(target, pred),
+        compute_rms(target, pred),
+    )
+
+
+def _assert_audio_metrics_within_thresholds(
+    target: np.ndarray, pred: np.ndarray, label: str
+) -> tuple[float, float, float, float]:
+    """Assert phase-robust audio metrics for one pair are within the module thresholds.
+
+    Returns the four metric values so callers can accumulate them for trend reporting.
+    """
+    mss, wmfcc, sot, rms_cos = _audio_metrics(target, pred)
+    log.info(
+        "%s audio metrics: mss=%.4f wmfcc=%.4f sot=%.4f rms_cos=%.4f",
+        label,
+        mss,
+        wmfcc,
+        sot,
+        rms_cos,
+    )
+    assert mss < _MSS_MAX, f"{label}: mss={mss:.4f} exceeds {_MSS_MAX}"
+    assert wmfcc < _WMFCC_MAX, f"{label}: wmfcc={wmfcc:.4f} exceeds {_WMFCC_MAX}"
+    assert sot < _SOT_MAX, f"{label}: sot={sot:.4f} exceeds {_SOT_MAX}"
+    assert rms_cos > _RMS_MIN_COSINE, (
+        f"{label}: rms cosine similarity {rms_cos:.4f} below {_RMS_MIN_COSINE}"
+    )
+    return mss, wmfcc, sot, rms_cos
+
+
+def _emit_benchmark_metrics(entries: list[dict[str, float | str]]) -> None:
+    """Append metrics to ``BENCHMARK_OUTPUT_PATH`` for github-action-benchmark.
+
+    No-op when the env var is unset (e.g. local pytest runs). The on-disk format
+    is the ``customSmallerIsBetter`` schema:
+    https://github.com/benchmark-action/github-action-benchmark#examples
+    """
+    out_path = os.environ.get("BENCHMARK_OUTPUT_PATH")
+    if not out_path:
+        return
+    out = Path(out_path)
+    existing = json.loads(out.read_text()) if out.exists() else []
+    out.write_text(json.dumps(existing + entries, indent=2))
+
+
+def _assert_all_pairs_audio_metrics_within_thresholds(
+    audio: np.ndarray, label_prefix: str
+) -> None:
+    """For every (i, j) pair with i < j in ``audio``, assert metrics within thresholds.
+
+    Use this when every row is expected to be a render of the *same* params — every pair should be
+    perceptually identical, and the worst pair across the run is the interesting datum. Asserts on
+    the worst measurement so a single failure surfaces the most-divergent rendering rather than the
+    first iteration to trip a threshold. Identifies the (i, j) that produced each worst measurement
+    to make debugging easy.
+    """
+    n = audio.shape[0]
+    pair_count = n * (n - 1) // 2
+    worst_mss = (-1.0, -1, -1)
+    worst_wmfcc = (-1.0, -1, -1)
+    worst_sot = (-1.0, -1, -1)
+    worst_rms_cos = (1.0 + 1e-9, -1, -1)  # min target — start above 1.0
+    for i in range(n):
+        for j in range(i + 1, n):
+            mss, wmfcc, sot, rms_cos = _audio_metrics(audio[i], audio[j])
+            if mss > worst_mss[0]:
+                worst_mss = (mss, i, j)
+            if wmfcc > worst_wmfcc[0]:
+                worst_wmfcc = (wmfcc, i, j)
+            if sot > worst_sot[0]:
+                worst_sot = (sot, i, j)
+            if rms_cos < worst_rms_cos[0]:
+                worst_rms_cos = (rms_cos, i, j)
+    log.info(
+        "%s worst-pair over %d pairs: mss=%.4f@(%d,%d) wmfcc=%.4f@(%d,%d) "
+        "sot=%.4f@(%d,%d) rms_cos=%.4f@(%d,%d)",
+        label_prefix,
+        pair_count,
+        *worst_mss,
+        *worst_wmfcc,
+        *worst_sot,
+        *worst_rms_cos,
+    )
+    assert worst_mss[0] < _MSS_MAX, (
+        f"{label_prefix}: worst mss={worst_mss[0]:.4f} at pair {worst_mss[1:]} "
+        f"exceeds {_MSS_MAX}"
+    )
+    assert worst_wmfcc[0] < _WMFCC_MAX, (
+        f"{label_prefix}: worst wmfcc={worst_wmfcc[0]:.4f} at pair {worst_wmfcc[1:]} "
+        f"exceeds {_WMFCC_MAX}"
+    )
+    assert worst_sot[0] < _SOT_MAX, (
+        f"{label_prefix}: worst sot={worst_sot[0]:.4f} at pair {worst_sot[1:]} "
+        f"exceeds {_SOT_MAX}"
+    )
+    assert worst_rms_cos[0] > _RMS_MIN_COSINE, (
+        f"{label_prefix}: worst rms cosine={worst_rms_cos[0]:.4f} at pair "
+        f"{worst_rms_cos[1:]} below {_RMS_MIN_COSINE}"
+    )
+
+
 def _assert_round_trip_matches(
     actual_audio: np.ndarray,
     actual_mel: np.ndarray,
@@ -333,6 +442,7 @@ def _assert_round_trip_matches(
     expected_note_patches: list[dict[str, int | tuple[float, float]]],
     spec: ParamSpec,
     num_samples: int,
+    benchmark_name_prefix: str | None = None,
 ) -> None:
     """Assert a Stage-2 dataset reproduces a Stage-1 dataset within phase-robust tolerances.
 
@@ -346,6 +456,10 @@ def _assert_round_trip_matches(
     ``expected_synth_patches`` / ``expected_note_patches`` are length-``num_samples``
     lists. For tests that replay a single fixed patch across all rows, callers should
     pass the patch repeated ``num_samples`` times.
+
+    ``benchmark_name_prefix`` (optional): when set and ``BENCHMARK_OUTPUT_PATH`` is
+    defined, the helper emits the worst-case per-pair metrics + mel diff under that
+    prefix for github-action-benchmark trend tracking. See ``_emit_benchmark_metrics``.
     """
     np.testing.assert_allclose(
         actual_params,
@@ -355,33 +469,57 @@ def _assert_round_trip_matches(
         err_msg="param_array row-for-row mismatch",
     )
 
+    mss_values: list[float] = []
+    wmfcc_values: list[float] = []
+    sot_values: list[float] = []
+    rms_cos_values: list[float] = []
     for i in range(num_samples):
-        target = expected_audio[i]
-        pred = actual_audio[i]
-        mss = compute_mss(target, pred)
-        wmfcc = compute_wmfcc(target, pred)
-        sot = compute_sot(target, pred)
-        rms_cos = compute_rms(target, pred)
-        log.info(
-            "sample %d audio metrics: mss=%.4f wmfcc=%.4f sot=%.4f rms_cos=%.4f",
-            i,
-            mss,
-            wmfcc,
-            sot,
-            rms_cos,
+        mss, wmfcc, sot, rms_cos = _assert_audio_metrics_within_thresholds(
+            expected_audio[i], actual_audio[i], label=f"sample {i}"
         )
-        assert mss < _MSS_MAX, f"sample {i}: mss={mss:.4f} exceeds {_MSS_MAX}"
-        assert wmfcc < _WMFCC_MAX, f"sample {i}: wmfcc={wmfcc:.4f} exceeds {_WMFCC_MAX}"
-        assert sot < _SOT_MAX, f"sample {i}: sot={sot:.4f} exceeds {_SOT_MAX}"
-        assert rms_cos > _RMS_MIN_COSINE, (
-            f"sample {i}: rms cosine similarity {rms_cos:.4f} below {_RMS_MIN_COSINE}"
-        )
+        mss_values.append(float(mss))
+        wmfcc_values.append(float(wmfcc))
+        sot_values.append(float(sot))
+        rms_cos_values.append(float(rms_cos))
 
     mel_dist = float(np.mean(np.abs(actual_mel - expected_mel)))
     log.info("mel mean abs diff: %.4f (max=%.4f)", mel_dist, _MEL_MEAN_ABS_MAX)
     assert mel_dist < _MEL_MEAN_ABS_MAX, (
         f"mel mean abs diff {mel_dist:.4f} exceeds {_MEL_MEAN_ABS_MAX}"
     )
+
+    if benchmark_name_prefix is not None:
+        # Max-over-samples for distance-style metrics; ``1 - min(rms_cos)`` keeps
+        # all entries smaller=better, which the customSmallerIsBetter schema requires.
+        _emit_benchmark_metrics(
+            [
+                {
+                    "name": f"{benchmark_name_prefix}/mss-max",
+                    "unit": "dB",
+                    "value": max(mss_values),
+                },
+                {
+                    "name": f"{benchmark_name_prefix}/wmfcc-max",
+                    "unit": "L1",
+                    "value": max(wmfcc_values),
+                },
+                {
+                    "name": f"{benchmark_name_prefix}/sot-max",
+                    "unit": "W",
+                    "value": max(sot_values),
+                },
+                {
+                    "name": f"{benchmark_name_prefix}/rms-distance-max",
+                    "unit": "1-cos",
+                    "value": 1.0 - min(rms_cos_values),
+                },
+                {
+                    "name": f"{benchmark_name_prefix}/mel-mean-abs",
+                    "unit": "dB",
+                    "value": mel_dist,
+                },
+            ]
+        )
 
     for i in range(num_samples):
         decoded_synth_params, decoded_note_params = spec.decode(actual_params[i])
@@ -412,7 +550,7 @@ def _assert_round_trip_matches(
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_make_dataset_replays_via_param_spec_sample_mock_with_hardcoded_params(
+def test_datasets_from_hardcoded_params_are_identical(
     tmp_path: Path,
 ) -> None:
     """make_dataset round-trips a single hardcoded param set when ``param_spec.sample`` is patched.
@@ -427,7 +565,7 @@ def test_make_dataset_replays_via_param_spec_sample_mock_with_hardcoded_params(
     surge_xt run; if the spec changes, they must be regenerated.
     """
     spec = param_specs[_SPEC_NAME]
-    num_samples = 8
+    num_samples = 6
     replay = [(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * num_samples
 
     expected_dataset = tmp_path / "expected.h5"
@@ -485,15 +623,25 @@ def test_make_dataset_replays_via_param_spec_sample_mock_with_hardcoded_params(
         expected_params=expected_params,
         expected_synth_patches=[_HARDCODED_SYNTH_PARAMS] * num_samples,
         expected_note_patches=[_HARDCODED_NOTE_PARAMS] * num_samples,
+        benchmark_name_prefix="vst-fixed-replay",
         spec=spec,
         num_samples=num_samples,
     )
+
+    # Every render in expected ∪ actual uses identical params, so every pair across
+    # the union should be perceptually identical. Asserts on the worst-case pair to
+    # surface the most-divergent rendering (e.g. an every-other-render glitch).
+    _assert_all_pairs_audio_metrics_within_thresholds(
+        np.concatenate([expected_audio, actual_audio], axis=0),
+        label_prefix="hardcoded all-pairs",
+    )
+
 
 @pytest.mark.xfail(strict=True, reason="bug #489")
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_make_dataset_replays_via_param_spec_sample_mock(tmp_path: Path) -> None:
+def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     """make_dataset reproduces a previous dataset row-for-row when params are replayed.
 
     Two-stage e2e test:
@@ -607,7 +755,7 @@ def test_make_dataset_replays_via_param_spec_sample_mock(tmp_path: Path) -> None
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_make_dataset_with_random_sampling_produces_valid_h5(tmp_path: Path) -> None:
+def test_make_dataset(tmp_path: Path) -> None:
     """make_dataset with the natural random source writes a valid h5."""
     out = tmp_path / "random.h5"
     spec = param_specs[_SPEC_NAME]
