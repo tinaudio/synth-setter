@@ -73,8 +73,11 @@ def generate_sample(
 ) -> VSTDataSample:
     while True:
         logger.debug("sampling params")
-        synth_params = fixed_synth_params
-        note_params = fixed_note_params
+        synth_params, note_params = param_spec.sample()
+        if fixed_synth_params is not None:
+            synth_params = fixed_synth_params
+        if fixed_note_params is not None:
+            note_params = fixed_note_params
 
         logger.debug("sampling note")
 
