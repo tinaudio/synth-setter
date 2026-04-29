@@ -31,6 +31,14 @@ on:
         description: "Push run metrics to gh-pages (creates the page on first run)"
         type: boolean
         default: false
+      dummy_only:
+        # Fast iteration on the publish step. Skips the (slow) Docker test
+        # run entirely and writes a hardcoded ``bench.json`` so the publish
+        # step has data to push. Implies ``publish_metrics`` — flipping
+        # this on always publishes (the whole point is to debug publish).
+        description: "Skip slow tests; publish hardcoded dummy data only (debug-only)"
+        type: boolean
+        default: false
   push:
     # ``test/vst-roundtrip-xfail-tests`` listed temporarily so we can bootstrap
     # the ``gh-pages`` benchmark chart from this PR before merging to main.
@@ -69,9 +77,30 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Pull image
+        if: inputs.dummy_only != true
         run: docker pull "$IMAGE"
 
+      # Mirrors the headless plugin-load smoke check in
+      # ``docker/ubuntu22_04/Dockerfile:312-314`` (and the local-runner version
+      # in ``test-expensive.yml``) — fails fast if the plugin / image / mount
+      # layout is broken before the much-longer pytest run.
+      - name: Smoke-test Surge XT plugin load
+        if: inputs.dummy_only != true
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "$IMAGE" \
+            passthrough bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              scripts/run-linux-vst-headless.sh \
+                python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
+            '
+
       - name: Run VST slow tests in Docker
+        if: inputs.dummy_only != true
         # Mount the PR's tests + src into the container so we test THIS
         # branch's code against the image's environment. The image's
         # ENTRYPOINT is the ``python click`` CLI; ``passthrough <argv>``
@@ -92,13 +121,12 @@ jobs:
             -e PYTHONPATH=/home/build/synth-setter \
             -e BENCHMARK_OUTPUT_PATH=/bench/bench.json \
             -e HYDRA_FULL_ERROR=1 \
+            -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
             "$IMAGE" \
             passthrough bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
               scripts/run-linux-vst-headless.sh \
                 pytest -vv -s tests/data/vst/test_generate_vst_dataset.py
             '
@@ -109,7 +137,7 @@ jobs:
         # out of the host-mounted volume to where the action expects it.
         # Skipped cleanly if the test wrote nothing (e.g. all xfail tests
         # produced XFAIL before reaching the emit, or VST tests deselected).
-        if: always()
+        if: always() && inputs.dummy_only != true
         run: |
           if [ -f /tmp/bench/bench.json ]; then
             cp /tmp/bench/bench.json "${{ github.workspace }}/bench.json"
@@ -117,6 +145,25 @@ jobs:
           else
             echo "no bench.json written by test run — publish step will be skipped"
           fi
+
+      - name: Write hardcoded dummy bench.json (debug-only fast path)
+        # Bypasses the slow Docker test entirely. Lets a maintainer iterate
+        # on the publish-step gating / config without waiting ~5 minutes
+        # per cycle. Schema mirrors what ``_assert_round_trip_matches``
+        # writes for ``test_datasets_from_hardcoded_params_are_identical``;
+        # values are fictitious but plausible.
+        if: inputs.dummy_only == true
+        run: |
+          cat > "${{ github.workspace }}/bench.json" <<'EOF'
+          [
+            {"name": "vst-fixed-replay/mss-max",          "unit": "dB",    "value": 1.0},
+            {"name": "vst-fixed-replay/wmfcc-max",        "unit": "L1",    "value": 1.0},
+            {"name": "vst-fixed-replay/sot-max",          "unit": "W",     "value": 0.001},
+            {"name": "vst-fixed-replay/rms-distance-max", "unit": "1-cos", "value": 0.001},
+            {"name": "vst-fixed-replay/mel-mean-abs",     "unit": "dB",    "value": 0.5}
+          ]
+          EOF
+          echo "dummy bench.json written (size: $(wc -c < "${{ github.workspace }}/bench.json") bytes)"
 
       - name: Publish VST audio-similarity metrics to benchmark history
         # Push-to-main always publishes. Manual dispatch publishes only
@@ -127,7 +174,7 @@ jobs:
         if: |
           hashFiles('bench.json') != '' && (
             (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
-            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
+            (github.event_name == 'workflow_dispatch' && (inputs.publish_metrics == true || inputs.dummy_only == true))
           )
         uses: benchmark-action/github-action-benchmark@v1
         with:
@@ -136,12 +183,6 @@ jobs:
           output-file-path: bench.json
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
-          # ``gh-pages`` doesn't exist yet on first bootstrap. Without this,
-          # the action fails at ``git fetch ... gh-pages:gh-pages`` with
-          # "couldn't find remote ref gh-pages" instead of creating it.
-          # Safe to keep on after bootstrap — the action falls back to fetch
-          # when the local checkout doesn't have the branch yet.
-          skip-fetch-gh-pages: true
           auto-push: true
           alert-threshold: "150%"
           comment-on-alert: true
