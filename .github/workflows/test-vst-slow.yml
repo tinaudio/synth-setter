@@ -1,4 +1,5 @@
 name: VST Slow Tests
+# Re-trigger marker: 2026-04-29 (post-gh-pages-bootstrap). Safe to remove on the next edit.
 
 # Runs the slow VST audio-similarity tests in
 # ``tests/data/vst/test_generate_vst_dataset.py`` inside the
