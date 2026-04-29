@@ -31,7 +31,10 @@ on:
         type: boolean
         default: false
   push:
-    branches: [main]
+    # ``test/vst-roundtrip-xfail-tests`` listed temporarily so we can bootstrap
+    # the ``gh-pages`` benchmark chart from this PR before merging to main.
+    # Revert to ``[main]`` once the chart exists.
+    branches: [main, test/vst-roundtrip-xfail-tests]
     paths:
       - "src/data/vst/**"
       - "tests/data/vst/**"
@@ -122,7 +125,7 @@ jobs:
         # cleanly when the previous step found no bench.json.
         if: |
           hashFiles('bench.json') != '' && (
-            (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+            (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
             (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
           )
         uses: benchmark-action/github-action-benchmark@v1
