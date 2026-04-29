@@ -6,15 +6,6 @@ name: Slow Tests
 # Triggered post-merge on main (and via manual dispatch).
 on:
   workflow_dispatch:
-    inputs:
-      publish_metrics:
-        # Opt-in escape hatch so a maintainer can bootstrap the gh-pages chart
-        # from a feature branch without merging to main first. The default is
-        # ``false`` so accidental dispatches don't pollute the benchmark
-        # history. Push-to-main always publishes regardless of this input.
-        description: "Push run metrics to gh-pages (creates the page on first run)"
-        type: boolean
-        default: false
   push:
     branches: [main]
     paths-ignore:
@@ -36,13 +27,6 @@ jobs:
     # GitHub-hosted label that fits — see `docs/reference/github-actions.md`
     # for the runner inventory. Don't downgrade without a CPU+memory probe.
     runs-on: ubuntu-latest-4core
-
-    # Job-level grant so only this job (not the rest of the workflow) can push to
-    # ``gh-pages`` for the benchmark history. The workflow-level default is
-    # ``contents: read``; the only step that needs write here is the
-    # ``Publish VST audio-similarity metrics`` step, gated to push-to-main.
-    permissions:
-      contents: write
 
     timeout-minutes: 90
 
@@ -111,37 +95,5 @@ jobs:
       - name: Run slow (non-GPU, non-MPS) tests
         env:
           HYDRA_FULL_ERROR: "1"
-          # Picked up by ``_emit_benchmark_metrics`` in
-          # ``tests/data/vst/test_generate_vst_dataset.py``. When set, the
-          # round-trip test appends summary audio-similarity metrics here for
-          # the publish step below. Unset locally → no-op.
-          BENCHMARK_OUTPUT_PATH: ${{ github.workspace }}/bench.json
         run: |
           pytest -vv -s -m "slow and not gpu and not mps"
-
-      - name: Publish VST audio-similarity metrics to benchmark history
-        # Push-to-main always publishes. Manual dispatch publishes only when
-        # the dispatcher explicitly sets ``publish_metrics=true`` — used to
-        # bootstrap the gh-pages chart from a feature branch before main has
-        # picked up the workflow. ``hashFiles`` skips cleanly if the test
-        # wrote nothing (e.g. it was deselected by markers or skipped because
-        # the VST plugin smoke check failed earlier in the job).
-        if: |
-          hashFiles('bench.json') != '' && (
-            (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
-          )
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: VST fixed-params replay
-          tool: customSmallerIsBetter
-          output-file-path: bench.json
-          gh-pages-branch: gh-pages
-          benchmark-data-dir-path: dev/bench
-          auto-push: true
-          alert-threshold: "150%"
-          comment-on-alert: true
-          # Warn-only initially. Flip to ``true`` once the noise floor of the
-          # five series is well-characterised and the alert threshold is tuned.
-          fail-on-alert: false
-          github-token: ${{ secrets.GITHUB_TOKEN }}
