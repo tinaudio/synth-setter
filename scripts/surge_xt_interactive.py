@@ -1,7 +1,9 @@
 """Interactive Surge XT preview with real-time audio streaming via pedalboard."""
 
+import logging
 import math
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,17 +15,23 @@ import rootutils
 import torch
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile, AudioStream, StreamResampler
-from rich import print
 
 from src.data.vst import load_plugin, load_preset, param_specs
 from src.data.vst.core import set_params
+from src.data.vst.generate_vst_dataset import make_dataset
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
+logger = logging.getLogger(__name__)
 
 CHANNELS = 2
 SAMPLE_RATE = 44100
 BUFFER_SIZE = 512
+MAKE_DATASET_SCRIPT_PATH = Path("src/data/vst/generate_vst_dataset.py").resolve()
+MAKE_DATASET_VELOCITY = 100
+MAKE_DATASET_SIGNAL_DURATION_SECONDS = 4.0
+MAKE_DATASET_MIN_LOUDNESS = -50.0
+MAKE_DATASET_SAMPLE_BATCH_SIZE = 32
 
 PLAYBACK_SAMPLE_RATE = (
     44100  # Sample rate to use for real-time playback. Must be supported by the output device.
@@ -174,16 +182,9 @@ def load_dataset_synth_params(
     with h5py.File(ref.path, "r") as f:
         param_array = f["param_array"]
         assert isinstance(param_array, h5py.Dataset), "expected h5py.Dataset for 'param_array'"
-        print(
-            f"Loaded param_array from {ref.path}: shape={param_array.shape}, dtype={param_array.dtype}"
-        )
-        print(f"param array keys: {list(f.keys())}")
-        print(f"param_array : {param_array}")
         row = np.asarray(param_array[ref.batch_idx], dtype=np.float32)
-        print(f"Loaded row from {ref.path}: {row}")
 
     synth_params, _ = spec.decode(row)
-    print(f"Decoded synth params: {synth_params}")
     return synth_params
 
 
@@ -210,17 +211,21 @@ def load_prediction_synth_params(
     return decode_prediction_row(pred_tensor, ref.batch_idx, param_spec_name)
 
 
-def play_audio(plugin: VST3Plugin, close_window_event: threading.Event) -> None:
-    """Stream silence through Surge XT and write synthesized audio to the output device."""
+def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
+    """Stream silence through Surge XT and write synthesized audio to the output device.
+
+    Runs until ``stop_event`` is set (typically by ``keyboard_loop``'s quit action or by
+    ``main`` after the plugin editor is closed). Resamples to ``PLAYBACK_SAMPLE_RATE`` if
+    it differs from ``SAMPLE_RATE`` so the output device gets a rate it supports.
+    """
     silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
-    # output_device = None if sys.platform == "Linux" else AudioStream.default_output_device_name
     stream_resampler = None
     with AudioStream(
         output_device_name=AudioStream.default_output_device_name,
         sample_rate=SAMPLE_RATE,
         buffer_size=BUFFER_SIZE,
     ) as stream:
-        while not close_window_event.is_set():
+        while not stop_event.is_set():
             if SAMPLE_RATE != PLAYBACK_SAMPLE_RATE and stream_resampler is None:
                 stream_resampler = StreamResampler(SAMPLE_RATE, PLAYBACK_SAMPLE_RATE, CHANNELS)
             synth_output = plugin(silence, SAMPLE_RATE, reset=False)
@@ -231,24 +236,50 @@ def play_audio(plugin: VST3Plugin, close_window_event: threading.Event) -> None:
                 stream.write(synth_output, SAMPLE_RATE)
 
 
-def wait_and_watch(plugin: VST3Plugin, close_window_event: threading.Event) -> None:
+def keyboard_loop(
+    plugin: VST3Plugin, stop_event: threading.Event, param_spec_name: str
+) -> list[dict[str, float]]:
+    """Read keystrokes and snapshot the live plugin params into a list of patches.
+
+    Keys:
+
+    - ``p`` — record the current values of every synth param in
+      ``param_specs[param_spec_name]`` as a patch dict.
+    - ``q`` — set ``stop_event`` and exit.
+
+    Also exits when ``stop_event`` is set externally (e.g. when the plugin editor is
+    closed). Returns the list of recorded patches.
+    """
+    spec = param_specs[param_spec_name]
+    synth_patches: list[dict[str, float]] = []
+
     def quit_action():
-        close_window_event.set()
+        stop_event.set()
+        logger.info("Quitting...")
         return False  # stop loop
 
-    def show_params():
-        print(f"params: {dict(plugin.parameters)}")  # pyright: ignore[reportAttributeAccessIssue]
+    def record_patch():
+        patch: dict[str, float] = dict()
+        logger.info("Recording patch...")
+        for param_name in spec.synth_param_names:
+            assert param_name in plugin.parameters, (  # pyright: ignore[reportAttributeAccessIssue]
+                f"parameter {param_name!r} not found in plugin parameters"
+            )
+            patch[param_name] = plugin.parameters[param_name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
+        synth_patches.append(patch)
+        logger.info("patch recorded: %s", synth_patches[-1])
         return True  # keep going
 
     actions = {
         "q": quit_action,
-        "p": show_params,
+        "p": record_patch,
     }
-    while not close_window_event.is_set():
+    while not stop_event.is_set():
         ch = click.getchar()
         action = actions.get(ch)
         if action and not action():
-            return
+            return synth_patches
+    return synth_patches
 
 
 @click.command()
@@ -278,45 +309,54 @@ def wait_and_watch(plugin: VST3Plugin, close_window_event: threading.Event) -> N
     "-r",
     type=str,
     default="presets/surge-base.vstpreset",
-    help="Base preset to load before applying predicted params.",
+    help="Base preset to load before applying any --pred / --dataset-ref params.",
 )
 @click.option(
-    "--param-spec",
+    "--param-spec-name",
     type=str,
     default="surge_xt",
-    help="Parameter spec name used to decode the prediction tensor.",
-)
-@click.option(
-    "--output-wav",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
     help=(
-        "Render audio offline to this WAV file instead of opening an output device. "
-        "Use in headless environments (e.g. Docker on Linux). "
-        "When set, the plugin GUI is not opened."
+        "Parameter spec name (key into ``param_specs``) used to decode prediction/dataset "
+        "rows applied to the plugin and to enumerate which synth params are captured when "
+        "recording patches."
     ),
 )
 @click.option(
-    "--duration",
-    type=float,
-    default=5.0,
-    help="Seconds of audio to render when --output-wav is set.",
+    "--output-dataset-path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "HDF5 file to append recorded patches to. After the editor is closed, patches "
+        "captured via the keyboard loop (press 'p' to record, 'q' to quit) are rendered "
+        "through the plugin and written to this dataset via "
+        "``src.data.vst.generate_vst_dataset.make_dataset``."
+    ),
 )
 def main(
     plugin_path: str,
     pred: PredictionRef | None,
     dataset_ref: DatasetRef | None,
     preset_path: str,
-    param_spec: str,
-    output_wav: Path | None,
-    duration: float,
+    param_spec_name: str,
+    output_dataset_path: Path | None,
 ) -> None:
-    """Open Surge XT GUI with real-time audio streaming.
+    """Open Surge XT GUI with real-time audio streaming and record patches to an HDF5 dataset.
 
-    When --pred is provided, the predicted parameters from predict_vst_audio.py output are applied
-    to the plugin before the editor opens.
+    Flow:
+
+    1. Load the plugin and base preset.
+    2. If ``--pred`` or ``--dataset-ref`` is provided, decode the referenced row and apply
+       it to the plugin before the editor opens.
+    3. Open the plugin's GUI editor; in parallel, stream audio to the default output device
+       and run a keyboard loop (press ``p`` to snapshot the current synth params as a patch,
+       ``q`` to quit).
+    4. After the editor is closed, render every recorded patch through the plugin and append
+       the resulting samples to ``--output-dataset-path`` via ``make_dataset``.
     """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     plugin = load_plugin(plugin_path)
+    assert isinstance(plugin, VST3Plugin), f"expected VST3Plugin, got {type(plugin).__name__}"
+
     load_preset(plugin, preset_path)
 
     # flush plugin to ensure that full parameter dict is populated.
@@ -326,28 +366,47 @@ def main(
     plugin.reset()
 
     if dataset_ref is not None:
-        synth_params = load_dataset_synth_params(dataset_ref, param_spec)
+        synth_params = load_dataset_synth_params(dataset_ref, param_spec_name)
         set_params(plugin, synth_params)
     elif pred is not None:
-        synth_params = load_prediction_synth_params(pred, param_spec)
+        synth_params = load_prediction_synth_params(pred, param_spec_name)
         set_params(plugin, synth_params)
-    else:
-        plugin = VST3Plugin(plugin_path)
 
-    if output_wav is not None:
-        render_to_wav(plugin, output_wav, duration)
+    synth_patches = None
+    stop_event = threading.Event()
+    with ThreadPoolExecutor() as pool:
+        audio_future = pool.submit(play_audio, plugin, stop_event)
+        keyboard_future = pool.submit(keyboard_loop, plugin, stop_event, param_spec_name)
+
+        try:
+            plugin.show_editor(stop_event)
+        finally:
+            stop_event.set()
+            # surface any exception that happened in the audio thread
+            audio_future.result(timeout=2)
+        logger.info("Editor closed, waiting for audio thread to finish...")
+        synth_patches = keyboard_future.result()
+        logger.info("Recorded %d patches: %s", len(synth_patches), synth_patches)
+
+    assert synth_patches is not None, "synth_patches should be set by keyboard_loop"
+    if output_dataset_path is None:
+        logger.info("No output dataset path provided, skipping dataset creation.")
         return
-
-    close_window_event = threading.Event()
-    audio_thread = threading.Thread(
-        target=play_audio, args=(plugin, close_window_event), daemon=True
-    )
-    audio_thread.start()
-    threading.Thread(target=wait_and_watch, args=(plugin, close_window_event), daemon=True).start()
-
-    plugin.show_editor(close_window_event)
-    # editor closed manually → still shut down audio
-    audio_thread.join(timeout=2)
+    with h5py.File(output_dataset_path, "a") as f:
+        make_dataset(
+            hdf5_file=f,
+            num_samples=len(synth_patches),
+            plugin_path=plugin_path,
+            preset_path=preset_path,
+            sample_rate=SAMPLE_RATE,
+            channels=CHANNELS,
+            velocity=MAKE_DATASET_VELOCITY,
+            signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
+            min_loudness=MAKE_DATASET_MIN_LOUDNESS,
+            param_spec=param_specs[param_spec_name],
+            sample_batch_size=MAKE_DATASET_SAMPLE_BATCH_SIZE,
+            fixed_synth_params_list=synth_patches,
+        )
 
 
 if __name__ == "__main__":
