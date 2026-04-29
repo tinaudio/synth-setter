@@ -68,7 +68,7 @@ def generate_sample(
     param_spec: ParamSpec,
     preset_path: str,
     fixed_synth_params: dict[str, float] | None = None,
-    fixed_note_params: dict[str, int | tuple[float, float]] | None = None,
+    fixed_note_params: dict[str, tuple[float, float] | int] | None = None,
 ) -> VSTDataSample:
     while True:
         logger.debug("sampling params and note from param_spec")
