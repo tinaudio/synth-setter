@@ -40,8 +40,9 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
     logger.info("Preparing plugin for preset load...")
-    _prepare_plugin(p)
-    logger.info("Plugin ready")
+    # _prepare_plugin(p)
+    p.show_editor()  # This is needed to ensure the plugin is fully loaded and ready to accept parameter changes. It may cause a window to briefly flash on the screen.
+    # p.info("Plugin ready")
     return p
 
 
