@@ -178,7 +178,7 @@ jobs:
           )
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: VST fixed-params replay
+          name: VST noise floor
           tool: customSmallerIsBetter
           output-file-path: bench.json
           gh-pages-branch: gh-pages

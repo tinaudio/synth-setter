@@ -494,27 +494,31 @@ def _assert_round_trip_matches(
         _emit_benchmark_metrics(
             [
                 {
-                    "name": f"{benchmark_name_prefix}/mss-max",
+                    "name": f"{benchmark_name_prefix}/multi-scale-spectral-loss-max",
                     "unit": "dB",
                     "value": max(mss_values),
                 },
                 {
-                    "name": f"{benchmark_name_prefix}/wmfcc-max",
+                    "name": f"{benchmark_name_prefix}/dtw-aligned-mfcc-distance-max",
                     "unit": "L1",
                     "value": max(wmfcc_values),
                 },
                 {
-                    "name": f"{benchmark_name_prefix}/sot-max",
-                    "unit": "W",
+                    "name": f"{benchmark_name_prefix}/spectral-optimal-transport-max",
+                    "unit": "Wasserstein",
                     "value": max(sot_values),
                 },
                 {
-                    "name": f"{benchmark_name_prefix}/rms-distance-max",
+                    "name": (
+                        f"{benchmark_name_prefix}/rms-envelope-cosine-distance-max"
+                    ),
                     "unit": "1-cos",
                     "value": 1.0 - min(rms_cos_values),
                 },
                 {
-                    "name": f"{benchmark_name_prefix}/mel-mean-abs",
+                    "name": (
+                        f"{benchmark_name_prefix}/mel-spectrogram-mean-absolute-error"
+                    ),
                     "unit": "dB",
                     "value": mel_dist,
                 },
@@ -623,7 +627,7 @@ def test_datasets_from_hardcoded_params_are_identical(
         expected_params=expected_params,
         expected_synth_patches=[_HARDCODED_SYNTH_PARAMS] * num_samples,
         expected_note_patches=[_HARDCODED_NOTE_PARAMS] * num_samples,
-        benchmark_name_prefix="vst-fixed-replay",
+        benchmark_name_prefix="vst-noise-floor",
         spec=spec,
         num_samples=num_samples,
     )
