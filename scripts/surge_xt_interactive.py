@@ -1,7 +1,6 @@
 """Interactive Surge XT preview with real-time audio streaming via pedalboard."""
 
 import logging
-import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -230,78 +229,67 @@ def _flush_plugin(plugin: VST3Plugin) -> None:
     plugin.reset()
 
 
-def play_audio(
-    plugin: VST3Plugin,
-    stop_event: threading.Event,
-    session_recording_path: Path | None = None,
-) -> None:
+def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
     """Stream silence through Surge XT and write synthesized audio to the output device.
 
     Runs until ``stop_event`` is set (typically by ``keyboard_loop``'s quit action or by
     ``main`` after the plugin editor is closed). Resamples to ``PLAYBACK_SAMPLE_RATE`` if
     it differs from ``SAMPLE_RATE`` so the output device gets a rate it supports.
-
-    When ``session_recording_path`` is provided, the first
-    ``SESSION_RECORDING_MAX_SECONDS`` of the session is teed to that WAV file
-    (at ``SAMPLE_RATE``, pre-resample). After the cap is reached the recording
-    is closed and the live stream continues.
     """
     silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
     needs_resample = SAMPLE_RATE != PLAYBACK_SAMPLE_RATE
     stream_resampler = (
         StreamResampler(SAMPLE_RATE, PLAYBACK_SAMPLE_RATE, CHANNELS) if needs_resample else None
     )
+    with AudioStream(
+        output_device_name=AudioStream.default_output_device_name,
+        sample_rate=PLAYBACK_SAMPLE_RATE,
+        buffer_size=BUFFER_SIZE,
+    ) as stream:
+        while not stop_event.is_set():
+            synth_output = plugin(silence, SAMPLE_RATE, reset=False)
+            assert synth_output.shape == (CHANNELS, BUFFER_SIZE), (
+                f"expected synth output shape ({CHANNELS}, {BUFFER_SIZE}), "
+                f"got {synth_output.shape}"
+            )
+            if stream_resampler is not None:
+                stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
+            else:
+                stream.write(synth_output, SAMPLE_RATE)
 
-    recorder: AudioFile | None = None
-    recorder_buffers_remaining = 0
-    if session_recording_path is not None:
-        recorder = AudioFile(str(session_recording_path), "w", SAMPLE_RATE, CHANNELS)
-        recorder_buffers_remaining = math.ceil(
-            SESSION_RECORDING_MAX_SECONDS * SAMPLE_RATE / BUFFER_SIZE
-        )
-        logger.info(
-            "Recording first %.1fs of the session to %s",
-            SESSION_RECORDING_MAX_SECONDS,
-            session_recording_path,
-        )
 
-    try:
-        with AudioStream(
-            output_device_name=AudioStream.default_output_device_name,
-            sample_rate=PLAYBACK_SAMPLE_RATE,
-            buffer_size=BUFFER_SIZE,
-        ) as stream:
-            while not stop_event.is_set():
-                synth_output = plugin(silence, SAMPLE_RATE, reset=False)
-                # ``plugin(...)`` returns audio shaped (channels, frames). Pin
-                # this invariant — anything else here means a pedalboard API
-                # change or a misconfigured plugin and would silently corrupt
-                # the recording / stream writes downstream.
-                assert synth_output.shape == (CHANNELS, BUFFER_SIZE), (
-                    f"expected synth output shape ({CHANNELS}, {BUFFER_SIZE}), "
-                    f"got {synth_output.shape}"
-                )
+def play_audio_recorded(
+    plugin: VST3Plugin,
+    stop_event: threading.Event,
+    session_recording_path: Path,
+    n_seconds: float = SESSION_RECORDING_MAX_SECONDS,
+) -> None:
+    """Render plugin output for ``n_seconds`` to ``session_recording_path`` (no live stream).
 
-                if recorder is not None and recorder_buffers_remaining > 0:
-                    # AudioFile.write expects (frames, channels); plugin output is
-                    # (channels, frames), so transpose before writing.
-                    recorder.write(synth_output.T)
-                    recorder_buffers_remaining -= 1
-                    if recorder_buffers_remaining == 0:
-                        recorder.close()
-                        recorder = None
-                        logger.info(
-                            "Session recording reached %.1fs cap; closed.",
-                            SESSION_RECORDING_MAX_SECONDS,
-                        )
-
-                if stream_resampler is not None:
-                    stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
-                else:
-                    stream.write(synth_output, SAMPLE_RATE)
-    finally:
-        if recorder is not None:
-            recorder.close()
+    Headless alternative to :func:`play_audio` — opens a WAV via
+    ``pedalboard.io.AudioFile`` instead of an ``AudioStream``, so it works in
+    environments without an audio output device. Loops until either
+    ``n_seconds`` of audio has been written or ``stop_event`` is set,
+    whichever comes first. The final chunk is trimmed so the file lands
+    exactly on ``n_seconds * SAMPLE_RATE`` frames.
+    """
+    silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
+    target = int(n_seconds * SAMPLE_RATE)
+    logger.info("Recording up to %.1fs of plugin output to %s", n_seconds, session_recording_path)
+    written = 0
+    with AudioFile(str(session_recording_path), "w", SAMPLE_RATE, CHANNELS) as f:
+        while written < target and not stop_event.is_set():
+            chunk = plugin(silence, SAMPLE_RATE, reset=False)
+            assert chunk.shape == (CHANNELS, BUFFER_SIZE), (
+                f"expected chunk shape ({CHANNELS}, {BUFFER_SIZE}), got {chunk.shape}"
+            )
+            remaining = target - written
+            if chunk.shape[-1] > remaining:
+                chunk = chunk[..., :remaining]
+            # AudioFile.write expects (frames, channels); plugin output is (channels, frames).
+            f.write(chunk.T)
+            written += chunk.shape[-1]
+    logger.info("Recording wrote %d frames (%.2fs)", written, written / SAMPLE_RATE)
 
 
 def keyboard_loop(
@@ -475,7 +463,12 @@ def main(
 
     stop_event = threading.Event()
     with ThreadPoolExecutor() as pool:
-        audio_future = pool.submit(play_audio, plugin, stop_event, session_recording_path)
+        if session_recording_path is not None:
+            audio_future = pool.submit(
+                play_audio_recorded, plugin, stop_event, session_recording_path
+            )
+        else:
+            audio_future = pool.submit(play_audio, plugin, stop_event)
         keyboard_future = pool.submit(keyboard_loop, plugin, stop_event, param_spec_name)
 
         try:

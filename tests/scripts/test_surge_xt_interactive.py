@@ -1,6 +1,7 @@
 """Tests for scripts/surge_xt_interactive.py prediction decoding helpers."""
 
 import importlib
+import threading
 from pathlib import Path
 
 import click
@@ -8,6 +9,7 @@ import h5py
 import numpy as np
 import pytest
 import torch
+from pedalboard.io import AudioFile
 
 from src.data.vst import param_specs
 from src.data.vst.param_spec import ParamSpec
@@ -278,3 +280,68 @@ class TestLoadDatasetSynthParams:
         for name, value in loaded.items():
             assert isinstance(value, float), f"{name} is {type(value).__name__}, expected float"
             assert np.isfinite(value), f"{name} = {value} is not finite"
+
+
+class _ConstantPlugin:
+    """Stand-in plugin: returns a constant-valued buffer of the input shape.
+
+    Duck-typed to satisfy ``play_audio_recorded``'s ``plugin(buf, sr, reset=...)`` call —
+    avoids loading a real VST3, which is unavailable in headless test runs.
+    """
+
+    def __init__(self, sample_value: float) -> None:
+        self.sample_value = sample_value
+        self.call_count = 0
+
+    def __call__(
+        self, audio_buffer: np.ndarray, sample_rate: int, reset: bool = False
+    ) -> np.ndarray:
+        """Return a buffer shaped like ``audio_buffer`` filled with ``sample_value``."""
+        del sample_rate, reset
+        self.call_count += 1
+        return np.full_like(audio_buffer, self.sample_value)
+
+
+class TestPlayAudioRecorded:
+    """play_audio_recorded writes plugin output to a WAV file (headless, no audio device)."""
+
+    def test_writes_exact_n_seconds_trimming_final_chunk(
+        self, surge_xt_interactive, tmp_path: Path
+    ) -> None:
+        """The WAV lands on exactly ``n_seconds * SAMPLE_RATE`` frames, even mid-buffer."""
+        plugin = _ConstantPlugin(sample_value=0.25)
+        output_path = tmp_path / "session.wav"
+        sample_rate = surge_xt_interactive.SAMPLE_RATE
+        buffer_size = surge_xt_interactive.BUFFER_SIZE
+        # Pick a duration whose frame count is NOT a multiple of BUFFER_SIZE so
+        # the trim-final-chunk branch actually runs. 1.5 buffers worth.
+        n_seconds = (1.5 * buffer_size) / sample_rate
+        expected_frames = int(n_seconds * sample_rate)
+
+        surge_xt_interactive.play_audio_recorded(
+            plugin, threading.Event(), output_path, n_seconds=n_seconds
+        )
+
+        assert output_path.is_file()
+        with AudioFile(str(output_path)) as f:
+            audio = f.read(f.frames)
+        assert audio.shape == (surge_xt_interactive.CHANNELS, expected_frames)
+        np.testing.assert_allclose(audio, plugin.sample_value, atol=1e-3)
+        # Two plugin calls: first full buffer + second buffer (trimmed).
+        assert plugin.call_count == 2
+
+    def test_stop_event_short_circuits_loop(self, surge_xt_interactive, tmp_path: Path) -> None:
+        """A pre-set ``stop_event`` exits before any plugin call or write."""
+        plugin = _ConstantPlugin(sample_value=0.0)
+        output_path = tmp_path / "stopped.wav"
+        stop_event = threading.Event()
+        stop_event.set()
+
+        surge_xt_interactive.play_audio_recorded(plugin, stop_event, output_path, n_seconds=10.0)
+
+        # File still gets created (AudioFile opens before the loop) but no
+        # plugin calls are made and no audio is written.
+        assert output_path.is_file()
+        assert plugin.call_count == 0
+        with AudioFile(str(output_path)) as f:
+            assert f.frames == 0
