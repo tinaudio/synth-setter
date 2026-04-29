@@ -46,7 +46,7 @@ def write_wav(audio: np.ndarray, path: str, sample_rate: float, channels: int) -
 
 
 def render_params(
-    plugin＿path: str,
+    plugin_path: str,
     params: dict[str, float],
     midi_note: int,
     velocity: int,
