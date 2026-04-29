@@ -19,13 +19,14 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
     logger.info("Preparing plugin for preset load...")
-    stop_event = threading.Event()
-    t = threading.Thread(target=_prepare_plugin, args=(stop_event,))
-    t.start()
-    try:
-        p.show_editor(stop_event)
-    finally:
-        stop_event.set()
+    # stop_event = threading.Event()
+    # t = threading.Thread(target=_prepare_plugin, args=(stop_event,))
+    # t.start()
+    # try:
+    #     p.show_editor(stop_event)
+    # finally:
+    #     stop_event.set()
+    p.show_editor()
     return p
 
 
@@ -46,7 +47,7 @@ def write_wav(audio: np.ndarray, path: str, sample_rate: float, channels: int) -
 
 
 def render_params(
-    plugin: VST3Plugin,
+    plugin＿path: str,
     params: dict[str, float],
     midi_note: int,
     velocity: int,
@@ -56,6 +57,7 @@ def render_params(
     channels: int,
     preset_path: Optional[str] = None,
 ) -> np.ndarray:
+    plugin = load_plugin(plugin_path)
     if preset_path is not None:
         load_preset(plugin, preset_path)
 

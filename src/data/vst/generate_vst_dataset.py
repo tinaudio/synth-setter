@@ -60,7 +60,7 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
 
 
 def generate_sample(
-    plugin: VST3Plugin,
+    plugin_path: str,
     velocity: int,
     signal_duration_seconds: float,
     sample_rate: float,
@@ -73,18 +73,13 @@ def generate_sample(
 ) -> VSTDataSample:
     while True:
         logger.debug("sampling params")
-        if fixed_synth_params is not None:
-            synth_params = fixed_synth_params
-            _, note_params = param_spec.sample()
-            if fixed_note_params is not None:
-                note_params = fixed_note_params
-        else:
-            synth_params, note_params = param_spec.sample()
+        synth_params = fixed_synth_params
+        note_params = fixed_note_params
 
         logger.debug("sampling note")
 
         output = render_params(
-            plugin,
+            plugin_path,
             synth_params,
             note_params["pitch"],
             velocity,
@@ -252,7 +247,7 @@ def make_dataset(
     audio_dataset.attrs["channels"] = channels
     audio_dataset.attrs["min_loudness"] = min_loudness
 
-    plugin = load_plugin(plugin_path)
+
 
     sample_batch = []
     sample_batch_start = start_idx
@@ -260,7 +255,7 @@ def make_dataset(
     for i in trange(start_idx, num_samples):
         logger.info(f"Making sample {i}")
         sample = generate_sample(
-            plugin,
+            plugin_path,
             velocity=velocity,
             signal_duration_seconds=signal_duration_seconds,
             sample_rate=sample_rate,
