@@ -146,21 +146,21 @@ config: `velocity`, `signal_duration_seconds`, `sample_rate`,
 ## End-to-end workflow
 
 ```
-                            ┌─────────────────────────┐
+                             ┌─────────────────────────┐
   src/eval.py  ──pred-*.pt──▶│                         │
-                            │  surge_xt_interactive   │  ──┐
-  *.h5 dataset ──row N─────▶│  (audition + capture)   │    │
-                            └─────────────────────────┘    │
-                                       │                    │
-                              ▼ user presses 'p'            │
-                            synth_patches: list[dict]        │
-                                       │                    │
-                                       ▼                    │
-                            make_dataset(                    │
-                                fixed_synth_params_list=…)   │
-                                       │                    │
-                                       ▼                    │
-                            outputs/curated-patches.h5  ◀───┘
+                             │  surge_xt_interactive   │ ──┐
+  *.h5 dataset ──row N─────▶ │  (audition + capture)   │   │
+                             └─────────────────────────┘   │
+                                       │                   │
+                              ▼ user presses 'p'           │
+                            synth_patches: list[dict]      │
+                                       │                   │
+                                       ▼                   │
+                            make_dataset(                  │
+                                fixed_synth_params_list=…) │
+                                       │                   │
+                                       ▼                   │
+                            outputs/curated-patches.h5 ◀───┘
                             (audio, mel_spec, param_array)
                                        │
                                        ▼
