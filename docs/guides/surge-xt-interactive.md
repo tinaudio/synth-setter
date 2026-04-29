@@ -4,8 +4,8 @@
 > **Last Updated**: 2026-04-29
 > **Source**: [`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py)
 
-> Last refresh covered the `--session-recording-path` flag and the
-> `play_audio_recorded` headless-render path.
+> Last refresh: `--session-recording-path` now renders a deterministic
+> 10-second middle-C clip (was: a tee of the live stream's first 20 s).
 
 ______________________________________________________________________
 
@@ -71,9 +71,8 @@ python scripts/surge_xt_interactive.py \
     --output-dataset-path outputs/curated-patches.h5
 ```
 
-Capture a WAV recording of the session instead of streaming to your
-audio device — useful when running headless or when you want a quick
-audible artifact of how the predicted patch sounds:
+Render a deterministic test clip of the loaded patch to a WAV — useful
+for headless runs and reproducible audio diffs of model predictions:
 
 ```bash
 python scripts/surge_xt_interactive.py \
@@ -82,25 +81,28 @@ python scripts/surge_xt_interactive.py \
 ```
 
 When `--session-recording-path` is set, the live audio stream is
-*replaced* by a WAV recording — the editor still runs and you can
-still snapshot patches, but plugin output is written to disk instead
-of the output device. Combines freely with `--pred`, `--dataset-ref`,
-and `--output-dataset-path`.
+*replaced* by a fixed 10-second offline render: middle C held from
+2 s to 4 s, with the surrounding silence capturing any release tail.
+Output depends only on plugin state (preset + `--pred` /
+`--dataset-ref` params), so the same inputs always produce the same
+WAV. The editor still runs and you can still snapshot patches.
+Combines freely with `--pred`, `--dataset-ref`, and
+`--output-dataset-path`.
 
 `--pred` and `--dataset-ref` are mutually exclusive — passing both
 raises `click.UsageError`.
 
 ## CLI reference
 
-| Flag                       | Type               | Default                        | Notes                                                                                                                                                                                                                                                                                                                                                      |
-| -------------------------- | ------------------ | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--plugin-path` / `-p`     | path               | `plugins/Surge XT.vst3`        | Path to VST3 plugin.                                                                                                                                                                                                                                                                                                                                       |
-| `--preset-path` / `-r`     | path               | `presets/surge-base.vstpreset` | Base preset to load before applying any `--pred` / `--dataset-ref` params.                                                                                                                                                                                                                                                                                 |
-| `--pred`                   | `PATH:BATCH_IDX`   | unset                          | Prediction reference. When set, the predicted row is decoded and applied to the plugin before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                            |
-| `--dataset-ref`            | `PATH:DATASET_IDX` | unset                          | Dataset reference. When set, the dataset row is decoded and applied to the plugin before the editor opens. Example: `outputs/test.h5:0`.                                                                                                                                                                                                                   |
-| `--param-spec-name`        | str                | `surge_xt`                     | Parameter spec name (key into `param_specs`) used to decode prediction/dataset rows applied to the plugin and to enumerate which synth params are captured when recording patches.                                                                                                                                                                         |
-| `--output-dataset-path`    | path               | unset                          | HDF5 file to write recorded patches to. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to this dataset via `src.data.vst.generate_vst_dataset.make_dataset`. Must not already exist — `make_dataset` writes fixed-size HDF5 datasets and cannot append. |
-| `--session-recording-path` | path               | unset                          | Optional WAV file to record up to `SESSION_RECORDING_MAX_SECONDS` (20 s) of plugin output to. When set, replaces the live audio stream — the editor still runs but plugin output goes to the WAV file instead of the output device. No-op when not set. Useful for headless runs and for capturing an audible record of a session.                         |
+| Flag                       | Type               | Default                        | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------------- | ------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--plugin-path` / `-p`     | path               | `plugins/Surge XT.vst3`        | Path to VST3 plugin.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `--preset-path` / `-r`     | path               | `presets/surge-base.vstpreset` | Base preset to load before applying any `--pred` / `--dataset-ref` params.                                                                                                                                                                                                                                                                                                                                                                  |
+| `--pred`                   | `PATH:BATCH_IDX`   | unset                          | Prediction reference. When set, the predicted row is decoded and applied to the plugin before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                                                                                                             |
+| `--dataset-ref`            | `PATH:DATASET_IDX` | unset                          | Dataset reference. When set, the dataset row is decoded and applied to the plugin before the editor opens. Example: `outputs/test.h5:0`.                                                                                                                                                                                                                                                                                                    |
+| `--param-spec-name`        | str                | `surge_xt`                     | Parameter spec name (key into `param_specs`) used to decode prediction/dataset rows applied to the plugin and to enumerate which synth params are captured when recording patches.                                                                                                                                                                                                                                                          |
+| `--output-dataset-path`    | path               | unset                          | HDF5 file to write recorded patches to. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to this dataset via `src.data.vst.generate_vst_dataset.make_dataset`. Must not already exist — `make_dataset` writes fixed-size HDF5 datasets and cannot append.                                                                                  |
+| `--session-recording-path` | path               | unset                          | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set. |
 
 Tip — the help strings above are quoted verbatim from the Click
 decorators in `scripts/surge_xt_interactive.py`. Run
@@ -118,12 +120,12 @@ in parallel:
      output device via `pedalboard.io.AudioStream`, resampling on the fly
      if `PLAYBACK_SAMPLE_RATE` differs from `SAMPLE_RATE`. You hear
      whatever the current patch is doing.
-   - With `--session-recording-path` (`play_audio_recorded`): writes up
-     to `SESSION_RECORDING_MAX_SECONDS` (20 s) of plugin output to the
-     given WAV file via `pedalboard.io.AudioFile` and returns. No live
-     device output during the recording — you listen back from the WAV
-     after the session ends. Returns early if `stop_event` is set
-     before the cap is reached.
+   - With `--session-recording-path` (`play_audio_recorded`): renders a
+     deterministic `SESSION_RECORDING_DURATION_SECONDS` (10 s) clip
+     (middle C from 2 s to 4 s) via a single `plugin.process(...)` call
+     and writes it to the given WAV file. No live device output. Returns
+     as soon as the offline render completes — the editor remains open
+     for patch capture.
 2. **Editor (main thread)** — the plugin's native GUI. Tweak knobs as
    you would in any host.
 3. **Keyboard thread** — `keyboard_loop` reads keystrokes:
@@ -262,9 +264,10 @@ your teammates so they aren't blindsided.
 **`AudioStream` fails to open / no audio device.** You're running
 headless or your default device is not configured. Use
 `--session-recording-path outputs/session.wav` —
-`play_audio_recorded` writes plugin output directly to a WAV file via
-`pedalboard.io.AudioFile` without ever opening an audio device, which
-is exactly the headless-render path.
+`play_audio_recorded` renders a deterministic 10-second middle-C clip
+of the loaded patch directly to a WAV via `pedalboard.io.AudioFile`,
+without ever opening an audio device. Enough to confirm the plugin
+loaded and the params applied without any live audio.
 
 **Sample-rate mismatch.** `play_audio` resamples on the fly via
 `StreamResampler` when `PLAYBACK_SAMPLE_RATE != SAMPLE_RATE`. If your

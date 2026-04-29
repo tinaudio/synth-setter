@@ -19,7 +19,7 @@ from pedalboard import VST3Plugin  # noqa: E402
 from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 
 from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
-from src.data.vst.core import set_params  # noqa: E402
+from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -34,15 +34,24 @@ MAKE_DATASET_SAMPLE_BATCH_SIZE = 32
 
 # Real-time playback rate. Set this to whatever the default output device supports
 # if it differs from ``SAMPLE_RATE`` — ``play_audio`` will resample on the fly.
+# Resampling adds overhead, so it's optional and disabled by default.
 PLAYBACK_SAMPLE_RATE = SAMPLE_RATE
 
 # Maximum time to wait for the audio thread to drain after ``stop_event`` is set.
 AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS = 2
 
-# Cap on how many seconds of the live session ``play_audio`` will tee into a
-# WAV file when ``--session-recording-path`` is set. Bounded so a long editor
-# session doesn't write an unbounded recording.
-SESSION_RECORDING_MAX_SECONDS = 20.0
+# Deterministic recording clip when ``--session-recording-path`` is set.
+# The point is reproducibility: same plugin + preset + params -> same WAV.
+# A held middle-C note is rendered from ``NOTE_START`` to ``NOTE_END``,
+# inside a fixed-length window so any release tail is captured.
+SESSION_RECORDING_DURATION_SECONDS = 10.0
+SESSION_RECORDING_MIDI_NOTE = 60  # middle C (C4)
+SESSION_RECORDING_VELOCITY = 100
+SESSION_RECORDING_NOTE_START_SECONDS = 2.0
+SESSION_RECORDING_NOTE_END_SECONDS = 4.0
+# Buffer size used for the offline ``plugin.process(...)`` render. Mirrors
+# the value used in ``src.data.vst.core.render_params``.
+_SESSION_RECORDING_BUFFER_SIZE = 2048
 
 # Plugin-flush parameters used by the post-load / pre-render flush pattern; see
 # ``_flush_plugin``. Mirror of the values used in ``src.data.vst.core.render_params``.
@@ -258,38 +267,50 @@ def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
                 stream.write(synth_output, SAMPLE_RATE)
 
 
-def play_audio_recorded(
-    plugin: VST3Plugin,
-    stop_event: threading.Event,
-    session_recording_path: Path,
-    n_seconds: float = SESSION_RECORDING_MAX_SECONDS,
-) -> None:
-    """Render plugin output for ``n_seconds`` to ``session_recording_path`` (no live stream).
+def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> None:
+    """Render a deterministic clip through ``plugin`` to ``session_recording_path``.
 
-    Headless alternative to :func:`play_audio` — opens a WAV via
+    The clip is a fixed ``SESSION_RECORDING_DURATION_SECONDS`` window with a
+    held middle-C note from ``SESSION_RECORDING_NOTE_START_SECONDS`` to
+    ``SESSION_RECORDING_NOTE_END_SECONDS``; the surrounding silence captures
+    any release tail. The output depends only on the loaded plugin state
+    (preset + ``--pred`` / ``--dataset-ref`` params), so the same inputs
+    always produce the same WAV.
+
+    Headless alternative to :func:`play_audio` — uses
     ``pedalboard.io.AudioFile`` instead of an ``AudioStream``, so it works in
-    environments without an audio output device. Loops until either
-    ``n_seconds`` of audio has been written or ``stop_event`` is set,
-    whichever comes first. The final chunk is trimmed so the file lands
-    exactly on ``n_seconds * SAMPLE_RATE`` frames.
+    environments without an audio output device.
     """
-    silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
-    target = int(n_seconds * SAMPLE_RATE)
-    logger.info("Recording up to %.1fs of plugin output to %s", n_seconds, session_recording_path)
-    written = 0
+    midi_events = make_midi_events(
+        SESSION_RECORDING_MIDI_NOTE,
+        SESSION_RECORDING_VELOCITY,
+        SESSION_RECORDING_NOTE_START_SECONDS,
+        SESSION_RECORDING_NOTE_END_SECONDS,
+    )
+    logger.info(
+        "Rendering %.1fs deterministic clip (note %d, %.1f-%.1fs) to %s",
+        SESSION_RECORDING_DURATION_SECONDS,
+        SESSION_RECORDING_MIDI_NOTE,
+        SESSION_RECORDING_NOTE_START_SECONDS,
+        SESSION_RECORDING_NOTE_END_SECONDS,
+        session_recording_path,
+    )
+    output = plugin.process(
+        list(midi_events),
+        SESSION_RECORDING_DURATION_SECONDS,
+        SAMPLE_RATE,
+        CHANNELS,
+        _SESSION_RECORDING_BUFFER_SIZE,
+        True,
+    )
+    expected_frames = int(SESSION_RECORDING_DURATION_SECONDS * SAMPLE_RATE)
+    assert output.shape == (CHANNELS, expected_frames), (
+        f"expected output shape ({CHANNELS}, {expected_frames}), got {output.shape}"
+    )
+    # AudioFile.write expects (frames, channels); plugin output is (channels, frames).
     with AudioFile(str(session_recording_path), "w", SAMPLE_RATE, CHANNELS) as f:
-        while written < target and not stop_event.is_set():
-            chunk = plugin(silence, SAMPLE_RATE, reset=False)
-            assert chunk.shape == (CHANNELS, BUFFER_SIZE), (
-                f"expected chunk shape ({CHANNELS}, {BUFFER_SIZE}), got {chunk.shape}"
-            )
-            remaining = target - written
-            if chunk.shape[-1] > remaining:
-                chunk = chunk[..., :remaining]
-            # AudioFile.write expects (frames, channels); plugin output is (channels, frames).
-            f.write(chunk.T)
-            written += chunk.shape[-1]
-    logger.info("Recording wrote %d frames (%.2fs)", written, written / SAMPLE_RATE)
+        f.write(output.T)
+    logger.info("Recording wrote %d frames", expected_frames)
 
 
 def keyboard_loop(
@@ -398,9 +419,12 @@ def keyboard_loop(
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help=(
-        "Optional WAV file to tee the first "
-        f"{int(SESSION_RECORDING_MAX_SECONDS)}s of the live audio stream into. "
-        "No-op when not set."
+        f"Optional WAV file to render a deterministic "
+        f"{int(SESSION_RECORDING_DURATION_SECONDS)}s test clip to "
+        f"(middle C from {SESSION_RECORDING_NOTE_START_SECONDS:.1f}-"
+        f"{SESSION_RECORDING_NOTE_END_SECONDS:.1f}s). When set, replaces the live "
+        f"audio stream — output depends only on plugin state, so the same inputs "
+        f"always produce the same WAV. No-op when not set."
     ),
 )
 def main(
@@ -464,9 +488,7 @@ def main(
     stop_event = threading.Event()
     with ThreadPoolExecutor() as pool:
         if session_recording_path is not None:
-            audio_future = pool.submit(
-                play_audio_recorded, plugin, stop_event, session_recording_path
-            )
+            audio_future = pool.submit(play_audio_recorded, plugin, session_recording_path)
         else:
             audio_future = pool.submit(play_audio, plugin, stop_event)
         keyboard_future = pool.submit(keyboard_loop, plugin, stop_event, param_spec_name)

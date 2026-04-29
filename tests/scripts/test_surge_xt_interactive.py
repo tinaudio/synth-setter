@@ -1,7 +1,6 @@
 """Tests for scripts/surge_xt_interactive.py prediction decoding helpers."""
 
 import importlib
-import threading
 from pathlib import Path
 
 import click
@@ -283,65 +282,75 @@ class TestLoadDatasetSynthParams:
 
 
 class _ConstantPlugin:
-    """Stand-in plugin: returns a constant-valued buffer of the input shape.
+    """Stand-in plugin with a ``.process(...)`` method that returns constant audio.
 
-    Duck-typed to satisfy ``play_audio_recorded``'s ``plugin(buf, sr, reset=...)`` call —
+    Duck-typed to satisfy ``play_audio_recorded``'s ``plugin.process(...)`` call —
     avoids loading a real VST3, which is unavailable in headless test runs.
+    Stashes its last call's ``midi_messages`` argument for assertion in tests.
     """
 
     def __init__(self, sample_value: float) -> None:
         self.sample_value = sample_value
-        self.call_count = 0
+        self.process_call_count = 0
+        self.last_midi_messages: list | None = None
 
-    def __call__(
-        self, audio_buffer: np.ndarray, sample_rate: int, reset: bool = False
+    def process(
+        self,
+        midi_messages: list,
+        duration_seconds: float,
+        sample_rate: float,
+        num_channels: int,
+        buffer_size: int,
+        reset: bool,
     ) -> np.ndarray:
-        """Return a buffer shaped like ``audio_buffer`` filled with ``sample_value``."""
-        del sample_rate, reset
-        self.call_count += 1
-        return np.full_like(audio_buffer, self.sample_value)
+        """Return a constant-valued ``(num_channels, duration * sample_rate)`` buffer."""
+        del buffer_size, reset
+        self.process_call_count += 1
+        self.last_midi_messages = list(midi_messages)
+        frames = int(duration_seconds * sample_rate)
+        return np.full((num_channels, frames), self.sample_value, dtype=np.float32)
 
 
 class TestPlayAudioRecorded:
-    """play_audio_recorded writes plugin output to a WAV file (headless, no audio device)."""
+    """play_audio_recorded renders a deterministic clip via a single plugin.process() call."""
 
-    def test_writes_exact_n_seconds_trimming_final_chunk(
-        self, surge_xt_interactive, tmp_path: Path
-    ) -> None:
-        """The WAV lands on exactly ``n_seconds * SAMPLE_RATE`` frames, even mid-buffer."""
+    def test_writes_exact_duration_frames(self, surge_xt_interactive, tmp_path: Path) -> None:
+        """The WAV's frame count is exactly ``DURATION * SAMPLE_RATE`` (one process call)."""
         plugin = _ConstantPlugin(sample_value=0.25)
         output_path = tmp_path / "session.wav"
-        sample_rate = surge_xt_interactive.SAMPLE_RATE
-        buffer_size = surge_xt_interactive.BUFFER_SIZE
-        # Pick a duration whose frame count is NOT a multiple of BUFFER_SIZE so
-        # the trim-final-chunk branch actually runs. 1.5 buffers worth.
-        n_seconds = (1.5 * buffer_size) / sample_rate
-        expected_frames = int(n_seconds * sample_rate)
-
-        surge_xt_interactive.play_audio_recorded(
-            plugin, threading.Event(), output_path, n_seconds=n_seconds
+        expected_frames = int(
+            surge_xt_interactive.SESSION_RECORDING_DURATION_SECONDS
+            * surge_xt_interactive.SAMPLE_RATE
         )
 
+        surge_xt_interactive.play_audio_recorded(plugin, output_path)
+
+        assert plugin.process_call_count == 1
         assert output_path.is_file()
         with AudioFile(str(output_path)) as f:
             audio = f.read(f.frames)
         assert audio.shape == (surge_xt_interactive.CHANNELS, expected_frames)
         np.testing.assert_allclose(audio, plugin.sample_value, atol=1e-3)
-        # Two plugin calls: first full buffer + second buffer (trimmed).
-        assert plugin.call_count == 2
 
-    def test_stop_event_short_circuits_loop(self, surge_xt_interactive, tmp_path: Path) -> None:
-        """A pre-set ``stop_event`` exits before any plugin call or write."""
+    def test_passes_expected_midi_events(self, surge_xt_interactive, tmp_path: Path) -> None:
+        """plugin.process is called with note_on/off middle-C events at NOTE_START/END."""
         plugin = _ConstantPlugin(sample_value=0.0)
-        output_path = tmp_path / "stopped.wav"
-        stop_event = threading.Event()
-        stop_event.set()
 
-        surge_xt_interactive.play_audio_recorded(plugin, stop_event, output_path, n_seconds=10.0)
+        surge_xt_interactive.play_audio_recorded(plugin, tmp_path / "events.wav")
 
-        # File still gets created (AudioFile opens before the loop) but no
-        # plugin calls are made and no audio is written.
-        assert output_path.is_file()
-        assert plugin.call_count == 0
-        with AudioFile(str(output_path)) as f:
-            assert f.frames == 0
+        assert plugin.last_midi_messages is not None
+        assert len(plugin.last_midi_messages) == 2
+        (note_on_bytes, note_on_t), (note_off_bytes, note_off_t) = plugin.last_midi_messages
+
+        assert note_on_t == pytest.approx(
+            surge_xt_interactive.SESSION_RECORDING_NOTE_START_SECONDS
+        )
+        assert note_off_t == pytest.approx(surge_xt_interactive.SESSION_RECORDING_NOTE_END_SECONDS)
+
+        # MIDI wire format: status byte (high nibble = type), note, velocity.
+        # 0x90 = note_on (channel 0), 0x80 = note_off (channel 0).
+        assert note_on_bytes[0] & 0xF0 == 0x90
+        assert note_off_bytes[0] & 0xF0 == 0x80
+        assert note_on_bytes[1] == surge_xt_interactive.SESSION_RECORDING_MIDI_NOTE
+        assert note_off_bytes[1] == surge_xt_interactive.SESSION_RECORDING_MIDI_NOTE
+        assert note_on_bytes[2] == surge_xt_interactive.SESSION_RECORDING_VELOCITY
