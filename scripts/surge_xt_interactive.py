@@ -170,7 +170,7 @@ def decode_prediction_row(
         raise IndexError(f"batch_idx {batch_idx} out of range (batch size {pred_tensor.shape[0]})")
 
     spec = param_specs[param_spec_name]
-    row = pred_tensor[batch_idx].float().numpy()
+    row = pred_tensor[batch_idx].detach().cpu().float().numpy()
     row_scaled = np.clip((row + 1) / 2, 0, 1)
     synth_params, _ = spec.decode(row_scaled)
     return synth_params
@@ -363,10 +363,11 @@ def keyboard_loop(
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help=(
-        "HDF5 file to append recorded patches to. After the editor is closed, patches "
-        "captured via the keyboard loop (press 'p' to record, 'q' to quit) are rendered "
-        "through the plugin and written to this dataset via "
-        "``src.data.vst.generate_vst_dataset.make_dataset``."
+        "HDF5 file to be created with the recorded patches. Must not already exist — "
+        "``make_dataset`` writes fixed-size HDF5 datasets without ``maxshape`` and cannot "
+        "append to existing files. After the editor is closed, patches captured via the "
+        "keyboard loop (press 'p' to record, 'q' to quit) are rendered through the plugin "
+        "and written to this file via ``src.data.vst.generate_vst_dataset.make_dataset``."
     ),
 )
 def main(
@@ -395,6 +396,17 @@ def main(
     if dataset_ref is not None and pred is not None:
         raise click.UsageError(
             "--pred and --dataset-ref are mutually exclusive; pass at most one."
+        )
+
+    # Fail fast — ``make_dataset`` writes fixed-size HDF5 datasets without
+    # ``maxshape`` and cannot append, so a pre-existing path would either
+    # silently overwrite (when re-creating datasets) or fail mid-render after
+    # patches have been captured. Better to reject up front.
+    if output_dataset_path is not None and output_dataset_path.exists():
+        raise click.UsageError(
+            f"--output-dataset-path {output_dataset_path} already exists; "
+            f"this script writes a new file (fixed-size HDF5 datasets cannot be "
+            f"appended to). Choose a path that does not exist yet."
         )
 
     plugin = load_plugin(plugin_path)
@@ -444,23 +456,10 @@ def main(
     if not synth_patches:
         logger.info("No patches recorded, skipping dataset creation.")
         return
-    # ``make_dataset`` treats ``num_samples`` as the *total* dataset size, not
-    # a delta. Read any existing total from the h5 so resuming doesn't truncate
-    # earlier rows; for a fresh file ``existing_total`` is 0.
-    with h5py.File(output_dataset_path, "a") as f:
-        if "audio" in f:
-            existing_audio = f["audio"]
-            if not isinstance(existing_audio, h5py.Dataset):
-                raise TypeError(
-                    f"expected h5py.Dataset for 'audio', got {type(existing_audio).__name__}"
-                )
-            existing_total = existing_audio.shape[0]
-        else:
-            existing_total = 0
-        total_samples = existing_total + len(synth_patches)
+    with h5py.File(output_dataset_path, "w") as f:
         make_dataset(
             hdf5_file=f,
-            num_samples=total_samples,
+            num_samples=len(synth_patches),
             plugin_path=plugin_path,
             preset_path=preset_path,
             sample_rate=SAMPLE_RATE,

@@ -8,7 +8,6 @@ import h5py
 import hdf5plugin  # noqa: F401  # pyright: ignore[reportUnusedImport]  side-effect: registers Blosc2 filter for h5py reads
 import numpy as np
 import pytest
-from rich import print
 
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from src.data.vst import param_specs
@@ -38,6 +37,9 @@ _WMFCC_MAX = 5.0         # DTW-aligned MFCC L1 distance
 _SOT_MAX = 0.05          # spectral optimal transport (Wasserstein on STFT mags)
 _RMS_MIN_COSINE = 0.95   # RMS envelope cosine similarity (1.0 = identical)
 _MEL_MEAN_ABS_MAX = 5.0  # mean abs diff on stored mel_spec (log-power dB)
+
+# Peak amplitude floor below which a clip is treated as silent.
+_AUDIO_PEAK_SILENCE_FLOOR = 1e-4
 
 # Per-sample mel shape `(channels, n_mels, n_frames)` hardcoded by the writer.
 # Derivation: channels=2 literal in writer; n_mels=128 from librosa kwarg;
@@ -102,7 +104,9 @@ def _assert_h5_structure_is_valid(
         assert np.isfinite(params[...]).all()
 
         peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
-        assert (peak > 1e-4).all(), f"silent clips: peaks={peak.tolist()}"
+        assert (peak > _AUDIO_PEAK_SILENCE_FLOOR).all(), (
+            f"silent clips: peaks={peak.tolist()}"
+        )
 
         return audio_arr, mel[...], params[...]
 
@@ -172,13 +176,13 @@ def test_make_dataset_with_fixed_params_round_trips_per_row(tmp_path: Path) -> N
     # inputs for the second ``make_dataset`` run — guaranteed past the loudness
     # gate by construction (the candidate render survived stage 1).
     synth_patches: list[dict[str, float]] = []
-    note_patches: list[dict[str, float]] = []
+    note_patches: list[dict[str, int | tuple[float, float]]] = []
     for i in range(_NUM_SAMPLES):
         decoded_synth_params, decoded_note_params = spec.decode(expected_params[i])
         synth_patches.append(decoded_synth_params)
         note_patches.append(decoded_note_params)
-    print("synth_patches", synth_patches)
-    print("note_patches", note_patches)
+    log.info("synth_patches: %s", synth_patches)
+    log.info("note_patches: %s", note_patches)
 
     # Stage 2: replay the candidates as fixed inputs and verify reproducibility.
     got_dataset = tmp_path / "fixed.h5"

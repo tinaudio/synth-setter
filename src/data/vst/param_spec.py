@@ -242,14 +242,18 @@ class ParamSpec:
     def __len__(self):
         return self.synth_param_length + self.note_param_length
 
-    def sample(self) -> Tuple[dict[str, float], dict[str, float]]:
+    def sample(
+        self,
+    ) -> Tuple[dict[str, float], dict[str, int | tuple[float, float]]]:
         synth_param_dict = {p.name: p.sample() for p in self.synth_params}
         note_param_dict = {p.name: p.sample() for p in self.note_params}
 
         return synth_param_dict, note_param_dict
 
     def encode(
-        self, synth_param_dict: dict[str, float], note_param_dict: dict[str, float]
+        self,
+        synth_param_dict: dict[str, float],
+        note_param_dict: dict[str, int | tuple[float, float]],
     ) -> np.ndarray:
         synth_params = [p.encode(synth_param_dict[p.name]) for p in self.synth_params]
         note_params = [p.encode(note_param_dict[p.name]) for p in self.note_params]
@@ -259,7 +263,9 @@ class ParamSpec:
 
         return np.concatenate((synth_params, note_params))
 
-    def decode(self, params: np.ndarray) -> Tuple[dict[str, float], dict[str, float]]:
+    def decode(
+        self, params: np.ndarray
+    ) -> Tuple[dict[str, float], dict[str, int | tuple[float, float]]]:
         synth_params_to_process = [(p, len(p)) for p in self.synth_params]
         note_params_to_process = [(p, len(p)) for p in self.note_params]
 

@@ -10,7 +10,6 @@ import librosa
 import numpy as np
 import rootutils
 from loguru import logger
-from pedalboard import VST3Plugin
 from pyloudnorm import Meter
 from tqdm import trange
 
@@ -69,17 +68,13 @@ def generate_sample(
     param_spec: ParamSpec,
     preset_path: str,
     fixed_synth_params: dict[str, float] | None = None,
-    fixed_note_params: dict[str, float] | None = None,
+    fixed_note_params: dict[str, int | tuple[float, float]] | None = None,
 ) -> VSTDataSample:
     while True:
-        if fixed_synth_params is not None and fixed_note_params is not None:
-            synth_params = fixed_synth_params
-            note_params = fixed_note_params
-        else:
-            logger.debug("sampling params and note from param_spec")
-            sampled_synth, sampled_note = param_spec.sample()
-            synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
-            note_params = fixed_note_params if fixed_note_params is not None else sampled_note
+        logger.debug("sampling params and note from param_spec")
+        sampled_synth, sampled_note = param_spec.sample()
+        synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
+        note_params = fixed_note_params if fixed_note_params is not None else sampled_note
 
         output = render_params(
             plugin_path,
@@ -230,7 +225,7 @@ def make_dataset(
     param_spec: ParamSpec,
     sample_batch_size: int,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[dict[str, float]] | None = None,
+    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
 ) -> None:
     audio_dataset, mel_dataset, param_dataset, start_idx = (
         create_datasets_and_get_start_idx(

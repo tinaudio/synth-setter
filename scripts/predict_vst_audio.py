@@ -12,7 +12,7 @@ from pedalboard.io import AudioFile
 from tqdm import tqdm, trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from src.data.vst import load_plugin, load_preset, param_specs, render_params
+from src.data.vst import param_specs, render_params
 from src.data.vst.param_spec import ParamSpec
 
 
@@ -127,11 +127,10 @@ def main(
     param_spec = param_specs[param_spec]
     os.makedirs(output_dir, exist_ok=True)
 
-    # 1. load and prepare the VST
-    plugin = load_plugin(plugin_path)
-    load_preset(plugin, preset_path)
+    # render_params loads the plugin (and applies preset_path) on every call,
+    # so no upfront load_plugin is needed here.
 
-    # 2. list the .pt files with accompanying indices (each file has name
+    # list the .pt files with accompanying indices (each file has name
     # pred-{index}.pt, and we want to sort by index)
     pred_dir = Path(pred_dir)
     pred_files = [f for f in pred_dir.glob("pred-*.pt") if f.is_file()]
@@ -167,9 +166,8 @@ def main(
             row_params_scaled = np.clip(row_params_scaled, 0, 1)
             synth_params, note_params = param_spec.decode(row_params_scaled)
 
-            load_preset(plugin, preset_path)
             pred_audio = render_params(
-                plugin,
+                plugin_path,
                 synth_params,
                 int(note_params["pitch"]),
                 velocity,
@@ -177,6 +175,7 @@ def main(
                 signal_duration_seconds,
                 sample_rate,
                 channels,
+                preset_path=preset_path,
             )
 
             out_target = os.path.join(sample_dir, "target.wav")
@@ -186,9 +185,8 @@ def main(
                 target_params_ = np.clip(target_params_, 0, 1)
                 target_synth_params, target_note_params = param_spec.decode(target_params_)
 
-                load_preset(plugin, preset_path)
                 new_target = render_params(
-                    plugin,
+                    plugin_path,
                     target_synth_params,
                     int(target_note_params["pitch"]),
                     velocity,
@@ -196,6 +194,7 @@ def main(
                     signal_duration_seconds,
                     sample_rate,
                     channels,
+                    preset_path=preset_path,
                 )
                 with AudioFile(out_target, "w", sample_rate, channels) as f:
                     f.write(new_target.T)
