@@ -1,7 +1,5 @@
-import _thread
 import threading
 import time
-from typing import Callable, Optional, Tuple
 
 import mido
 import numpy as np
@@ -9,10 +7,32 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
+# How long the helper thread waits before signalling ``show_editor`` to close.
+# Tuned experimentally on this branch (commits 086d80f, 9ff7f16, c6e4139): values
+# below ~0.3s were flaky against Surge XT's editor init; 0.5s is the smallest
+# value that consistently yielded valid (non-silent) renders during dataset
+# generation on the verification host.
+_PREPARE_PLUGIN_SLEEP_SECONDS = 0.5
 
-def _prepare_plugin(stop_event: threading.Event, sleep_time: float = 0.5) -> None:
+# Upper bound for how long load_plugin waits for the helper thread to exit
+# after signalling its stop event. The helper only sleeps for
+# ``_PREPARE_PLUGIN_SLEEP_SECONDS`` so 1.0s is a generous ceiling.
+_PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS = 1.0
+
+
+def _prepare_plugin(
+    stop_event: threading.Event,
+    sleep_time: float = _PREPARE_PLUGIN_SLEEP_SECONDS,
+) -> None:
+    """Sleep, then signal ``show_editor`` to close.
+
+    Used by :func:`load_plugin` to drive ``show_editor`` long enough that the
+    plugin completes initialisation, but no longer than necessary for batch
+    rendering throughput.
+    """
     time.sleep(sleep_time)
     stop_event.set()
+
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
     logger.info(f"Loading plugin {plugin_path}")
@@ -26,6 +46,7 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
         p.show_editor(stop_event)
     finally:
         stop_event.set()
+        t.join(timeout=_PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS)
     return p
 
 
@@ -50,12 +71,23 @@ def render_params(
     params: dict[str, float],
     midi_note: int,
     velocity: int,
-    note_start_and_end: Tuple[float, float],
+    note_start_and_end: tuple[float, float],
     signal_duration_seconds: float,
     sample_rate: float,
     channels: int,
-    preset_path: Optional[str] = None,
+    preset_path: str | None = None,
 ) -> np.ndarray:
+    """Render a single audio sample by loading the plugin fresh per call.
+
+    The plugin is reloaded (and its editor briefly shown via
+    ``_prepare_plugin``) on every call. This is intentional and is the
+    workaround for the silent / alternate-render bug investigated on this
+    branch (see commits 086d80f, 9ff7f16, c6e4139): without a per-call reload,
+    the plugin retained stale state from prior renders and produced silent or
+    repeated audio. The cost is ~7s of plugin-load + editor-show overhead per
+    sample — acceptable for interactive use and small batch generation, not
+    for large-scale pipeline runs.
+    """
     plugin = load_plugin(plugin_path)
     if preset_path is not None:
         load_preset(plugin, preset_path)

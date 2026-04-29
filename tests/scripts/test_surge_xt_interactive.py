@@ -78,13 +78,13 @@ class TestDecodePredictionRow:
     @pytest.mark.parametrize(
         "param_name, expected",
         [
-            # col 0 = -1.0 -> rescaled 0.0 -> attack min (0.0)
+            # col 0 = -1.0 -> rescaled 0.0 -> attack at spec min (0.0)
             ("a_amp_eg_attack", 0.0),
-            # col 1 =  0.0 -> rescaled 0.5 -> decay = 0.5 * max (0.77)
-            ("a_amp_eg_decay", 0.5 * 0.77),
-            # col 2 =  1.0 -> rescaled 1.0 -> release max (0.77)
+            # col 1 =  0.0 -> rescaled 0.5 -> decay at spec midpoint
+            ("a_amp_eg_decay", 0.385),
+            # col 2 =  1.0 -> rescaled 1.0 -> release at spec max
             ("a_amp_eg_release", 0.77),
-            # col 3 =  2.0 -> clipped to 1.0 -> sustain max (1.0)
+            # col 3 =  2.0 -> clipped to 1.0 -> sustain at spec max
             ("a_amp_eg_sustain", 1.0),
         ],
     )

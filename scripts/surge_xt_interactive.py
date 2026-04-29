@@ -7,35 +7,48 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-import click
-import h5py
-import hdf5plugin  # noqa: F401   side-effect import: registers HDF5_PLUGIN_PATH so h5py can load Blosc2 filters in fixtures
-import numpy as np
 import rootutils
-import torch
-from pedalboard import VST3Plugin
-from pedalboard.io import AudioFile, AudioStream, StreamResampler
-
-from src.data.vst import load_plugin, load_preset, param_specs
-from src.data.vst.core import set_params
-from src.data.vst.generate_vst_dataset import make_dataset
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
+import click  # noqa: E402
+import h5py  # noqa: E402
+import hdf5plugin  # noqa: F401, E402  side-effect: registers HDF5_PLUGIN_PATH for Blosc2 filters
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from pedalboard import VST3Plugin  # noqa: E402
+from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
+
+from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
+from src.data.vst.core import set_params  # noqa: E402
+from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 CHANNELS = 2
 SAMPLE_RATE = 44100
 BUFFER_SIZE = 512
-MAKE_DATASET_SCRIPT_PATH = Path("src/data/vst/generate_vst_dataset.py").resolve()
 MAKE_DATASET_VELOCITY = 100
 MAKE_DATASET_SIGNAL_DURATION_SECONDS = 4.0
 MAKE_DATASET_MIN_LOUDNESS = -50.0
 MAKE_DATASET_SAMPLE_BATCH_SIZE = 32
 
-PLAYBACK_SAMPLE_RATE = (
-    44100  # Sample rate to use for real-time playback. Must be supported by the output device.
-)
+# Real-time playback rate. Set this to whatever the default output device supports
+# if it differs from ``SAMPLE_RATE`` — ``play_audio`` will resample on the fly.
+PLAYBACK_SAMPLE_RATE = SAMPLE_RATE
+
+# Maximum time to wait for the audio thread to drain after ``stop_event`` is set.
+AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS = 2
+
+# Plugin-flush parameters used by the post-load / pre-render flush pattern; see
+# ``_flush_plugin``. Mirror of the values used in ``src.data.vst.core.render_params``.
+_PLUGIN_FLUSH_DURATION_SECONDS = 32.0
+_PLUGIN_FLUSH_BUFFER_SIZE = 2048
+
+# Return signals for ``keyboard_loop`` actions — distinguishes "user requested
+# quit" from "action completed, keep listening".
+_KEEP_LOOPING = True
+_STOP_LOOPING = False
 
 
 @dataclass(frozen=True)
@@ -181,7 +194,10 @@ def load_dataset_synth_params(
     spec = param_specs[param_spec_name]
     with h5py.File(ref.path, "r") as f:
         param_array = f["param_array"]
-        assert isinstance(param_array, h5py.Dataset), "expected h5py.Dataset for 'param_array'"
+        if not isinstance(param_array, h5py.Dataset):
+            raise TypeError(
+                f"expected h5py.Dataset for 'param_array', got {type(param_array).__name__}"
+            )
         row = np.asarray(param_array[ref.batch_idx], dtype=np.float32)
 
     synth_params, _ = spec.decode(row)
@@ -211,6 +227,23 @@ def load_prediction_synth_params(
     return decode_prediction_row(pred_tensor, ref.batch_idx, param_spec_name)
 
 
+def _flush_plugin(plugin: VST3Plugin) -> None:
+    """Process an empty buffer and reset the plugin to flush internal state.
+
+    Mirrors the post-load / pre-render flush pattern in
+    ``src.data.vst.core.render_params``.
+    """
+    plugin.process(
+        [],
+        _PLUGIN_FLUSH_DURATION_SECONDS,
+        SAMPLE_RATE,
+        CHANNELS,
+        _PLUGIN_FLUSH_BUFFER_SIZE,
+        True,
+    )
+    plugin.reset()
+
+
 def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
     """Stream silence through Surge XT and write synthesized audio to the output device.
 
@@ -219,19 +252,19 @@ def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
     it differs from ``SAMPLE_RATE`` so the output device gets a rate it supports.
     """
     silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
-    stream_resampler = None
+    needs_resample = SAMPLE_RATE != PLAYBACK_SAMPLE_RATE
+    stream_resampler = (
+        StreamResampler(SAMPLE_RATE, PLAYBACK_SAMPLE_RATE, CHANNELS) if needs_resample else None
+    )
     with AudioStream(
         output_device_name=AudioStream.default_output_device_name,
         sample_rate=SAMPLE_RATE,
         buffer_size=BUFFER_SIZE,
     ) as stream:
         while not stop_event.is_set():
-            if SAMPLE_RATE != PLAYBACK_SAMPLE_RATE and stream_resampler is None:
-                stream_resampler = StreamResampler(SAMPLE_RATE, PLAYBACK_SAMPLE_RATE, CHANNELS)
             synth_output = plugin(silence, SAMPLE_RATE, reset=False)
-            if stream_resampler:
-                resampled = stream_resampler.process(synth_output)
-                stream.write(resampled, PLAYBACK_SAMPLE_RATE)
+            if stream_resampler is not None:
+                stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
             else:
                 stream.write(synth_output, SAMPLE_RATE)
 
@@ -253,31 +286,35 @@ def keyboard_loop(
     spec = param_specs[param_spec_name]
     synth_patches: list[dict[str, float]] = []
 
-    def quit_action():
+    def quit_action() -> bool:
         stop_event.set()
         logger.info("Quitting...")
-        return False  # stop loop
+        return _STOP_LOOPING
 
-    def record_patch():
-        patch: dict[str, float] = dict()
+    def record_patch() -> bool:
+        patch: dict[str, float] = {}
         logger.info("Recording patch...")
         for param_name in spec.synth_param_names:
-            assert param_name in plugin.parameters, (  # pyright: ignore[reportAttributeAccessIssue]
-                f"parameter {param_name!r} not found in plugin parameters"
-            )
+            if param_name not in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
+                raise KeyError(f"parameter {param_name!r} not found in plugin parameters")
             patch[param_name] = plugin.parameters[param_name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
         synth_patches.append(patch)
         logger.info("patch recorded: %s", synth_patches[-1])
-        return True  # keep going
+        return _KEEP_LOOPING
 
     actions = {
         "q": quit_action,
         "p": record_patch,
     }
+    # NOTE: ``click.getchar()`` blocks until a key is pressed, so this loop only
+    # checks ``stop_event`` between keystrokes. If the editor closes from another
+    # thread, the loop won't exit until the user presses any key. Acceptable for
+    # the typical editor-close-then-press-q flow; a sentinel-key approach would
+    # be needed for fully event-driven shutdown.
     while not stop_event.is_set():
         ch = click.getchar()
         action = actions.get(ch)
-        if action and not action():
+        if action is not None and action() == _STOP_LOOPING:
             return synth_patches
     return synth_patches
 
@@ -354,16 +391,22 @@ def main(
        the resulting samples to ``--output-dataset-path`` via ``make_dataset``.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if dataset_ref is not None and pred is not None:
+        raise click.UsageError(
+            "--pred and --dataset-ref are mutually exclusive; pass at most one."
+        )
+
     plugin = load_plugin(plugin_path)
-    assert isinstance(plugin, VST3Plugin), f"expected VST3Plugin, got {type(plugin).__name__}"
+    if not isinstance(plugin, VST3Plugin):
+        raise TypeError(f"expected VST3Plugin, got {type(plugin).__name__}")
 
     load_preset(plugin, preset_path)
 
-    # flush plugin to ensure that full parameter dict is populated.
-    plugin.process([], 32.0, SAMPLE_RATE, CHANNELS, 2048, True)  # flush
-    plugin.reset()
-    plugin.process([], 32.0, SAMPLE_RATE, CHANNELS, 2048, True)  # flush
-    plugin.reset()
+    # Two flushes ensure the plugin's full parameter dict is populated and any
+    # transient state from preset load is cleared before applying user params.
+    _flush_plugin(plugin)
+    _flush_plugin(plugin)
 
     if dataset_ref is not None:
         synth_params = load_dataset_synth_params(dataset_ref, param_spec_name)
@@ -372,7 +415,6 @@ def main(
         synth_params = load_prediction_synth_params(pred, param_spec_name)
         set_params(plugin, synth_params)
 
-    synth_patches = None
     stop_event = threading.Event()
     with ThreadPoolExecutor() as pool:
         audio_future = pool.submit(play_audio, plugin, stop_event)
@@ -382,20 +424,43 @@ def main(
             plugin.show_editor(stop_event)
         finally:
             stop_event.set()
-            # surface any exception that happened in the audio thread
-            audio_future.result(timeout=2)
-        logger.info("Editor closed, waiting for audio thread to finish...")
+            # Surface any exception from the audio thread. Catch TimeoutError so
+            # a slow stream-close on shutdown doesn't crash the script — log it
+            # and continue draining; cancel-style errors will resurface elsewhere.
+            try:
+                audio_future.result(timeout=AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS)
+            except TimeoutError:
+                logger.warning(
+                    "audio thread did not exit within %ss; continuing shutdown",
+                    AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS,
+                )
+        logger.info("Editor closed, waiting for keyboard thread to finish...")
         synth_patches = keyboard_future.result()
         logger.info("Recorded %d patches: %s", len(synth_patches), synth_patches)
 
-    assert synth_patches is not None, "synth_patches should be set by keyboard_loop"
     if output_dataset_path is None:
         logger.info("No output dataset path provided, skipping dataset creation.")
         return
+    if not synth_patches:
+        logger.info("No patches recorded, skipping dataset creation.")
+        return
+    # ``make_dataset`` treats ``num_samples`` as the *total* dataset size, not
+    # a delta. Read any existing total from the h5 so resuming doesn't truncate
+    # earlier rows; for a fresh file ``existing_total`` is 0.
     with h5py.File(output_dataset_path, "a") as f:
+        if "audio" in f:
+            existing_audio = f["audio"]
+            if not isinstance(existing_audio, h5py.Dataset):
+                raise TypeError(
+                    f"expected h5py.Dataset for 'audio', got {type(existing_audio).__name__}"
+                )
+            existing_total = existing_audio.shape[0]
+        else:
+            existing_total = 0
+        total_samples = existing_total + len(synth_patches)
         make_dataset(
             hdf5_file=f,
-            num_samples=len(synth_patches),
+            num_samples=total_samples,
             plugin_path=plugin_path,
             preset_path=preset_path,
             sample_rate=SAMPLE_RATE,

@@ -1,7 +1,7 @@
 import hashlib
 import random
 from dataclasses import dataclass
-from typing import Any, List, Tuple
+from typing import Any
 
 import click
 import h5py
@@ -72,14 +72,14 @@ def generate_sample(
     fixed_note_params: dict[str, float] | None = None,
 ) -> VSTDataSample:
     while True:
-        logger.debug("sampling params")
-        synth_params, note_params = param_spec.sample()
-        if fixed_synth_params is not None:
+        if fixed_synth_params is not None and fixed_note_params is not None:
             synth_params = fixed_synth_params
-        if fixed_note_params is not None:
             note_params = fixed_note_params
-
-        logger.debug("sampling note")
+        else:
+            logger.debug("sampling params and note from param_spec")
+            sampled_synth, sampled_note = param_spec.sample()
+            synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
+            note_params = fixed_note_params if fixed_note_params is not None else sampled_note
 
         output = render_params(
             plugin_path,
@@ -131,7 +131,7 @@ def save_sample(
 
 
 def save_samples(
-    samples: List[VSTDataSample],
+    samples: list[VSTDataSample],
     audio_dataset: h5py.Dataset,
     mel_dataset: h5py.Dataset,
     param_dataset: h5py.Dataset,
@@ -163,10 +163,10 @@ def get_first_unwritten_idx(dataset: h5py.Dataset) -> int:
 def create_dataset_and_get_first_unwritten_idx(
     h5py_file: h5py.File,
     name: str,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     dtype: np.dtype,
     compression: Any,
-) -> Tuple[h5py.Dataset, int]:
+) -> tuple[h5py.Dataset, int]:
     logger.info(f"Looking for dataset {name}...")
     if name in h5py_file:
         logger.info(f"Found dataset {name}, looking for first unwritten row.")
@@ -229,10 +229,9 @@ def make_dataset(
     min_loudness: float,
     param_spec: ParamSpec,
     sample_batch_size: int,
-    fixed_synth_params_list: List[dict[str, float]] | None = None,
-    fixed_note_params_list: List[dict[str, float]] | None = None,
+    fixed_synth_params_list: list[dict[str, float]] | None = None,
+    fixed_note_params_list: list[dict[str, float]] | None = None,
 ) -> None:
-
     audio_dataset, mel_dataset, param_dataset, start_idx = (
         create_datasets_and_get_start_idx(
             hdf5_file=hdf5_file,
@@ -244,19 +243,33 @@ def make_dataset(
         )
     )
 
+    # ``fixed_*_params_list`` is indexed relative to ``start_idx`` so that callers
+    # resuming a partially-written dataset pass a list sized to the *remaining*
+    # samples (``num_samples - start_idx``), not the full dataset.
+    expected_fixed_len = num_samples - start_idx
+    for name, lst in [
+        ("fixed_synth_params_list", fixed_synth_params_list),
+        ("fixed_note_params_list", fixed_note_params_list),
+    ]:
+        if lst is not None and len(lst) < expected_fixed_len:
+            raise ValueError(
+                f"{name} has length {len(lst)}, expected at least "
+                f"num_samples - start_idx = {expected_fixed_len} "
+                f"(num_samples={num_samples}, start_idx={start_idx})"
+            )
+
     audio_dataset.attrs["velocity"] = velocity
     audio_dataset.attrs["signal_duration_seconds"] = signal_duration_seconds
     audio_dataset.attrs["sample_rate"] = sample_rate
     audio_dataset.attrs["channels"] = channels
     audio_dataset.attrs["min_loudness"] = min_loudness
 
-
-
     sample_batch = []
     sample_batch_start = start_idx
 
     for i in trange(start_idx, num_samples):
         logger.info(f"Making sample {i}")
+        fixed_idx = i - start_idx
         sample = generate_sample(
             plugin_path,
             velocity=velocity,
@@ -266,8 +279,16 @@ def make_dataset(
             min_loudness=min_loudness,
             param_spec=param_spec,
             preset_path=preset_path,
-            fixed_synth_params=fixed_synth_params_list[i] if fixed_synth_params_list else None,
-            fixed_note_params=fixed_note_params_list[i] if fixed_note_params_list else None,
+            fixed_synth_params=(
+                fixed_synth_params_list[fixed_idx]
+                if fixed_synth_params_list is not None
+                else None
+            ),
+            fixed_note_params=(
+                fixed_note_params_list[fixed_idx]
+                if fixed_note_params_list is not None
+                else None
+            ),
         )
 
         sample_batch.append(sample)

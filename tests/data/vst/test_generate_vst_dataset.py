@@ -1,5 +1,6 @@
 """Basic e2e test for src/data/vst/generate_vst_dataset.py — verifies HDF5 output."""
 
+import logging
 import os
 from pathlib import Path
 
@@ -7,13 +8,11 @@ import h5py
 import hdf5plugin  # noqa: F401  # pyright: ignore[reportUnusedImport]  side-effect: registers Blosc2 filter for h5py reads
 import numpy as np
 import pytest
-import logging
-log = logging.getLogger(__name__)
-from rich import print   # shadows builtin print
-
 
 from src.data.vst import param_specs
 from src.data.vst.generate_vst_dataset import make_dataset
+
+log = logging.getLogger(__name__)
 
 _PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 _PRESET_PATH = "presets/surge-base.vstpreset"
@@ -45,45 +44,17 @@ skip_no_vst = pytest.mark.skipif(
 )
 
 
-@pytest.mark.slow
-@pytest.mark.requires_vst
-@skip_no_vst
-def test_make_dataset_writes_valid_h5(tmp_path: Path) -> None:
-    """make_dataset produces an h5 with correct datasets, shapes, attrs, and finite samples."""
-    out = tmp_path / "data.h5"
-    spec = param_specs[_SPEC_NAME]
-    log.info(spec.names, spec.synth_param_length, spec.note_param_length)
-    SYNTH_PATCHES = []
-    NOTE_PATCHES = []
-    single_synth_patch, single_set_note_params = spec.sample()
-    for i in range(_NUM_SAMPLES):
-        # patch, _ = spec.sample()
-        # for param_name, param_value in patch.items():
-        #     patch[param_name] = float(0)
-        # print(f"Sampled synth params for sample {i}: {patch}")
+def _assert_h5_structure_is_valid(
+    out: Path, spec, num_samples: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Open ``out`` and assert dataset keys, shapes, dtypes, attrs, and finiteness.
 
-        SYNTH_PATCHES.append(single_synth_patch)
-        NOTE_PATCHES.append(single_set_note_params)
-
-    with h5py.File(out, "a") as f:
-        make_dataset(
-            hdf5_file=f,
-            num_samples=_NUM_SAMPLES,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=_NUM_SAMPLES,
-            fixed_synth_params_list=SYNTH_PATCHES,
-            fixed_note_params_list=NOTE_PATCHES,
-        )
-
-    expected_audio_shape = (_NUM_SAMPLES, _CHANNELS, int(_SAMPLE_RATE * _DURATION))
-    expected_mel_shape = (_NUM_SAMPLES, *_PER_SAMPLE_MEL_SHAPE)
+    Returns materialized (audio, mel_spec, param_array) numpy arrays so callers can perform per-row
+    decode checks without re-opening the file. Shared by the fixed-params and random-sampling e2e
+    tests.
+    """
+    expected_audio_shape = (num_samples, _CHANNELS, int(_SAMPLE_RATE * _DURATION))
+    expected_mel_shape = (num_samples, *_PER_SAMPLE_MEL_SHAPE)
 
     with h5py.File(out, "r") as f:
         for name in ("audio", "mel_spec", "param_array"):
@@ -98,11 +69,7 @@ def test_make_dataset_writes_valid_h5(tmp_path: Path) -> None:
 
         assert audio.shape == expected_audio_shape
         assert mel.shape == expected_mel_shape
-        assert params.shape == (_NUM_SAMPLES, len(spec))
-
-        log.info(
-            f"params dtype: {params.dtype}, param.shape: {params.shape}, params[0].shape: {params[0].shape}, params[0]: {params[0]}, param[0][0]: {params[0][0]}"
-        )
+        assert params.shape == (num_samples, len(spec))
         assert params.shape[1] == spec.synth_param_length + spec.note_param_length
         assert spec.note_param_length == 3  # pitch (1) + note_start_and_end (2)
 
@@ -121,33 +88,102 @@ def test_make_dataset_writes_valid_h5(tmp_path: Path) -> None:
         assert np.isfinite(mel[...]).all()
         assert np.isfinite(params[...]).all()
 
-        peak = np.abs(audio_arr).reshape(_NUM_SAMPLES, -1).max(axis=1)
+        peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
         assert (peak > 1e-4).all(), f"silent clips: peaks={peak.tolist()}"
 
-        for i in range(_NUM_SAMPLES):
-            encoded = params[i]
-            decoded_synth_params, decoded_note_params = spec.decode(encoded)
-            assert isinstance(decoded_synth_params, dict)
-            original_synth_params = SYNTH_PATCHES[i]
-            assert decoded_synth_params == pytest.approx(
-                original_synth_params, rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
-            ), (
-                f"decoded synth param `{name}` value {decoded_synth_params} does not match original {original_synth_params} within tolerances (abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
-            )
-            assert decoded_note_params == pytest.approx(
-                NOTE_PATCHES[i], rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
-            ), (
-                f"decoded note params {decoded_note_params} do not match original {NOTE_PATCHES[i]} within tolerances (abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
-            )
+        return audio_arr, mel[...], params[...]
 
-            log.info(f"Decoded synth params for sample {i}: {decoded_synth_params}")
-            assert isinstance(decoded_note_params, dict)
-            log.info(f"Decoded note params for sample {i}: {decoded_note_params}")
-            assert decoded_note_params.keys() == {"pitch", "note_start_and_end"}
-            assert isinstance(decoded_note_params["pitch"], int)
-            assert isinstance(decoded_note_params["note_start_and_end"], tuple)
-            log.info(f"type of note_start_and_end: {type(decoded_note_params['note_start_and_end'])}")
-            start, end = decoded_note_params["note_start_and_end"]
-            log.info(f"type of start: {type(start)}, type of end: {type(end)}")
-            assert isinstance(start, np.floating)
-            assert isinstance(end, np.floating)
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@skip_no_vst
+def test_make_dataset_with_fixed_params_round_trips_per_row(tmp_path: Path) -> None:
+    """make_dataset with distinct fixed_*_params_list per row recovers each row's input on
+    decode."""
+    out = tmp_path / "fixed.h5"
+    spec = param_specs[_SPEC_NAME]
+    log.info("spec %s synth_len=%d note_len=%d", spec.names, spec.synth_param_length,
+             spec.note_param_length)
+
+    synth_patches: list[dict[str, float]] = []
+    note_patches: list[dict[str, float]] = []
+    for _ in range(_NUM_SAMPLES):
+        s, n = spec.sample()
+        synth_patches.append(s)
+        note_patches.append(n)
+
+    with h5py.File(out, "a") as f:
+        make_dataset(
+            hdf5_file=f,
+            num_samples=_NUM_SAMPLES,
+            plugin_path=_PLUGIN_PATH,
+            preset_path=_PRESET_PATH,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            velocity=_VELOCITY,
+            signal_duration_seconds=_DURATION,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            sample_batch_size=_NUM_SAMPLES,
+            fixed_synth_params_list=synth_patches,
+            fixed_note_params_list=note_patches,
+        )
+
+    _, _, params = _assert_h5_structure_is_valid(out, spec, _NUM_SAMPLES)
+
+    for i in range(_NUM_SAMPLES):
+        decoded_synth_params, decoded_note_params = spec.decode(params[i])
+        assert isinstance(decoded_synth_params, dict)
+        assert decoded_synth_params == pytest.approx(
+            synth_patches[i], rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
+        ), (
+            f"sample {i}: decoded synth params {decoded_synth_params} do not match input "
+            f"{synth_patches[i]} within tolerances (abs={_ABSOLUTE_TOLERANCE}, "
+            f"rel={_RELATIVE_TOLERANCE})"
+        )
+        assert decoded_note_params == pytest.approx(
+            note_patches[i], rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
+        ), (
+            f"sample {i}: decoded note params {decoded_note_params} do not match input "
+            f"{note_patches[i]} within tolerances (abs={_ABSOLUTE_TOLERANCE}, "
+            f"rel={_RELATIVE_TOLERANCE})"
+        )
+        assert isinstance(decoded_note_params, dict)
+        assert decoded_note_params.keys() == {"pitch", "note_start_and_end"}
+        assert isinstance(decoded_note_params["pitch"], int)
+        assert isinstance(decoded_note_params["note_start_and_end"], tuple)
+        start, end = decoded_note_params["note_start_and_end"]
+        assert isinstance(start, np.floating)
+        assert isinstance(end, np.floating)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@skip_no_vst
+def test_make_dataset_with_random_sampling_produces_valid_h5(tmp_path: Path) -> None:
+    """make_dataset without fixed_*_params_list samples params internally and writes a valid h5."""
+    out = tmp_path / "random.h5"
+    spec = param_specs[_SPEC_NAME]
+
+    with h5py.File(out, "a") as f:
+        make_dataset(
+            hdf5_file=f,
+            num_samples=_NUM_SAMPLES,
+            plugin_path=_PLUGIN_PATH,
+            preset_path=_PRESET_PATH,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            velocity=_VELOCITY,
+            signal_duration_seconds=_DURATION,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            sample_batch_size=_NUM_SAMPLES,
+        )
+
+    _, _, params = _assert_h5_structure_is_valid(out, spec, _NUM_SAMPLES)
+
+    decoded_rows = [spec.decode(params[i]) for i in range(_NUM_SAMPLES)]
+    for synth, note in decoded_rows:
+        assert isinstance(synth, dict)
+        assert isinstance(note, dict)
+        assert note.keys() == {"pitch", "note_start_and_end"}
