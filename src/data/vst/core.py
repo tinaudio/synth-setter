@@ -84,6 +84,10 @@ def render_params(
     repeated audio. The cost is ~7s of plugin-load + editor-show overhead per
     sample — acceptable for interactive use and small batch generation, not
     for large-scale pipeline runs.
+
+    Tracking issue for the underlying stale-state bug and a future
+    perf-friendly fix:
+    https://github.com/tinaudio/synth-setter/issues/705
     """
     plugin = load_plugin(plugin_path)
     if preset_path is not None:

@@ -40,6 +40,11 @@ PLAYBACK_SAMPLE_RATE = SAMPLE_RATE
 # Maximum time to wait for the audio thread to drain after ``stop_event`` is set.
 AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS = 2
 
+# Cap on how many seconds of the live session ``play_audio`` will tee into a
+# WAV file when ``--session-recording-path`` is set. Bounded so a long editor
+# session doesn't write an unbounded recording.
+SESSION_RECORDING_MAX_SECONDS = 20.0
+
 # Plugin-flush parameters used by the post-load / pre-render flush pattern; see
 # ``_flush_plugin``. Mirror of the values used in ``src.data.vst.core.render_params``.
 _PLUGIN_FLUSH_DURATION_SECONDS = 32.0
@@ -115,25 +120,6 @@ class DatasetRefType(click.ParamType):
         except ValueError:
             self.fail(f"batch index must be an integer, got {idx_str!r}", param, ctx)
         return DatasetRef(path=Path(path_str), batch_idx=batch_idx)
-
-
-def render_to_wav(plugin: VST3Plugin, output_path: Path, duration_seconds: float) -> None:
-    """Render synthesized audio through ``plugin`` to a WAV file at ``output_path``.
-
-    Offline alternative to :func:`play_audio` for headless environments (e.g. Docker
-    on Linux without ALSA/PulseAudio) where ``AudioStream`` cannot open a device.
-
-    :param plugin: Loaded VST3 plugin (post preset/parameter setup).
-    :param output_path: WAV destination. Parent directory must exist.
-    :param duration_seconds: Seconds of audio to render. The actual length is
-        rounded up to the nearest ``BUFFER_SIZE`` samples.
-    """
-    silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
-    num_buffers = math.ceil(duration_seconds * SAMPLE_RATE / BUFFER_SIZE)
-    with AudioFile(str(output_path), "w", SAMPLE_RATE, CHANNELS) as f:
-        for _ in range(num_buffers):
-            synth_output = plugin(silence, SAMPLE_RATE, reset=False)
-            f.write(synth_output)
 
 
 def _load_pred_tensor(pred_path: Path) -> torch.Tensor:
@@ -244,29 +230,78 @@ def _flush_plugin(plugin: VST3Plugin) -> None:
     plugin.reset()
 
 
-def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
+def play_audio(
+    plugin: VST3Plugin,
+    stop_event: threading.Event,
+    session_recording_path: Path | None = None,
+) -> None:
     """Stream silence through Surge XT and write synthesized audio to the output device.
 
     Runs until ``stop_event`` is set (typically by ``keyboard_loop``'s quit action or by
     ``main`` after the plugin editor is closed). Resamples to ``PLAYBACK_SAMPLE_RATE`` if
     it differs from ``SAMPLE_RATE`` so the output device gets a rate it supports.
+
+    When ``session_recording_path`` is provided, the first
+    ``SESSION_RECORDING_MAX_SECONDS`` of the session is teed to that WAV file
+    (at ``SAMPLE_RATE``, pre-resample). After the cap is reached the recording
+    is closed and the live stream continues.
     """
     silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
     needs_resample = SAMPLE_RATE != PLAYBACK_SAMPLE_RATE
     stream_resampler = (
         StreamResampler(SAMPLE_RATE, PLAYBACK_SAMPLE_RATE, CHANNELS) if needs_resample else None
     )
-    with AudioStream(
-        output_device_name=AudioStream.default_output_device_name,
-        sample_rate=SAMPLE_RATE,
-        buffer_size=BUFFER_SIZE,
-    ) as stream:
-        while not stop_event.is_set():
-            synth_output = plugin(silence, SAMPLE_RATE, reset=False)
-            if stream_resampler is not None:
-                stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
-            else:
-                stream.write(synth_output, SAMPLE_RATE)
+
+    recorder: AudioFile | None = None
+    recorder_buffers_remaining = 0
+    if session_recording_path is not None:
+        recorder = AudioFile(str(session_recording_path), "w", SAMPLE_RATE, CHANNELS)
+        recorder_buffers_remaining = math.ceil(
+            SESSION_RECORDING_MAX_SECONDS * SAMPLE_RATE / BUFFER_SIZE
+        )
+        logger.info(
+            "Recording first %.1fs of the session to %s",
+            SESSION_RECORDING_MAX_SECONDS,
+            session_recording_path,
+        )
+
+    try:
+        with AudioStream(
+            output_device_name=AudioStream.default_output_device_name,
+            sample_rate=PLAYBACK_SAMPLE_RATE,
+            buffer_size=BUFFER_SIZE,
+        ) as stream:
+            while not stop_event.is_set():
+                synth_output = plugin(silence, SAMPLE_RATE, reset=False)
+                # ``plugin(...)`` returns audio shaped (channels, frames). Pin
+                # this invariant — anything else here means a pedalboard API
+                # change or a misconfigured plugin and would silently corrupt
+                # the recording / stream writes downstream.
+                assert synth_output.shape == (CHANNELS, BUFFER_SIZE), (
+                    f"expected synth output shape ({CHANNELS}, {BUFFER_SIZE}), "
+                    f"got {synth_output.shape}"
+                )
+
+                if recorder is not None and recorder_buffers_remaining > 0:
+                    # AudioFile.write expects (frames, channels); plugin output is
+                    # (channels, frames), so transpose before writing.
+                    recorder.write(synth_output.T)
+                    recorder_buffers_remaining -= 1
+                    if recorder_buffers_remaining == 0:
+                        recorder.close()
+                        recorder = None
+                        logger.info(
+                            "Session recording reached %.1fs cap; closed.",
+                            SESSION_RECORDING_MAX_SECONDS,
+                        )
+
+                if stream_resampler is not None:
+                    stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
+                else:
+                    stream.write(synth_output, SAMPLE_RATE)
+    finally:
+        if recorder is not None:
+            recorder.close()
 
 
 def keyboard_loop(
@@ -370,6 +405,16 @@ def keyboard_loop(
         "and written to this file via ``src.data.vst.generate_vst_dataset.make_dataset``."
     ),
 )
+@click.option(
+    "--session-recording-path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Optional WAV file to tee the first "
+        f"{int(SESSION_RECORDING_MAX_SECONDS)}s of the live audio stream into. "
+        "No-op when not set."
+    ),
+)
 def main(
     plugin_path: str,
     pred: PredictionRef | None,
@@ -377,6 +422,7 @@ def main(
     preset_path: str,
     param_spec_name: str,
     output_dataset_path: Path | None,
+    session_recording_path: Path | None,
 ) -> None:
     """Open Surge XT GUI with real-time audio streaming and record patches to an HDF5 dataset.
 
@@ -429,7 +475,7 @@ def main(
 
     stop_event = threading.Event()
     with ThreadPoolExecutor() as pool:
-        audio_future = pool.submit(play_audio, plugin, stop_event)
+        audio_future = pool.submit(play_audio, plugin, stop_event, session_recording_path)
         keyboard_future = pool.submit(keyboard_loop, plugin, stop_event, param_spec_name)
 
         try:

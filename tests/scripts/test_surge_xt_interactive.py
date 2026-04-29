@@ -1,7 +1,6 @@
 """Tests for scripts/surge_xt_interactive.py prediction decoding helpers."""
 
 import importlib
-import math
 from pathlib import Path
 
 import click
@@ -9,7 +8,6 @@ import h5py
 import numpy as np
 import pytest
 import torch
-from pedalboard.io import AudioFile
 
 from src.data.vst import param_specs
 from src.data.vst.param_spec import ParamSpec
@@ -280,62 +278,3 @@ class TestLoadDatasetSynthParams:
         for name, value in loaded.items():
             assert isinstance(value, float), f"{name} is {type(value).__name__}, expected float"
             assert np.isfinite(value), f"{name} = {value} is not finite"
-
-
-class _ConstantPlugin:
-    """Stand-in plugin: returns a constant-valued buffer of the input shape.
-
-    Duck-typed to satisfy ``render_to_wav``'s ``plugin(buf, sr, reset=...)`` call —
-    avoids loading a real VST3, which is unavailable in headless test runs.
-    """
-
-    def __init__(self, sample_value: float) -> None:
-        self.sample_value = sample_value
-        self.call_count = 0
-
-    def __call__(
-        self, audio_buffer: np.ndarray, sample_rate: int, reset: bool = False
-    ) -> np.ndarray:
-        """Return a buffer shaped like ``audio_buffer`` filled with ``sample_value``."""
-        del sample_rate, reset
-        self.call_count += 1
-        return np.full_like(audio_buffer, self.sample_value)
-
-
-class TestRenderToWav:
-    """render_to_wav writes plugin output to a WAV file (offline, no audio device)."""
-
-    def test_writes_wav_with_expected_shape_and_content(
-        self, surge_xt_interactive, tmp_path: Path
-    ) -> None:
-        """Renders a WAV with the expected ``(channels, samples)`` shape and constant content."""
-        plugin = _ConstantPlugin(sample_value=0.25)
-        output_path = tmp_path / "out.wav"
-        duration_seconds = 0.05
-
-        surge_xt_interactive.render_to_wav(plugin, output_path, duration_seconds)
-
-        assert output_path.is_file()
-        with AudioFile(str(output_path)) as f:
-            audio = f.read(f.frames)
-        expected_buffers = math.ceil(
-            duration_seconds * surge_xt_interactive.SAMPLE_RATE / surge_xt_interactive.BUFFER_SIZE
-        )
-        expected_samples = expected_buffers * surge_xt_interactive.BUFFER_SIZE
-        assert audio.shape == (surge_xt_interactive.CHANNELS, expected_samples)
-        assert plugin.call_count == expected_buffers
-        np.testing.assert_allclose(audio, plugin.sample_value, atol=1e-3)
-
-    def test_rounds_up_to_full_buffer(self, surge_xt_interactive, tmp_path: Path) -> None:
-        """Sub-buffer durations still produce one full BUFFER_SIZE-sample buffer."""
-        plugin = _ConstantPlugin(sample_value=0.0)
-        output_path = tmp_path / "tiny.wav"
-        # one sample's worth of duration → still 1 full buffer rendered
-        duration_seconds = 1.0 / surge_xt_interactive.SAMPLE_RATE
-
-        surge_xt_interactive.render_to_wav(plugin, output_path, duration_seconds)
-
-        with AudioFile(str(output_path)) as f:
-            audio = f.read(f.frames)
-        assert audio.shape[1] == surge_xt_interactive.BUFFER_SIZE
-        assert plugin.call_count == 1
