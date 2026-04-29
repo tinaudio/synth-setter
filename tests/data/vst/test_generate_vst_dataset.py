@@ -8,6 +8,7 @@ import h5py
 import hdf5plugin  # noqa: F401  # pyright: ignore[reportUnusedImport]  side-effect: registers Blosc2 filter for h5py reads
 import numpy as np
 import pytest
+from rich import print
 
 from src.data.vst import param_specs
 from src.data.vst.generate_vst_dataset import make_dataset
@@ -25,6 +26,13 @@ _MIN_LOUDNESS = -55.0
 _SPEC_NAME = "surge_xt"
 _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
+# Wider tolerances for audio + mel comparisons. Audio is round-tripped through
+# float16 in storage, and mel computation is float32 with non-trivial accumulation,
+# so bit-exact equality across two independent renders of the same params is
+# unrealistic. These values are wide enough to absorb that drift while still
+# catching gross divergence (e.g. wrong patch applied, render skipped).
+_AUDIO_ABSOLUTE_TOLERANCE = 1e-3
+_MEL_ABSOLUTE_TOLERANCE = 1e-2
 
 # Per-sample mel shape `(channels, n_mels, n_frames)` hardcoded by the writer.
 # Derivation: channels=2 literal in writer; n_mels=128 from librosa kwarg;
@@ -98,21 +106,71 @@ def _assert_h5_structure_is_valid(
 @pytest.mark.requires_vst
 @skip_no_vst
 def test_make_dataset_with_fixed_params_round_trips_per_row(tmp_path: Path) -> None:
-    """make_dataset with distinct fixed_*_params_list per row recovers each row's input on
-    decode."""
-    out = tmp_path / "fixed.h5"
-    spec = param_specs[_SPEC_NAME]
-    log.info("spec %s synth_len=%d note_len=%d", spec.names, spec.synth_param_length,
-             spec.note_param_length)
+    """make_dataset with fixed_*_params_list reproduces a previously-rendered dataset row-for-row.
 
+    Two-stage e2e test:
+
+    1. Build a "candidates" dataset by calling ``make_dataset`` *without* any
+       ``fixed_*_params_list``. Internally ``generate_sample`` samples params via
+       ``param_spec.sample()`` and rejects renders below ``_MIN_LOUDNESS`` in a
+       ``while True`` loop. Each surviving row is therefore guaranteed to be
+       loud enough to pass the loudness gate.
+    2. Decode the candidate ``param_array`` rows back into ``synth_patches`` /
+       ``note_patches`` and feed those into a second ``make_dataset`` call as
+       ``fixed_synth_params_list`` / ``fixed_note_params_list``. Because the
+       params are guaranteed-loud (step 1), this run can't infinite-loop on the
+       loudness gate the way it would for arbitrary fixed params.
+
+    Then assert that the second dataset matches the first row-for-row across
+    audio, mel_spec, and param_array — proving that ``fixed_*_params_list``
+    deterministically reproduces a render and that the per-row indexing in
+    ``make_dataset`` lines up with the order callers provide.
+    """
+    spec = param_specs[_SPEC_NAME]
+
+    # Stage 1: random-sampled "candidates" dataset (loudness-filtered).
+    expected_dataset = tmp_path / "candidates.h5"
+    with h5py.File(expected_dataset, "a") as expected_file:
+        make_dataset(
+            hdf5_file=expected_file,
+            num_samples=_NUM_SAMPLES,
+            plugin_path=_PLUGIN_PATH,
+            preset_path=_PRESET_PATH,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            velocity=_VELOCITY,
+            signal_duration_seconds=_DURATION,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            sample_batch_size=_NUM_SAMPLES,
+        )
+
+    expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
+        expected_dataset, spec, _NUM_SAMPLES
+    )
+
+    log.info(
+        "spec %s synth_len=%d note_len=%d",
+        spec.names,
+        spec.synth_param_length,
+        spec.note_param_length,
+    )
+
+    # Decode the candidate rows back into synth/note params dicts. These are the
+    # inputs for the second ``make_dataset`` run — guaranteed past the loudness
+    # gate by construction (the candidate render survived stage 1).
     synth_patches: list[dict[str, float]] = []
     note_patches: list[dict[str, float]] = []
-    for _ in range(_NUM_SAMPLES):
-        s, n = spec.sample()
-        synth_patches.append(s)
-        note_patches.append(n)
+    for i in range(_NUM_SAMPLES):
+        decoded_synth_params, decoded_note_params = spec.decode(expected_params[i])
+        synth_patches.append(decoded_synth_params)
+        note_patches.append(decoded_note_params)
+    print("synth_patches", synth_patches)
+    print("note_patches", note_patches)
 
-    with h5py.File(out, "a") as f:
+    # Stage 2: replay the candidates as fixed inputs and verify reproducibility.
+    got_dataset = tmp_path / "fixed.h5"
+    with h5py.File(got_dataset, "a") as f:
         make_dataset(
             hdf5_file=f,
             num_samples=_NUM_SAMPLES,
@@ -129,10 +187,40 @@ def test_make_dataset_with_fixed_params_round_trips_per_row(tmp_path: Path) -> N
             fixed_note_params_list=note_patches,
         )
 
-    _, _, params = _assert_h5_structure_is_valid(out, spec, _NUM_SAMPLES)
+    actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
+        got_dataset, spec, _NUM_SAMPLES
+    )
 
+    # Encoded param rows must round-trip exactly to bit-precision float32.
+    np.testing.assert_allclose(
+        actual_params,
+        expected_params,
+        rtol=_RELATIVE_TOLERANCE,
+        atol=_ABSOLUTE_TOLERANCE,
+        err_msg="param_array does not match candidates row-for-row",
+    )
+
+    # Audio + mel are independently re-rendered through the VST in stage 2, so
+    # they aren't bit-exact: the audio dataset is stored as float16 and mel
+    # computation accumulates float32 in librosa. Wider tolerances let the
+    # legitimate drift through while still catching gross divergence.
+    np.testing.assert_allclose(
+        actual_audio,
+        expected_audio,
+        atol=_AUDIO_ABSOLUTE_TOLERANCE,
+        err_msg="audio does not match candidates row-for-row within audio tolerance",
+    )
+    np.testing.assert_allclose(
+        actual_mel,
+        expected_mel,
+        atol=_MEL_ABSOLUTE_TOLERANCE,
+        err_msg="mel_spec does not match candidates row-for-row within mel tolerance",
+    )
+
+    # Decoded params should match the inputs we fed in within the same tight
+    # numeric tolerance used for the encoded array.
     for i in range(_NUM_SAMPLES):
-        decoded_synth_params, decoded_note_params = spec.decode(params[i])
+        decoded_synth_params, decoded_note_params = spec.decode(actual_params[i])
         assert isinstance(decoded_synth_params, dict)
         assert decoded_synth_params == pytest.approx(
             synth_patches[i], rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE

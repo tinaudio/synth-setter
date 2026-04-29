@@ -8,10 +8,6 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 # How long the helper thread waits before signalling ``show_editor`` to close.
-# Tuned experimentally on this branch (commits 086d80f, 9ff7f16, c6e4139): values
-# below ~0.3s were flaky against Surge XT's editor init; 0.5s is the smallest
-# value that consistently yielded valid (non-silent) renders during dataset
-# generation on the verification host.
 _PREPARE_PLUGIN_SLEEP_SECONDS = 0.5
 
 # Upper bound for how long load_plugin waits for the helper thread to exit
@@ -35,6 +31,7 @@ def _prepare_plugin(
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
+    """Load a VST3 plugin and run a brief editor session to populate its parameter dict."""
     logger.info(f"Loading plugin {plugin_path}")
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
