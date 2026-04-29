@@ -10,39 +10,22 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 
-def _call_with_interrupt(fn: Callable, sleep_time: float = 2.0):
-    """Calls the function fn on the main thread, while another thread sends a KeyboardInterrupt
-    (SIGINT) to the main thread."""
-
-    def send_interrupt():
-        # Brief sleep so that fn starts before we send the interrupt
-        time.sleep(sleep_time)
-        _thread.interrupt_main()
-
-    # Create and start the thread that sends the interrupt
-    t = threading.Thread(target=send_interrupt)
-    t.start()
-
-    try:
-        fn()
-    except KeyboardInterrupt:
-        print("Interrupted main thread.")
-    finally:
-        t.join()
-
-
-def _prepare_plugin(plugin: VST3Plugin) -> None:
-    _call_with_interrupt(plugin.show_editor, sleep_time=2.0)
-
+def _prepare_plugin(stop_event: threading.Event, sleep_time: float = 5.0) -> None:
+    time.sleep(sleep_time)
+    stop_event.set()
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
     logger.info(f"Loading plugin {plugin_path}")
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
     logger.info("Preparing plugin for preset load...")
-    # _prepare_plugin(p)
-    p.show_editor()  # This is needed to ensure the plugin is fully loaded and ready to accept parameter changes. It may cause a window to briefly flash on the screen.
-    # p.info("Plugin ready")
+    stop_event = threading.Event()
+    t = threading.Thread(target=_prepare_plugin, args=(stop_event,))
+    t.start()
+    try:
+        p.show_editor(stop_event)
+    finally:
+        stop_event.set()
     return p
 
 

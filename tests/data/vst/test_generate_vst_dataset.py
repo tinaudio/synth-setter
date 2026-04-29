@@ -17,7 +17,7 @@ from src.data.vst.generate_vst_dataset import make_dataset
 
 _PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 _PRESET_PATH = "presets/surge-base.vstpreset"
-_NUM_SAMPLES = 16
+_NUM_SAMPLES = 5
 _SAMPLE_RATE = 44100.0
 _CHANNELS = 2
 _DURATION = 4.0
