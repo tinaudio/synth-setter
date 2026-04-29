@@ -10,7 +10,7 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 
-def _prepare_plugin(stop_event: threading.Event, sleep_time: float = 5.0) -> None:
+def _prepare_plugin(stop_event: threading.Event, sleep_time: float = 7.0) -> None:
     time.sleep(sleep_time)
     stop_event.set()
 
@@ -19,14 +19,13 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
     logger.info("Preparing plugin for preset load...")
-    # stop_event = threading.Event()
-    # t = threading.Thread(target=_prepare_plugin, args=(stop_event,))
-    # t.start()
-    # try:
-    #     p.show_editor(stop_event)
-    # finally:
-    #     stop_event.set()
-    p.show_editor()
+    stop_event = threading.Event()
+    t = threading.Thread(target=_prepare_plugin, args=(stop_event,))
+    t.start()
+    try:
+        p.show_editor(stop_event)
+    finally:
+        stop_event.set()
     return p
 
 
