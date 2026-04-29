@@ -6,6 +6,15 @@ name: Slow Tests
 # Triggered post-merge on main (and via manual dispatch).
 on:
   workflow_dispatch:
+    inputs:
+      publish_metrics:
+        # Opt-in escape hatch so a maintainer can bootstrap the gh-pages chart
+        # from a feature branch without merging to main first. The default is
+        # ``false`` so accidental dispatches don't pollute the benchmark
+        # history. Push-to-main always publishes regardless of this input.
+        description: "Push run metrics to gh-pages (creates the page on first run)"
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths-ignore:
@@ -111,11 +120,17 @@ jobs:
           pytest -vv -s -m "slow and not gpu and not mps"
 
       - name: Publish VST audio-similarity metrics to benchmark history
-        # Gated to push-to-main so PRs and manual dispatch from feature branches
-        # don't write to ``gh-pages``. ``hashFiles`` skips cleanly if the test
+        # Push-to-main always publishes. Manual dispatch publishes only when
+        # the dispatcher explicitly sets ``publish_metrics=true`` — used to
+        # bootstrap the gh-pages chart from a feature branch before main has
+        # picked up the workflow. ``hashFiles`` skips cleanly if the test
         # wrote nothing (e.g. it was deselected by markers or skipped because
         # the VST plugin smoke check failed earlier in the job).
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('bench.json') != ''
+        if: |
+          hashFiles('bench.json') != '' && (
+            (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
+          )
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: VST fixed-params replay
