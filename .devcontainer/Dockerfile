@@ -5,12 +5,8 @@ FROM tinaudio/synth-setter:devcontainer-tools
 # (built from docker/ubuntu22_04/Dockerfile, devcontainer-tools stage).
 #
 # To add a package without modifying the base image:
-
-USER root
-RUN apt-get update && apt-get install -y \
-    alsa-utils libasound2-plugins \
-    unzip \
-    pulseaudio \
-    pulseaudio-utils \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+#
+#   USER root
+#   RUN apt-get update && apt-get install -y <package> \
+#     && rm -rf /var/lib/apt/lists/*
+#   USER dev
