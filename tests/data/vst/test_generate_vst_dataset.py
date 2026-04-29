@@ -17,13 +17,13 @@ from src.data.vst.generate_vst_dataset import make_dataset
 
 _PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or "plugins/Surge XT.vst3"
 _PRESET_PATH = "presets/surge-base.vstpreset"
-_NUM_SAMPLES = 1
+_NUM_SAMPLES = 16
 _SAMPLE_RATE = 44100.0
 _CHANNELS = 2
 _DURATION = 4.0
 _VELOCITY = 100
 _MIN_LOUDNESS = -55.0
-_SPEC_NAME = "surge_simple"
+_SPEC_NAME = "surge_xt"
 _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
 
@@ -53,14 +53,17 @@ def test_make_dataset_writes_valid_h5(tmp_path: Path) -> None:
     out = tmp_path / "data.h5"
     spec = param_specs[_SPEC_NAME]
     log.info(spec.names, spec.synth_param_length, spec.note_param_length)
-    SYNTH_PATCHES: list[dict[str, float]] = []
+    SYNTH_PATCHES = []
+    NOTE_PATCHES = []
+    single_synth_patch, single_set_note_params = spec.sample()
     for i in range(_NUM_SAMPLES):
-        patch, _ = spec.sample()
-        for param_name, param_value in patch.items():
-            patch[param_name] = float(0)
-        print(f"Sampled synth params for sample {i}: {patch}")
+        # patch, _ = spec.sample()
+        # for param_name, param_value in patch.items():
+        #     patch[param_name] = float(0)
+        # print(f"Sampled synth params for sample {i}: {patch}")
 
-        SYNTH_PATCHES.append(patch)
+        SYNTH_PATCHES.append(single_synth_patch)
+        NOTE_PATCHES.append(single_set_note_params)
 
     with h5py.File(out, "a") as f:
         make_dataset(
@@ -76,6 +79,7 @@ def test_make_dataset_writes_valid_h5(tmp_path: Path) -> None:
             param_spec=spec,
             sample_batch_size=_NUM_SAMPLES,
             fixed_synth_params_list=SYNTH_PATCHES,
+            fixed_note_params_list=NOTE_PATCHES,
         )
 
     expected_audio_shape = (_NUM_SAMPLES, _CHANNELS, int(_SAMPLE_RATE * _DURATION))
@@ -129,6 +133,11 @@ def test_make_dataset_writes_valid_h5(tmp_path: Path) -> None:
                 original_synth_params, rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
             ), (
                 f"decoded synth param `{name}` value {decoded_synth_params} does not match original {original_synth_params} within tolerances (abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
+            )
+            assert decoded_note_params == pytest.approx(
+                NOTE_PATCHES[i], rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
+            ), (
+                f"decoded note params {decoded_note_params} do not match original {NOTE_PATCHES[i]} within tolerances (abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
             )
 
             log.info(f"Decoded synth params for sample {i}: {decoded_synth_params}")
