@@ -31,9 +31,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRYPOINT_PATH = REPO_ROOT / "scripts" / "docker_entrypoint.py"
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture()
 def _detach_pytest_live_logging_handler() -> Iterator[None]:
-    """Detach pytest's live-logging handler around each CliRunner-driven test.
+    """Detach pytest's live-logging handler for tests that drive a CliRunner callback whose error
+    path calls ``logger.error(...)``.
 
     Why: when ``log_cli=True`` (project default), pytest installs
     ``_LiveLoggingStreamHandler`` on the root logger. Its ``emit()`` opens a
@@ -43,6 +44,10 @@ def _detach_pytest_live_logging_handler() -> Iterator[None]:
     under test then triggers ``CliRunner.invoke()``'s finally-block ``.getvalue()``
     on a closed buffer → ``ValueError: I/O operation on closed file``. Tracked
     in #730.
+
+    Opt-in via ``@pytest.mark.usefixtures("_detach_pytest_live_logging_handler")``
+    on tests that exercise that code path. Tests that don't drive ``logger.error``
+    inside ``CliRunner.invoke`` shouldn't pay the indirection cost.
     """
     root = logging.getLogger()
     detached = [
@@ -165,6 +170,7 @@ class TestIdle:
         assert result.exit_code == 0, result.output
         assert calls == [("sleep", ["sleep", "infinity"])]
 
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
     def test_idle_exec_failure_becomes_click_exception(
         self, runner: CliRunner, entrypoint: ModuleType
     ) -> None:
@@ -227,6 +233,7 @@ class TestPassthrough:
         assert result.exit_code == 0, result.output
         assert calls == [("rclone", ["rclone", "--checksum", "src", "dst"])]
 
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
     def test_passthrough_exec_failure_becomes_click_exception(
         self, runner: CliRunner, entrypoint: ModuleType
     ) -> None:
@@ -306,6 +313,7 @@ class TestGenerateDataset:
         result = runner.invoke(entrypoint.cli, ["generate_dataset", "--spec", str(missing)])
         assert result.exit_code == 2
 
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
     def test_malformed_json_spec_exits_nonzero_without_calling_run(
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
@@ -320,6 +328,7 @@ class TestGenerateDataset:
 
         assert result.exit_code != 0
 
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
     def test_invalid_spec_shape_exits_nonzero_without_calling_run(
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
@@ -334,6 +343,7 @@ class TestGenerateDataset:
 
         assert result.exit_code != 0
 
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
     def test_binary_spec_file_exits_nonzero_without_calling_run(
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
@@ -366,6 +376,7 @@ class TestGenerateDataset:
 class TestRenderEval:
     """render_eval subcommand is a deliberate placeholder pointing at #410."""
 
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
     def test_render_eval_fails_loudly_with_issue_pointer(
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
@@ -400,6 +411,7 @@ class TestRenderEval:
 class TestTrain:
     """Train subcommand is a deliberate placeholder pointing at #409."""
 
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
     def test_train_fails_loudly_with_issue_pointer(
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
