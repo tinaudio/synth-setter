@@ -241,6 +241,17 @@ class TestMainCli:
         mock_sky: MagicMock,
     ) -> None:
         """End-to-end: spec is materialized under LOCAL_SPEC_DIR and sky.* is called with expected args."""
+        # Capture mount-source content at call time. The launcher unlinks the .mount.json
+        # sibling in a finally after sky.* returns, so we can't read it post-invoke.
+        captured: dict[str, str] = {}
+
+        def _capture(mounts: dict[str, str]) -> None:
+            for k, v in mounts.items():
+                captured[k] = Path(v).read_text()
+
+        task = mock_sky.Task.from_yaml.return_value
+        task.update_file_mounts.side_effect = _capture
+
         runner = CliRunner()
         result = runner.invoke(
             main,
@@ -258,7 +269,6 @@ class TestMainCli:
         assert result.exit_code == 0, result.output
 
         mock_sky.Task.from_yaml.assert_called_once_with(str(template_yaml))
-        task = mock_sky.Task.from_yaml.return_value
 
         task.update_envs.assert_called_once()
         forwarded_envs = task.update_envs.call_args.args[0]
@@ -274,11 +284,12 @@ class TestMainCli:
         assert spec_path.is_file()
 
         # Mount source is a sibling copy (so SkyPilot's staging-by-rename doesn't consume
-        # the original file the CI artifact upload depends on).
+        # the original file the CI artifact upload depends on). Content matches the spec at
+        # call time, and the sibling is cleaned up in finally so it doesn't survive the run.
         mount_source = Path(mounts[WORKER_SPEC_PATH])
         assert mount_source != spec_path
-        assert mount_source.is_file()
-        assert mount_source.read_text() == spec_path.read_text()
+        assert captured[WORKER_SPEC_PATH] == spec_path.read_text()
+        assert not mount_source.exists()
 
         # Round-trip: the materialized JSON validates as a DatasetPipelineSpec.
         spec = DatasetPipelineSpec.model_validate_json(spec_path.read_text())

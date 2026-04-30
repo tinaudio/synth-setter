@@ -152,22 +152,30 @@ def main(
     # on RunPod we have observed clusters not torn down even after the worker job exits — the
     # GHA job sits in tail_logs until the 60-min job timeout. Drive teardown explicitly in a
     # finally below so the cluster always goes away on success, exception, or worker error.
-    click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
-    launch_request_id = sky.launch(task, cluster_name=resolved_cluster_name, down=False)
-    job_id, _ = sky.stream_and_get(launch_request_id, follow=True)
+    # SkyPilot normally consumes mount_source by rename during staging, but a failure between
+    # the copyfile above and stage would leave one .mount.json per cluster behind on shared CI
+    # runners. Unlink in finally with missing_ok=True to keep the success path quiet.
     try:
-        # Block on the worker job and stream its stdout/stderr to ours so a worker traceback
-        # surfaces here (instead of as a downstream "shard not in R2" error). tail_logs is
-        # synchronous when preload_content=True (the default), returns the worker's exit code,
-        # and follows the log to completion.
-        click.echo(f"Streaming worker job {job_id} logs from {resolved_cluster_name}")
-        exit_code = sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=True)
-        if exit_code != 0:
-            raise click.ClickException(f"Worker job {job_id} exited with code {exit_code}")
+        click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
+        launch_request_id = sky.launch(task, cluster_name=resolved_cluster_name, down=False)
+        job_id, _ = sky.stream_and_get(launch_request_id, follow=True)
+        try:
+            # Block on the worker job and stream its stdout/stderr to ours so a worker traceback
+            # surfaces here (instead of as a downstream "shard not in R2" error). tail_logs is
+            # synchronous when preload_content=True (the default), returns the worker's exit code,
+            # and follows the log to completion.
+            click.echo(f"Streaming worker job {job_id} logs from {resolved_cluster_name}")
+            exit_code = sky.tail_logs(
+                cluster_name=resolved_cluster_name, job_id=job_id, follow=True
+            )
+            if exit_code != 0:
+                raise click.ClickException(f"Worker job {job_id} exited with code {exit_code}")
+        finally:
+            click.echo(f"Tearing down cluster: {resolved_cluster_name}")
+            down_request_id = sky.down(resolved_cluster_name)
+            sky.stream_and_get(down_request_id, follow=True)
     finally:
-        click.echo(f"Tearing down cluster: {resolved_cluster_name}")
-        down_request_id = sky.down(resolved_cluster_name)
-        sky.stream_and_get(down_request_id, follow=True)
+        mount_source.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
