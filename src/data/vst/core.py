@@ -1,8 +1,7 @@
-import _thread
 import sys
 import threading
 import time
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
 
 import mido
 import numpy as np
@@ -10,30 +9,27 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
+# How long the helper thread waits before signalling ``show_editor`` to close.
+_PREPARE_PLUGIN_SLEEP_SECONDS = 0.5
 
-def _call_with_interrupt(fn: Callable, sleep_time: float = 2.0):
-    """Calls the function fn on the main thread, while another thread sends a KeyboardInterrupt
-    (SIGINT) to the main thread."""
-
-    def send_interrupt():
-        # Brief sleep so that fn starts before we send the interrupt
-        time.sleep(sleep_time)
-        _thread.interrupt_main()
-
-    # Create and start the thread that sends the interrupt
-    t = threading.Thread(target=send_interrupt)
-    t.start()
-
-    try:
-        fn()
-    except KeyboardInterrupt:
-        print("Interrupted main thread.")
-    finally:
-        t.join()
+# Upper bound for how long load_plugin waits for the helper thread to exit
+# after signalling its stop event. The helper only sleeps for
+# ``_PREPARE_PLUGIN_SLEEP_SECONDS`` so 1.0s is a generous ceiling.
+_PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS = 1.0
 
 
-def _prepare_plugin(plugin: VST3Plugin) -> None:
-    _call_with_interrupt(plugin.show_editor, sleep_time=2.0)
+def _prepare_plugin(
+    stop_event: threading.Event,
+    sleep_time: float = _PREPARE_PLUGIN_SLEEP_SECONDS,
+) -> None:
+    """Sleep, then signal ``show_editor`` to close.
+
+    Used by :func:`load_plugin` to drive ``show_editor`` long enough that the
+    plugin completes initialisation, but no longer than necessary for batch
+    rendering throughput.
+    """
+    time.sleep(sleep_time)
+    stop_event.set()
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
@@ -49,8 +45,14 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
     # audit on #714 for the empirical justification.
     if sys.platform != "darwin":
         logger.info("Preparing plugin for preset load...")
-        _prepare_plugin(p)
-        logger.info("Plugin ready")
+        stop_event = threading.Event()
+        t = threading.Thread(target=_prepare_plugin, args=(stop_event,))
+        t.start()
+        try:
+            p.show_editor(stop_event)
+        finally:
+            stop_event.set()
+            t.join(timeout=_PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS)
     return p
 
 
@@ -71,7 +73,7 @@ def write_wav(audio: np.ndarray, path: str, sample_rate: float, channels: int) -
 
 
 def render_params(
-    plugin: VST3Plugin,
+    plugin_path: str,
     params: dict[str, float],
     midi_note: int,
     velocity: int,
@@ -81,6 +83,12 @@ def render_params(
     channels: int,
     preset_path: Optional[str] = None,
 ) -> np.ndarray:
+    """Render a single audio sample by loading the plugin fresh per call.
+
+    Reloads the plugin on every call to work around stale-state bug #489. This incurs an extra
+    plugin-load per render; see #705 for the perf follow-up.
+    """
+    plugin = load_plugin(plugin_path)
     if preset_path is not None:
         load_preset(plugin, preset_path)
 

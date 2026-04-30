@@ -695,7 +695,6 @@ def _assert_round_trip_matches(
     )
 
 
-@pytest.mark.xfail(strict=True, reason="bug #489")
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst

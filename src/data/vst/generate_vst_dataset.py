@@ -10,12 +10,11 @@ import librosa
 import numpy as np
 import rootutils
 from loguru import logger
-from pedalboard import VST3Plugin
 from pyloudnorm import Meter
 from tqdm import trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from src.data.vst import load_plugin, param_specs, render_params  # noqa
+from src.data.vst import param_specs, render_params  # noqa
 from src.data.vst.param_spec import ParamSpec  # noqa
 
 
@@ -60,7 +59,7 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
 
 
 def generate_sample(
-    plugin: VST3Plugin,
+    plugin_path: str,
     velocity: int,
     signal_duration_seconds: float,
     sample_rate: float,
@@ -76,7 +75,7 @@ def generate_sample(
         logger.debug("sampling note")
 
         output = render_params(
-            plugin,
+            plugin_path,
             synth_params,
             note_params["pitch"],
             velocity,
@@ -242,15 +241,13 @@ def make_dataset(
     audio_dataset.attrs["channels"] = channels
     audio_dataset.attrs["min_loudness"] = min_loudness
 
-    plugin = load_plugin(plugin_path)
-
     sample_batch = []
     sample_batch_start = start_idx
 
     for i in trange(start_idx, num_samples):
         logger.info(f"Making sample {i}")
         sample = generate_sample(
-            plugin,
+            plugin_path,
             velocity=velocity,
             signal_duration_seconds=signal_duration_seconds,
             sample_rate=sample_rate,
