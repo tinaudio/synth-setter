@@ -476,7 +476,7 @@ def _assert_round_trip_matches(
     lists. For tests that replay a single fixed patch across all rows, callers should
     pass the patch repeated ``num_samples`` times.
 
-    ``benchmark_name_prefix`` (optional): when set and ``BENCHMARK_OUTPUT_PATH`` is
+    ``benchmark_name_prefix`` (optional): when set and ``BENCHMARK_OUTPUT_DIR`` is
     defined, the helper emits the worst-case per-pair metrics + mel diff under that
     prefix for github-action-benchmark trend tracking. See ``_emit_benchmark_metrics``.
     """

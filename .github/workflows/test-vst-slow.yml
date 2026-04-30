@@ -163,7 +163,9 @@ jobs:
             {"name": "${prefix}/dtw-aligned-mfcc-distance-max",        "unit": "L1",          "value": 1.0},
             {"name": "${prefix}/spectral-optimal-transport-max",       "unit": "Wasserstein", "value": 0.001},
             {"name": "${prefix}/rms-envelope-cosine-distance-max",     "unit": "1-cos",       "value": 0.001},
-            {"name": "${prefix}/mel-spectrogram-mean-absolute-error",  "unit": "dB",          "value": 0.5}
+            {"name": "${prefix}/mel-spectrogram-mean-absolute-error",  "unit": "dB",          "value": 0.5},
+            {"name": "${prefix}/num-samples",                          "unit": "count",       "value": 6},
+            {"name": "${prefix}/wall-clock-seconds-per-render",        "unit": "seconds",     "value": 1.0}
           ]
           EOF
             echo "dummy ${prefix}.json written"

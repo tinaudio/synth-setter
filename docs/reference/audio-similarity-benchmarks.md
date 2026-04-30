@@ -88,7 +88,8 @@ point but covers more of the patch space than the hardcoded fixture.
 
 ## Metric series
 
-Both buckets emit the same six series:
+Both buckets emit the same seven series (five distance metrics plus
+two non-distance sentinels — `num-samples` and `wall-clock-seconds-per-render`):
 
 | Metric                                | Computed by                                                                 | Unit        | Smaller-is-better? |
 | ------------------------------------- | --------------------------------------------------------------------------- | ----------- | ------------------ |
