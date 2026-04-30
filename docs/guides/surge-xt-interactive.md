@@ -72,7 +72,8 @@ python scripts/surge_xt_interactive.py \
 ```
 
 Render a deterministic test clip of the loaded patch to a WAV — useful
-for headless runs and reproducible audio diffs of model predictions:
+when no audio output device is available, and for reproducible audio
+diffs of model predictions:
 
 ```bash
 python scripts/surge_xt_interactive.py \
@@ -83,11 +84,13 @@ python scripts/surge_xt_interactive.py \
 When `--session-recording-path` is set, the live audio stream is
 *replaced* by a fixed 10-second offline render: middle C held from
 2 s to 4 s, with the surrounding silence capturing any release tail.
-Output depends only on plugin state (preset + `--pred` /
-`--dataset-ref` params), so the same inputs always produce the same
-WAV. The editor still runs and you can still snapshot patches.
-Combines freely with `--pred`, `--dataset-ref`, and
-`--output-dataset-path`.
+The render runs synchronously *before* the editor opens, so the WAV
+depends only on the initially-loaded plugin state (preset + `--pred`
+/ `--dataset-ref` params) and the same inputs always produce the
+same WAV. After the render completes, the editor still opens and you
+can still snapshot patches. No audio output device is required, but
+the editor still needs a display. Combines freely with `--pred`,
+`--dataset-ref`, and `--output-dataset-path`.
 
 `--pred` and `--dataset-ref` are mutually exclusive — passing both
 raises `click.UsageError`.
@@ -135,8 +138,10 @@ in parallel:
    - `q` — set `stop_event` and exit.
 
 Closing the editor window also sets `stop_event`, ending the audio
-thread and signalling the keyboard thread to exit. Snapshots are
-buffered in memory; nothing is written until the editor closes.
+thread. The keyboard thread checks that event only between
+`click.getchar()` calls, so it may not exit until another key is
+pressed. Snapshots are buffered in memory; nothing is written until
+the editor closes.
 
 ## Output dataset format
 

@@ -491,14 +491,20 @@ def main(
         synth_params = load_prediction_synth_params(pred, param_spec_name)
         set_params(plugin, synth_params)
 
+    # Render the deterministic clip before opening the editor so the WAV depends
+    # only on the initially-loaded plugin state. Running it concurrently with
+    # show_editor would let the user twist knobs mid-render and break that
+    # guarantee.
+    if session_recording_path is not None:
+        play_audio_recorded(plugin, session_recording_path)
+
     stop_event = threading.Event()
     pool = ThreadPoolExecutor()
     audio_timed_out = False
     try:
-        if session_recording_path is not None:
-            audio_future = pool.submit(play_audio_recorded, plugin, session_recording_path)
-        else:
-            audio_future = pool.submit(play_audio, plugin, stop_event)
+        audio_future = (
+            pool.submit(play_audio, plugin, stop_event) if session_recording_path is None else None
+        )
         keyboard_future = pool.submit(keyboard_loop, plugin, stop_event, param_spec_name)
 
         try:
@@ -508,15 +514,20 @@ def main(
             # Surface any exception from the audio thread. Catch TimeoutError so
             # a slow stream-close on shutdown doesn't crash the script — log it
             # and skip the wait-for-completion in pool teardown to avoid hanging.
-            try:
-                audio_future.result(timeout=AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS)
-            except TimeoutError:
-                audio_timed_out = True
-                logger.warning(
-                    "audio thread did not exit within %ss; cancelling pool and continuing shutdown",
-                    AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS,
-                )
-        logger.info("Editor closed, waiting for keyboard thread to finish...")
+            if audio_future is not None:
+                try:
+                    audio_future.result(timeout=AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    audio_timed_out = True
+                    logger.warning(
+                        "audio thread did not exit within %ss; "
+                        "cancelling pool and continuing shutdown",
+                        AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS,
+                    )
+        logger.info(
+            "Editor closed; press any key in this terminal to finish "
+            "(captured patches will then be rendered)..."
+        )
         synth_patches = keyboard_future.result()
         logger.info("Recorded %d patches: %s", len(synth_patches), synth_patches)
     finally:
