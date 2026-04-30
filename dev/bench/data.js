@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777538899634,
+  "lastUpdate": 1777569582462,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST fixed-params replay": [
@@ -441,6 +441,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.05208402872085571,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "450cf0b05b9a6c516e4eea0e240fa2b335bb0bbd",
+          "message": "build(deps): migrate lightning to pytorch_lightning (lightning quarantined on PyPI) + add docker deps for skypilot (#721)\n\n* build(deps): migrate lightning to pytorch_lightning\n\n* build(docker): drop ENTRYPOINT, default CMD to /bin/bash, install sky deps\n\nSkyPilot's RunPod backend launches the pod with `dockerArgs: \"bash -c\n'<base64-setup>'\"`, so a baked-in click-CLI ENTRYPOINT collides with the\nlauncher. Drop ENTRYPOINT and default CMD to /bin/bash so `docker run img`\nlands in a shell; callers invoke the click CLI explicitly.\n\nInstall rsync, openssh-client, and python3-pip — SkyPilot needs the SSH\ntoolchain to stage file_mounts and shells out to a system `pip3` that the\nuv-managed venv at /venv/main does not expose.\n\nSkip test_render_params_sets_preset_dependent_param on linux pending\nrefactor to use scripts/run-linux-vst-headless.sh.",
+          "timestamp": "2026-04-30T13:07:41-04:00",
+          "tree_id": "3d7d0591b758bf38112889d900bedcd4b57e5343",
+          "url": "https://github.com/tinaudio/synth-setter/commit/450cf0b05b9a6c516e4eea0e240fa2b335bb0bbd"
+        },
+        "date": 1777569581574,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.8720703125,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.759646213936503,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.027715224772691727,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.018704593181610107,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.6998417377471924,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.830569734250004,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.420691013336182,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 7.029468371905386,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03556937351822853,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03645247220993042,
             "unit": "1-cos"
           },
           {
