@@ -1025,6 +1025,68 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
             )
 
 
+def test_make_dataset_raises_when_fixed_params_list_is_too_short(
+    tmp_path: Path,
+) -> None:
+    """make_dataset rejects fixed_*_params_list shorter than num_samples - start_idx."""
+    spec = param_specs[_SPEC_NAME]
+    out = tmp_path / "should_not_write.h5"
+    with h5py.File(out, "a") as f:
+        with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
+            make_dataset(
+                hdf5_file=f,
+                num_samples=3,
+                plugin_path=_PLUGIN_PATH,
+                preset_path=_PRESET_PATH,
+                sample_rate=_SAMPLE_RATE,
+                channels=_CHANNELS,
+                velocity=_VELOCITY,
+                signal_duration_seconds=_DURATION,
+                min_loudness=_MIN_LOUDNESS,
+                param_spec=spec,
+                sample_batch_size=3,
+                fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS],
+            )
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@skip_no_vst
+def test_make_dataset_uses_fixed_params_lists_when_provided(
+    tmp_path: Path,
+) -> None:
+    """make_dataset writes the supplied fixed params verbatim, bypassing param_spec.sample()."""
+    spec = param_specs[_SPEC_NAME]
+    out = tmp_path / "fixed.h5"
+    num_samples = 3
+    with h5py.File(out, "a") as f:
+        make_dataset(
+            hdf5_file=f,
+            num_samples=num_samples,
+            plugin_path=_PLUGIN_PATH,
+            preset_path=_PRESET_PATH,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            velocity=_VELOCITY,
+            signal_duration_seconds=_DURATION,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            sample_batch_size=num_samples,
+            fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
+            fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
+        )
+
+    _, _, params = _assert_h5_structure_is_valid(out, spec, num_samples)
+    # ParamSpec.encode is annotated dict[str, float] on main but accepts the runtime
+    # note-param shape (pitch is int, note_start_and_end is a tuple); annotation gets
+    # corrected in a sibling PR.
+    expected = spec.encode(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)  # pyright: ignore[reportArgumentType]
+    for i in range(num_samples):
+        assert np.allclose(params[i], expected, atol=_ABSOLUTE_TOLERANCE), (
+            f"row {i} did not match fixed params"
+        )
+
+
 # Unit tests for ``_emit_audio_similarity_benchmark_metrics`` — pure JSON
 # serialization, no VST needed. Fast feedback while iterating on the
 # emission schema; complements the slow integration coverage above.
