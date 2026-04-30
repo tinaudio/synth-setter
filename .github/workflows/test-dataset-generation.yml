@@ -125,6 +125,17 @@ jobs:
               umask 077
               printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
 
+              # Diagnostic: which python is bash invoking, and is the
+              # /venv/main venv actually being activated by it? (sky is
+              # baked into /venv/main/lib/python3.10/site-packages/.)
+              echo "=== diagnostic ==="
+              echo "PATH=$PATH"
+              echo "which python: $(command -v python)"
+              echo "which python3: $(command -v python3)"
+              ls -la /venv/main/bin/python /venv/main/bin/python3 /venv/main/pyvenv.cfg 2>&1 | head -10
+              python -c "import sys; print('sys.executable:', sys.executable); print('sys.prefix:', sys.prefix); print('sys.base_prefix:', sys.base_prefix); print('in venv:', sys.prefix != sys.base_prefix); print('sys.path[:5]:', sys.path[:5])"
+              echo "=== end diagnostic ==="
+
               # No headless-X wrapper: the launcher submits a SkyPilot job
               # and renders nothing locally; extract_renderer_version is
               # short-circuited (see #734) so materialize_spec doesn't
