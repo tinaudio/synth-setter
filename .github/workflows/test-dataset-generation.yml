@@ -121,7 +121,11 @@ jobs:
               # skypilot[runpod]==0.12.0 was added to requirements-app.txt.
               # Install at runtime so `import sky` works. Remove once the
               # image is republished from the current Dockerfile.
-              uv pip install "skypilot[runpod]==0.12.0"
+              # Bootstrap pip into the venv via stdlib ensurepip — uv and
+              # pip3 are both absent from PATH in the currently-published
+              # dev-snapshot.
+              python -m ensurepip --upgrade
+              python -m pip install --quiet "skypilot[runpod]==0.12.0"
 
               # The launcher imports pipeline.schemas.spec (→ pedalboard via
               # param_specs) which needs a live X display, hence the headless
