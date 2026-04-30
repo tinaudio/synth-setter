@@ -281,18 +281,36 @@ class TestDatasetPipelineSpec:
 
 
 class TestExtractRendererVersion:
-    """Platform-specific VST3 plugin version extraction."""
+    """extract_renderer_version is short-circuited per #734.
 
+    Real extraction (moduleinfo.json / Info.plist / pedalboard fallback) is disabled so the
+    SkyPilot launcher does not need an X display. The tests that exercised the real branches are
+    kept here in skipped form so the behavioral coverage is reinstated automatically once #734 is
+    resolved.
+    """
+
+    def test_existing_plugin_returns_placeholder(self, tmp_path: Path) -> None:
+        """Any existing plugin path returns the #734 placeholder string."""
+        plugin = tmp_path / "Plugin.vst3"
+        plugin.mkdir()
+        assert extract_renderer_version(plugin) == "SKIPPED — see #734"
+
+    def test_raises_file_not_found_when_plugin_path_does_not_exist(self, tmp_path: Path) -> None:
+        """Nonexistent plugin path still raises FileNotFoundError with clear message."""
+        plugin = tmp_path / "nonexistent.vst3"
+        with pytest.raises(FileNotFoundError, match="Plugin path does not exist"):
+            extract_renderer_version(plugin)
+
+    @pytest.mark.skip(reason="extract_renderer_version short-circuited; restore with #734")
     def test_extracts_version_from_linux_moduleinfo_json(self, tmp_path: Path) -> None:
-        """Linux moduleinfo.json with Version key returns the version string."""
         plugin = tmp_path / "Plugin.vst3"
         contents = plugin / "Contents"
         contents.mkdir(parents=True)
         (contents / "moduleinfo.json").write_text('{"Version": "1.3.4"}')
         assert extract_renderer_version(plugin) == "1.3.4"
 
+    @pytest.mark.skip(reason="extract_renderer_version short-circuited; restore with #734")
     def test_extracts_version_from_macos_info_plist(self, tmp_path: Path) -> None:
-        """MacOS Info.plist with CFBundleShortVersionString returns the version."""
         plugin = tmp_path / "Plugin.vst3"
         contents = plugin / "Contents"
         contents.mkdir(parents=True)
@@ -300,8 +318,8 @@ class TestExtractRendererVersion:
         (contents / "Info.plist").write_bytes(plistlib.dumps(plist_data))
         assert extract_renderer_version(plugin) == "1.3.4"
 
+    @pytest.mark.skip(reason="extract_renderer_version short-circuited; restore with #734")
     def test_prefers_moduleinfo_json_when_both_exist(self, tmp_path: Path) -> None:
-        """When both version files exist, moduleinfo.json takes precedence."""
         plugin = tmp_path / "Plugin.vst3"
         contents = plugin / "Contents"
         contents.mkdir(parents=True)
@@ -310,22 +328,16 @@ class TestExtractRendererVersion:
         (contents / "Info.plist").write_bytes(plistlib.dumps(plist_data))
         assert extract_renderer_version(plugin) == "2.0.0"
 
+    @pytest.mark.skip(reason="extract_renderer_version short-circuited; restore with #734")
     def test_raises_when_no_version_file_and_no_loadable_plugin(self, tmp_path: Path) -> None:
-        """Empty Contents directory with no loadable plugin raises an error."""
         plugin = tmp_path / "Plugin.vst3"
         contents = plugin / "Contents"
         contents.mkdir(parents=True)
         with pytest.raises(Exception):  # noqa: B017
             extract_renderer_version(plugin)
 
-    def test_raises_file_not_found_when_plugin_path_does_not_exist(self, tmp_path: Path) -> None:
-        """Nonexistent plugin path raises FileNotFoundError with clear message."""
-        plugin = tmp_path / "nonexistent.vst3"
-        with pytest.raises(FileNotFoundError, match="Plugin path does not exist"):
-            extract_renderer_version(plugin)
-
+    @pytest.mark.skip(reason="extract_renderer_version short-circuited; restore with #734")
     def test_raises_key_error_when_version_field_missing(self, tmp_path: Path) -> None:
-        """moduleinfo.json without Version key raises KeyError."""
         plugin = tmp_path / "Plugin.vst3"
         contents = plugin / "Contents"
         contents.mkdir(parents=True)
@@ -352,7 +364,7 @@ class TestMaterializeSpec:
         assert spec.created_at == FIXED_NOW
         assert spec.code_version == "abc123def456"
         assert spec.is_repo_dirty is False
-        assert spec.renderer_version == "1.3.4"
+        assert spec.renderer_version == "SKIPPED — see #734"  # short-circuited; see #734
         assert spec.output_format == "hdf5"
         assert spec.sample_rate == 16000
         assert spec.shard_size == 10000
@@ -480,7 +492,7 @@ class TestMaterializeSpec:
         config_id = DatasetConfigId("ci-smoke-test")
         spec = materialize_spec(config, config_id)
 
-        assert spec.renderer_version == "1.3.4"
+        assert spec.renderer_version == "SKIPPED — see #734"  # short-circuited; see #734
 
     def test_unknown_param_spec_raises_key_error(
         self, patch_materialize_io: Path, valid_config_dict: dict
@@ -580,7 +592,7 @@ class TestMaterializeSpecIntegration:
 
         assert re.fullmatch(r"[0-9a-f]{40}", spec.code_version)
         assert isinstance(spec.is_repo_dirty, bool)
-        assert spec.renderer_version == "1.0.0-test"
+        assert spec.renderer_version == "SKIPPED — see #734"  # short-circuited; see #734
         assert spec.created_at.tzinfo is not None
         assert spec.run_id.startswith("integration-test-")
         assert spec.num_shards == 1
