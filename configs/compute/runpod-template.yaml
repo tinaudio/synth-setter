@@ -50,5 +50,9 @@ setup: |
   echo "synth-setter worker ready (host: $(hostname))"
 
 run: |
+  # cd into the repo root before invoking generate_dataset: it shells out to
+  # scripts/run-linux-vst-headless.sh via a relative path, and SkyPilot's run
+  # block does not execute from the image's WORKDIR by default.
+  cd /home/build/synth-setter
   python /usr/local/bin/entrypoint.py generate_dataset \
     --spec /home/build/synth-setter/data/skypilot-launch-smoke-spec.json
