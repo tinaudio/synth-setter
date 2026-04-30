@@ -112,9 +112,12 @@ def generate_sample(
             if fixed_synth_params is not None:
                 raise ValueError(
                     f"fixed_synth_params render produced loudness {loudness:.2f} dB "
-                    f"below min_loudness {min_loudness:.2f} dB. Re-sampling note "
-                    f"params alone rarely lifts a silent synth patch above the "
-                    f"threshold, so retrying is futile. Provide a louder patch."
+                    f"below min_loudness {min_loudness:.2f} dB. The synth patch is "
+                    f"held constant and dominates loudness, so retrying is futile "
+                    f"(the fully-fixed case has no re-sample input at all; the "
+                    f"only-synth-fixed case re-samples note params, which rarely "
+                    f"lifts a silent patch above the threshold). Provide a louder "
+                    f"patch."
                 )
             logger.debug("loudness too low, skipping")
             continue

@@ -1049,12 +1049,13 @@ def test_make_dataset_raises_when_fixed_params_list_is_too_short(
             )
 
 
-# Unit tests for the loudness-loop bounded-retry semantics. Mocking
+# Unit tests for the loudness-loop retry/raise semantics. Mocking
 # ``render_params`` and ``param_spec.sample`` keeps these CPU-only and fast —
 # no VST plugin, no real audio rendering. They guard the asymmetric guard in
 # ``generate_sample``: silent renders raise immediately when the synth is
-# fixed, but retry when only note params are fixed (synth re-sampled each
-# iteration) — see issue #724.
+# fixed, but retry (still unboundedly) when only note params are fixed —
+# synth is re-sampled each iteration, so retrying remains meaningful — see
+# issue #724.
 
 _SILENT_AUDIO_PEAK = 0.0
 _LOUD_AUDIO_PEAK = 0.5
