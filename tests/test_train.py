@@ -155,6 +155,7 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_vst
 def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
     """Run training of the Surge XT FFN model on the smoke test fixture.
 
@@ -181,6 +182,7 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.requires_vst
 def test_train_eval_surge_xt(
     tmp_path: Path, cfg_surge_xt: DictConfig, cfg_surge_xt_eval: DictConfig
 ) -> None:

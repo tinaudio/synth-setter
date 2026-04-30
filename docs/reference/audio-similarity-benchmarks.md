@@ -135,6 +135,20 @@ gate merges.
 
 ## Workflow wiring
 
+The pytest invocation is split into two sequential Docker steps so the
+benchmark-emitting tests run first (they produce the bench JSON the
+publish steps need; they're also the most important regression signal —
+a failure there should short-circuit the run before more runner minutes
+are spent on the rest of the slow VST suite):
+
+1. **Benchmark step** — `pytest -m "benchmark and slow and requires_vst" tests/data/vst/test_generate_vst_dataset.py`. Only the two
+   round-trip tests carry the `benchmark` marker, so this runs them
+   exclusively and emits `<prefix>.json` per bucket.
+2. **Other VST slow tests step** — `pytest -m "slow and requires_vst and not benchmark"` (whole-suite, no file restriction). Picks up
+   `test_train_surge_xt`, `test_train_eval_surge_xt`, `test_make_dataset`,
+   `test_preset_params.py`, and any future `requires_vst` test marked
+   `slow`. Skipped if the benchmark step fails.
+
 ```
 tests/data/vst/test_generate_vst_dataset.py
    |
@@ -142,6 +156,7 @@ tests/data/vst/test_generate_vst_dataset.py
    |  writes to $BENCHMARK_OUTPUT_DIR/<prefix>.json (per-test)
    v
 docker run -v /tmp/bench:/bench -e BENCHMARK_OUTPUT_DIR=/bench ...
+   (1. benchmark step writes JSON; 2. other slow VST step runs after)
    |
    |  Surface step: cp /tmp/bench/<prefix>.json -> ${{ workspace }}/<prefix>.json
    v

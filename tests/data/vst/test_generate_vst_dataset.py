@@ -698,6 +698,7 @@ def _assert_round_trip_matches(
 @pytest.mark.xfail(strict=True, reason="bug #489")
 @pytest.mark.slow
 @pytest.mark.requires_vst
+@pytest.mark.benchmark
 @skip_no_vst
 def test_datasets_from_hardcoded_params_are_identical(
     tmp_path: Path,
@@ -809,6 +810,7 @@ def test_datasets_from_hardcoded_params_are_identical(
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
+@pytest.mark.benchmark
 @skip_no_vst
 def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     """make_dataset reproduces a previous dataset row-for-row when params are replayed.

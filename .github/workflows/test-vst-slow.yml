@@ -1,15 +1,25 @@
 name: VST Slow Tests
 # Re-trigger marker: 2026-04-29 (post-gh-pages-bootstrap). Safe to remove on the next edit.
 
-# Runs the slow VST audio-similarity tests in
-# ``tests/data/vst/test_generate_vst_dataset.py`` inside the
-# ``tinaudio/synth-setter:dev-snapshot`` Docker image so the headless X11
-# stack the renderer needs is the same one used by ``dataset-generation.yml``
-# (proven working in CI). Bare ``ubuntu-latest`` runners hit "Timeout
-# waiting for Xvfb to start" intermittently — see the failing run at
+# Runs the slow VST tests inside the ``tinaudio/synth-setter:dev-snapshot``
+# Docker image so the headless X11 stack the renderer needs is the same
+# one used by ``dataset-generation.yml`` (proven working in CI). Bare
+# ``ubuntu-latest`` runners hit "Timeout waiting for Xvfb to start"
+# intermittently — see the failing run at
 # https://github.com/tinaudio/synth-setter/actions/runs/25026506440 — which
 # is why this lives in its own Docker-only workflow rather than as another
 # step in ``test-expensive.yml``.
+#
+# The pytest invocation is split into two sequential steps so the
+# benchmark-emitting tests run first (they produce the bench JSON files
+# the publish steps need; they're also the most important regression
+# signal — a tank there should fail CI before burning more runner minutes
+# on the rest):
+#   1. ``-m "benchmark and slow and requires_vst"`` (file-scoped to the
+#      VST round-trip suite) — emits the per-bucket bench JSON files.
+#   2. ``-m "slow and requires_vst and not benchmark"`` (whole-suite) —
+#      sweeps up everything else that needs the VST host (Surge XT
+#      training smoke, ``test_make_dataset``, preset-param tests, etc).
 #
 # Also publishes per-run audio-similarity metrics to the ``gh-pages``
 # benchmark chart (Issue #703) on push-to-main, or on dispatch when the
@@ -89,7 +99,7 @@ jobs:
                 python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
             '
 
-      - name: Run VST slow tests in Docker
+      - name: Run VST benchmark tests in Docker
         # Mount the PR's tests + src into the container so we test THIS
         # branch's code against the image's environment. The image's
         # ENTRYPOINT is the ``python click`` CLI; ``passthrough <argv>``
@@ -102,6 +112,14 @@ jobs:
         # imports load the VST host which needs a live X display, so the
         # headless wrapper has to apply at the pytest level (not the
         # entire container).
+        #
+        # Runs the metric-emitting round-trip tests first: they produce
+        # the per-bucket bench JSON the publish steps need, and they're
+        # the most important regression signal in this workflow — failing
+        # here should short-circuit the run so we don't burn runner
+        # minutes on the rest. File-scoped to ``test_generate_vst_dataset.py``
+        # because the ``benchmark`` marker is only used by the two
+        # round-trip tests in that file.
         run: |
           mkdir -p /tmp/bench
           docker run --rm \
@@ -117,7 +135,37 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               scripts/run-linux-vst-headless.sh \
-                pytest -vv -s tests/data/vst/test_generate_vst_dataset.py
+                pytest -vv -s -m "benchmark and slow and requires_vst" \
+                tests/data/vst/test_generate_vst_dataset.py
+            '
+
+      - name: Run other VST slow tests in Docker
+        # Sweeps up every other ``slow and requires_vst`` test in the
+        # suite — Surge XT training smoke (``test_train_surge_xt``,
+        # ``test_train_eval_surge_xt``), ``test_make_dataset``, and the
+        # ``test_preset_params.py`` cases. Same Docker mount + env stack
+        # as the benchmark step. No file restriction so newly-marked
+        # tests anywhere under ``tests/`` are picked up automatically.
+        # ``BENCHMARK_OUTPUT_DIR`` is still set so any future test that
+        # opts into bench emission Just Works; today none of the tests
+        # in this filter actually emit. Implicit ``if: success()`` on
+        # this step skips it cleanly when the benchmark step above
+        # fails — the bench JSON is the load-bearing signal, fail fast.
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/home/build/synth-setter \
+            -v /tmp/bench:/bench \
+            -e PYTHONPATH=/home/build/synth-setter \
+            -e BENCHMARK_OUTPUT_DIR=/bench \
+            -e HYDRA_FULL_ERROR=1 \
+            -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
+            "$IMAGE" \
+            passthrough bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              scripts/run-linux-vst-headless.sh \
+                pytest -vv -s -m "slow and requires_vst and not benchmark"
             '
 
       - name: Surface per-bucket bench JSON files on the runner
