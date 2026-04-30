@@ -1147,14 +1147,14 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 
 ## 11. Open Questions & Risks
 
-| #   | Question / Risk                                                                             | Impact                                              | Status                   |
-| --- | ------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
-| 1   | **VST plugin licensing on CI runners** — can we legally run Surge XT in GitHub Actions?     | E2E CI may need a stub or fixture-based approach    | Open                     |
-| 2   | **macOS pedalboard + Surge XT compatibility** — does the VST3 plugin load on Apple Silicon? | Blocks macOS render stage                           | Needs testing            |
-| 3   | **W&B artifact download speed** — best.ckpt may be 500MB+; W&B API is slower than rclone    | Mitigated by caching; accepted trade-off for W&B UI | Accepted                 |
-| 4   | **Metrics reproducibility across platforms** — float differences in spectral computations   | May cause CI flakiness with tight tolerances        | Use relative tolerances  |
-| 5   | **Xvfb availability in Docker base image** — may need to install in Dockerfile              | Low risk, well-documented                           | Resolved by Docker stage |
-| 6   | **rclone version skew** — different rclone versions on dev machines vs CI                   | Pin rclone version in Dockerfile and CI workflow    | Open                     |
+| #   | Question / Risk                                                                             | Impact                                              | Status                                                                                            |
+| --- | ------------------------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 1   | **VST plugin licensing on CI runners** — can we legally run Surge XT in GitHub Actions?     | E2E CI may need a stub or fixture-based approach    | Open                                                                                              |
+| 2   | **macOS pedalboard + Surge XT compatibility** — does the VST3 plugin load on Apple Silicon? | Blocks macOS render stage                           | Partial — plugin loads; `show_editor` warmup skipped on Darwin (#714, see `src/data/vst/core.py`) |
+| 3   | **W&B artifact download speed** — best.ckpt may be 500MB+; W&B API is slower than rclone    | Mitigated by caching; accepted trade-off for W&B UI | Accepted                                                                                          |
+| 4   | **Metrics reproducibility across platforms** — float differences in spectral computations   | May cause CI flakiness with tight tolerances        | Use relative tolerances                                                                           |
+| 5   | **Xvfb availability in Docker base image** — may need to install in Dockerfile              | Low risk, well-documented                           | Resolved by Docker stage                                                                          |
+| 6   | **rclone version skew** — different rclone versions on dev machines vs CI                   | Pin rclone version in Dockerfile and CI workflow    | Open                                                                                              |
 
 ## 12. Out of Scope
 

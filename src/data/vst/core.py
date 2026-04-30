@@ -37,8 +37,8 @@ def _prepare_plugin(plugin: VST3Plugin) -> None:
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
-    """Load a VST3 plugin (with a brief editor warmup on non-Darwin to populate its parameter
-    dict)."""
+    """Load a VST3 plugin (with a brief editor warmup on non-Darwin — see comment below for
+    rationale)."""
     logger.info(f"Loading plugin {plugin_path}")
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
