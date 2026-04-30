@@ -35,10 +35,10 @@ _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
 
 # Phase-robust audio similarity thresholds for replayed-params vs. candidates.
-# Two independent renders of identical params differ at the sample level (Surge XT's
-# oscillator phase init is nondeterministic across the per-call plugin reloads in
-# ``render_params``), but should remain perceptually close. Tune downward if the
-# metrics consistently come in tighter than these caps.
+# Two independent renders of identical params differ at the sample level on main
+# (issue #489 — Surge XT's oscillator phase init is nondeterministic across renders),
+# but should remain perceptually close. Tune downward if the metrics consistently come
+# in tighter than these caps.
 _MSS_MAX = 10.0           # multi-scale log-mel L1 distance (dB)
 _WMFCC_MAX = 18.0         # DTW-aligned MFCC L1 distance
 _SOT_MAX = 0.15          # spectral optimal transport (Wasserstein on STFT mags)
@@ -67,11 +67,10 @@ skip_no_vst = pytest.mark.skipif(
 
 # Known-good loudness-passing patch captured from a prior random-sampled run
 # (sample 4 of a 5-sample candidates dataset for the surge_xt spec). Used by
-# ``test_make_dataset_replays_via_param_spec_sample_mock_with_hardcoded_params``
-# to drive both stages with a fixed, single-sample param set rather than
-# random sampling. If the spec changes (keys added/removed), this dict must
-# be regenerated; values can be edited freely as long as the resulting render
-# clears ``_MIN_LOUDNESS``.
+# ``test_datasets_from_hardcoded_params_are_identical`` to drive both stages
+# with a fixed, single-sample param set rather than random sampling. If the
+# spec changes (keys added/removed), this dict must be regenerated; values
+# can be edited freely as long as the resulting render clears ``_MIN_LOUDNESS``.
 _HARDCODED_SYNTH_PARAMS: dict[str, float] = {
     "a_amp_eg_attack": 0.6115446960926056,
     "a_amp_eg_decay": 0.7035384780168533,
@@ -283,16 +282,18 @@ def _assert_h5_structure_is_valid(
         assert audio.attrs["min_loudness"] == _MIN_LOUDNESS
 
         audio_arr = audio[...].astype(np.float32)
+        mel_arr = mel[...]
+        params_arr = params[...]
         assert np.isfinite(audio_arr).all()
-        assert np.isfinite(mel[...]).all()
-        assert np.isfinite(params[...]).all()
+        assert np.isfinite(mel_arr).all()
+        assert np.isfinite(params_arr).all()
 
         peak = np.abs(audio_arr).reshape(num_samples, -1).max(axis=1)
         assert (peak > _AUDIO_PEAK_SILENCE_FLOOR).all(), (
             f"silent clips: peaks={peak.tolist()}"
         )
 
-        return audio_arr, mel[...], params[...]
+        return audio_arr, mel_arr, params_arr
 
 
 @contextmanager
@@ -380,7 +381,15 @@ def _emit_benchmark_metrics(
         return
     out = Path(out_dir) / bench_filename
     out.parent.mkdir(parents=True, exist_ok=True)
-    existing = json.loads(out.read_text()) if out.exists() else []
+    if out.exists():
+        try:
+            existing = json.loads(out.read_text())
+        except json.JSONDecodeError:
+            # Truncated file from a previous interrupted run — start fresh.
+            log.warning("benchmark file %s contains invalid JSON; resetting", out)
+            existing = []
+    else:
+        existing = []
     out.write_text(json.dumps(existing + entries, indent=2))
 
 
@@ -459,9 +468,9 @@ def _assert_round_trip_matches(
     Five checks: ``param_array`` exact equality, per-row phase-robust audio metrics
     (MSS / wMFCC / SOT / RMS-envelope cosine), mel mean-abs-diff, per-row decoded-params
     equality vs. the expected patches, and decoded shape/type sanity. Element-wise audio
-    equality is *not* a property of the system: ``render_params`` reloads Surge XT per
-    call (work-around for the silent-output bug, commits 086d80f / 9ff7f16), and each
-    reload yields a different oscillator phase init.
+    equality is *not* a property of the system: Surge XT's oscillator phase init is
+    nondeterministic across renders of identical params (issue #489), so two renders are
+    phase-shifted variants of the same waveform.
 
     ``expected_synth_patches`` / ``expected_note_patches`` are length-``num_samples``
     lists. For tests that replay a single fixed patch across all rows, callers should
@@ -591,11 +600,13 @@ def test_datasets_from_hardcoded_params_are_identical(
 ) -> None:
     """make_dataset round-trips a single hardcoded param set when ``param_spec.sample`` is patched.
 
-    Variant of ``test_make_dataset_replays_via_param_spec_sample_mock`` that removes
+    Variant of ``test_datasets_from_sampled_params_are_identical`` that removes
     the random Stage 1 entirely. Both stages patch ``param_spec.sample`` to return the
     same hardcoded ``(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)`` tuple, so the
     test pins reproducibility on a fixed, version-controlled patch rather than a
-    random candidate. ``num_samples=1``: a single render per stage, total two renders.
+    random candidate. ``num_samples=6`` (12 renders total across both stages) so the
+    all-pairs check has enough pairs to surface every-other-render variance — bug #489
+    only shows up across multiple renders, single-pair checks miss it.
 
     The hardcoded values are a known-good loudness-passing capture from a prior
     surge_xt run; if the spec changes, they must be regenerated.
@@ -705,10 +716,10 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
       tolerance — params are deterministic.
     - Per-row audio matches within phase-robust perceptual metrics (MSS,
       wMFCC, SOT, RMS-envelope cosine). Element-wise equality is *not* a
-      property of the system: ``render_params`` reloads Surge XT per call to
-      work around the silent-output bug (commits 086d80f, 9ff7f16), and each
-      reload yields a different oscillator phase init, so the two renders of
-      the same params are phase-shifted variants of the same waveform.
+      property of the system: Surge XT's oscillator phase init is
+      nondeterministic across renders of identical params (issue #489), so
+      the two renders of the same params are phase-shifted variants of the
+      same waveform.
     - Mel spec matches within mean absolute log-power error.
     """
     spec = param_specs[_SPEC_NAME]

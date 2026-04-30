@@ -181,7 +181,7 @@ jobs:
             (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
             (github.event_name == 'workflow_dispatch' && (inputs.publish_metrics == true || inputs.dummy_only == true))
           )
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
           name: VST noise floor (1 preset N renders)
           tool: customSmallerIsBetter
@@ -207,7 +207,7 @@ jobs:
             (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
             (github.event_name == 'workflow_dispatch' && (inputs.publish_metrics == true || inputs.dummy_only == true))
           )
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
           name: VST noise floor (random preset replay)
           tool: customSmallerIsBetter

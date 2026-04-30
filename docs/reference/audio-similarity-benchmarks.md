@@ -23,11 +23,11 @@ of the kind of regressions the chart is designed to surface:
   metric distribution.
 - **`librosa` / `pedalboard` upgrade** changing mel-spectrogram
   computation or VST host behavior, even with identical params.
-- **Regression in the per-render plugin reload** in
-  `src/data/vst/render_params` — this is the workaround for
-  [#489](https://github.com/tinaudio/synth-setter/issues/489), and if it
-  ever stops doing what it should, the every-other-render variance
-  spikes.
+- **Regression in the renderer's determinism** in
+  `src/data/vst/render_params` — bug
+  [#489](https://github.com/tinaudio/synth-setter/issues/489) tracks the
+  every-other-render variance; if a future fix lands and then regresses,
+  that variance spikes here first.
 - **Renderer perf regressions** — dB metrics may stay flat while
   `wall-clock-seconds-per-render` doubles.
 
