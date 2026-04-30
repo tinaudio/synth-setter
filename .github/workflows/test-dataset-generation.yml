@@ -101,28 +101,12 @@ jobs:
             -e CONFIG_PATH \
             -e PYTHONPATH=/home/build/synth-setter \
             "$IMAGE" \
-            passthrough bash -c '
+            bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               mkdir -p plugins
               ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
-
-              # The launcher imports pipeline.schemas.spec (→ pedalboard via
-              # param_specs) which needs a live X display, hence the headless
-              # wrapper. Skypilot[runpod] is in requirements-app.txt as of
-              # PR #716; ensure-installed for old image tags that predate it.
-              # The image uses uv-managed venvs (no `pip` on PATH); use uv.
-              python -c "import sky" 2>/dev/null \
-                || uv pip install --quiet "skypilot[runpod]==0.12.0" "python-dotenv"
-
-              # Transitional fallback while images predating the Dockerfile
-              # bump for SkyPilot are still in circulation. SkyPilot needs
-              # rsync + an SSH client to provision and stage file_mounts onto
-              # the RunPod pod, and shells out to `pip3` directly (the
-              # uv-managed venv does not expose one).
-              { command -v rsync && command -v ssh-keygen && command -v pip3; } >/dev/null \
-                || (apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync openssh-client python3-pip)
 
               # SkyPilot validates RunPod credentials by reading
               # ~/.runpod/config.toml (env var alone is not enough).
@@ -130,6 +114,9 @@ jobs:
               umask 077
               printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
 
+              # The launcher imports pipeline.schemas.spec (→ pedalboard via
+              # param_specs) which needs a live X display, hence the headless
+              # wrapper.
               scripts/run-linux-vst-headless.sh \
                 python scripts/skypilot_launch_smoke.py --config "$CONFIG_PATH"
 
