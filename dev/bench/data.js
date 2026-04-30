@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777512396828,
+  "lastUpdate": 1777532645581,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST fixed-params replay": [
@@ -634,6 +634,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 4.092413352800003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c34930a8e51cc0f68b5beb9e2b5f904437f35770",
+          "message": "workaround(vst): skip show_editor warmup on Darwin to avoid AppKit SIGTRAP (#715)\n\n* fix(vst): skip show_editor warmup on Darwin to avoid AppKit SIGTRAP\n\nOn macOS, pedalboard.VST3Plugin.show_editor accumulates AppKit/CGS\ncommit-handler state per call in the unbundled python process. After\n~3-4 calls the next show_editor invocation aborts with SIGTRAP, which\nbreaks any flow that reloads the plugin per render (#714).\n\nSkip the warmup on Darwin only. On Linux/Windows show_editor remains the\nestablished workaround for spotify/pedalboard#394 (preset state not\ncommitted until the editor opens).\n\nEmpirical justification (full audit logged on #714):\n- Cross-path equivalence test on the per-render-reload PR (#713) showed\n  0 audio-sample differences between renders that called show_editor and\n  renders that did not.\n- Preset-coverage audit across all 3 Surge XT presets and 770+\n  parameters per preset found 0 readback divergences between\n  (load_preset -> flush) and (show_editor -> load_preset -> flush).\n- The post-load process([], ...) flush already in render_params is\n  sufficient to commit Surge XT's preset state without show_editor.\n\nA new requires_vst test (tests/data/vst/test_preset_coverage.py) guards\nthis decision: it parametrizes over every .vstpreset and asserts the two\npatterns produce identical parameter readbacks. If a future preset,\npedalboard release, or Surge XT version ever diverges, the test fails\nloudly so the Darwin path doesn't silently fall back to Surge defaults.\n\nCloses #714\nRefs #489 #713 spotify/pedalboard#394\n\n* docs(eval): note macOS Darwin gate in eval-pipeline open questions; tighten load_plugin docstring\n\ndoc-drift findings on PR #715:\n- eval-pipeline.md Open Question #2 (macOS Apple Silicon support) was 'Needs\n  testing'; the plugin demonstrably loads, with the show_editor warmup skipped\n  on Darwin per #714. Status updated to reflect the partial answer + gating.\n- load_plugin docstring claimed the warmup populates the parameter dict; the\n  preset-coverage audit added in this PR proves the dict is identical with vs\n  without show_editor. Replaced with a pointer to the comment block, which\n  already explains the real rationale (pedalboard #394 ordering workaround +\n  Darwin SIGTRAP).\n\nRefs #714\n\n* test(vst): mark preset coverage test as slow\n\nEach parameter case constructs two VST3Plugin instances (one with the\nshow_editor warmup, one without) and reads ~770 parameters off each.\nTotal wall-clock per case is several seconds even on Linux + Xvfb, well\npast the make test budget. Aligns with the other VST-gated tests in\nthis directory.\n\nRefs #714\n\n* test(vst): skip preset coverage test on Darwin to avoid show_editor SIGTRAP\n\nThe test calls plugin.show_editor() which is the exact AppKit SIGTRAP trigger\nthis PR fixes. On a Darwin host with the Surge XT plugin installed, running\nthis test would crash pytest. Mirrors the sys.platform != \"darwin\" gate in\nsrc/data/vst/core.py:50.\n\nRefs #714",
+          "timestamp": "2026-04-30T02:57:54-04:00",
+          "tree_id": "75b2b583de9d382014c7eb04531e4a3472c6a4c1",
+          "url": "https://github.com/tinaudio/synth-setter/commit/c34930a8e51cc0f68b5beb9e2b5f904437f35770"
+        },
+        "date": 1777532645197,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.5092296600341797,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.6222000133991243,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.021497655659914017,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0040929317474365234,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.6025935411453247,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 4.418843707200006,
             "unit": "seconds"
           }
         ]
