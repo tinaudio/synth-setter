@@ -114,7 +114,7 @@ jobs:
               # PR #716; ensure-installed for old image tags that predate it.
               # The image uses uv-managed venvs (no `pip` on PATH); use uv.
               python -c "import sky" 2>/dev/null \
-                || uv pip install --quiet "skypilot[runpod]==0.7.0" "python-dotenv"
+                || uv pip install --quiet "skypilot[runpod]==0.12.0" "python-dotenv"
 
               # Transitional fallback while images predating the Dockerfile
               # bump for SkyPilot are still in circulation. SkyPilot needs
