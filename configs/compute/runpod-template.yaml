@@ -1,6 +1,6 @@
 # SkyPilot task template for RunPod.
 #
-# Loaded by scripts/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
+# Loaded by pipeline/entrypoints/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
 # The launcher injects R2 credentials (via task.update_envs) and the
 # materialized DatasetPipelineSpec (via task.update_file_mounts) before
 # calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
@@ -40,7 +40,7 @@ envs:
 
 # <repo_root>/data/skypilot-launch-smoke-spec.json is mounted by the launcher via
 # update_file_mounts. Keep this path in sync with WORKER_SPEC_PATH in
-# scripts/skypilot_launch_smoke.py.
+# pipeline/entrypoints/skypilot_launch_smoke.py.
 setup: |
   # SkyPilot uses rsync (via SSH) to stage file_mounts onto the worker.
   # Ensure rsync is present before any mount happens. Idempotent: succeeds

@@ -1,6 +1,6 @@
 name: Test Dataset Generation
 
-# Exercises the SkyPilot RunPod launcher (scripts/skypilot_launch_smoke.py)
+# Exercises the SkyPilot RunPod launcher (pipeline/entrypoints/skypilot_launch_smoke.py)
 # with the CI smoke-test config (32 samples, 1 shard). The launcher runs
 # inside the Docker image so materialize_spec can import pedalboard via the
 # headless X wrapper. SkyPilot streams worker logs back and waits for the
@@ -37,7 +37,7 @@ on:
       - "configs/compute/**"
       - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.py"
-      - "scripts/skypilot_launch_smoke.py"
+      - "pipeline/entrypoints/skypilot_launch_smoke.py"
       - ".github/workflows/test-dataset-generation.yml"
       - "requirements*.txt"
 
@@ -158,7 +158,7 @@ jobs:
               # materialized spec at a known path under $TMPDIR (shared
               # filesystem with SkyPilot staging — bind-mounted repo paths
               # trip EXDEV on os.rename in-container).
-              PYTHONPATH=/home/build/synth-setter python scripts/skypilot_launch_smoke.py \
+              python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --spec-out /tmp/input_spec.json
 

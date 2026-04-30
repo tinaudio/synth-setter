@@ -1,4 +1,4 @@
-"""Tests for scripts/skypilot_launch_smoke.py — SkyPilot RunPod smoke launcher.
+"""Tests for pipeline/entrypoints/skypilot_launch_smoke.py — SkyPilot RunPod smoke launcher.
 
 Mock-based: no real SkyPilot or RunPod calls. The `mock_sky` fixture replaces the launcher's
 module-level `sky` reference with a MagicMock, and `local_spec_dir` redirects the on-disk spec
@@ -16,12 +16,12 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from pipeline.schemas.spec import DatasetPipelineSpec
-from scripts.skypilot_launch_smoke import (
+from pipeline.entrypoints.skypilot_launch_smoke import (
     WORKER_SPEC_PATH,
     load_worker_env,
     main,
 )
+from pipeline.schemas.spec import DatasetPipelineSpec
 
 FIXED_NOW = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -98,7 +98,7 @@ def env_file(tmp_path: Path) -> Path:
 def template_yaml() -> Path:
     """Resolve the in-repo SkyPilot RunPod template path."""
     return (
-        Path(__file__).resolve().parent.parent.parent
+        Path(__file__).resolve().parent.parent.parent.parent
         / "configs"
         / "compute"
         / "runpod-template.yaml"
@@ -115,7 +115,7 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     spec_dir = tmp_path / "spec-out"
     spec_dir.mkdir()
-    monkeypatch.setattr("scripts.skypilot_launch_smoke.LOCAL_SPEC_DIR", spec_dir)
+    monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.LOCAL_SPEC_DIR", spec_dir)
     return spec_dir
 
 
@@ -123,7 +123,7 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace the launcher's module-level `sky` reference with a MagicMock."""
     fake = MagicMock()
-    monkeypatch.setattr("scripts.skypilot_launch_smoke.sky", fake)
+    monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.sky", fake)
     return fake
 
 
