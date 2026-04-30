@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 
 import click
+from dotenv import dotenv_values
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import materialize_spec
@@ -28,28 +29,13 @@ DEFAULT_ENV_FILE = REPO_ROOT / ".env.cloud"
 WORKER_SPEC_PATH = "/workspace/spec.json"
 
 
-def parse_dotenv(path: Path) -> dict[str, str]:
-    """Parse a `KEY=VALUE` env file. Skips blank lines and `#` comments.
+def load_worker_env(path: Path) -> dict[str, str]:
+    """Read worker-side env from a dotenv file using python-dotenv.
 
-    Strips a single layer of surrounding single or double quotes from the value. Raises ValueError
-    on malformed lines so misconfiguration surfaces before contacting SkyPilot.
+    `dotenv_values` returns a dict whose values are `Optional[str]` (a key with no `=` becomes
+    `None`); coerce to a plain `dict[str, str]` for `task.update_envs(...)` and skip None entries.
     """
-    env: dict[str, str] = {}
-    for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            raise ValueError(f"{path}:{lineno}: missing '=' in line: {raw!r}")
-        key, _, value = line.partition("=")
-        key = key.strip()
-        if not key:
-            raise ValueError(f"{path}:{lineno}: empty key in line: {raw!r}")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
-        env[key] = value
-    return env
+    return {k: v for k, v in dotenv_values(path).items() if v is not None}
 
 
 def write_spec_to_tempfile(spec_json: str) -> Path:
@@ -110,7 +96,7 @@ def main(
             f"Copy .env.cloud.example to .env.cloud and fill in values."
         )
 
-    worker_env = parse_dotenv(env_file_path)
+    worker_env = load_worker_env(env_file_path)
     if not worker_env:
         raise click.ClickException(f"No env vars parsed from {env_file_path}.")
 

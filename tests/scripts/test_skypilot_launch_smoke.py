@@ -20,8 +20,8 @@ from click.testing import CliRunner
 from pipeline.schemas.spec import DatasetPipelineSpec
 from scripts.skypilot_launch_smoke import (
     WORKER_SPEC_PATH,
+    load_worker_env,
     main,
-    parse_dotenv,
     write_spec_to_tempfile,
 )
 
@@ -117,56 +117,35 @@ def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# parse_dotenv
+# load_worker_env
 # ---------------------------------------------------------------------------
 
 
-class TestParseDotenv:
-    """Behavioral contracts for the inline .env file parser."""
+class TestLoadWorkerEnv:
+    """Behavioral contracts for the worker-env loader (thin wrapper over python-dotenv)."""
 
-    def test_parses_simple_key_value(self, tmp_path: Path) -> None:
-        """Two simple KEY=VALUE lines parse into the expected dict."""
-        path = tmp_path / "env"
-        path.write_text("FOO=bar\nBAZ=qux\n")
-        assert parse_dotenv(path) == {"FOO": "bar", "BAZ": "qux"}
-
-    def test_skips_blank_lines_and_comments(self, tmp_path: Path) -> None:
-        """Blank lines and `#`-prefixed comment lines are ignored."""
-        path = tmp_path / "env"
-        path.write_text("\n# a comment\nFOO=bar\n\n  # indented comment\nBAZ=qux\n")
-        assert parse_dotenv(path) == {"FOO": "bar", "BAZ": "qux"}
-
-    def test_strips_surrounding_quotes(self, tmp_path: Path) -> None:
-        """A single layer of matching surrounding single/double quotes is stripped from values."""
-        path = tmp_path / "env"
-        path.write_text("FOO=\"bar baz\"\nQUOTED='single'\nUNQUOTED=plain\n")
-        assert parse_dotenv(path) == {
-            "FOO": "bar baz",
-            "QUOTED": "single",
-            "UNQUOTED": "plain",
-        }
-
-    def test_keeps_internal_equals(self, tmp_path: Path) -> None:
-        """Only the first `=` is treated as the separator — value may contain `=`."""
-        path = tmp_path / "env"
-        path.write_text("URL=https://acct.r2.cloudflarestorage.com/path?x=1\n")
-        assert parse_dotenv(path) == {
+    def test_parses_keys_skips_comments_and_strips_quotes(self, tmp_path: Path) -> None:
+        """Python-dotenv handles blanks, `#` comments, and quoted values; we only forward dict[str,
+        str]."""
+        path = tmp_path / ".env.cloud"
+        path.write_text(
+            "# a comment\n"
+            "\n"
+            "FOO=bar\n"
+            'QUOTED="bar baz"\n'
+            "URL=https://acct.r2.cloudflarestorage.com/path?x=1\n"
+        )
+        assert load_worker_env(path) == {
+            "FOO": "bar",
+            "QUOTED": "bar baz",
             "URL": "https://acct.r2.cloudflarestorage.com/path?x=1",
         }
 
-    def test_raises_on_missing_equals(self, tmp_path: Path) -> None:
-        """A non-blank, non-comment line missing `=` raises ValueError."""
-        path = tmp_path / "env"
-        path.write_text("FOO=bar\nNOPE\n")
-        with pytest.raises(ValueError, match="missing '='"):
-            parse_dotenv(path)
-
-    def test_raises_on_empty_key(self, tmp_path: Path) -> None:
-        """A line that begins with `=` (empty key) raises ValueError."""
-        path = tmp_path / "env"
-        path.write_text("=value\n")
-        with pytest.raises(ValueError, match="empty key"):
-            parse_dotenv(path)
+    def test_drops_keys_with_no_value(self, tmp_path: Path) -> None:
+        """Lines like `BARE` (no `=`) come back as None from dotenv; loader filters them out."""
+        path = tmp_path / ".env.cloud"
+        path.write_text("FOO=bar\nBARE\n")
+        assert load_worker_env(path) == {"FOO": "bar"}
 
 
 # ---------------------------------------------------------------------------
