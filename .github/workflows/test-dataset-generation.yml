@@ -119,8 +119,11 @@ jobs:
               scripts/run-linux-vst-headless.sh \
                 python scripts/skypilot_launch_smoke.py --config "$CONFIG_PATH"
 
-              # Stage the materialized spec for downstream jobs.
-              cp data/skypilot-launch-smoke-spec.json /run-metadata/input_spec.json
+              # Stage the materialized spec for downstream jobs. The launcher
+              # writes the local source under $TMPDIR (must share a filesystem
+              # with SkyPilot's /tmp staging — bind-mounted repo paths trip
+              # EXDEV on os.rename inside the container).
+              cp /tmp/skypilot-launch-smoke-spec.json /run-metadata/input_spec.json
             ' \
             2>&1 | tee /tmp/run-metadata/generate.log
 
