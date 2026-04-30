@@ -99,6 +99,24 @@ jobs:
       - name: Prepare run-metadata mount
         run: mkdir -p /tmp/run-metadata
 
+      # Launch step notes (kept out of the heredoc so quoting is simple):
+      #   - The launcher (pipeline.entrypoints.skypilot_launch_smoke) submits
+      #     a SkyPilot job via sky.launch + stream_and_get, blocking until
+      #     the cluster is provisioned, the worker runs, and (down=True)
+      #     the cluster is torn down. The job-level `timeout-minutes: 60`
+      #     above is the safety bound on that block.
+      #   - SkyPilot validates RunPod credentials from ~/.runpod/config.toml
+      #     (env var alone is not enough), hence the in-container write of
+      #     that file with `umask 077` to keep the API key 600.
+      #   - No headless-X wrapper is needed: the launcher renders nothing
+      #     locally, and extract_renderer_version is short-circuited
+      #     (see #734) so materialize_spec runs interpreter-only.
+      #   - --spec-out lands the materialized spec under $TMPDIR (shared FS
+      #     with SkyPilot staging); bind-mounted repo paths trip EXDEV on
+      #     os.rename in-container, so we copy the spec to /run-metadata
+      #     afterwards. `chmod 0644` is required because the leaked umask
+      #     above would otherwise leave the staged spec 600 root-owned and
+      #     unreadable to the host runner for `head` / upload-artifact.
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
@@ -118,29 +136,12 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               mkdir -p plugins
               ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
-
-              # SkyPilot validates RunPod credentials by reading
-              # ~/.runpod/config.toml (env var alone is not enough).
               mkdir -p ~/.runpod
               umask 077
               printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
-
-              # No headless-X wrapper: the launcher submits a SkyPilot job
-              # and renders nothing locally; extract_renderer_version is
-              # short-circuited (see #734) so materialize_spec does not
-              # need an X display. --spec-out points the materialized
-              # spec at a known path under $TMPDIR (shared filesystem
-              # with SkyPilot staging — bind-mounted repo paths trip
-              # EXDEV on os.rename in-container).
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --spec-out /tmp/input_spec.json
-
-              # Stage the materialized spec for downstream jobs. The
-              # `umask 077` above (set so ~/.runpod/config.toml lands
-              # mode 600) persists through the rest of this shell, so cp
-              # would otherwise produce a 600 root-owned file the host
-              # runner can not read for `head` / upload-artifact.
               cp /tmp/input_spec.json /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \
