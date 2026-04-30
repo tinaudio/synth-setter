@@ -113,8 +113,14 @@ jobs:
               # wrapper. Skypilot[runpod] is in requirements-app.txt as of
               # PR #716; ensure-installed for old image tags that predate it.
               # The image uses uv-managed venvs (no `pip` on PATH); use uv.
-              python -c "import sky.jobs" 2>/dev/null \
+              python -c "import sky" 2>/dev/null \
                 || uv pip install --quiet "skypilot[runpod]==0.7.0" "python-dotenv"
+
+              # SkyPilot validates RunPod credentials by reading
+              # ~/.runpod/config.toml (env var alone is not enough).
+              mkdir -p ~/.runpod
+              umask 077
+              printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
 
               scripts/run-linux-vst-headless.sh \
                 python scripts/skypilot_launch_smoke.py --config "$CONFIG_PATH"
