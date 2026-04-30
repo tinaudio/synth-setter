@@ -49,6 +49,15 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 - Use `structlog` for logging in pipeline code. Use Python's `logging` module elsewhere.
 - All `rclone` operations use `--checksum`.
 
+#### Comment Hygiene: Don't Bake Values Into Comments
+
+Comments that restate values, counts, or list contents go stale the moment the code changes. The code is the source of truth — name it, don't mirror it.
+
+- **Don't restate constant values.** Next to `num_samples = 6`, never write `# 6 samples (12 renders total)`. Reference the symbol (`each stage renders num_samples times`) or describe behavior without numbers.
+- **Don't bake in counts the code already reports.** `# 29 review comments triaged` or `# 5 metric series` belongs in a PR description (a snapshot in time), not in a docstring or inline comment that lives next to the data and will drift the next time someone adds an item. Prefer "the metric series listed below" or reference the data source.
+- **Don't enumerate list contents in prose.** Next to `THINGS = ["a", "b", "c"]`, never write `# three things: a, b, and c` — both the count and the contents will mismatch the list within a release. The list is the source of truth; a comment can name the *category*, not its contents.
+- Still write comments for: WHY a non-obvious choice was made, hidden invariants, workarounds (with bug ID), and surprising behavior.
+
 ### Testing
 
 - **pytest** with strict markers. Run `make test` for quick tests (excludes slow).
