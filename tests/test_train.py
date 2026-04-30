@@ -111,6 +111,17 @@ def test_train_ddp_sim(cfg_train: DictConfig) -> None:
         cfg_train.trainer.accelerator = "cpu"
         cfg_train.trainer.devices = 2
         cfg_train.trainer.strategy = "ddp_spawn"
+        # Workaround for #709: ddp_spawn rank processes start with torch's
+        # default `file_descriptor` sharing strategy, and their forked
+        # dataloader workers inherit it. On the GitHub-hosted
+        # `ubuntu-latest-4core` runner that strategy fails with
+        # `RuntimeError: unable to resize file ... Invalid argument (22)`
+        # because anonymous shm-backed fds can't be ftruncate'd in the
+        # runner sandbox. Setting num_workers=0 keeps dataloading inline in
+        # each rank process, sidestepping cross-process tensor shm entirely.
+        # This test exercises ddp_spawn coordination, not dataloader
+        # parallelism, so dropping workers does not weaken coverage.
+        cfg_train.data.num_workers = 0
     train(cfg_train)
 
 
