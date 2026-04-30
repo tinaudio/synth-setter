@@ -126,7 +126,8 @@ def main(
     )
 
     local_spec_path.parent.mkdir(parents=True, exist_ok=True)
-    local_spec_path.write_text(spec.model_dump_json(indent=2))
+    # Pin encoding so JSON output is locale-independent (workers/CI run with varied locales).
+    local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Materialized spec to {local_spec_path}")
 
     # SkyPilot stages file_mount sources by moving them into its own staging dir; passing
