@@ -2,7 +2,7 @@
 
 Materializes a `DatasetPipelineSpec` locally from the smoke config, ships the
 frozen spec into the worker via `task.update_file_mounts`, forwards the
-worker-side env from a `.env.cloud` file via `task.update_envs`, and launches
+worker-side env from a `.env` file via `task.update_envs`, and launches
 an unmanaged SkyPilot task (`sky.launch`) that runs the existing container CLI.
 
 `sky.jobs.launch` (managed jobs) requires a cloud-storage backend for
@@ -30,7 +30,7 @@ from pipeline.schemas.spec import materialize_spec
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
-DEFAULT_ENV_FILE = REPO_ROOT / ".env.cloud"
+DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 
 # Worker-side mount destination. The image's WORKDIR is /home/build/synth-setter (Dockerfile),
 # so the spec lands under <repo_root>/data/ on the worker — gitignored, no clash with repo
@@ -107,7 +107,7 @@ def main(
     if not env_file_path.is_file():
         raise click.ClickException(
             f"Worker env file not found: {env_file_path}. "
-            f"Copy .env.cloud.example to .env.cloud and fill in values."
+            f"Copy .env.example to .env and fill in values."
         )
 
     worker_env = load_worker_env(env_file_path)

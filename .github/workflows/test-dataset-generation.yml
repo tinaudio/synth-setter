@@ -81,20 +81,23 @@ jobs:
             configs/compute/runpod-template.yaml
           grep image_id configs/compute/runpod-template.yaml
 
-      - name: Write .env.cloud from secrets
+      - name: Write .env from secrets
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
         run: |
-          cat > .env.cloud <<EOF
+          cat > .env <<EOF
           RCLONE_CONFIG_R2_TYPE=s3
           RCLONE_CONFIG_R2_PROVIDER=Cloudflare
           RCLONE_CONFIG_R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
           RCLONE_CONFIG_R2_ENDPOINT=${R2_ENDPOINT}
+          WANDB_S3_ENDPOINT_URL=${R2_ENDPOINT}
+          WANDB_API_KEY=${WANDB_API_KEY}
           EOF
-          chmod 600 .env.cloud
+          chmod 600 .env
 
       - name: Prepare run-metadata mount
         run: mkdir -p /tmp/run-metadata

@@ -82,8 +82,8 @@ def config_yaml(tmp_path: Path, fake_plugin: Path) -> Path:
 
 @pytest.fixture()
 def env_file(tmp_path: Path) -> Path:
-    """Write a minimal valid .env.cloud with the rclone-R2 keys the launcher forwards."""
-    path = tmp_path / ".env.cloud"
+    """Write a minimal valid .env with the rclone-R2 keys the launcher forwards."""
+    path = tmp_path / ".env"
     path.write_text(
         "RCLONE_CONFIG_R2_TYPE=s3\n"
         "RCLONE_CONFIG_R2_PROVIDER=Cloudflare\n"
@@ -145,7 +145,7 @@ class TestLoadWorkerEnv:
     def test_parses_keys_skips_comments_and_strips_quotes(self, tmp_path: Path) -> None:
         """Python-dotenv handles blanks, comments, and quoted values; loader returns dict[str,
         str]."""
-        path = tmp_path / ".env.cloud"
+        path = tmp_path / ".env"
         path.write_text(
             "# a comment\n"
             "\n"
@@ -161,7 +161,7 @@ class TestLoadWorkerEnv:
 
     def test_drops_keys_with_no_value(self, tmp_path: Path) -> None:
         """Lines like `BARE` (no `=`) come back as None from dotenv; loader filters them out."""
-        path = tmp_path / ".env.cloud"
+        path = tmp_path / ".env"
         path.write_text("FOO=bar\nBARE\n")
         assert load_worker_env(path) == {"FOO": "bar"}
 
@@ -183,7 +183,7 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Missing .env.cloud aborts with a clear error and never calls sky.*."""
+        """Missing .env aborts with a clear error and never calls sky.*."""
         missing = tmp_path / "does-not-exist.env"
         runner = CliRunner()
         result = runner.invoke(
