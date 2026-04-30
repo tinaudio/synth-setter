@@ -146,8 +146,8 @@ jobs:
               python /tmp/get-pip.py --quiet
               python -m pip install --quiet "skypilot[runpod]==0.12.0"
 
-              # Probe — proves the launcher's interpreter sees sky.
-              python -c "import sys, importlib.util; print(\"python:\", sys.executable); print(\"sky importable:\", importlib.util.find_spec(\"sky\") is not None)"
+              # Probe — proves the launcher's interpreter sees sky and the pipeline package.
+              python -c "import sys, importlib.util; print(\"python:\", sys.executable); print(\"PYTHONPATH:\", __import__(\"os\").environ.get(\"PYTHONPATH\", \"<unset>\")); print(\"cwd:\", __import__(\"os\").getcwd()); print(\"sky importable:\", importlib.util.find_spec(\"sky\") is not None); print(\"pipeline importable:\", importlib.util.find_spec(\"pipeline\") is not None)"
 
               # No headless-X wrapper: the launcher submits a SkyPilot job
               # and runs no renders locally. The wrapper was load-bearing
@@ -158,7 +158,7 @@ jobs:
               # materialized spec at a known path under $TMPDIR (shared
               # filesystem with SkyPilot staging — bind-mounted repo paths
               # trip EXDEV on os.rename in-container).
-              python scripts/skypilot_launch_smoke.py \
+              PYTHONPATH=/home/build/synth-setter python scripts/skypilot_launch_smoke.py \
                 --config "$CONFIG_PATH" \
                 --spec-out /tmp/input_spec.json
 
