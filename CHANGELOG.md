@@ -1,6 +1,819 @@
 # CHANGELOG
 
 
+## v0.6.1 (2026-04-30)
+
+### Bug Fixes
+
+- **vst**: Reload plugin per render to eliminate every-other junk audio
+  ([#713](https://github.com/tinaudio/synth-setter/pull/713),
+  [`ceaf0fc`](https://github.com/tinaudio/synth-setter/commit/ceaf0fc54f29e875edba3e60a7b575b39d8ec41c))
+
+* fix(vst): reload plugin per render to eliminate every-other junk audio
+
+render_params now takes a plugin_path and reloads the VST3 plugin on every call, working around a
+  stale-state bug where alternating renders produced silent or repeated audio. load_plugin's
+  editor-pump uses a threading.Event + show_editor(stop_event) pattern (replacing the prior
+  _thread.interrupt KeyboardInterrupt hack), which is what makes a per-call reload safe and fast
+  enough to be the default.
+
+generate_sample, make_dataset, and scripts/predict_vst_audio.py are updated to pass plugin_path
+  through to render_params instead of pre-loading the plugin.
+
+The xfail decorator on test_datasets_from_hardcoded_params_are_identical is removed: with this fix
+  in place, the test no longer xpasses.
+
+Closes #489 Refs #705 Refs #702
+
+* docs(eval): update audio-similarity-benchmarks for #489 closure
+
+The dashboard's framing described #489 as an open bug and called the all-pairs series its
+  "regression signal". With #713 closing #489 via per-render plugin reload, the framing inverts: the
+  all-pairs series is now the regression guard against the fix.
+
+Also fixes the stale module path `src/data/vst/render_params` → `src/data/vst/core.py §
+  render_params()`.
+
+Refs #489 Refs #713
+
+* test(vst): characterize that show_editor warm-up does not change rendered audio
+
+Adds test_show_editor_warmup_does_not_change_rendered_audio: renders the hardcoded #489 patch N
+  times each with the show_editor warm-up enabled and disabled (by swapping VST3Plugin.show_editor
+  to a no-op around the second batch), then asserts every cross-path pair is within the same
+  audio-similarity thresholds the round-trip tests use.
+
+This is the empirical justification for the macOS fix in #714 — if the warm-up is not load-bearing
+  for the per-render reload path, it can be dropped without changing output, which avoids the
+  AppKit/CGS SIGTRAP that show_editor accumulation triggers in unbundled python on macOS.
+
+Refs #489 Refs #714
+
+* fix(vst): make load_plugin helper thread daemon + warn on stuck cleanup
+
+If show_editor hangs past the join timeout, mark the helper thread daemon so it can't block process
+  exit, and log a warning so the condition is visible. Cosmetic comment trim on test_preset_params
+  explaining the post-call parameter readback inversion.
+
+Refs #489
+
+* refactor(vst): use threading.Timer for show_editor close timing
+
+threading.Timer is the right primitive for 'fire X after N seconds'; hand-rolling it via Thread +
+  time.sleep was reinventing it. Drops the _prepare_plugin helper and
+  _PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS constant. timer.cancel() + close_editor.set() in the finally
+  block is defensive against show_editor returning early for any reason.
+
+Refs #489 #714
+
+### Chores
+
+- **testing**: Remove MNIST datamodule, model, configs, and tests
+  ([#689](https://github.com/tinaudio/synth-setter/pull/689),
+  [`feaa935`](https://github.com/tinaudio/synth-setter/commit/feaa935d70a19a7401d9749434d15b3009f2c2ac))
+
+The Lightning-Hydra-Template MNIST scaffolding has been dead weight: test_mnist_datamodule is
+  permanently skipped (#243) and three sweep tests were skipped because example.yaml referenced a
+  missing model=mnist config (#514). Workflows still cached data/MNIST and pyright/pre-commit
+  configs still pinned MNIST file paths even though no MNIST code path runs.
+
+Delete: - src/data/mnist_datamodule.py - src/models/mnist_module.py -
+  src/models/components/simple_dense_net.py (only consumer was MNIST) - configs/data/mnist.yaml -
+  configs/hparams_search/mnist_optuna.yaml - configs/experiment/example.yaml -
+  tests/test_datamodules.py - test_experiments + test_optuna_sweep{,_ddp_sim_wandb} from
+  tests/test_sweeps.py (all skipped on #514)
+
+Update workflows (test, test-expensive, test-conda) to drop the MNIST cache step and the macOS
+  test_mnist_datamodule exclusion. Drop MNIST file paths from pyrightconfig.json and
+  .pre-commit-config.yaml. Fix stale mnist_optuna reference in
+  configs/hparams_search/ksin_optuna.yaml header comment, and update src/data/__init__.py docstring
+  and the W&B / GitHub Actions / configuration / eval-pipeline reference docs.
+
+Closes #688
+
+### Continuous Integration
+
+- Add test-expensive workflow for slow (non-GPU) tests on main
+  ([#681](https://github.com/tinaudio/synth-setter/pull/681),
+  [`11fad5f`](https://github.com/tinaudio/synth-setter/commit/11fad5fe552976e448f1f81df0d2d39abd858c6c))
+
+* feat(ci): add test-expensive workflow for slow (non-GPU) tests on main
+
+Repurpose test-expensive.yml as a post-merge runner for the @pytest.mark.slow suite (excluding
+  GPU-marked tests) on ubuntu-latest, triggered on push to main and via workflow_dispatch. Slow
+  regressions now surface on the integration branch close to the offending commit without slowing
+  down PR feedback (PRs still skip slow).
+
+Move the previous GPU-only workflow to test-gpu.yml so its filename matches its purpose. Update
+  docs/reference and docs/design tables to reflect the split.
+
+Closes #680
+
+* fix(ci): add permissions to test-gpu.yml; sync github-actions.md
+
+CodeQL flagged test-gpu.yml as missing an explicit permissions block. Add `contents: read` to scope
+  the GITHUB_TOKEN minimally (the workflow only checks out code).
+
+Update docs/reference/github-actions.md to reflect the post-split state: - concurrency: now lists
+  both `release` and `test-expensive`. - caching: MNIST cache key is shared with test-expensive. -
+  workflow table: fill in the test-expensive Gotcha cell with the shared cache note for symmetry
+  with `test`.
+
+Refs #680
+
+* fix(ci): address Copilot review on test-expensive workflow
+
+- test-expensive.yml: add `paths-ignore` (`docs/**`, `**/*.md`) so docs-only merges to main don't
+  trigger a 90-minute slow-test run (Copilot, .github/workflows/test-expensive.yml:8). -
+  docs/reference/github-actions.md: workflow table cell for `test-expensive` now mentions
+  concurrency and paths-ignore alongside the shared MNIST cache (Copilot, line 17). -
+  docs/design/storage-provenance-spec.md: trigger column for the Slow Tests row now includes manual
+  dispatch (Copilot, line 180).
+
+* docs: include `dispatch` in test.yml trigger column
+
+`test.yml` declares `workflow_dispatch:` but the storage-provenance workflow table omits it. Update
+  the cell for consistency with the other rows that already list `dispatch` (Copilot, line 177).
+
+- Bump test-expensive runner to ubuntu-latest-4core
+  ([#699](https://github.com/tinaudio/synth-setter/pull/699),
+  [`13e031c`](https://github.com/tinaudio/synth-setter/commit/13e031c14c36fb4f665e861e56951f870bbfdcc6))
+
+* fix(ci): bump test-expensive runner to ubuntu-latest-4core
+
+The standard 2-core / 7 GB `ubuntu-latest` GitHub-hosted runner OOMs during the PyTorch CPU forward
+  passes that `test_train_surge_xt[cpu]` and `test_train_eval_surge_xt[cpu]` exercise. Since this
+  lane is the post-merge gate for `[cpu]` accelerator coverage of slow tests, an OOM here means
+  regressions land on main with no signal.
+
+Bump to `ubuntu-latest-4core` (4 vCPU / 16 GB) — the smallest GitHub-hosted label that fits the
+  workload. Going wider buys nothing for this CPU-bound, single-process workload.
+
+Closes #698
+
+* docs(storage-provenance): sync Slow Tests runner row with ubuntu-latest-4core
+
+The runner-bump in the previous commit makes the workflow table in storage-provenance-spec.md stale
+  — it still listed `ubuntu-latest` as the Slow Tests runner. Update the row to match the workflow.
+
+Refs #698
+
+- Rename test-expensive → cpu-slow and auto-file failure tickets
+  ([#708](https://github.com/tinaudio/synth-setter/pull/708),
+  [`0884b26`](https://github.com/tinaudio/synth-setter/commit/0884b2646a5f6ec07ee8b45dd6671a52ce8cd11e))
+
+Renames .github/workflows/test-expensive.yml to .github/workflows/cpu-slow.yml (workflow name "Slow
+  Tests" → "CPU Slow Tests") and strips the Surge XT VST3 + headless X11 install / smoke-test steps
+  now that VST slow tests live in test-vst-slow.yml. Tightens the pytest marker filter to also
+  exclude requires_vst so any leftover VST-marked tests are skipped at collection time.
+
+Adds a final post-merge-only step that auto-opens a ci-automation Bug assigned to ktinubu (milestone
+  ci-automation v1.0.0, parented under Phase 1: Core CI #150) when the workflow fails on a push to
+  main, with title-based dedupe that comments on the existing open issue instead of stacking
+  duplicates. Uses gh api graphql best-effort to set issue type=Bug and parent sub-issue link; if
+  either GraphQL call fails the issue still ships with label + milestone + assignee, which is enough
+  for triage. Job-level permissions widen to issues: write so the workflow default (contents: read)
+  isn't relaxed globally.
+
+Updates references in docs/reference/github-actions.md, docs/reference/testing.md,
+  docs/design/storage-provenance-spec.md, and docs/doc-map.yaml.
+
+Refs #707
+
+### Documentation
+
+- Add comment-hygiene rule to CLAUDE.md ([#711](https://github.com/tinaudio/synth-setter/pull/711),
+  [`fb06a81`](https://github.com/tinaudio/synth-setter/commit/fb06a81863b90b38e98a86a26a9ce9270fa1495a))
+
+Future Claude sessions keep producing comments that restate constants, bake in counts, or enumerate
+  list contents — all of which go stale the moment the code changes. Add a "Comment Hygiene"
+  subsection under Writing Code with concrete bad examples and the rule (the code is the source of
+  truth; a comment names the category, not its contents). Existing good-comment categories (WHY,
+  invariants, workarounds, surprises) are preserved explicitly.
+
+Refs #710
+
+### Refactoring
+
+- **configs**: Require explicit data/model; split trainer presets
+  ([#687](https://github.com/tinaudio/synth-setter/pull/687),
+  [`86d1aca`](https://github.com/tinaudio/synth-setter/commit/86d1acae360630df722ce314a49b307e64fb0217))
+
+* configs: udpate default hydra configs
+
+Co-authored-by: Copilot <copilot@github.com>
+
+* continue
+
+* docs(testing): align testing primer with mandatory data/model defaults
+
+Three sections in the testing primer described state that this branch's config refactor invalidates:
+
+- §4 claimed `cfg_train_global` and `cfg_eval_global` had asymmetric `limit_*_batches` presets and
+  divergent `data`/`model`/`callbacks` defaults. The new conftest composes both with the same
+  `data=ksin model=ffn trainer=cpu` overrides and pins dataset shape via integer
+  `train_val_test_sizes` instead of fractional `limit_*_batches`. - §5 template's "align cfg_eval
+  with cfg_train" step (copying data/model/ callbacks/limit_val_batches) is no longer needed. The
+  template now has three phases instead of four. - Gotchas #2 and #3 (alignment + limit_*_batches
+  asymmetry) no longer apply. Replaced with a single gotcha covering the new "explicit data/model
+  required" behavior.
+
+* internal-fix(configs): address Copilot review feedback on PR #687
+
+- Rename configs/trainer/mps-32-true-non-determnistic.yaml to mps_32_true_non_deterministic.yaml:
+  fix typo ("determnistic" → "deterministic") and switch to underscore convention used by other
+  trainer presets (gpu, gpu_400k_steps, ddp_sim, cpu). - Fix dead-code metric_dict_1 binding in
+  tests/test_train.py:: test_train_resume — assertion using it was removed earlier in this branch
+  but the binding wasn't. - Drop logger=wandb override from cfg_eval_global; restore cfg.logger =
+  None to keep tests offline-safe (no WANDB_API_KEY / network needed in CI). - Drop duplicate
+  cfg.data.pin_memory = False assignment in both fixture blocks.
+
+* internal-fix(configs): address second round of Copilot review on PR #687
+
+- configs/eval.yaml: switch default callbacks from `default` to `none`. The `default` set includes
+  `lr_monitor`, which Lightning's LearningRateMonitor hard-requires an active logger for — and
+  eval.yaml has `logger: null`. Eval runs predict/test/validate, not training, so the
+  training-oriented callbacks (model_checkpoint, lr_monitor, rich_progress_bar, plot_*) were never
+  appropriate defaults here. Tracks the broader lr_monitor issue separately at #517.
+
+- tests/conftest.py: drop the cfg_eval_global model_checkpoint overrides that no longer apply now
+  that eval composes with `callbacks: none`. Eval doesn't write checkpoints, so save_top_k /
+  save_last are dead config. Also drop the matching lr_monitor cleanup loop — there's no callbacks
+  tree to clean up anymore on the eval fixture.
+
+- tests/test_train.py: rewrite the docstring + drop the misleading "Prevent CPU unittest OOM"
+  comment on test_train_fast_dev_run_tiny_model_tiny_data. The model/batch/dataset shrinks the
+  comment described moved to the shared cfg_train fixture earlier on this branch; the test itself
+  now only adds `fast_dev_run=True` on top.
+
+* internal-fix(testing): update test_configs guards for new trainer defaults
+
+The two test_configs.py tests still encoded the pre-PR trainer schema:
+
+- test_cfg_train_t_max_interpolation_resolves composed train.yaml without data= (now mandatory) and
+  set trainer.min_steps / trainer.max_steps / trainer.val_check_interval inside open_dict — those
+  keys no longer exist in the composed trainer cfg, so the writes failed in struct mode. Replaced
+  with data=surge + +trainer.max_steps=-1 to add the key for the interpolation guard, dropping the
+  obsolete writes.
+
+- test_cfg_train_trainer_keys_coherent_with_test_mode asserted
+  min_steps/max_steps/val_check_interval take specific values from the fixture; with this branch's
+  defaults stripped from trainer/default.yaml, those keys are no longer in the struct. The bug it
+  guarded against (#625) is now structurally impossible. Reframed the test to assert the new
+  structural invariant: step-based keys must NOT be present, and fixture sets max_epochs=1 /
+  val_check_interval=1 / check_val_every_n_epoch=1.
+
+* internal-fix(configs): restore val_check_interval=10_000 in trainer/default
+
+The val_check_interval drop from 10_000 to 1000 in trainer/default.yaml was unintentional — it would
+  have 10x'd validation cadence for every preset that inherits default (gpu, cpu, mps_*) without
+  setting its own value, materially slowing long runs and increasing checkpoint I/O for any caller
+  not pinned to gpu_400k_steps or an experiment override. Restore the prior default; experiments
+  that want tighter validation keep overriding explicitly (kosc -> gpu_400k_steps already sets
+  10_000; surge/base sets 10_000 directly).
+
+* docs(configs): document surge max_steps requirement and point to experiments
+
+- configs/experiment/surge/base.yaml: comment explaining that surge model configs interpolate
+  ${trainer.max_steps} into the CosineAnnealingLR scheduler's T_max, so max_steps must be set; the
+  values right below are the surge default. - docs/getting-started.md §5a: after the config tree,
+  point readers to configs/experiment/{kosc,surge}/base.yaml as the canonical starting points
+  showing how each model family is meant to be trained, including required values like
+  trainer.max_steps for the surge LR scheduler.
+
+---------
+
+### Testing
+
+- **configs**: Bump FIXTURE_BASELINE + cover jobs/predict scripts
+  ([#684](https://github.com/tinaudio/synth-setter/pull/684),
+  [`9a92d0a`](https://github.com/tinaudio/synth-setter/commit/9a92d0a075bb51928eecfabf35843a72fd18f797))
+
+* fix(testing): bump FIXTURE_BASELINE to PR #679 merge SHA
+
+PR #679 is now on main at 1bfa7ea, so the pre-merge workaround in _build_equal_cases /
+  _build_diff_cases (different script_rel paths for baseline vs current to bridge the hydra_app.sh →
+  baseline_app.sh rename) is obsolete. Bump the constant and collapse both pairs to the renamed
+  path.
+
+* test(testing): cover jobs/predict scripts in config-drift harness
+
+Adds 18 parametrized cases (one per script under jobs/predict/, excluding the helper
+  get-ckpt-from-wandb.sh) that compare resolved Hydra configs between MODEL_BASELINE (v0.0.0) and
+  the live tree.
+
+The predict scripts source get-ckpt-from-wandb.sh, which exits 1 when no checkpoint can be located
+  via `find logs/train ...`. Pre-set CKPT_PATH to a real (empty) sandbox file so the sourced
+  script's `[ -f $CKPT_PATH ]` guard passes without any real wandb resolution; the path appears
+  verbatim in the resolved config, so a single per-test value keeps the two sides comparable.
+
+Also widens RefCompareCase.slug() to include the script stem so the 18 predict cases (all under
+  parent dir "predict", task_id 0) get distinct parametrize ids instead of pytest's _0..._17
+  fallback.
+
+- **data-pipeline**: Reproduce round-trip reproducibility failure for VST dataset generation
+  ([#706](https://github.com/tinaudio/synth-setter/pull/706),
+  [`9a33ed1`](https://github.com/tinaudio/synth-setter/commit/9a33ed197268d916af8d7c3a83b96bc29b319da3))
+
+* test(data-pipeline): add xfail round-trip reproducibility tests for VST dataset generation
+
+Two new e2e tests in tests/data/vst/test_generate_vst_dataset.py that exercise make_dataset
+  round-trip reproducibility via _patched_sample, plus a third random-sampling sanity test.
+
+The two round-trip tests are marked @pytest.mark.xfail(strict=True, reason="bug #489") because main
+  does not yet carry the per-render plugin-reload workaround on
+  feat/surge-xt-interactive-load-prediction (commits 086d80f / 9ff7f16). Without that workaround,
+  ~50% of every-other render produces junk audio, and audio-metric assertions fail. strict=True
+  ensures that an unexpected pass surfaces as a test failure so the bug gets revisited.
+
+Refs #489
+
+* feat(ci-automation): track VST audio-similarity test metrics over time
+
+Implements #703.
+
+Test-side: ``_emit_benchmark_metrics`` writes the five summary metrics to ``$BENCHMARK_OUTPUT_PATH``
+  when set (no-op locally). ``_assert_audio_metrics_within_thresholds`` returns the metrics tuple so
+  ``_assert_round_trip_matches`` can accumulate per-pair values, and emits the worst-case (mss-max,
+  wmfcc-max, sot-max, rms-distance-max, mel-mean-abs) under ``vst-fixed-replay/`` when
+  ``benchmark_name_prefix`` is passed. ``test_datasets_from_hardcoded_params_are_identical`` opts
+  in.
+
+Workflow: ``.github/workflows/test-expensive.yml`` sets ``BENCHMARK_OUTPUT_PATH`` on the pytest step
+  and adds a ``benchmark-action/github-action-benchmark@v1`` publish step gated to ``push`` on
+  ``refs/heads/main`` with ``hashFiles('bench.json') != ''``. ``contents: write`` is granted at the
+  *job* (not workflow) level so only ``run_slow_tests`` can push to ``gh-pages``.
+
+Also re-applies ``@pytest.mark.xfail(strict=True, reason="bug #489")`` to the two round-trip tests
+  after the rename, and picks up the all-pairs worst-case check from the feature branch — the
+  assertion that makes the xfail premise empirically true on main today.
+
+Refs #489 Refs #703
+
+* ci(test-expensive): allow workflow_dispatch to publish benchmark history
+
+Adds a ``publish_metrics`` boolean input on the manual-dispatch trigger (default false) so a
+  maintainer can bootstrap the ``gh-pages`` chart from a feature branch before main has merged the
+  workflow. Push-to-main still always publishes; the new input is an explicit opt-in escape hatch.
+
+Usage:
+
+gh workflow run test-expensive.yml \ --ref test/vst-roundtrip-xfail-tests \ -f publish_metrics=true
+
+Refs #703
+
+* ci(test-vst-slow): move VST slow tests + benchmark publish into Docker
+
+Bare ``ubuntu-latest`` runners hit "Timeout waiting for Xvfb to start" in ``test-expensive.yml``'s
+  smoke-test step (https://github.com/tinaudio/synth-setter/actions/runs/25026506440), so the slow
+  VST tests never reach pytest there. The benchmark publish step in ``test-expensive.yml`` was
+  therefore unreachable too.
+
+Add a separate ``test-vst-slow.yml`` workflow that runs
+  ``tests/data/vst/test_generate_vst_dataset.py`` inside the ``tinaudio/synth-setter:dev-snapshot``
+  Docker image, mirroring the working docker-pull pattern in ``dataset-generation.yml``.
+  ``BENCHMARK_OUTPUT_PATH`` is set on the container; ``bench.json`` is mounted out via ``-v
+  /tmp/bench`` and copied to the runner workspace for the
+  ``benchmark-action/github-action-benchmark@v1`` publish step.
+
+Triggers: push-to-main on relevant paths, plus ``workflow_dispatch`` with ``image_tag`` and
+  ``publish_metrics`` inputs. The ``publish_metrics`` opt-in lets a maintainer bootstrap the
+  ``gh-pages`` chart from a feature branch.
+
+Reverts the benchmark instrumentation out of ``test-expensive.yml``: the ``BENCHMARK_OUTPUT_PATH``
+  env var, the publish step, the dispatch input, and the job-level ``contents: write`` grant.
+  ``test-expensive.yml`` goes back to its pre-#703 shape — its non-VST slow tests can remain there.
+
+* ci(test-vst-slow): TEMPORARY bootstrap push-trigger from PR branch
+
+Adds ``test/vst-roundtrip-xfail-tests`` to the push-trigger branch list and widens the publish
+  step's ``if:`` to accept that ref. Lets us bootstrap the gh-pages benchmark chart from this PR
+  branch before main has the workflow.
+
+REVERT-ME: Roll back to ``branches: [main]`` and the main-only ``if:`` gate once the chart exists.
+  See follow-up revert commit.
+
+* fix(test-vst): drop xfail from sampled-params test (not a #489 reproducer)
+
+``test_datasets_from_sampled_params_are_identical`` does NOT reproduce #489. Its rows use
+  *different* random params per row (Stage 1 picks 5 random samples), so it has no all-pairs
+  cross-comparison — only per-row ``expected[i]`` vs ``actual[i]`` checks. Per-row checks alone
+  don't expose every-other-render junk because they only ever compare a row to itself across stages,
+  not row-vs-row within a stage.
+
+CI confirmed this on c69f985: the hardcoded test correctly XFAIL'd (all-pairs check caught the bug),
+  the smoke test passed, but the sampled test XPASS'd against the strict marker.
+
+The hardcoded test is the canonical #489 reproducer; the sampled test is a regression net for the
+  round-trip API and should pass as-is.
+
+* fix(test-vst): skip-fetch-gh-pages on first bootstrap
+
+The benchmark action defaults to ``skip-fetch-gh-pages: false`` and runs ``git fetch ...
+  gh-pages:gh-pages`` before any other step. On a first bootstrap where the ``gh-pages`` branch
+  doesn't exist yet, that fetch fails with "couldn't find remote ref gh-pages" instead of letting
+  the action create the branch.
+
+Run 25138635107 (commit e0e191d) hit this — tests passed, publish step crashed at the fetch.
+
+Setting ``skip-fetch-gh-pages: true`` lets the action take its local-only path: it generates
+  ``data.js`` + ``index.html`` from ``bench.json``, commits them on a fresh ``gh-pages`` worktree,
+  and ``auto-push`` creates the remote branch.
+
+* ci: re-trigger after gh-pages bootstrap
+
+* ci(test-vst): drop in-container symlink + add VST smoke + dummy fast-path
+
+Three changes to ``.github/workflows/test-vst-slow.yml``:
+
+1. Drop the ``mkdir -p plugins; ln -sf`` lines from the docker run. The base image already places
+  the VST3 at ``/usr/lib/vst3/Surge XT.vst3``, and the bind mount over ``/home/build/synth-setter``
+  hides the image-side symlink that the Dockerfile creates. Set
+  ``SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3`` so the test uses the absolute path the
+  .deb installs to.
+
+2. Add a ``Smoke-test Surge XT plugin load`` step before the test step, mirroring the local-runner
+  smoke check in ``test-expensive.yml``. Fails fast if the plugin / image / mount layout is broken
+  before committing to the much-longer pytest run.
+
+3. Add a ``dummy_only`` workflow_dispatch input + a ``Write hardcoded dummy bench.json`` step gated
+  on it. When set, the pull / smoke / test / surface steps are skipped and a hand-crafted
+  ``bench.json`` is written directly to the workspace. Lets a maintainer iterate on the publish-step
+  gating in ~10 seconds instead of ~5 minutes per cycle. Implies ``publish_metrics``.
+
+Also revert the ``skip-fetch-gh-pages: true`` flag now that the ``gh-pages`` branch exists on the
+  remote — the action's default fetch path now resolves it cleanly.
+
+* ci(test-vst): rename benchmark bucket + use full metric names
+
+Bucket: ``VST fixed-params replay`` → ``VST noise floor``. Reflects what the test actually measures
+  — the floor of how well two render passes of identical params reproduce each other under the
+  docker mitigation stack — rather than the now-misnamed historical reference to the
+  ``fixed_*_params_list`` API the test no longer uses.
+
+Metric series: drop project-internal abbreviations in favor of full names so the chart's left-hand
+  legend is self-explanatory.
+
+mss-max → multi-scale-spectral-loss-max wmfcc-max → dtw-aligned-mfcc-distance-max sot-max →
+  spectral-optimal-transport-max (unit: W → Wasserstein) rms-distance-max →
+  rms-envelope-cosine-distance-max mel-mean-abs → mel-spectrogram-mean-absolute-error
+
+Also rename the ``benchmark_name_prefix`` argument from ``vst-fixed-replay`` to ``vst-noise-floor``
+  so the on-chart series strings are consistent with the bucket.
+
+The single existing bootstrap data point on ``gh-pages`` will be orphaned under the old bucket name
+  — left for now since deleting it would mean a force-push to ``gh-pages`` and the noise-floor chart
+  only becomes meaningful once a few runs land anyway.
+
+* feat(ci-automation): split benchmark dashboards + timing metrics + docs
+
+Splits the single benchmark dashboard into two
+  (``test_datasets_from_hardcoded_params_are_identical`` → ``VST noise floor (1 preset N renders)``,
+  ``test_datasets_from_sampled_params_are_identical`` → ``VST noise floor (random preset replay)``),
+  since the action keys all entries from one bench JSON under one chart bucket so multi-dashboard
+  needs separate files. ``_emit_benchmark_metrics`` now takes a ``bench_filename`` arg and reads
+  ``BENCHMARK_OUTPUT_DIR``; each test passes its prefix as the filename; the workflow's Surface step
+  copies both files; Publish is duplicated, one per bucket.
+
+Adds two new metrics per bucket:
+
+num-samples sentinel for fixture-size regressions wall-clock-seconds-per-render renderer perf drift
+
+Each test brackets its ``make_dataset`` calls with ``time.perf_counter()`` and passes the elapsed
+  total as ``total_render_seconds``.
+
+New doc ``docs/reference/audio-similarity-benchmarks.md`` covers purpose, where to find the live
+  charts + raw data, the two dashboard semantics, the seven metric series, threshold/alerting,
+  workflow wiring, and operations (bootstrapping, pre-merge publishing, adding new dashboards,
+  pruning history).
+
+* fix(test-vst): address PR #706 review feedback
+
+- Reword `render_params` reload references to present-tense bug-#489 descriptions; drop
+  forward-references to the unmerged per-render reload workaround (commits 086d80f / 9ff7f16, PR
+  #702). - Sync hardcoded-params docstring `num_samples` and test-name references to the actual
+  `test_datasets_from_hardcoded_params_are_identical` body (num_samples=6, all-pairs check
+  rationale). - Sync sampled-params docstring rationale to match issue #489 framing (drop the
+  workaround commit citations). - Cache `mel[...]` and `params[...]` reads in
+  `_assert_h5_structure_is_valid` to avoid double materialization. - Handle JSONDecodeError in
+  `_emit_benchmark_metrics` by treating a truncated bench file as an empty list. - Pin
+  `benchmark-action/github-action-benchmark@v1` -> the v1.22.0 commit SHA in `test-vst-slow.yml` for
+  supply-chain hygiene. - Update `docs/reference/audio-similarity-benchmarks.md` to drop the
+  forward-reference to the unmerged per-render reload workaround.
+
+* fix(test-vst): address PR #706 review feedback (round 2)
+
+Doc/wording fixes only — no behavior change:
+
+- _assert_round_trip_matches docstring: ``BENCHMARK_OUTPUT_PATH`` → ``BENCHMARK_OUTPUT_DIR``
+  (matches the actual env var read by _emit_benchmark_metrics and set by test-vst-slow.yml). Comment
+  3164945781. - docs/reference/audio-similarity-benchmarks.md: "six series" → "seven series" with
+  explicit call-out of the two non-distance sentinels (num-samples, wall-clock-seconds-per-render);
+  the metric table already listed seven rows. Comment 3164945796. - test-vst-slow.yml dummy_only
+  fast-path: include num-samples and wall-clock-seconds-per-render in the hardcoded bench JSON so
+  the debug-only payload mirrors what _assert_round_trip_matches actually emits. Comment 3164945820.
+
+Comment 3164945810 (temp branch in push.branches) is a duplicate of the round-1 thread already
+  justified at 3164936475 / 3164936515 — kept intentionally and gated by an in-file removal note;
+  will be reverted in a follow-up before merge once the gh-pages chart is bootstrapped.
+
+xfail decorators, _HARDCODED_*_PARAMS, and gh-pages branch are not touched.
+
+* chore(test-vst): remove dummy fast-path debug code from workflow
+
+The ``dummy_only`` workflow_dispatch input + ``Write hardcoded dummy bench JSON files (debug-only
+  fast path)`` step + all ``inputs.dummy_only`` references were scaffolding for iterating on the
+  publish-step gating during the gh-pages bootstrap. The chart is live and the publish path is
+  verified, so the dummy code is no longer load-bearing — it just adds noise to the workflow and
+  gives operators a footgun (publishing junk to gh-pages by accident).
+
+Reverts: - ``dummy_only`` dispatch input - "Write hardcoded dummy bench JSON files" step - ``if:
+  inputs.dummy_only != true`` gates on Pull image, Smoke-test, Run VST tests, Surface -
+  ``inputs.dummy_only == true`` clauses in both publish steps' ``if:``
+
+* refactor(test-vst): factor benchmark emission out of round-trip helper
+
+Per PR review feedback (r3165027905): the published "1 preset N renders" chart was wired to per-pair
+  metrics, but the #489 reproducer is the all-pairs worst-case across the union of renders. The
+  chart could look flat while the test xfails on the all-pairs assertion.
+
+Refactor: - New ``RoundTripMetrics`` and ``AllPairsMetrics`` frozen dataclasses hold the four audio
+  metrics + their respective extras (mel diff + num_samples for round-trip; pair count for
+  all-pairs). - ``_assert_round_trip_matches`` returns ``RoundTripMetrics`` and no longer has any
+  benchmark-emit logic. Drops ``benchmark_name_prefix`` and ``total_render_seconds`` params. -
+  ``_assert_all_pairs_audio_metrics_within_thresholds`` returns ``AllPairsMetrics``. - New
+  ``_emit_audio_similarity_benchmark_metrics(prefix, round_trip, all_pairs, total_render_seconds)``
+  consumes either or both structs and writes the bench JSON. Round-trip series go under
+  ``<prefix>/``; all-pairs series go under ``<prefix>/all-pairs-`` so both can coexist on the same
+  chart bucket without name collisions. - Hardcoded test now emits BOTH structs — round-trip for
+  context, all-pairs as the primary regression signal for #489. - Sampled test still emits only
+  round-trip (cross-row pairs differ legitimately, no all-pairs check applies).
+
+Adds six unit tests for ``_emit_audio_similarity_benchmark_metrics`` covering: env-unset no-op,
+  round-trip-only schema, all-pairs-only schema, both-structs namespace separation, no-args
+  no-write, and append-on-second-call. All run in <1s without the VST.
+
+Updates ``docs/reference/audio-similarity-benchmarks.md`` to document the new ``all-pairs-*`` series
+  + their role as the primary #489 signal on the hardcoded bucket.
+
+* docs(test-vst): make hardcoded-test docstring self-contained
+
+Drops the 'Variant of test_datasets_from_sampled_params_are_identical' framing and rewrites as a
+  standalone description of what the test actually does.
+
+- **surge**: Parametrized Surge XT train+eval e2e (cpu/mps/gpu)
+  ([#674](https://github.com/tinaudio/synth-setter/pull/674),
+  [`0d055b3`](https://github.com/tinaudio/synth-setter/commit/0d055b35ac85932c7584d67e57087c7432b35476))
+
+* test(surge): add one-step train and end-to-end eval smoke tests
+
+Add two GPU-gated tests covering the Surge XT flow-matching model: - `test_train_surge_xt_one_step`:
+  trains `experiment=surge/flow_full` for exactly one step on the 5-sample fixture, asserts
+  `global_step == 1`. - `test_train_eval_surge_xt`: trains, then chains predict -> VST audio render
+  -> audio-metrics CSV, asserting on `predictions/`, `audio/sample_*/`, `metrics/metrics.csv`, and
+  `metrics/aggregated_metrics.csv`.
+
+Add three supporting fixtures in `tests/conftest.py`: `cfg_surge_xt_global` (package-scoped compose
+  of `train.yaml` with `experiment=surge/flow_full` and the 5-sample fixture defaults),
+  `cfg_surge_xt` (function-scoped `tmp_path` wrapper), and `cfg_surge_xt_eval` (function-scoped eval
+  config composed from `eval.yaml` with `data`/`model` copied from the train config to match the
+  checkpoint shape).
+
+Closes #673 Refs #672
+
+* fix(test): lazy-import VST scripts in test_train_eval_surge_xt
+
+`scripts.compute_audio_metrics` transitively loads `torchaudio`, which fails binary load in the
+  conda CI env. Module-level imports were breaking collection for the whole `tests/test_train.py`
+  file on that runner. Move the VST-script imports inside the GPU-gated test body — the test is
+  skipped in envs without a working torchaudio anyway.
+
+Refs #673
+
+* docs(testing): document cfg_surge_xt fixture group
+
+Add a paragraph to the testing primer's §4 noting the new cfg_surge_xt_global / cfg_surge_xt /
+  cfg_surge_xt_eval fixtures and what they parallel vs. extend from the existing cfg_train /
+  cfg_eval pair.
+
+* continue
+
+* run tests on presubmit
+
+* temp macos vst smoketest for ci
+
+* test surge train test in ci
+
+* add dataset validation in e2e test
+
+* udpate docstrings
+
+* add support for pytorch test fanout across gpu, mps, cpu
+
+* -
+
+* fixes
+
+- **testing**: Config-drift harness comparing live configs vs pinned baseline ref
+  ([#679](https://github.com/tinaudio/synth-setter/pull/679),
+  [`1bfa7ea`](https://github.com/tinaudio/synth-setter/commit/1bfa7ea9c4b237a4561a9ac546a3e241ecff5951))
+
+* tests: compare experiment configs with baseline
+
+Co-authored-by: Copilot <copilot@github.com>
+
+* udpate test
+
+* update test
+
+* continue
+
+* fix(testing): address PR #679 review — sandbox HOME, harden worktree cleanup
+
+- Sandbox HOME, XDG_CACHE_HOME, XDG_CONFIG_HOME under shim_dir in _run_under_shim. The real
+  jobs/train/{kosc,surge}/train.sh runs `rm -rf ~/.triton/cache` before the python shim
+  short-circuits anything, which would silently wipe the developer's Triton cache on every test run.
+  (Copilot review comment #3142753423 / PR #679)
+
+- Defensive shutil.rmtree fallback after `git worktree remove --force` in _baseline_worktree.py. If
+  the path exists but isn't a registered worktree (interrupted prior run, manually-edited
+  .git/worktrees), the remove is a silent no-op and the next `git worktree add` errors with "already
+  exists". (Copilot review comment #3142753431 / PR #679)
+
+* fix(testing): auto-fetch missing baseline refs; tag ref tests `network`
+
+Replaces the pre-skip + workflow-fetch dance with self-contained ref acquisition inside the worktree
+  fixture:
+
+- worktree_for_ref now calls `git fetch --depth=1 origin <ref>` when the ref isn't locally known,
+  then re-checks. Works for tags, branch tips, and arbitrary SHAs on remotes with
+  uploadpack.allowAnySHA1InWant=true (GitHub default). RuntimeError only surfaces if both the local
+  check and the fetch attempt fail. - The four ref-based tests (equality, diff, kosc, surge) now
+  carry `@pytest.mark.network` so they can be deselected on offline runs via `-m "not network"`.
+  Marker registered in pyproject.toml under strict-markers. - Removed _FIXTURE_BASELINE_SKIP
+  machinery — fixture's auto-fetch makes the pre-skip check redundant; FIXTURE_BASELINE SHA fetches
+  just like any other ref now. - Reverted the `with: fetch-tags: true` blocks added to test.yml,
+  test-conda.yml, test-expensive.yml, nightly.yml — workflow no longer needs to know about baseline
+  refs.
+
+Addresses Copilot review comment #3142753429 on PR #679.
+
+* fix(testing): two-step git fetch so tag baselines resolve in CI shallow clones
+
+CI was failing on `worktree_for_ref("v0.0.0")`: `git fetch --depth=1 origin v0.0.0` puts the commit
+  object in the local store and writes FETCH_HEAD, but does NOT create a local `refs/tags/v0.0.0`.
+  Subsequent `git rev-parse --verify v0.0.0^{commit}` (which looks up the tag *name*, not the SHA)
+  then fails and the harness raises RuntimeError.
+
+Fix: after the bare fetch, if the ref still isn't resolvable, fall back to an
+
+explicit tag refspec `+refs/tags/<ref>:refs/tags/<ref>` which does create the local tag. Two-step
+  covers both SHAs (step 1) and tag names (step 2).
+
+* fix(testing): address PR #679 review round 2 — xdist, sys.executable, slow marker, docstrings
+
+- _baseline_worktree.py: suffix sanitized-ref slug with PYTEST_XDIST_WORKER so each xdist worker has
+  a unique worktree name. Without this, multiple workers running `pytest -n auto -m "not slow"`
+  would collide on the basename registered under .git/worktrees/<name>/. (comment #3142785710) -
+  test_compare_baseline_configs.py: real_python returns sys.executable so the shim runs the same
+  interpreter pytest is running under (with deps), instead of shutil.which("python") which can pick
+  up a system Python missing deps. (comment #3142785713) - test_compare_baseline_configs.py: rewrite
+  ACCEPTED_DIFFS comment to honestly describe each entry (including the asymmetric
+  tensorboard-subtree strip — added post-v0.0.0, observability only). Behavior unchanged; comment
+  was misleading. (comment #3142785721) - test_compare_baseline_configs.py: rewrite
+  get_num_experiments docstring — it counts non-empty lines, doesn't parse SGE_TASK_ID. (comment
+  #3142785727) - test_compare_baseline_configs.py: add @pytest.mark.slow to the kosc + surge
+  model-baseline tests (44 + 8 cases, ~7 min). They now run in test-expensive.yml (`-m "slow and not
+  gpu"`) instead of bloating the fast suite (`-n auto -m "not slow"`). (comments #3142785731,
+  #3142800321)
+
+* fix(testing): address PR #679 review round 3 — code-health pass
+
+_baseline_worktree.py: - Extract `_git(*argv, check=False)` helper (centralizes the noqa rationale
+  that was duplicated across ~9 subprocess.run sites). - `_try_fetch_ref` now returns per-attempt
+  stderr; `worktree_for_ref` includes it in the RuntimeError so CI failures don't surface as "did
+  not resolve it" with zero context. (comment #3142785710) - Session-end cleanup loop emits a
+  `warnings.warn` on non-zero `git worktree remove` exit instead of swallowing stderr silently.
+  (comment #3142785710)
+
+test_compare_baseline_configs.py: - Add `test_pinned_baselines_resolve` collection-time guard so a
+  stale FIXTURE_BASELINE / MODEL_BASELINE surfaces fast rather than deep inside a parametrized
+  failure. (comment #3142800321) - Promote magic counts (8, 44) to module-level
+  `EXPECTED_KOSC_TASKS` / `EXPECTED_SURGE_TASKS` constants. The sanity tests assert against the
+  constant (not a tautological recomputation). (comment #3142785721) - Drop tautological `assert
+  case.task_id <= expected_tasks` loops in the sanity tests — task_ids are constructed as range(1,
+  N+1). (comment #3142785727) - Rename `RefCompareCase.id()` → `slug()` to stop shadowing the
+  builtin. Update all four parametrize call sites + the unit test. (comment #3142785731) - Annotate
+  `shim_factory` and `worktree_for_ref` fixture parameters across all six test signatures (Callable
+  types). (comment #3142800321) - Replace `open(path)` with `open(path, encoding="utf-8")`. (comment
+  #3142785727) - Add comment to `_NOOP_SHIMS` explaining mamba/module are env-activation tools the
+  production train scripts source. (comment #3142785721) - Add inline comment to
+  `_strip_dotted_keys` explaining the for-else branch runs only on no-break (full path traversable).
+  (comment #3142785721) - Extract `_assert_resolved_configs_differ` for symmetry with the existing
+  `_assert_resolved_configs_equal`; inequality test now reads as a single semantic line. (comment
+  #3142785731) - Smoke test uses `_git("rev-parse", "HEAD", check=True)` instead of an inline
+  subprocess.run with duplicated noqa pair. - Drop stale "Once this PR merges and the default ref
+  flips" paragraph from `_build_equal_cases` docstring (defaults are hardcoded constants now).
+  (comment #3142785731)
+
+tests/fixtures/{baseline_repo,diff_repo}/scripts/*.py: - Add module docstrings to satisfy PY7.
+  (comment #3142800321)
+
+* fix(testing): address PR #679 review round 4 — locks, markers, dict-diff
+
+_baseline_worktree.py: - Add `_git_lock(lock_path)` context manager (fcntl.flock on
+  .git/baseline_worktree.lock) wrapping the fetch + prune + worktree-add block, plus the session-end
+  cleanup loop. Worker-id-suffixed paths solved the worktree-name collision but not the per-repo
+  locks git itself takes (.git/config.lock, FETCH_HEAD.lock) — this serializes shared-state ops
+  across xdist workers. Verified with `pytest -n 4 -m network`. (comment #3142816350)
+
+test_compare_baseline_configs.py: - test_pinned_baselines_resolve: add @pytest.mark.network — it
+  triggers outbound git fetch via _try_fetch_ref. Without the marker, `pytest -m "not network"`
+  silently runs it and fails on offline machines. (comment #3142832748) -
+  test_pinned_baselines_resolve: actually call worktree_for_ref(...) on both pinned refs and assert
+  the worktree materializes. The previous version took the fixture but only checked _ref_exists,
+  leaving the fixture's worktree-creation path untested for the constants the test is supposed to
+  validate. (comment #3142832755) - shim_factory: use request.node.nodeid (not .name) when
+  sanitizing filenames for --keep-yaml-dir. nodeid includes the module path so files from different
+  test modules with the same parametrize id can't overwrite each other in a shared keep directory.
+  (comment #3142832759) - _assert_resolved_configs_{equal,differ}: drop the `, (base, cur)` message
+  from the `assert base ==/!= cur` lines. The custom message defeats pytest's structured dict-diff
+  output; without it pytest renders a readable per-key diff for the ~150-line config dicts. (comment
+  #3142832760)
+
+* fix(testing): address PR #679 review round 5 — public API + warn on cleanup
+
+_baseline_worktree.py: - Drop leading underscore from `_git`, `_ref_exists`, `_try_fetch_ref` →
+  `git`, `ref_exists`, `try_fetch_ref`. These were always meant to be used by the test module too;
+  the underscore was a holdover. Module docstring now names them as the public API. (comment #1) -
+  Add `git_or_warn(*argv, context)` helper — runs `git(*argv)` and emits `warnings.warn` on non-zero
+  exit. Apply to the in-flight `worktree prune` and `worktree remove --force` calls (which
+  previously swallowed stderr silently) and the session-end cleanup loop (which had the manual warn
+  block). All best-effort cleanup steps now consistently surface failures through pytest's warnings
+  summary. (comment #8)
+
+test_compare_baseline_configs.py: - Update import + 7 call sites for the rename.
+
+* fix(testing): address PR #679 review round 6 — git-common-dir, stale comments
+
+_baseline_worktree.py: - Add `_git_common_dir()` helper using `git rev-parse --git-common-dir`.
+  Replaces the hardcoded `REPO_ROOT / ".git" / ...` lock path, which would fail in a linked git
+  worktree (where REPO_ROOT/.git is a *file* pointing at the main repo's `.git/worktrees/<name>/`,
+  not a directory). Bonus: all linked worktrees of the same repo now resolve to the same lock path,
+  so the lock serializes across worktrees too — not just across xdist workers in one checkout.
+  (comment #3142850584)
+
+test_compare_baseline_configs.py: - Rewrite the comment block above FIXTURE_BASELINE/MODEL_BASELINE:
+  the old "Prefer tags ... so CI can fetch via fetch-tags: true on actions/checkout" was stale
+  (workflows no longer set fetch-tags; the harness auto-fetches via try_fetch_ref). New text says
+  tags are preferred for stability / discoverability. (comment #3142850588) - Add an IMPORTANT note
+  next to FIXTURE_BASELINE warning that the current value is a branch-tip SHA on PR #679, not
+  reachable from main, and must be bumped post-merge (or GitHub may eventually GC the orphan commit
+  if the branch is deleted). Points readers at the merge-followup PR comment for the step-by-step
+  procedure. (comment #3142850590)
+
+* fix(testing): drop --depth=1 from try_fetch_ref to avoid missing-tree CI flake
+
+CI failure on test_baseline_and_current_resolved_hydra_configs_are_equal:
+
+git worktree add failed for ref '624ea3c0...': fatal: unable to read tree (6ecf2143...)
+
+Tree 6ecf2143 is `docs/reference/` at commit 624ea3c. The fetch succeeded at returning the commit
+  object — `ref_exists` saw it via `git rev-parse --verify <sha>^{commit}` and we proceeded — but a
+  *subtree* referenced by the commit was silently dropped from the pack.
+
+Root cause: shallow-fetch-by-SHA pack-negotiation bug. CI starts with a depth-1 clone of HEAD
+  (`actions/checkout@v4` default). When we then run `git fetch --depth=1 origin <sha>`, the server's
+  pack-objects looks at the client's "have" set (just HEAD), assumes the client probably has many
+  subtrees that overlap with <sha>'s tree, and omits some of them. The depth-1 client doesn't
+  actually have the *specific* subtree SHAs from <sha>'s revision (e.g., docs/reference/ was edited
+  between 624ea3c and HEAD, so the SHAs differ). `git worktree add` then can't reconstruct <sha>'s
+  working tree.
+
+Fix: drop `--depth=1` from both fetch attempts. Without the depth constraint, git negotiates a
+  complete pack — still incremental (only sends objects the client doesn't have), just no longer
+  artificially shallow.
+
+* fix(testing): address PR #679 review round 7 — empty keep-dir + relative git-common-dir
+
+_baseline_worktree.py:
+
+- worktree_for_ref: treat empty-string `--compare-baseline-configs-keep-yaml-dir` as unset. Argparse
+  passes "" when the user writes the flag with no value
+  (`--compare-baseline-configs-keep-yaml-dir=`), and `Path("").resolve()` then silently expands to
+  the current working directory — would have spawned a `worktrees/` subdir wherever pytest was
+  invoked. Switched to `or None` so empty strings collapse to None and fall through to the
+  tmp_path_factory branch. (comment #3142862689)
+
+- _git_common_dir: explicitly anchor against REPO_ROOT when `git rev-parse --git-common-dir` returns
+  a relative path (which it does in the main repo — typically just `.git`). `Path(".git")` is
+  interpreted against the process cwd, so the lock file would land in the wrong place when pytest is
+  invoked from a directory other than REPO_ROOT, breaking the inter-process serialization. Now:
+  absolute → return as-is; relative → REPO_ROOT / common_dir. (comment #3142862697)
+
+---------
+
+
 ## v0.6.0 (2026-04-25)
 
 ### Features
