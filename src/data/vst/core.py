@@ -1,7 +1,4 @@
-import _thread
-import threading
-import time
-from typing import Callable, Optional, Tuple
+from typing import Optional, Tuple
 
 import mido
 import numpy as np
@@ -10,38 +7,11 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 
-def _call_with_interrupt(fn: Callable, sleep_time: float = 2.0):
-    """Calls the function fn on the main thread, while another thread sends a KeyboardInterrupt
-    (SIGINT) to the main thread."""
-
-    def send_interrupt():
-        # Brief sleep so that fn starts before we send the interrupt
-        time.sleep(sleep_time)
-        _thread.interrupt_main()
-
-    # Create and start the thread that sends the interrupt
-    t = threading.Thread(target=send_interrupt)
-    t.start()
-
-    try:
-        fn()
-    except KeyboardInterrupt:
-        print("Interrupted main thread.")
-    finally:
-        t.join()
-
-
-def _prepare_plugin(plugin: VST3Plugin) -> None:
-    _call_with_interrupt(plugin.show_editor, sleep_time=2.0)
-
-
 def load_plugin(plugin_path: str) -> VST3Plugin:
+    """Load a VST3 plugin."""
     logger.info(f"Loading plugin {plugin_path}")
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
-    logger.info("Preparing plugin for preset load...")
-    _prepare_plugin(p)
-    logger.info("Plugin ready")
     return p
 
 
