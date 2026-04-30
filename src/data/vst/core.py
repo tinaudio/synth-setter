@@ -1,6 +1,5 @@
 import sys
 import threading
-import time
 from typing import Optional, Tuple
 
 import mido
@@ -9,27 +8,8 @@ from loguru import logger
 from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
-# How long the helper thread waits before signalling ``show_editor`` to close.
-_PREPARE_PLUGIN_SLEEP_SECONDS = 0.5
-
-# Upper bound for how long load_plugin waits for the helper thread to exit
-# after signalling its stop event. The helper only sleeps for
-# ``_PREPARE_PLUGIN_SLEEP_SECONDS`` so 1.0s is a generous ceiling.
-_PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS = 1.0
-
-
-def _prepare_plugin(
-    stop_event: threading.Event,
-    sleep_time: float = _PREPARE_PLUGIN_SLEEP_SECONDS,
-) -> None:
-    """Sleep, then signal ``show_editor`` to close.
-
-    Used by :func:`load_plugin` to drive ``show_editor`` long enough that the
-    plugin completes initialisation, but no longer than necessary for batch
-    rendering throughput.
-    """
-    time.sleep(sleep_time)
-    stop_event.set()
+# How long the editor stays open before we signal it to close.
+_EDITOR_INIT_DELAY_SECONDS = 0.5
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
@@ -45,20 +25,15 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
     # audit on #714 for the empirical justification.
     if sys.platform != "darwin":
         logger.info("Preparing plugin for preset load...")
-        stop_event = threading.Event()
-        t = threading.Thread(target=_prepare_plugin, args=(stop_event,), daemon=True)
-        t.start()
+        close_editor = threading.Event()
+        timer = threading.Timer(_EDITOR_INIT_DELAY_SECONDS, close_editor.set)
+        timer.daemon = True
+        timer.start()
         try:
-            p.show_editor(stop_event)
+            p.show_editor(close_editor)
         finally:
-            stop_event.set()
-            t.join(timeout=_PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS)
-            if t.is_alive():
-                logger.warning(
-                    "Plugin preparation helper thread did not exit within {}s for {}",
-                    _PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS,
-                    plugin_path,
-                )
+            timer.cancel()
+            close_editor.set()  # defensive: ensure show_editor unblocks even if Timer fails
     return p
 
 
