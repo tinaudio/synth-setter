@@ -8,7 +8,11 @@ tensorboard
 wandb
 
 # --------- pipeline --------- #
-click
+# click is pinned <8.2 because skypilot 0.7 deepcopies click Command objects
+# (sky/cli.py::_add_command_alias) and click >=8.2 added a Sentinel enum that
+# doesn't round-trip through copy.deepcopy — `from sky.cli import cli` aborts
+# with `ValueError: <object …> is not a valid Sentinel`.
+click>=8.0,<8.2
 numpy
 pydantic>=2
 pyyaml
