@@ -1,4 +1,5 @@
 import _thread
+import sys
 import threading
 import time
 from typing import Callable, Optional, Tuple
@@ -36,12 +37,20 @@ def _prepare_plugin(plugin: VST3Plugin) -> None:
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:
+    """Load a VST3 plugin (with a brief editor warmup on non-Darwin to populate its parameter
+    dict)."""
     logger.info(f"Loading plugin {plugin_path}")
     p = VST3Plugin(plugin_path)
     logger.info(f"Plugin {plugin_path} loaded")
-    logger.info("Preparing plugin for preset load...")
-    _prepare_plugin(p)
-    logger.info("Plugin ready")
+    # show_editor accumulates AppKit/CGS commit-handler state per call in
+    # unbundled python and triggers SIGTRAP after ~3-4 plugin reloads on
+    # Darwin (#714). The post-load process() flush in render_params is
+    # sufficient to commit Surge XT's preset state — see preset-coverage
+    # audit on #714 for the empirical justification.
+    if sys.platform != "darwin":
+        logger.info("Preparing plugin for preset load...")
+        _prepare_plugin(p)
+        logger.info("Plugin ready")
     return p
 
 
