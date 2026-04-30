@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777538897285,
+  "lastUpdate": 1777538899634,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST fixed-params replay": [
@@ -920,6 +920,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.891129689399985,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "13bfc624b277ca9f966ac897a290e26324383c3c",
+          "message": "internal-feat(vst): add deterministic-render kwargs to make_dataset/generate_sample (#720)\n\n* internal-feat(vst): add deterministic-render kwargs to make_dataset/generate_sample\n\n`generate_sample` accepts optional `fixed_synth_params` / `fixed_note_params`\nthat take precedence over `param_spec.sample()`, and `make_dataset` accepts\n`fixed_synth_params_list` / `fixed_note_params_list` and indexes them per\nsample by `i - start_idx` after validating the lists are long enough. The\nkwargs are internal-only on this PR — they exist so a later act of the #702\nsplit (the `surge_xt_interactive.py` capture/replay flow) can render\ncaller-supplied patches deterministically. No public-facing surface changes.\n\nRefs #702 #719\n\n* internal-fix(vst): skip param_spec.sample() and bound retries when fully fixed\n\nAddress two Copilot review comments on PR #720:\n\n1. (#3166554305) When both fixed_synth_params and fixed_note_params are\n   supplied, skip the param_spec.sample() call entirely. The previous\n   code burned RNG state and paid the call overhead on every retry\n   even though the values were discarded — now param_spec.sample() only\n   runs when at least one half needs sampling.\n\n2. (#3166554339) When BOTH fixed dicts are supplied, render inputs are\n   fully deterministic, so retrying after a loudness fail is provably\n   futile. Raise ValueError with a clear caller-actionable message\n   instead of looping forever. When only one half is fixed, the other\n   is re-sampled each retry and the loop remains meaningful.\n\nPer-item shape validation of fixed_note_params (suggested by #3166554364)\nis intentionally not added — this is an internal-feat:, the caller is\ntrusted to produce well-formed dicts (same trust boundary as\nparam_spec.sample()), and the existing KeyError on\nnote_params['pitch'] is already actionable.\n\nRefs #720 #719 #702",
+          "timestamp": "2026-04-30T08:35:59Z",
+          "tree_id": "3d244bfe390ad2fd1fb1249bdfd33e8a53330295",
+          "url": "https://github.com/tinaudio/synth-setter/commit/13bfc624b277ca9f966ac897a290e26324383c3c"
+        },
+        "date": 1777538899381,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.0389244556427,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.5321727210655807,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.016979897394776344,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.07794207334518433,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.428880214691162,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 10.4250717613,
             "unit": "seconds"
           }
         ]
