@@ -704,13 +704,16 @@ def test_datasets_from_hardcoded_params_are_identical(
 ) -> None:
     """make_dataset round-trips a single hardcoded param set when ``param_spec.sample`` is patched.
 
-    Variant of ``test_datasets_from_sampled_params_are_identical`` that removes
-    the random Stage 1 entirely. Both stages patch ``param_spec.sample`` to return the
-    same hardcoded ``(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)`` tuple, so the
-    test pins reproducibility on a fixed, version-controlled patch rather than a
-    random candidate. ``num_samples=6`` (12 renders total across both stages) so the
-    all-pairs check has enough pairs to surface every-other-render variance — bug #489
-    only shows up across multiple renders, single-pair checks miss it.
+    Both stages of ``make_dataset`` patch ``param_spec.sample`` to return the same
+    hardcoded ``(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)`` tuple, so every
+    one of the ``2 × num_samples`` renders uses identical inputs. This pins
+    reproducibility on a fixed, version-controlled patch — no random sampling, no
+    Stage-1-then-decode — and the rendered audio across rows should be perceptually
+    identical on every pair.
+
+    ``num_samples=6`` (12 renders total) so the all-pairs check has enough pairs to
+    surface every-other-render variance — bug #489 only shows up across multiple
+    renders, single-pair checks miss it.
 
     The hardcoded values are a known-good loudness-passing capture from a prior
     surge_xt run; if the spec changes, they must be regenerated.
