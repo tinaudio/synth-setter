@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -27,6 +29,34 @@ from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRYPOINT_PATH = REPO_ROOT / "scripts" / "docker_entrypoint.py"
+
+
+@pytest.fixture(autouse=True)
+def _detach_pytest_live_logging_handler() -> Iterator[None]:
+    """Detach pytest's live-logging handler around each CliRunner-driven test.
+
+    Why: when ``log_cli=True`` (project default), pytest installs
+    ``_LiveLoggingStreamHandler`` on the root logger. Its ``emit()`` opens a
+    ``global_and_fixture_disabled`` ctx that suspends pytest's global capture,
+    which closes the captured stream that ``CliRunner.isolation()`` puts on
+    ``sys.stdout``/``stderr``. A ``logger.error(...)`` inside the click callback
+    under test then triggers ``CliRunner.invoke()``'s finally-block ``.getvalue()``
+    on a closed buffer → ``ValueError: I/O operation on closed file``. Tracked
+    in #730.
+    """
+    root = logging.getLogger()
+    detached = [
+        (i, h)
+        for i, h in enumerate(root.handlers)
+        if type(h).__name__ == "_LiveLoggingStreamHandler"
+    ]
+    for _, h in detached:
+        root.removeHandler(h)
+    try:
+        yield
+    finally:
+        for i, h in sorted(detached):
+            root.handlers.insert(i, h)
 
 
 def _load_entrypoint_module() -> ModuleType:
