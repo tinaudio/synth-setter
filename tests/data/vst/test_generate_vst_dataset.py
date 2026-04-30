@@ -1049,6 +1049,127 @@ def test_make_dataset_raises_when_fixed_params_list_is_too_short(
             )
 
 
+# Unit tests for the loudness-loop bounded-retry semantics. Mocking
+# ``render_params`` and ``param_spec.sample`` keeps these CPU-only and fast —
+# no VST plugin, no real audio rendering. They guard the asymmetric guard in
+# ``generate_sample``: silent renders raise immediately when the synth is
+# fixed, but retry when only note params are fixed (synth re-sampled each
+# iteration) — see issue #724.
+
+_SILENT_AUDIO_PEAK = 0.0
+_LOUD_AUDIO_PEAK = 0.5
+
+
+def _silent_audio() -> np.ndarray:
+    """Return a silent stereo render with the module's standard shape."""
+    return np.zeros((_CHANNELS, int(_SAMPLE_RATE * _DURATION)), dtype=np.float32)
+
+
+def _loud_audio() -> np.ndarray:
+    """Return a clearly-loud stereo render: a 440 Hz sine at half-scale."""
+    n = int(_SAMPLE_RATE * _DURATION)
+    t = np.arange(n) / _SAMPLE_RATE
+    sine = (_LOUD_AUDIO_PEAK * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+    return np.stack([sine, sine], axis=0)
+
+
+def test_generate_sample_raises_when_fixed_synth_params_renders_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Silent render with ``fixed_synth_params`` (no note fix) raises instead of looping.
+
+    Pre-fix, this call would loop forever: ``fully_fixed`` was False (note params
+    not fixed) so the loudness gate fell through to ``continue``, but re-sampling
+    note params alone never lifts a silent synth above threshold. Post-fix, the
+    "fixed synth" branch raises immediately. See issue #724.
+    """
+    from src.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _silent_audio())
+
+    with pytest.raises(ValueError, match="fixed_synth_params render produced loudness"):
+        generate_vst_dataset.generate_sample(
+            plugin_path=_PLUGIN_PATH,
+            velocity=_VELOCITY,
+            signal_duration_seconds=_DURATION,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            preset_path=_PRESET_PATH,
+            fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
+            fixed_note_params=None,
+        )
+
+
+def test_generate_sample_raises_when_both_fixed_renders_silent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both-fixed silent render still raises (existing fully-fixed behavior preserved)."""
+    from src.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _silent_audio())
+
+    with pytest.raises(ValueError, match="fixed_synth_params render produced loudness"):
+        generate_vst_dataset.generate_sample(
+            plugin_path=_PLUGIN_PATH,
+            velocity=_VELOCITY,
+            signal_duration_seconds=_DURATION,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            preset_path=_PRESET_PATH,
+            fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
+            fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        )
+
+
+def test_generate_sample_retries_when_only_fixed_note_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only-note-fixed retries: synth is re-sampled each iteration, loop is meaningful.
+
+    First render is silent (rejected); second is loud (accepted). The function should
+    retry rather than raise — re-sampling the synth each iteration can lift loudness
+    above threshold.
+    """
+    from src.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+
+    render_outputs = iter([_silent_audio(), _loud_audio()])
+    monkeypatch.setattr(
+        generate_vst_dataset,
+        "render_params",
+        lambda *a, **kw: next(render_outputs),
+    )
+
+    sample_returns = iter([
+        (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
+        (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
+    ])
+    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+
+    sample = generate_vst_dataset.generate_sample(
+        plugin_path=_PLUGIN_PATH,
+        velocity=_VELOCITY,
+        signal_duration_seconds=_DURATION,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        preset_path=_PRESET_PATH,
+        fixed_synth_params=None,
+        fixed_note_params=_HARDCODED_NOTE_PARAMS,
+    )
+    # Exhausted both render outputs ⇒ retried exactly once.
+    assert next(render_outputs, None) is None
+    assert sample.note_params == _HARDCODED_NOTE_PARAMS
+
+
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
