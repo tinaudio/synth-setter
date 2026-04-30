@@ -112,8 +112,9 @@ jobs:
               # param_specs) which needs a live X display, hence the headless
               # wrapper. Skypilot[runpod] is in requirements-app.txt as of
               # PR #716; ensure-installed for old image tags that predate it.
+              # The image uses uv-managed venvs (no `pip` on PATH); use uv.
               python -c "import sky.jobs" 2>/dev/null \
-                || pip install --quiet "skypilot[runpod]==0.7.0" "python-dotenv"
+                || uv pip install --quiet "skypilot[runpod]==0.7.0" "python-dotenv"
 
               scripts/run-linux-vst-headless.sh \
                 python scripts/skypilot_launch_smoke.py --config "$CONFIG_PATH"
