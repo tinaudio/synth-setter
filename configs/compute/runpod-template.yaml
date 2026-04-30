@@ -12,7 +12,19 @@
 
 resources:
   cloud: runpod
-  accelerators: A4000:1
+  # Any one cheap GPU is enough for the smoke run (32 samples). The set is wide
+  # so a stocked-out tier doesn't fail the launch — SkyPilot picks the cheapest
+  # available match. Add/remove tiers as RunPod inventory drifts.
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
   use_spot: false
   disk_size: 50
   image_id: docker:tinaudio/synth-setter:dev-snapshot
