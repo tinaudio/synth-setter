@@ -287,8 +287,11 @@ class TestMainCli:
         assert spec.num_shards == 1
         assert spec.r2_bucket == "intermediate-data"
 
-        mock_sky.launch.assert_called_once_with(task, cluster_name="smoke-job-1", down=True)
-        mock_sky.stream_and_get.assert_called_once_with(mock_sky.launch.return_value, follow=True)
+        # down=False on the launch — explicit sky.down in the finally block drives teardown.
+        mock_sky.launch.assert_called_once_with(task, cluster_name="smoke-job-1", down=False)
+        # stream_and_get is called twice: once for the launch RequestId, once for the down
+        # RequestId (so we wait for teardown to finish before returning).
+        assert mock_sky.stream_and_get.call_count == 2
 
         # Worker-side blocking: tail_logs is called with the job_id stream_and_get returned (1)
         # so the launcher waits for the worker's `python -m pipeline.entrypoints.generate_dataset`
@@ -296,6 +299,9 @@ class TestMainCli:
         mock_sky.tail_logs.assert_called_once_with(
             cluster_name="smoke-job-1", job_id=1, follow=True
         )
+
+        # Explicit teardown — must always run, even on success.
+        mock_sky.down.assert_called_once_with("smoke-job-1")
 
     def test_default_cluster_name_uses_config_id_prefix(
         self,
@@ -324,7 +330,7 @@ class TestMainCli:
         # Config stem is "ci-smoke-test"; first 8 chars → "ci-smoke".
         kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"] == "synth-setter-smoke-ci-smoke"
-        assert kwargs["down"] is True
+        assert kwargs["down"] is False
 
     def test_spec_out_overrides_default_path(
         self,

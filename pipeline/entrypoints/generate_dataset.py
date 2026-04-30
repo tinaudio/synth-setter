@@ -17,12 +17,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-import structlog
+from loguru import logger
 
 from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
-
-log = structlog.get_logger(__name__)
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
 # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
@@ -122,24 +120,21 @@ def run(spec: DatasetPipelineSpec) -> None:
         # double-name issue a full object-key destination would cause.
         spec_path = work_dir / INPUT_SPEC_FILENAME
         spec_path.write_text(spec.model_dump_json(indent=2))
-        log.info("spec written", path=str(spec_path), dest=r2_dest_prefix)
+        logger.info(f"spec written: {spec_path}")
         _rclone_copy(str(spec_path), r2_dest_prefix)
-        log.info("spec uploaded", dest=r2_dest_prefix)
+        logger.info(f"spec uploaded -> {r2_dest_prefix}")
 
         # Single-shard only: picks spec.shards[0] unconditionally. Guarded by
         # the fail-fast check above; multi-shard support tracked in #407.
         shard = spec.shards[0]
         args = [VST_HEADLESS_WRAPPER, *build_generate_args(spec, shard, work_dir)]
-        log.info("rendering shard", shard_id=shard.shard_id, filename=shard.filename)
+        logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
         subprocess.check_call(args)  # noqa: S603 — args built from validated spec
         shard_path = work_dir / shard.filename
-        log.info(
-            "shard rendered",
-            path=str(shard_path),
-            size_bytes=shard_path.stat().st_size if shard_path.exists() else None,
-        )
+        size = shard_path.stat().st_size if shard_path.exists() else 0
+        logger.info(f"shard rendered: {shard_path} ({size} bytes)")
         _rclone_copy(str(shard_path), r2_dest_prefix)
-        log.info("shard uploaded", dest=r2_dest_prefix, filename=shard.filename)
+        logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
 
 
 if __name__ == "__main__":
