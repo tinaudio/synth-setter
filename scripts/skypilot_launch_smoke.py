@@ -12,11 +12,11 @@ those land in the Phase A–C PRs.
 
 from __future__ import annotations
 
-import sys
-import tempfile
 from pathlib import Path
 
 import click
+import sky
+import sky.jobs
 from dotenv import dotenv_values
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
@@ -28,10 +28,12 @@ DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env.cloud"
 
 # Worker-side mount destination. The image's WORKDIR is /home/build/synth-setter (Dockerfile),
-# so this lands the spec under <repo_root>/data/ on the worker — gitignored, no clash with repo
-# files, and the same shape any future container layout could keep portable.
+# so the spec lands under <repo_root>/data/ on the worker — gitignored, no clash with repo
+# files, and portable if the container layout changes later. The local source path mirrors it
+# under the launching repo's data/ dir.
 WORKER_REPO_ROOT = "/home/build/synth-setter"
 WORKER_SPEC_PATH = f"{WORKER_REPO_ROOT}/data/skypilot-launch-smoke-spec.json"
+LOCAL_SPEC_PATH = REPO_ROOT / "data" / "skypilot-launch-smoke-spec.json"
 
 
 def load_worker_env(path: Path) -> dict[str, str]:
@@ -41,20 +43,6 @@ def load_worker_env(path: Path) -> dict[str, str]:
     `None`); coerce to a plain `dict[str, str]` for `task.update_envs(...)` and skip None entries.
     """
     return {k: v for k, v in dotenv_values(path).items() if v is not None}
-
-
-def write_spec_to_tempfile(spec_json: str) -> Path:
-    """Write `spec_json` to a delete=False tempfile and return its path.
-
-    The tempfile must outlive `sky.jobs.launch()` so SkyPilot can copy it as a file mount; cleanup
-    is the OS's responsibility (matches how other short-lived launcher scripts in this repo handle
-    materialized artifacts).
-    """
-    fd, name = tempfile.mkstemp(prefix="synth-setter-spec-", suffix=".json")
-    path = Path(name)
-    with open(fd, "w") as f:
-        f.write(spec_json)
-    return path
 
 
 @click.command()
@@ -109,18 +97,15 @@ def main(
     config_id = dataset_config_id_from_path(config_path)
     spec = materialize_spec(config, config_id)
 
-    spec_path = write_spec_to_tempfile(spec.model_dump_json(indent=2))
-    click.echo(f"Materialized spec to {spec_path}")
+    LOCAL_SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOCAL_SPEC_PATH.write_text(spec.model_dump_json(indent=2))
+    click.echo(f"Materialized spec to {LOCAL_SPEC_PATH}")
 
     resolved_job_name = job_name or f"synth-setter-smoke-{config_id[:8]}"
 
-    # Lazy import: keep --help and arg parsing usable without skypilot installed.
-    import sky  # noqa: PLC0415
-    import sky.jobs  # noqa: PLC0415
-
     task = sky.Task.from_yaml(str(template_path))
     task.update_envs(worker_env)
-    task.update_file_mounts({WORKER_SPEC_PATH: str(spec_path)})
+    task.update_file_mounts({WORKER_SPEC_PATH: str(LOCAL_SPEC_PATH)})
 
     click.echo(f"Submitting SkyPilot job: name={resolved_job_name}")
     sky.jobs.launch(task, name=resolved_job_name)
@@ -128,4 +113,3 @@ def main(
 
 if __name__ == "__main__":
     main()
-    sys.exit(0)
