@@ -111,6 +111,17 @@ def test_train_ddp_sim(cfg_train: DictConfig) -> None:
         cfg_train.trainer.accelerator = "cpu"
         cfg_train.trainer.devices = 2
         cfg_train.trainer.strategy = "ddp_spawn"
+        # Workaround for #709: ddp_spawn rank processes start with torch's
+        # default `file_descriptor` sharing strategy, and their forked
+        # dataloader workers inherit it. On the GitHub-hosted
+        # `ubuntu-latest-4core` runner that strategy fails with
+        # `RuntimeError: unable to resize file ... Invalid argument (22)`
+        # because anonymous shm-backed fds can't be ftruncate'd in the
+        # runner sandbox. Setting num_workers=0 keeps dataloading inline in
+        # each rank process, sidestepping cross-process tensor shm entirely.
+        # This test exercises ddp_spawn coordination, not dataloader
+        # parallelism, so dropping workers does not weaken coverage.
+        cfg_train.data.num_workers = 0
     train(cfg_train)
 
 
@@ -154,6 +165,7 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     )
 
 
+@pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
     """Run training of the Surge XT FFN model on the smoke test fixture.
@@ -180,6 +192,7 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
         assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
 
 
+@pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_eval_surge_xt(
     tmp_path: Path, cfg_surge_xt: DictConfig, cfg_surge_xt_eval: DictConfig
