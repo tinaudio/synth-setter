@@ -125,39 +125,13 @@ jobs:
               umask 077
               printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
 
-              # Stopgap: dev-snapshot hasn't been rebuilt since
-              # skypilot[runpod]==0.12.0 was added to requirements-app.txt.
-              # Install at runtime so `import sky` works. Remove once the
-              # image is republished from the current Dockerfile.
-              #
-              # /venv/main/bin/ in the published image holds entry-point
-              # scripts (alembic, pytest, runpod, …) but NO `python`,
-              # `pip`, `pip3`, or `uv` symlink — confirmed by extracting
-              # the image layers locally. So `python` falls through PATH
-              # to /usr/bin/python3 (Ubuntu system python). Two follow-on
-              # constraints:
-              #   - ensurepip is disabled by Ubuntu for system python.
-              #   - `apt-get update` fails with "Permission denied" on
-              #     /var/lib/apt/lists/lock under this image's runtime.
-              # Bootstrap pip from upstream get-pip.py, then install
-              # skypilot to /usr/local site-packages (system python sees
-              # it without --user shenanigans).
-              curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-              python /tmp/get-pip.py --quiet
-              python -m pip install --quiet "skypilot[runpod]==0.12.0"
-
-              # Probe — proves the launcher's interpreter sees sky and the pipeline package.
-              python -c "import sys, importlib.util; print(\"python:\", sys.executable); print(\"PYTHONPATH:\", __import__(\"os\").environ.get(\"PYTHONPATH\", \"<unset>\")); print(\"cwd:\", __import__(\"os\").getcwd()); print(\"sky importable:\", importlib.util.find_spec(\"sky\") is not None); print(\"pipeline importable:\", importlib.util.find_spec(\"pipeline\") is not None)"
-
               # No headless-X wrapper: the launcher submits a SkyPilot job
-              # and runs no renders locally. The wrapper was load-bearing
-              # only for extract_renderer_version's pedalboard fallback
-              # (no moduleinfo.json on the dev-snapshot Surge XT bundle);
-              # that path is short-circuited (see #734), so materialize_spec
-              # no longer needs a live X display. --spec-out points the
-              # materialized spec at a known path under $TMPDIR (shared
-              # filesystem with SkyPilot staging — bind-mounted repo paths
-              # trip EXDEV on os.rename in-container).
+              # and renders nothing locally; extract_renderer_version is
+              # short-circuited (see #734) so materialize_spec doesn't
+              # need an X display. --spec-out points the materialized
+              # spec at a known path under $TMPDIR (shared filesystem
+              # with SkyPilot staging — bind-mounted repo paths trip
+              # EXDEV on os.rename in-container).
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --spec-out /tmp/input_spec.json
