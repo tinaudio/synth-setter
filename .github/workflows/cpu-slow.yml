@@ -1,0 +1,177 @@
+name: CPU Slow Tests
+
+# Runs CPU-only slow tests on a bare-metal runner. VST-marked tests live in
+# `test-vst-slow.yml`, which runs the Surge XT suite inside the project's
+# Docker dev image; this workflow no longer installs Surge XT or the headless
+# X11 stack. The pytest marker filter excludes `gpu`, `mps`, and `requires_vst`
+# so any leftover VST-marked tests are skipped at collection time rather than
+# relying on the runtime `skip_no_vst` decorator.
+# Triggered post-merge on main (and via manual dispatch).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+concurrency:
+  group: cpu-slow-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run_slow_tests:
+    # Larger runner: the slow CPU suite runs PyTorch forward passes on the FFN
+    # smoke fixtures, and the standard 2-core/7 GB `ubuntu-latest` OOMs during
+    # those passes. `ubuntu-latest-4core` (4 vCPU / 16 GB) is the smallest
+    # GitHub-hosted label that fits — see `docs/reference/github-actions.md`
+    # for the runner inventory. Don't downgrade without a CPU+memory probe.
+    runs-on: ubuntu-latest-4core
+
+    timeout-minutes: 90
+
+    # `issues: write` is needed by the post-merge auto-issue step below.
+    # Workflow default is `contents: read`; widening here keeps the elevated
+    # scope job-local rather than workflow-wide.
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -r requirements.txt
+          uv pip install --system sh
+
+      - name: List dependencies
+        run: uv pip list --system
+
+      - name: Run slow (non-GPU, non-MPS, non-VST) tests
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: |
+          pytest -vv -s -m "slow and not gpu and not mps and not requires_vst"
+
+      # Auto-file a bug ticket on post-merge failure so CPU regressions in
+      # main don't go silently stale. Runs only when the run failed AND the
+      # trigger was a push to main (skipped on workflow_dispatch / PR runs).
+      #
+      # Taxonomy (see docs/design/github-taxonomy.md):
+      #   - label `ci-automation`
+      #   - milestone `ci-automation v1.0.0`
+      #   - assignee `ktinubu`
+      #   - issue type `Bug` (set via gh api graphql; best-effort — if the
+      #     graphql call fails we still get a labeled+milestoned issue and
+      #     the pr-metadata-gate workflow only enforces type on PRs, not on
+      #     issues filed by automation)
+      #   - parent: Phase 1: Core CI (#150)
+      #
+      # Dedupe: if an open ci-automation-labeled issue with "cpu-slow
+      # post-merge failure" in its title already exists, comment on that
+      # instead of opening a new one. Keeps the queue from filling up when
+      # the same regression hits multiple commits.
+      - name: Auto-file failure ticket
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          dedupe_search='cpu-slow post-merge failure'
+          existing=$(gh issue list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --label ci-automation \
+            --state open \
+            --search "${dedupe_search} in:title" \
+            --json number,title \
+            --jq '.[0].number // empty')
+
+          comment_body=$(printf '%s\n\n%s\n' \
+            "Another post-merge \`cpu-slow\` failure on commit \`${COMMIT_SHA}\`." \
+            "Failed run: ${RUN_URL}")
+
+          if [ -n "${existing}" ]; then
+            echo "Dedup hit: commenting on existing issue #${existing}"
+            gh issue comment "${existing}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --body "${comment_body}"
+            exit 0
+          fi
+
+          title="bug(ci-automation): cpu-slow post-merge failure on ${COMMIT_SHA}"
+          body=$(printf '%s\n\n%s\n%s\n%s\n' \
+            "The \`cpu-slow\` workflow failed post-merge on \`main\`. This issue was auto-opened by \`.github/workflows/cpu-slow.yml\` so the regression doesn't go silently stale." \
+            "- Failed run: ${RUN_URL}" \
+            "- Commit: \`${COMMIT_SHA}\`" \
+            "- Auto-filed by the cpu-slow workflow on failure.")
+
+          new_issue_url=$(gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${title}" \
+            --body "${body}" \
+            --label ci-automation \
+            --assignee ktinubu \
+            --milestone "ci-automation v1.0.0")
+          echo "Filed: ${new_issue_url}"
+
+          new_issue_number="${new_issue_url##*/}"
+
+          # Best-effort: set issue type=Bug and parent under Phase 1: Core
+          # CI (#150). These use GraphQL mutations that aren't exposed via
+          # `gh issue create` flags; if either call fails the issue still
+          # has label + milestone + assignee, which is enough for triage.
+          new_node_id=$(gh api graphql \
+            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id}}}' \
+            -f owner="${GITHUB_REPOSITORY%/*}" \
+            -f repo="${GITHUB_REPOSITORY#*/}" \
+            -F number="${new_issue_number}" \
+            --jq '.data.repository.issue.id')
+
+          bug_type_id=$(gh api graphql \
+            -f query='query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){issueTypes(first:20){nodes{id name}}}}' \
+            -f owner="${GITHUB_REPOSITORY%/*}" \
+            -f repo="${GITHUB_REPOSITORY#*/}" \
+            --jq '.data.repository.issueTypes.nodes[]|select(.name=="Bug")|.id')
+
+          if [ -n "${bug_type_id}" ] && [ -n "${new_node_id}" ]; then
+            gh api graphql \
+              -f query='mutation($issueId:ID!,$issueTypeId:ID!){updateIssueIssueType(input:{issueId:$issueId,issueTypeId:$issueTypeId}){issue{number}}}' \
+              -f issueId="${new_node_id}" \
+              -f issueTypeId="${bug_type_id}" \
+              || echo "WARN: failed to set issue type=Bug; triage manually"
+          else
+            echo "WARN: missing node_id or bug_type_id; skipping issue-type set"
+          fi
+
+          phase_node_id=$(gh api graphql \
+            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id}}}' \
+            -f owner="${GITHUB_REPOSITORY%/*}" \
+            -f repo="${GITHUB_REPOSITORY#*/}" \
+            -F number=150 \
+            --jq '.data.repository.issue.id')
+
+          if [ -n "${phase_node_id}" ] && [ -n "${new_node_id}" ]; then
+            gh api graphql \
+              -f query='mutation($parentId:ID!,$childId:ID!){addSubIssue(input:{issueId:$parentId,subIssueId:$childId}){subIssue{number}}}' \
+              -f parentId="${phase_node_id}" \
+              -f childId="${new_node_id}" \
+              || echo "WARN: failed to parent under Phase 1 (#150); reparent manually"
+          fi

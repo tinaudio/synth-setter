@@ -176,7 +176,7 @@ ______________________________________________________________________
 | --------------- | ------------------------ | --------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
 | Tests           | `test.yml`               | push, PR, dispatch    | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
 | GPU Tests       | `test-gpu.yml`           | schedule, dispatch    | `gpu-x64`                       | —                   | —                                                                |
-| Slow Tests      | `test-expensive.yml`     | push (main), dispatch | `ubuntu-latest-4core`           | —                   | —                                                                |
+| CPU Slow Tests  | `cpu-slow.yml`           | push (main), dispatch | `ubuntu-latest-4core`           | —                   | —                                                                |
 | Data Generation | `dataset-generation.yml` | `workflow_call`       | `ubuntu-latest-4core`           | DockerHub           | `image_tag`, `config_path`, `artifact_name`                      |
 | Training        | TBD                      | `workflow_dispatch`   | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
 | Evaluation      | TBD                      | `workflow_dispatch`   | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |
