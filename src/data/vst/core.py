@@ -46,13 +46,19 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
     if sys.platform != "darwin":
         logger.info("Preparing plugin for preset load...")
         stop_event = threading.Event()
-        t = threading.Thread(target=_prepare_plugin, args=(stop_event,))
+        t = threading.Thread(target=_prepare_plugin, args=(stop_event,), daemon=True)
         t.start()
         try:
             p.show_editor(stop_event)
         finally:
             stop_event.set()
             t.join(timeout=_PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS)
+            if t.is_alive():
+                logger.warning(
+                    "Plugin preparation helper thread did not exit within {}s for {}",
+                    _PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS,
+                    plugin_path,
+                )
     return p
 
 

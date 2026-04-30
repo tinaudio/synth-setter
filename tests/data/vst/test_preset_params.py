@@ -66,9 +66,8 @@ def test_render_params_sets_preset_dependent_param():
 
     # render_params now takes a plugin_path and loads its own VST3Plugin instance
     # per call (see src/data/vst/core.py docstring), so the caller cannot observe
-    # the post-call parameter state directly. Verify instead that the call returns
-    # finite, non-silent audio — proof that the preset-dependent param was set
-    # without raising KeyError.
+    # the post-call parameter state directly. Verify instead that the call does
+    # not raise KeyError and returns finite, non-silent audio.
     output = render_params(
         plugin_path=PLUGIN_PATH,
         params={"a_osc_1_sawtooth": 0.5},
