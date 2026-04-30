@@ -8,10 +8,11 @@ tensorboard
 wandb
 
 # --------- pipeline --------- #
-click
+click<8.2
 numpy
 pydantic>=2
 pyyaml
+skypilot[runpod]==0.12.0
 structlog
 tenacity
 webdataset
