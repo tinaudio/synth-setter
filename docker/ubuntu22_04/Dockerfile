@@ -286,10 +286,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         -r /artifacts/requirements.txt && \
     rm -rf /artifacts/requirements*.txt
 
-# Runtime apt packages: headless VST loading, rclone for R2 uploads, and
-# the toolchain SkyPilot needs to provision/file-mount over SSH (rsync,
-# openssh-client) plus a system pip3 (sky shells out to `pip3` directly,
-# which the uv-managed venv doesn't expose).
+# Runtime apt packages for headless VST loading + rclone for R2 uploads
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update; \
@@ -304,10 +301,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       openbox \
       x11-utils \
       x11-xserver-utils \
-      rclone \
-      rsync \
-      openssh-client \
-      python3-pip; \
+      rclone; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
@@ -369,13 +363,8 @@ RUN uv pip install --no-deps -e .
 RUN pytest -k "not slow" -v
 
 COPY scripts/docker_entrypoint.py /usr/local/bin/entrypoint.py
-COPY scripts/docker_dispatch.sh /usr/local/bin/dispatch.sh
-RUN chmod +x /usr/local/bin/entrypoint.py /usr/local/bin/dispatch.sh
-# dispatch.sh routes click subcommands (generate_dataset, passthrough, idle,
-# …) through the click CLI and execs anything else directly — required so
-# SkyPilot's RunPod backend can run `bash -c '<setup>'` without having `bash`
-# rejected by the click parser.
-ENTRYPOINT ["/usr/local/bin/dispatch.sh"]
+RUN chmod +x /usr/local/bin/entrypoint.py
+ENTRYPOINT ["python", "/usr/local/bin/entrypoint.py"]
 CMD []
 
 # ==========================================
