@@ -165,6 +165,7 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     )
 
 
+@pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
     """Run training of the Surge XT FFN model on the smoke test fixture.
@@ -191,6 +192,7 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
         assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
 
 
+@pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_eval_surge_xt(
     tmp_path: Path, cfg_surge_xt: DictConfig, cfg_surge_xt_eval: DictConfig
