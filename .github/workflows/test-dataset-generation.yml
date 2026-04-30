@@ -1,11 +1,19 @@
 name: Test Dataset Generation
 
-# Exercises the dataset-generation reusable workflow with the CI smoke-test
-# config (32 samples, 1 shard). Validates the spec artifact after generation.
+# Exercises the SkyPilot RunPod launcher (scripts/skypilot_launch_smoke.py)
+# with the CI smoke-test config (32 samples, 1 shard). The launcher runs
+# inside the Docker image so materialize_spec can import pedalboard via the
+# headless X wrapper. SkyPilot streams worker logs back and blocks until
+# the managed job completes; the materialized spec is then validated and
+# the resulting shard pulled from R2 and structurally validated.
 #
 # Triggers:
 # - Manual dispatch: test with custom image tag and config
 # - Pull request: smoke test on dataset-related path changes
+#
+# Required secrets:
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
+#   RUNPOD_API_KEY — SkyPilot's RunPod backend reads this from env
 
 on:
   workflow_dispatch:
@@ -23,25 +31,115 @@ on:
       - "src/data/vst/**"
       - "pipeline/schemas/**"
       - "configs/dataset/**"
+      - "configs/compute/**"
       - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.py"
-      - ".github/workflows/dataset-generation.yml"
+      - "scripts/skypilot_launch_smoke.py"
       - ".github/workflows/test-dataset-generation.yml"
       - "requirements*.txt"
 
 jobs:
   generate:
-    uses: ./.github/workflows/dataset-generation.yml
-    with:
-      image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      config_path: >-
+    name: Launch generate_dataset on RunPod via SkyPilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DATASET_CONFIG: >-
         ${{
           github.event_name == 'pull_request'
             && 'configs/dataset/ci-smoke-test.yaml'
             || (inputs.dataset_config || 'configs/dataset/ci-smoke-test.yaml')
         }}
-      artifact_name: test-run-metadata
-    secrets: inherit
+      IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      - name: Pin image tag in SkyPilot template
+        run: |
+          # The template's image_id defaults to dev-snapshot; pin it to the
+          # tag this run was dispatched with so the worker pulls the same
+          # image we just smoke-tested locally.
+          sed -i \
+            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
+            configs/compute/runpod-template.yaml
+          grep image_id configs/compute/runpod-template.yaml
+
+      - name: Write .env.cloud from secrets
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          cat > .env.cloud <<EOF
+          RCLONE_CONFIG_R2_TYPE=s3
+          RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+          RCLONE_CONFIG_R2_ENDPOINT=${R2_ENDPOINT}
+          EOF
+          chmod 600 .env.cloud
+
+      - name: Prepare run-metadata mount
+        run: mkdir -p /tmp/run-metadata
+
+      - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
+        run: |
+          set -o pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v /tmp/run-metadata:/run-metadata \
+            -e RUNPOD_API_KEY \
+            -e CONFIG_PATH \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "$IMAGE" \
+            passthrough bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              mkdir -p plugins
+              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+
+              # The launcher imports pipeline.schemas.spec (→ pedalboard via
+              # param_specs) which needs a live X display, hence the headless
+              # wrapper. Skypilot[runpod] is in requirements-app.txt as of
+              # PR #716; ensure-installed for old image tags that predate it.
+              python -c "import sky.jobs" 2>/dev/null \
+                || pip install --quiet "skypilot[runpod]==0.7.0" "python-dotenv"
+
+              scripts/run-linux-vst-headless.sh \
+                python scripts/skypilot_launch_smoke.py --config "$CONFIG_PATH"
+
+              # Stage the materialized spec for downstream jobs.
+              cp data/skypilot-launch-smoke-spec.json /run-metadata/input_spec.json
+            ' \
+            2>&1 | tee /tmp/run-metadata/generate.log
+
+      - name: Validate spec exists
+        run: |
+          if [ ! -f /tmp/run-metadata/input_spec.json ]; then
+            echo "::error::input_spec.json not found in /tmp/run-metadata/"
+            exit 1
+          fi
+          echo "=== Materialized Spec ==="
+          head -20 /tmp/run-metadata/input_spec.json
+
+      - name: Upload run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-run-metadata
+          path: /tmp/run-metadata/
+          retention-days: 7
+          if-no-files-found: warn
 
   validate-spec:
     needs: generate
