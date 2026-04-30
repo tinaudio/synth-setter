@@ -18,6 +18,7 @@ import pytest
 
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from src.data.vst import param_specs
+from src.data.vst.core import render_params
 from src.data.vst.generate_vst_dataset import make_dataset
 from src.data.vst.param_spec import ParamSpec
 
@@ -965,6 +966,63 @@ def test_make_dataset(tmp_path: Path) -> None:
         assert isinstance(synth, dict)
         assert isinstance(note, dict)
         assert note.keys() == {"pitch", "note_start_and_end"}
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@skip_no_vst
+def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
+    """``show_editor`` warm-up in ``load_plugin`` does not change rendered audio.
+
+    Empirical characterisation of ``load_plugin``'s ``show_editor`` warm-up.
+    Renders the same hardcoded patch N times each with the warm-up enabled
+    and disabled (by swapping ``VST3Plugin.show_editor`` to a no-op around
+    the second batch), then asserts every cross-path pair (with[i] vs no[j])
+    is within the same audio-similarity thresholds the round-trip tests use.
+
+    If this passes, the warm-up is not load-bearing for the per-render
+    reload path — it can be dropped without changing output. That matters
+    for #714 (macOS SIGTRAP from per-render ``show_editor`` accumulating
+    AppKit/CGS state in unbundled python).
+    """
+    from pedalboard import VST3Plugin
+
+    n_renders = 3
+    pitch = _HARDCODED_NOTE_PARAMS["pitch"]
+    note_window = _HARDCODED_NOTE_PARAMS["note_start_and_end"]
+    assert isinstance(pitch, int)
+    assert isinstance(note_window, tuple)
+
+    def _render_n(n: int) -> list[np.ndarray]:
+        return [
+            render_params(
+                _PLUGIN_PATH,
+                _HARDCODED_SYNTH_PARAMS,
+                pitch,
+                _VELOCITY,
+                note_window,
+                _DURATION,
+                _SAMPLE_RATE,
+                _CHANNELS,
+                preset_path=_PRESET_PATH,
+            )
+            for _ in range(n)
+        ]
+
+    with_editor = _render_n(n_renders)
+
+    original_show_editor = VST3Plugin.show_editor
+    VST3Plugin.show_editor = lambda self, *a, **kw: None
+    try:
+        no_editor = _render_n(n_renders)
+    finally:
+        VST3Plugin.show_editor = original_show_editor
+
+    for i, target in enumerate(with_editor):
+        for j, pred in enumerate(no_editor):
+            _assert_audio_metrics_within_thresholds(
+                target, pred, label=f"with-editor[{i}] vs no-editor[{j}]"
+            )
 
 
 # Unit tests for ``_emit_audio_similarity_benchmark_metrics`` — pure JSON
