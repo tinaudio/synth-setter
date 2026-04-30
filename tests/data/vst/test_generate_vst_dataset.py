@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -15,6 +16,7 @@ import hdf5plugin  # noqa: F401  side-effect: registers Blosc2 filter for h5py r
 _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
+from pedalboard import VST3Plugin
 
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from src.data.vst import param_specs
@@ -722,51 +724,79 @@ def test_datasets_from_hardcoded_params_are_identical(
     num_samples = 6
     replay = [(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * num_samples
 
+    # #714 hypothesis: hold show_editor open on the main thread for the entire
+    # duration of rendering, with the worker thread driving make_dataset. Bypass
+    # load_plugin entirely so no warm-up runs at construction.
+    plugin = VST3Plugin(_PLUGIN_PATH)
+    stop_event = threading.Event()
+
     expected_dataset = tmp_path / "expected.h5"
-    t0 = time.perf_counter()
-    with (
-        h5py.File(expected_dataset, "a") as f,
-        _patched_sample(spec, replay),
-    ):
-        make_dataset(
-            hdf5_file=f,
-            num_samples=num_samples,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=num_samples,
-        )
-    stage1_seconds = time.perf_counter() - t0
+    got_dataset = tmp_path / "replayed.h5"
+    timings: dict[str, float] = {}
+    worker_error: list[BaseException] = []
+
+    def _run_both_stages() -> None:
+        try:
+            t0 = time.perf_counter()
+            with (
+                h5py.File(expected_dataset, "a") as f,
+                _patched_sample(spec, replay),
+            ):
+                make_dataset(
+                    hdf5_file=f,
+                    num_samples=num_samples,
+                    plugin_path=_PLUGIN_PATH,
+                    preset_path=_PRESET_PATH,
+                    sample_rate=_SAMPLE_RATE,
+                    channels=_CHANNELS,
+                    velocity=_VELOCITY,
+                    signal_duration_seconds=_DURATION,
+                    min_loudness=_MIN_LOUDNESS,
+                    param_spec=spec,
+                    sample_batch_size=num_samples,
+                    plugin=plugin,
+                )
+            timings["stage1"] = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            with (
+                h5py.File(got_dataset, "a") as f,
+                _patched_sample(spec, replay),
+            ):
+                make_dataset(
+                    hdf5_file=f,
+                    num_samples=num_samples,
+                    plugin_path=_PLUGIN_PATH,
+                    preset_path=_PRESET_PATH,
+                    sample_rate=_SAMPLE_RATE,
+                    channels=_CHANNELS,
+                    velocity=_VELOCITY,
+                    signal_duration_seconds=_DURATION,
+                    min_loudness=_MIN_LOUDNESS,
+                    param_spec=spec,
+                    sample_batch_size=num_samples,
+                    plugin=plugin,
+                )
+            timings["stage2"] = time.perf_counter() - t0
+        except BaseException as exc:  # noqa: BLE001 — re-raised on main below
+            worker_error.append(exc)
+        finally:
+            stop_event.set()
+
+    worker = threading.Thread(target=_run_both_stages, name="vst-render-worker")
+    worker.start()
+    plugin.show_editor(stop_event)
+    worker.join()
+
+    if worker_error:
+        raise worker_error[0]
+
+    stage1_seconds = timings["stage1"]
+    stage2_seconds = timings["stage2"]
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
         expected_dataset, spec, num_samples
     )
-
-    got_dataset = tmp_path / "replayed.h5"
-    t0 = time.perf_counter()
-    with (
-        h5py.File(got_dataset, "a") as f,
-        _patched_sample(spec, replay),
-    ):
-        make_dataset(
-            hdf5_file=f,
-            num_samples=num_samples,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=num_samples,
-        )
-    stage2_seconds = time.perf_counter() - t0
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
         got_dataset, spec, num_samples

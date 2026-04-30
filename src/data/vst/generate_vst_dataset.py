@@ -1,7 +1,7 @@
 import hashlib
 import random
 from dataclasses import dataclass
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import click
 import h5py
@@ -223,6 +223,7 @@ def make_dataset(
     min_loudness: float,
     param_spec: ParamSpec,
     sample_batch_size: int,
+    plugin: Optional[VST3Plugin] = None,
 ) -> None:
 
     audio_dataset, mel_dataset, param_dataset, start_idx = (
@@ -242,7 +243,8 @@ def make_dataset(
     audio_dataset.attrs["channels"] = channels
     audio_dataset.attrs["min_loudness"] = min_loudness
 
-    plugin = load_plugin(plugin_path)
+    if plugin is None:
+        plugin = load_plugin(plugin_path)
 
     sample_batch = []
     sample_batch_start = start_idx
