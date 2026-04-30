@@ -36,10 +36,11 @@ jobs:
           CONFIG_PATH: ${{ inputs.config_path }}
         # Mount the PR's code into the container so we test THIS branch's code
         # against the image's environment (Surge XT, Python, pedalboard, etc.).
-        # Dispatch goes through the default ENTRYPOINT (python click CLI) via
-        # `passthrough` — no `--entrypoint bash` override. CONFIG_PATH is
-        # forwarded via -e so the inner script references it via $CONFIG_PATH
-        # instead of splicing a workflow input into the command text.
+        # Image has no ENTRYPOINT (#721 dropped it for SkyPilot); CMD defaults
+        # to /bin/bash, so `docker run img bash -c '...'` overrides CMD with
+        # the bash invocation. CONFIG_PATH is forwarded via -e so the inner
+        # script references it via $CONFIG_PATH instead of splicing a workflow
+        # input into the command text.
         run: |
           mkdir -p /tmp/spec-output
           docker run --rm \
@@ -53,7 +54,7 @@ jobs:
             -e CONFIG_PATH \
             -e PYTHONPATH=/home/build/synth-setter \
             tinaudio/synth-setter:${{ inputs.image_tag }} \
-            passthrough bash -c '
+            bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               # Runner UID != container UID; git refuses to run in untrusted dirs

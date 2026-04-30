@@ -172,6 +172,11 @@ jobs:
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
           cache-to: ""
 
+      # The image no longer sets an ENTRYPOINT (#721 dropped it for SkyPilot's
+      # RunPod backend, which prepends `bash -c '...'`); CMD defaults to
+      # /bin/bash, and `docker run img <argv>` overrides CMD with that argv.
+      # So we invoke pytest directly instead of going through the click CLI's
+      # `passthrough` subcommand.
       - name: Smoke test — container starts and Python imports work
         if: github.event_name != 'pull_request'
         env:
@@ -180,7 +185,7 @@ jobs:
           docker run --rm \
             -e PYTHONPATH=/home/build/synth-setter \
             "$SMOKE_IMAGE" \
-            passthrough pytest tests/docker/test_smoke.py::test_pedalboard_importable -v
+            pytest tests/docker/test_smoke.py::test_pedalboard_importable -v
 
       - name: Smoke test — VST loads under headless X11
         if: github.event_name != 'pull_request'
@@ -190,5 +195,5 @@ jobs:
           docker run --rm \
             -e PYTHONPATH=/home/build/synth-setter \
             "$SMOKE_IMAGE" \
-            passthrough scripts/run-linux-vst-headless.sh \
+            scripts/run-linux-vst-headless.sh \
               pytest tests/docker/test_smoke.py::test_surge_xt_loads -v
