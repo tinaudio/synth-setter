@@ -286,7 +286,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         -r /artifacts/requirements.txt && \
     rm -rf /artifacts/requirements*.txt
 
-# Runtime apt packages for headless VST loading + rclone for R2 uploads
+# Runtime apt packages: headless VST loading, rclone for R2 uploads, and
+# the toolchain SkyPilot needs to provision/file-mount over SSH (rsync,
+# openssh-client) plus a system pip3 (sky shells out to `pip3` directly,
+# which the uv-managed venv doesn't expose).
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update; \
@@ -301,7 +304,10 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       openbox \
       x11-utils \
       x11-xserver-utils \
-      rclone; \
+      rclone \
+      rsync \
+      openssh-client \
+      python3-pip; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
