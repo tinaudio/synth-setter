@@ -50,6 +50,10 @@ setup: |
   echo "synth-setter worker ready (host: $(hostname))"
 
 run: |
+  # Diagnostic: which cwd does SkyPilot's run block start in? We expect this
+  # NOT to be /home/build/synth-setter (the image's WORKDIR) — confirming that
+  # is why the cd below is necessary.
+  echo "skypilot-run-cwd: $(pwd)"
   # cd into the repo root before invoking generate_dataset: it shells out to
   # scripts/run-linux-vst-headless.sh via a relative path, and SkyPilot's run
   # block does not execute from the image's WORKDIR by default.
