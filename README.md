@@ -187,6 +187,9 @@ Further reading (mostly for contributors and maintainers):
   storage provenance spec, SkyPilot integration, implementation plans
 - [`docs/reference/`](docs/reference/) — configuration reference, Docker,
   GitHub Actions, W&B integration
+- [`docs/guides/surge-xt-interactive.md`](docs/guides/surge-xt-interactive.md) —
+  human-in-the-loop tool for auditioning predicted Surge XT params and
+  capturing patches into a labeled dataset
 
 Run `make help` for available commands.
 
