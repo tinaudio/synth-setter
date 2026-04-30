@@ -136,8 +136,13 @@ jobs:
                 --config "$CONFIG_PATH" \
                 --spec-out /tmp/input_spec.json
 
-              # Stage the materialized spec for downstream jobs.
+              # Stage the materialized spec for downstream jobs. The
+              # `umask 077` above (set so ~/.runpod/config.toml lands
+              # mode 600) persists through the rest of this shell, so cp
+              # would otherwise produce a 600 root-owned file the host
+              # runner can not read for `head` / upload-artifact.
               cp /tmp/input_spec.json /run-metadata/input_spec.json
+              chmod 0644 /run-metadata/input_spec.json
             ' \
             2>&1 | tee /tmp/run-metadata/generate.log
 
