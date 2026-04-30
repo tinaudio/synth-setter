@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777534775289,
+  "lastUpdate": 1777538897285,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST fixed-params replay": [
@@ -357,6 +357,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03589135408401489,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "13bfc624b277ca9f966ac897a290e26324383c3c",
+          "message": "internal-feat(vst): add deterministic-render kwargs to make_dataset/generate_sample (#720)\n\n* internal-feat(vst): add deterministic-render kwargs to make_dataset/generate_sample\n\n`generate_sample` accepts optional `fixed_synth_params` / `fixed_note_params`\nthat take precedence over `param_spec.sample()`, and `make_dataset` accepts\n`fixed_synth_params_list` / `fixed_note_params_list` and indexes them per\nsample by `i - start_idx` after validating the lists are long enough. The\nkwargs are internal-only on this PR — they exist so a later act of the #702\nsplit (the `surge_xt_interactive.py` capture/replay flow) can render\ncaller-supplied patches deterministically. No public-facing surface changes.\n\nRefs #702 #719\n\n* internal-fix(vst): skip param_spec.sample() and bound retries when fully fixed\n\nAddress two Copilot review comments on PR #720:\n\n1. (#3166554305) When both fixed_synth_params and fixed_note_params are\n   supplied, skip the param_spec.sample() call entirely. The previous\n   code burned RNG state and paid the call overhead on every retry\n   even though the values were discarded — now param_spec.sample() only\n   runs when at least one half needs sampling.\n\n2. (#3166554339) When BOTH fixed dicts are supplied, render inputs are\n   fully deterministic, so retrying after a loudness fail is provably\n   futile. Raise ValueError with a clear caller-actionable message\n   instead of looping forever. When only one half is fixed, the other\n   is re-sampled each retry and the loop remains meaningful.\n\nPer-item shape validation of fixed_note_params (suggested by #3166554364)\nis intentionally not added — this is an internal-feat:, the caller is\ntrusted to produce well-formed dicts (same trust boundary as\nparam_spec.sample()), and the existing KeyError on\nnote_params['pitch'] is already actionable.\n\nRefs #720 #719 #702",
+          "timestamp": "2026-04-30T08:35:59Z",
+          "tree_id": "3d244bfe390ad2fd1fb1249bdfd33e8a53330295",
+          "url": "https://github.com/tinaudio/synth-setter/commit/13bfc624b277ca9f966ac897a290e26324383c3c"
+        },
+        "date": 1777538896883,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.8057427406311035,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.420990044572391,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.034688860177993774,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.047290027141571045,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.7512216567993164,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.80401720758333,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.94356107711792,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.655967754672747,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.042190149426460266,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.05208402872085571,
             "unit": "1-cos"
           },
           {
