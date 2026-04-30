@@ -1,13 +1,12 @@
 """Tests for scripts/skypilot_launch_smoke.py — SkyPilot RunPod smoke launcher.
 
-Mock-based: no real SkyPilot or RunPod calls. The `sky` module is lazily
-imported inside `main`, so tests inject a MagicMock via `sys.modules` before
-invoking the CLI.
+Mock-based: no real SkyPilot or RunPod calls. The `mock_sky` fixture replaces the launcher's
+module-level `sky` reference with a MagicMock, and `local_spec_path` redirects the on-disk spec
+write to a tmp path so tests don't write into the real repo's data/ dir.
 """
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,7 +21,6 @@ from scripts.skypilot_launch_smoke import (
     WORKER_SPEC_PATH,
     load_worker_env,
     main,
-    write_spec_to_tempfile,
 )
 
 FIXED_NOW = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
@@ -108,11 +106,18 @@ def template_yaml() -> Path:
 
 
 @pytest.fixture()
+def local_spec_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect the launcher's on-disk spec write to a tmp path (don't pollute the real data/)."""
+    path = tmp_path / "spec-out" / "skypilot-launch-smoke-spec.json"
+    monkeypatch.setattr("scripts.skypilot_launch_smoke.LOCAL_SPEC_PATH", path)
+    return path
+
+
+@pytest.fixture()
 def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Inject MagicMocks for the lazily-imported `sky` and `sky.jobs` modules."""
+    """Replace the launcher's module-level `sky` reference with a MagicMock."""
     fake = MagicMock()
-    monkeypatch.setitem(sys.modules, "sky", fake)
-    monkeypatch.setitem(sys.modules, "sky.jobs", fake.jobs)
+    monkeypatch.setattr("scripts.skypilot_launch_smoke.sky", fake)
     return fake
 
 
@@ -125,7 +130,7 @@ class TestLoadWorkerEnv:
     """Behavioral contracts for the worker-env loader (thin wrapper over python-dotenv)."""
 
     def test_parses_keys_skips_comments_and_strips_quotes(self, tmp_path: Path) -> None:
-        """Python-dotenv handles blanks, `#` comments, and quoted values; we only forward dict[str,
+        """Python-dotenv handles blanks, comments, and quoted values; loader returns dict[str,
         str]."""
         path = tmp_path / ".env.cloud"
         path.write_text(
@@ -149,26 +154,6 @@ class TestLoadWorkerEnv:
 
 
 # ---------------------------------------------------------------------------
-# write_spec_to_tempfile
-# ---------------------------------------------------------------------------
-
-
-class TestWriteSpecToTempfile:
-    """Behavioral contracts for the materialized-spec tempfile helper."""
-
-    def test_writes_content_and_returns_path(self) -> None:
-        """Content is written verbatim, the returned Path exists, and it has a `.json` suffix."""
-        spec_json = '{"hello": "world"}'
-        path = write_spec_to_tempfile(spec_json)
-        try:
-            assert path.exists()
-            assert path.read_text() == spec_json
-            assert path.suffix == ".json"
-        finally:
-            path.unlink()
-
-
-# ---------------------------------------------------------------------------
 # main — CLI integration with mocked sky
 # ---------------------------------------------------------------------------
 
@@ -176,35 +161,33 @@ class TestWriteSpecToTempfile:
 class TestMainCli:
     """End-to-end CLI behavior: env validation, spec materialization, sky.* call shape."""
 
-    def test_missing_env_file_fails_before_sky_import(
+    def test_missing_env_file_fails_with_clear_error(
         self,
         tmp_path: Path,
         config_yaml: Path,
         template_yaml: Path,
         patch_materialize_io: None,
+        local_spec_path: Path,
+        mock_sky: MagicMock,
     ) -> None:
-        """Missing .env.cloud raises before sky.* is touched (sky absent from sys.modules)."""
-        # Ensure sky is not importable: simulate it not being installed.
-        original = sys.modules.pop("sky", None)
-        try:
-            missing = tmp_path / "does-not-exist.env"
-            runner = CliRunner()
-            result = runner.invoke(
-                main,
-                [
-                    "--config",
-                    str(config_yaml),
-                    "--template",
-                    str(template_yaml),
-                    "--env-file",
-                    str(missing),
-                ],
-            )
-            assert result.exit_code != 0
-            assert "Worker env file not found" in result.output
-        finally:
-            if original is not None:
-                sys.modules["sky"] = original
+        """Missing .env.cloud aborts with a clear error and never calls sky.*."""
+        missing = tmp_path / "does-not-exist.env"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--config",
+                str(config_yaml),
+                "--template",
+                str(template_yaml),
+                "--env-file",
+                str(missing),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Worker env file not found" in result.output
+        mock_sky.Task.from_yaml.assert_not_called()
+        mock_sky.jobs.launch.assert_not_called()
 
     def test_empty_env_file_fails(
         self,
@@ -212,6 +195,8 @@ class TestMainCli:
         config_yaml: Path,
         template_yaml: Path,
         patch_materialize_io: None,
+        local_spec_path: Path,
+        mock_sky: MagicMock,
     ) -> None:
         """An env file containing only blank/comment lines fails fast with a clear error."""
         empty_env = tmp_path / "empty.env"
@@ -230,6 +215,8 @@ class TestMainCli:
         )
         assert result.exit_code != 0
         assert "No env vars parsed" in result.output
+        mock_sky.Task.from_yaml.assert_not_called()
+        mock_sky.jobs.launch.assert_not_called()
 
     def test_submits_job_with_expected_arguments(
         self,
@@ -237,9 +224,10 @@ class TestMainCli:
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
+        local_spec_path: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """End-to-end: spec is materialized, sky.* is called with expected args."""
+        """End-to-end: spec is materialized to LOCAL_SPEC_PATH and sky.* is called with expected args."""
         runner = CliRunner()
         result = runner.invoke(
             main,
@@ -264,20 +252,15 @@ class TestMainCli:
         assert forwarded_envs["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
         assert forwarded_envs["RCLONE_CONFIG_R2_ENDPOINT"].startswith("https://")
 
-        task.update_file_mounts.assert_called_once()
-        mounts: dict[str, str] = task.update_file_mounts.call_args.args[0]
-        assert WORKER_SPEC_PATH in mounts
-        spec_path = Path(mounts[WORKER_SPEC_PATH])
-        try:
-            assert spec_path.is_file()
-            # Round-trip: the materialized JSON validates as a DatasetPipelineSpec.
-            spec = DatasetPipelineSpec.model_validate_json(spec_path.read_text())
-            assert spec.code_version == "abc123def456"
-            assert spec.is_repo_dirty is False
-            assert spec.num_shards == 1
-            assert spec.r2_bucket == "intermediate-data"
-        finally:
-            spec_path.unlink(missing_ok=True)
+        task.update_file_mounts.assert_called_once_with({WORKER_SPEC_PATH: str(local_spec_path)})
+
+        # Round-trip: the materialized JSON validates as a DatasetPipelineSpec.
+        assert local_spec_path.is_file()
+        spec = DatasetPipelineSpec.model_validate_json(local_spec_path.read_text())
+        assert spec.code_version == "abc123def456"
+        assert spec.is_repo_dirty is False
+        assert spec.num_shards == 1
+        assert spec.r2_bucket == "intermediate-data"
 
         mock_sky.jobs.launch.assert_called_once_with(task, name="smoke-job-1")
 
@@ -287,6 +270,7 @@ class TestMainCli:
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
+        local_spec_path: Path,
         mock_sky: MagicMock,
     ) -> None:
         """When --job-name is omitted, the launcher derives the name from `config_id[:8]`."""
@@ -307,9 +291,3 @@ class TestMainCli:
         # Config stem is "ci-smoke-test"; first 8 chars → "ci-smoke".
         kwargs: dict[str, Any] = mock_sky.jobs.launch.call_args.kwargs
         assert kwargs["name"] == "synth-setter-smoke-ci-smoke"
-
-        # Clean up the materialized spec tempfile.
-        mounts: dict[str, str] = (
-            mock_sky.Task.from_yaml.return_value.update_file_mounts.call_args.args[0]
-        )
-        Path(mounts[WORKER_SPEC_PATH]).unlink(missing_ok=True)
