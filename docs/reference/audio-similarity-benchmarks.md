@@ -24,10 +24,11 @@ of the kind of regressions the chart is designed to surface:
 - **`librosa` / `pedalboard` upgrade** changing mel-spectrogram
   computation or VST host behavior, even with identical params.
 - **Regression in the renderer's determinism** in
-  `src/data/vst/render_params` — bug
-  [#489](https://github.com/tinaudio/synth-setter/issues/489) tracks the
-  every-other-render variance; if a future fix lands and then regresses,
-  that variance spikes here first.
+  `src/data/vst/core.py` § `render_params()` — bug
+  [#489](https://github.com/tinaudio/synth-setter/issues/489) was the
+  every-other-render variance, closed by
+  [#713](https://github.com/tinaudio/synth-setter/pull/713) via per-render
+  plugin reload; if that fix regresses, the variance spikes here first.
 - **Renderer perf regressions** — dB metrics may stay flat while
   `wall-clock-seconds-per-render` doubles.
 
@@ -43,7 +44,8 @@ safety net; the chart is the early warning.
 | `gh-pages` branch tree     | <https://github.com/tinaudio/synth-setter/tree/gh-pages>                       |
 | Workflow runs that publish | <https://github.com/tinaudio/synth-setter/actions/workflows/test-vst-slow.yml> |
 | Tracking issue             | [#703](https://github.com/tinaudio/synth-setter/issues/703)                    |
-| Underlying bug             | [#489](https://github.com/tinaudio/synth-setter/issues/489)                    |
+| Original bug               | [#489](https://github.com/tinaudio/synth-setter/issues/489) (closed)           |
+| Fix PR                     | [#713](https://github.com/tinaudio/synth-setter/pull/713)                      |
 
 The chart's left-hand legend lets you toggle individual metric series on
 and off; the dropdown at the top selects the dashboard ("bucket").
@@ -60,7 +62,9 @@ stages of `make_dataset` run with the same hardcoded
 `_HARDCODED_*_PARAMS` patch via `_patched_sample`, so all
 `2 × num_samples` renders use _identical_ inputs. The per-pair metrics
 plus an all-pairs cross-comparison expose every-other-render variance —
-this is the reproducer for [#489](https://github.com/tinaudio/synth-setter/issues/489).
+this was the reproducer for [#489](https://github.com/tinaudio/synth-setter/issues/489)
+and is now the regression guard against its fix in
+[#713](https://github.com/tinaudio/synth-setter/pull/713).
 
 Bucket name: `VST noise floor (1 preset N renders)`<br>
 JSON file (in workflow run): `vst-noise-floor-1-preset-n-renders.json`<br>
@@ -103,9 +107,10 @@ plus the two non-distance sentinels `num-samples` and
 | `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                 | seconds     | yes                |
 
 The **`1 preset N renders`** bucket additionally emits five `all-pairs-*`
-series — these are the **#489 regression signal**, since the per-row
-metrics can stay flat while the all-pairs worst-case spikes (the bug
-manifests as junk on every-other render, not on every render):
+series — these are the **fix-regression signal for the #489
+every-other-render bug**, since the per-row metrics can stay flat
+while the all-pairs worst-case spikes (the bug manifested as junk on
+every-other render, not on every render):
 
 | Metric                                       | Computed by                                   | Unit        |
 | -------------------------------------------- | --------------------------------------------- | ----------- |
