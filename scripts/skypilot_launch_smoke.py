@@ -38,11 +38,12 @@ DEFAULT_ENV_FILE = REPO_ROOT / ".env.cloud"
 WORKER_REPO_ROOT = "/home/build/synth-setter"
 WORKER_SPEC_PATH = f"{WORKER_REPO_ROOT}/data/skypilot-launch-smoke-spec.json"
 
-# Local source path. Lives under the system tempdir (not the repo) so it shares a filesystem
-# with SkyPilot's staging dir (also under /tmp). Inside the dev-snapshot container the repo
-# workspace is bind-mounted from the runner host while /tmp is on the container's overlay —
-# crossing those two with `os.rename` raises EXDEV (Errno 18) when SkyPilot stages mounts.
-LOCAL_SPEC_PATH = Path(tempfile.gettempdir()) / "skypilot-launch-smoke-spec.json"
+# Local-source directory for the materialized spec. Lives under the system tempdir
+# (not the repo) so it shares a filesystem with SkyPilot's staging dir (also under
+# /tmp). Inside the dev-snapshot container the repo workspace is bind-mounted from
+# the runner host while /tmp is on the container's overlay — crossing those two
+# with `os.rename` raises EXDEV (Errno 18) when SkyPilot stages mounts.
+LOCAL_SPEC_DIR = Path(tempfile.gettempdir())
 
 
 def load_worker_env(path: Path) -> dict[str, str]:
@@ -85,11 +86,22 @@ def load_worker_env(path: Path) -> dict[str, str]:
     default=None,
     help="SkyPilot cluster name (default: synth-setter-smoke-<config_id[:8]>).",
 )
+@click.option(
+    "--spec-out",
+    "spec_out",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Where to write the materialized spec JSON. Default: a per-cluster path under "
+        "$TMPDIR (avoids parallel-run collisions on a shared host)."
+    ),
+)
 def main(
     config_path: Path,
     template_path: Path,
     env_file_path: Path,
     cluster_name: str | None,
+    spec_out: Path | None,
 ) -> None:
     """Launch the smoke `generate_dataset` run on RunPod via SkyPilot."""
     if not env_file_path.is_file():
@@ -106,17 +118,22 @@ def main(
     config_id = dataset_config_id_from_path(config_path)
     spec = materialize_spec(config, config_id)
 
-    LOCAL_SPEC_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LOCAL_SPEC_PATH.write_text(spec.model_dump_json(indent=2))
-    click.echo(f"Materialized spec to {LOCAL_SPEC_PATH}")
+    resolved_cluster_name = cluster_name or f"synth-setter-smoke-{config_id[:8]}"
+    # Per-cluster filename so parallel launches (CI matrix, local dev concurrent with CI on
+    # the same host) don't clobber one another's spec.
+    local_spec_path = (
+        spec_out or LOCAL_SPEC_DIR / f"skypilot-launch-smoke-{resolved_cluster_name}.json"
+    )
+
+    local_spec_path.parent.mkdir(parents=True, exist_ok=True)
+    local_spec_path.write_text(spec.model_dump_json(indent=2))
+    click.echo(f"Materialized spec to {local_spec_path}")
 
     # SkyPilot stages file_mount sources by moving them into its own staging dir; passing
-    # LOCAL_SPEC_PATH directly would leave nothing behind for downstream consumers (CI
+    # local_spec_path directly would leave nothing behind for downstream consumers (CI
     # artifact upload, validate-spec). Stage a sibling copy and mount that instead.
-    mount_source = LOCAL_SPEC_PATH.with_suffix(".mount.json")
-    shutil.copyfile(LOCAL_SPEC_PATH, mount_source)
-
-    resolved_cluster_name = cluster_name or f"synth-setter-smoke-{config_id[:8]}"
+    mount_source = local_spec_path.with_suffix(".mount.json")
+    shutil.copyfile(local_spec_path, mount_source)
 
     task = sky.Task.from_yaml(str(template_path))
     task.update_envs(worker_env)

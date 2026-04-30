@@ -1,8 +1,8 @@
 """Tests for scripts/skypilot_launch_smoke.py — SkyPilot RunPod smoke launcher.
 
 Mock-based: no real SkyPilot or RunPod calls. The `mock_sky` fixture replaces the launcher's
-module-level `sky` reference with a MagicMock, and `local_spec_path` redirects the on-disk spec
-write to a tmp path so tests don't write into the real repo's data/ dir.
+module-level `sky` reference with a MagicMock, and `local_spec_dir` redirects the on-disk spec
+write under tmp_path so tests don't write into the real /tmp.
 """
 
 from __future__ import annotations
@@ -106,11 +106,17 @@ def template_yaml() -> Path:
 
 
 @pytest.fixture()
-def local_spec_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect the launcher's on-disk spec write to a tmp path (don't pollute the real data/)."""
-    path = tmp_path / "spec-out" / "skypilot-launch-smoke-spec.json"
-    monkeypatch.setattr("scripts.skypilot_launch_smoke.LOCAL_SPEC_PATH", path)
-    return path
+def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect the launcher's default spec-write directory under tmp_path.
+
+    With LOCAL_SPEC_DIR repointed at a tmp dir, the launcher's per-cluster default path
+    (`<LOCAL_SPEC_DIR>/skypilot-launch-smoke-<cluster>.json`) lands inside tmp_path too —
+    no pollution of the real /tmp.
+    """
+    spec_dir = tmp_path / "spec-out"
+    spec_dir.mkdir()
+    monkeypatch.setattr("scripts.skypilot_launch_smoke.LOCAL_SPEC_DIR", spec_dir)
+    return spec_dir
 
 
 @pytest.fixture()
@@ -167,7 +173,7 @@ class TestMainCli:
         config_yaml: Path,
         template_yaml: Path,
         patch_materialize_io: None,
-        local_spec_path: Path,
+        local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
         """Missing .env.cloud aborts with a clear error and never calls sky.*."""
@@ -195,7 +201,7 @@ class TestMainCli:
         config_yaml: Path,
         template_yaml: Path,
         patch_materialize_io: None,
-        local_spec_path: Path,
+        local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
         """An env file containing only blank/comment lines fails fast with a clear error."""
@@ -224,10 +230,10 @@ class TestMainCli:
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
-        local_spec_path: Path,
+        local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """End-to-end: spec is materialized to LOCAL_SPEC_PATH and sky.* is called with expected args."""
+        """End-to-end: spec is materialized under LOCAL_SPEC_DIR and sky.* is called with expected args."""
         runner = CliRunner()
         result = runner.invoke(
             main,
@@ -255,16 +261,20 @@ class TestMainCli:
         task.update_file_mounts.assert_called_once()
         mounts = task.update_file_mounts.call_args.args[0]
         assert WORKER_SPEC_PATH in mounts
-        # Mount source is a sibling copy of LOCAL_SPEC_PATH (so SkyPilot's staging-by-rename
-        # doesn't consume the original file the CI artifact upload depends on).
+
+        # Default spec path embeds the resolved cluster name to avoid parallel-run collisions.
+        spec_path = local_spec_dir / "skypilot-launch-smoke-smoke-job-1.json"
+        assert spec_path.is_file()
+
+        # Mount source is a sibling copy (so SkyPilot's staging-by-rename doesn't consume
+        # the original file the CI artifact upload depends on).
         mount_source = Path(mounts[WORKER_SPEC_PATH])
-        assert mount_source != local_spec_path
+        assert mount_source != spec_path
         assert mount_source.is_file()
-        assert mount_source.read_text() == local_spec_path.read_text()
+        assert mount_source.read_text() == spec_path.read_text()
 
         # Round-trip: the materialized JSON validates as a DatasetPipelineSpec.
-        assert local_spec_path.is_file()
-        spec = DatasetPipelineSpec.model_validate_json(local_spec_path.read_text())
+        spec = DatasetPipelineSpec.model_validate_json(spec_path.read_text())
         assert spec.code_version == "abc123def456"
         assert spec.is_repo_dirty is False
         assert spec.num_shards == 1
@@ -279,7 +289,7 @@ class TestMainCli:
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
-        local_spec_path: Path,
+        local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
         """When --cluster-name is omitted, the launcher derives the name from `config_id[:8]`."""
@@ -301,3 +311,32 @@ class TestMainCli:
         kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"] == "synth-setter-smoke-ci-smoke"
         assert kwargs["down"] is True
+
+    def test_spec_out_overrides_default_path(
+        self,
+        tmp_path: Path,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """--spec-out forces an explicit local path (used by CI to find the spec for upload)."""
+        explicit = tmp_path / "explicit-out" / "input_spec.json"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--config",
+                str(config_yaml),
+                "--template",
+                str(template_yaml),
+                "--env-file",
+                str(env_file),
+                "--spec-out",
+                str(explicit),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert explicit.is_file()

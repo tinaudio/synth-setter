@@ -147,15 +147,16 @@ jobs:
 
               # The launcher imports pipeline.schemas.spec (→ pedalboard via
               # param_specs) which needs a live X display, hence the headless
-              # wrapper.
+              # wrapper. --spec-out points the materialized spec at a known
+              # path under $TMPDIR (shared filesystem with SkyPilot staging —
+              # bind-mounted repo paths trip EXDEV on os.rename in-container).
               scripts/run-linux-vst-headless.sh \
-                python scripts/skypilot_launch_smoke.py --config "$CONFIG_PATH"
+                python scripts/skypilot_launch_smoke.py \
+                  --config "$CONFIG_PATH" \
+                  --spec-out /tmp/input_spec.json
 
-              # Stage the materialized spec for downstream jobs. The launcher
-              # writes the local source under $TMPDIR (must share a filesystem
-              # with SkyPilot's /tmp staging — bind-mounted repo paths trip
-              # EXDEV on os.rename inside the container).
-              cp /tmp/skypilot-launch-smoke-spec.json /run-metadata/input_spec.json
+              # Stage the materialized spec for downstream jobs.
+              cp /tmp/input_spec.json /run-metadata/input_spec.json
             ' \
             2>&1 | tee /tmp/run-metadata/generate.log
 
