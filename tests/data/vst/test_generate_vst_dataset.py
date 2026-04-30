@@ -6,6 +6,7 @@ import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
@@ -362,6 +363,150 @@ def _assert_audio_metrics_within_thresholds(
     return mss, wmfcc, sot, rms_cos
 
 
+@dataclass(frozen=True)
+class RoundTripMetrics:
+    """Per-pair (``expected[i]`` vs ``actual[i]``) audio-similarity summary.
+
+    Computed by ``_assert_round_trip_matches`` over ``num_samples`` matched
+    rows. Values are worst-case across rows for distance-style metrics
+    (max for MSS / wMFCC / SOT, min for RMS cosine), and a global mean for
+    the mel diff.
+    """
+
+    mss_max: float
+    wmfcc_max: float
+    sot_max: float
+    rms_cos_min: float
+    mel_mean_abs: float
+    num_samples: int
+
+
+@dataclass(frozen=True)
+class AllPairsMetrics:
+    """Worst-case across all (i, j) pairs in a single audio array.
+
+    Computed by ``_assert_all_pairs_audio_metrics_within_thresholds``.
+    Use this when every row is a render of the *same* params — the
+    worst-pair signal is the #489 fingerprint (every-other-render variance)
+    and is the right thing to track on the trend chart for that bucket.
+    """
+
+    mss_max: float
+    wmfcc_max: float
+    sot_max: float
+    rms_cos_min: float
+    pair_count: int
+
+
+def _emit_audio_similarity_benchmark_metrics(
+    prefix: str,
+    round_trip: RoundTripMetrics | None = None,
+    all_pairs: AllPairsMetrics | None = None,
+    total_render_seconds: float | None = None,
+) -> None:
+    """Convert metric structs into bench entries and write them under ``prefix``.
+
+    Caller supplies whichever structs are meaningful for the bucket:
+
+    - ``round_trip`` for buckets where each row uses different params; the
+      meaningful comparison is per-pair ``expected[i]`` vs ``actual[i]``.
+      Series prefix: ``<prefix>/`` (no extra qualifier).
+    - ``all_pairs`` for buckets where every row uses identical params; the
+      meaningful comparison is the worst-case across the union of renders
+      (the #489 reproducer signal). Series prefix: ``<prefix>/all-pairs-``.
+    - ``total_render_seconds`` adds a ``wall-clock-seconds-per-render``
+      entry derived from ``round_trip.num_samples`` (so it's only emitted
+      when ``round_trip`` is also supplied).
+
+    No-op when ``$BENCHMARK_OUTPUT_DIR`` is unset (local pytest runs).
+    """
+    entries: list[dict[str, float | str]] = []
+    if round_trip is not None:
+        entries.extend(
+            [
+                {
+                    "name": f"{prefix}/multi-scale-spectral-loss-max",
+                    "unit": "dB",
+                    "value": round_trip.mss_max,
+                },
+                {
+                    "name": f"{prefix}/dtw-aligned-mfcc-distance-max",
+                    "unit": "L1",
+                    "value": round_trip.wmfcc_max,
+                },
+                {
+                    "name": f"{prefix}/spectral-optimal-transport-max",
+                    "unit": "Wasserstein",
+                    "value": round_trip.sot_max,
+                },
+                {
+                    "name": f"{prefix}/rms-envelope-cosine-distance-max",
+                    "unit": "1-cos",
+                    "value": 1.0 - round_trip.rms_cos_min,
+                },
+                {
+                    "name": f"{prefix}/mel-spectrogram-mean-absolute-error",
+                    "unit": "dB",
+                    "value": round_trip.mel_mean_abs,
+                },
+                {
+                    # Static input parameter; emitting it as a series surfaces
+                    # accidental fixture-size regressions alongside the metric
+                    # drift they would silently cause.
+                    "name": f"{prefix}/num-samples",
+                    "unit": "count",
+                    "value": round_trip.num_samples,
+                },
+            ]
+        )
+        if total_render_seconds is not None:
+            # Wall-clock time of both stages divided by total renders
+            # (= 2 × num_samples, since each stage renders num_samples).
+            # Captures renderer perf drift even when audio metrics stay flat.
+            # Includes loudness-loop retries on Stage 1 of the random-replay
+            # test, so it's a real-throughput number not a render-only one.
+            entries.append(
+                {
+                    "name": f"{prefix}/wall-clock-seconds-per-render",
+                    "unit": "seconds",
+                    "value": total_render_seconds / (2 * round_trip.num_samples),
+                }
+            )
+    if all_pairs is not None:
+        entries.extend(
+            [
+                {
+                    "name": f"{prefix}/all-pairs-multi-scale-spectral-loss-max",
+                    "unit": "dB",
+                    "value": all_pairs.mss_max,
+                },
+                {
+                    "name": f"{prefix}/all-pairs-dtw-aligned-mfcc-distance-max",
+                    "unit": "L1",
+                    "value": all_pairs.wmfcc_max,
+                },
+                {
+                    "name": f"{prefix}/all-pairs-spectral-optimal-transport-max",
+                    "unit": "Wasserstein",
+                    "value": all_pairs.sot_max,
+                },
+                {
+                    "name": f"{prefix}/all-pairs-rms-envelope-cosine-distance-max",
+                    "unit": "1-cos",
+                    "value": 1.0 - all_pairs.rms_cos_min,
+                },
+                {
+                    "name": f"{prefix}/all-pairs-pair-count",
+                    "unit": "count",
+                    "value": all_pairs.pair_count,
+                },
+            ]
+        )
+    if not entries:
+        return
+    _emit_benchmark_metrics(entries=entries, bench_filename=f"{prefix}.json")
+
+
 def _emit_benchmark_metrics(
     entries: list[dict[str, float | str]], bench_filename: str
 ) -> None:
@@ -395,7 +540,7 @@ def _emit_benchmark_metrics(
 
 def _assert_all_pairs_audio_metrics_within_thresholds(
     audio: np.ndarray, label_prefix: str
-) -> None:
+) -> AllPairsMetrics:
     """For every (i, j) pair with i < j in ``audio``, assert metrics within thresholds.
 
     Use this when every row is expected to be a render of the *same* params — every pair should be
@@ -403,6 +548,9 @@ def _assert_all_pairs_audio_metrics_within_thresholds(
     the worst measurement so a single failure surfaces the most-divergent rendering rather than the
     first iteration to trip a threshold. Identifies the (i, j) that produced each worst measurement
     to make debugging easy.
+
+    Returns an ``AllPairsMetrics`` summarising the worst-case observations so callers can pass it
+    to ``_emit_audio_similarity_benchmark_metrics`` without recomputing.
     """
     n = audio.shape[0]
     pair_count = n * (n - 1) // 2
@@ -447,6 +595,13 @@ def _assert_all_pairs_audio_metrics_within_thresholds(
         f"{label_prefix}: worst rms cosine={worst_rms_cos[0]:.4f} at pair "
         f"{worst_rms_cos[1:]} below {_RMS_MIN_COSINE}"
     )
+    return AllPairsMetrics(
+        mss_max=float(worst_mss[0]),
+        wmfcc_max=float(worst_wmfcc[0]),
+        sot_max=float(worst_sot[0]),
+        rms_cos_min=float(worst_rms_cos[0]),
+        pair_count=pair_count,
+    )
 
 
 def _assert_round_trip_matches(
@@ -460,9 +615,7 @@ def _assert_round_trip_matches(
     expected_note_patches: list[dict[str, int | tuple[float, float]]],
     spec: ParamSpec,
     num_samples: int,
-    benchmark_name_prefix: str | None = None,
-    total_render_seconds: float | None = None,
-) -> None:
+) -> RoundTripMetrics:
     """Assert a Stage-2 dataset reproduces a Stage-1 dataset within phase-robust tolerances.
 
     Five checks: ``param_array`` exact equality, per-row phase-robust audio metrics
@@ -476,9 +629,9 @@ def _assert_round_trip_matches(
     lists. For tests that replay a single fixed patch across all rows, callers should
     pass the patch repeated ``num_samples`` times.
 
-    ``benchmark_name_prefix`` (optional): when set and ``BENCHMARK_OUTPUT_DIR`` is
-    defined, the helper emits the worst-case per-pair metrics + mel diff under that
-    prefix for github-action-benchmark trend tracking. See ``_emit_benchmark_metrics``.
+    Returns a ``RoundTripMetrics`` summarising the per-row worst-case observations so
+    callers can pass it to ``_emit_audio_similarity_benchmark_metrics`` without
+    recomputing.
     """
     np.testing.assert_allclose(
         actual_params,
@@ -507,65 +660,6 @@ def _assert_round_trip_matches(
         f"mel mean abs diff {mel_dist:.4f} exceeds {_MEL_MEAN_ABS_MAX}"
     )
 
-    if benchmark_name_prefix is not None:
-        # Max-over-samples for distance-style metrics; ``1 - min(rms_cos)`` keeps
-        # all entries smaller=better, which the customSmallerIsBetter schema requires.
-        # Each prefix gets its own JSON file so the publish step can post each
-        # bucket to a different chart page.
-        bench_entries: list[dict[str, float | str]] = [
-            {
-                "name": f"{benchmark_name_prefix}/multi-scale-spectral-loss-max",
-                "unit": "dB",
-                "value": max(mss_values),
-            },
-            {
-                "name": f"{benchmark_name_prefix}/dtw-aligned-mfcc-distance-max",
-                "unit": "L1",
-                "value": max(wmfcc_values),
-            },
-            {
-                "name": f"{benchmark_name_prefix}/spectral-optimal-transport-max",
-                "unit": "Wasserstein",
-                "value": max(sot_values),
-            },
-            {
-                "name": f"{benchmark_name_prefix}/rms-envelope-cosine-distance-max",
-                "unit": "1-cos",
-                "value": 1.0 - min(rms_cos_values),
-            },
-            {
-                "name": f"{benchmark_name_prefix}/mel-spectrogram-mean-absolute-error",
-                "unit": "dB",
-                "value": mel_dist,
-            },
-            {
-                # Static input parameter, but emitting it as a series keeps it
-                # visible alongside the other metrics — useful to verify the
-                # workflow ran the configured fixture size and to spot
-                # accidental num_samples regressions.
-                "name": f"{benchmark_name_prefix}/num-samples",
-                "unit": "count",
-                "value": num_samples,
-            },
-        ]
-        if total_render_seconds is not None:
-            # Wall-clock time of both stages divided by total renders
-            # (= 2 × num_samples, since each stage renders num_samples). Captures
-            # render-loop perf drift (Surge XT version bumps, pedalboard updates,
-            # plugin reload changes). Includes loudness-loop retries on Stage 1
-            # so it's a real-throughput number, not a render-only number.
-            bench_entries.append(
-                {
-                    "name": f"{benchmark_name_prefix}/wall-clock-seconds-per-render",
-                    "unit": "seconds",
-                    "value": total_render_seconds / (2 * num_samples),
-                },
-            )
-        _emit_benchmark_metrics(
-            entries=bench_entries,
-            bench_filename=f"{benchmark_name_prefix}.json",
-        )
-
     for i in range(num_samples):
         decoded_synth_params, decoded_note_params = spec.decode(actual_params[i])
         assert isinstance(decoded_synth_params, dict)
@@ -590,6 +684,16 @@ def _assert_round_trip_matches(
         start, end = decoded_note_params["note_start_and_end"]
         assert isinstance(start, np.floating)
         assert isinstance(end, np.floating)
+
+    return RoundTripMetrics(
+        mss_max=max(mss_values),
+        wmfcc_max=max(wmfcc_values),
+        sot_max=max(sot_values),
+        rms_cos_min=min(rms_cos_values),
+        mel_mean_abs=mel_dist,
+        num_samples=num_samples,
+    )
+
 
 @pytest.mark.xfail(strict=True, reason="bug #489")
 @pytest.mark.slow
@@ -665,7 +769,7 @@ def test_datasets_from_hardcoded_params_are_identical(
         got_dataset, spec, num_samples
     )
 
-    _assert_round_trip_matches(
+    round_trip_metrics = _assert_round_trip_matches(
         actual_audio=actual_audio,
         actual_mel=actual_mel,
         actual_params=actual_params,
@@ -674,21 +778,29 @@ def test_datasets_from_hardcoded_params_are_identical(
         expected_params=expected_params,
         expected_synth_patches=[_HARDCODED_SYNTH_PARAMS] * num_samples,
         expected_note_patches=[_HARDCODED_NOTE_PARAMS] * num_samples,
-        # Each prefix is also the bench JSON filename — workflow's publish step
-        # reads ``vst-noise-floor-1-preset-n-renders.json``. See
-        # ``docs/reference/audio-similarity-benchmarks.md``.
-        benchmark_name_prefix="vst-noise-floor-1-preset-n-renders",
-        total_render_seconds=stage1_seconds + stage2_seconds,
         spec=spec,
         num_samples=num_samples,
     )
 
     # Every render in expected ∪ actual uses identical params, so every pair across
     # the union should be perceptually identical. Asserts on the worst-case pair to
-    # surface the most-divergent rendering (e.g. an every-other-render glitch).
-    _assert_all_pairs_audio_metrics_within_thresholds(
+    # surface the most-divergent rendering (e.g. an every-other-render glitch). This is
+    # the #489 fingerprint, so the trend chart for this bucket tracks all-pairs metrics
+    # (the per-row round_trip metrics are emitted alongside for context, not as the
+    # primary regression signal).
+    all_pairs_metrics = _assert_all_pairs_audio_metrics_within_thresholds(
         np.concatenate([expected_audio, actual_audio], axis=0),
         label_prefix="hardcoded all-pairs",
+    )
+
+    # Bench filename is the prefix; workflow's publish step reads
+    # ``vst-noise-floor-1-preset-n-renders.json``. See
+    # ``docs/reference/audio-similarity-benchmarks.md``.
+    _emit_audio_similarity_benchmark_metrics(
+        prefix="vst-noise-floor-1-preset-n-renders",
+        round_trip=round_trip_metrics,
+        all_pairs=all_pairs_metrics,
+        total_render_seconds=stage1_seconds + stage2_seconds,
     )
 
 
@@ -796,7 +908,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
         got_dataset, spec, _NUM_SAMPLES
     )
 
-    _assert_round_trip_matches(
+    round_trip_metrics = _assert_round_trip_matches(
         actual_audio=actual_audio,
         actual_mel=actual_mel,
         actual_params=actual_params,
@@ -807,10 +919,16 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
         expected_note_patches=note_patches,
         spec=spec,
         num_samples=_NUM_SAMPLES,
-        # Each prefix is also the bench JSON filename — workflow's publish step
-        # reads ``vst-noise-floor-random-preset-replay.json``. See
-        # ``docs/reference/audio-similarity-benchmarks.md``.
-        benchmark_name_prefix="vst-noise-floor-random-preset-replay",
+    )
+
+    # Each row uses different random params, so cross-row pairs differ legitimately —
+    # no all-pairs check applies here. Per-row round-trip metrics are the right
+    # regression signal for this bucket. Bench filename is the prefix; workflow's
+    # publish step reads ``vst-noise-floor-random-preset-replay.json``. See
+    # ``docs/reference/audio-similarity-benchmarks.md``.
+    _emit_audio_similarity_benchmark_metrics(
+        prefix="vst-noise-floor-random-preset-replay",
+        round_trip=round_trip_metrics,
         total_render_seconds=stage1_seconds + stage2_seconds,
     )
 
@@ -845,3 +963,134 @@ def test_make_dataset(tmp_path: Path) -> None:
         assert isinstance(synth, dict)
         assert isinstance(note, dict)
         assert note.keys() == {"pitch", "note_start_and_end"}
+
+
+# Unit tests for ``_emit_audio_similarity_benchmark_metrics`` — pure JSON
+# serialization, no VST needed. Fast feedback while iterating on the
+# emission schema; complements the slow integration coverage above.
+
+
+def test_emit_benchmark_skips_when_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No-op when ``BENCHMARK_OUTPUT_DIR`` isn't set (local pytest runs)."""
+    monkeypatch.delenv("BENCHMARK_OUTPUT_DIR", raising=False)
+    _emit_audio_similarity_benchmark_metrics(
+        prefix="x",
+        round_trip=RoundTripMetrics(
+            mss_max=1.0, wmfcc_max=1.0, sot_max=0.001,
+            rms_cos_min=0.99, mel_mean_abs=0.5, num_samples=4,
+        ),
+    )
+    assert list(tmp_path.iterdir()) == []  # nothing written
+
+
+def test_emit_benchmark_round_trip_only_writes_expected_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-pair-only emission (sampled bucket): seven entries, no all-pairs.
+
+    Includes ``wall-clock-seconds-per-render`` because ``total_render_seconds``
+    is supplied. ``rms-envelope-cosine-distance`` is reported as ``1 - rms_cos_min``
+    so the schema reads smaller-is-better.
+    """
+    monkeypatch.setenv("BENCHMARK_OUTPUT_DIR", str(tmp_path))
+    _emit_audio_similarity_benchmark_metrics(
+        prefix="bucket-a",
+        round_trip=RoundTripMetrics(
+            mss_max=2.5, wmfcc_max=3.5, sot_max=0.02,
+            rms_cos_min=0.97, mel_mean_abs=1.5, num_samples=4,
+        ),
+        total_render_seconds=8.0,  # 8 / (2 × 4) = 1.0 s/render
+    )
+    out = tmp_path / "bucket-a.json"
+    assert out.exists()
+    entries = json.loads(out.read_text())
+    by_name = {e["name"]: e for e in entries}
+    assert by_name["bucket-a/multi-scale-spectral-loss-max"]["value"] == 2.5
+    assert by_name["bucket-a/dtw-aligned-mfcc-distance-max"]["value"] == 3.5
+    assert by_name["bucket-a/spectral-optimal-transport-max"]["value"] == 0.02
+    assert (
+        by_name["bucket-a/rms-envelope-cosine-distance-max"]["value"]
+        == pytest.approx(1.0 - 0.97)
+    )
+    assert by_name["bucket-a/mel-spectrogram-mean-absolute-error"]["value"] == 1.5
+    assert by_name["bucket-a/num-samples"]["value"] == 4
+    assert by_name["bucket-a/wall-clock-seconds-per-render"]["value"] == 1.0
+    # Units are spelled out, not abbreviated.
+    assert by_name["bucket-a/spectral-optimal-transport-max"]["unit"] == "Wasserstein"
+    # No all-pairs entries when only round_trip is supplied.
+    assert not any("all-pairs" in name for name in by_name)
+
+
+def test_emit_benchmark_all_pairs_only_skips_round_trip_series(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """All-pairs-only emission: five entries, none of the round-trip series."""
+    monkeypatch.setenv("BENCHMARK_OUTPUT_DIR", str(tmp_path))
+    _emit_audio_similarity_benchmark_metrics(
+        prefix="bucket-b",
+        all_pairs=AllPairsMetrics(
+            mss_max=4.0, wmfcc_max=6.0, sot_max=0.03,
+            rms_cos_min=0.95, pair_count=66,
+        ),
+    )
+    entries = json.loads((tmp_path / "bucket-b.json").read_text())
+    by_name = {e["name"]: e for e in entries}
+    assert by_name["bucket-b/all-pairs-multi-scale-spectral-loss-max"]["value"] == 4.0
+    assert (
+        by_name["bucket-b/all-pairs-rms-envelope-cosine-distance-max"]["value"]
+        == pytest.approx(1.0 - 0.95)
+    )
+    assert by_name["bucket-b/all-pairs-pair-count"]["value"] == 66
+    # No round-trip entries when only all_pairs is supplied.
+    assert "bucket-b/multi-scale-spectral-loss-max" not in by_name
+    assert "bucket-b/num-samples" not in by_name
+
+
+def test_emit_benchmark_both_structs_writes_both_namespaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hardcoded bucket emits both per-row and all-pairs (the latter is the #489 signal)."""
+    monkeypatch.setenv("BENCHMARK_OUTPUT_DIR", str(tmp_path))
+    _emit_audio_similarity_benchmark_metrics(
+        prefix="bucket-c",
+        round_trip=RoundTripMetrics(
+            mss_max=1.0, wmfcc_max=1.0, sot_max=0.001,
+            rms_cos_min=0.99, mel_mean_abs=0.5, num_samples=6,
+        ),
+        all_pairs=AllPairsMetrics(
+            mss_max=4.0, wmfcc_max=6.0, sot_max=0.03,
+            rms_cos_min=0.95, pair_count=66,
+        ),
+    )
+    entries = json.loads((tmp_path / "bucket-c.json").read_text())
+    names = {e["name"] for e in entries}
+    # Both namespaces present.
+    assert "bucket-c/multi-scale-spectral-loss-max" in names
+    assert "bucket-c/all-pairs-multi-scale-spectral-loss-max" in names
+
+
+def test_emit_benchmark_no_args_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both structs None ⇒ no file written, no error."""
+    monkeypatch.setenv("BENCHMARK_OUTPUT_DIR", str(tmp_path))
+    _emit_audio_similarity_benchmark_metrics(prefix="bucket-d")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_emit_benchmark_appends_to_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Subsequent emissions for the same prefix accumulate in the same file."""
+    monkeypatch.setenv("BENCHMARK_OUTPUT_DIR", str(tmp_path))
+    rt = RoundTripMetrics(
+        mss_max=1.0, wmfcc_max=1.0, sot_max=0.001,
+        rms_cos_min=0.99, mel_mean_abs=0.5, num_samples=2,
+    )
+    _emit_audio_similarity_benchmark_metrics(prefix="bucket-e", round_trip=rt)
+    _emit_audio_similarity_benchmark_metrics(prefix="bucket-e", round_trip=rt)
+    entries = json.loads((tmp_path / "bucket-e.json").read_text())
+    # Six round-trip entries per call (no render-seconds), twice = 12 total.
+    assert len(entries) == 12

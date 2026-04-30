@@ -88,8 +88,9 @@ point but covers more of the patch space than the hardcoded fixture.
 
 ## Metric series
 
-Both buckets emit the same seven series (five distance metrics plus
-two non-distance sentinels — `num-samples` and `wall-clock-seconds-per-render`):
+Both buckets emit the per-row "round-trip" series (five distance metrics
+plus the two non-distance sentinels `num-samples` and
+`wall-clock-seconds-per-render`):
 
 | Metric                                | Computed by                                                                 | Unit        | Smaller-is-better? |
 | ------------------------------------- | --------------------------------------------------------------------------- | ----------- | ------------------ |
@@ -101,13 +102,26 @@ two non-distance sentinels — `num-samples` and `wall-clock-seconds-per-render`
 | `num-samples`                         | static fixture size (input parameter)                                       | count       | n/a (sentinel)     |
 | `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                 | seconds     | yes                |
 
+The **`1 preset N renders`** bucket additionally emits five `all-pairs-*`
+series — these are the **#489 regression signal**, since the per-row
+metrics can stay flat while the all-pairs worst-case spikes (the bug
+manifests as junk on every-other render, not on every render):
+
+| Metric                                       | Computed by                                   | Unit        |
+| -------------------------------------------- | --------------------------------------------- | ----------- |
+| `all-pairs-multi-scale-spectral-loss-max`    | worst-case `compute_mss` across all pairs     | dB          |
+| `all-pairs-dtw-aligned-mfcc-distance-max`    | worst-case `compute_wmfcc` across all pairs   | L1          |
+| `all-pairs-spectral-optimal-transport-max`   | worst-case `compute_sot` across all pairs     | Wasserstein |
+| `all-pairs-rms-envelope-cosine-distance-max` | worst-case `1 - compute_rms` across all pairs | 1-cos       |
+| `all-pairs-pair-count`                       | `n × (n − 1) / 2` for `n = 2 × num_samples`   | count       |
+
 Distance metrics are emitted as **max-over-samples** (worst-case
-per-pair) for distance-style series — that's what `_assert_round_trip_matches`
-reports — and `1 - min(rms_cos)` for the RMS series so that all entries
-read smaller-is-better (required by the `customSmallerIsBetter` schema).
-`num-samples` is a static input parameter; emitting it as a series makes
-fixture-size regressions visible alongside the metric drift it would
-silently cause.
+per-pair) for the round-trip series and **max-over-pairs** for the
+all-pairs series, with `1 - min(rms_cos)` so all entries read
+smaller-is-better (required by the `customSmallerIsBetter` schema).
+`num-samples` and `all-pairs-pair-count` are static given the test's
+fixture size; emitting them as series makes accidental fixture changes
+visible alongside the metric drift they would silently cause.
 `wall-clock-seconds-per-render` includes the loudness-loop retries on
 Stage 1 of the random-replay test, so it's a real-throughput number
 rather than a render-only one.
