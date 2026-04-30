@@ -45,6 +45,14 @@ jobs:
   generate:
     name: Launch generate_dataset on RunPod via SkyPilot
     runs-on: ubuntu-latest
+    # Spends real RunPod + R2 dollars and needs RUNPOD_API_KEY in the job env.
+    # Only run for PRs opened from the same repository (forks can't read the
+    # secrets anyway, but this fails fast and surfaces the reason instead of
+    # provisioning a pod that errors on missing creds). workflow_dispatch is
+    # always allowed because it's gated by repo write permissions.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 60
     env:
       DATASET_CONFIG: >-
@@ -121,11 +129,21 @@ jobs:
               # skypilot[runpod]==0.12.0 was added to requirements-app.txt.
               # Install at runtime so `import sky` works. Remove once the
               # image is republished from the current Dockerfile.
-              # Bootstrap pip into the venv via stdlib ensurepip — uv and
-              # pip3 are both absent from PATH in the currently-published
-              # dev-snapshot.
-              python -m ensurepip --upgrade
-              python -m pip install --quiet "skypilot[runpod]==0.12.0"
+              #
+              # In the currently-published dev-snapshot, `python` (and the
+              # downstream launcher invocation) resolves to the Ubuntu
+              # system python at /usr/bin/python3, not the uv venv at
+              # /venv/main — neither uv nor pip3 are on PATH and stdlib
+              # ensurepip is disabled by Ubuntu for the system python.
+              # apt-install python3-pip and install into system
+              # site-packages so the launcher's `import sky` resolves.
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends python3-pip
+              pip3 install --quiet "skypilot[runpod]==0.12.0"
+
+              # Probe what the launcher's interpreter will see, in case
+              # this is wrong:
+              python -c "import sys, importlib.util; print(\"python:\", sys.executable); print(\"sky importable:\", importlib.util.find_spec(\"sky\") is not None)"
 
               # The launcher imports pipeline.schemas.spec (→ pedalboard via
               # param_specs) which needs a live X display, hence the headless
@@ -207,9 +225,9 @@ jobs:
           echo "R2 prefix: ${R2_PREFIX}"
           echo "Shard file: ${SHARD_FILE}"
 
-          # Download shard from R2 via Docker (has rclone). The image's
-          # ENTRYPOINT is the python click CLI; `passthrough <cmd>` execs
-          # the trailing argv as PID 1.
+          # Download shard from R2 via Docker (has rclone). The image has no
+          # ENTRYPOINT, so `docker run img <argv>` overrides the /bin/bash
+          # CMD with <argv> directly.
           mkdir -p /tmp/shard-download
           docker pull "$IMAGE"
           docker run --rm \
@@ -221,7 +239,7 @@ jobs:
             -e PYTHONPATH=/home/build/synth-setter \
             -v /tmp/shard-download:/download \
             "$IMAGE" \
-            passthrough rclone copy --checksum \
+            rclone copy --checksum \
               "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
               /download/
 
@@ -236,6 +254,6 @@ jobs:
             -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
             -e PYTHONPATH=/home/build/synth-setter \
             "$IMAGE" \
-            passthrough python3 -m pipeline.ci.validate_shard \
+            python3 -m pipeline.ci.validate_shard \
               /spec/input_spec.json \
               "/download/${SHARD_FILE}"
