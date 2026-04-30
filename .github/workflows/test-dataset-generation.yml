@@ -116,6 +116,12 @@ jobs:
               python -c "import sky" 2>/dev/null \
                 || uv pip install --quiet "skypilot[runpod]==0.7.0" "python-dotenv"
 
+              # SkyPilot needs rsync + an SSH client to provision and stage
+              # file_mounts onto the RunPod pod. The base image lacks both;
+              # install at runtime.
+              command -v rsync >/dev/null && command -v ssh-keygen >/dev/null \
+                || (apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync openssh-client)
+
               # SkyPilot validates RunPod credentials by reading
               # ~/.runpod/config.toml (env var alone is not enough).
               mkdir -p ~/.runpod
