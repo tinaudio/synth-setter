@@ -369,8 +369,13 @@ RUN uv pip install --no-deps -e .
 RUN pytest -k "not slow" -v
 
 COPY scripts/docker_entrypoint.py /usr/local/bin/entrypoint.py
-RUN chmod +x /usr/local/bin/entrypoint.py
-ENTRYPOINT ["python", "/usr/local/bin/entrypoint.py"]
+COPY scripts/docker_dispatch.sh /usr/local/bin/dispatch.sh
+RUN chmod +x /usr/local/bin/entrypoint.py /usr/local/bin/dispatch.sh
+# dispatch.sh routes click subcommands (generate_dataset, passthrough, idle,
+# …) through the click CLI and execs anything else directly — required so
+# SkyPilot's RunPod backend can run `bash -c '<setup>'` without having `bash`
+# rejected by the click parser.
+ENTRYPOINT ["/usr/local/bin/dispatch.sh"]
 CMD []
 
 # ==========================================
