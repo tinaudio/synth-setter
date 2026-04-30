@@ -74,17 +74,23 @@ def generate_sample(
 
     When ``fixed_synth_params`` and/or ``fixed_note_params`` are supplied, they take
     precedence over the values drawn from ``param_spec.sample()`` for deterministic
-    rendering. Caveat: if ``fixed_synth_params`` produces audio below ``min_loudness``,
-    the loudness-retry loop will spin forever — the caller is responsible for providing
-    loudness-passing patches.
+    rendering. When BOTH are supplied, render inputs are fully fixed — the function
+    renders once and raises ``ValueError`` on loudness fail rather than retrying
+    against an unchanged input. When only one is supplied, the other is re-sampled
+    each retry and the loop remains meaningful.
     """
+    fully_fixed = fixed_synth_params is not None and fixed_note_params is not None
     while True:
-        logger.debug("sampling params")
-        sampled_synth, sampled_note = param_spec.sample()
-        synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
-        note_params = fixed_note_params if fixed_note_params is not None else sampled_note
-
-        logger.debug("sampling note")
+        if fixed_synth_params is None or fixed_note_params is None:
+            logger.debug("sampling params")
+            sampled_synth, sampled_note = param_spec.sample()
+            synth_params = (
+                fixed_synth_params if fixed_synth_params is not None else sampled_synth
+            )
+            note_params = fixed_note_params if fixed_note_params is not None else sampled_note
+        else:
+            synth_params = fixed_synth_params
+            note_params = fixed_note_params
 
         output = render_params(
             plugin_path,
@@ -102,6 +108,12 @@ def generate_sample(
         loudness = meter.integrated_loudness(output.T)
         logger.debug(f"loudness: {loudness}")
         if loudness < min_loudness:
+            if fully_fixed:
+                raise ValueError(
+                    f"fully-fixed render produced loudness {loudness:.2f} dB below "
+                    f"min_loudness {min_loudness:.2f} dB; retrying is futile because "
+                    f"render inputs are deterministic. Provide a louder patch."
+                )
             logger.debug("loudness too low, skipping")
             continue
 
