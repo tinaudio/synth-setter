@@ -238,7 +238,7 @@ class TestMainCli:
                 str(template_yaml),
                 "--env-file",
                 str(env_file),
-                "--job-name",
+                "--cluster-name",
                 "smoke-job-1",
             ],
         )
@@ -273,7 +273,7 @@ class TestMainCli:
         mock_sky.launch.assert_called_once_with(task, cluster_name="smoke-job-1", down=True)
         mock_sky.stream_and_get.assert_called_once_with(mock_sky.launch.return_value, follow=True)
 
-    def test_default_job_name_uses_config_id_prefix(
+    def test_default_cluster_name_uses_config_id_prefix(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -282,7 +282,7 @@ class TestMainCli:
         local_spec_path: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """When --job-name is omitted, the launcher derives the name from `config_id[:8]`."""
+        """When --cluster-name is omitted, the launcher derives the name from `config_id[:8]`."""
         runner = CliRunner()
         result = runner.invoke(
             main,

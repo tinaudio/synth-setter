@@ -3,7 +3,8 @@
 # Loaded by scripts/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
 # The launcher injects R2 credentials (via task.update_envs) and the
 # materialized DatasetPipelineSpec (via task.update_file_mounts) before
-# calling sky.jobs.launch(task, name=...).
+# calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
+# (not sky.jobs.launch) — RunPod has no managed-jobs controller backend.
 #
 # Image: tinaudio/synth-setter:dev-snapshot must be pushed to Docker Hub
 # (`make docker-build-dev-snapshot` then `docker push`) before launch.

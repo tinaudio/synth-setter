@@ -3,9 +3,10 @@ name: Test Dataset Generation
 # Exercises the SkyPilot RunPod launcher (scripts/skypilot_launch_smoke.py)
 # with the CI smoke-test config (32 samples, 1 shard). The launcher runs
 # inside the Docker image so materialize_spec can import pedalboard via the
-# headless X wrapper. SkyPilot streams worker logs back and blocks until
-# the managed job completes; the materialized spec is then validated and
-# the resulting shard pulled from R2 and structurally validated.
+# headless X wrapper. SkyPilot streams worker logs back and waits for the
+# unmanaged cluster launch (sky.launch + stream_and_get) to complete; the
+# materialized spec is then validated and the resulting shard pulled from
+# R2 and structurally validated.
 #
 # Triggers:
 # - Manual dispatch: test with custom image tag and config
@@ -13,7 +14,9 @@ name: Test Dataset Generation
 #
 # Required secrets:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
-#   RUNPOD_API_KEY — SkyPilot's RunPod backend reads this from env
+#   RUNPOD_API_KEY — used by this workflow to write ~/.runpod/config.toml,
+#                    which SkyPilot's RunPod backend reads at provision time
+#                    (env var alone is not sufficient for `sky check runpod`)
 
 on:
   workflow_dispatch:

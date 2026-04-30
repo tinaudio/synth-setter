@@ -2,8 +2,12 @@
 
 Materializes a `DatasetPipelineSpec` locally from the smoke config, ships the
 frozen spec into the worker via `task.update_file_mounts`, forwards the
-worker-side env from a `.env.cloud` file via `task.update_envs`, and submits
-a SkyPilot managed job that runs the existing container CLI.
+worker-side env from a `.env.cloud` file via `task.update_envs`, and launches
+an unmanaged SkyPilot task (`sky.launch`) that runs the existing container CLI.
+
+`sky.jobs.launch` (managed jobs) requires a cloud-storage backend for
+controller state, which RunPod doesn't provide; cluster-level launch is
+sufficient for this single-shard smoke probe.
 
 This is the first scaffolding under the SkyPilot integration epic (#534).
 No `compute_config` schema, no `pipeline generate --backend skypilot` CLI —
@@ -76,16 +80,16 @@ def load_worker_env(path: Path) -> dict[str, str]:
     help="Path to a KEY=VALUE env file forwarded to the worker.",
 )
 @click.option(
-    "--job-name",
+    "--cluster-name",
     type=str,
     default=None,
-    help="SkyPilot job name (default: synth-setter-smoke-<config_id[:8]>).",
+    help="SkyPilot cluster name (default: synth-setter-smoke-<config_id[:8]>).",
 )
 def main(
     config_path: Path,
     template_path: Path,
     env_file_path: Path,
-    job_name: str | None,
+    cluster_name: str | None,
 ) -> None:
     """Launch the smoke `generate_dataset` run on RunPod via SkyPilot."""
     if not env_file_path.is_file():
@@ -112,7 +116,7 @@ def main(
     mount_source = LOCAL_SPEC_PATH.with_suffix(".mount.json")
     shutil.copyfile(LOCAL_SPEC_PATH, mount_source)
 
-    resolved_job_name = job_name or f"synth-setter-smoke-{config_id[:8]}"
+    resolved_cluster_name = cluster_name or f"synth-setter-smoke-{config_id[:8]}"
 
     task = sky.Task.from_yaml(str(template_path))
     task.update_envs(worker_env)
@@ -123,8 +127,8 @@ def main(
     # along the way; on failure it raises. `down=True` tears the cluster down after the run.
     # Non-managed launch (sky.launch, not sky.jobs.launch) — managed jobs require a separate
     # cloud-storage backend for controller state, which RunPod doesn't provide.
-    click.echo(f"Provisioning SkyPilot cluster: {resolved_job_name}")
-    request_id = sky.launch(task, cluster_name=resolved_job_name, down=True)
+    click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
+    request_id = sky.launch(task, cluster_name=resolved_cluster_name, down=True)
     sky.stream_and_get(request_id, follow=True)
 
 
