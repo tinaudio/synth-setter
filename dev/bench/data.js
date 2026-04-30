@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777534772516,
+  "lastUpdate": 1777534775289,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST fixed-params replay": [
@@ -777,6 +777,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 4.418843707200006,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ceaf0fc54f29e875edba3e60a7b575b39d8ec41c",
+          "message": "fix(vst): reload plugin per render to eliminate every-other junk audio (#713)\n\n* fix(vst): reload plugin per render to eliminate every-other junk audio\n\nrender_params now takes a plugin_path and reloads the VST3 plugin on every\ncall, working around a stale-state bug where alternating renders produced\nsilent or repeated audio. load_plugin's editor-pump uses a threading.Event\n+ show_editor(stop_event) pattern (replacing the prior _thread.interrupt\nKeyboardInterrupt hack), which is what makes a per-call reload safe and\nfast enough to be the default.\n\ngenerate_sample, make_dataset, and scripts/predict_vst_audio.py are\nupdated to pass plugin_path through to render_params instead of\npre-loading the plugin.\n\nThe xfail decorator on\ntest_datasets_from_hardcoded_params_are_identical is removed: with this\nfix in place, the test no longer xpasses.\n\nCloses #489\nRefs #705\nRefs #702\n\n* docs(eval): update audio-similarity-benchmarks for #489 closure\n\nThe dashboard's framing described #489 as an open bug and called the\nall-pairs series its \"regression signal\". With #713 closing #489 via\nper-render plugin reload, the framing inverts: the all-pairs series is\nnow the regression guard against the fix.\n\nAlso fixes the stale module path `src/data/vst/render_params` →\n`src/data/vst/core.py § render_params()`.\n\nRefs #489\nRefs #713\n\n* test(vst): characterize that show_editor warm-up does not change rendered audio\n\nAdds test_show_editor_warmup_does_not_change_rendered_audio: renders the\nhardcoded #489 patch N times each with the show_editor warm-up enabled\nand disabled (by swapping VST3Plugin.show_editor to a no-op around the\nsecond batch), then asserts every cross-path pair is within the same\naudio-similarity thresholds the round-trip tests use.\n\nThis is the empirical justification for the macOS fix in #714 — if the\nwarm-up is not load-bearing for the per-render reload path, it can be\ndropped without changing output, which avoids the AppKit/CGS SIGTRAP\nthat show_editor accumulation triggers in unbundled python on macOS.\n\nRefs #489\nRefs #714\n\n* fix(vst): make load_plugin helper thread daemon + warn on stuck cleanup\n\nIf show_editor hangs past the join timeout, mark the helper thread\ndaemon so it can't block process exit, and log a warning so the\ncondition is visible. Cosmetic comment trim on test_preset_params\nexplaining the post-call parameter readback inversion.\n\nRefs #489\n\n* refactor(vst): use threading.Timer for show_editor close timing\n\nthreading.Timer is the right primitive for 'fire X after N seconds';\nhand-rolling it via Thread + time.sleep was reinventing it. Drops the\n_prepare_plugin helper and _PREPARE_PLUGIN_JOIN_TIMEOUT_SECONDS\nconstant. timer.cancel() + close_editor.set() in the finally block is\ndefensive against show_editor returning early for any reason.\n\nRefs #489 #714",
+          "timestamp": "2026-04-30T03:26:17-04:00",
+          "tree_id": "c5ca7f23bf1188ab84af12c9f2cd5ca12da53f22",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ceaf0fc54f29e875edba3e60a7b575b39d8ec41c"
+        },
+        "date": 1777534774673,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.2751128673553467,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.7308008645474913,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.008529347367584705,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.07157295942306519,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.869699478149414,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.891129689399985,
             "unit": "seconds"
           }
         ]
