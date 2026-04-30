@@ -221,13 +221,16 @@ python -c "import h5py; f = h5py.File('outputs/curated-patches.h5'); \
 These are accepted trade-offs, not bugs we plan to fix soon. Surface to
 your teammates so they aren't blindsided.
 
-- **0.5 s editor warm-up** — `_prepare_plugin` in `src/data/vst/core.py`
-  shows the editor for a fixed
-  [`_PREPARE_PLUGIN_SLEEP_SECONDS = 0.5`](../../src/data/vst/core.py)
-  to let the plugin populate its full parameter dict before we apply
-  params. On slow machines, parameter discovery may still be
-  incomplete; the visible symptom is a `KeyError` from
-  `set_params`. Workaround: bump the constant.
+- **0.5 s editor warm-up (non-Darwin only)** — `load_plugin` in
+  `src/data/vst/core.py` briefly opens the editor (gated by
+  [`_EDITOR_INIT_DELAY_SECONDS`](../../src/data/vst/core.py)) so the
+  plugin populates its full parameter dict before we apply params. On
+  slow machines parameter discovery may still be incomplete; the
+  visible symptom is a `KeyError` from `set_params`, and the workaround
+  is to bump the constant. On macOS the warmup is skipped entirely (see
+  the `#714` SIGTRAP comment in `core.py`); the post-load `process(...)`
+  flush in `render_params` is what commits Surge XT's preset state on
+  that platform.
 - **Plugin reloaded on every render in `make_dataset`** — `render_params`
   calls `load_plugin(plugin_path)` per sample
   ([`src/data/vst/core.py`](../../src/data/vst/core.py)). This is an
@@ -241,10 +244,13 @@ your teammates so they aren't blindsided.
   resamples params and re-renders until output integrated loudness
   exceeds `MAKE_DATASET_MIN_LOUDNESS = -50.0`
   ([`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py)).
-  When `fixed_synth_params` is set, the params don't change between
-  retries — so if the captured patch is near-silent, dataset
-  generation hangs on that row. Workaround: only press `p` while you
-  can hear the patch.
+  When `fixed_synth_params` is set (this script's path), the synth
+  params are held constant — only the note params are re-sampled per
+  retry — so a near-silent captured patch loops forever because the
+  note rarely fixes loudness. (When *both* synth and note params are
+  fully fixed, `generate_sample` raises `ValueError` instead of
+  retrying, but this script never reaches that branch.) Workaround:
+  only press `p` while you can hear the patch.
 - **Blocking keyboard input** — `keyboard_loop` uses
   `click.getchar()`, which only checks `stop_event` between
   keystrokes. After the editor closes, you may need to press one key
