@@ -148,6 +148,14 @@ class TestPredictionRefType:
         with pytest.raises(click.BadParameter):
             parser.convert(value, None, None)
 
+    def test_rejects_negative_batch_idx(self, surge_xt_interactive) -> None:
+        """Negative indices raise ``click.BadParameter`` to match ``decode_prediction_row``'s
+        contract — h5py-style negative indexing would otherwise silently select the last row."""
+        parser = surge_xt_interactive.PredictionRefType()
+
+        with pytest.raises(click.BadParameter):
+            parser.convert("pred-0.pt:-1", None, None)
+
 
 class TestDatasetRefType:
     """DatasetRefType parses ``PATH:DATASET_IDX`` into a DatasetRef."""
@@ -171,6 +179,14 @@ class TestDatasetRefType:
 
         with pytest.raises(click.BadParameter):
             parser.convert(value, None, None)
+
+    def test_rejects_negative_batch_idx(self, surge_xt_interactive) -> None:
+        """Negative indices raise ``click.BadParameter`` — h5py's ``param_array[-1]`` would
+        otherwise silently return the last row instead of failing."""
+        parser = surge_xt_interactive.DatasetRefType()
+
+        with pytest.raises(click.BadParameter):
+            parser.convert("test.h5:-1", None, None)
 
 
 class TestLoadPredictionSynthParams:

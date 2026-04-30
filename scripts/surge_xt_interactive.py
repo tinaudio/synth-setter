@@ -102,6 +102,8 @@ class PredictionRefType(click.ParamType):
             batch_idx = int(idx_str)
         except ValueError:
             self.fail(f"batch index must be an integer, got {idx_str!r}", param, ctx)
+        if batch_idx < 0:
+            self.fail(f"batch index must be non-negative, got {batch_idx}", param, ctx)
         return PredictionRef(path=Path(path_str), batch_idx=batch_idx)
 
 
@@ -127,6 +129,8 @@ class DatasetRefType(click.ParamType):
             batch_idx = int(idx_str)
         except ValueError:
             self.fail(f"batch index must be an integer, got {idx_str!r}", param, ctx)
+        if batch_idx < 0:
+            self.fail(f"dataset index must be non-negative, got {batch_idx}", param, ctx)
         return DatasetRef(path=Path(path_str), batch_idx=batch_idx)
 
 
@@ -257,10 +261,11 @@ def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
     ) as stream:
         while not stop_event.is_set():
             synth_output = plugin(silence, SAMPLE_RATE, reset=False)
-            assert synth_output.shape == (CHANNELS, BUFFER_SIZE), (
-                f"expected synth output shape ({CHANNELS}, {BUFFER_SIZE}), "
-                f"got {synth_output.shape}"
-            )
+            if synth_output.shape != (CHANNELS, BUFFER_SIZE):
+                raise ValueError(
+                    f"expected synth output shape ({CHANNELS}, {BUFFER_SIZE}), "
+                    f"got {synth_output.shape}"
+                )
             if stream_resampler is not None:
                 stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
             else:
@@ -304,9 +309,10 @@ def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> Non
         True,
     )
     expected_frames = int(SESSION_RECORDING_DURATION_SECONDS * SAMPLE_RATE)
-    assert output.shape == (CHANNELS, expected_frames), (
-        f"expected output shape ({CHANNELS}, {expected_frames}), got {output.shape}"
-    )
+    if output.shape != (CHANNELS, expected_frames):
+        raise ValueError(
+            f"expected output shape ({CHANNELS}, {expected_frames}), got {output.shape}"
+        )
     # AudioFile.write expects (frames, channels); plugin output is (channels, frames).
     with AudioFile(str(session_recording_path), "w", SAMPLE_RATE, CHANNELS) as f:
         f.write(output.T)
@@ -486,7 +492,9 @@ def main(
         set_params(plugin, synth_params)
 
     stop_event = threading.Event()
-    with ThreadPoolExecutor() as pool:
+    pool = ThreadPoolExecutor()
+    audio_timed_out = False
+    try:
         if session_recording_path is not None:
             audio_future = pool.submit(play_audio_recorded, plugin, session_recording_path)
         else:
@@ -499,17 +507,23 @@ def main(
             stop_event.set()
             # Surface any exception from the audio thread. Catch TimeoutError so
             # a slow stream-close on shutdown doesn't crash the script — log it
-            # and continue draining; cancel-style errors will resurface elsewhere.
+            # and skip the wait-for-completion in pool teardown to avoid hanging.
             try:
                 audio_future.result(timeout=AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS)
             except TimeoutError:
+                audio_timed_out = True
                 logger.warning(
-                    "audio thread did not exit within %ss; continuing shutdown",
+                    "audio thread did not exit within %ss; cancelling pool and continuing shutdown",
                     AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS,
                 )
         logger.info("Editor closed, waiting for keyboard thread to finish...")
         synth_patches = keyboard_future.result()
         logger.info("Recorded %d patches: %s", len(synth_patches), synth_patches)
+    finally:
+        # When the audio thread timed out, don't let pool teardown block waiting
+        # on it again — cancel pending work and return immediately. Otherwise
+        # wait for any remaining work to drain normally.
+        pool.shutdown(wait=not audio_timed_out, cancel_futures=audio_timed_out)
 
     if output_dataset_path is None:
         logger.info("No output dataset path provided, skipping dataset creation.")
