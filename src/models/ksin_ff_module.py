@@ -1,7 +1,7 @@
 from typing import Any
 
 import torch
-from lightning import LightningModule
+from pytorch_lightning import LightningModule
 
 from src.metrics import ChamferDistance, LinearAssignmentDistance, LogSpectralDistance
 from src.models.components.loss import ChamferLoss

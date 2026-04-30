@@ -293,7 +293,7 @@ Lightning's `WandbLogger` with `log_model: "all"` uploads every checkpoint as a 
 ```yaml
 # configs/logger/wandb.yaml
 wandb:
-  _target_: lightning.pytorch.loggers.WandbLogger
+  _target_: pytorch_lightning.loggers.WandbLogger
   project: synth-setter
   log_model: "all"  # uploads every checkpoint immediately as model artifacts (crash-resilient)
 ```

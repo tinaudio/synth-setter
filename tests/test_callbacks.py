@@ -7,8 +7,8 @@ no TensorBoard file writes).
 
 from unittest.mock import MagicMock
 
-from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
+from pytorch_lightning.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 
 from src.utils.callbacks import _log_figure
 

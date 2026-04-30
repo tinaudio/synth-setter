@@ -3,8 +3,8 @@ from functools import partial
 from typing import Any, Literal
 
 import torch
-from lightning import LightningModule
-from lightning.pytorch.utilities import grad_norm
+from pytorch_lightning import LightningModule
+from pytorch_lightning.utilities import grad_norm
 
 
 def call_with_cfg(

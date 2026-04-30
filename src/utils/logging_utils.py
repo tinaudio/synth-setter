@@ -4,7 +4,7 @@ import sys
 from importlib.util import find_spec
 from typing import Any
 
-from lightning_utilities.core.rank_zero import rank_zero_only
+from lightning_fabric.utilities.rank_zero import rank_zero_only
 from omegaconf import OmegaConf
 
 from src.utils import pylogger

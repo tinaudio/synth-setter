@@ -4,7 +4,7 @@ from typing import Optional, Union
 import librosa
 import numpy as np
 import torch
-from lightning import LightningDataModule
+from pytorch_lightning import LightningDataModule
 from pedalboard.io import AudioFile
 
 
