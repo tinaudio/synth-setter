@@ -14,6 +14,7 @@ Pattern compared:
 """
 
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -37,6 +38,10 @@ requires_vst = pytest.mark.requires_vst
 skip_no_vst = pytest.mark.skipif(
     not Path(_PLUGIN_PATH).exists(),
     reason=f"VST plugin not found at {_PLUGIN_PATH}",
+)
+skip_darwin = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="show_editor SIGTRAPs on Darwin (#714) — the very crash this PR avoids",
 )
 
 
@@ -75,6 +80,7 @@ def _read_all_params(plugin: VST3Plugin) -> dict[str, float]:
 @pytest.mark.slow
 @requires_vst
 @skip_no_vst
+@skip_darwin
 def test_flush_pattern_matches_show_editor_pattern(preset_path: str) -> None:
     """Flush pattern in render_params is sufficient to commit Surge XT preset state."""
     p_no = VST3Plugin(_PLUGIN_PATH)
