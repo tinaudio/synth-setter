@@ -252,7 +252,15 @@ class TestMainCli:
         assert forwarded_envs["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
         assert forwarded_envs["RCLONE_CONFIG_R2_ENDPOINT"].startswith("https://")
 
-        task.update_file_mounts.assert_called_once_with({WORKER_SPEC_PATH: str(local_spec_path)})
+        task.update_file_mounts.assert_called_once()
+        mounts = task.update_file_mounts.call_args.args[0]
+        assert WORKER_SPEC_PATH in mounts
+        # Mount source is a sibling copy of LOCAL_SPEC_PATH (so SkyPilot's staging-by-rename
+        # doesn't consume the original file the CI artifact upload depends on).
+        mount_source = Path(mounts[WORKER_SPEC_PATH])
+        assert mount_source != local_spec_path
+        assert mount_source.is_file()
+        assert mount_source.read_text() == local_spec_path.read_text()
 
         # Round-trip: the materialized JSON validates as a DatasetPipelineSpec.
         assert local_spec_path.is_file()
@@ -263,6 +271,7 @@ class TestMainCli:
         assert spec.r2_bucket == "intermediate-data"
 
         mock_sky.launch.assert_called_once_with(task, cluster_name="smoke-job-1", down=True)
+        mock_sky.stream_and_get.assert_called_once_with(mock_sky.launch.return_value, follow=True)
 
     def test_default_job_name_uses_config_id_prefix(
         self,
