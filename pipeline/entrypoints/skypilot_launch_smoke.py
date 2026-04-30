@@ -141,13 +141,25 @@ def main(
     task.update_file_mounts({WORKER_SPEC_PATH: str(mount_source)})
 
     # SkyPilot 0.12 made sky.launch async (it returns a RequestId backed by the local API
-    # server). `stream_and_get` blocks until the request resolves, streaming logs to stdout
-    # along the way; on failure it raises. `down=True` tears the cluster down after the run.
+    # server). `stream_and_get` blocks until the *launch request* resolves — i.e., the cluster
+    # is provisioned, file_mounts are synced, setup runs, and the job is submitted — and
+    # streams provisioning logs to stdout along the way. It does NOT wait for the submitted
+    # job to actually run to completion, and it does NOT stream the worker's own stdout/stderr.
+    # `down=True` tears the cluster down after the run.
     # Non-managed launch (sky.launch, not sky.jobs.launch) — managed jobs require a separate
     # cloud-storage backend for controller state, which RunPod doesn't provide.
     click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
-    request_id = sky.launch(task, cluster_name=resolved_cluster_name, down=True)
-    sky.stream_and_get(request_id, follow=True)
+    launch_request_id = sky.launch(task, cluster_name=resolved_cluster_name, down=True)
+    job_id, _ = sky.stream_and_get(launch_request_id, follow=True)
+
+    # Block on the worker job and stream its stdout/stderr to ours so a worker traceback
+    # surfaces here (instead of as a downstream "shard not in R2" error). tail_logs is
+    # synchronous when preload_content=True (the default), returns the worker's exit code,
+    # and follows the log to completion.
+    click.echo(f"Streaming worker job {job_id} logs from {resolved_cluster_name}")
+    exit_code = sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=True)
+    if exit_code != 0:
+        raise click.ClickException(f"Worker job {job_id} exited with code {exit_code}")
 
 
 if __name__ == "__main__":

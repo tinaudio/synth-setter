@@ -121,8 +121,15 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture()
 def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-    """Replace the launcher's module-level `sky` reference with a MagicMock."""
+    """Replace the launcher's module-level `sky` reference with a MagicMock.
+
+    `sky.launch` returns a RequestId; `sky.stream_and_get` of that request resolves to
+    `(job_id, handle)`; `sky.tail_logs` returns the worker job's exit code (0 = success).
+    Stub all three so the launcher's blocking-and-checking flow exits cleanly.
+    """
     fake = MagicMock()
+    fake.stream_and_get.return_value = (1, MagicMock())
+    fake.tail_logs.return_value = 0
     monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.sky", fake)
     return fake
 
@@ -283,6 +290,13 @@ class TestMainCli:
         mock_sky.launch.assert_called_once_with(task, cluster_name="smoke-job-1", down=True)
         mock_sky.stream_and_get.assert_called_once_with(mock_sky.launch.return_value, follow=True)
 
+        # Worker-side blocking: tail_logs is called with the job_id stream_and_get returned (1)
+        # so the launcher waits for the worker's `python -m pipeline.entrypoints.generate_dataset`
+        # to finish and surfaces its stdout/stderr instead of silently exiting after submission.
+        mock_sky.tail_logs.assert_called_once_with(
+            cluster_name="smoke-job-1", job_id=1, follow=True
+        )
+
     def test_default_cluster_name_uses_config_id_prefix(
         self,
         config_yaml: Path,
@@ -340,3 +354,33 @@ class TestMainCli:
         )
         assert result.exit_code == 0, result.output
         assert explicit.is_file()
+
+    def test_worker_nonzero_exit_fails_launcher(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A worker job that exits non-zero must fail the launcher (not silently succeed).
+
+        Without this, sky.tail_logs returning a non-zero exit would let the launcher complete and
+        downstream "shard not in R2" errors would mask the actual worker traceback.
+        """
+        mock_sky.tail_logs.return_value = 7
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--config",
+                str(config_yaml),
+                "--template",
+                str(template_yaml),
+                "--env-file",
+                str(env_file),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "exited with code 7" in result.output
