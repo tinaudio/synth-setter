@@ -119,7 +119,7 @@ jobs:
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -v /tmp/bench:/bench \
             -e PYTHONPATH=/home/build/synth-setter \
-            -e BENCHMARK_OUTPUT_PATH=/bench/bench.json \
+            -e BENCHMARK_OUTPUT_DIR=/bench \
             -e HYDRA_FULL_ERROR=1 \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
             "$IMAGE" \
@@ -131,56 +131,61 @@ jobs:
                 pytest -vv -s tests/data/vst/test_generate_vst_dataset.py
             '
 
-      - name: Surface bench.json on the runner
-        # ``benchmark-action/github-action-benchmark`` reads the file from
-        # the runner workspace, not from inside the container — copy it
-        # out of the host-mounted volume to where the action expects it.
-        # Skipped cleanly if the test wrote nothing (e.g. all xfail tests
-        # produced XFAIL before reaching the emit, or VST tests deselected).
+      - name: Surface per-bucket bench JSON files on the runner
+        # ``benchmark-action/github-action-benchmark`` reads its input from
+        # the runner workspace, not from inside the container — copy each
+        # ``<prefix>.json`` out of the host-mounted volume to where the
+        # publish steps expect it. Each prefix maps 1:1 to a chart bucket.
+        # Skipped cleanly if a file is missing (test deselected, xfailed
+        # before emit, etc).
         if: always() && inputs.dummy_only != true
         run: |
-          if [ -f /tmp/bench/bench.json ]; then
-            cp /tmp/bench/bench.json "${{ github.workspace }}/bench.json"
-            echo "bench.json captured (size: $(wc -c < bench.json) bytes)"
-          else
-            echo "no bench.json written by test run — publish step will be skipped"
-          fi
+          for f in vst-noise-floor-1-preset-n-renders.json vst-noise-floor-random-preset-replay.json; do
+            if [ -f "/tmp/bench/$f" ]; then
+              cp "/tmp/bench/$f" "${{ github.workspace }}/$f"
+              echo "$f captured (size: $(wc -c < "${{ github.workspace }}/$f") bytes)"
+            else
+              echo "no $f written by test run — corresponding publish step will be skipped"
+            fi
+          done
 
-      - name: Write hardcoded dummy bench.json (debug-only fast path)
+      - name: Write hardcoded dummy bench JSON files (debug-only fast path)
         # Bypasses the slow Docker test entirely. Lets a maintainer iterate
-        # on the publish-step gating / config without waiting ~5 minutes
-        # per cycle. Schema mirrors what ``_assert_round_trip_matches``
-        # writes for ``test_datasets_from_hardcoded_params_are_identical``;
-        # values are fictitious but plausible.
+        # on publish-step gating / config without waiting ~5 minutes per
+        # cycle. Schema mirrors what ``_assert_round_trip_matches`` writes
+        # for the two round-trip tests; values are fictitious but plausible.
         if: inputs.dummy_only == true
         run: |
-          cat > "${{ github.workspace }}/bench.json" <<'EOF'
+          for prefix in vst-noise-floor-1-preset-n-renders vst-noise-floor-random-preset-replay; do
+            cat > "${{ github.workspace }}/${prefix}.json" <<EOF
           [
-            {"name": "vst-fixed-replay/mss-max",          "unit": "dB",    "value": 1.0},
-            {"name": "vst-fixed-replay/wmfcc-max",        "unit": "L1",    "value": 1.0},
-            {"name": "vst-fixed-replay/sot-max",          "unit": "W",     "value": 0.001},
-            {"name": "vst-fixed-replay/rms-distance-max", "unit": "1-cos", "value": 0.001},
-            {"name": "vst-fixed-replay/mel-mean-abs",     "unit": "dB",    "value": 0.5}
+            {"name": "${prefix}/multi-scale-spectral-loss-max",        "unit": "dB",          "value": 1.0},
+            {"name": "${prefix}/dtw-aligned-mfcc-distance-max",        "unit": "L1",          "value": 1.0},
+            {"name": "${prefix}/spectral-optimal-transport-max",       "unit": "Wasserstein", "value": 0.001},
+            {"name": "${prefix}/rms-envelope-cosine-distance-max",     "unit": "1-cos",       "value": 0.001},
+            {"name": "${prefix}/mel-spectrogram-mean-absolute-error",  "unit": "dB",          "value": 0.5}
           ]
           EOF
-          echo "dummy bench.json written (size: $(wc -c < "${{ github.workspace }}/bench.json") bytes)"
+            echo "dummy ${prefix}.json written"
+          done
 
-      - name: Publish VST audio-similarity metrics to benchmark history
-        # Push-to-main always publishes. Manual dispatch publishes only
-        # when the dispatcher explicitly sets ``publish_metrics=true``,
-        # used to bootstrap the gh-pages chart from a feature branch
-        # before main has picked up the workflow. ``hashFiles`` skips
-        # cleanly when the previous step found no bench.json.
+      - name: Publish "1 preset N renders" metrics to benchmark history
+        # Bucket 1: same hardcoded patch rendered ``num_samples`` times across
+        # both stages, exposing the every-other-render variance described in
+        # bug #489. See ``docs/reference/audio-similarity-benchmarks.md``.
+        # Push-to-main always publishes; manual dispatch requires the
+        # ``publish_metrics`` or ``dummy_only`` opt-in. ``hashFiles`` skips
+        # the step cleanly if the file is missing.
         if: |
-          hashFiles('bench.json') != '' && (
+          hashFiles('vst-noise-floor-1-preset-n-renders.json') != '' && (
             (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
             (github.event_name == 'workflow_dispatch' && (inputs.publish_metrics == true || inputs.dummy_only == true))
           )
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: VST noise floor
+          name: VST noise floor (1 preset N renders)
           tool: customSmallerIsBetter
-          output-file-path: bench.json
+          output-file-path: vst-noise-floor-1-preset-n-renders.json
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           auto-push: true
@@ -189,5 +194,28 @@ jobs:
           # Warn-only initially. Flip to ``true`` once the noise floor of
           # the five series is well-characterised and the alert threshold
           # is tuned.
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish "random preset replay" metrics to benchmark history
+        # Bucket 2: random Stage-1 candidates replayed in Stage 2. Per-row
+        # only (no all-pairs), so it tracks the API-level round-trip
+        # invariant rather than the every-other-render bug. See
+        # ``docs/reference/audio-similarity-benchmarks.md``.
+        if: |
+          hashFiles('vst-noise-floor-random-preset-replay.json') != '' && (
+            (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
+            (github.event_name == 'workflow_dispatch' && (inputs.publish_metrics == true || inputs.dummy_only == true))
+          )
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: VST noise floor (random preset replay)
+          tool: customSmallerIsBetter
+          output-file-path: vst-noise-floor-random-preset-replay.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          alert-threshold: "150%"
+          comment-on-alert: true
           fail-on-alert: false
           github-token: ${{ secrets.GITHUB_TOKEN }}

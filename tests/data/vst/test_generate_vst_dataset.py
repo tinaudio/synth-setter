@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -360,17 +361,25 @@ def _assert_audio_metrics_within_thresholds(
     return mss, wmfcc, sot, rms_cos
 
 
-def _emit_benchmark_metrics(entries: list[dict[str, float | str]]) -> None:
-    """Append metrics to ``BENCHMARK_OUTPUT_PATH`` for github-action-benchmark.
+def _emit_benchmark_metrics(
+    entries: list[dict[str, float | str]], bench_filename: str
+) -> None:
+    """Append metrics to ``$BENCHMARK_OUTPUT_DIR/<bench_filename>`` for the trend chart.
 
-    No-op when the env var is unset (e.g. local pytest runs). The on-disk format
-    is the ``customSmallerIsBetter`` schema:
+    No-op when the env var is unset (e.g. local pytest runs). One file per
+    benchmark "bucket" because ``benchmark-action/github-action-benchmark@v1``
+    keys all entries from a single file under one chart page; multiple charts
+    require multiple publish steps reading distinct files. See
+    ``docs/reference/audio-similarity-benchmarks.md`` for the wiring.
+
+    The on-disk format is the ``customSmallerIsBetter`` schema:
     https://github.com/benchmark-action/github-action-benchmark#examples
     """
-    out_path = os.environ.get("BENCHMARK_OUTPUT_PATH")
-    if not out_path:
+    out_dir = os.environ.get("BENCHMARK_OUTPUT_DIR")
+    if not out_dir:
         return
-    out = Path(out_path)
+    out = Path(out_dir) / bench_filename
+    out.parent.mkdir(parents=True, exist_ok=True)
     existing = json.loads(out.read_text()) if out.exists() else []
     out.write_text(json.dumps(existing + entries, indent=2))
 
@@ -443,6 +452,7 @@ def _assert_round_trip_matches(
     spec: ParamSpec,
     num_samples: int,
     benchmark_name_prefix: str | None = None,
+    total_render_seconds: float | None = None,
 ) -> None:
     """Assert a Stage-2 dataset reproduces a Stage-1 dataset within phase-robust tolerances.
 
@@ -491,38 +501,60 @@ def _assert_round_trip_matches(
     if benchmark_name_prefix is not None:
         # Max-over-samples for distance-style metrics; ``1 - min(rms_cos)`` keeps
         # all entries smaller=better, which the customSmallerIsBetter schema requires.
+        # Each prefix gets its own JSON file so the publish step can post each
+        # bucket to a different chart page.
+        bench_entries: list[dict[str, float | str]] = [
+            {
+                "name": f"{benchmark_name_prefix}/multi-scale-spectral-loss-max",
+                "unit": "dB",
+                "value": max(mss_values),
+            },
+            {
+                "name": f"{benchmark_name_prefix}/dtw-aligned-mfcc-distance-max",
+                "unit": "L1",
+                "value": max(wmfcc_values),
+            },
+            {
+                "name": f"{benchmark_name_prefix}/spectral-optimal-transport-max",
+                "unit": "Wasserstein",
+                "value": max(sot_values),
+            },
+            {
+                "name": f"{benchmark_name_prefix}/rms-envelope-cosine-distance-max",
+                "unit": "1-cos",
+                "value": 1.0 - min(rms_cos_values),
+            },
+            {
+                "name": f"{benchmark_name_prefix}/mel-spectrogram-mean-absolute-error",
+                "unit": "dB",
+                "value": mel_dist,
+            },
+            {
+                # Static input parameter, but emitting it as a series keeps it
+                # visible alongside the other metrics — useful to verify the
+                # workflow ran the configured fixture size and to spot
+                # accidental num_samples regressions.
+                "name": f"{benchmark_name_prefix}/num-samples",
+                "unit": "count",
+                "value": num_samples,
+            },
+        ]
+        if total_render_seconds is not None:
+            # Wall-clock time of both stages divided by total renders
+            # (= 2 × num_samples, since each stage renders num_samples). Captures
+            # render-loop perf drift (Surge XT version bumps, pedalboard updates,
+            # plugin reload changes). Includes loudness-loop retries on Stage 1
+            # so it's a real-throughput number, not a render-only number.
+            bench_entries.append(
+                {
+                    "name": f"{benchmark_name_prefix}/wall-clock-seconds-per-render",
+                    "unit": "seconds",
+                    "value": total_render_seconds / (2 * num_samples),
+                },
+            )
         _emit_benchmark_metrics(
-            [
-                {
-                    "name": f"{benchmark_name_prefix}/multi-scale-spectral-loss-max",
-                    "unit": "dB",
-                    "value": max(mss_values),
-                },
-                {
-                    "name": f"{benchmark_name_prefix}/dtw-aligned-mfcc-distance-max",
-                    "unit": "L1",
-                    "value": max(wmfcc_values),
-                },
-                {
-                    "name": f"{benchmark_name_prefix}/spectral-optimal-transport-max",
-                    "unit": "Wasserstein",
-                    "value": max(sot_values),
-                },
-                {
-                    "name": (
-                        f"{benchmark_name_prefix}/rms-envelope-cosine-distance-max"
-                    ),
-                    "unit": "1-cos",
-                    "value": 1.0 - min(rms_cos_values),
-                },
-                {
-                    "name": (
-                        f"{benchmark_name_prefix}/mel-spectrogram-mean-absolute-error"
-                    ),
-                    "unit": "dB",
-                    "value": mel_dist,
-                },
-            ]
+            entries=bench_entries,
+            bench_filename=f"{benchmark_name_prefix}.json",
         )
 
     for i in range(num_samples):
@@ -573,6 +605,7 @@ def test_datasets_from_hardcoded_params_are_identical(
     replay = [(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * num_samples
 
     expected_dataset = tmp_path / "expected.h5"
+    t0 = time.perf_counter()
     with (
         h5py.File(expected_dataset, "a") as f,
         _patched_sample(spec, replay),
@@ -590,12 +623,14 @@ def test_datasets_from_hardcoded_params_are_identical(
             param_spec=spec,
             sample_batch_size=num_samples,
         )
+    stage1_seconds = time.perf_counter() - t0
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
         expected_dataset, spec, num_samples
     )
 
     got_dataset = tmp_path / "replayed.h5"
+    t0 = time.perf_counter()
     with (
         h5py.File(got_dataset, "a") as f,
         _patched_sample(spec, replay),
@@ -613,6 +648,7 @@ def test_datasets_from_hardcoded_params_are_identical(
             param_spec=spec,
             sample_batch_size=num_samples,
         )
+    stage2_seconds = time.perf_counter() - t0
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
         got_dataset, spec, num_samples
@@ -627,7 +663,11 @@ def test_datasets_from_hardcoded_params_are_identical(
         expected_params=expected_params,
         expected_synth_patches=[_HARDCODED_SYNTH_PARAMS] * num_samples,
         expected_note_patches=[_HARDCODED_NOTE_PARAMS] * num_samples,
-        benchmark_name_prefix="vst-noise-floor",
+        # Each prefix is also the bench JSON filename — workflow's publish step
+        # reads ``vst-noise-floor-1-preset-n-renders.json``. See
+        # ``docs/reference/audio-similarity-benchmarks.md``.
+        benchmark_name_prefix="vst-noise-floor-1-preset-n-renders",
+        total_render_seconds=stage1_seconds + stage2_seconds,
         spec=spec,
         num_samples=num_samples,
     )
@@ -675,6 +715,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
 
     # Stage 1: random-sampled "candidates" dataset (loudness-filtered).
     expected_dataset = tmp_path / "candidates.h5"
+    t0 = time.perf_counter()
     with h5py.File(expected_dataset, "a") as expected_file:
         make_dataset(
             hdf5_file=expected_file,
@@ -689,6 +730,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
             param_spec=spec,
             sample_batch_size=_NUM_SAMPLES,
         )
+    stage1_seconds = time.perf_counter() - t0
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
         expected_dataset, spec, _NUM_SAMPLES
@@ -719,6 +761,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     # Stage 2: replay the candidates via ``_patched_sample`` and verify reproducibility.
     got_dataset = tmp_path / "replayed.h5"
     replay = list(zip(synth_patches, note_patches, strict=True))
+    t0 = time.perf_counter()
     with (
         h5py.File(got_dataset, "a") as f,
         _patched_sample(spec, replay),
@@ -736,6 +779,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
             param_spec=spec,
             sample_batch_size=_NUM_SAMPLES,
         )
+    stage2_seconds = time.perf_counter() - t0
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
         got_dataset, spec, _NUM_SAMPLES
@@ -752,6 +796,11 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
         expected_note_patches=note_patches,
         spec=spec,
         num_samples=_NUM_SAMPLES,
+        # Each prefix is also the bench JSON filename — workflow's publish step
+        # reads ``vst-noise-floor-random-preset-replay.json``. See
+        # ``docs/reference/audio-similarity-benchmarks.md``.
+        benchmark_name_prefix="vst-noise-floor-random-preset-replay",
+        total_render_seconds=stage1_seconds + stage2_seconds,
     )
 
 
