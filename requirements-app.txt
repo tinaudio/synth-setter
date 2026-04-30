@@ -8,7 +8,7 @@ tensorboard
 wandb
 
 # --------- pipeline --------- #
-click<8.2
+click
 numpy
 pydantic>=2
 pyyaml
