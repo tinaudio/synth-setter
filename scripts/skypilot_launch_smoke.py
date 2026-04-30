@@ -12,6 +12,7 @@ those land in the Phase A–C PRs.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import click
@@ -29,11 +30,15 @@ DEFAULT_ENV_FILE = REPO_ROOT / ".env.cloud"
 
 # Worker-side mount destination. The image's WORKDIR is /home/build/synth-setter (Dockerfile),
 # so the spec lands under <repo_root>/data/ on the worker — gitignored, no clash with repo
-# files, and portable if the container layout changes later. The local source path mirrors it
-# under the launching repo's data/ dir.
+# files, and portable if the container layout changes later.
 WORKER_REPO_ROOT = "/home/build/synth-setter"
 WORKER_SPEC_PATH = f"{WORKER_REPO_ROOT}/data/skypilot-launch-smoke-spec.json"
-LOCAL_SPEC_PATH = REPO_ROOT / "data" / "skypilot-launch-smoke-spec.json"
+
+# Local source path. Lives under the system tempdir (not the repo) so it shares a filesystem
+# with SkyPilot's staging dir (also under /tmp). Inside the dev-snapshot container the repo
+# workspace is bind-mounted from the runner host while /tmp is on the container's overlay —
+# crossing those two with `os.rename` raises EXDEV (Errno 18) when SkyPilot stages mounts.
+LOCAL_SPEC_PATH = Path(tempfile.gettempdir()) / "skypilot-launch-smoke-spec.json"
 
 
 def load_worker_env(path: Path) -> dict[str, str]:
