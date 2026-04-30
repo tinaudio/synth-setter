@@ -41,6 +41,7 @@ sh
 rootutils
 runpod==1.8.1
 scipy==1.14.1
+skypilot[runpod]==0.7.0
 threadpoolctl
 
 # --------- eval metrics --------- #

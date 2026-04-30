@@ -1,0 +1,33 @@
+# SkyPilot task template for RunPod.
+#
+# Loaded by scripts/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
+# The launcher injects R2 credentials (via task.update_envs) and the
+# materialized DatasetPipelineSpec (via task.update_file_mounts) before
+# calling sky.jobs.launch(task, name=...).
+#
+# Image: tinaudio/synth-setter:dev-snapshot must be pushed to Docker Hub
+# (`make docker-build-dev-snapshot` then `docker push`) before launch.
+# Tag pinning to a git SHA is deferred to the Phase B PR per the design doc
+# at docs/design/skypilot-compute-integration.md.
+
+resources:
+  cloud: runpod
+  accelerators: A4000:1
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+# Placeholders. Real values are injected by the launcher via update_envs.
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+
+# /workspace/spec.json is mounted by the launcher via update_file_mounts.
+setup: |
+  echo "synth-setter worker ready (host: $(hostname))"
+
+run: |
+  python /usr/local/bin/entrypoint.py generate_dataset --spec /workspace/spec.json

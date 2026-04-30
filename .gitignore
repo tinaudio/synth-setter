@@ -151,6 +151,7 @@ configs/local/default.yaml
 /data/
 /logs/
 .env
+.env.cloud
 
 # Aim logging
 .aim
