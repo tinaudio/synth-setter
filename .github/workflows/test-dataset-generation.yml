@@ -130,19 +130,23 @@ jobs:
               # Install at runtime so `import sky` works. Remove once the
               # image is republished from the current Dockerfile.
               #
-              # In the currently-published dev-snapshot, `python` (and the
-              # downstream launcher invocation) resolves to the Ubuntu
-              # system python at /usr/bin/python3, not the uv venv at
-              # /venv/main — neither uv nor pip3 are on PATH and stdlib
-              # ensurepip is disabled by Ubuntu for the system python.
-              # apt-install python3-pip and install into system
-              # site-packages so the launcher's `import sky` resolves.
-              apt-get update -qq
-              apt-get install -y -qq --no-install-recommends python3-pip
-              pip3 install --quiet "skypilot[runpod]==0.12.0"
+              # /venv/main/bin/ in the published image holds entry-point
+              # scripts (alembic, pytest, runpod, …) but NO `python`,
+              # `pip`, `pip3`, or `uv` symlink — confirmed by extracting
+              # the image layers locally. So `python` falls through PATH
+              # to /usr/bin/python3 (Ubuntu system python). Two follow-on
+              # constraints:
+              #   - ensurepip is disabled by Ubuntu for system python.
+              #   - `apt-get update` fails with "Permission denied" on
+              #     /var/lib/apt/lists/lock under this image's runtime.
+              # Bootstrap pip from upstream get-pip.py, then install
+              # skypilot to /usr/local site-packages (system python sees
+              # it without --user shenanigans).
+              curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+              python /tmp/get-pip.py --quiet
+              python -m pip install --quiet "skypilot[runpod]==0.12.0"
 
-              # Probe what the launcher's interpreter will see, in case
-              # this is wrong:
+              # Probe — proves the launcher's interpreter sees sky.
               python -c "import sys, importlib.util; print(\"python:\", sys.executable); print(\"sky importable:\", importlib.util.find_spec(\"sky\") is not None)"
 
               # The launcher imports pipeline.schemas.spec (→ pedalboard via
