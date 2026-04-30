@@ -72,6 +72,7 @@ def _read_all_params(plugin: VST3Plugin) -> dict[str, float]:
     "preset_path",
     sorted(p.as_posix() for p in _PRESET_DIR.glob("*.vstpreset")),
 )
+@pytest.mark.slow
 @requires_vst
 @skip_no_vst
 def test_flush_pattern_matches_show_editor_pattern(preset_path: str) -> None:
