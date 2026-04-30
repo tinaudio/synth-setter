@@ -187,7 +187,7 @@ class TestMainCli:
         assert result.exit_code != 0
         assert "Worker env file not found" in result.output
         mock_sky.Task.from_yaml.assert_not_called()
-        mock_sky.jobs.launch.assert_not_called()
+        mock_sky.launch.assert_not_called()
 
     def test_empty_env_file_fails(
         self,
@@ -216,7 +216,7 @@ class TestMainCli:
         assert result.exit_code != 0
         assert "No env vars parsed" in result.output
         mock_sky.Task.from_yaml.assert_not_called()
-        mock_sky.jobs.launch.assert_not_called()
+        mock_sky.launch.assert_not_called()
 
     def test_submits_job_with_expected_arguments(
         self,
@@ -262,7 +262,7 @@ class TestMainCli:
         assert spec.num_shards == 1
         assert spec.r2_bucket == "intermediate-data"
 
-        mock_sky.jobs.launch.assert_called_once_with(task, name="smoke-job-1")
+        mock_sky.launch.assert_called_once_with(task, cluster_name="smoke-job-1", down=True)
 
     def test_default_job_name_uses_config_id_prefix(
         self,
@@ -289,5 +289,6 @@ class TestMainCli:
         assert result.exit_code == 0, result.output
 
         # Config stem is "ci-smoke-test"; first 8 chars → "ci-smoke".
-        kwargs: dict[str, Any] = mock_sky.jobs.launch.call_args.kwargs
-        assert kwargs["name"] == "synth-setter-smoke-ci-smoke"
+        kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
+        assert kwargs["cluster_name"] == "synth-setter-smoke-ci-smoke"
+        assert kwargs["down"] is True
