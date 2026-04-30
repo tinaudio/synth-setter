@@ -11,6 +11,7 @@ Regression for: https://github.com/tinaudio/synth-setter/issues/225
 
 import os
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -27,6 +28,10 @@ skip_no_vst = pytest.mark.skipif(
     reason=f"VST plugin not found at {PLUGIN_PATH}",
 )
 
+skip_linux = pytest.mark.skipif(
+    sys.platform == "linux",
+    reason=" test needs refactor to use  scripts/run-linux-vst-headless.sh",
+)
 
 @requires_vst
 @skip_no_vst
@@ -58,6 +63,7 @@ def test_preset_dependent_params_missing_without_flush():
 
 @requires_vst
 @skip_no_vst
+@skip_linux
 def test_render_params_sets_preset_dependent_param():
     """render_params must successfully set preset-dependent params without raising."""
     import numpy as np

@@ -286,7 +286,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         -r /artifacts/requirements.txt && \
     rm -rf /artifacts/requirements*.txt
 
-# Runtime apt packages for headless VST loading + rclone for R2 uploads
+# Runtime apt packages: headless VST loading, rclone for R2 uploads, and the
+# toolchain SkyPilot's RunPod backend needs to provision and stage file_mounts
+# over SSH (rsync, openssh-client) plus a system pip3 (sky shells out to `pip3`
+# directly, which the uv-managed venv at /venv/main does not expose).
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update; \
@@ -301,7 +304,10 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       openbox \
       x11-utils \
       x11-xserver-utils \
-      rclone; \
+      rclone \
+      rsync \
+      openssh-client \
+      python3-pip; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
@@ -364,8 +370,15 @@ RUN pytest -k "not slow" -v
 
 COPY scripts/docker_entrypoint.py /usr/local/bin/entrypoint.py
 RUN chmod +x /usr/local/bin/entrypoint.py
-ENTRYPOINT ["python", "/usr/local/bin/entrypoint.py"]
-CMD []
+# No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
+# `dockerArgs: "bash -c '<base64-setup>'"`, and a baked-in click-CLI
+# ENTRYPOINT would prepend `python entrypoint.py`, turning that into
+#   python entrypoint.py bash -c '...'
+# which crashes with `Error: No such command 'bash'` before SkyPilot can
+# SSH in. Default CMD is /bin/bash so `docker run img` (no args) lands in
+# a shell. Callers that want the click CLI invoke it explicitly:
+#   docker run img python /usr/local/bin/entrypoint.py generate_dataset --spec /path/spec.json
+CMD ["/bin/bash"]
 
 # ==========================================
 # devcontainer-tools: dev-base + CLI tools + non-root user.
