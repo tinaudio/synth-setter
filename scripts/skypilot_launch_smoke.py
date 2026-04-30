@@ -12,6 +12,7 @@ those land in the Phase A–C PRs.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -105,18 +106,26 @@ def main(
     LOCAL_SPEC_PATH.write_text(spec.model_dump_json(indent=2))
     click.echo(f"Materialized spec to {LOCAL_SPEC_PATH}")
 
+    # SkyPilot stages file_mount sources by moving them into its own staging dir; passing
+    # LOCAL_SPEC_PATH directly would leave nothing behind for downstream consumers (CI
+    # artifact upload, validate-spec). Stage a sibling copy and mount that instead.
+    mount_source = LOCAL_SPEC_PATH.with_suffix(".mount.json")
+    shutil.copyfile(LOCAL_SPEC_PATH, mount_source)
+
     resolved_job_name = job_name or f"synth-setter-smoke-{config_id[:8]}"
 
     task = sky.Task.from_yaml(str(template_path))
     task.update_envs(worker_env)
-    task.update_file_mounts({WORKER_SPEC_PATH: str(LOCAL_SPEC_PATH)})
+    task.update_file_mounts({WORKER_SPEC_PATH: str(mount_source)})
 
-    # Non-managed `sky.launch` (not `sky.jobs.launch`): managed jobs require a separate cloud
-    # storage backend (S3/GCS/etc.) for the controller's state, which RunPod doesn't provide.
-    # `down=True` tears the cluster down after the run; `stream_logs=True` (default) blocks
-    # until completion and streams worker logs.
+    # SkyPilot 0.12 made sky.launch async (it returns a RequestId backed by the local API
+    # server). `stream_and_get` blocks until the request resolves, streaming logs to stdout
+    # along the way; on failure it raises. `down=True` tears the cluster down after the run.
+    # Non-managed launch (sky.launch, not sky.jobs.launch) — managed jobs require a separate
+    # cloud-storage backend for controller state, which RunPod doesn't provide.
     click.echo(f"Provisioning SkyPilot cluster: {resolved_job_name}")
-    sky.launch(task, cluster_name=resolved_job_name, down=True)
+    request_id = sky.launch(task, cluster_name=resolved_job_name, down=True)
+    sky.stream_and_get(request_id, follow=True)
 
 
 if __name__ == "__main__":
