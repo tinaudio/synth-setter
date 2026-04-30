@@ -25,9 +25,12 @@ envs:
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
 
-# /workspace/spec.json is mounted by the launcher via update_file_mounts.
+# <repo_root>/data/skypilot-launch-smoke-spec.json is mounted by the launcher via
+# update_file_mounts. Keep this path in sync with WORKER_SPEC_PATH in
+# scripts/skypilot_launch_smoke.py.
 setup: |
   echo "synth-setter worker ready (host: $(hostname))"
 
 run: |
-  python /usr/local/bin/entrypoint.py generate_dataset --spec /workspace/spec.json
+  python /usr/local/bin/entrypoint.py generate_dataset \
+    --spec /home/build/synth-setter/data/skypilot-launch-smoke-spec.json

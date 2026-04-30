@@ -26,7 +26,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env.cloud"
-WORKER_SPEC_PATH = "/workspace/spec.json"
+
+# Worker-side mount destination. The image's WORKDIR is /home/build/synth-setter (Dockerfile),
+# so this lands the spec under <repo_root>/data/ on the worker — gitignored, no clash with repo
+# files, and the same shape any future container layout could keep portable.
+WORKER_REPO_ROOT = "/home/build/synth-setter"
+WORKER_SPEC_PATH = f"{WORKER_REPO_ROOT}/data/skypilot-launch-smoke-spec.json"
 
 
 def load_worker_env(path: Path) -> dict[str, str]:
