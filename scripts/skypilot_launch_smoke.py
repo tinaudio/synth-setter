@@ -17,7 +17,6 @@ from pathlib import Path
 
 import click
 import sky
-import sky.jobs
 from dotenv import dotenv_values
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
@@ -112,8 +111,12 @@ def main(
     task.update_envs(worker_env)
     task.update_file_mounts({WORKER_SPEC_PATH: str(LOCAL_SPEC_PATH)})
 
-    click.echo(f"Submitting SkyPilot job: name={resolved_job_name}")
-    sky.jobs.launch(task, name=resolved_job_name)
+    # Non-managed `sky.launch` (not `sky.jobs.launch`): managed jobs require a separate cloud
+    # storage backend (S3/GCS/etc.) for the controller's state, which RunPod doesn't provide.
+    # `down=True` tears the cluster down after the run; `stream_logs=True` (default) blocks
+    # until completion and streams worker logs.
+    click.echo(f"Provisioning SkyPilot cluster: {resolved_job_name}")
+    sky.launch(task, cluster_name=resolved_job_name, down=True)
 
 
 if __name__ == "__main__":
