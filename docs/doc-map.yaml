@@ -242,6 +242,19 @@ docs:
         covers: "Packer template, packer variables (synth_setter_git_ref/torch_backend/python_version/vm_name), provisioner steps, brew packages, venv layout, VST3 path, smoke tests, .zshrc auto-activation, prebuilt image at registry-1.docker.io/tinaudio/synth-setter-macos, Docker Hub publishing workflow"
         scope: "tart"
 
+  # ── Surge XT interactive guide ──────────────────────────────────
+  - doc: docs/guides/surge-xt-interactive.md
+    description: Interactive Surge XT prediction audition and patch-recording guide
+    sources:
+      - pattern: "scripts/surge_xt_interactive.py"
+        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch HDF5 output, append-vs-fresh dataset semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants"
+      - pattern: "src/data/vst/core.py"
+        covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
+        scope: "interactive"
+      - pattern: "src/data/vst/generate_vst_dataset.py"
+        covers: "fixed_synth_params_list / fixed_note_params_list optional path used to render captured patches; mel_spec shape (2,128,401), audio dtype float16"
+        scope: "interactive"
+
   # ── rclone reference (placeholder — doc does not exist yet) ─────
   # - doc: docs/reference/rclone.md
   #   description: rclone R2 operations reference
