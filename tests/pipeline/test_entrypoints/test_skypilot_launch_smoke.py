@@ -525,11 +525,16 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """An exception out of `sky.tail_logs` must not skip cluster teardown."""
+        """A `sky.tail_logs` failure is observability-only — must not abort the launcher or skip
+        cluster teardown."""
         mock_sky.tail_logs.side_effect = RuntimeError("boom")
 
         result = _invoke(config_yaml, template_yaml, env_file)
-        assert result.exit_code != 0
+        # Worker job reached SUCCEEDED via the polling loop, so even though the worker-log
+        # dump in the finally raised, the launcher should still exit cleanly. The "boom"
+        # message is logged via click.echo as part of the diagnostic block.
+        assert result.exit_code == 0, result.output
+        assert "Worker log dump failed: boom" in result.output
         mock_sky.down.assert_called_once()
 
     def test_mount_source_cleaned_up_on_launch_exception(

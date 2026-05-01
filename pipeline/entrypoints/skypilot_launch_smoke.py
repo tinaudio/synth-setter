@@ -205,20 +205,22 @@ def main(
             )
             click.echo(f"Job {job_id} reached terminal status: {final_status.name}")
 
-            click.echo(f"--- Worker log (job {job_id}) ---")
-            sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
-            click.echo(f"--- End worker log (job {job_id}) ---")
-
             if final_status != sky.JobStatus.SUCCEEDED:
                 raise click.ClickException(
                     f"Worker job {job_id} ended with status {final_status.name}"
                 )
         finally:
-            # Diagnostic snapshot before teardown — paper trail for the next hang. We log
-            # both the per-job status (the source of truth used by _wait_for_job) and the
-            # full cluster queue (so we can correlate with anything else SkyPilot has
-            # scheduled on this cluster). Errors are swallowed so a failed query never
-            # blocks teardown.
+            # Pre-teardown observability paper trail. Always runs — on success, on
+            # worker-failure, and on _wait_for_job deadline timeout — so the next
+            # hang investigation has the worker log + SkyPilot's job_status / queue
+            # view of the cluster. Each block is best-effort: a failure querying one
+            # signal never blocks teardown.
+            try:
+                click.echo(f"--- Worker log (job {job_id}) ---")
+                sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
+                click.echo(f"--- End worker log (job {job_id}) ---")
+            except Exception as e:  # noqa: BLE001 — best-effort diagnostic
+                click.echo(f"Worker log dump failed: {e}")
             try:
                 final_statuses = sky.stream_and_get(
                     sky.job_status(resolved_cluster_name, [job_id])
