@@ -41,6 +41,9 @@ on:
       - ".github/workflows/test-dataset-generation.yml"
       - "requirements*.txt"
 
+permissions:
+  contents: read
+
 jobs:
   generate:
     name: Launch generate_dataset on RunPod via SkyPilot
