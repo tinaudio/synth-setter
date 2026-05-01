@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import click
@@ -26,6 +27,18 @@ from dotenv import dotenv_values
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import materialize_spec
+
+# Job states that mean the worker is done (success or failure).
+_TERMINAL_JOB_STATUSES = frozenset(
+    {
+        sky.JobStatus.SUCCEEDED,
+        sky.JobStatus.FAILED,
+        sky.JobStatus.FAILED_SETUP,
+        sky.JobStatus.FAILED_DRIVER,
+        sky.JobStatus.CANCELLED,
+    }
+)
+_JOB_POLL_INTERVAL_SECONDS = 15
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
@@ -158,24 +171,57 @@ def main(
     try:
         click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
         launch_request_id = sky.launch(task, cluster_name=resolved_cluster_name, down=False)
-        job_id, _ = sky.stream_and_get(launch_request_id, follow=True)
-        try:
-            # Block on the worker job and stream its stdout/stderr to ours so a worker traceback
-            # surfaces here (instead of as a downstream "shard not in R2" error). tail_logs is
-            # synchronous when preload_content=True (the default), returns the worker's exit code,
-            # and follows the log to completion.
-            click.echo(f"Streaming worker job {job_id} logs from {resolved_cluster_name}")
-            exit_code = sky.tail_logs(
-                cluster_name=resolved_cluster_name, job_id=job_id, follow=True
+        launch_result = sky.stream_and_get(launch_request_id, follow=True)
+        if launch_result is None or launch_result[0] is None:
+            raise click.ClickException(
+                f"Launch yielded no job_id for cluster {resolved_cluster_name}"
             )
-            if exit_code != 0:
-                raise click.ClickException(f"Worker job {job_id} exited with code {exit_code}")
+        job_id: int = launch_result[0]
+        try:
+            # Originally we used `sky.tail_logs(..., follow=True)` to block on the worker
+            # and stream its stdout. On RunPod the per-job log stream never EOFs after the
+            # worker process exits, so tail_logs hangs forever even though the worker has
+            # finished and uploaded the shard to R2 (verified via `rclone ls`). Poll
+            # `sky.queue` for a terminal JobStatus instead, then dump the full log
+            # non-following at the end so a worker traceback still surfaces in CI output.
+            click.echo(f"Polling job {job_id} on {resolved_cluster_name} for completion")
+            final_status = _wait_for_job(resolved_cluster_name, job_id)
+            click.echo(f"Job {job_id} reached terminal status: {final_status.name}")
+
+            click.echo(f"--- Worker log (job {job_id}) ---")
+            sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
+            click.echo(f"--- End worker log (job {job_id}) ---")
+
+            if final_status != sky.JobStatus.SUCCEEDED:
+                raise click.ClickException(
+                    f"Worker job {job_id} ended with status {final_status.name}"
+                )
         finally:
             click.echo(f"Tearing down cluster: {resolved_cluster_name}")
             down_request_id = sky.down(resolved_cluster_name)
             sky.stream_and_get(down_request_id, follow=True)
     finally:
         mount_source.unlink(missing_ok=True)
+
+
+def _wait_for_job(cluster_name: str, job_id: int) -> sky.JobStatus:
+    """Poll `sky.queue` until the given job reaches a terminal status, then return it.
+
+    Used in place of `sky.tail_logs(follow=True)` because the latter hangs indefinitely
+    on RunPod (the per-job log stream is never closed by the cluster even after the
+    worker process exits). Polls every `_JOB_POLL_INTERVAL_SECONDS` seconds.
+    """
+    while True:
+        queue_request_id = sky.queue(cluster_name)
+        jobs = sky.stream_and_get(queue_request_id) or []
+        job = next((j for j in jobs if j.job_id == job_id), None)
+        if job is None:
+            click.echo(f"  job {job_id} not yet visible in queue; retrying", err=True)
+        else:
+            click.echo(f"  status={job.status.name}", err=True)
+            if job.status in _TERMINAL_JOB_STATUSES:
+                return job.status
+        time.sleep(_JOB_POLL_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":
