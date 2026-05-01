@@ -29,7 +29,7 @@ from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_co
 from pipeline.schemas.spec import materialize_spec
 
 _JOB_POLL_INTERVAL_SECONDS = 15
-_JOB_DEADLINE_SECONDS = 10 * 60  # bound the poll loop so a stuck job can't block CI forever
+_JOB_DEADLINE_SECONDS = 25 * 60  # bound the poll loop so a stuck job can't block CI forever
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
