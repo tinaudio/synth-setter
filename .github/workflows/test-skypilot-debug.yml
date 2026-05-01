@@ -31,6 +31,18 @@ on:
         description: "Wall-clock cap on the launcher's job-status poll loop."
         required: false
         default: "30"
+  # Auto-fire on pushes to the SkyPilot integration branch when the launcher,
+  # the debug template, or this workflow itself changes — so we can iterate
+  # without manual dispatch each time. Note: this spends RunPod budget on
+  # every relevant push to the branch; remove the `push` trigger once the
+  # launcher is stable on RunPod.
+  push:
+    branches:
+      - feat/skypilot-runpod-smoke
+    paths:
+      - "pipeline/entrypoints/skypilot_launch_smoke.py"
+      - "configs/compute/runpod-debug-template.yaml"
+      - ".github/workflows/test-skypilot-debug.yml"
 
 permissions:
   contents: read
