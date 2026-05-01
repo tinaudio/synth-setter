@@ -199,6 +199,17 @@ jobs:
             configs/compute/runpod-debug-template.yaml
           grep image_id configs/compute/runpod-debug-template.yaml
 
+      - name: Stage empty plugin bundle for materialize_spec's plugin-exists check
+        # The launcher's materialize_spec validates that spec.plugin_path
+        # resolves to an existing path; the smoke config points at
+        # `plugins/Surge XT.vst3`, which only ships inside the dev-snapshot
+        # image. extract_renderer_version is NOT called on the launcher
+        # path (renderer_version is pinned to SURGE_XT_RENDERER_VERSION),
+        # so the bundle's contents don't matter — an empty directory is
+        # enough to satisfy the exists check. The no-op debug worker
+        # never reads the plugin either.
+        run: mkdir -p "plugins/Surge XT.vst3"
+
       - name: Launch SkyPilot debug job (bare runner)
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
