@@ -385,12 +385,19 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`sky.tail_logs` is called once with follow=False (buffered post-completion dump)."""
+        """`sky.tail_logs` is invoked with follow=False (buffered post-completion dump).
+
+        The launcher may also call tail_logs again as a best-effort pre-teardown diagnostic; we
+        don't pin the call count, only that every invocation uses follow=False so we never hang
+        waiting for an SSH stream EOF.
+        """
         result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
         assert result.exit_code == 0, result.output
-        mock_sky.tail_logs.assert_called_once_with(
-            cluster_name="smoke-job-1", job_id=1, follow=False
-        )
+        assert mock_sky.tail_logs.call_count >= 1
+        for call in mock_sky.tail_logs.call_args_list:
+            assert call.kwargs.get("follow") is False
+            assert call.kwargs.get("cluster_name") == "smoke-job-1"
+            assert call.kwargs.get("job_id") == 1
 
     def test_teardown_runs_on_success(
         self,

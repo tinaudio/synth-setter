@@ -29,7 +29,7 @@ from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_co
 from pipeline.schemas.spec import materialize_spec
 
 _JOB_POLL_INTERVAL_SECONDS = 15
-_JOB_DEADLINE_SECONDS = 30 * 60  # bound the poll loop so a stuck job can't block CI forever
+_JOB_DEADLINE_SECONDS = 10 * 60  # bound the poll loop so a stuck job can't block CI forever
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
@@ -216,6 +216,15 @@ def main(
                 click.echo(f"Pre-teardown queue: {queue}")
             except Exception as e:  # noqa: BLE001 — best-effort diagnostic
                 click.echo(f"Pre-teardown queue query failed: {e}")
+            # Last-ditch dump of any worker output that may have arrived between the
+            # polling loop's terminal-detect and the imminent teardown. follow=False so
+            # this can never hang. Best-effort: errors are logged and swallowed.
+            try:
+                click.echo(f"--- Pre-teardown worker log (job {job_id}) ---")
+                sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
+                click.echo(f"--- End pre-teardown worker log (job {job_id}) ---")
+            except Exception as e:  # noqa: BLE001 — best-effort diagnostic
+                click.echo(f"Pre-teardown tail_logs failed: {e}")
 
             click.echo(f"Tearing down cluster: {resolved_cluster_name}")
             down_request_id = sky.down(resolved_cluster_name)
