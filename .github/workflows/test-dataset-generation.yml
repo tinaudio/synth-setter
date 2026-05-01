@@ -76,11 +76,11 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
+      # Pin the template's image_id from its default (`dev-snapshot`) to the tag
+      # this run was dispatched with, so the worker pulls the same image we just
+      # smoke-tested locally in the prior step.
       - name: Pin image tag in SkyPilot template
         run: |
-          # The template's image_id defaults to dev-snapshot; pin it to the
-          # tag this run was dispatched with so the worker pulls the same
-          # image we just smoke-tested locally.
           sed -i \
             "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
             configs/compute/runpod-template.yaml
@@ -201,6 +201,19 @@ jobs:
       - name: Install PyYAML for config parsing
         run: pip install pyyaml
 
+      # R2 bucket comes from configs/image/dev-snapshot.yaml — single source of
+      # truth across the image, the launcher, and this validation step. R2 prefix
+      # + shard filename come from the materialized spec, downloaded via the
+      # `test-run-metadata` artifact.
+      #
+      # Two `docker run` invocations: the first uses the image's rclone to pull
+      # the shard from R2 to a host-side tmpdir; the second mounts the PR
+      # checkout (read-only) over /home/build/synth-setter so the editable
+      # install picks up our `pipeline.ci.validate_shard` module (in case it's
+      # newer than what the published image was baked against). The image has
+      # no ENTRYPOINT, so `docker run img <argv>` overrides the /bin/bash CMD
+      # with <argv> directly — that's how we get rclone / python invocations
+      # into the same image.
       - name: Download shard from R2 and validate
         env:
           IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -208,7 +221,6 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
-          # Read R2 bucket from image config YAML (single source of truth)
           R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
           R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
           SHARD_FILE=$(python3 -c "import json; print(json.load(open('input_spec.json'))['shards'][0]['filename'])")
@@ -217,9 +229,6 @@ jobs:
           echo "R2 prefix: ${R2_PREFIX}"
           echo "Shard file: ${SHARD_FILE}"
 
-          # Download shard from R2 via Docker (has rclone). The image has no
-          # ENTRYPOINT, so `docker run img <argv>` overrides the /bin/bash
-          # CMD with <argv> directly.
           mkdir -p /tmp/shard-download
           docker pull "$IMAGE"
           docker run --rm \
@@ -237,9 +246,6 @@ jobs:
 
           ls -la /tmp/shard-download/
 
-          # Validate shard inside Docker (has h5py)
-          # Mount PR code over /home/build/synth-setter so the editable install
-          # picks up our validate_shard module (not in the published image yet).
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
             -v /tmp/shard-download:/download:ro \
