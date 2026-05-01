@@ -20,7 +20,11 @@ from pathlib import Path
 from loguru import logger
 
 from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
+from pipeline.schemas.spec import (
+    DatasetPipelineSpec,
+    ShardSpec,
+    extract_renderer_version,
+)
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
 # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
@@ -107,6 +111,20 @@ def run(spec: DatasetPipelineSpec) -> None:
         raise ValueError(
             f"generate_vst_dataset.py only supports hdf5 output, got: {spec.output_format}"
         )
+
+    # Constraint check: the plugin actually present on this worker must match the
+    # renderer_version pinned into the spec at materialize time. The launcher trusts
+    # SURGE_XT_RENDERER_VERSION blindly so its code path stays interpreter-only;
+    # the worker is where pedalboard is available, so this is where we verify.
+    actual_renderer_version = extract_renderer_version(Path(spec.plugin_path))
+    if actual_renderer_version != spec.renderer_version:
+        raise RuntimeError(
+            f"Renderer version mismatch: spec pins {spec.renderer_version!r} but "
+            f"plugin at {spec.plugin_path} reports {actual_renderer_version!r}. "
+            "Rebuild the image against the matching SURGE_GIT_REF, or bump "
+            "SURGE_XT_RENDERER_VERSION in pipeline.schemas.spec."
+        )
+    logger.info(f"renderer_version OK: plugin at {spec.plugin_path} == {spec.renderer_version}")
 
     r2_dest_prefix = f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
