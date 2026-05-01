@@ -216,15 +216,6 @@ def main(
                 click.echo(f"Pre-teardown queue: {queue}")
             except Exception as e:  # noqa: BLE001 — best-effort diagnostic
                 click.echo(f"Pre-teardown queue query failed: {e}")
-            # Last-ditch dump of any worker output that may have arrived between the
-            # polling loop's terminal-detect and the imminent teardown. follow=False so
-            # this can never hang. Best-effort: errors are logged and swallowed.
-            try:
-                click.echo(f"--- Pre-teardown worker log (job {job_id}) ---")
-                sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
-                click.echo(f"--- End pre-teardown worker log (job {job_id}) ---")
-            except Exception as e:  # noqa: BLE001 — best-effort diagnostic
-                click.echo(f"Pre-teardown tail_logs failed: {e}")
 
             click.echo(f"Tearing down cluster: {resolved_cluster_name}")
             down_request_id = sky.down(resolved_cluster_name)
