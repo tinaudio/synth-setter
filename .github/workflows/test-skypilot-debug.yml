@@ -51,7 +51,6 @@ jobs:
   debug:
     name: Launch no-op job on RunPod via SkyPilot (debug)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 30
     env:
       DATASET_CONFIG: configs/dataset/ci-smoke-test.yaml
