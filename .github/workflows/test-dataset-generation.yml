@@ -37,6 +37,7 @@ on:
       - "configs/compute/**"
       - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.py"
+      - "scripts/run-linux-vst-headless.sh"
       - "pipeline/entrypoints/skypilot_launch_smoke.py"
       - ".github/workflows/test-dataset-generation.yml"
       - "requirements*.txt"
