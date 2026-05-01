@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import click
@@ -26,6 +27,9 @@ from dotenv import dotenv_values
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import materialize_spec
+
+_JOB_POLL_INTERVAL_SECONDS = 15
+_JOB_DEADLINE_SECONDS = 30 * 60  # bound the poll loop so a stuck job can't block CI forever
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
@@ -175,21 +179,56 @@ def main(
             )
         job_id: int = launch_result[0]
         try:
-            # tail_logs is sync (preload_content=True default) and follows the worker job
-            # to completion, returning its exit code. Streams worker stdout/stderr to ours
-            # so a worker traceback shows up in CI immediately.
-            click.echo(f"Streaming worker job {job_id} logs from {resolved_cluster_name}")
-            exit_code = sky.tail_logs(
-                cluster_name=resolved_cluster_name, job_id=job_id, follow=True
-            )
-            if exit_code != 0:
-                raise click.ClickException(f"Worker job {job_id} exited with code {exit_code}")
+            # Originally we used `sky.tail_logs(..., follow=True)` to block on the worker
+            # and stream its stdout. On RunPod, log tailing relies on SSH to the pod, and
+            # SSH gets flaky after the workload finishes — tail_logs(follow=True) waits
+            # for an EOF that never arrives and the launcher hangs even though the worker
+            # has terminated and uploaded artifacts to R2 (verified via `rclone ls`). Poll
+            # `sky.queue` for a terminal JobStatus instead, then dump the buffered worker
+            # log non-following so a traceback still surfaces in CI.
+            click.echo(f"Polling job {job_id} on {resolved_cluster_name} for completion")
+            final_status = _wait_for_job(resolved_cluster_name, job_id)
+            click.echo(f"Job {job_id} reached terminal status: {final_status.name}")
+
+            click.echo(f"--- Worker log (job {job_id}) ---")
+            sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
+            click.echo(f"--- End worker log (job {job_id}) ---")
+
+            if final_status != sky.JobStatus.SUCCEEDED:
+                raise click.ClickException(
+                    f"Worker job {job_id} ended with status {final_status.name}"
+                )
         finally:
             click.echo(f"Tearing down cluster: {resolved_cluster_name}")
             down_request_id = sky.down(resolved_cluster_name)
             sky.stream_and_get(down_request_id)
     finally:
         mount_source.unlink(missing_ok=True)
+
+
+def _wait_for_job(cluster_name: str, job_id: int) -> sky.JobStatus:
+    """Poll `sky.job_status` until the given job reaches a terminal status, then return it.
+
+    Used in place of `sky.tail_logs(follow=True)` because the latter hangs on RunPod
+    waiting for an SSH-stream EOF that never arrives after the worker exits. Polls every
+    `_JOB_POLL_INTERVAL_SECONDS` seconds and times out after `_JOB_DEADLINE_SECONDS` so a
+    truly stuck worker can't block CI forever.
+    """
+    deadline = time.monotonic() + _JOB_DEADLINE_SECONDS
+    while time.monotonic() < deadline:
+        statuses = sky.stream_and_get(sky.job_status(cluster_name, [job_id])) or {}
+        status = statuses.get(job_id)
+        if status is None:
+            click.echo(f"  job {job_id} not yet visible; retrying")
+        else:
+            click.echo(f"  status={status.name}")
+            if status.is_terminal():
+                return status
+        time.sleep(_JOB_POLL_INTERVAL_SECONDS)
+    raise click.ClickException(
+        f"Job {job_id} did not reach a terminal status within "
+        f"{_JOB_DEADLINE_SECONDS // 60} minutes"
+    )
 
 
 if __name__ == "__main__":
