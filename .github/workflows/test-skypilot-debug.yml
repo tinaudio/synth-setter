@@ -1,18 +1,23 @@
 name: Test SkyPilot Debug
 
-# Permanent diagnostic matrix for the SkyPilot+RunPod path. Four canary
-# variants, each isolating one known failure class. None of these
-# exercise the production launcher or worker — they're standalone
-# probes. When test-dataset-generation regresses, dispatch this and
-# read the green/red pattern to triage in ~5 minutes.
+# Permanent diagnostic matrix for the SkyPilot+RunPod path. Seven canary
+# variants, each isolating one known failure class or one piece of the
+# wrapper-cleanup fix. None of these exercise the production launcher or
+# worker — they're standalone probes. When test-dataset-generation
+# regresses, dispatch this and read the green/red pattern to triage in
+# ~10 minutes.
+#
+# Top-level canaries (4):
 #
 #   noop             SkyPilot/RunPod orchestration canary
 #                    (provision -> submit -> status-poll -> teardown,
 #                    no wrapper, no Python work).
 #
-#   headless         Wrapper-cleanup canary
-#                    (`scripts/run-linux-vst-headless.sh echo "ok"`,
-#                    catches regressions of the bug class fixed by #736).
+#   headless         Wrapper-cleanup canary — full production wrapper
+#                    (`scripts/run-linux-vst-headless.sh echo "ok"`).
+#                    PASS proves the wrapper as a whole still works;
+#                    pair with the three bisect variants below to know
+#                    *which* pieces are doing the work.
 #
 #   rclone           rclone-process-exit canary
 #                    (`rclone copy <small file> r2:...`, catches
@@ -23,8 +28,26 @@ name: Test SkyPilot Debug
 #                    wrapper, closest-to-production without rclone;
 #                    catches the bug-#3 regression directly).
 #
+# Wrapper-cleanup bisect variants (3): each runs the headless wrapper
+# with exactly ONE piece of the cleanup fix reverted. Reading green/red
+# across these four pinpoints exactly which pieces of the cleanup are
+# load-bearing on RunPod, and locks them in — if anyone rewrites the
+# wrapper and quietly drops a piece, the corresponding variant fails.
+#
+#   headless-no-stdin-detach  Reverts `</dev/null` on backgrounded
+#                             daemons. Tests stdin-pipe inheritance
+#                             from the SSH command. Expected: FAIL.
+#
+#   headless-no-wait          Reverts `wait` (and its dependent
+#                             `pkill -P $$`) from the cleanup trap.
+#                             Tests synchronous reap.
+#
+#   headless-no-pkill         Reverts the `pkill -P $$` orphan-
+#                             grandchild sweep, keeps `wait`. Tests
+#                             reparented-grandchild SIGTERM coverage.
+#
 # Triggers: workflow_dispatch only — RunPod pods are billable. Each
-# dispatch spends ~4 pods. Add a `push` trigger only temporarily when
+# dispatch spends ~7 pods. Add a `push` trigger only temporarily when
 # actively iterating on launcher / wrapper / template behavior.
 #
 # Required secrets:
@@ -73,6 +96,15 @@ jobs:
           - variant: pedalboard-load
             template: configs/compute/runpod-debug-pedalboard-template.yaml
             cluster_suffix: pedalboard
+          - variant: headless-no-stdin-detach
+            template: configs/compute/runpod-debug-headless-no-stdin-detach-template.yaml
+            cluster_suffix: headless-no-stdin-detach
+          - variant: headless-no-wait
+            template: configs/compute/runpod-debug-headless-no-wait-template.yaml
+            cluster_suffix: headless-no-wait
+          - variant: headless-no-pkill
+            template: configs/compute/runpod-debug-headless-no-pkill-template.yaml
+            cluster_suffix: headless-no-pkill
 
     steps:
       - name: Checkout

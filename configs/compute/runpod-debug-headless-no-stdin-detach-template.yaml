@@ -1,0 +1,37 @@
+# SkyPilot task template for RunPod — DEBUG variant: headless wrapper with
+# the stdin-detach piece reverted.
+#
+# Identical to runpod-debug-headless-template.yaml except `run` invokes
+# `scripts/run-linux-vst-headless-no-stdin-detach.sh`. Used by the
+# test-skypilot-debug matrix's `headless-no-stdin-detach` variant to prove
+# the stdin-detach is independently necessary on RunPod. See the script
+# header for the narrative; expected outcome: FAIL.
+
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+
+setup: |
+  echo "synth-setter debug-headless-no-stdin-detach worker ready (host: $(hostname))"
+
+run: |
+  bash scripts/run-linux-vst-headless-no-stdin-detach.sh echo "skypilot-debug headless-no-stdin-detach job done (host: $(hostname))"
