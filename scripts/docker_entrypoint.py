@@ -125,6 +125,22 @@ def generate_dataset(spec_path: Path) -> None:
     spec_type = _MODE_SPEC_TYPES["generate_dataset"]
     spec = _parse_spec(spec_path, spec_type)
     run(cast(DatasetPipelineSpec, spec))
+    # Workaround for #735: the SkyPilot RunPod worker consistently hangs at
+    # Python interpreter shutdown after generate_dataset.run() returns
+    # successfully — some library (most likely pedalboard / numba / dask /
+    # h5py) leaves a non-daemon thread alive that prevents the interpreter
+    # from exiting. SkyPilot's job-status reporter sees the SSH session's
+    # process tree still alive and the job stays in RUNNING forever even
+    # though both rclone uploads have already landed in R2 (verified via
+    # `rclone ls`). The worker pod is ephemeral (sky.launch + down=True),
+    # so there's nothing for a clean shutdown to flush. `os._exit(0)`
+    # bypasses atexit / non-daemon-thread join and lets SkyPilot register
+    # SUCCEEDED. Root-causing the offending thread is tracked in
+    # https://github.com/tinaudio/synth-setter/issues/735 (see the
+    # faulthandler + SIGTERM stack-dump plan in the comment); revert this
+    # exit once the underlying library leak is fixed at its source.
+    logger.info("forcing interpreter exit (#735 workaround) — bypassing atexit")
+    os._exit(0)
 
 
 @cli.command("render_eval")
