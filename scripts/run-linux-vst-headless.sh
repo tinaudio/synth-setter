@@ -34,9 +34,10 @@ cleanup() {
   # process tree, so any straggler child keeps the job in RUNNING forever
   # even after the wrapped command and the wrapper bash have logically
   # finished (#735). `wait` after the SIGTERMs reaps the X-stack daemons
-  # we tracked (XVFB / XSETTINGS / OPENBOX). Every step echoes to stderr
-  # so `tail_logs` evidence can pinpoint where cleanup stalls if it ever
-  # stalls again.
+  # we tracked; `pkill -P $$` then sweeps any grandchildren openbox or
+  # dbus-launch may have spawned that we didn't track. Every step echoes
+  # to stderr so `tail_logs` evidence can pinpoint where cleanup stalls
+  # if it ever stalls again.
   echo "[wrapper] cleanup: starting (pid=$$)" >&2
   echo "[wrapper] cleanup: child PIDs OPENBOX=${OPENBOX_PID-} XSETTINGS=${XSETTINGS_PID-} XVFB=${XVFB_PID-}" >&2
   echo "[wrapper] cleanup: pre-kill process tree:" >&2
@@ -56,6 +57,11 @@ cleanup() {
   fi
   echo "[wrapper] cleanup: waiting for tracked children to reap" >&2
   wait 2>/dev/null || true
+  echo "[wrapper] cleanup: sweeping any orphan grandchildren" >&2
+  pkill -P $$ 2>/dev/null || true
+  echo "[wrapper] cleanup: post-kill process tree:" >&2
+  ps -eo pid,ppid,pgid,stat,comm --no-headers \
+    | awk -v me=$$ '$2==me || $3==me' >&2 || true
   if [ -n "${TMP_DIR-}" ]; then
     echo "[wrapper] cleanup: removing TMP_DIR=${TMP_DIR}" >&2
     rm -rf "${TMP_DIR}" || true
