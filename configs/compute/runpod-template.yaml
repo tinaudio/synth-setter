@@ -1,0 +1,57 @@
+# SkyPilot task template for RunPod.
+#
+# Loaded by pipeline/entrypoints/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
+# The launcher injects R2 credentials (via task.update_envs) and the
+# materialized DatasetPipelineSpec (via task.update_file_mounts) before
+# calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
+# (not sky.jobs.launch) — RunPod has no managed-jobs controller backend.
+#
+# Image: tinaudio/synth-setter:dev-snapshot must be pushed to Docker Hub
+# (`make docker-build-dev-snapshot` then `docker push`) before launch.
+# Tag pinning to a git SHA is deferred to the Phase B PR per the design doc
+# at docs/design/skypilot-compute-integration.md.
+
+resources:
+  cloud: runpod
+  # Any one cheap GPU is enough for the smoke run (32 samples). The set is wide
+  # so a stocked-out tier doesn't fail the launch — SkyPilot picks the cheapest
+  # available match. Add/remove tiers as RunPod inventory drifts.
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+# Placeholders. Real values are injected by the launcher via update_envs.
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+
+# <repo_root>/data/skypilot-launch-smoke-spec.json is mounted by the launcher via
+# update_file_mounts. Keep this path in sync with WORKER_SPEC_PATH in
+# pipeline/entrypoints/skypilot_launch_smoke.py.
+setup: |
+  echo "synth-setter worker ready (host: $(hostname))"
+
+run: |
+  # Diagnostic: which cwd does SkyPilot's run block start in? We expect this
+  # NOT to be /home/build/synth-setter (the image's WORKDIR) — confirming that
+  # is why the cd below is necessary.
+  echo "skypilot-run-cwd: $(pwd)"
+  # cd into the repo root before invoking generate_dataset: it shells out to
+  # scripts/run-linux-vst-headless.sh via a relative path, and SkyPilot's run
+  # block does not execute from the image's WORKDIR by default.
+  cd /home/build/synth-setter
+  python /usr/local/bin/entrypoint.py generate_dataset \
+    --spec /home/build/synth-setter/data/skypilot-launch-smoke-spec.json

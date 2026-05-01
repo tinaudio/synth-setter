@@ -29,25 +29,52 @@ export JUCE_USE_XINPUT2=0
 DISPLAY_FILE="$TMP_DIR/display_num"
 
 cleanup() {
+  # `kill PID` is async — bash returns while the child is still draining.
+  # On RunPod, SkyPilot's job-status reporter watches the SSH session's
+  # process tree, so any straggler child keeps the job in RUNNING forever
+  # even after the wrapped command and the wrapper bash have logically
+  # finished (#735). `wait` after the SIGTERMs reaps the X-stack daemons
+  # we tracked; `pkill -P $$` then sweeps any grandchildren openbox or
+  # dbus-launch may have spawned that we didn't track. Every step echoes
+  # to stderr so `tail_logs` evidence can pinpoint where cleanup stalls
+  # if it ever stalls again.
+  echo "[wrapper] cleanup: starting (pid=$$)" >&2
+  echo "[wrapper] cleanup: child PIDs OPENBOX=${OPENBOX_PID-} XSETTINGS=${XSETTINGS_PID-} XVFB=${XVFB_PID-}" >&2
+  echo "[wrapper] cleanup: pre-kill process tree:" >&2
+  ps -eo pid,ppid,pgid,stat,comm --no-headers \
+    | awk -v me=$$ '$2==me || $3==me' >&2 || true
   if [ -n "${OPENBOX_PID-}" ]; then
+    echo "[wrapper] cleanup: kill openbox pid=${OPENBOX_PID}" >&2
     kill "${OPENBOX_PID}" 2>/dev/null || true
   fi
   if [ -n "${XSETTINGS_PID-}" ]; then
+    echo "[wrapper] cleanup: kill xsettingsd pid=${XSETTINGS_PID}" >&2
     kill "${XSETTINGS_PID}" 2>/dev/null || true
   fi
   if [ -n "${XVFB_PID-}" ]; then
+    echo "[wrapper] cleanup: kill xvfb pid=${XVFB_PID}" >&2
     kill "${XVFB_PID}" 2>/dev/null || true
   fi
+  echo "[wrapper] cleanup: waiting for tracked children to reap" >&2
+  wait 2>/dev/null || true
+  echo "[wrapper] cleanup: sweeping any orphan grandchildren" >&2
+  pkill -P $$ 2>/dev/null || true
+  echo "[wrapper] cleanup: post-kill process tree:" >&2
+  ps -eo pid,ppid,pgid,stat,comm --no-headers \
+    | awk -v me=$$ '$2==me || $3==me' >&2 || true
   if [ -n "${TMP_DIR-}" ]; then
+    echo "[wrapper] cleanup: removing TMP_DIR=${TMP_DIR}" >&2
     rm -rf "${TMP_DIR}" || true
   fi
+  echo "[wrapper] cleanup: done" >&2
 }
 trap cleanup EXIT
 
 # Start Xvfb (let it pick a display)
 # -displayfd 3 writes the chosen display number to file descriptor 3
 # 3>"$DISPLAY_FILE" redirects FD 3 to our temp file so we can read it later
-Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
+Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp \
+  </dev/null >/dev/null 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
 XVFB_PID=$!
 
 # Wait for Xvfb to output the display number
@@ -80,12 +107,17 @@ for _ in {1..50}; do
 done
 xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || { echo "Xvfb did not start"; cat "$TMP_DIR/xvfb.log" || true; exit 1; }
 
-# Start an XSettings manager
-xsettingsd --config /dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
+# Start an XSettings manager.
+# `</dev/null` detaches stdin so backgrounded daemons (and any grandchildren
+# they fork) don't keep the parent SSH session's stdin pipe open. Without
+# this, SkyPilot's RunPod backend never observes EOF on the SSH command's
+# pipes and the job stays in RUNNING forever even after the wrapped
+# command exits (#735).
+xsettingsd --config /dev/null </dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
 XSETTINGS_PID=$!
 
 # Start a lightweight window manager (important for many plugins)
-openbox-session >"$TMP_DIR/openbox.log" 2>&1 &
+openbox-session </dev/null >"$TMP_DIR/openbox.log" 2>&1 &
 OPENBOX_PID=$!
 
 # Run the actual command inside a D-Bus session.
