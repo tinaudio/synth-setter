@@ -29,18 +29,38 @@ export JUCE_USE_XINPUT2=0
 DISPLAY_FILE="$TMP_DIR/display_num"
 
 cleanup() {
+  # `kill PID` is async — bash returns while the child is still draining.
+  # On RunPod, SkyPilot's job-status reporter watches the SSH session's
+  # process tree, so any straggler child keeps the job in RUNNING forever
+  # even after the wrapped command and the wrapper bash have logically
+  # finished (#735). `wait` after the SIGTERMs reaps the X-stack daemons
+  # we tracked (XVFB / XSETTINGS / OPENBOX). Every step echoes to stderr
+  # so `tail_logs` evidence can pinpoint where cleanup stalls if it ever
+  # stalls again.
+  echo "[wrapper] cleanup: starting (pid=$$)" >&2
+  echo "[wrapper] cleanup: child PIDs OPENBOX=${OPENBOX_PID-} XSETTINGS=${XSETTINGS_PID-} XVFB=${XVFB_PID-}" >&2
+  echo "[wrapper] cleanup: pre-kill process tree:" >&2
+  ps -eo pid,ppid,pgid,stat,comm --no-headers \
+    | awk -v me=$$ '$2==me || $3==me' >&2 || true
   if [ -n "${OPENBOX_PID-}" ]; then
+    echo "[wrapper] cleanup: kill openbox pid=${OPENBOX_PID}" >&2
     kill "${OPENBOX_PID}" 2>/dev/null || true
   fi
   if [ -n "${XSETTINGS_PID-}" ]; then
+    echo "[wrapper] cleanup: kill xsettingsd pid=${XSETTINGS_PID}" >&2
     kill "${XSETTINGS_PID}" 2>/dev/null || true
   fi
   if [ -n "${XVFB_PID-}" ]; then
+    echo "[wrapper] cleanup: kill xvfb pid=${XVFB_PID}" >&2
     kill "${XVFB_PID}" 2>/dev/null || true
   fi
+  echo "[wrapper] cleanup: waiting for tracked children to reap" >&2
+  wait 2>/dev/null || true
   if [ -n "${TMP_DIR-}" ]; then
+    echo "[wrapper] cleanup: removing TMP_DIR=${TMP_DIR}" >&2
     rm -rf "${TMP_DIR}" || true
   fi
+  echo "[wrapper] cleanup: done" >&2
 }
 trap cleanup EXIT
 
