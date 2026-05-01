@@ -469,9 +469,9 @@ class TestMaterializeSpec:
 
         The launcher path is interpreter-only (no pedalboard / X11), so the spec's
         renderer_version is a constant trusted at materialize time. The matching
-        constraint check happens worker-side via
-        pipeline.entrypoints.generate_dataset.check_renderer_version, which loads
-        the plugin and fails the run on mismatch.
+        constraint check happens worker-side: pipeline.entrypoints.generate_dataset.run
+        calls pipeline.schemas.spec.extract_renderer_version against the actual
+        plugin and fails the run on mismatch.
         """
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
         valid_config_dict["num_shards"] = 1

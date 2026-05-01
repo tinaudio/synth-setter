@@ -1,7 +1,8 @@
 name: Test Dataset Generation
 
 # Exercises the SkyPilot RunPod launcher (pipeline/entrypoints/skypilot_launch_smoke.py)
-# with the CI smoke-test config (32 samples, 1 shard). The launcher runs
+# with the CI smoke-test config (configs/dataset/ci-smoke-test.yaml — single-shard
+# round-trip). The launcher runs
 # inside the Docker image so materialize_spec can import pedalboard via the
 # headless X wrapper. SkyPilot streams worker logs back and waits for the
 # unmanaged cluster launch (sky.launch + stream_and_get) to complete; the

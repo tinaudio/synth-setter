@@ -24,8 +24,9 @@ from src.data.vst import param_specs
 # this directly into DatasetPipelineSpec.renderer_version so the launcher's
 # code path stays interpreter-only (no pedalboard.VST3Plugin instantiation, no
 # X display dependency). The worker validates the running plugin against this
-# constant via check_renderer_version before rendering — see
-# pipeline/entrypoints/generate_dataset.py. Bump together with SURGE_GIT_REF.
+# constant via extract_renderer_version (called inline in
+# pipeline.entrypoints.generate_dataset.run) before rendering. Bump together
+# with SURGE_GIT_REF.
 SURGE_XT_RENDERER_VERSION = "1.3.4"
 
 
