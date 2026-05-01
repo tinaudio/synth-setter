@@ -88,5 +88,20 @@ XSETTINGS_PID=$!
 openbox-session >"$TMP_DIR/openbox.log" 2>&1 &
 OPENBOX_PID=$!
 
-# Run the actual command inside a D-Bus session
-exec dbus-run-session -- "$@"
+# Run the actual command inside a D-Bus session.
+#
+# NOTE: this used to be `exec dbus-run-session -- "$@"`. With `exec`, the
+# wrapper bash process is replaced by dbus-run-session, the `trap cleanup
+# EXIT` above never fires, and Xvfb / xsettingsd / openbox keep running
+# after the wrapped command exits. On RunPod, SkyPilot's job-status
+# reporter never sees the SSH session's process tree go quiet — the job
+# stays in RUNNING forever even though the worker has uploaded its
+# artifacts. Drop the `exec` so bash stays in scope; trap fires after
+# dbus-run-session returns and kills the X-stack daemons.
+#
+# Confirmed via the test-skypilot-debug matrix on PR #716:
+#   bare-wrapper (just exec "$@")            -> PASS
+#   no-dbus      (X stack, exec "$@")        -> FAIL
+#   no-exec      (X stack + dbus, no exec)   -> PASS  ← this fix
+#   headless     (X stack + dbus + exec)     -> FAIL
+dbus-run-session -- "$@"
