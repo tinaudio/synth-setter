@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777677711534,
+  "lastUpdate": 1777677713458,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST fixed-params replay": [
@@ -1349,6 +1349,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.6120192707,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "86a46d2f71c151ec8445e1b84dc2c3e4cf0af0c4",
+          "message": "internal-feat(pipeline): renderer-version contract end-to-end + rclone-native upload bounds (#740)\n\n* internal-feat(pipeline): pin renderer_version to SURGE_XT_RENDERER_VERSION; expose extract_renderer_version\n\n`materialize_spec` previously extracted `renderer_version` from the VST3\nplugin bundle at materialization time, which required loading the plugin\nvia `pedalboard.VST3Plugin` when neither `Contents/moduleinfo.json` nor\n`Contents/Info.plist` was present — and that codepath needs an X display.\nThat blocks any caller that wants to materialize a spec without an X\nstack (e.g. the SkyPilot launcher, which runs on a GHA runner / dev\nlaptop and never loads the plugin itself).\n\nPin `renderer_version` to a single source of truth, the\n`SURGE_XT_RENDERER_VERSION = \"1.3.4\"` constant in this module, kept in\nlockstep with the dev-snapshot image's `SURGE_GIT_REF`. `materialize_spec`\nnow sets the pin directly and doesn't touch the plugin bundle.\n\nKeep `extract_renderer_version` as a public function — same static-metadata\n+ pedalboard-fallback shape — so the worker side can call it against the\nactual plugin and verify the pin matches reality before rendering. The\nworker-side cross-check is the next commit; the rclone-native upload\nbounds are the one after.\n\nRefs #534\n\n* internal-feat(pipeline): worker-side renderer_version cross-check in generate_dataset.run\n\nThe launcher pins `renderer_version` to `SURGE_XT_RENDERER_VERSION` blindly\n(its code path stays interpreter-only). The worker is where pedalboard is\navailable, so the worker is where the pin gets verified against reality.\n\n`run()` now calls `extract_renderer_version` against `spec.plugin_path`\nbefore any rclone or subprocess work and raises `RuntimeError` if the\nrunning plugin disagrees with the spec. The error message points at the\ntwo valid fixes (rebuild the image against the matching `SURGE_GIT_REF`\nor bump the constant), so failures are actionable rather than mysterious.\nOn match, a single `renderer_version OK: …` info log records the\nconfirmed pairing for forensics.\n\nTest fixture: tests/pipeline/fixtures/TestPlugin.vst3 (already on `main`)\nhas `Contents/moduleinfo.json` reporting Version=\"1.0.0-test\". Updated\n`_base_spec_kwargs` to use that fixture + that version so the spec/plugin\npair matches by default; new test asserts mismatch raises before any\nupload happens.\n\nRefs #534\n\n* internal-fix(pipeline): rclone-native upload bounds + 'rclone returned cleanly' sentinel\n\nTwo related observability fixes for the worker upload path:\n\n1. `_rclone_copy` was running `rclone copy --checksum src dst` with no\n   timeouts and no retries — a stuck TCP connect or a slow PUT could hold\n   the worker indefinitely. Switch to rclone's own bounds:\n     --contimeout=30s    bound TCP connect phase\n     --timeout=300s      bound any single HTTP request\n     --retries=3         retry the whole copy on transient failure\n     -vv                 emit per-request debug log so a failure leaves\n                         actionable evidence in the worker stdout\n   Letting rclone enforce these (vs. wrapping `subprocess.run(..., timeout=N)`\n   in Python) preserves the postcondition that a non-zero exit means the\n   upload genuinely failed, instead of \"we waited N seconds and gave up\".\n\n2. After `subprocess.check_call` returns from a successful rclone, log a\n   single `rclone returned cleanly: <src> -> <dst>` sentinel. Distinct\n   string so CI logs can be grepped to tell at a glance whether the rclone\n   subprocess actually exited vs. hanging post-upload (the bug-#2 hang\n   shape from #735, now believed gone but worth keeping the canary).\n\nAdds matching boundary logs around the upload path (`spec written:`,\n`spec uploaded ->`, `rendering shard …`, `shard rendered: … (N bytes)`,\n`shard uploaded: …`) so a `tail_logs(follow=False)` dump pinpoints which\nstep a hung run got to.\n\nRefs #534\nRefs #735\n\n* refactor: move extract_renderer_version to src.data.vst.core\n\nThe extractor reads VST3 plugin bundle metadata — that's a VST utility,\nnot a spec-schema concern. Move it next to the other VST helpers\n(`load_plugin`, `load_preset`, `render_params`) in `src/data/vst/core.py`\nand update the worker-side caller in `pipeline.entrypoints.generate_dataset`\nto import from the new location.\n\n`SURGE_XT_RENDERER_VERSION` stays in `pipeline.schemas.spec` because it\nis a spec-construction constant (consumed by `materialize_spec`); only\nthe extractor moves. Tests follow the source: `TestExtractRendererVersion`\nmoves from `tests/pipeline/test_schemas/test_spec.py` to a new\n`tests/data/vst/test_core.py` (matching the existing\n`tests/data/vst/{test_generate_vst_dataset,test_preset_*}.py` layout).\n\nNo behavior change. The function signature and error contract are\nidentical; tests are byte-for-byte the same as their previous\nlocation, just imported from the new path.\n\nRefs #534\n\n---------\n\nCo-authored-by: Your Name <you@example.com>",
+          "timestamp": "2026-05-01T18:58:15-04:00",
+          "tree_id": "1b380633afcd57b07636dddead1f765f334739f0",
+          "url": "https://github.com/tinaudio/synth-setter/commit/86a46d2f71c151ec8445e1b84dc2c3e4cf0af0c4"
+        },
+        "date": 1777677713198,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.481773853302002,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.106176937967539,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.020253485068678856,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.007873713970184326,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.6002923250198364,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.70911317560001,
             "unit": "seconds"
           }
         ]
