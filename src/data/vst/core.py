@@ -1,5 +1,8 @@
+import json
+import plistlib
 import sys
 import threading
+from pathlib import Path
 from typing import Optional, Tuple
 
 import mido
@@ -10,6 +13,45 @@ from pedalboard.io import AudioFile
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
+
+
+def extract_renderer_version(plugin_path: Path) -> str:
+    """Extract the version string from a VST3 plugin bundle.
+
+    Tries the static-metadata files first (`Contents/moduleinfo.json` on Linux,
+    `Contents/Info.plist` on macOS), then falls back to loading the plugin via
+    pedalboard and reading `plugin.version`. The fallback requires a usable
+    X11 display, so callers in interpreter-only contexts (the SkyPilot
+    launcher) must avoid it — they pin `renderer_version` to
+    `pipeline.schemas.spec.SURGE_XT_RENDERER_VERSION` and let the worker
+    compare against this function's output before rendering (see
+    `pipeline.entrypoints.generate_dataset.run`).
+
+    Raises:
+        FileNotFoundError: plugin_path does not exist.
+        RuntimeError: version cannot be extracted by any method.
+        json.JSONDecodeError: moduleinfo.json is malformed.
+        plistlib.InvalidFileException: Info.plist is malformed.
+    """
+    if not plugin_path.exists():
+        raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
+
+    moduleinfo = plugin_path / "Contents" / "moduleinfo.json"
+    if moduleinfo.is_file():
+        return json.loads(moduleinfo.read_text())["Version"]
+
+    plist = plugin_path / "Contents" / "Info.plist"
+    if plist.is_file():
+        return plistlib.loads(plist.read_bytes())["CFBundleShortVersionString"]
+
+    # Pedalboard fallback: prebuilt plugin bundles (e.g. Surge XT shipped via
+    # .deb) don't always carry moduleinfo.json. Loading the .so via pedalboard
+    # gives us VST3 factory metadata; this requires X11.
+    plugin = VST3Plugin(str(plugin_path))
+    version = plugin.version
+    if not version:
+        raise RuntimeError(f"Could not extract version from {plugin_path}")
+    return version
 
 
 def load_plugin(plugin_path: str) -> VST3Plugin:

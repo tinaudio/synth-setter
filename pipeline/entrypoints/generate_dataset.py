@@ -20,11 +20,8 @@ from pathlib import Path
 from loguru import logger
 
 from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.schemas.spec import (
-    DatasetPipelineSpec,
-    ShardSpec,
-    extract_renderer_version,
-)
+from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
+from src.data.vst.core import extract_renderer_version
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
 # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.

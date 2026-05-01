@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
-import plistlib
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -24,51 +21,10 @@ from src.data.vst import param_specs
 # this directly into DatasetPipelineSpec.renderer_version so the launcher's
 # code path stays interpreter-only (no pedalboard.VST3Plugin instantiation, no
 # X display dependency). The worker validates the running plugin against this
-# constant via extract_renderer_version (called inline in
+# constant via src.data.vst.core.extract_renderer_version (called inline in
 # pipeline.entrypoints.generate_dataset.run) before rendering. Bump together
 # with SURGE_GIT_REF.
 SURGE_XT_RENDERER_VERSION = "1.3.4"
-
-
-def extract_renderer_version(plugin_path: Path) -> str:
-    """Extract the version string from a VST3 plugin bundle.
-
-    Tries the static-metadata files first (`Contents/moduleinfo.json` on Linux,
-    `Contents/Info.plist` on macOS), then falls back to loading the plugin via
-    pedalboard and reading `plugin.version`. The fallback requires a usable
-    X11 display, so the launcher does not call this — it pins
-    `renderer_version` to `SURGE_XT_RENDERER_VERSION` and lets the worker
-    compare against this function's output (see
-    `pipeline.entrypoints.generate_dataset.run`).
-
-    Raises:
-        FileNotFoundError: plugin_path does not exist.
-        RuntimeError: version cannot be extracted by any method.
-        json.JSONDecodeError: moduleinfo.json is malformed.
-        plistlib.InvalidFileException: Info.plist is malformed.
-    """
-    if not plugin_path.exists():
-        raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
-
-    moduleinfo = plugin_path / "Contents" / "moduleinfo.json"
-    if moduleinfo.is_file():
-        return json.loads(moduleinfo.read_text())["Version"]
-
-    plist = plugin_path / "Contents" / "Info.plist"
-    if plist.is_file():
-        return plistlib.loads(plist.read_bytes())["CFBundleShortVersionString"]
-
-    # Pedalboard fallback: prebuilt plugin bundles (e.g. Surge XT shipped via
-    # .deb) don't always carry moduleinfo.json. Loading the .so via pedalboard
-    # gives us VST3 factory metadata; this requires X11, so callers in
-    # interpreter-only contexts (the SkyPilot launcher) must avoid it.
-    from pedalboard import VST3Plugin  # noqa: PLC0415
-
-    plugin = VST3Plugin(str(plugin_path))
-    version = plugin.version
-    if not version:
-        raise RuntimeError(f"Could not extract version from {plugin_path}")
-    return version
 
 
 class ShardSpec(BaseModel):
