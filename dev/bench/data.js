@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777676892401,
+  "lastUpdate": 1777676894446,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST fixed-params replay": [
@@ -1206,6 +1206,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.508583992799998,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ae7401f48eade9a3273ddf37519256c91dc6e0a",
+          "message": "fix(ci): drop `passthrough` from remaining docker run invocations after #721 (#742)\n\n* fix(ci): drop `passthrough` from remaining docker run invocations after #721 dropped ENTRYPOINT\n\nPR #727 already dropped `passthrough` from `docker-build-validation.yml`\nand `spec-materialization.yml`, but `dataset-generation.yml` and the\n`validate-shard` job in `test-dataset-generation.yml` were missed and\nfail with `exec: \"passthrough\": executable file not found in $PATH`\nagainst the rebuilt `dev-snapshot` image.\n\nImage now has no ENTRYPOINT and `CMD=[\"/bin/bash\"]`, so trailing argv\nis exec'd directly:\n\n- `passthrough bash -c '…'`           → `bash -c '…'`\n- `passthrough rclone copy …`         → `rclone copy …`\n- `passthrough python3 -m …`          → `python3 -m …`\n- `generate_dataset --spec …`         → `python /usr/local/bin/entrypoint.py generate_dataset --spec …`\n  (matches `configs/compute/runpod-template.yaml` from #721)\n\n`flush-investigation.yml` still uses `passthrough` but is slated for\ndeletion, so leave it untouched.\n\nCloses #726\n\n* fix(ci): drop `passthrough` from test-vst-slow.yml after #721 dropped ENTRYPOINT\n\nSame pattern as the rest of #726: `docker run img passthrough bash -c '…'`\nfails with `exec: \"passthrough\": executable file not found in $PATH` against\nthe rebuilt `dev-snapshot` image (no ENTRYPOINT, `CMD=[\"/bin/bash\"]`).\nDrop the `passthrough` prefix so the trailing `bash -c '…'` is exec'd\ndirectly.\n\nRefs #726",
+          "timestamp": "2026-05-01T18:55:38-04:00",
+          "tree_id": "5d7518cc4f005ca49bd977a3bd47dd3ef2ddadd6",
+          "url": "https://github.com/tinaudio/synth-setter/commit/7ae7401f48eade9a3273ddf37519256c91dc6e0a"
+        },
+        "date": 1777676893927,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.5421438217163086,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.3441296565532683,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.03164781630039215,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.007090747356414795,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.5233615636825562,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.6120192707,
             "unit": "seconds"
           }
         ]
