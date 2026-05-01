@@ -27,6 +27,14 @@ from pipeline.entrypoints.generate_dataset import (
 )
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
 
+# Reusable VST3 bundle with a real Contents/moduleinfo.json so
+# extract_renderer_version (called by run) returns a deterministic version
+# without loading any .so via pedalboard. Version inside is "1.0.0-test" — the
+# specs built in this file pin renderer_version to the same string so the
+# constraint check passes.
+TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPlugin.vst3"
+TEST_PLUGIN_VERSION = "1.0.0-test"
+
 
 def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
     """Return valid DatasetPipelineSpec kwargs for direct construction."""
@@ -37,7 +45,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         "code_version": "a" * 40,
         "is_repo_dirty": False,
         "param_spec": "surge_simple",
-        "renderer_version": "1.3.4",
+        "renderer_version": TEST_PLUGIN_VERSION,
         "output_format": "hdf5",
         "sample_rate": 16000,
         "shard_size": 10000,
@@ -45,7 +53,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         "num_params": 92,
         "r2_bucket": "intermediate-data",
         "splits": {"train": 1, "val": 0, "test": 0},
-        "plugin_path": str(tmp_path / "FakePlugin.vst3"),
+        "plugin_path": str(TEST_PLUGIN_VST3),
         "preset_path": "presets/surge-base.vstpreset",
         "channels": 2,
         "velocity": 100,
@@ -216,6 +224,25 @@ class TestRun:
 
         with pytest.raises(ValueError, match="only supports hdf5"):
             run(spec)
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_renderer_version_mismatch_raises_before_uploads(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When the plugin's actual version disagrees with spec.renderer_version, run() fails
+        before any rclone/subprocess work happens (prevents emitting a shard tagged with the wrong
+        renderer_version)."""
+        kwargs = _base_spec_kwargs(tmp_path, renderer_version="999.999.999")
+        spec = DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
+
+        with pytest.raises(RuntimeError, match="Renderer version mismatch"):
+            run(spec)
+        mock_rclone.assert_not_called()
+        mock_check_call.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
