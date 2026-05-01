@@ -1,0 +1,125 @@
+name: Test SkyPilot Debug
+
+# Parallel debug variant of test-dataset-generation.yml. Exercises the
+# SkyPilot RunPod launcher end-to-end (provision -> setup -> submit -> poll
+# -> tail -> teardown) WITHOUT running the real worker pipeline. The debug
+# template's `run` block prints a single line and exits 0, so any hang
+# surfaced here is in the launcher's SkyPilot interaction, not in the
+# dataset generation code.
+#
+# `--job-deadline-seconds 30` makes the polling loop fail fast (30s instead
+# of the production 600s default), so a stuck cluster shows up in seconds.
+#
+# Triggers:
+# - Manual dispatch only (debug tool — don't burn RunPod budget on every PR)
+#
+# Required secrets:
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
+#                    (the launcher reads them from .env even though the
+#                    debug worker ignores them)
+#   RUNPOD_API_KEY — written to ~/.runpod/config.toml so SkyPilot can
+#                    provision a pod
+
+on:
+  workflow_dispatch:
+    inputs:
+      docker_image_tag:
+        description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
+        required: false
+        default: "dev-snapshot"
+      job_deadline_seconds:
+        description: "Wall-clock cap on the launcher's job-status poll loop."
+        required: false
+        default: "30"
+
+jobs:
+  debug:
+    name: Launch no-op job on RunPod via SkyPilot (debug)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 30
+    env:
+      DATASET_CONFIG: configs/dataset/ci-smoke-test.yaml
+      IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      JOB_DEADLINE_SECONDS: ${{ inputs.job_deadline_seconds || '30' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      - name: Pin image tag in debug template
+        run: |
+          sed -i \
+            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
+            configs/compute/runpod-debug-template.yaml
+          grep image_id configs/compute/runpod-debug-template.yaml
+
+      - name: Write .env from secrets
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+        run: |
+          cat > .env <<EOF
+          RCLONE_CONFIG_R2_TYPE=s3
+          RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+          RCLONE_CONFIG_R2_ENDPOINT=${R2_ENDPOINT}
+          WANDB_S3_ENDPOINT_URL=${R2_ENDPOINT}
+          WANDB_API_KEY=${WANDB_API_KEY}
+          EOF
+          chmod 600 .env
+
+      - name: Prepare run-metadata mount
+        run: mkdir -p /tmp/run-metadata
+
+      # Same launcher as test-dataset-generation, with two differences:
+      # - --template points at the debug yaml (run block is just `echo …`).
+      # - --job-deadline-seconds is small so a stuck cluster fails fast.
+      - name: Launch SkyPilot debug job (inside container)
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
+          DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
+        run: |
+          set -o pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v /tmp/run-metadata:/run-metadata \
+            -e RUNPOD_API_KEY \
+            -e CONFIG_PATH \
+            -e DEADLINE \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              mkdir -p plugins
+              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              mkdir -p ~/.runpod
+              umask 077
+              printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+              python -m pipeline.entrypoints.skypilot_launch_smoke \
+                --config "$CONFIG_PATH" \
+                --template configs/compute/runpod-debug-template.yaml \
+                --cluster-name "synth-setter-debug-${GITHUB_RUN_ID:-local}" \
+                --job-deadline-seconds "$DEADLINE" \
+                --spec-out /tmp/input_spec.json
+            ' \
+            2>&1 | tee /tmp/run-metadata/debug.log
+
+      - name: Upload run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skypilot-debug-run-metadata
+          path: /tmp/run-metadata/
+          retention-days: 7
+          if-no-files-found: warn

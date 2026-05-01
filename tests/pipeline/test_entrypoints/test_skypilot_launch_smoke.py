@@ -487,15 +487,12 @@ class TestMainCli:
         }
         mock_sky.stream_and_get.side_effect = lambda req: responses[req]
 
-        # Tiny deadline + zero sleep so the loop completes synchronously.
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch_smoke._JOB_DEADLINE_SECONDS", 0.1
-        )
+        # Zero sleep between polls so the deadline-bounded loop completes synchronously.
         monkeypatch.setattr(
             "pipeline.entrypoints.skypilot_launch_smoke._JOB_POLL_INTERVAL_SECONDS", 0
         )
 
-        result = _invoke(config_yaml, template_yaml, env_file)
+        result = _invoke(config_yaml, template_yaml, env_file, "--job-deadline-seconds", "0")
         assert result.exit_code != 0
         assert "did not reach a terminal status" in result.output
         mock_sky.down.assert_called_once()

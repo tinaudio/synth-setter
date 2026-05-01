@@ -100,12 +100,25 @@ def load_worker_env(path: Path) -> dict[str, str]:
         "$TMPDIR (avoids parallel-run collisions on a shared host)."
     ),
 )
+@click.option(
+    "--job-deadline-seconds",
+    type=int,
+    default=_JOB_DEADLINE_SECONDS,
+    show_default=True,
+    help=(
+        "Wall-clock cap on the job-status polling loop. The launcher fails fast if the "
+        "worker job has not reached a terminal status within this window — useful in "
+        "debug workflows where we want a stuck cluster to surface in seconds rather "
+        "than minutes."
+    ),
+)
 def main(
     config_path: Path,
     template_path: Path,
     env_file_path: Path,
     cluster_name: str | None,
     spec_out: Path | None,
+    job_deadline_seconds: int,
 ) -> None:
     """Launch the smoke `generate_dataset` run on RunPod via SkyPilot."""
     if not env_file_path.is_file():
@@ -187,7 +200,9 @@ def main(
             # `sky.queue` for a terminal JobStatus instead, then dump the buffered worker
             # log non-following so a traceback still surfaces in CI.
             click.echo(f"Polling job {job_id} on {resolved_cluster_name} for completion")
-            final_status = _wait_for_job(resolved_cluster_name, job_id)
+            final_status = _wait_for_job(
+                resolved_cluster_name, job_id, deadline_seconds=job_deadline_seconds
+            )
             click.echo(f"Job {job_id} reached terminal status: {final_status.name}")
 
             click.echo(f"--- Worker log (job {job_id}) ---")
@@ -224,15 +239,17 @@ def main(
         mount_source.unlink(missing_ok=True)
 
 
-def _wait_for_job(cluster_name: str, job_id: int) -> sky.JobStatus:
+def _wait_for_job(
+    cluster_name: str, job_id: int, deadline_seconds: int = _JOB_DEADLINE_SECONDS
+) -> sky.JobStatus:
     """Poll `sky.job_status` until the given job reaches a terminal status, then return it.
 
     Used in place of `sky.tail_logs(follow=True)` because the latter hangs on RunPod
     waiting for an SSH-stream EOF that never arrives after the worker exits. Polls every
-    `_JOB_POLL_INTERVAL_SECONDS` seconds and times out after `_JOB_DEADLINE_SECONDS` so a
+    `_JOB_POLL_INTERVAL_SECONDS` seconds and times out after `deadline_seconds` so a
     truly stuck worker can't block CI forever.
     """
-    deadline = time.monotonic() + _JOB_DEADLINE_SECONDS
+    deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
         statuses = sky.stream_and_get(sky.job_status(cluster_name, [job_id])) or {}
         status = statuses.get(job_id)
@@ -244,8 +261,7 @@ def _wait_for_job(cluster_name: str, job_id: int) -> sky.JobStatus:
                 return status
         time.sleep(_JOB_POLL_INTERVAL_SECONDS)
     raise click.ClickException(
-        f"Job {job_id} did not reach a terminal status within "
-        f"{_JOB_DEADLINE_SECONDS // 60} minutes"
+        f"Job {job_id} did not reach a terminal status within {deadline_seconds} seconds"
     )
 
 
