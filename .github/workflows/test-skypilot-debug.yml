@@ -125,6 +125,13 @@ jobs:
 
           print(f"[probe] launching cluster={cluster} variant={variant}")
           task = sky.Task.from_yaml(template_path)
+          # Sync the GH-actions checkout to the worker as the SkyPilot workdir
+          # so the worker uses the in-repo `scripts/run-linux-vst-headless.sh`
+          # rather than whatever happens to be baked into the image. Lets us
+          # iterate on the wrapper without rebuilding the docker image. Workdir
+          # lands at ~/sky_workdir on the worker (the SSH command's cwd).
+          task.workdir = os.getcwd()
+          print(f"[probe] workdir set to {task.workdir}")
           # Inject R2 creds + a unique R2_DEBUG_PREFIX for the rclone variant.
           # Other variants ignore these; the env block on each template lists
           # only the keys it cares about.

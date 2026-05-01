@@ -36,6 +36,9 @@ setup: |
   echo "synth-setter debug-headless worker ready (host: $(hostname))"
 
 run: |
-  # cd into the repo root so the relative path to the headless wrapper resolves.
-  cd /home/build/synth-setter
-  scripts/run-linux-vst-headless.sh echo "skypilot-debug headless-wrapped job done (host: $(hostname), pwd: $(pwd))"
+  # SSH cwd is ~/sky_workdir (synced from the GH-actions checkout via
+  # task.workdir in the matrix YAML), so the in-repo wrapper script ships
+  # along with the run block — we don't depend on whatever wrapper is
+  # baked into the image. This is what lets us iterate the wrapper
+  # without a docker rebuild.
+  bash scripts/run-linux-vst-headless.sh echo "skypilot-debug headless-wrapped job done (host: $(hostname), pwd: $(pwd))"
