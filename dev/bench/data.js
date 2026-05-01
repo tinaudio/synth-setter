@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777569584770,
+  "lastUpdate": 1777676892401,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST fixed-params replay": [
@@ -525,6 +525,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03645247220993042,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ae7401f48eade9a3273ddf37519256c91dc6e0a",
+          "message": "fix(ci): drop `passthrough` from remaining docker run invocations after #721 (#742)\n\n* fix(ci): drop `passthrough` from remaining docker run invocations after #721 dropped ENTRYPOINT\n\nPR #727 already dropped `passthrough` from `docker-build-validation.yml`\nand `spec-materialization.yml`, but `dataset-generation.yml` and the\n`validate-shard` job in `test-dataset-generation.yml` were missed and\nfail with `exec: \"passthrough\": executable file not found in $PATH`\nagainst the rebuilt `dev-snapshot` image.\n\nImage now has no ENTRYPOINT and `CMD=[\"/bin/bash\"]`, so trailing argv\nis exec'd directly:\n\n- `passthrough bash -c '…'`           → `bash -c '…'`\n- `passthrough rclone copy …`         → `rclone copy …`\n- `passthrough python3 -m …`          → `python3 -m …`\n- `generate_dataset --spec …`         → `python /usr/local/bin/entrypoint.py generate_dataset --spec …`\n  (matches `configs/compute/runpod-template.yaml` from #721)\n\n`flush-investigation.yml` still uses `passthrough` but is slated for\ndeletion, so leave it untouched.\n\nCloses #726\n\n* fix(ci): drop `passthrough` from test-vst-slow.yml after #721 dropped ENTRYPOINT\n\nSame pattern as the rest of #726: `docker run img passthrough bash -c '…'`\nfails with `exec: \"passthrough\": executable file not found in $PATH` against\nthe rebuilt `dev-snapshot` image (no ENTRYPOINT, `CMD=[\"/bin/bash\"]`).\nDrop the `passthrough` prefix so the trailing `bash -c '…'` is exec'd\ndirectly.\n\nRefs #726",
+          "timestamp": "2026-05-01T18:55:38-04:00",
+          "tree_id": "5d7518cc4f005ca49bd977a3bd47dd3ef2ddadd6",
+          "url": "https://github.com/tinaudio/synth-setter/commit/7ae7401f48eade9a3273ddf37519256c91dc6e0a"
+        },
+        "date": 1777676891685,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.8175413608551025,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.716695620827377,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.024430369958281517,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.020220398902893066,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.612326145172119,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.88265226708333,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.472593307495117,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.825548760239035,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.044085100293159485,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04849100112915039,
             "unit": "1-cos"
           },
           {
