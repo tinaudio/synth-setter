@@ -36,8 +36,6 @@ envs:
   RCLONE_CONFIG_R2_ENDPOINT: ""
 
 setup: |
-  command -v rsync >/dev/null 2>&1 \
-    || (apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync)
   echo "synth-setter debug worker ready (host: $(hostname))"
 
 run: |
