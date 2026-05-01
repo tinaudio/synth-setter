@@ -1,11 +1,23 @@
 name: Test Dataset Generation
 
-# Exercises the dataset-generation reusable workflow with the CI smoke-test
-# config (32 samples, 1 shard). Validates the spec artifact after generation.
+# Exercises the SkyPilot RunPod launcher (pipeline/entrypoints/skypilot_launch_smoke.py)
+# with the CI smoke-test config (configs/dataset/ci-smoke-test.yaml — single-shard
+# round-trip). The launcher runs
+# inside the Docker image so materialize_spec can import pedalboard via the
+# headless X wrapper. SkyPilot streams worker logs back and waits for the
+# unmanaged cluster launch (sky.launch + stream_and_get) to complete; the
+# materialized spec is then validated and the resulting shard pulled from
+# R2 and structurally validated.
 #
 # Triggers:
 # - Manual dispatch: test with custom image tag and config
 # - Pull request: smoke test on dataset-related path changes
+#
+# Required secrets:
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
+#   RUNPOD_API_KEY — used by this workflow to write ~/.runpod/config.toml,
+#                    which SkyPilot's RunPod backend reads at provision time
+#                    (env var alone is not sufficient for `sky check runpod`)
 
 on:
   workflow_dispatch:
@@ -23,25 +35,139 @@ on:
       - "src/data/vst/**"
       - "pipeline/schemas/**"
       - "configs/dataset/**"
+      - "configs/compute/**"
       - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.py"
-      - ".github/workflows/dataset-generation.yml"
+      - "scripts/run-linux-vst-headless.sh"
+      - "pipeline/entrypoints/skypilot_launch_smoke.py"
       - ".github/workflows/test-dataset-generation.yml"
       - "requirements*.txt"
 
+permissions:
+  contents: read
+
 jobs:
   generate:
-    uses: ./.github/workflows/dataset-generation.yml
-    with:
-      image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      config_path: >-
+    name: Launch generate_dataset on RunPod via SkyPilot
+    runs-on: ubuntu-latest
+    # Spends real RunPod + R2 dollars and needs RUNPOD_API_KEY in the job env.
+    # Only run for PRs opened from the same repository (forks can't read the
+    # secrets anyway, but this fails fast and surfaces the reason instead of
+    # provisioning a pod that errors on missing creds). workflow_dispatch is
+    # always allowed because it's gated by repo write permissions.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 60
+    env:
+      DATASET_CONFIG: >-
         ${{
           github.event_name == 'pull_request'
             && 'configs/dataset/ci-smoke-test.yaml'
             || (inputs.dataset_config || 'configs/dataset/ci-smoke-test.yaml')
         }}
-      artifact_name: test-run-metadata
-    secrets: inherit
+      IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      - name: Pin image tag in SkyPilot template
+        run: |
+          # The template's image_id defaults to dev-snapshot; pin it to the
+          # tag this run was dispatched with so the worker pulls the same
+          # image we just smoke-tested locally.
+          sed -i \
+            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
+            configs/compute/runpod-template.yaml
+          grep image_id configs/compute/runpod-template.yaml
+
+      - name: Prepare run-metadata mount
+        run: mkdir -p /tmp/run-metadata
+
+      # Launch step notes (kept out of the heredoc so quoting is simple):
+      #   - The launcher (pipeline.entrypoints.skypilot_launch_smoke) submits
+      #     a SkyPilot job via sky.launch + stream_and_get, blocking until
+      #     the cluster is provisioned, the worker runs, and (down=True)
+      #     the cluster is torn down. The job-level `timeout-minutes: 60`
+      #     above is the safety bound on that block.
+      #   - SkyPilot validates RunPod credentials from ~/.runpod/config.toml
+      #     (env var alone is not enough), hence the in-container write of
+      #     that file with `umask 077` to keep the API key 600.
+      #   - R2 / WANDB secrets land in the container's process env via
+      #     `docker run -e ...` directly. The launcher reads them through
+      #     `resolve_worker_env` (process env first, then optional .env
+      #     file) and forwards them to the SkyPilot Task via
+      #     `task.update_envs(...)` — no .env file ever touches the
+      #     runner's filesystem in CI.
+      #   - --spec-out lands the materialized spec under $TMPDIR (shared FS
+      #     with SkyPilot staging); bind-mounted repo paths trip EXDEV on
+      #     os.rename in-container, so we copy the spec to /run-metadata
+      #     afterwards. `chmod 0644` is required because the in-container
+      #     `umask 077` above would otherwise leave the staged spec 600
+      #     root-owned and unreadable to the host runner for `head` /
+      #     upload-artifact.
+      - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
+        run: |
+          set -o pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v /tmp/run-metadata:/run-metadata \
+            -e RUNPOD_API_KEY \
+            -e CONFIG_PATH \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+            -e WANDB_API_KEY="${WANDB_API_KEY}" \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              mkdir -p plugins
+              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              mkdir -p ~/.runpod
+              umask 077
+              printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+              python -m pipeline.entrypoints.skypilot_launch_smoke \
+                --config "$CONFIG_PATH" \
+                --spec-out /tmp/input_spec.json
+              cp /tmp/input_spec.json /run-metadata/input_spec.json
+              chmod 0644 /run-metadata/input_spec.json
+            ' \
+            2>&1 | tee /tmp/run-metadata/generate.log
+
+      - name: Validate spec exists
+        run: |
+          if [ ! -f /tmp/run-metadata/input_spec.json ]; then
+            echo "::error::input_spec.json not found in /tmp/run-metadata/"
+            exit 1
+          fi
+          echo "=== Materialized Spec ==="
+          head -20 /tmp/run-metadata/input_spec.json
+
+      - name: Upload run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-run-metadata
+          path: /tmp/run-metadata/
+          retention-days: 7
+          if-no-files-found: warn
 
   validate-spec:
     needs: generate
@@ -91,9 +217,9 @@ jobs:
           echo "R2 prefix: ${R2_PREFIX}"
           echo "Shard file: ${SHARD_FILE}"
 
-          # Download shard from R2 via Docker (has rclone). Image has no
-          # ENTRYPOINT (#721 dropped it for SkyPilot); CMD defaults to
-          # /bin/bash, so `docker run img <argv>` overrides CMD with that argv.
+          # Download shard from R2 via Docker (has rclone). The image has no
+          # ENTRYPOINT, so `docker run img <argv>` overrides the /bin/bash
+          # CMD with <argv> directly.
           mkdir -p /tmp/shard-download
           docker pull "$IMAGE"
           docker run --rm \
