@@ -12,13 +12,9 @@
 # at docs/design/skypilot-compute-integration.md.
 
 resources:
-  any_of:
-    - infra: runpod
-      instance_type: cpu3c-2-4
-      image_id: docker:tinaudio/synth-setter:dev-snapshot
-    - infra: runpod
-      instance_type: cpu3c-1-2
-      image_id: docker:tinaudio/synth-setter:dev-snapshot
+  cloud: runpod
+  instance_type: cpu3c-2-4
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 # Placeholders. Real values are injected by the launcher via update_envs.
 envs:

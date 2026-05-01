@@ -11,13 +11,9 @@
 # the materialized spec; the worker just ignores them.
 
 resources:
-  any_of:
-    - infra: runpod
-      instance_type: cpu3c-2-4
-      image_id: docker:tinaudio/synth-setter:dev-snapshot
-    - infra: runpod
-      instance_type: cpu3c-1-2
-      image_id: docker:tinaudio/synth-setter:dev-snapshot
+  - infra: runpod
+    instance_type: cpu3c-2-4
+    image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 # Placeholders — the launcher will overwrite these with real values via
 # update_envs. The worker's run block doesn't read them, so anything works.
