@@ -49,9 +49,37 @@ run: |
   # NOT to be /home/build/synth-setter (the image's WORKDIR) — confirming that
   # is why the cd below is necessary.
   echo "skypilot-run-cwd: $(pwd)"
-  # cd into the repo root before invoking generate_dataset: it shells out to
+  # cd into the repo root before calling run(): it shells out to
   # scripts/run-linux-vst-headless.sh via a relative path, and SkyPilot's run
   # block does not execute from the image's WORKDIR by default.
   cd /home/build/synth-setter
-  python /usr/local/bin/entrypoint.py generate_dataset \
-    --spec /home/build/synth-setter/data/skypilot-launch-smoke-spec.json
+  # Inline the generate_dataset call so we can `os._exit(0)` immediately
+  # after `run()` returns. Workaround for #735: the SkyPilot RunPod worker
+  # consistently hangs at Python interpreter shutdown after a successful
+  # `generate_dataset.run()` — some library (most likely pedalboard / numba
+  # / dask / h5py) leaves a non-daemon thread alive and the interpreter
+  # never exits. SkyPilot's job-status reporter sees the SSH session's
+  # process tree still alive and the job stays in RUNNING forever even
+  # though both rclone uploads have already landed in R2. The worker pod is
+  # ephemeral (`sky.launch + down=True`), so there's nothing for a clean
+  # shutdown to flush. `os._exit(0)` bypasses atexit / non-daemon-thread
+  # join and lets SkyPilot register SUCCEEDED.
+  #
+  # Inlining here (instead of in scripts/docker_entrypoint.py) keeps the
+  # workaround scoped to the SkyPilot worker code path. Local dev runs and
+  # other CI consumers of `python -m scripts.docker_entrypoint generate_dataset`
+  # keep clean atexit / non-daemon-thread teardown. Drop this whole inline
+  # block (and revert to invoking the docker_entrypoint click subcommand) once
+  # https://github.com/tinaudio/synth-setter/issues/735 is root-caused at its
+  # source. PR-B's `pedalboard-load` matrix variant is the canary that
+  # proves the revert is safe.
+  python -c '
+  import os
+  from pipeline.entrypoints.generate_dataset import run
+  from pipeline.schemas.spec import DatasetPipelineSpec
+  spec_path = "/home/build/synth-setter/data/skypilot-launch-smoke-spec.json"
+  with open(spec_path) as f:
+      run(DatasetPipelineSpec.model_validate_json(f.read()))
+  print("forcing interpreter exit (#735 workaround) — bypassing atexit", flush=True)
+  os._exit(0)
+  '
