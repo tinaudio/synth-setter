@@ -1,0 +1,42 @@
+# SkyPilot task template for RunPod — DEBUG / no-op variant.
+#
+# Used by .github/workflows/test-skypilot-debug.yml to exercise the launcher
+# (provision → setup → submit → poll → tail → teardown) without running the
+# real worker pipeline. The run block prints a single line and exits 0, so any
+# hang surfaced under this template is in the launcher's SkyPilot interaction,
+# NOT in the dataset generation code.
+#
+# Same image and accelerator set as the production template so we don't have
+# to publish a separate debug image. The launcher still injects env + mounts
+# the materialized spec; the worker just ignores them.
+
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+# Placeholders — the launcher will overwrite these with real values via
+# update_envs. The worker's run block doesn't read them, so anything works.
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+
+setup: |
+  echo "synth-setter debug worker ready (host: $(hostname))"
+
+run: |
+  echo "skypilot-debug job done (host: $(hostname), pwd: $(pwd))"

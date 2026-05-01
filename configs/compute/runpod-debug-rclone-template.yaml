@@ -1,0 +1,52 @@
+# SkyPilot task template for RunPod — DEBUG variant: rclone-process-exit
+# canary.
+#
+# Provisions a RunPod pod, uploads a tiny sentinel file to R2 via rclone
+# (with the same flags the production worker uses), and exits. If rclone
+# ever stops exiting cleanly post-upload again — the failure mode behind
+# https://github.com/tinaudio/synth-setter/issues/735 — this variant
+# fails before the production smoke does.
+#
+# Worker-side env (RCLONE_CONFIG_R2_*) is forwarded by whoever invokes
+# this template (see .github/workflows/test-skypilot-debug.yml).
+
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+  R2_BUCKET: ""
+  R2_DEBUG_PREFIX: ""
+
+setup: |
+  echo "synth-setter debug-rclone worker ready (host: $(hostname))"
+
+run: |
+  set -euo pipefail
+  printf "%s\n" "$(hostname) $(date -u +%FT%TZ)" > /tmp/skypilot-debug-rclone-sentinel.txt
+  rclone copy \
+    -vv \
+    --checksum \
+    --contimeout=30s \
+    --timeout=300s \
+    --retries=3 \
+    /tmp/skypilot-debug-rclone-sentinel.txt \
+    "r2:${R2_BUCKET}/${R2_DEBUG_PREFIX}"
+  echo "skypilot-debug variant=rclone done (host: $(hostname))"
