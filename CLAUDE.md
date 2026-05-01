@@ -58,6 +58,33 @@ Comments that restate values, counts, or list contents go stale the moment the c
 - **Don't enumerate list contents in prose.** Next to `THINGS = ["a", "b", "c"]`, never write `# three things: a, b, and c` — both the count and the contents will mismatch the list within a release. The list is the source of truth; a comment can name the *category*, not its contents.
 - Still write comments for: WHY a non-obvious choice was made, hidden invariants, workarounds (with bug ID), and surprising behavior.
 
+#### No Comments Inside YAML `run:` Block-Scalars
+
+YAML block-scalars passed to bash — i.e. `run: |` blocks in **GitHub Actions workflow YAML** (`.github/workflows/*.{yml,yaml}`) and **SkyPilot Task YAML** (`configs/compute/*.yaml`'s `run:` and `setup:` blocks) — render without syntax highlighting in most YAML viewers and are visually indistinguishable from "real" command lines once they reach bash. Stray `'`, `` ` ``, `$`, or `\` inside a comment have caused unintended shell quoting / expansion in the past.
+
+**Rule:** put comments *above* the block-scalar, not inside it.
+
+```yaml
+# Bad — comments INSIDE the run: block:
+- name: Pin image tag
+  run: |
+    # The template's image_id defaults to dev-snapshot; pin it to the
+    # tag this run was dispatched with.
+    sed -i "s|...dev-snapshot|...${IMAGE_TAG}|" configs/compute/runpod-template.yaml
+
+# Good — comments ABOVE the step:
+# Pin the template's image_id from its default (`dev-snapshot`) to the tag
+# this run was dispatched with, so the worker pulls the same image we just
+# smoke-tested locally in the prior step.
+- name: Pin image tag
+  run: |
+    sed -i "s|...dev-snapshot|...${IMAGE_TAG}|" configs/compute/runpod-template.yaml
+```
+
+Same rule for SkyPilot `run:`/`setup:` blocks — put rationale comments at the YAML structural level (above the `run:` key), not inside the block-scalar.
+
+The block-scalar should contain only commands. The reader who wants to know *why* a command exists looks at the comment block above the step or above the `run:` key — outside the bash interpretation surface.
+
 ### Testing
 
 - **pytest** with strict markers. Run `make test` for quick tests (excludes slow).
