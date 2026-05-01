@@ -11,9 +11,20 @@
 # the materialized spec; the worker just ignores them.
 
 resources:
-  - infra: runpod
-    instance_type: cpu3c-2-4
-    image_id: docker:tinaudio/synth-setter:dev-snapshot
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 # Placeholders — the launcher will overwrite these with real values via
 # update_envs. The worker's run block doesn't read them, so anything works.
