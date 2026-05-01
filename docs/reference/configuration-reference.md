@@ -12,7 +12,7 @@ ______________________________________________________________________
 | Experiment config     | Hydra YAML composition                         | Deferred — class constructors at `hydra.utils.instantiate()` | git (`configs/experiment/`)        | `configs/experiment/surge/flow_simple.yaml`  |
 | Pipeline input config | Pydantic `BaseModel(strict=True)`              | Parse-time — `load_dataset_config()`                         | git (`configs/dataset/`)           | `configs/dataset/surge-simple-480k-10k.yaml` |
 | Frozen runtime spec   | Pydantic `BaseModel(strict=True, frozen=True)` | Materialization — `materialize_spec()`                       | R2 (`{r2_prefix}/input_spec.json`) | `DatasetPipelineSpec`                        |
-| Cloud infrastructure  | Plain YAML                                     | Launcher script (not Hydra)                                  | git (`configs/cloud/`)             | `configs/cloud/runpod-a5000.yaml` (planned)  |
+| Cloud infrastructure  | SkyPilot Task YAML                             | Launcher script (not Hydra)                                  | git (`configs/compute/`)           | `configs/compute/runpod-template.yaml`       |
 | Secrets / credentials | Environment variables                          | Runtime                                                      | `.env` (local), CI secrets         | `WANDB_API_KEY`                              |
 
 ### Why These Boundaries
@@ -76,15 +76,17 @@ Reference: `eval-pipeline.md` §4–5
 ### 2.4 Cloud Infrastructure
 
 ```
-configs/cloud/{provider}-{profile}.yaml (plain YAML)
-  → launcher script reads YAML + experiment name
-    → calls provider API (RunPod / Vast.ai)
-      → pod/instance runs: python src/train.py experiment={exp}
+configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
+  → launcher script (pipeline.entrypoints.skypilot_launch_smoke)
+    reads YAML, materializes spec, mounts spec into worker
+    → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
+      → pod runs: python -m pipeline.entrypoints.generate_dataset --spec ...
 ```
 
-- Separate from Hydra — different consumer (launcher API), different time (before job starts)
-- Launcher takes infrastructure config + experiment name as separate inputs
-- Invoked via: `make {provider}-train CLOUD={profile} EXPERIMENT={experiment}`
+- Separate from Hydra — different consumer (SkyPilot's `Task.from_yaml`), different time (before worker starts)
+- Launcher takes the task template + a `DatasetConfig` and stages the materialized
+  `DatasetPipelineSpec` via `task.update_file_mounts`
+- Invoked via: `python -m pipeline.entrypoints.skypilot_launch_smoke --config <yaml> --template <yaml>`
 
 Reference: `training-pipeline.md` Appendix D
 
@@ -111,22 +113,30 @@ ______________________________________________________________________
 | Region selection    | Limited datacenter selection             | `geolocation in [US,CA,DE]` filter                                           |
 | Benchmark data      | N/A                                      | `dlperf` (DL perf score), `dlperf_per_dphtotal` (perf/$)                     |
 
-### Config Shape (Planned)
+### Config Shape
 
-Neither config file exists yet. These show the target format.
+The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet implemented.
 
-**RunPod** (`configs/cloud/runpod-a5000.yaml`):
+**RunPod** (`configs/compute/runpod-template.yaml`) — landed:
 
 ```yaml
-provider: runpod
-gpu_type: "NVIDIA RTX A5000"
-gpu_count: 1
-image: "tinaudio/synth-setter-train:latest"
-container_disk_gb: 50
-cloud_type: "SECURE"
+resources:
+  cloud: runpod
+  accelerators: { RTX3090: 1, RTXA4000: 1, A40: 1, RTX4090: 1, ... }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+envs:
+  RCLONE_CONFIG_R2_*: ""   # injected by launcher from .env
+  WANDB_API_KEY: ""
+  WORKER_SPEC_PATH: "/home/build/synth-setter/data/skypilot-launch-smoke-spec.json"
+
+run: |
+  cd /home/build/synth-setter && python -m pipeline.entrypoints.generate_dataset --spec "$WORKER_SPEC_PATH"
 ```
 
-**Vast.ai** (`configs/cloud/vast-4090.yaml`):
+**Vast.ai** (`configs/compute/vast-template.yaml`) — planned, not implemented:
 
 ```yaml
 provider: vast
@@ -201,15 +211,15 @@ Gaps are configuration inputs that design docs specify or that standard practice
 
 ### 5.5 Cloud Infrastructure
 
-| Input               | Type            | What's Needed                                                          | Reference                       |
-| ------------------- | --------------- | ---------------------------------------------------------------------- | ------------------------------- |
-| RunPod config       | YAML            | ~14 params: GPU type/count, image, volumes, cloud type, auto-terminate | training-pipeline.md Appendix D |
-| Vast.ai config      | YAML            | ~50 params: search query, disk, runtype, volumes, pricing              | new provider                    |
-| `configs/cloud/`    | directory       | Cloud config YAML files don't exist yet                                | —                               |
-| `make train`        | Makefile target | Training shorthand with EXPERIMENT arg                                 | training-pipeline.md §2         |
-| `make docker-train` | Makefile target | Docker training shorthand                                              | training-pipeline.md §2         |
-| `make runpod-train` | Makefile target | RunPod launcher shorthand                                              | training-pipeline.md §2         |
-| `make resume`       | Makefile target | Resume from W&B artifact with EXPERIMENT + RUN_ID                      | training-pipeline.md §2         |
+| Input               | Type               | What's Needed                                                                                                                         | Reference                                             |
+| ------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| RunPod config       | SkyPilot Task YAML | Landed for the data pipeline smoke at `configs/compute/runpod-template.yaml`; training launcher still uses the legacy RunPod-API path | data-pipeline.md §14, training-pipeline.md Appendix D |
+| Vast.ai config      | SkyPilot Task YAML | Planned — `configs/compute/vast-template.yaml` not yet authored                                                                       | new provider                                          |
+| `configs/compute/`  | directory          | SkyPilot Task templates for the data pipeline launcher (RunPod landed; Vast.ai planned)                                               | —                                                     |
+| `make train`        | Makefile target    | Training shorthand with EXPERIMENT arg                                                                                                | training-pipeline.md §2                               |
+| `make docker-train` | Makefile target    | Docker training shorthand                                                                                                             | training-pipeline.md §2                               |
+| `make runpod-train` | Makefile target    | RunPod launcher shorthand                                                                                                             | training-pipeline.md §2                               |
+| `make resume`       | Makefile target    | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                     | training-pipeline.md §2                               |
 
 ### 5.6 Other
 

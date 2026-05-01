@@ -1234,7 +1234,7 @@ class DatasetPipelineSpec(BaseModel):
     code_version: str       # git commit SHA
     is_repo_dirty: bool
     param_spec: str
-    renderer_version: str   # Auto-extracted from plugin bundle at materialization
+    renderer_version: str   # Pinned to SURGE_XT_RENDERER_VERSION at materialization; worker re-derives via extract_renderer_version and refuses on mismatch
     output_format: Literal["hdf5", "wds"]
     sample_rate: int
     shard_size: int
@@ -1372,9 +1372,9 @@ splits:
 On first `generate`:
 
 1. Load YAML, validate against Pydantic `DatasetConfig` (strict mode)
-2. Extract `renderer_version` from the plugin bundle (`CFBundleShortVersionString` from `Info.plist` on macOS, `Version` from `moduleinfo.json` on Linux)
+2. Pin `renderer_version` to `SURGE_XT_RENDERER_VERSION` (the constant in `pipeline/schemas/spec.py`, kept in lockstep with the `dev-snapshot` image's `SURGE_GIT_REF`). The launcher path stays interpreter-only — the worker re-derives via `extract_renderer_version` (`Version` from `moduleinfo.json` on Linux, `CFBundleShortVersionString` from `Info.plist` on macOS, pedalboard fallback if neither is present) and refuses to render on mismatch.
 3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`
-4. Materialize `DatasetPipelineSpec` — expand config into per-shard specs (seeds, filenames) and capture runtime state (git SHA, renderer version, num_params)
+4. Materialize `DatasetPipelineSpec` — expand config into per-shard specs (seeds, filenames) and capture runtime state (git SHA, pinned renderer version, num_params)
 5. Upload spec + source config to R2
 6. Proceed with reconciliation
 

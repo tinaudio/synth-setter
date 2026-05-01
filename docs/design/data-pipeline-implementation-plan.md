@@ -285,8 +285,10 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 - Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
   `dataset_config_id` is the config filename stem, which encodes runtime params for readability.
 - `materialize_spec(config: DatasetConfig, config_id: DatasetConfigId) -> DatasetPipelineSpec`.
-  Derives all runtime state internally (git SHA, repo dirty status, renderer version from plugin,
-  UTC timestamp). No optional overrides — tests mock I/O helpers instead.
+  Derives all runtime state internally (git SHA, repo dirty status, pinned renderer version
+  from `SURGE_XT_RENDERER_VERSION`, UTC timestamp). The launcher path stays interpreter-only;
+  the worker re-derives the renderer version via `extract_renderer_version` and refuses on
+  mismatch. No optional overrides — tests mock I/O helpers instead.
 
 **Design doc schema gaps to fix alongside this task:**
 
@@ -627,9 +629,11 @@ Click group from `cli.py`).
 - `--log-level` (default: `INFO`, options: `DEBUG`, `INFO`, `WARNING`)
 - Auth validation: check R2 connectivity + RunPod API key before launching.
   On failure: clear error message, exit 1, no workers launched.
-- Early validation: check `plugin_path` exists before materialization — actionable
-  error if VST3 bundle not found (avoids unclear renderer_version extraction failure).
-- First run: config → validate → extract `renderer_version` → materialize spec →
+- Plugin-path validation runs on the worker, not the launcher. The launcher path is
+  interpreter-only (no VST load), so it pins `renderer_version` to
+  `SURGE_XT_RENDERER_VERSION` and the worker validates the actual plugin bundle
+  via `extract_renderer_version` before rendering.
+- First run: config → validate → pin `renderer_version` constant → materialize spec →
   upload frozen spec to `metadata/input_spec.json` + source config to
   `metadata/config.yaml` (provenance copy) → if `is_repo_dirty`, upload
   `git diff` to `metadata/run_diff.patch` → reconcile → partition → submit → exit.
@@ -953,10 +957,16 @@ Task 5.1 specifies auth validation before compute but no reference test covers t
 failure case. Add unit test: missing R2 credentials → clear error message, exit 1,
 no workers launched.
 
-**GP4. `generate` should validate `plugin_path` exists before materialization.**
-If the VST3 bundle path in the config doesn't exist, `renderer_version` extraction will
-fail with an unclear error. Add early validation: check `plugin_path` exists, error with
-actionable message if not.
+**GP4. Plugin-path validation belongs on the worker, not the launcher.**
+The launcher path is interpreter-only (the SkyPilot launcher in
+`pipeline/entrypoints/skypilot_launch_smoke.py` cannot load a VST3 plugin — no X11),
+so `materialize_spec` no longer extracts `renderer_version` from the plugin bundle and
+no longer enforces a `plugin_path.exists()` precondition. Pin `renderer_version` to
+`SURGE_XT_RENDERER_VERSION` at materialization; the worker calls
+`extract_renderer_version` against the actual plugin before rendering and raises a clear
+mismatch error if the running plugin disagrees with the spec. This pushes plugin-bundle
+errors to the worker, where the X stack and pedalboard fallback are available, instead
+of failing the launcher with an unclear extraction error.
 
 **GP5. No `--verbose` / log-level flag on CLI.**
 Design doc Appendix E.1 shows structured logging config but no CLI flag controls

@@ -126,7 +126,7 @@ Dispatch and dataset-run configuration flow via CLI, not env vars: the
 subcommand (`generate_dataset`, `idle`, `passthrough`, …) is a positional
 arg; the pipeline spec — including the R2 bucket — is read from the JSON
 file passed via `--spec`. `input_spec.json` is written by the caller (the
-`pipeline.ci.materialize_spec` bootstrap step in CI) to a bind-mounted
+`pipeline.schemas.spec.materialize_spec` bootstrap step in CI) to a bind-mounted
 directory. Multi-shard generation runs sequentially on a single worker;
 distributed parallelism is tracked in [#407](https://github.com/tinaudio/synth-setter/issues/407).
 
