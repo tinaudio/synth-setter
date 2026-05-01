@@ -47,7 +47,8 @@ trap cleanup EXIT
 # Start Xvfb (let it pick a display)
 # -displayfd 3 writes the chosen display number to file descriptor 3
 # 3>"$DISPLAY_FILE" redirects FD 3 to our temp file so we can read it later
-Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
+Xvfb -displayfd 3 -screen 0 1920x1080x24 -nolisten tcp \
+  </dev/null >/dev/null 3>"$DISPLAY_FILE" 2>"$TMP_DIR/xvfb.log" &
 XVFB_PID=$!
 
 # Wait for Xvfb to output the display number
@@ -80,12 +81,17 @@ for _ in {1..50}; do
 done
 xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 || { echo "Xvfb did not start"; cat "$TMP_DIR/xvfb.log" || true; exit 1; }
 
-# Start an XSettings manager
-xsettingsd --config /dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
+# Start an XSettings manager.
+# `</dev/null` detaches stdin so backgrounded daemons (and any grandchildren
+# they fork) don't keep the parent SSH session's stdin pipe open. Without
+# this, SkyPilot's RunPod backend never observes EOF on the SSH command's
+# pipes and the job stays in RUNNING forever even after the wrapped
+# command exits (#735).
+xsettingsd --config /dev/null </dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
 XSETTINGS_PID=$!
 
 # Start a lightweight window manager (important for many plugins)
-openbox-session >"$TMP_DIR/openbox.log" 2>&1 &
+openbox-session </dev/null >"$TMP_DIR/openbox.log" 2>&1 &
 OPENBOX_PID=$!
 
 # Run the actual command inside a D-Bus session.
