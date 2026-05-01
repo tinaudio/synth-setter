@@ -164,7 +164,11 @@ def main(
             idle_minutes_to_autostop=0,
             down=True,
         )
-        launch_result = sky.stream_and_get(launch_request_id, follow=True)
+        # follow=True belongs on tail_logs (which actually tails an evolving stream); on a
+        # launch RequestId it just keeps stream_and_get open longer than needed. The launch
+        # request resolves when provisioning + setup + job submission complete; let it return
+        # then.
+        launch_result = sky.stream_and_get(launch_request_id)
         if launch_result is None or launch_result[0] is None:
             raise click.ClickException(
                 f"Launch yielded no job_id for cluster {resolved_cluster_name}"
@@ -183,7 +187,7 @@ def main(
         finally:
             click.echo(f"Tearing down cluster: {resolved_cluster_name}")
             down_request_id = sky.down(resolved_cluster_name)
-            sky.stream_and_get(down_request_id, follow=True)
+            sky.stream_and_get(down_request_id)
     finally:
         mount_source.unlink(missing_ok=True)
 
