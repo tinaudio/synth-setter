@@ -42,8 +42,9 @@ jobs:
 
       # Bootstrap steps that can't run from inside the click entrypoint
       # (git safe.directory + plugin symlink depend on the bind mount + runner
-      # UID mismatch). Done via `passthrough` so we still exercise the real
-      # ENTRYPOINT (python click CLI) instead of `--entrypoint bash`.
+      # UID mismatch). The image has no ENTRYPOINT and CMD=/bin/bash (dropped
+      # in a3e5f87 so SkyPilot's RunPod backend can run `bash -c '<setup>'`),
+      # so trailing argv is the command — invoke `bash -c` directly.
       # CONFIG_PATH is passed as a positional arg to `bash -c`, not expanded
       # into the script text, to avoid quoting hazards if the workflow input
       # ever contains shell metacharacters.
@@ -57,15 +58,14 @@ jobs:
             -e CONFIG_PATH \
             -e PYTHONPATH=/home/build/synth-setter \
             tinaudio/synth-setter:${{ inputs.image_tag }} \
-            passthrough bash -c '
+            bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               mkdir -p plugins
               ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
               # materialize_spec imports pedalboard (via param_specs) which
-              # needs a live X display — wrap the materialize invocation, not
-              # the whole container, so the click entrypoint stays X11-agnostic.
+              # needs a live X display.
               scripts/run-linux-vst-headless.sh \
                 python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
             '
@@ -77,8 +77,8 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
         # Mount the PR's code into the container so we test THIS branch's code
-        # against the image's environment. Dispatch goes through the default
-        # ENTRYPOINT (python click CLI) — no `--entrypoint bash` override.
+        # against the image's environment. With ENTRYPOINT dropped, invoke the
+        # click CLI explicitly via `python /usr/local/bin/entrypoint.py`.
         run: |
           set -o pipefail
           docker run --rm \
@@ -92,7 +92,7 @@ jobs:
             -e WANDB_API_KEY="${WANDB_API_KEY}" \
             -e PYTHONPATH=/home/build/synth-setter \
             tinaudio/synth-setter:${{ inputs.image_tag }} \
-            generate_dataset --spec /run-metadata/input_spec.json \
+            python /usr/local/bin/entrypoint.py generate_dataset --spec /run-metadata/input_spec.json \
             2>&1 | tee /tmp/run-metadata/generate.log
 
       - name: Validate spec exists

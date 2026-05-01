@@ -91,9 +91,9 @@ jobs:
           echo "R2 prefix: ${R2_PREFIX}"
           echo "Shard file: ${SHARD_FILE}"
 
-          # Download shard from R2 via Docker (has rclone). The image's
-          # ENTRYPOINT is the python click CLI; `passthrough <cmd>` execs
-          # the trailing argv as PID 1.
+          # Download shard from R2 via Docker (has rclone). Image has no
+          # ENTRYPOINT (#721 dropped it for SkyPilot); CMD defaults to
+          # /bin/bash, so `docker run img <argv>` overrides CMD with that argv.
           mkdir -p /tmp/shard-download
           docker pull "$IMAGE"
           docker run --rm \
@@ -105,7 +105,7 @@ jobs:
             -e PYTHONPATH=/home/build/synth-setter \
             -v /tmp/shard-download:/download \
             "$IMAGE" \
-            passthrough rclone copy --checksum \
+            rclone copy --checksum \
               "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
               /download/
 
@@ -120,6 +120,6 @@ jobs:
             -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
             -e PYTHONPATH=/home/build/synth-setter \
             "$IMAGE" \
-            passthrough python3 -m pipeline.ci.validate_shard \
+            python3 -m pipeline.ci.validate_shard \
               /spec/input_spec.json \
               "/download/${SHARD_FILE}"
