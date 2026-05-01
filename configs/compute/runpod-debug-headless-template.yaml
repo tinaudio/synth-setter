@@ -1,0 +1,41 @@
+# SkyPilot task template for RunPod — DEBUG variant: headless-wrapper +
+# job-done echo.
+#
+# Identical to runpod-debug-template.yaml except the `run` block invokes
+# `scripts/run-linux-vst-headless.sh` (Xvfb + xsettingsd + openbox + dbus)
+# and then echoes a single line. If the no-wrapper debug variant succeeds
+# but this one hangs, the wrapper's child-process lifecycle is implicated
+# in the production worker hang (i.e., SkyPilot's notion of "job done"
+# never fires because the wrapper's children outlive the foreground
+# command).
+
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+
+setup: |
+  echo "synth-setter debug-headless worker ready (host: $(hostname))"
+
+run: |
+  # cd into the repo root so the relative path to the headless wrapper resolves.
+  cd /home/build/synth-setter
+  scripts/run-linux-vst-headless.sh echo "skypilot-debug headless-wrapped job done (host: $(hostname), pwd: $(pwd))"

@@ -241,14 +241,28 @@ jobs:
 
   # ------------------------------------------------------------------------
   # debug-pure-sky: bypass the launcher entirely. Inline calls to sky.launch /
-  # stream_and_get / tail_logs / down. If this works but debug-launcher-bare
-  # hangs, the launcher's materialize_spec / file_mounts / env path is at
-  # fault. If this hangs, the issue is in SkyPilot+RunPod itself.
+  # stream_and_get / tail_logs / down. Two matrix variants:
+  #   - noop:     run block is `echo "..."` (no headless wrapper). Baseline.
+  #   - headless: run block is `scripts/run-linux-vst-headless.sh echo "..."`.
+  #               If this hangs but `noop` succeeds, the headless wrapper's
+  #               child-process lifecycle (Xvfb + xsettingsd + openbox + dbus)
+  #               is what blocks SkyPilot from registering job completion on
+  #               RunPod — i.e., the production worker hang lives there.
   # ------------------------------------------------------------------------
   debug-pure-sky:
-    name: Pure-SkyPilot probe (debug)
+    name: Pure-SkyPilot probe (${{ matrix.variant }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: noop
+            template: configs/compute/runpod-debug-template.yaml
+            cluster_suffix: noop
+          - variant: headless
+            template: configs/compute/runpod-debug-headless-template.yaml
+            cluster_suffix: headless
 
     steps:
       - name: Checkout
@@ -264,32 +278,37 @@ jobs:
         run: pip install "skypilot[runpod]==0.12.0"
 
       - name: Pin image tag in debug template
+        env:
+          TEMPLATE: ${{ matrix.template }}
         run: |
           sed -i \
             "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
-            configs/compute/runpod-debug-template.yaml
-          grep image_id configs/compute/runpod-debug-template.yaml
+            "$TEMPLATE"
+          grep image_id "$TEMPLATE"
 
       - name: Run inline SkyPilot probe
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          CLUSTER_NAME: synth-setter-debug-pure-${{ github.run_id }}
+          CLUSTER_NAME: synth-setter-debug-pure-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
+          TEMPLATE: ${{ matrix.template }}
+          LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -o pipefail
           mkdir -p ~/.runpod
           umask 077
           printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
 
-          python - <<'PY' 2>&1 | tee /tmp/debug-pure-sky.log
+          python - <<'PY' 2>&1 | tee "$LOG_PATH"
           import os, time
           import sky
 
           cluster = os.environ["CLUSTER_NAME"]
           deadline_seconds = int(os.environ["DEADLINE"])
+          template_path = os.environ["TEMPLATE"]
 
-          print(f"[probe] launching cluster={cluster}")
-          task = sky.Task.from_yaml("configs/compute/runpod-debug-template.yaml")
+          print(f"[probe] launching cluster={cluster} template={template_path}")
+          task = sky.Task.from_yaml(template_path)
           launch_req = sky.launch(
               task,
               cluster_name=cluster,
@@ -344,7 +363,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: skypilot-debug-pure-sky-metadata
-          path: /tmp/debug-pure-sky.log
+          name: skypilot-debug-pure-sky-${{ matrix.cluster_suffix }}-metadata
+          path: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
           retention-days: 7
           if-no-files-found: warn
