@@ -47,6 +47,9 @@ on:
     paths:
       - "pipeline/entrypoints/skypilot_launch_smoke.py"
       - "configs/compute/runpod-debug-template.yaml"
+      - "configs/compute/runpod-debug-headless-template.yaml"
+      - "configs/compute/runpod-debug-branch-echo-template.yaml"
+      - "configs/compute/runpod-debug-branch-py-template.yaml"
       - ".github/workflows/test-skypilot-debug.yml"
 
 permissions:
@@ -263,6 +266,16 @@ jobs:
           - variant: headless
             template: configs/compute/runpod-debug-headless-template.yaml
             cluster_suffix: headless
+          # Branch-checkout variants: setup git-clones the feat branch and runs
+          # the branch's wrapper. Tests the wrapper script as it exists on this
+          # branch (not the version baked into the dev-snapshot image) and the
+          # full Python+pedalboard+X11 import chain the production worker uses.
+          - variant: branch-echo
+            template: configs/compute/runpod-debug-branch-echo-template.yaml
+            cluster_suffix: branch-echo
+          - variant: branch-py
+            template: configs/compute/runpod-debug-branch-py-template.yaml
+            cluster_suffix: branch-py
 
     steps:
       - name: Checkout
