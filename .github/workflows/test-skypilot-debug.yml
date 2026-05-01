@@ -1,34 +1,36 @@
 name: Test SkyPilot Debug
 
-# Three parallel debug variants of test-dataset-generation.yml. Each fans out
-# a different "shape" of the launcher → SkyPilot → RunPod path so a green/red
-# matrix tells us where the production hang lives:
+# Permanent diagnostic matrix for the SkyPilot+RunPod path. Four canary
+# variants, each isolating one known failure class. None of these
+# exercise the production launcher or worker — they're standalone
+# probes. When test-dataset-generation regresses, dispatch this and
+# read the green/red pattern to triage in ~5 minutes.
 #
-#   debug-image          : run the launcher inside the dev-snapshot Docker
-#                          image (mirrors test-dataset-generation exactly,
-#                          minus the worker pipeline)
-#   debug-launcher-bare  : run the launcher on the bare GHA runner with the
-#                          repo's requirements installed via pip
-#   debug-pure-sky       : skip the launcher entirely; call sky.launch /
-#                          stream_and_get / tail_logs / down inline from a
-#                          bare GHA runner
+#   noop             SkyPilot/RunPod orchestration canary
+#                    (provision -> submit -> status-poll -> teardown,
+#                    no wrapper, no Python work).
 #
-# Same `runpod-debug-template.yaml` (run block is `echo "skypilot-debug job
-# done"`) for all three; same `--job-deadline-seconds 30` (or its inline
-# equivalent) so a stuck cluster surfaces in seconds. Each job uses a unique
-# cluster name so the three pods don't collide.
+#   headless         Wrapper-cleanup canary
+#                    (`scripts/run-linux-vst-headless.sh echo "ok"`,
+#                    catches regressions of the bug class fixed by #736).
 #
-# Triggers:
-# - Manual dispatch
-# - Push to feat/skypilot-runpod-smoke when the launcher / debug template /
-#   this workflow changes (auto-iterate; remove the `push` trigger once the
-#   launcher is stable on RunPod — every push spends RunPod budget).
+#   rclone           rclone-process-exit canary
+#                    (`rclone copy <small file> r2:...`, catches
+#                    regressions of the bug class behind #735).
+#
+#   pedalboard-load  Python+pedalboard+X interpreter-shutdown canary
+#                    (`python -c "load Surge XT"` through the headless
+#                    wrapper, closest-to-production without rclone;
+#                    catches the bug-#3 regression directly).
+#
+# Triggers: workflow_dispatch only — RunPod pods are billable. Each
+# dispatch spends ~4 pods. Add a `push` trigger only temporarily when
+# actively iterating on launcher / wrapper / template behavior.
 #
 # Required secrets:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
-#   WANDB_API_KEY                                       — Weights & Biases
-#   RUNPOD_API_KEY                                      — written to
-#                                                         ~/.runpod/config.toml
+#   RUNPOD_API_KEY  — written to ~/.runpod/config.toml so SkyPilot can
+#                     provision a pod
 
 on:
   workflow_dispatch:
@@ -40,23 +42,7 @@ on:
       job_deadline_seconds:
         description: "Wall-clock cap on the launcher's job-status poll loop."
         required: false
-        default: "30"
-  push:
-    branches:
-      - feat/skypilot-runpod-smoke
-    paths:
-      - "pipeline/entrypoints/skypilot_launch_smoke.py"
-      - "configs/compute/runpod-debug-template.yaml"
-      - "configs/compute/runpod-debug-headless-template.yaml"
-      - "configs/compute/runpod-debug-branch-echo-template.yaml"
-      - "configs/compute/runpod-debug-branch-py-template.yaml"
-      - "configs/compute/runpod-debug-no-exec-template.yaml"
-      - "configs/compute/runpod-debug-no-dbus-template.yaml"
-      - "configs/compute/runpod-debug-bare-wrapper-template.yaml"
-      - "scripts/run-linux-vst-headless-no-exec.sh"
-      - "scripts/run-linux-vst-headless-no-dbus.sh"
-      - "scripts/run-linux-vst-headless-bare.sh"
-      - ".github/workflows/test-skypilot-debug.yml"
+        default: "120"
 
 permissions:
   contents: read
@@ -64,201 +50,10 @@ permissions:
 env:
   IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
   IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
-  JOB_DEADLINE_SECONDS: ${{ inputs.job_deadline_seconds || '30' }}
+  JOB_DEADLINE_SECONDS: ${{ inputs.job_deadline_seconds || '120' }}
 
 jobs:
-  # ------------------------------------------------------------------------
-  # debug-image: launcher invoked inside the dev-snapshot Docker container.
-  # Mirrors test-dataset-generation.yml's launch step exactly, minus the real
-  # worker. If this fails but debug-launcher-bare succeeds, the image runtime
-  # is the suspect; if both fail, the launcher is.
-  # ------------------------------------------------------------------------
-  debug-image:
-    name: Image-runtime launcher (debug)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Pull image
-        run: docker pull "$IMAGE"
-
-      - name: Pin image tag in debug template
-        run: |
-          sed -i \
-            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
-            configs/compute/runpod-debug-template.yaml
-          grep image_id configs/compute/runpod-debug-template.yaml
-
-      - name: Write .env from secrets
-        env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-        run: |
-          cat > .env <<EOF
-          RCLONE_CONFIG_R2_TYPE=s3
-          RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
-          RCLONE_CONFIG_R2_ENDPOINT=${R2_ENDPOINT}
-          WANDB_S3_ENDPOINT_URL=${R2_ENDPOINT}
-          WANDB_API_KEY=${WANDB_API_KEY}
-          EOF
-          chmod 600 .env
-
-      - name: Prepare run-metadata mount
-        run: mkdir -p /tmp/run-metadata
-
-      - name: Launch SkyPilot debug job (inside container)
-        env:
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
-          CLUSTER_NAME: synth-setter-debug-image-${{ github.run_id }}
-        run: |
-          set -o pipefail
-          docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v /tmp/run-metadata:/run-metadata \
-            -e RUNPOD_API_KEY \
-            -e DEADLINE \
-            -e CLUSTER_NAME \
-            -e PYTHONPATH=/home/build/synth-setter \
-            "$IMAGE" \
-            bash -c '
-              set -euo pipefail
-              cd /home/build/synth-setter
-              git config --global --add safe.directory /home/build/synth-setter
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
-              mkdir -p ~/.runpod
-              umask 077
-              printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
-              python -m pipeline.entrypoints.skypilot_launch_smoke \
-                --template configs/compute/runpod-debug-template.yaml \
-                --cluster-name "$CLUSTER_NAME" \
-                --job-deadline-seconds "$DEADLINE" \
-                --spec-out /tmp/input_spec.json
-            ' \
-            2>&1 | tee /tmp/run-metadata/debug-image.log
-
-      - name: Upload run metadata
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: skypilot-debug-image-metadata
-          path: /tmp/run-metadata/
-          retention-days: 7
-          if-no-files-found: warn
-
-  # ------------------------------------------------------------------------
-  # debug-launcher-bare: same launcher, run on the bare GHA runner with the
-  # repo's app requirements installed via pip. Isolates the image from the
-  # launcher: if this works but debug-image hangs, the dev-snapshot runtime
-  # is at fault; if both work, the bug is somewhere in the production
-  # worker (generate_dataset).
-  # ------------------------------------------------------------------------
-  debug-launcher-bare:
-    name: Bare-runner launcher (debug)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-          cache: pip
-
-      - name: Install launcher deps
-        # We only need what `pipeline.entrypoints.skypilot_launch_smoke` and
-        # the modules it transitively imports require to RUN — `materialize_spec`
-        # imports src.data.vst.__init__ which loads pedalboard etc. The full
-        # requirements-app.txt covers all of these without us second-guessing.
-        run: pip install -r requirements-app.txt
-
-      - name: Write .env from secrets
-        env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-        run: |
-          cat > .env <<EOF
-          RCLONE_CONFIG_R2_TYPE=s3
-          RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
-          RCLONE_CONFIG_R2_ENDPOINT=${R2_ENDPOINT}
-          WANDB_S3_ENDPOINT_URL=${R2_ENDPOINT}
-          WANDB_API_KEY=${WANDB_API_KEY}
-          EOF
-          chmod 600 .env
-
-      - name: Pin image tag in debug template
-        run: |
-          sed -i \
-            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
-            configs/compute/runpod-debug-template.yaml
-          grep image_id configs/compute/runpod-debug-template.yaml
-
-      - name: Stage empty plugin bundle for materialize_spec's plugin-exists check
-        # The launcher's materialize_spec validates that spec.plugin_path
-        # resolves to an existing path; the smoke config points at
-        # `plugins/Surge XT.vst3`, which only ships inside the dev-snapshot
-        # image. extract_renderer_version is NOT called on the launcher
-        # path (renderer_version is pinned to SURGE_XT_RENDERER_VERSION),
-        # so the bundle's contents don't matter — an empty directory is
-        # enough to satisfy the exists check. The no-op debug worker
-        # never reads the plugin either.
-        run: mkdir -p "plugins/Surge XT.vst3"
-
-      - name: Launch SkyPilot debug job (bare runner)
-        env:
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
-          PYTHONPATH: ${{ github.workspace }}
-          CLUSTER_NAME: synth-setter-debug-bare-${{ github.run_id }}
-        run: |
-          set -o pipefail
-          mkdir -p ~/.runpod
-          umask 077
-          printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
-          python -m pipeline.entrypoints.skypilot_launch_smoke \
-            --template configs/compute/runpod-debug-template.yaml \
-            --cluster-name "$CLUSTER_NAME" \
-            --job-deadline-seconds "$DEADLINE" \
-            --spec-out /tmp/input_spec.json \
-            2>&1 | tee /tmp/debug-launcher-bare.log
-
-      - name: Upload run metadata
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: skypilot-debug-launcher-bare-metadata
-          path: |
-            /tmp/debug-launcher-bare.log
-            /tmp/input_spec.json
-          retention-days: 7
-          if-no-files-found: warn
-
-  # ------------------------------------------------------------------------
-  # debug-pure-sky: bypass the launcher entirely. Inline calls to sky.launch /
-  # stream_and_get / tail_logs / down. Two matrix variants:
-  #   - noop:     run block is `echo "..."` (no headless wrapper). Baseline.
-  #   - headless: run block is `scripts/run-linux-vst-headless.sh echo "..."`.
-  #               If this hangs but `noop` succeeds, the headless wrapper's
-  #               child-process lifecycle (Xvfb + xsettingsd + openbox + dbus)
-  #               is what blocks SkyPilot from registering job completion on
-  #               RunPod — i.e., the production worker hang lives there.
-  # ------------------------------------------------------------------------
-  debug-pure-sky:
+  debug:
     name: Pure-SkyPilot probe (${{ matrix.variant }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -272,28 +67,12 @@ jobs:
           - variant: headless
             template: configs/compute/runpod-debug-headless-template.yaml
             cluster_suffix: headless
-          # Branch-checkout variants: setup git-clones the feat branch and runs
-          # the branch's wrapper. Tests the wrapper script as it exists on this
-          # branch (not the version baked into the dev-snapshot image) and the
-          # full Python+pedalboard+X11 import chain the production worker uses.
-          - variant: branch-echo
-            template: configs/compute/runpod-debug-branch-echo-template.yaml
-            cluster_suffix: branch-echo
-          - variant: branch-py
-            template: configs/compute/runpod-debug-branch-py-template.yaml
-            cluster_suffix: branch-py
-          # Wrapper-bisect variants. See scripts/run-linux-vst-headless-*.sh
-          # for the hypothesis behind each. All three clone the feat branch
-          # so the variant wrapper scripts are present.
-          - variant: no-exec
-            template: configs/compute/runpod-debug-no-exec-template.yaml
-            cluster_suffix: no-exec
-          - variant: no-dbus
-            template: configs/compute/runpod-debug-no-dbus-template.yaml
-            cluster_suffix: no-dbus
-          - variant: bare-wrapper
-            template: configs/compute/runpod-debug-bare-wrapper-template.yaml
-            cluster_suffix: bare-wrapper
+          - variant: rclone
+            template: configs/compute/runpod-debug-rclone-template.yaml
+            cluster_suffix: rclone
+          - variant: pedalboard-load
+            template: configs/compute/runpod-debug-pedalboard-template.yaml
+            cluster_suffix: pedalboard
 
     steps:
       - name: Checkout
@@ -320,9 +99,14 @@ jobs:
       - name: Run inline SkyPilot probe
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          CLUSTER_NAME: synth-setter-debug-pure-${{ matrix.cluster_suffix }}-${{ github.run_id }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: intermediate-data
+          CLUSTER_NAME: synth-setter-debug-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
           TEMPLATE: ${{ matrix.template }}
+          VARIANT: ${{ matrix.variant }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -o pipefail
@@ -337,9 +121,24 @@ jobs:
           cluster = os.environ["CLUSTER_NAME"]
           deadline_seconds = int(os.environ["DEADLINE"])
           template_path = os.environ["TEMPLATE"]
+          variant = os.environ["VARIANT"]
 
-          print(f"[probe] launching cluster={cluster} template={template_path}")
+          print(f"[probe] launching cluster={cluster} variant={variant}")
           task = sky.Task.from_yaml(template_path)
+          # Inject R2 creds + a unique R2_DEBUG_PREFIX for the rclone variant.
+          # Other variants ignore these; the env block on each template lists
+          # only the keys it cares about.
+          task.update_envs(
+              {
+                  "RCLONE_CONFIG_R2_TYPE": "s3",
+                  "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+                  "RCLONE_CONFIG_R2_ACCESS_KEY_ID": os.environ["R2_ACCESS_KEY_ID"],
+                  "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": os.environ["R2_SECRET_ACCESS_KEY"],
+                  "RCLONE_CONFIG_R2_ENDPOINT": os.environ["R2_ENDPOINT"],
+                  "R2_BUCKET": os.environ["R2_BUCKET"],
+                  "R2_DEBUG_PREFIX": f"data/skypilot-debug/{cluster}/",
+              }
+          )
           launch_req = sky.launch(
               task,
               cluster_name=cluster,
@@ -374,12 +173,6 @@ jobs:
           except Exception as e:
               print(f"[probe] tail_logs failed: {e}")
 
-          try:
-              q = sky.stream_and_get(sky.queue(cluster))
-              print(f"[probe] queue: {q}")
-          except Exception as e:
-              print(f"[probe] queue failed: {e}")
-
           print(f"[probe] tearing down cluster={cluster}")
           sky.stream_and_get(sky.down(cluster))
           print(f"[probe] done, final_status={final.name if final else 'TIMED_OUT'}")
@@ -394,7 +187,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: skypilot-debug-pure-sky-${{ matrix.cluster_suffix }}-metadata
+          name: skypilot-debug-${{ matrix.cluster_suffix }}-metadata
           path: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
           retention-days: 7
           if-no-files-found: warn

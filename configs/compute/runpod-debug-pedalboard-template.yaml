@@ -1,0 +1,51 @@
+# SkyPilot task template for RunPod — DEBUG variant:
+# Python+pedalboard+X interpreter-shutdown canary.
+#
+# Wraps a Python interpreter that imports pedalboard, loads the Surge XT
+# VST3, and exits. Closest-to-production worker shape that doesn't
+# involve rclone or the dataset-generation entrypoint, so a failure here
+# isolates to "Python + pedalboard + X stack don't compose into a
+# cleanly-exiting process."
+#
+# This is the canary for bug #3 in #735 (Python interpreter shutdown
+# hang). Once the underlying thread leak is fixed at its source and the
+# `os._exit(0)` workaround in scripts/docker_entrypoint.py is reverted,
+# this variant should still pass — proving the fix.
+
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+
+setup: |
+  echo "synth-setter debug-pedalboard worker ready (host: $(hostname))"
+
+run: |
+  set -euo pipefail
+  cd /home/build/synth-setter
+  mkdir -p plugins
+  ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+  scripts/run-linux-vst-headless.sh python -c '
+  from pedalboard import VST3Plugin
+  plugin = VST3Plugin("plugins/Surge XT.vst3")
+  print(f"plugin loaded: name={plugin.name!r} version={plugin.version!r}")
+  print("skypilot-debug variant=pedalboard-load done")
+  '
