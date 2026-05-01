@@ -210,29 +210,14 @@ def main(
                     f"Worker job {job_id} ended with status {final_status.name}"
                 )
         finally:
-            # Pre-teardown observability paper trail. Always runs — on success, on
-            # worker-failure, and on _wait_for_job deadline timeout — so the next
-            # hang investigation has the worker log + SkyPilot's job_status / queue
-            # view of the cluster. Each block is best-effort: a failure querying one
-            # signal never blocks teardown.
+            # Always dump the worker log before teardown so a worker traceback
+            # surfaces in CI even when the launcher exited via the deadline path.
             try:
                 click.echo(f"--- Worker log (job {job_id}) ---")
                 sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
                 click.echo(f"--- End worker log (job {job_id}) ---")
             except Exception as e:  # noqa: BLE001 — best-effort diagnostic
                 click.echo(f"Worker log dump failed: {e}")
-            try:
-                final_statuses = sky.stream_and_get(
-                    sky.job_status(resolved_cluster_name, [job_id])
-                )
-                click.echo(f"Pre-teardown job_status: {final_statuses}")
-            except Exception as e:  # noqa: BLE001 — best-effort diagnostic
-                click.echo(f"Pre-teardown job_status query failed: {e}")
-            try:
-                queue = sky.stream_and_get(sky.queue(resolved_cluster_name))
-                click.echo(f"Pre-teardown queue: {queue}")
-            except Exception as e:  # noqa: BLE001 — best-effort diagnostic
-                click.echo(f"Pre-teardown queue query failed: {e}")
 
             click.echo(f"Tearing down cluster: {resolved_cluster_name}")
             down_request_id = sky.down(resolved_cluster_name)

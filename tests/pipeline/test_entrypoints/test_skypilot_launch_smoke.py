@@ -124,13 +124,11 @@ def _succeeded_run(mock_sky: MagicMock) -> None:
     mock_sky.JobStatus = sky.JobStatus
     mock_sky.launch.return_value = "launch-req"
     mock_sky.job_status.return_value = "job-status-req"
-    mock_sky.queue.return_value = "queue-req"
     mock_sky.down.return_value = "down-req"
 
     responses = {
         "launch-req": (1, MagicMock()),
         "job-status-req": {1: sky.JobStatus.SUCCEEDED},
-        "queue-req": [],
         "down-req": None,
     }
     mock_sky.stream_and_get.side_effect = lambda req: responses[req]
@@ -143,7 +141,6 @@ def _failed_run(mock_sky: MagicMock, status: Any) -> None:
     responses = {
         "launch-req": (1, MagicMock()),
         "job-status-req": {1: status},
-        "queue-req": [],
         "down-req": None,
     }
     mock_sky.stream_and_get.side_effect = lambda req: responses[req]
@@ -482,7 +479,6 @@ class TestMainCli:
         responses = {
             "launch-req": (1, MagicMock()),
             "job-status-req": {1: sky.JobStatus.RUNNING},
-            "queue-req": [],
             "down-req": None,
         }
         mock_sky.stream_and_get.side_effect = lambda req: responses[req]
