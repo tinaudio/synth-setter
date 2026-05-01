@@ -3,10 +3,10 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from lightning.pytorch import Trainer
+from lightning.pytorch.callbacks import BasePredictionWriter, Callback
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
-from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import BasePredictionWriter, Callback
-from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 
 from src.data.vst import param_specs
 from src.models.components.transformer import (

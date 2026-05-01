@@ -6,7 +6,7 @@ import h5py
 import hdf5plugin
 import numpy as np
 import torch
-from pytorch_lightning import LightningDataModule
+from lightning import LightningDataModule
 
 from src.data.ot import _hungarian_match
 

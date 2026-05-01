@@ -3,7 +3,7 @@ from functools import partial
 from typing import Optional, Tuple, Union
 
 import torch
-from pytorch_lightning import LightningDataModule
+from lightning import LightningDataModule
 
 from src.data.ot import ot_collate_fn, regular_collate_fn
 from src.utils import RankedLogger

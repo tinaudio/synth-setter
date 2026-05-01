@@ -4,9 +4,9 @@ from importlib.util import find_spec
 from typing import Any
 
 import torch
+from lightning import LightningModule
+from lightning.pytorch.loggers import Logger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
-from pytorch_lightning import LightningModule
-from pytorch_lightning.loggers import Logger, WandbLogger
 
 from src.utils import pylogger, rich_utils
 

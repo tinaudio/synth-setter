@@ -1,7 +1,7 @@
 import platform
 from importlib.metadata import PackageNotFoundError, distribution
 
-from lightning_fabric.accelerators import TPUAccelerator
+from lightning.fabric.accelerators import TPUAccelerator
 
 
 def _package_available(package_name: str) -> bool:

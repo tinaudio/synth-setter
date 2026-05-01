@@ -5,8 +5,8 @@ from typing import Any, Literal
 
 import ot as pot
 import torch
-from pytorch_lightning import LightningModule
-from pytorch_lightning.utilities import grad_norm
+from lightning import LightningModule
+from lightning.pytorch.utilities import grad_norm
 from scipy.optimize import linear_sum_assignment
 
 from src.metrics import (

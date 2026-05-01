@@ -1,8 +1,8 @@
 from typing import Any
 
 import torch
-from pytorch_lightning import LightningModule
-from pytorch_lightning.utilities import grad_norm
+from lightning import LightningModule
+from lightning.pytorch.utilities import grad_norm
 
 from src.models.components.vae import compute_flowvae_loss
 
