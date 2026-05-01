@@ -34,30 +34,30 @@ from pipeline.schemas.spec import (
 VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
 
 
-_RCLONE_TIMEOUT_SECONDS = 120
-
-
 def _rclone_copy(src: str, dest: str) -> None:
     """Upload a file to R2 via rclone with checksum verification.
 
-    Bounded by `_RCLONE_TIMEOUT_SECONDS` because on the SkyPilot RunPod worker
-    we observe rclone's process not returning after a successful upload — the
-    file lands in R2 (verified separately via `rclone ls` from the host), but
-    Python's `Popen.wait()` blocks indefinitely. Likely rclone is doing
-    post-upload bookkeeping (HTTP keep-alive close, stats flush) that never
-    completes. On timeout, `subprocess.run` kills rclone for us and we proceed
-    — the upload is durable. Tracked in #735.
+    Connection-level timeouts and retries are rclone's job, not ours:
+      --contimeout=30s   bound the TCP connect phase
+      --timeout=300s     bound any single HTTP request (PUT, list, etc.)
+      --retries=3        retry the whole copy on transient failure
+      -vv                emit per-request debug log so a failure leaves
+                         actionable evidence in the worker stdout
+    A non-zero rclone exit raises CalledProcessError and the run fails — we
+    do not silently accept partial uploads behind a Python wall-clock.
     """
-    args = ["rclone", "copy", "--checksum", src, dest]  # noqa: S607
-    try:
-        subprocess.run(args, check=True, timeout=_RCLONE_TIMEOUT_SECONDS)  # noqa: S603
-    except subprocess.TimeoutExpired:
-        logger.warning(
-            f"rclone copy {src} -> {dest} did not return within "
-            f"{_RCLONE_TIMEOUT_SECONDS}s; subprocess killed. The upload itself is "
-            "durable (rclone completes the PUT well within this window in practice); "
-            "only the rclone process exit hangs. See #735."
-        )
+    args = [  # noqa: S607 — rclone resolved by the image's PATH
+        "rclone",
+        "copy",
+        "-vv",
+        "--checksum",
+        "--contimeout=30s",
+        "--timeout=300s",
+        "--retries=3",
+        src,
+        dest,
+    ]
+    subprocess.check_call(args)  # noqa: S603 — args from validated spec
 
 
 def build_generate_args(
