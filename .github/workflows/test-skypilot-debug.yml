@@ -1,6 +1,6 @@
 name: Test SkyPilot Debug
 
-# Permanent diagnostic matrix for the SkyPilot+RunPod path. Three canary
+# Permanent diagnostic matrix for the SkyPilot+RunPod path. Four canary
 # variants, each isolating one known failure class. None of these exercise
 # the production launcher or worker — they're standalone probes. When
 # test-dataset-generation (lands in a follow-up PR) regresses, dispatch
@@ -12,6 +12,15 @@ name: Test SkyPilot Debug
 #                    itself is fine; failure here means the regression
 #                    is in SkyPilot, RunPod's API, or the cluster
 #                    plumbing — not in our code.
+#
+#   image-pull       Image-availability canary. Same shape as `noop`
+#                    (provision a pod, run a one-line echo) but a
+#                    distinct slot in the matrix so a single RunPod
+#                    transient on `noop` doesn't look like a regression.
+#                    `noop` + `image-pull` together = two independent
+#                    pod boots per dispatch on the simplest possible
+#                    workload; both green = RunPod can reliably hand us
+#                    pods that have SSH + the dev-snapshot image ready.
 #
 #   rclone           rclone-process-exit canary
 #                    (`rclone copy <small file> r2:...`). Catches a
@@ -32,7 +41,7 @@ name: Test SkyPilot Debug
 #                    `os._exit(0)` workaround for.
 #
 # Triggers: workflow_dispatch only — RunPod pods are billable. Each
-# dispatch spends ~3 pods. Add a `push` trigger only temporarily when
+# dispatch spends ~4 pods. Add a `push` trigger only temporarily when
 # actively iterating on launcher / wrapper / template behavior.
 #
 # Required secrets:
@@ -72,6 +81,9 @@ jobs:
           - variant: noop
             template: configs/compute/runpod-debug-template.yaml
             cluster_suffix: noop
+          - variant: image-pull
+            template: configs/compute/runpod-debug-image-pull-template.yaml
+            cluster_suffix: image-pull
           - variant: rclone
             template: configs/compute/runpod-debug-rclone-template.yaml
             cluster_suffix: rclone
