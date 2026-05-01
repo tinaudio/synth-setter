@@ -24,13 +24,14 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 ### Pipeline
 
-| Workflow                    | Purpose                                                                                                                   | Gotcha                                                                                                  |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `dataset-generation`        | Reusable workflow: materializes a DatasetPipelineSpec, generates a shard in Docker, uploads spec and shard to R2.         | Mounts PR code as a volume into the container. See [Mount-as-volume pattern](#mount-as-volume-pattern). |
-| `test-dataset-generation`   | Exercises `dataset-generation` with the CI smoke-test config and validates the resulting shard.                           |                                                                                                         |
-| `spec-materialization`      | Reusable workflow: materializes and structurally validates a DatasetPipelineSpec in Docker.                               |                                                                                                         |
-| `test-spec-materialization` | Exercises `spec-materialization` and validates test-specific config values.                                               |                                                                                                         |
-| `flush-investigation`       | Runs the `flush-investigation.ipynb` notebook in Docker, uploads rendered HTML + audio as an artifact (90-day retention). |                                                                                                         |
+| Workflow                    | Purpose                                                                                                                                                                                                                                  | Gotcha                                                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `dataset-generation`        | Reusable workflow: materializes a DatasetPipelineSpec, generates a shard in Docker, uploads spec and shard to R2.                                                                                                                        | Mounts PR code as a volume into the container. See [Mount-as-volume pattern](#mount-as-volume-pattern). |
+| `test-dataset-generation`   | Launches `pipeline.entrypoints.skypilot_launch_smoke` to exercise the SkyPilot/RunPod path with the CI smoke-test config; validates the resulting spec and shard.                                                                        | Provisions a real RunPod pod (billable). Needs `RUNPOD_API_KEY` in addition to the `R2_*` secrets.      |
+| `test-skypilot-debug`       | 7-variant `workflow_dispatch`-only canary matrix: pure-SkyPilot/RunPod orchestration probe + headless-wrapper + rclone + pedalboard-load + 3 wrapper-cleanup bisect variants. Used to triage SkyPilot/RunPod regressions in ~10 minutes. | Each dispatch spends ~7 RunPod pods (billable). No `push` trigger by design.                            |
+| `spec-materialization`      | Reusable workflow: materializes and structurally validates a DatasetPipelineSpec in Docker.                                                                                                                                              |                                                                                                         |
+| `test-spec-materialization` | Exercises `spec-materialization` and validates test-specific config values.                                                                                                                                                              |                                                                                                         |
+| `flush-investigation`       | Runs the `flush-investigation.ipynb` notebook in Docker, uploads rendered HTML + audio as an artifact (90-day retention).                                                                                                                |                                                                                                         |
 
 ### Release & versioning
 
@@ -58,8 +59,11 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 **Reusable workflow calls (`workflow_call`):**
 
-- `test-dataset-generation` calls `dataset-generation`
 - `test-spec-materialization` calls `spec-materialization`
+
+(`test-dataset-generation` no longer calls `dataset-generation` after PR #716 — it
+invokes `pipeline.entrypoints.skypilot_launch_smoke` directly inside the
+`tinaudio/synth-setter:dev-snapshot` image and provisions a RunPod pod via SkyPilot.)
 
 **Workflow-run triggers (`workflow_run`):**
 
@@ -67,7 +71,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 **Artifact chains (`upload-artifact` → `download-artifact`):**
 
-- `dataset-generation` uploads spec + shard → `test-dataset-generation` downloads and validates
+- `test-dataset-generation` writes spec + launcher log to `test-run-metadata`; the `validate-spec` and `validate-shard` jobs in the same workflow consume it (single-workflow chain, no cross-workflow handoff).
 - `spec-materialization` uploads spec → `test-spec-materialization` downloads and validates
 - `flush-investigation` uploads notebook HTML (terminal; not consumed by another workflow)
 
@@ -75,17 +79,18 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 All secrets are repo-scoped (no workflow uses an `environment:` block). No custom variables (`${{ vars.* }}`) are in use.
 
-| Name                       | Used by                                                                 | Purpose                                                                                                           |
-| -------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`        | (currently unused)                                                      | Previously consumed by `claude-review`, which was removed. Secret is kept registered for possible future revival. |
-| `APPROVAL_BOT_APP_ID`      | `auto-approve`, `release`                                               | GitHub App ID for the approval-bot (issues approval reviews; writes release commits past branch protection).      |
-| `APPROVAL_BOT_PRIVATE_KEY` | `auto-approve`, `release`                                               | GitHub App private key paired with `APPROVAL_BOT_APP_ID`.                                                         |
-| `DOCKERHUB_USERNAME`       | `docker-build-validation`                                               | Docker Hub login for pushing the public image (pulls are anonymous).                                              |
-| `DOCKERHUB_TOKEN`          | same as above                                                           | Docker Hub token paired with `DOCKERHUB_USERNAME`.                                                                |
-| `R2_ACCESS_KEY_ID`         | `dataset-generation`, `spec-materialization`, `test-dataset-generation` | Cloudflare R2 credentials passed as runtime env vars to `docker run` (`RCLONE_CONFIG_R2_*`).                      |
-| `R2_SECRET_ACCESS_KEY`     | same as above                                                           | Paired with `R2_ACCESS_KEY_ID`.                                                                                   |
-| `R2_ENDPOINT`              | `dataset-generation`, `spec-materialization`, `test-dataset-generation` | R2 endpoint URL (runtime).                                                                                        |
-| `WANDB_API_KEY`            | `dataset-generation`                                                    | W&B credentials passed as runtime env var to `docker run`.                                                        |
+| Name                       | Used by                                                                                        | Purpose                                                                                                           |
+| -------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`        | (currently unused)                                                                             | Previously consumed by `claude-review`, which was removed. Secret is kept registered for possible future revival. |
+| `APPROVAL_BOT_APP_ID`      | `auto-approve`, `release`                                                                      | GitHub App ID for the approval-bot (issues approval reviews; writes release commits past branch protection).      |
+| `APPROVAL_BOT_PRIVATE_KEY` | `auto-approve`, `release`                                                                      | GitHub App private key paired with `APPROVAL_BOT_APP_ID`.                                                         |
+| `DOCKERHUB_USERNAME`       | `docker-build-validation`                                                                      | Docker Hub login for pushing the public image (pulls are anonymous).                                              |
+| `DOCKERHUB_TOKEN`          | same as above                                                                                  | Docker Hub token paired with `DOCKERHUB_USERNAME`.                                                                |
+| `R2_ACCESS_KEY_ID`         | `dataset-generation`, `spec-materialization`, `test-dataset-generation`, `test-skypilot-debug` | Cloudflare R2 credentials passed as runtime env vars to `docker run` (`RCLONE_CONFIG_R2_*`).                      |
+| `R2_SECRET_ACCESS_KEY`     | same as above                                                                                  | Paired with `R2_ACCESS_KEY_ID`.                                                                                   |
+| `R2_ENDPOINT`              | `dataset-generation`, `spec-materialization`, `test-dataset-generation`, `test-skypilot-debug` | R2 endpoint URL (runtime).                                                                                        |
+| `RUNPOD_API_KEY`           | `test-dataset-generation`, `test-skypilot-debug`                                               | RunPod API token; written to `~/.runpod/config.toml` so SkyPilot can provision pods on demand.                    |
+| `WANDB_API_KEY`            | `dataset-generation`                                                                           | W&B credentials passed as runtime env var to `docker run`.                                                        |
 
 ## Common operations
 

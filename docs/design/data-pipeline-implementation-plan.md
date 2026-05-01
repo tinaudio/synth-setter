@@ -103,7 +103,7 @@ stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-pr
 # configs/dataset/surge-simple-480k-10k.yaml
 # → dataset_config_id = surge-simple-480k-10k
 param_spec: surge_simple
-plugin_path: plugins/Surge XT.vst3    # renderer_version auto-extracted from bundle
+plugin_path: plugins/Surge XT.vst3    # renderer_version pinned via SURGE_XT_RENDERER_VERSION constant; worker verifies
 output_format: hdf5                   # "hdf5" (local training) or "wds" (multi-GPU streaming)
 sample_rate: 16000
 shard_size: 10000
@@ -134,9 +134,12 @@ python -m pipeline generate \
   --workers 10 --backend runpod --image tinaudio/synth-setter:dev-snapshot-abc1234
 ```
 
-**Renderer version:** Auto-extracted at materialization from VST3 bundle
-(`Info.plist` → `CFBundleShortVersionString` on macOS, `moduleinfo.json` or
-`SURGE_XT_VERSION` env on Linux). Fallback: `"unknown"` with warning.
+**Renderer version:** Pinned at materialization to the `SURGE_XT_RENDERER_VERSION`
+constant in `pipeline/schemas/spec.py` (kept in lockstep with the `dev-snapshot`
+image's `SURGE_GIT_REF`). The launcher path stays interpreter-only; the worker
+calls `extract_renderer_version` against the actual plugin bundle (`moduleinfo.json`
+on Linux, `Info.plist` → `CFBundleShortVersionString` on macOS, pedalboard fallback)
+and refuses to render on mismatch.
 
 **Output format:** `hdf5` produces virtual HDF5 datasets (`train.h5`, `val.h5`, `test.h5`).
 `wds` produces WebDataset tar archives (`train-{shard}.tar`, etc.) for multi-GPU streaming.

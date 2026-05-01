@@ -82,13 +82,14 @@ synth-setter/
 │   └── utils/              #   Logging, config helpers
 │
 ├── pipeline/               # Distributed data pipeline
-│   ├── schemas/            #   Pydantic models (config, spec, prefix, image_config)
-│   ├── entrypoints/        #   Pipeline entry points (generate_dataset)
-│   ├── ci/                 #   CI validation scripts (materialize_spec, validate_shard/spec)
+│   ├── schemas/            #   Pydantic models (see directory)
+│   ├── entrypoints/        #   Pipeline entry points (see directory)
+│   ├── ci/                 #   CI validation scripts (see directory)
 │   └── constants.py        #   Shared constants (R2 bucket, spec filename)
 │
-├── configs/                # Hydra YAML configs
+├── configs/                # Hydra YAML configs (and SkyPilot Task templates under compute/)
 │   ├── dataset/            #   Pipeline dataset configs (synth, shard count, sample count)
+│   ├── compute/            #   SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
 │   ├── data/               #   DataModule configs (paths, splits, batch size)
 │   ├── model/              #   Model architecture configs
 │   ├── trainer/            #   Lightning Trainer configs
