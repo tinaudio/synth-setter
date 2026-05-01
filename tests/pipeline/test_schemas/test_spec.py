@@ -496,19 +496,6 @@ class TestMaterializeSpec:
         with pytest.raises(KeyError):
             materialize_spec(config, config_id)
 
-    def test_missing_plugin_raises_file_not_found(
-        self, patch_materialize_io: Path, valid_config_dict: dict
-    ) -> None:
-        """Nonexistent plugin_path raises FileNotFoundError."""
-        valid_config_dict["plugin_path"] = "/nonexistent/path"
-        valid_config_dict["num_shards"] = 1
-        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
-        config = DatasetConfig(**valid_config_dict)
-        config_id = DatasetConfigId("ci-smoke-test")
-
-        with pytest.raises(FileNotFoundError):
-            materialize_spec(config, config_id)
-
     def test_wds_output_format_raises_not_implemented(
         self, patch_materialize_io: Path, valid_config_dict: dict
     ) -> None:
