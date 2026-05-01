@@ -50,6 +50,12 @@ on:
       - "configs/compute/runpod-debug-headless-template.yaml"
       - "configs/compute/runpod-debug-branch-echo-template.yaml"
       - "configs/compute/runpod-debug-branch-py-template.yaml"
+      - "configs/compute/runpod-debug-no-exec-template.yaml"
+      - "configs/compute/runpod-debug-no-dbus-template.yaml"
+      - "configs/compute/runpod-debug-bare-wrapper-template.yaml"
+      - "scripts/run-linux-vst-headless-no-exec.sh"
+      - "scripts/run-linux-vst-headless-no-dbus.sh"
+      - "scripts/run-linux-vst-headless-bare.sh"
       - ".github/workflows/test-skypilot-debug.yml"
 
 permissions:
@@ -276,6 +282,18 @@ jobs:
           - variant: branch-py
             template: configs/compute/runpod-debug-branch-py-template.yaml
             cluster_suffix: branch-py
+          # Wrapper-bisect variants. See scripts/run-linux-vst-headless-*.sh
+          # for the hypothesis behind each. All three clone the feat branch
+          # so the variant wrapper scripts are present.
+          - variant: no-exec
+            template: configs/compute/runpod-debug-no-exec-template.yaml
+            cluster_suffix: no-exec
+          - variant: no-dbus
+            template: configs/compute/runpod-debug-no-dbus-template.yaml
+            cluster_suffix: no-dbus
+          - variant: bare-wrapper
+            template: configs/compute/runpod-debug-bare-wrapper-template.yaml
+            cluster_suffix: bare-wrapper
 
     steps:
       - name: Checkout
