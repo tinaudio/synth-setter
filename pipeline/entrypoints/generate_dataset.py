@@ -34,9 +34,30 @@ from pipeline.schemas.spec import (
 VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
 
 
+_RCLONE_TIMEOUT_SECONDS = 120
+
+
 def _rclone_copy(src: str, dest: str) -> None:
-    """Upload a file to R2 via rclone with checksum verification."""
-    subprocess.check_call(["rclone", "copy", "--checksum", src, dest])  # noqa: S603, S607
+    """Upload a file to R2 via rclone with checksum verification.
+
+    Bounded by `_RCLONE_TIMEOUT_SECONDS` because on the SkyPilot RunPod worker
+    we observe rclone's process not returning after a successful upload — the
+    file lands in R2 (verified separately via `rclone ls` from the host), but
+    Python's `Popen.wait()` blocks indefinitely. Likely rclone is doing
+    post-upload bookkeeping (HTTP keep-alive close, stats flush) that never
+    completes. On timeout, `subprocess.run` kills rclone for us and we proceed
+    — the upload is durable. Tracked in #735.
+    """
+    args = ["rclone", "copy", "--checksum", src, dest]  # noqa: S607
+    try:
+        subprocess.run(args, check=True, timeout=_RCLONE_TIMEOUT_SECONDS)  # noqa: S603
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            f"rclone copy {src} -> {dest} did not return within "
+            f"{_RCLONE_TIMEOUT_SECONDS}s; subprocess killed. The upload itself is "
+            "durable (rclone completes the PUT well within this window in practice); "
+            "only the rclone process exit hangs. See #735."
+        )
 
 
 def build_generate_args(
