@@ -123,10 +123,12 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace the launcher's module-level `sky` reference with a MagicMock.
 
-    Happy-path side_effect chain on stream_and_get:
-    1. launch RequestId      -> `(job_id=1, handle)`
-    2. job_status RequestId  -> `{1: sky.JobStatus.SUCCEEDED}` (terminal, breaks poll loop)
-    3. down RequestId        -> `None`
+    Happy-path side_effect chain on stream_and_get (one entry per call):
+    1. launch RequestId               -> `(job_id=1, handle)`
+    2. _wait_for_job job_status poll  -> `{1: SUCCEEDED}` (terminal, breaks poll loop)
+    3. pre-teardown job_status diag   -> `{1: SUCCEEDED}` (paper trail before sky.down)
+    4. pre-teardown queue diag        -> `[]` (paper trail; ignored on failure)
+    5. down RequestId                 -> `None`
 
     `sky.tail_logs` is the buffered (follow=False) dump after job completion.
     """
@@ -137,6 +139,8 @@ def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     fake.stream_and_get.side_effect = [
         (1, MagicMock()),
         {1: sky.JobStatus.SUCCEEDED},
+        {1: sky.JobStatus.SUCCEEDED},
+        [],
         None,
     ]
     fake.tail_logs.return_value = 0
@@ -314,11 +318,15 @@ class TestMainCli:
         mock_sky.launch.assert_called_once_with(
             task, cluster_name="smoke-job-1", idle_minutes_to_autostop=0, down=True
         )
-        # stream_and_get is called three times: launch RequestId -> (job_id, handle);
-        # job_status RequestId -> {1: SUCCEEDED}; down RequestId -> None.
-        assert mock_sky.stream_and_get.call_count == 3
-        # sky.job_status is the polling target.
+        # stream_and_get is called five times: launch -> (job_id, handle);
+        # _wait_for_job job_status poll -> {1: SUCCEEDED}; pre-teardown job_status diag;
+        # pre-teardown queue diag; down -> None.
+        assert mock_sky.stream_and_get.call_count == 5
+        # sky.job_status is the polling target (called by both _wait_for_job and the
+        # pre-teardown diagnostic).
         mock_sky.job_status.assert_called_with("smoke-job-1", [1])
+        # sky.queue is queried as a pre-teardown diagnostic.
+        mock_sky.queue.assert_called_with("smoke-job-1")
 
         # tail_logs is called with follow=False (buffered dump after the queue poll
         # detected SUCCEEDED), so we never block on the SSH stream that hangs on RunPod.
@@ -406,7 +414,9 @@ class TestMainCli:
 
         mock_sky.stream_and_get.side_effect = [
             (1, MagicMock()),  # launch RequestId -> (job_id, handle)
-            {1: sky.JobStatus.FAILED},  # job_status poll -> terminal FAILED
+            {1: sky.JobStatus.FAILED},  # _wait_for_job poll -> terminal FAILED
+            {1: sky.JobStatus.FAILED},  # pre-teardown job_status diagnostic
+            [],  # pre-teardown queue diagnostic
             None,  # down RequestId
         ]
         runner = CliRunner()

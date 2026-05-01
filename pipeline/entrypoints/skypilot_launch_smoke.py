@@ -199,6 +199,24 @@ def main(
                     f"Worker job {job_id} ended with status {final_status.name}"
                 )
         finally:
+            # Diagnostic snapshot before teardown — paper trail for the next hang. We log
+            # both the per-job status (the source of truth used by _wait_for_job) and the
+            # full cluster queue (so we can correlate with anything else SkyPilot has
+            # scheduled on this cluster). Errors are swallowed so a failed query never
+            # blocks teardown.
+            try:
+                final_statuses = sky.stream_and_get(
+                    sky.job_status(resolved_cluster_name, [job_id])
+                )
+                click.echo(f"Pre-teardown job_status: {final_statuses}")
+            except Exception as e:  # noqa: BLE001 — best-effort diagnostic
+                click.echo(f"Pre-teardown job_status query failed: {e}")
+            try:
+                queue = sky.stream_and_get(sky.queue(resolved_cluster_name))
+                click.echo(f"Pre-teardown queue: {queue}")
+            except Exception as e:  # noqa: BLE001 — best-effort diagnostic
+                click.echo(f"Pre-teardown queue query failed: {e}")
+
             click.echo(f"Tearing down cluster: {resolved_cluster_name}")
             down_request_id = sky.down(resolved_cluster_name)
             sky.stream_and_get(down_request_id)
