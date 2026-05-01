@@ -7,6 +7,9 @@
       "--platform=linux/amd64"
     ]
   },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {}
+  },
   "initializeCommand": "bash .devcontainer/initialize.sh",
   "runArgs": [
     "--gpus",
