@@ -58,6 +58,11 @@ def _rclone_copy(src: str, dest: str) -> None:
         dest,
     ]
     subprocess.check_call(args)  # noqa: S603 — args from validated spec
+    # Distinct sentinel so we can grep CI logs for "rclone returned" and tell
+    # at a glance whether the rclone subprocess actually exited (vs. hanging
+    # post-upload — see #735). If the upload itself failed, check_call already
+    # raised before we got here.
+    logger.info(f"rclone returned cleanly: {src} -> {dest}")
 
 
 def build_generate_args(
