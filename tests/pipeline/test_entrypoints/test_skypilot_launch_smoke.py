@@ -123,23 +123,14 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace the launcher's module-level `sky` reference with a MagicMock.
 
-    Wires up the launcher's full happy-path flow:
-    - `sky.launch` -> returns a RequestId-like sentinel.
-    - `sky.stream_and_get` -> first call (launch) yields `(job_id=1, handle)`; subsequent
-      calls (queue polls + down) yield a single-job list with status SUCCEEDED.
-    - `sky.queue` -> returns a sentinel (consumed by stream_and_get above).
-    - `sky.tail_logs` -> non-following dump of the worker log.
-    - `sky.down` -> returns a sentinel.
-    - `sky.JobStatus` -> real enum so the launcher's terminal-state check works.
-    """
-    import sky  # noqa: PLC0415 — import the real enum for the mock to use
+    Happy-path side_effect chain on stream_and_get:
+    1. launch RequestId -> `(job_id=1, handle)`
+    2. down RequestId -> `None`
 
+    `sky.tail_logs` returns the worker job's exit code (0 = success).
+    """
     fake = MagicMock()
-    fake.JobStatus = sky.JobStatus
-    succeeded_job = MagicMock(job_id=1, status=sky.JobStatus.SUCCEEDED)
-    # First stream_and_get is for the launch RequestId -> (job_id, handle); subsequent
-    # calls are for queue / down RequestIds.
-    fake.stream_and_get.side_effect = [(1, MagicMock()), [succeeded_job], None]
+    fake.stream_and_get.side_effect = [(1, MagicMock()), None]
     fake.tail_logs.return_value = 0
     monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.sky", fake)
     return fake
@@ -309,21 +300,21 @@ class TestMainCli:
         assert spec.num_shards == 1
         assert spec.r2_bucket == "intermediate-data"
 
-        # down=False on the launch — explicit sky.down in the finally block drives teardown.
-        mock_sky.launch.assert_called_once_with(task, cluster_name="smoke-job-1", down=False)
-        # stream_and_get is called three times: launch RequestId -> (job_id, handle), one
-        # queue poll -> [succeeded_job], down RequestId -> None.
-        assert mock_sky.stream_and_get.call_count == 3
-        # sky.queue must be called at least once with the cluster name (status polling).
-        mock_sky.queue.assert_called_with("smoke-job-1")
+        # idle_minutes_to_autostop=0 + down=True — predictable 1-min autodown timer
+        # (sky internally bumps idle=0 to 1 minute) and `down=True` keeps the cluster
+        # from lingering on setup errors. Belt-and-suspenders explicit sky.down in
+        # finally below.
+        mock_sky.launch.assert_called_once_with(
+            task, cluster_name="smoke-job-1", idle_minutes_to_autostop=0, down=True
+        )
+        # stream_and_get is called twice: launch RequestId, then down RequestId.
+        assert mock_sky.stream_and_get.call_count == 2
 
-        # Worker log is dumped non-following at the end (after the queue-status poll
-        # detected SUCCEEDED) so a worker traceback shows up in CI without relying on
-        # tail_logs(follow=True) which hangs on RunPod.
-        tail_call = mock_sky.tail_logs.call_args
-        assert tail_call.kwargs["cluster_name"] == "smoke-job-1"
-        assert tail_call.kwargs["job_id"] == 1
-        assert tail_call.kwargs["follow"] is False
+        # Worker-side blocking: tail_logs(follow=True) follows the worker job to
+        # completion and returns its exit code, surfacing tracebacks live in CI.
+        mock_sky.tail_logs.assert_called_once_with(
+            cluster_name="smoke-job-1", job_id=1, follow=True
+        )
 
         # Explicit teardown — must always run, even on success.
         mock_sky.down.assert_called_once_with("smoke-job-1")
@@ -355,7 +346,8 @@ class TestMainCli:
         # Config stem is "ci-smoke-test"; first 8 chars → "ci-smoke".
         kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"] == "synth-setter-smoke-ci-smoke"
-        assert kwargs["down"] is False
+        assert kwargs["idle_minutes_to_autostop"] == 0
+        assert kwargs["down"] is True
 
     def test_spec_out_overrides_default_path(
         self,
@@ -386,7 +378,7 @@ class TestMainCli:
         assert result.exit_code == 0, result.output
         assert explicit.is_file()
 
-    def test_worker_failed_status_fails_launcher(
+    def test_worker_nonzero_exit_fails_launcher(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -395,19 +387,12 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """A worker job in a non-SUCCEEDED terminal status must fail the launcher.
+        """A worker job exiting non-zero must fail the launcher (not silently succeed).
 
-        Without this, a FAILED worker would let the launcher complete and downstream "shard not in
-        R2" errors would mask the actual worker traceback.
+        Without this, a worker traceback would be masked by a downstream "shard not in R2" error in
+        CI.
         """
-        import sky  # noqa: PLC0415
-
-        failed_job = MagicMock(job_id=1, status=sky.JobStatus.FAILED)
-        mock_sky.stream_and_get.side_effect = [
-            (1, MagicMock()),  # launch RequestId -> (job_id, handle)
-            [failed_job],  # queue poll -> [failed_job]
-            None,  # down RequestId -> None
-        ]
+        mock_sky.tail_logs.return_value = 7
         runner = CliRunner()
         result = runner.invoke(
             main,
@@ -421,6 +406,6 @@ class TestMainCli:
             ],
         )
         assert result.exit_code != 0
-        assert "ended with status FAILED" in result.output
+        assert "exited with code 7" in result.output
         # Teardown still runs even on worker failure.
         mock_sky.down.assert_called_once()

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-import time
 from pathlib import Path
 
 import click
@@ -27,18 +26,6 @@ from dotenv import dotenv_values
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import materialize_spec
-
-# Job states that mean the worker is done (success or failure).
-_TERMINAL_JOB_STATUSES = frozenset(
-    {
-        sky.JobStatus.SUCCEEDED,
-        sky.JobStatus.FAILED,
-        sky.JobStatus.FAILED_SETUP,
-        sky.JobStatus.FAILED_DRIVER,
-        sky.JobStatus.CANCELLED,
-    }
-)
-_JOB_POLL_INTERVAL_SECONDS = 15
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
@@ -153,24 +140,30 @@ def main(
     task.update_envs(worker_env)
     task.update_file_mounts({WORKER_SPEC_PATH: str(mount_source)})
 
-    # SkyPilot 0.12 made sky.launch async (it returns a RequestId backed by the local API
-    # server). `stream_and_get` blocks until the *launch request* resolves — i.e., the cluster
-    # is provisioned, file_mounts are synced, setup runs, and the job is submitted — and
-    # streams provisioning logs to stdout along the way. It does NOT wait for the submitted
-    # job to actually run to completion, and it does NOT stream the worker's own stdout/stderr.
-    # Non-managed launch (sky.launch, not sky.jobs.launch) — managed jobs require a separate
-    # cloud-storage backend for controller state, which RunPod doesn't provide.
+    # `sky.launch` is async (returns a RequestId). Launch with both
+    # `idle_minutes_to_autostop=0` and `down=True` so the cluster has a predictable 1-min
+    # autodown timer (sky internally bumps idle=0 to 1 minute) — `down=True` alone leaves
+    # the cluster up if setup errors, by design. `stream_and_get` on the launch request
+    # blocks until provisioning + setup + job-submission + run completes, streaming
+    # provisioning logs along the way; it returns `(job_id, handle)`. Non-managed launch
+    # (sky.launch, not sky.jobs.launch) — managed jobs require a separate cloud-storage
+    # backend for controller state, which RunPod doesn't provide.
     #
-    # Note: `down=True` on sky.launch is meant to auto-teardown after the run, but in practice
-    # on RunPod we have observed clusters not torn down even after the worker job exits — the
-    # GHA job sits in tail_logs until the 60-min job timeout. Drive teardown explicitly in a
-    # finally below so the cluster always goes away on success, exception, or worker error.
-    # SkyPilot normally consumes mount_source by rename during staging, but a failure between
-    # the copyfile above and stage would leave one .mount.json per cluster behind on shared CI
-    # runners. Unlink in finally with missing_ok=True to keep the success path quiet.
+    # SkyPilot normally consumes mount_source by rename during staging, but a failure
+    # between the copyfile above and stage would leave one .mount.json per cluster behind
+    # on shared CI runners. Unlink in finally with missing_ok=True to keep the success
+    # path quiet. The inner finally drives teardown explicitly so the cluster always goes
+    # away on success, exception, or worker error — even if down=True or the autodown
+    # timer is silently dropped (observed on RunPod when setup runs cleanly but the job
+    # exits via a path that doesn't trigger the autodown scheduler).
     try:
         click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
-        launch_request_id = sky.launch(task, cluster_name=resolved_cluster_name, down=False)
+        launch_request_id = sky.launch(
+            task,
+            cluster_name=resolved_cluster_name,
+            idle_minutes_to_autostop=0,
+            down=True,
+        )
         launch_result = sky.stream_and_get(launch_request_id, follow=True)
         if launch_result is None or launch_result[0] is None:
             raise click.ClickException(
@@ -178,50 +171,21 @@ def main(
             )
         job_id: int = launch_result[0]
         try:
-            # Originally we used `sky.tail_logs(..., follow=True)` to block on the worker
-            # and stream its stdout. On RunPod the per-job log stream never EOFs after the
-            # worker process exits, so tail_logs hangs forever even though the worker has
-            # finished and uploaded the shard to R2 (verified via `rclone ls`). Poll
-            # `sky.queue` for a terminal JobStatus instead, then dump the full log
-            # non-following at the end so a worker traceback still surfaces in CI output.
-            click.echo(f"Polling job {job_id} on {resolved_cluster_name} for completion")
-            final_status = _wait_for_job(resolved_cluster_name, job_id)
-            click.echo(f"Job {job_id} reached terminal status: {final_status.name}")
-
-            click.echo(f"--- Worker log (job {job_id}) ---")
-            sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
-            click.echo(f"--- End worker log (job {job_id}) ---")
-
-            if final_status != sky.JobStatus.SUCCEEDED:
-                raise click.ClickException(
-                    f"Worker job {job_id} ended with status {final_status.name}"
-                )
+            # tail_logs is sync (preload_content=True default) and follows the worker job
+            # to completion, returning its exit code. Streams worker stdout/stderr to ours
+            # so a worker traceback shows up in CI immediately.
+            click.echo(f"Streaming worker job {job_id} logs from {resolved_cluster_name}")
+            exit_code = sky.tail_logs(
+                cluster_name=resolved_cluster_name, job_id=job_id, follow=True
+            )
+            if exit_code != 0:
+                raise click.ClickException(f"Worker job {job_id} exited with code {exit_code}")
         finally:
             click.echo(f"Tearing down cluster: {resolved_cluster_name}")
             down_request_id = sky.down(resolved_cluster_name)
             sky.stream_and_get(down_request_id, follow=True)
     finally:
         mount_source.unlink(missing_ok=True)
-
-
-def _wait_for_job(cluster_name: str, job_id: int) -> sky.JobStatus:
-    """Poll `sky.queue` until the given job reaches a terminal status, then return it.
-
-    Used in place of `sky.tail_logs(follow=True)` because the latter hangs indefinitely
-    on RunPod (the per-job log stream is never closed by the cluster even after the
-    worker process exits). Polls every `_JOB_POLL_INTERVAL_SECONDS` seconds.
-    """
-    while True:
-        queue_request_id = sky.queue(cluster_name)
-        jobs = sky.stream_and_get(queue_request_id) or []
-        job = next((j for j in jobs if j.job_id == job_id), None)
-        if job is None:
-            click.echo(f"  job {job_id} not yet visible in queue; retrying", err=True)
-        else:
-            click.echo(f"  status={job.status.name}", err=True)
-            if job.status in _TERMINAL_JOB_STATUSES:
-                return job.status
-        time.sleep(_JOB_POLL_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":
