@@ -159,10 +159,6 @@ def materialize_spec(
     Derives all runtime state internally: git SHA, repo dirty status,
     renderer version from plugin path, current UTC timestamp.
     """
-    plugin = Path(config.plugin_path)
-    if not plugin.exists():
-        raise FileNotFoundError(f"Plugin path does not exist: {config.plugin_path}")
-
     created_at = datetime.now(timezone.utc)
     return _build_pipeline_spec(
         config=config,
