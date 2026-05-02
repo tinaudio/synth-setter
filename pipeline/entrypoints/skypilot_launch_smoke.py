@@ -25,7 +25,7 @@ from pathlib import Path
 import click
 import sky
 from dotenv import dotenv_values
-from sky.exceptions import ClusterNotUpError
+from sky.exceptions import ClusterDoesNotExist, ClusterNotUpError
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
@@ -242,12 +242,13 @@ def main(
     task = sky.Task.from_yaml(str(template_path))
     task.update_envs(worker_env)
 
-    # `sky.launch` is async (returns a RequestId). Launch with both
-    # `idle_minutes_to_autostop=0` and `down=True` so the cluster has a predictable 1-min
-    # autodown timer (sky internally bumps idle=0 to 1 minute) — `down=True` alone leaves
-    # the cluster up if setup errors, by design. `stream_and_get` on the launch request
-    # blocks until provisioning + setup + job-submission + run completes, streaming
-    # provisioning logs along the way; it returns `(job_id, handle)`. Non-managed launch
+    # `sky.launch` is async (returns a RequestId). `down=True` ensures cleanup; we set
+    # `idle_minutes_to_autostop=5` rather than 0 to leave a window between job-end and
+    # cluster-down for `_wait_for_job` to catch the terminal status — at idle=0 SkyPilot
+    # bumps to 1 min internally, which races our 15-second poll cadence and leaves the
+    # cluster vanished by the time we re-poll, surfacing as ClusterDoesNotExist.
+    # `stream_and_get` on the launch request blocks until provisioning + setup +
+    # job-submission completes; it returns `(job_id, handle)`. Non-managed launch
     # (sky.launch, not sky.jobs.launch) — managed jobs require a separate cloud-storage
     # backend for controller state, which RunPod doesn't provide.
     #
@@ -259,7 +260,7 @@ def main(
     launch_request_id = sky.launch(
         task,
         cluster_name=resolved_cluster_name,
-        idle_minutes_to_autostop=0,
+        idle_minutes_to_autostop=5,
         down=True,
     )
     launch_result = sky.stream_and_get(launch_request_id)
@@ -311,6 +312,11 @@ def _wait_for_job(
     signal — not a terminal failure — so swallow it as long as we're inside the deadline.
     The caller's deadline still bounds total wait, so a cluster that genuinely never
     transitions to UP fails on the deadline check below, not on the first job_status call.
+
+    `ClusterDoesNotExist` means the cluster was torn down between polls — typically by
+    SkyPilot's autostop timer firing after the worker job completed. With
+    `idle_minutes_to_autostop=5` on launch this should be rare, but raise a clean error
+    rather than letting the unhandled exception leak into CI logs.
     """
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
@@ -320,6 +326,12 @@ def _wait_for_job(
             click.echo(f"  cluster not yet UP ({exc.cluster_status}); retrying")
             time.sleep(_JOB_POLL_INTERVAL_SECONDS)
             continue
+        except ClusterDoesNotExist as exc:
+            raise click.ClickException(
+                f"Cluster {cluster_name!r} vanished mid-poll ({exc}); job {job_id} terminal "
+                "status unknown. Likely autostop fired before the next poll caught the "
+                "transition — bump idle_minutes_to_autostop or shorten _JOB_POLL_INTERVAL_SECONDS."
+            ) from exc
         status = statuses.get(job_id)
         if status is None:
             click.echo(f"  job {job_id} not yet visible; retrying")

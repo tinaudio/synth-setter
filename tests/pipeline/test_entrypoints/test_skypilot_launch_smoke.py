@@ -392,7 +392,7 @@ class TestMainCli:
 
         task.update_file_mounts.assert_not_called()
 
-    def test_launch_uses_autostop_zero_and_down_true(
+    def test_launch_uses_autostop_window_and_down_true(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -401,14 +401,16 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`sky.launch` is called with the autostop+down combo the launcher relies on."""
+        """`sky.launch` keeps `down=True` for cleanup but uses a multi-minute autostop window — at
+        idle=0 SkyPilot tears down the cluster within ~1 min of the worker exiting, racing the
+        polling cadence and surfacing as ClusterDoesNotExist."""
         result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
         assert result.exit_code == 0, result.output
 
         mock_sky.launch.assert_called_once()
         kwargs = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"] == "smoke-job-1"
-        assert kwargs["idle_minutes_to_autostop"] == 0
+        assert kwargs["idle_minutes_to_autostop"] >= 2
         assert kwargs["down"] is True
 
     def test_tail_logs_invoked_with_follow_false(
@@ -460,7 +462,7 @@ class TestMainCli:
         kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"].startswith("synth-setter-smoke-")
         assert kwargs["cluster_name"].endswith(config_id[:8])
-        assert kwargs["idle_minutes_to_autostop"] == 0
+        assert kwargs["idle_minutes_to_autostop"] >= 2
         assert kwargs["down"] is True
 
     def test_spec_out_overrides_default_path(
