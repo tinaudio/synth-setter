@@ -72,6 +72,19 @@ def spec(tmp_path: Path) -> DatasetPipelineSpec:
     return DatasetPipelineSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
 
 
+def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetPipelineSpec:
+    """Return a DatasetPipelineSpec with ``n`` shards (deterministic filenames/seeds)."""
+    shards = tuple(
+        ShardSpec(shard_id=i, filename=f"shard-{i:06d}.h5", seed=42 + i) for i in range(n)
+    )
+    kwargs = _base_spec_kwargs(
+        tmp_path,
+        splits={"train": n, "val": 0, "test": 0},
+        shards=shards,
+    )
+    return DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
+
+
 # ---------------------------------------------------------------------------
 # run — full flow orchestration
 # ---------------------------------------------------------------------------
@@ -202,21 +215,6 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-    def test_num_shards_greater_than_one_raises(self, tmp_path: Path) -> None:
-        """num_shards > 1 raises NotImplementedError (multi-shard is orchestrator territory)."""
-        multi_shards = tuple(
-            ShardSpec(shard_id=i, filename=f"shard-{i:06d}.h5", seed=42 + i) for i in range(3)
-        )
-        kwargs = _base_spec_kwargs(
-            tmp_path,
-            splits={"train": 1, "val": 1, "test": 1},
-            shards=multi_shards,
-        )
-        spec = DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
-
-        with pytest.raises(NotImplementedError, match="num_shards > 1"):
-            run(spec)
-
     def test_wds_output_format_raises(self, tmp_path: Path) -> None:
         """output_format 'wds' raises ValueError — generate_vst_dataset only supports hdf5."""
         kwargs = _base_spec_kwargs(tmp_path, output_format="wds")
@@ -224,6 +222,131 @@ class TestRun:
 
         with pytest.raises(ValueError, match="only supports hdf5"):
             run(spec)
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_with_three_shards_renders_each_shard(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Multi-shard run invokes generate_vst_dataset.py once per shard, in order."""
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        run(spec)
+
+        assert mock_check_call.call_count == 3
+        rendered_filenames = []
+        for call in mock_check_call.call_args_list:
+            args = call[0][0]
+            # Args layout: [wrapper, python, generate_vst_dataset.py, output_file, ...].
+            output_file = args[3]
+            rendered_filenames.append(Path(output_file).name)
+        assert rendered_filenames == [s.filename for s in spec.shards]
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_spec_uploaded_exactly_once_for_multi_shard_run(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Spec is uploaded once per run; remaining rclone calls are per-shard uploads."""
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        run(spec)
+
+        assert mock_rclone.call_count == 1 + 3
+        spec_uploads = [
+            call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
+        ]
+        assert len(spec_uploads) == 1
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_each_shard_uploaded_after_its_render(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Render and upload are interleaved per shard: render0, upload0, render1, upload1, ..."""
+        spec = _multi_shard_spec(tmp_path, n=3)
+        manager = MagicMock()
+        manager.attach_mock(mock_rclone, "rclone")
+        manager.attach_mock(mock_check_call, "check_call")
+
+        run(spec)
+
+        call_names = [c[0] for c in manager.mock_calls]
+        # First call is the spec upload; thereafter check_call/rclone alternate per shard.
+        assert call_names == [
+            "rclone",  # spec upload
+            "check_call",  # render shard 0
+            "rclone",  # upload shard 0
+            "check_call",  # render shard 1
+            "rclone",  # upload shard 1
+            "check_call",  # render shard 2
+            "rclone",  # upload shard 2
+        ]
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_local_shard_file_removed_after_upload(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Each shard's local HDF5 is unlinked after upload to bound disk to one shard."""
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        # Render side effect: create the local shard file so the unlink call is real.
+        def _materialize_shard(args: list[str]) -> int:
+            # Args layout: [wrapper, python, generate_vst_dataset.py, output_file, ...].
+            output_file = Path(args[3])
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_bytes(b"")
+            return 0
+
+        mock_check_call.side_effect = _materialize_shard
+        # Track which paths existed at upload time, and which still exist after run().
+        uploaded_paths: list[Path] = []
+
+        def _record_upload(src: str, dest: str) -> None:
+            uploaded_paths.append(Path(src))
+
+        mock_rclone.side_effect = _record_upload
+
+        run(spec)
+
+        shard_uploads = [p for p in uploaded_paths if p.name != INPUT_SPEC_FILENAME]
+        assert len(shard_uploads) == 3
+        for shard_path in shard_uploads:
+            assert not shard_path.exists(), f"shard file still on disk after run: {shard_path}"
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_subprocess_failure_in_second_shard_propagates_immediately(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Mid-loop subprocess failure raises immediately; later shards are not attempted."""
+        spec = _multi_shard_spec(tmp_path, n=3)
+        mock_check_call.side_effect = [
+            None,
+            subprocess.CalledProcessError(1, "generate_vst_dataset.py"),
+            None,
+        ]
+
+        with pytest.raises(subprocess.CalledProcessError):
+            run(spec)
+
+        assert mock_check_call.call_count == 2
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
