@@ -89,6 +89,16 @@ class DatasetPipelineSpec(BaseModel):
             raise ValueError("r2_bucket must not be blank")
         return value
 
+    @field_validator("shards")
+    @classmethod
+    def _shards_must_not_be_empty(cls, value: tuple[ShardSpec, ...]) -> tuple[ShardSpec, ...]:
+        # DatasetConfig enforces num_shards > 0 at materialize time; this mirror catches
+        # specs loaded from external/hand-edited JSON where shards=[] would otherwise let
+        # generate_dataset.run() succeed as a silent no-op (uploads only the spec).
+        if not value:
+            raise ValueError("shards must not be empty")
+        return value
+
 
 def _get_git_sha() -> str:
     """Get the current git commit SHA."""

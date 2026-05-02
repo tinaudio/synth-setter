@@ -74,12 +74,13 @@ def generate_sample(
 
     When ``fixed_synth_params`` and/or ``fixed_note_params`` are supplied, they take
     precedence over the values drawn from ``param_spec.sample()`` for deterministic
-    rendering. When BOTH are supplied, render inputs are fully fixed — the function
-    renders once and raises ``ValueError`` on loudness fail rather than retrying
-    against an unchanged input. When only one is supplied, the other is re-sampled
-    each retry and the loop remains meaningful.
+    rendering. When ``fixed_synth_params`` is supplied (with or without
+    ``fixed_note_params``), the function raises ``ValueError`` on loudness fail
+    rather than retrying — the synth patch is the dominant determinant of loudness,
+    so re-sampling note params alone almost never lifts a silent patch above
+    ``min_loudness`` and the loop would run forever. When only ``fixed_note_params``
+    is supplied, the synth is re-sampled each retry and the loop remains meaningful.
     """
-    fully_fixed = fixed_synth_params is not None and fixed_note_params is not None
     while True:
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")
@@ -108,11 +109,15 @@ def generate_sample(
         loudness = meter.integrated_loudness(output.T)
         logger.debug(f"loudness: {loudness}")
         if loudness < min_loudness:
-            if fully_fixed:
+            if fixed_synth_params is not None:
                 raise ValueError(
-                    f"fully-fixed render produced loudness {loudness:.2f} dB below "
-                    f"min_loudness {min_loudness:.2f} dB; retrying is futile because "
-                    f"render inputs are deterministic. Provide a louder patch."
+                    f"fixed_synth_params render produced loudness {loudness:.2f} dB "
+                    f"below min_loudness {min_loudness:.2f} dB. The synth patch is "
+                    f"held constant and dominates loudness, so retrying is futile "
+                    f"(the fully-fixed case has no re-sample input at all; the "
+                    f"only-synth-fixed case re-samples note params, which rarely "
+                    f"lifts a silent patch above the threshold). Provide a louder "
+                    f"patch."
                 )
             logger.debug("loudness too low, skipping")
             continue

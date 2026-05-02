@@ -1,8 +1,10 @@
-"""Spec-driven single-shard generate_dataset runner.
+"""Spec-driven generate_dataset runner.
 
 Public API:
     load_spec_from_uri(uri): Parse a DatasetPipelineSpec from a local path or r2:// URI.
     run(spec): Full flow — upload spec to R2, generate shard, upload shard to R2.
+    run(spec): Full flow — upload spec to R2 once, then loop over
+        ``spec.shards`` rendering and uploading each.
     build_generate_args(spec, shard, output_dir): Build CLI args for
         src/data/vst/generate_vst_dataset.py.
 
@@ -136,13 +138,13 @@ def build_generate_args(
 
 
 def run(spec: DatasetPipelineSpec) -> None:
-    """Materialized-spec driven run: upload spec to R2, generate shard, upload shard.
+    """Materialized-spec driven run: upload spec to R2 once, then render+upload each shard.
 
-    Single-shard only. Multi-shard generation is tracked in
-    https://github.com/tinaudio/synth-setter/issues/407 (``generate-shards``)
-    and requires the distributed pipeline. This entrypoint fails fast with
-    ``NotImplementedError`` on ``spec.num_shards > 1`` so callers don't
-    silently get a partial dataset.
+    Spec serialization, spec upload, and the renderer-version constraint check
+    happen once per run (pre-loop). Each shard is then rendered, uploaded, and
+    its local HDF5 file unlinked before moving on — so local disk usage is
+    bounded to one shard's worth at a time. Subprocess failures propagate
+    immediately (fail-fast); later shards are not attempted.
 
     HDF5-only. Other output formats (e.g. WebDataset) are not yet wired into
     the downstream generator.
@@ -151,19 +153,10 @@ def run(spec: DatasetPipelineSpec) -> None:
         spec: Pre-materialized DatasetPipelineSpec.
 
     Raises:
-        NotImplementedError: If ``spec.num_shards > 1`` (tracked in #407).
         ValueError: If ``spec.output_format != "hdf5"``.
+        RuntimeError: If the worker's plugin version disagrees with
+            ``spec.renderer_version``.
     """
-    # Single-shard fail-fast. The downstream generator, the shard-upload
-    # step, and build_generate_args all assume exactly one shard; see #407
-    # for the multi-shard rewrite.
-    if spec.num_shards > 1:
-        raise NotImplementedError(
-            f"num_shards > 1 not yet supported (got {spec.num_shards}). "
-            "Multi-shard generation is tracked in #407 "
-            "(https://github.com/tinaudio/synth-setter/issues/407)."
-        )
-
     if spec.output_format != "hdf5":
         raise ValueError(
             f"generate_vst_dataset.py only supports hdf5 output, got: {spec.output_format}"
@@ -199,17 +192,36 @@ def run(spec: DatasetPipelineSpec) -> None:
         _rclone_copy(str(spec_path), r2_dest_prefix)
         logger.info(f"spec uploaded -> {r2_dest_prefix}")
 
-        # Single-shard only: picks spec.shards[0] unconditionally. Guarded by
-        # the fail-fast check above; multi-shard support tracked in #407.
-        shard = spec.shards[0]
-        args = [VST_HEADLESS_WRAPPER, *build_generate_args(spec, shard, work_dir)]
-        logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
-        subprocess.check_call(args)  # noqa: S603 — args built from validated spec
-        shard_path = work_dir / shard.filename
-        size = shard_path.stat().st_size if shard_path.exists() else 0
-        logger.info(f"shard rendered: {shard_path} ({size} bytes)")
-        _rclone_copy(str(shard_path), r2_dest_prefix)
-        logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
+        for shard in spec.shards:
+            _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+
+
+def _render_and_upload_shard(
+    spec: DatasetPipelineSpec,
+    shard: ShardSpec,
+    work_dir: Path,
+    r2_dest_prefix: str,
+) -> None:
+    """Render a single shard, upload it to R2, then unlink the local file.
+
+    Unlinking after upload bounds local disk to one shard's HDF5 at a time — necessary for multi-
+    shard runs on disk-constrained workers.
+    """
+    args = [VST_HEADLESS_WRAPPER, *build_generate_args(spec, shard, work_dir)]
+    logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
+    subprocess.check_call(args)  # noqa: S603 — args built from validated spec
+    shard_path = work_dir / shard.filename
+    # Catches a generator that exits 0 without writing output — surfaces a clear error
+    # at the rendering boundary rather than a downstream rclone "source not found".
+    if not shard_path.is_file():
+        raise RuntimeError(
+            f"generate_vst_dataset.py exited 0 but did not write expected shard file: {shard_path}"
+        )
+    logger.info(f"shard rendered: {shard_path} ({shard_path.stat().st_size} bytes)")
+    _rclone_copy(str(shard_path), r2_dest_prefix)
+    logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
+    shard_path.unlink()
+    logger.info(f"shard removed locally: {shard_path}")
 
 
 if __name__ == "__main__":

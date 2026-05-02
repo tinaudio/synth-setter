@@ -1,7 +1,7 @@
 # Guide: Interactive Surge XT prediction & patch capture
 
 > **Status**: Stable
-> **Last Updated**: 2026-04-29
+> **Last Updated**: 2026-05-02
 > **Source**: [`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py)
 
 > Last refresh: `--session-recording-path` now renders a deterministic
@@ -245,17 +245,15 @@ your teammates so they aren't blindsided.
   overhead per sample, so capturing 100 patches at 4 s each takes
   more than ten minutes. Acceptable for human-scale capture; do not
   use this path for large pipeline runs.
-- **Loudness-retry loop has no iteration cap** — `generate_sample`
-  resamples params and re-renders until output integrated loudness
-  exceeds `MAKE_DATASET_MIN_LOUDNESS = -50.0`
+- **Silent captured patches fast-fail** — `generate_sample` raises
+  `ValueError` when `fixed_synth_params` is set and the render falls
+  below `MAKE_DATASET_MIN_LOUDNESS = -50.0`
   ([`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py)).
-  When `fixed_synth_params` is set (this script's path), the synth
-  params are held constant — only the note params are re-sampled per
-  retry — so a near-silent captured patch loops forever because the
-  note rarely fixes loudness. (When *both* synth and note params are
-  fully fixed, `generate_sample` raises `ValueError` instead of
-  retrying, but this script never reaches that branch.) Workaround:
-  only press `p` while you can hear the patch.
+  The synth patch dominates loudness, so re-sampling note params alone
+  can't lift a silent patch above threshold; rather than loop, the
+  whole `make_dataset` call aborts and points at the offending patch.
+  Workaround: only press `p` while you can hear the patch — once a
+  silent patch is captured, the session's dataset render will fail.
 - **Blocking keyboard input** — `keyboard_loop` uses
   `click.getchar()`, which only checks `stop_event` between
   keystrokes. After the editor closes, you may need to press one key
@@ -296,8 +294,10 @@ dim of the loaded tensor to match `param_specs[--param-spec-name]` row
 length. Print `pred_tensor.shape` and compare to
 `len(param_specs[name])`.
 
-**Dataset generation hangs after recording.** Likely the loudness
-retry loop on a near-silent patch; see *Known limitations*.
+**Dataset generation fails with `ValueError: fixed_synth_params render produced loudness …`.** One of the captured patches was below
+`MAKE_DATASET_MIN_LOUDNESS`. The error message includes the measured
+loudness; re-run the session and only press `p` while you can hear the
+patch. See *Known limitations*.
 
 **`ValueError: fixed_synth_params_list has length …`.** You re-ran
 with an existing `--output-dataset-path`. Use a fresh path; see the

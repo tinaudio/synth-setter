@@ -31,7 +31,7 @@ inputs. All dataset-run configuration — including the R2 bucket
 (`DatasetPipelineSpec.r2_bucket`) — flows in through the materialized
 spec at `--spec`.
 
-> **Note:** `generate_dataset` is the current single-shard MVP. It will be deprecated when `generate-shards` lands on main ([#411](https://github.com/tinaudio/synth-setter/issues/411)).
+> **Note:** `generate_dataset` is the current MVP (sequential multi-shard, single-worker). It will be deprecated when `generate-shards` lands on main ([#411](https://github.com/tinaudio/synth-setter/issues/411)).
 
 ### Headless X11
 
@@ -127,8 +127,8 @@ subcommand (`generate_dataset`, `idle`, `passthrough`, …) is a positional
 arg; the pipeline spec — including the R2 bucket — is read from the JSON
 file passed via `--spec`. `input_spec.json` is written by the caller (the
 `pipeline.ci.materialize_spec` bootstrap step in CI) to a bind-mounted
-directory. Multi-shard generation (`num_shards > 1`) raises
-`NotImplementedError`.
+directory. Multi-shard generation runs sequentially on a single worker;
+distributed parallelism is tracked in [#407](https://github.com/tinaudio/synth-setter/issues/407).
 
 rclone's native env-var config synthesizes the `r2` remote in-memory from
 the 5 `RCLONE_CONFIG_R2_*` vars — no `rclone.conf` file is read or written.
