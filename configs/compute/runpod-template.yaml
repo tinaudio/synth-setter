@@ -17,21 +17,12 @@
 
 resources:
   cloud: runpod
-  # Any one cheap GPU is enough for the smoke run (32 samples). The set is wide
-  # so a stocked-out tier doesn't fail the launch — SkyPilot picks the cheapest
-  # available match. Add/remove tiers as RunPod inventory drifts.
-  accelerators:
-    {
-      RTX3070:1,
-      RTX3080:1,
-      RTX3090:1,
-      RTXA4000:1,
-      RTX4000Ada:1,
-      A40:1,
-      RTX4090:1,
-    }
+  # CPU-only: generate_dataset.py is CPU-bound (pedalboard renders Surge XT
+  # on the host, no CUDA path). cpu3g-2-8 = 2 vCPU / 8 GB RAM, ~$0.08/hr.
+  # disk_size capped at 20 GB by RunPod's CPU3G tier (vCPU × 10 GB).
+  instance_type: cpu3g-2-8
   use_spot: false
-  disk_size: 50
+  disk_size: 20
   image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 # Placeholders. Real values are injected by the launcher via update_envs.
