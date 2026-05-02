@@ -81,7 +81,7 @@ jobs:
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -e PYTHONPATH=/home/build/synth-setter \
             "$IMAGE" \
-            passthrough bash -c '
+            bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
@@ -91,10 +91,10 @@ jobs:
 
       - name: Run VST slow tests in Docker
         # Mount the PR's tests + src into the container so we test THIS
-        # branch's code against the image's environment. The image's
-        # ENTRYPOINT is the ``python click`` CLI; ``passthrough <argv>``
-        # execs the trailing argv as PID 1, same pattern as
-        # ``dataset-generation.yml``. The bench.json output goes to a host
+        # branch's code against the image's environment. Image has no
+        # ENTRYPOINT (#721 dropped it for SkyPilot); CMD defaults to
+        # /bin/bash, so `docker run img bash -c '...'` overrides CMD with
+        # the bash invocation. The bench.json output goes to a host
         # directory mounted at ``/bench`` so the publish step downstream
         # can pick it up.
         #
@@ -112,7 +112,7 @@ jobs:
             -e HYDRA_FULL_ERROR=1 \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
             "$IMAGE" \
-            passthrough bash -c '
+            bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
