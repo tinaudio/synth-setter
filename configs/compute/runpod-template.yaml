@@ -45,9 +45,12 @@ envs:
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WORKER_SPEC_URI: ""
   WORKER_GIT_REF: ""
-  # See pipeline/partitioning.py for why these are OVERRIDE_-prefixed.
-  OVERRIDE_SKYPILOT_NODE_RANK: ""
-  OVERRIDE_SKYPILOT_NUM_NODES: ""
+  # Per-rank partition env: launcher injects these (NOT SkyPilot's
+  # SKYPILOT_NODE_RANK/SKYPILOT_NUM_NODES, which SkyPilot reserves and
+  # resets to single-node values on every pod). Source of truth:
+  # pipeline/partitioning.py.
+  WORKER_RANK: ""
+  NUM_WORKERS: ""
 
 setup: |
   echo "synth-setter worker ready (host: $(hostname))"
@@ -67,13 +70,11 @@ setup: |
 #   Public repo, no creds needed; ~3s of git fetch on a small clone.
 #   Skipped silently when WORKER_GIT_REF is unset, so non-CI launches
 #   keep using baked code.
-# - OVERRIDE_SKYPILOT_NODE_RANK / OVERRIDE_SKYPILOT_NUM_NODES are read
-#   inside `run()` via `pipeline.partitioning.read_rank_world_from_env`,
-#   which raises before any rclone work if either is missing or out-of-
-#   bounds. The OVERRIDE_ prefix sidesteps SkyPilot resetting the
-#   reserved SKYPILOT_NODE_RANK on every single-node pod. No belt-and-
+# - WORKER_RANK / NUM_WORKERS are read inside `run()` via
+#   `pipeline.partitioning.read_rank_world_from_env`, which raises before
+#   any rclone work if either is missing or out-of-bounds. No belt-and-
 #   suspenders pre-flight needed in this YAML — the worker fails loudly
-#   on its own.
+#   on its own. Our own names, not SkyPilot's reserved SKYPILOT_*.
 # - The Python invocation is inlined (instead of calling the docker
 #   entrypoint's click subcommand) so we can `os._exit(0)` immediately
 #   after `run()` returns successfully. Workaround for #735: the SkyPilot

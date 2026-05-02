@@ -9,14 +9,11 @@ container CLI. Logs stream live via `sky.tail_logs(..., follow=True)`.
 
 With `--num-workers N>1` the launcher fans out N independent single-node
 SkyPilot clusters in parallel (RunPod's backend doesn't support `num_nodes
-> 1`). Each rank gets ``OVERRIDE_SKYPILOT_NODE_RANK`` /
-``OVERRIDE_SKYPILOT_NUM_NODES`` injected via ``task.update_envs`` — the
-``OVERRIDE_`` prefix is required because SkyPilot reserves the unprefixed
-names and clobbers our injection on each pod (every single-node cluster
-sees ``SKYPILOT_NODE_RANK=0`` natively). The spec is materialized +
-uploaded to R2 once and shared across ranks, so all workers write shards
-under the same ``r2_prefix``. ``pipeline.partitioning.get_my_shards``
-slices each worker's shard ownership from the synthetic rank.
+> 1`). Each rank gets ``WORKER_RANK`` / ``NUM_WORKERS`` injected via
+``task.update_envs``. The spec is materialized + uploaded to R2 once and
+shared across ranks, so all workers write shards under the same
+``r2_prefix``. ``pipeline.partitioning.get_my_shards`` slices each
+worker's shard ownership from the rank.
 
 `sky.jobs.launch` (managed jobs) requires a cloud-storage backend for
 controller state, which RunPod doesn't provide; cluster-level launch is
@@ -39,7 +36,7 @@ import click
 import sky
 from dotenv import dotenv_values
 
-from pipeline.partitioning import RANK_ENV_VAR, WORLD_ENV_VAR
+from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
 
@@ -213,9 +210,9 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
     help=(
         "Number of single-node SkyPilot clusters to fan out in parallel. RunPod's backend "
         "does not support num_nodes>1, so we synthesize multi-worker partitioning by launching "
-        "N independent clusters and injecting OVERRIDE_SKYPILOT_NODE_RANK / OVERRIDE_SKYPILOT_NUM_NODES per "
-        "rank. Each cluster downloads the same materialized spec and uses "
-        "pipeline.partitioning.get_my_shards to slice its share."
+        "N independent clusters and injecting WORKER_RANK / NUM_WORKERS per rank. Each cluster "
+        "downloads the same materialized spec and uses pipeline.partitioning.get_my_shards to "
+        "slice its share."
     ),
 )
 def main(
@@ -292,8 +289,8 @@ def _run_workers(
 ) -> list[int]:
     """Launch len(cluster_names) single-node clusters in parallel; return tail_logs rc per rank.
 
-    Each rank gets its own ``sky.Task`` with ``OVERRIDE_SKYPILOT_NODE_RANK`` /
-    ``OVERRIDE_SKYPILOT_NUM_NODES`` injected via ``update_envs``. Provisioning + log streaming
+    Each rank gets its own ``sky.Task`` with ``WORKER_RANK`` / ``NUM_WORKERS`` injected via
+    ``update_envs``. Provisioning + log streaming
     run concurrently in a ``ThreadPoolExecutor`` (one thread per rank), and all clusters get
     torn down in parallel in the finally block regardless of which ranks succeeded.
 
@@ -308,8 +305,8 @@ def _run_workers(
         cluster = cluster_names[rank]
         env_for_rank = {
             **worker_env_base,
-            RANK_ENV_VAR: str(rank),
-            WORLD_ENV_VAR: str(num_workers),
+            WORKER_RANK_ENV_VAR: str(rank),
+            NUM_WORKERS_ENV_VAR: str(num_workers),
         }
         task = sky.Task.from_yaml(str(template_path))
         task.update_envs(env_for_rank)
@@ -331,8 +328,8 @@ def _run_workers(
 
     try:
         # noqa: BLE001 — must catch any rank-thread exception to keep teardown loop reachable.
-        with ThreadPoolExecutor(max_workers=num_workers) as ex:
-            future_to_rank = {ex.submit(_launch_and_tail, i): i for i in range(num_workers)}
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_rank = {executor.submit(_launch_and_tail, i): i for i in range(num_workers)}
             for fut, rank in future_to_rank.items():
                 try:
                     rcs[rank] = fut.result()
@@ -340,9 +337,9 @@ def _run_workers(
                     click.echo(f"[{cluster_names[rank]}] launch raised: {exc}")
                     rcs[rank] = -1
     finally:
-        with ThreadPoolExecutor(max_workers=num_workers) as ex:
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
             for cluster in cluster_names:
-                ex.submit(_teardown_cluster, cluster)
+                executor.submit(_teardown_cluster, cluster)
     return rcs
 
 

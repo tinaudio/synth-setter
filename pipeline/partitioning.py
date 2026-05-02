@@ -7,25 +7,26 @@ a single-node run with no coordination overhead.
 
 ``get_my_shards`` and ``validate_rank_world`` are pure — they don't read
 the environment. ``read_rank_world_from_env`` is the imperative shell
-that pulls ``OVERRIDE_SKYPILOT_NODE_RANK`` / ``OVERRIDE_SKYPILOT_NUM_NODES``
-from ``os.environ`` and fails loudly if they're missing or invalid;
-``generate_dataset.run`` calls it before any R2 work so a worker
-without partition env can't silently default to a single-worker
-partition that would make every node render every shard.
+that pulls ``WORKER_RANK`` / ``NUM_WORKERS`` from ``os.environ`` and
+fails loudly if they're missing or invalid; ``generate_dataset.run``
+calls it before any R2 work so a worker without partition env can't
+silently default to a single-worker partition that would make every
+node render every shard.
+
+Note: we deliberately use our own env-var names rather than SkyPilot's
+``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES``. SkyPilot reserves
+``SKYPILOT_NODE_RANK`` and resets it to the cluster-native value (0 on
+every single-node cluster) at job-submission time, which would clobber
+the launcher's per-rank injection in our N-clusters fan-out path. Our
+own names are fully under our control.
 """
 
 from __future__ import annotations
 
 import os
 
-# OVERRIDE_-prefixed because SkyPilot itself reserves SKYPILOT_NODE_RANK and
-# overrides our injection at runtime to the cluster-native value (0 on a
-# single-node cluster). We launch N independent single-node clusters per
-# fan-out (RunPod's backend doesn't support num_nodes>1), so the launcher
-# injects synthetic rank/world under non-reserved names that SkyPilot
-# leaves alone. The worker reads these and partitions accordingly.
-RANK_ENV_VAR = "OVERRIDE_SKYPILOT_NODE_RANK"
-WORLD_ENV_VAR = "OVERRIDE_SKYPILOT_NUM_NODES"
+WORKER_RANK_ENV_VAR = "WORKER_RANK"
+NUM_WORKERS_ENV_VAR = "NUM_WORKERS"
 
 
 def validate_rank_world(rank: int, world: int) -> None:
@@ -42,7 +43,7 @@ def validate_rank_world(rank: int, world: int) -> None:
 
 
 def read_rank_world_from_env() -> tuple[int, int]:
-    """Read OVERRIDE_SKYPILOT_NODE_RANK / OVERRIDE_SKYPILOT_NUM_NODES from the environment.
+    """Read WORKER_RANK / NUM_WORKERS from the environment.
 
     No defaults — if either env var is missing, malformed, or out-of-bounds,
     raise ``ValueError`` with a message naming the offending var(s). The
@@ -58,19 +59,21 @@ def read_rank_world_from_env() -> tuple[int, int]:
         ValueError: If either env var is missing, can't parse as int, or
             fails the rank/world bounds check.
     """
-    missing = [name for name in (RANK_ENV_VAR, WORLD_ENV_VAR) if name not in os.environ]
+    missing = [
+        name for name in (WORKER_RANK_ENV_VAR, NUM_WORKERS_ENV_VAR) if name not in os.environ
+    ]
     if missing:
-        raise ValueError(f"missing SkyPilot env vars: {', '.join(missing)}")
-    rank_raw = os.environ[RANK_ENV_VAR]
-    world_raw = os.environ[WORLD_ENV_VAR]
+        raise ValueError(f"missing partition env vars: {', '.join(missing)}")
+    rank_raw = os.environ[WORKER_RANK_ENV_VAR]
+    world_raw = os.environ[NUM_WORKERS_ENV_VAR]
     try:
         rank = int(rank_raw)
     except ValueError as e:
-        raise ValueError(f"{RANK_ENV_VAR} is not an integer: {rank_raw!r}") from e
+        raise ValueError(f"{WORKER_RANK_ENV_VAR} is not an integer: {rank_raw!r}") from e
     try:
         world = int(world_raw)
     except ValueError as e:
-        raise ValueError(f"{WORLD_ENV_VAR} is not an integer: {world_raw!r}") from e
+        raise ValueError(f"{NUM_WORKERS_ENV_VAR} is not an integer: {world_raw!r}") from e
     validate_rank_world(rank, world)
     return rank, world
 
