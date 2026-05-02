@@ -38,6 +38,19 @@ TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPl
 TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+def _find_script_index(args: list[str]) -> int:
+    """Locate generate_vst_dataset.py in subprocess args, with a clear failure on miss.
+
+    The args layout depends on platform — `[wrapper, python, script, output, ...]` on Linux
+    versus `[python, script, output, ...]` elsewhere — so callers locate the script by name
+    rather than fixed index.
+    """
+    for i, a in enumerate(args):
+        if a.endswith("generate_vst_dataset.py"):
+            return i
+    raise AssertionError(f"generate_vst_dataset.py not found in subprocess args: {args}")
+
+
 def _materialize_shard(args: list[str]) -> int:
     """subprocess.check_call side effect that writes the expected shard file.
 
@@ -45,11 +58,7 @@ def _materialize_shard(args: list[str]) -> int:
     HDF5 to its output path. Tests that don't supply this side effect would trip the
     `shard_path.is_file()` check in `_render_and_upload_shard`.
     """
-    # Args layout depends on platform:
-    #   linux:     [wrapper, python, generate_vst_dataset.py, output_file, ...]
-    #   non-linux: [python, generate_vst_dataset.py, output_file, ...]
-    # Locate the script and read the output file from the next slot.
-    script_idx = next(i for i, a in enumerate(args) if a.endswith("generate_vst_dataset.py"))
+    script_idx = _find_script_index(args)
     output_file = Path(args[script_idx + 1])
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_bytes(b"")
@@ -190,7 +199,7 @@ class TestRun:
         run(spec)
 
         args = mock_check_call.call_args[0][0]
-        if sys.platform.startswith("linux"):
+        if sys.platform == "linux":
             assert args[0] == VST_HEADLESS_WRAPPER
             assert args[2] == "src/data/vst/generate_vst_dataset.py"
         else:
@@ -269,13 +278,7 @@ class TestRun:
         rendered_filenames = []
         for call in mock_check_call.call_args_list:
             args = call[0][0]
-            # Args layout depends on platform:
-            #   linux:     [wrapper, python, generate_vst_dataset.py, output_file, ...]
-            #   non-linux: [python, generate_vst_dataset.py, output_file, ...]
-            script_idx = next(
-                i for i, a in enumerate(args) if a.endswith("generate_vst_dataset.py")
-            )
-            output_file = args[script_idx + 1]
+            output_file = args[_find_script_index(args) + 1]
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [s.filename for s in spec.shards]
 
