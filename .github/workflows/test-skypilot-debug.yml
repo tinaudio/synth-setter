@@ -1,10 +1,11 @@
 name: Test SkyPilot Debug
 
-# Permanent diagnostic matrix for the SkyPilot+RunPod path. Seven progressive
+# Permanent diagnostic matrix for the SkyPilot+RunPod path. Progressive
 # canary variants, each adding one piece of the production smoke's complexity.
-# None of these run the production launcher or worker — they're standalone
-# probes. Read the matrix's green/red pattern to identify where the production
-# smoke first breaks.
+# Most variants use a standalone inline-Python probe; the `launcher*` and
+# `generate-tiny` variants invoke the actual `skypilot_launch_smoke` launcher
+# so we can compare its behavior to the inline probe. Read the matrix's
+# green/red pattern to identify where the production smoke first breaks.
 #
 # Layer 1 — orchestration only (no wrapper, no Python, no mount):
 #
@@ -55,9 +56,41 @@ name: Test SkyPilot Debug
 #                    Also the canary for #735's bug-#3 (interpreter
 #                    shutdown hang).
 #
+# Layer 4 — invoke the actual production launcher / worker code paths:
+#
+#   stickiness-probe Same shape as `noop` but with a cluster-name prefix
+#                    matching the production smoke (`synth-setter-smoke-*`
+#                    vs. matrix's default `synth-setter-debug-*`). Tests
+#                    whether RunPod sticky-schedules `synth-setter-smoke-*`
+#                    clusters to a specific (possibly bad) pod pool — we
+#                    saw the same pod IP across multiple production-smoke
+#                    failures while matrix succeeded.
+#
+#   launcher         Invokes the actual `pipeline.entrypoints.skypilot_launch_smoke`
+#                    launcher CLI from the GH-actions runner directly (no
+#                    docker), against a minimal template that no-ops on the
+#                    worker. PASS = launcher works on RunPod from a bare
+#                    Python env; FAIL = launcher has a bug independent of
+#                    the dev-snapshot container.
+#
+#   launcher-in-docker
+#                    Same as `launcher` but invoked from inside the
+#                    `dev-snapshot` container (matching production-smoke's
+#                    shape). If `launcher` PASSes and this FAILs, the
+#                    failure is in the docker layer (OpenSSH version,
+#                    network namespace, etc.).
+#
+#   generate-tiny    Invokes the launcher with the production template
+#                    (real `generate_dataset.run` in the worker; full
+#                    render + rclone upload). The "tiny" qualifier is
+#                    aspirational — it's actually a mini production smoke
+#                    that exists in the matrix so triage doesn't require
+#                    re-dispatching the production workflow separately.
+#
 # Triggers: workflow_dispatch only — RunPod pods are billable. Each
-# dispatch spends ~7 pods. Add a `push` trigger only temporarily when
-# actively iterating on launcher / wrapper / template behavior.
+# dispatch spends one pod per matrix variant. Add a `push` trigger only
+# temporarily when actively iterating on launcher / wrapper / template
+# behavior.
 #
 # Required secrets:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
@@ -94,26 +127,71 @@ jobs:
       matrix:
         include:
           - variant: noop
+            mode: inline-sky
             template: configs/compute/runpod-debug-template.yaml
+            cluster_prefix: synth-setter-debug
             cluster_suffix: noop
+            config: ""
           - variant: image-pull
+            mode: inline-sky
             template: configs/compute/runpod-debug-image-pull-template.yaml
+            cluster_prefix: synth-setter-debug
             cluster_suffix: image-pull
+            config: ""
           - variant: spec-mount
+            mode: inline-sky
             template: configs/compute/runpod-debug-spec-mount-template.yaml
+            cluster_prefix: synth-setter-debug
             cluster_suffix: spec-mount
+            config: ""
           - variant: headless
+            mode: inline-sky
             template: configs/compute/runpod-debug-headless-template.yaml
+            cluster_prefix: synth-setter-debug
             cluster_suffix: headless
+            config: ""
           - variant: rclone
+            mode: inline-sky
             template: configs/compute/runpod-debug-rclone-template.yaml
+            cluster_prefix: synth-setter-debug
             cluster_suffix: rclone
+            config: ""
           - variant: headless-rclone
+            mode: inline-sky
             template: configs/compute/runpod-debug-headless-rclone-template.yaml
+            cluster_prefix: synth-setter-debug
             cluster_suffix: headless-rclone
+            config: ""
           - variant: pedalboard-load
+            mode: inline-sky
             template: configs/compute/runpod-debug-pedalboard-template.yaml
+            cluster_prefix: synth-setter-debug
             cluster_suffix: pedalboard
+            config: ""
+          - variant: stickiness-probe
+            mode: inline-sky
+            template: configs/compute/runpod-debug-template.yaml
+            cluster_prefix: synth-setter-smoke
+            cluster_suffix: stickiness
+            config: ""
+          - variant: launcher
+            mode: launcher-runner
+            template: configs/compute/runpod-debug-launcher-minimal-template.yaml
+            cluster_prefix: synth-setter-debug
+            cluster_suffix: launcher
+            config: configs/dataset/ci-smoke-test.yaml
+          - variant: launcher-in-docker
+            mode: launcher-docker
+            template: configs/compute/runpod-debug-launcher-minimal-template.yaml
+            cluster_prefix: synth-setter-debug
+            cluster_suffix: launcher-docker
+            config: configs/dataset/ci-smoke-test.yaml
+          - variant: generate-tiny
+            mode: launcher-runner
+            template: configs/compute/runpod-template.yaml
+            cluster_prefix: synth-setter-debug
+            cluster_suffix: generate-tiny
+            config: configs/dataset/ci-smoke-test.yaml
 
     steps:
       - name: Checkout
@@ -137,14 +215,25 @@ jobs:
             "$TEMPLATE"
           grep image_id "$TEMPLATE"
 
+      # Inline-Python probe contract:
+      #   - task.workdir = os.getcwd() syncs the GH-actions checkout to the
+      #     worker as ~/sky_workdir, so the worker exercises the in-repo
+      #     wrapper / templates as authored on the dispatching branch instead
+      #     of whatever is baked into the image — wrapper/template iterations
+      #     don't require a docker rebuild between dispatches.
+      #   - task.update_envs(...) injects R2 creds + a unique R2_DEBUG_PREFIX
+      #     for the rclone variants. Other variants ignore the keys; each
+      #     template's `envs:` block lists only the ones it actually consumes
+      #     (so SkyPilot doesn't error on unset placeholders).
       - name: Run inline SkyPilot probe
+        if: matrix.mode == 'inline-sky'
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET: intermediate-data
-          CLUSTER_NAME: synth-setter-debug-${{ matrix.cluster_suffix }}-${{ github.run_id }}
+          CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
           TEMPLATE: ${{ matrix.template }}
           VARIANT: ${{ matrix.variant }}
@@ -166,16 +255,8 @@ jobs:
 
           print(f"[probe] launching cluster={cluster} variant={variant}")
           task = sky.Task.from_yaml(template_path)
-          # Sync the GH-actions checkout to the worker as the SkyPilot workdir
-          # so the worker uses the in-repo `scripts/run-linux-vst-headless.sh`
-          # rather than whatever happens to be baked into the image. Lets us
-          # iterate on the wrapper without rebuilding the docker image. Workdir
-          # lands at ~/sky_workdir on the worker (the SSH command's cwd).
           task.workdir = os.getcwd()
           print(f"[probe] workdir set to {task.workdir}")
-          # Inject R2 creds + a unique R2_DEBUG_PREFIX for the rclone variant.
-          # Other variants ignore these; the env block on each template lists
-          # only the keys it cares about.
           task.update_envs(
               {
                   "RCLONE_CONFIG_R2_TYPE": "s3",
@@ -230,6 +311,86 @@ jobs:
                   f"(final={final})"
               )
           PY
+
+      - name: Install launcher deps (launcher-runner mode)
+        if: matrix.mode == 'launcher-runner'
+        run: pip install python-dotenv loguru pedalboard
+
+      - name: Run launcher (launcher-runner mode)
+        if: matrix.mode == 'launcher-runner'
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          PYTHONPATH: ${{ github.workspace }}
+          CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
+          CONFIG_PATH: ${{ matrix.config }}
+          TEMPLATE: ${{ matrix.template }}
+          DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
+          LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
+        run: |
+          set -o pipefail
+          mkdir -p ~/.runpod
+          umask 077
+          printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+          export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          export RCLONE_CONFIG_R2_ENDPOINT="$R2_ENDPOINT"
+          python -m pipeline.entrypoints.skypilot_launch_smoke \
+            --config "$CONFIG_PATH" \
+            --template "$TEMPLATE" \
+            --cluster-name "$CLUSTER_NAME" \
+            --job-deadline-seconds "$DEADLINE" \
+            2>&1 | tee "$LOG_PATH"
+
+      - name: Run launcher (launcher-docker mode)
+        if: matrix.mode == 'launcher-docker'
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
+          CONFIG_PATH: ${{ matrix.config }}
+          TEMPLATE: ${{ matrix.template }}
+          DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
+          LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
+        run: |
+          set -o pipefail
+          docker pull "$IMAGE"
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e RUNPOD_API_KEY \
+            -e CLUSTER_NAME \
+            -e CONFIG_PATH \
+            -e TEMPLATE \
+            -e DEADLINE \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              mkdir -p plugins
+              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              mkdir -p ~/.runpod
+              umask 077
+              printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+              python -m pipeline.entrypoints.skypilot_launch_smoke \
+                --config "$CONFIG_PATH" \
+                --template "$TEMPLATE" \
+                --cluster-name "$CLUSTER_NAME" \
+                --job-deadline-seconds "$DEADLINE"
+            ' \
+            2>&1 | tee "$LOG_PATH"
 
       - name: Upload run metadata
         if: always()

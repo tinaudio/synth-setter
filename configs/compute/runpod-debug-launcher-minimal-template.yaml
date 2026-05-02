@@ -1,0 +1,45 @@
+# SkyPilot task template for RunPod — DEBUG variant: launcher-target
+# minimal worker.
+#
+# Used by the `launcher` and `launcher-in-docker` matrix variants. Identical
+# resources / image / file_mounts contract to the production
+# runpod-template.yaml so the launcher's `task.update_file_mounts(...)`
+# round-trips a real materialized spec; the only difference is the `run:`
+# block — a one-line `echo done` — so the worker doesn't actually render.
+# This isolates "the launcher's launch flow on RunPod" from "the worker's
+# render flow."
+#
+# PASS = launcher's materialize_spec, task.update_envs, task.update_file_mounts,
+#        sky.launch + stream_and_get, _wait_for_job, sky.down all work on RunPod.
+# FAIL = the launcher itself has a bug, or the launcher's specific provisioning
+#        shape (cluster name pattern, mount upload, env injection) is what
+#        triggers RunPod failures the matrix's other variants don't see.
+
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+
+setup: |
+  echo "synth-setter debug-launcher-minimal worker ready (host: $(hostname))"
+
+run: |
+  echo "skypilot-debug launcher-minimal job done (host: $(hostname))"
