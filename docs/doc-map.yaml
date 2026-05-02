@@ -89,9 +89,9 @@ docs:
     description: SkyPilot launcher for the data pipeline (RunPod smoke, Vast.ai planned)
     sources:
       - pattern: "pipeline/entrypoints/skypilot_launch_smoke.py"
-        covers: "SkyPilot launcher CLI, materialize → mount → launch flow, sky.launch (unmanaged) + down=True, _wait_for_job polling vs tail_logs follow=True (RunPod hang), per-cluster spec staging"
+        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → launch flow, sky.launch (unmanaged) + down=True, _wait_for_job polling vs tail_logs follow=True (RunPod hang), per-cluster R2 spec key (skypilot-launcher-specs/<cluster>.json) — file_mounts deliberately avoided, see #749"
       - pattern: "configs/compute/runpod-template.yaml"
-        covers: "SkyPilot Task YAML for RunPod: resources block, image_id pin, env-var injection (RCLONE_CONFIG_R2_*), file_mount path contract (WORKER_SPEC_PATH)"
+        covers: "SkyPilot Task YAML for RunPod: resources block, image_id pin, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"

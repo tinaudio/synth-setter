@@ -83,7 +83,7 @@ After building, verify the image works:
 
 ```bash
 docker run --rm synth-setter:dev-snapshot \
-  passthrough python -c "import torch; print('torch', torch.__version__)"
+  python /usr/local/bin/entrypoint.py passthrough python -c "import torch; print('torch', torch.__version__)"
 ```
 
 ______________________________________________________________________
@@ -181,9 +181,12 @@ RunPod backend, which prepends its own `bash -lc` invocation, doesn't
 end up exec'ing our click group with stray argv). Callers invoke the
 click group explicitly:
 
+The click CLI is copied to `/usr/local/bin/entrypoint.py` (see
+`docker/ubuntu22_04/Dockerfile`). Invoke it via:
+
 ```bash
 docker run --rm synth-setter:dev-snapshot \
-  python scripts/docker_entrypoint.py <subcommand> [...]
+  python /usr/local/bin/entrypoint.py <subcommand> [...]
 ```
 
 The click group has five subcommands (`idle`, `passthrough`,
@@ -195,13 +198,15 @@ Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
 polluting your host shell:
 
 ```bash
-docker run --rm --env-file .env synth-setter:dev-snapshot passthrough ...
+docker run --rm --env-file .env synth-setter:dev-snapshot \
+  python /usr/local/bin/entrypoint.py passthrough ...
 ```
 
 ### `idle` — debug shell
 
 ```bash
-docker run -d --name debug synth-setter:dev-snapshot idle
+docker run -d --name debug synth-setter:dev-snapshot \
+  python /usr/local/bin/entrypoint.py idle
 docker exec -it debug bash
 # Clean up when done
 docker stop debug && docker rm debug
@@ -212,7 +217,8 @@ docker stop debug && docker rm debug
 ```bash
 # Run a one-off command (no creds needed — just a torch import)
 docker run --rm synth-setter:dev-snapshot \
-  passthrough python -c "import torch; print(torch.cuda.is_available())"
+  python /usr/local/bin/entrypoint.py passthrough \
+  python -c "import torch; print(torch.cuda.is_available())"
 ```
 
 > **Note:** add `--env-file .env` to any passthrough invocation that needs
@@ -242,7 +248,7 @@ docker run --rm \
   --env-file .env \
   -v "$(pwd)/run-metadata:/run-metadata" \
   synth-setter:dev-snapshot \
-  generate_dataset --spec /run-metadata/input_spec.json
+  python /usr/local/bin/entrypoint.py generate_dataset --spec /run-metadata/input_spec.json
 ```
 
 The example assumes your `.env` already contains the 5 `RCLONE_CONFIG_R2_*`
@@ -387,7 +393,8 @@ ______________________________________________________________________
 docker exec -it <container> bash
 
 # Start a fresh interactive debug session (drops into a shell)
-docker run --rm -it synth-setter:dev-snapshot passthrough bash
+docker run --rm -it synth-setter:dev-snapshot \
+  python /usr/local/bin/entrypoint.py passthrough bash
 ```
 
 ### OOM during builds

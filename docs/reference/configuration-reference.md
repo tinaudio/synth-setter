@@ -120,24 +120,39 @@ ______________________________________________________________________
 
 The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet implemented.
 
-**RunPod** (`configs/compute/runpod-template.yaml`) — landed:
+**RunPod** (`configs/compute/runpod-template.yaml`) — landed. Abridged
+shape (see the file for the full template, including the inline `os._exit(0)`
+workaround for [#735](https://github.com/tinaudio/synth-setter/issues/735)):
 
 ```yaml
 resources:
   cloud: runpod
-  accelerators: { RTX3090: 1, RTXA4000: 1, A40: 1, RTX4090: 1, ... }
+  accelerators: RTXA4000:1
   use_spot: false
   disk_size: 50
   image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 envs:
-  RCLONE_CONFIG_R2_*: ""   # injected by launcher from .env
+  RCLONE_CONFIG_R2_TYPE: ""           # the 5 RCLONE_CONFIG_R2_* keys + WANDB_API_KEY
+  RCLONE_CONFIG_R2_PROVIDER: ""       # are injected at launch time from
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""  # .env or process env (see _WORKER_ENV_KEYS).
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
   WANDB_API_KEY: ""
-  WORKER_SPEC_PATH: "/home/build/synth-setter/data/skypilot-launch-smoke-spec.json"
+  WORKER_SPEC_URI: ""                 # set by the launcher to r2://<bucket>/skypilot-launcher-specs/<cluster>.json
 
 run: |
-  cd /home/build/synth-setter && python -m pipeline.entrypoints.generate_dataset --spec "$WORKER_SPEC_PATH"
+  cd /home/build/synth-setter && python -c '
+  from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
+  import os
+  run(load_spec_from_uri(os.environ["WORKER_SPEC_URI"]))
+  os._exit(0)
+  '
 ```
+
+The launcher uploads the materialized spec to R2 (under
+`r2://{bucket}/skypilot-launcher-specs/<cluster>.json`) rather than using
+`task.update_file_mounts(...)` — see [#749](https://github.com/tinaudio/synth-setter/issues/749).
 
 **Vast.ai** (`configs/compute/vast-template.yaml`) — planned, not implemented:
 
