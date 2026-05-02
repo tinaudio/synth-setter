@@ -312,9 +312,15 @@ jobs:
               )
           PY
 
+      # Full requirements-app.txt install (skypilot + python-dotenv + loguru +
+      # pedalboard + mido + numpy + pydantic + click + ...). The launcher's
+      # import chain (skypilot_launch_smoke -> spec.py -> src.data.vst ->
+      # core.py) pulls in the whole runtime, so a targeted install is
+      # whack-a-mole — full requirements-app keeps the launcher-runner mode
+      # honestly mirroring what a developer would have on their laptop.
       - name: Install launcher deps (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
-        run: pip install python-dotenv loguru pedalboard
+        run: pip install -r requirements-app.txt
 
       - name: Run launcher (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
