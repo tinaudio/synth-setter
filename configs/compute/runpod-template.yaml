@@ -1,10 +1,14 @@
 # SkyPilot task template for RunPod.
 #
 # Loaded by pipeline/entrypoints/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
-# The launcher injects R2 credentials (via task.update_envs) and the
-# materialized DatasetPipelineSpec (via task.update_file_mounts) before
+# The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`)
+# and injects credentials + the spec URI via task.update_envs(...) before
 # calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
 # (not sky.jobs.launch) — RunPod has no managed-jobs controller backend.
+#
+# Spec ships via R2 (not file_mounts) because programmatic `task.update_file_mounts(...)`
+# triggers a SkyPilot RunPod-backend pubkey-overflow rejection at pod-create
+# time (see #749 for evidence + investigation status).
 #
 # Image: tinaudio/synth-setter:dev-snapshot must be pushed to Docker Hub
 # (`make docker-build-dev-snapshot` then `docker push`) before launch.
@@ -31,16 +35,16 @@ resources:
   image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 # Placeholders. Real values are injected by the launcher via update_envs.
+# WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the
+# uploaded spec; the worker downloads from there via load_spec_from_uri.
 envs:
   RCLONE_CONFIG_R2_TYPE: ""
   RCLONE_CONFIG_R2_PROVIDER: ""
   RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
+  WORKER_SPEC_URI: ""
 
-# <repo_root>/data/skypilot-launch-smoke-spec.json is mounted by the launcher via
-# update_file_mounts. Keep this path in sync with WORKER_SPEC_PATH in
-# pipeline/entrypoints/skypilot_launch_smoke.py.
 setup: |
   echo "synth-setter worker ready (host: $(hostname))"
 
@@ -75,11 +79,9 @@ run: |
   cd /home/build/synth-setter
   python -c '
   import os
-  from pipeline.entrypoints.generate_dataset import run
-  from pipeline.schemas.spec import DatasetPipelineSpec
-  spec_path = "/home/build/synth-setter/data/skypilot-launch-smoke-spec.json"
-  with open(spec_path) as f:
-      run(DatasetPipelineSpec.model_validate_json(f.read()))
+  from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
+  spec = load_spec_from_uri(os.environ["WORKER_SPEC_URI"])
+  run(spec)
   print("forcing interpreter exit (#735 workaround) — bypassing atexit", flush=True)
   os._exit(0)
   '

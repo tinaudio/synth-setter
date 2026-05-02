@@ -39,22 +39,15 @@ from typing import cast
 
 import click
 from pydantic import VERSION as _PYDANTIC_VERSION
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
-from pipeline.entrypoints.generate_dataset import run
+from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
 from pipeline.schemas.spec import DatasetPipelineSpec
 
 if not _PYDANTIC_VERSION.startswith("2."):
     raise RuntimeError(f"docker_entrypoint requires pydantic v2, got {_PYDANTIC_VERSION}")
 
 logger = logging.getLogger("docker_entrypoint")
-
-# Maps subcommand name -> pydantic model used to parse its --spec payload.
-# render_eval and train are deliberately absent; they gain entries when their
-# concrete spec types exist.
-_MODE_SPEC_TYPES: dict[str, type[BaseModel]] = {
-    "generate_dataset": DatasetPipelineSpec,
-}
 
 
 @click.group(invoke_without_command=True)
@@ -114,16 +107,25 @@ def passthrough(args: tuple[str, ...]) -> None:
 @cli.command("generate_dataset")
 @click.option(
     "--spec",
-    "spec_path",
+    "spec_path_or_uri",
     required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to a JSON-serialized DatasetPipelineSpec.",
+    type=str,
+    help=(
+        "Local path to a JSON-serialized DatasetPipelineSpec, or an `r2://bucket/key` "
+        "URI (downloaded via rclone before parsing — RCLONE_CONFIG_R2_* env vars must be set)."
+    ),
 )
-def generate_dataset(spec_path: Path) -> None:
+def generate_dataset(spec_path_or_uri: str) -> None:
     """Parse --spec into DatasetPipelineSpec and run the generate pipeline in-process."""
-    logger.info("Entering generate_dataset mode — spec=%s", spec_path)
-    spec_type = _MODE_SPEC_TYPES["generate_dataset"]
-    spec = _parse_spec(spec_path, spec_type)
+    logger.info("Entering generate_dataset mode — spec=%s", spec_path_or_uri)
+    try:
+        spec = load_spec_from_uri(spec_path_or_uri)
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.error("Spec read failed for %s: %s", spec_path_or_uri, exc)
+        raise click.ClickException(f"Unable to read spec at {spec_path_or_uri}: {exc}") from exc
+    except ValidationError as exc:
+        logger.error("Spec validation failed for %s: %s", spec_path_or_uri, exc)
+        raise click.ClickException(f"Invalid spec at {spec_path_or_uri}: {exc}") from exc
     run(cast(DatasetPipelineSpec, spec))
 
 
@@ -163,21 +165,6 @@ def train(spec_path: Path) -> None:
     """
     logger.error("train invoked but not implemented (see #409); spec=%s", spec_path)
     raise click.ClickException("train not implemented; tracked in #409")
-
-
-def _parse_spec(spec_path: Path, spec_type: type[BaseModel]) -> BaseModel:
-    """Deserialize ``spec_path`` as ``spec_type``; surface read + validation failures."""
-    try:
-        spec_text = spec_path.read_text()
-    except (OSError, UnicodeDecodeError) as exc:
-        logger.error("Spec read failed for %s: %s", spec_path, exc)
-        raise click.ClickException(f"Unable to read spec at {spec_path}: {exc}") from exc
-
-    try:
-        return spec_type.model_validate_json(spec_text)
-    except ValidationError as exc:
-        logger.error("Spec validation failed for %s: %s", spec_path, exc)
-        raise click.ClickException(f"Invalid spec at {spec_path}: {exc}") from exc
 
 
 def main() -> None:

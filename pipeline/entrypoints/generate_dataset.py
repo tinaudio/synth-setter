@@ -1,12 +1,13 @@
 """Spec-driven single-shard generate_dataset runner.
 
 Public API:
+    load_spec_from_uri(uri): Parse a DatasetPipelineSpec from a local path or r2:// URI.
     run(spec): Full flow — upload spec to R2, generate shard, upload shard to R2.
     build_generate_args(spec, shard, output_dir): Build CLI args for
         src/data/vst/generate_vst_dataset.py.
 
 This module is no longer invocable via ``python -m``; the container's CLI
-entrypoint (``scripts/docker_entrypoint.py generate_dataset --spec <path>``)
+entrypoint (``scripts/docker_entrypoint.py generate_dataset --spec <path-or-uri>``)
 parses the spec and calls ``run(spec)`` in-process.
 """
 
@@ -22,6 +23,39 @@ from loguru import logger
 from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
+
+_R2_URI_SCHEME = "r2://"
+
+
+def load_spec_from_uri(spec_uri: str) -> DatasetPipelineSpec:
+    """Load a DatasetPipelineSpec from a local path or `r2://bucket/key` URI.
+
+    Local paths are read directly. R2 URIs are downloaded via rclone (which
+    requires the standard `RCLONE_CONFIG_R2_*` env vars to be set in the
+    caller's environment) into a tmpdir and parsed.
+
+    The R2-URI path exists because SkyPilot's RunPod backend rejects
+    programmatic `task.update_file_mounts(...)` with a public-key-overflow
+    error (see #749), so the launcher ships the spec via R2 instead of
+    file_mounts.
+    """
+    if spec_uri.startswith(_R2_URI_SCHEME):
+        rclone_path = "r2:" + spec_uri[len(_R2_URI_SCHEME) :]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = [  # noqa: S607 — rclone resolved by image's PATH
+                "rclone",
+                "copy",
+                "--checksum",
+                rclone_path,
+                tmpdir,
+            ]
+            subprocess.check_call(args)  # noqa: S603 — args from validated spec URI
+            local_path = Path(tmpdir) / Path(spec_uri).name
+            spec_text = local_path.read_text()
+    else:
+        spec_text = Path(spec_uri).read_text()
+    return DatasetPipelineSpec.model_validate_json(spec_text)
+
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
 # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.

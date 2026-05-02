@@ -17,7 +17,7 @@ those land in the Phase A–C PRs.
 from __future__ import annotations
 
 import os
-import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -28,7 +28,16 @@ from dotenv import dotenv_values
 from sky.exceptions import ClusterNotUpError
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
-from pipeline.schemas.spec import materialize_spec
+from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
+
+# R2 prefix for launcher-uploaded specs. Each cluster gets a per-name key so
+# parallel launches don't collide. The worker downloads the spec from this URI
+# (see `pipeline.entrypoints.generate_dataset.load_spec_from_uri`) — we ship
+# specs through R2 instead of `task.update_file_mounts(...)` because that
+# SkyPilot RunPod-backend code path triggers a pubkey-overflow rejection at
+# pod-create time (see #749).
+_LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
+_WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
 
 # Worker-side env vars the launcher forwards via `task.update_envs`. Each is
 # resolved from the optional .env file first, then from the launcher's process
@@ -36,6 +45,9 @@ from pipeline.schemas.spec import materialize_spec
 # `configs/compute/runpod-template.yaml` — the template lists the same keys
 # (with empty defaults) so the SkyPilot Task validates as fully-specified
 # even when the launcher hasn't filled all of them.
+#
+# `WORKER_SPEC_URI` is also forwarded but isn't resolved from .env / process
+# env — the launcher injects the per-cluster R2 URI it uploads the spec to.
 _WORKER_ENV_KEYS: tuple[str, ...] = (
     "RCLONE_CONFIG_R2_TYPE",
     "RCLONE_CONFIG_R2_PROVIDER",
@@ -53,17 +65,8 @@ DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 
-# Worker-side mount destination. The image's WORKDIR is /home/build/synth-setter (Dockerfile),
-# so the spec lands under <repo_root>/data/ on the worker — gitignored, no clash with repo
-# files, and portable if the container layout changes later.
-WORKER_REPO_ROOT = "/home/build/synth-setter"
-WORKER_SPEC_PATH = f"{WORKER_REPO_ROOT}/data/skypilot-launch-smoke-spec.json"
-
-# Local-source directory for the materialized spec. Lives under the system tempdir
-# (not the repo) so it shares a filesystem with SkyPilot's staging dir (also under
-# /tmp). Inside the dev-snapshot container the repo workspace is bind-mounted from
-# the runner host while /tmp is on the container's overlay — crossing those two
-# with `os.rename` raises EXDEV (Errno 18) when SkyPilot stages mounts.
+# Local directory for the materialized spec written before R2 upload. Tempdir
+# so concurrent launches on the same host don't collide.
 LOCAL_SPEC_DIR = Path(tempfile.gettempdir())
 
 
@@ -99,6 +102,42 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
         elif key in os.environ:
             resolved[key] = os.environ[key]
     return resolved
+
+
+def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
+    """Upload `spec` to R2 under a per-cluster key; return the `r2://bucket/key` URI.
+
+    Uses `rclone copyto` (configured via `RCLONE_CONFIG_R2_*` in process env)
+    to put the spec at `r2:{spec.r2_bucket}/skypilot-launcher-specs/{cluster_name}.json`.
+    The worker pod's env will get `WORKER_SPEC_URI` pointing at the same URI;
+    the worker downloads via `load_spec_from_uri` before parsing.
+
+    Workaround for #749: SkyPilot's RunPod backend rejects programmatic
+    `task.update_file_mounts(...)` with a pubkey-overflow at pod-create time,
+    so the launcher ships the spec via R2 instead.
+    """
+    spec_key = f"{_LAUNCHER_SPEC_R2_PREFIX}/{cluster_name}.json"
+    rclone_dest = f"r2:{spec.r2_bucket}/{spec_key}"
+    spec_uri = f"r2://{spec.r2_bucket}/{spec_key}"
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+        f.write(spec.model_dump_json(indent=2))
+        local_path = f.name
+    try:
+        # `copyto` (vs `copy`) treats the destination as a file path, not a
+        # directory — the source-basename-preservation behavior of `copy` would
+        # land us at `r2:bucket/skypilot-launcher-specs/<cluster>.json/<tmpname>`
+        # which the worker can't address by URI.
+        args = [  # noqa: S607 — rclone resolved by host's PATH
+            "rclone",
+            "copyto",
+            "--checksum",
+            local_path,
+            rclone_dest,
+        ]
+        subprocess.check_call(args)  # noqa: S603 — args from validated spec/cluster_name
+    finally:
+        Path(local_path).unlink(missing_ok=True)
+    return spec_uri
 
 
 @click.command()
@@ -182,26 +221,26 @@ def main(
     spec = materialize_spec(config, config_id)
 
     resolved_cluster_name = cluster_name or f"synth-setter-smoke-{config_id[:8]}"
+
     # Per-cluster filename so parallel launches (CI matrix, local dev concurrent with CI on
     # the same host) don't clobber one another's spec.
     local_spec_path = (
         spec_out or LOCAL_SPEC_DIR / f"skypilot-launch-smoke-{resolved_cluster_name}.json"
     )
-
     local_spec_path.parent.mkdir(parents=True, exist_ok=True)
     # Pin encoding so JSON output is locale-independent (workers/CI run with varied locales).
     local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Materialized spec to {local_spec_path}")
 
-    # SkyPilot stages file_mount sources by moving them into its own staging dir; passing
-    # local_spec_path directly would leave nothing behind for downstream consumers (CI
-    # artifact upload, validate-spec). Stage a sibling copy and mount that instead.
-    mount_source = local_spec_path.with_suffix(".mount.json")
-    shutil.copyfile(local_spec_path, mount_source)
+    # Upload the spec to R2 and pass the URI to the worker via env var. Worker
+    # downloads via load_spec_from_uri. Avoids `task.update_file_mounts(...)`
+    # which triggers SkyPilot's RunPod-backend pubkey-overflow bug (#749).
+    spec_uri = upload_spec_to_r2(spec, resolved_cluster_name)
+    click.echo(f"Spec uploaded to {spec_uri}")
+    worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
 
     task = sky.Task.from_yaml(str(template_path))
     task.update_envs(worker_env)
-    task.update_file_mounts({WORKER_SPEC_PATH: str(mount_source)})
 
     # `sky.launch` is async (returns a RequestId). Launch with both
     # `idle_minutes_to_autostop=0` and `down=True` so the cluster has a predictable 1-min
@@ -212,64 +251,49 @@ def main(
     # (sky.launch, not sky.jobs.launch) — managed jobs require a separate cloud-storage
     # backend for controller state, which RunPod doesn't provide.
     #
-    # SkyPilot normally consumes mount_source by rename during staging, but a failure
-    # between the copyfile above and stage would leave one .mount.json per cluster behind
-    # on shared CI runners. Unlink in finally with missing_ok=True to keep the success
-    # path quiet. The inner finally drives teardown explicitly so the cluster always goes
-    # away on success, exception, or worker error — even if down=True or the autodown
-    # timer is silently dropped (observed on RunPod when setup runs cleanly but the job
-    # exits via a path that doesn't trigger the autodown scheduler).
+    # The inner finally drives teardown explicitly so the cluster always goes away on
+    # success, exception, or worker error — even if down=True or the autodown timer is
+    # silently dropped (observed on RunPod when setup runs cleanly but the job exits via
+    # a path that doesn't trigger the autodown scheduler).
+    click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
+    launch_request_id = sky.launch(
+        task,
+        cluster_name=resolved_cluster_name,
+        idle_minutes_to_autostop=0,
+        down=True,
+    )
+    launch_result = sky.stream_and_get(launch_request_id)
+    if launch_result is None or launch_result[0] is None:
+        raise click.ClickException(f"Launch yielded no job_id for cluster {resolved_cluster_name}")
+    job_id: int = launch_result[0]
     try:
-        click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
-        launch_request_id = sky.launch(
-            task,
-            cluster_name=resolved_cluster_name,
-            idle_minutes_to_autostop=0,
-            down=True,
+        # `sky.tail_logs(..., follow=True)` hangs on RunPod waiting for an SSH-stream EOF
+        # that never arrives after the worker exits. Poll `sky.job_status` for a terminal
+        # JobStatus instead, then dump the buffered worker log non-following so a traceback
+        # still surfaces in CI.
+        click.echo(f"Polling job {job_id} on {resolved_cluster_name} for completion")
+        final_status = _wait_for_job(
+            resolved_cluster_name, job_id, deadline_seconds=job_deadline_seconds
         )
-        # follow=True belongs on tail_logs (which actually tails an evolving stream); on a
-        # launch RequestId it just keeps stream_and_get open longer than needed. The launch
-        # request resolves when provisioning + setup + job submission complete; let it return
-        # then.
-        launch_result = sky.stream_and_get(launch_request_id)
-        if launch_result is None or launch_result[0] is None:
+        click.echo(f"Job {job_id} reached terminal status: {final_status.name}")
+
+        if final_status != sky.JobStatus.SUCCEEDED:
             raise click.ClickException(
-                f"Launch yielded no job_id for cluster {resolved_cluster_name}"
+                f"Worker job {job_id} ended with status {final_status.name}"
             )
-        job_id: int = launch_result[0]
-        try:
-            # Originally we used `sky.tail_logs(..., follow=True)` to block on the worker
-            # and stream its stdout. On RunPod, log tailing relies on SSH to the pod, and
-            # SSH gets flaky after the workload finishes — tail_logs(follow=True) waits
-            # for an EOF that never arrives and the launcher hangs even though the worker
-            # has terminated and uploaded artifacts to R2 (verified via `rclone ls`). Poll
-            # `sky.queue` for a terminal JobStatus instead, then dump the buffered worker
-            # log non-following so a traceback still surfaces in CI.
-            click.echo(f"Polling job {job_id} on {resolved_cluster_name} for completion")
-            final_status = _wait_for_job(
-                resolved_cluster_name, job_id, deadline_seconds=job_deadline_seconds
-            )
-            click.echo(f"Job {job_id} reached terminal status: {final_status.name}")
-
-            if final_status != sky.JobStatus.SUCCEEDED:
-                raise click.ClickException(
-                    f"Worker job {job_id} ended with status {final_status.name}"
-                )
-        finally:
-            # Always dump the worker log before teardown so a worker traceback
-            # surfaces in CI even when the launcher exited via the deadline path.
-            try:
-                click.echo(f"--- Worker log (job {job_id}) ---")
-                sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
-                click.echo(f"--- End worker log (job {job_id}) ---")
-            except Exception as e:  # noqa: BLE001 — best-effort diagnostic
-                click.echo(f"Worker log dump failed: {e}")
-
-            click.echo(f"Tearing down cluster: {resolved_cluster_name}")
-            down_request_id = sky.down(resolved_cluster_name)
-            sky.stream_and_get(down_request_id)
     finally:
-        mount_source.unlink(missing_ok=True)
+        # Always dump the worker log before teardown so a worker traceback
+        # surfaces in CI even when the launcher exited via the deadline path.
+        try:
+            click.echo(f"--- Worker log (job {job_id}) ---")
+            sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
+            click.echo(f"--- End worker log (job {job_id}) ---")
+        except Exception as e:  # noqa: BLE001 — best-effort diagnostic
+            click.echo(f"Worker log dump failed: {e}")
+
+        click.echo(f"Tearing down cluster: {resolved_cluster_name}")
+        down_request_id = sky.down(resolved_cluster_name)
+        sky.stream_and_get(down_request_id)
 
 
 def _wait_for_job(
