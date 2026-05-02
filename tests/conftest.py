@@ -1,8 +1,27 @@
 """This file prepares config fixtures for other tests."""
 
+import sys
+
+# Backfill shim (#489 chart history): the dev-snapshot Docker image was last
+# rebuilt at 822747d, which still has ``pytorch_lightning>=2.6.0`` in
+# requirements-torch.txt (the ``lightning``→``pytorch_lightning`` migration in
+# 450cf0b was reverted in c757a7a but the image hasn't been rebuilt). This
+# pre-fix branch (df4f983) imports from ``lightning``, so alias the package at
+# import time. Only enough aliases for src.utils.* to load — the VST test
+# itself doesn't touch Lightning.
+try:
+    import lightning  # noqa: F401
+except ImportError:
+    import pytorch_lightning as _pl
+
+    sys.modules["lightning"] = _pl
+    import pytorch_lightning.loggers as _pl_loggers
+
+    sys.modules["lightning.pytorch"] = _pl
+    sys.modules["lightning.pytorch.loggers"] = _pl_loggers
+
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import h5py
