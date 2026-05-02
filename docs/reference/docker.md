@@ -309,18 +309,22 @@ If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                              | Mutable? | Purpose                                                     |
-| ------------------------------------------------ | -------- | ----------------------------------------------------------- |
-| `tinaudio/synth-setter:latest`                   | Yes      | Convenience pointer to the most recent default-branch build |
-| `tinaudio/synth-setter:dev-snapshot`             | Yes      | Latest dev-snapshot (convenience)                           |
-| `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                             |
-| `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)    |
-| `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`         |
+| Tag                                              | Mutable? | Purpose                                                                          |
+| ------------------------------------------------ | -------- | -------------------------------------------------------------------------------- |
+| `tinaudio/synth-setter:latest`                   | Yes      | Convenience pointer to the most recent default-branch build                      |
+| `tinaudio/synth-setter:dev-snapshot`             | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
+| `tinaudio/synth-setter:dev-snapshot-<branch>`    | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
+| `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                                                  |
+| `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                         |
+| `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
 
-Mutable tags (`latest`, `dev-snapshot`) are only published on dispatch/schedule
-runs — not on pull-request build validations. `latest` is additionally gated
-to schedule runs or to `workflow_dispatch` with `git_ref=main`, so dispatching
-from main with a non-main `git_ref` does not overwrite `latest`.
+Both `latest` and `dev-snapshot` are gated to schedule runs or
+`workflow_dispatch` with `git_ref=main`. Feature-branch dispatches publish
+to `dev-snapshot-<branch>` instead of overwriting the floating `dev-snapshot`
+tag. This matters because other workflows (`test-skypilot-debug`,
+`test-dataset-generation`) consume `dev-snapshot` by default — diverting
+feature-branch builds to a per-branch tag prevents in-flight feature work
+from silently changing what those workflows run against.
 
 Smoke tests pull the SHA-pinned tag to avoid race conditions with concurrent
 workflow runs.
