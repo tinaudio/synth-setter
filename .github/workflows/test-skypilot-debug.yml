@@ -350,7 +350,6 @@ jobs:
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           CONFIG_PATH: ${{ matrix.config }}
           TEMPLATE: ${{ matrix.template }}
-          DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -o pipefail
@@ -364,7 +363,6 @@ jobs:
             --config "$CONFIG_PATH" \
             --template "$TEMPLATE" \
             --cluster-name "$CLUSTER_NAME" \
-            --job-deadline-seconds "$DEADLINE" \
             2>&1 | tee "$LOG_PATH"
 
       - name: Run launcher (launcher-docker mode)
@@ -377,7 +375,6 @@ jobs:
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           CONFIG_PATH: ${{ matrix.config }}
           TEMPLATE: ${{ matrix.template }}
-          DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -o pipefail
@@ -388,7 +385,6 @@ jobs:
             -e CLUSTER_NAME \
             -e CONFIG_PATH \
             -e TEMPLATE \
-            -e DEADLINE \
             -e RCLONE_CONFIG_R2_TYPE=s3 \
             -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
@@ -408,8 +404,7 @@ jobs:
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
-                --cluster-name "$CLUSTER_NAME" \
-                --job-deadline-seconds "$DEADLINE"
+                --cluster-name "$CLUSTER_NAME"
             ' \
             2>&1 | tee "$LOG_PATH"
 

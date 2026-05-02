@@ -144,40 +144,30 @@ def mock_rclone_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _succeeded_run(mock_sky: MagicMock) -> None:
-    """Configure `mock_sky` so the polled job reaches SUCCEEDED on first poll."""
-    import sky  # noqa: PLC0415 — real enum so JobStatus.is_terminal() works
+    """Configure `mock_sky` so launch + tail_logs + down all succeed.
 
-    mock_sky.JobStatus = sky.JobStatus
+    `sky.tail_logs` returns an int rc directly (per sky/core.py:1232) — 0 means
+    the worker job ended in SUCCEEDED, anything else means it ended in a
+    non-SUCCEEDED terminal status.
+    """
     mock_sky.launch.return_value = "launch-req"
-    mock_sky.job_status.return_value = "job-status-req"
     mock_sky.down.return_value = "down-req"
 
     responses = {
         "launch-req": (1, MagicMock()),
-        "job-status-req": {1: sky.JobStatus.SUCCEEDED},
         "down-req": None,
     }
     mock_sky.stream_and_get.side_effect = lambda req: responses[req]
     mock_sky.tail_logs.return_value = 0
 
 
-def _failed_run(mock_sky: MagicMock, status: Any) -> None:
-    """Configure `mock_sky` so the polled job reaches the given terminal `status`."""
-    _succeeded_run(mock_sky)
-    responses = {
-        "launch-req": (1, MagicMock()),
-        "job-status-req": {1: status},
-        "down-req": None,
-    }
-    mock_sky.stream_and_get.side_effect = lambda req: responses[req]
-
-
 @pytest.fixture()
 def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Replace the launcher's module-level `sky` with a MagicMock pre-configured for success.
 
-    Tests that need a different behavior call `_failed_run(...)` (or override individual
-    knobs like `mock_sky.tail_logs.side_effect`) on top of this fixture.
+    Tests that need a different behavior tweak knobs on the returned mock (e.g. set
+    `mock_sky.tail_logs.return_value = 100` for a worker failure, or
+    `mock_sky.tail_logs.side_effect = ...` for a transport raise).
     """
     fake = MagicMock()
     monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.sky", fake)
@@ -308,7 +298,7 @@ class TestMainCli:
         assert forwarded["RCLONE_CONFIG_R2_TYPE"] == "s3"
         assert forwarded["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "process-env-key"
 
-    # --- Happy-path slices (split from the original monolithic test) ---------
+    # --- Happy-path slices ---------------------------------------------------
 
     def test_materialized_spec_round_trips_as_pipeline_spec(
         self,
@@ -401,9 +391,8 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`sky.launch` keeps `down=True` for cleanup but uses a multi-minute autostop window — at
-        idle=0 SkyPilot tears down the cluster within ~1 min of the worker exiting, racing the
-        polling cadence and surfacing as ClusterDoesNotExist."""
+        """`sky.launch` keeps `down=True` for cleanup and an autostop window as a backstop in case
+        the explicit `sky.down` in `finally` is skipped by an unexpected exit path."""
         result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
         assert result.exit_code == 0, result.output
 
@@ -413,7 +402,7 @@ class TestMainCli:
         assert kwargs["idle_minutes_to_autostop"] >= 2
         assert kwargs["down"] is True
 
-    def test_tail_logs_invoked_with_follow_false(
+    def test_tail_logs_invoked_with_follow_true(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -422,11 +411,12 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`sky.tail_logs` is called once with follow=False (buffered post-completion dump)."""
+        """`sky.tail_logs` is called with follow=True — the launcher streams logs in real time
+        instead of polling job_status and dumping a buffered tail."""
         result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
         assert result.exit_code == 0, result.output
         mock_sky.tail_logs.assert_called_once_with(
-            cluster_name="smoke-job-1", job_id=1, follow=False
+            cluster_name="smoke-job-1", job_id=1, follow=True
         )
 
     def test_teardown_runs_on_success(
@@ -481,7 +471,7 @@ class TestMainCli:
         assert result.exit_code == 0, result.output
         assert explicit.is_file()
 
-    def test_worker_failed_status_fails_launcher(
+    def test_worker_failed_rc_fails_launcher(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -490,95 +480,17 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """A worker job in a non-SUCCEEDED terminal status must fail the launcher."""
-        import sky  # noqa: PLC0415
-
-        _failed_run(mock_sky, sky.JobStatus.FAILED)
+        """A non-zero `tail_logs` rc means the worker job ended in a non-SUCCEEDED terminal status;
+        the launcher must surface that as a non-zero exit and still tear down the cluster."""
+        mock_sky.tail_logs.return_value = 100
 
         result = _invoke(config_yaml, template_yaml, env_file)
         assert result.exit_code != 0
-        assert "ended with status FAILED" in result.output
+        assert "non-SUCCEEDED" in result.output
+        assert "rc=100" in result.output
         mock_sky.down.assert_called_once()
 
     # --- Edge cases ----------------------------------------------------------
-
-    def test_deadline_timeout_raises(
-        self,
-        config_yaml: Path,
-        template_yaml: Path,
-        env_file: Path,
-        patch_materialize_io: None,
-        local_spec_dir: Path,
-        mock_sky: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A job that never reaches a terminal status fails the launcher with a deadline error."""
-        import sky  # noqa: PLC0415
-
-        # Override only job_status to keep the polled status non-terminal forever.
-        responses = {
-            "launch-req": (1, MagicMock()),
-            "job-status-req": {1: sky.JobStatus.RUNNING},
-            "down-req": None,
-        }
-        mock_sky.stream_and_get.side_effect = lambda req: responses[req]
-
-        # Zero sleep between polls so the deadline-bounded loop completes synchronously.
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch_smoke._JOB_POLL_INTERVAL_SECONDS", 0
-        )
-
-        result = _invoke(config_yaml, template_yaml, env_file, "--job-deadline-seconds", "0")
-        assert result.exit_code != 0
-        assert "did not reach a terminal status" in result.output
-        mock_sky.down.assert_called_once()
-
-    def test_cluster_not_up_error_is_swallowed_keeps_polling(
-        self,
-        config_yaml: Path,
-        template_yaml: Path,
-        env_file: Path,
-        patch_materialize_io: None,
-        local_spec_dir: Path,
-        mock_sky: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """`sky.job_status` raises ClusterNotUpError when the cluster is still INIT (provisioning
-        slow).
-
-        The launcher's poll loop must treat that as 'not yet ready, keep polling' instead of
-        crashing — otherwise a slow RunPod provisioning window fails the launcher even though the
-        cluster will reach UP eventually.
-        """
-        import sky  # noqa: PLC0415
-        from sky import ClusterStatus  # noqa: PLC0415
-        from sky.exceptions import ClusterNotUpError  # noqa: PLC0415
-
-        first_call = [True]
-
-        def stream_and_get(req: str) -> object:
-            if req == "launch-req":
-                return (1, MagicMock())
-            if req == "down-req":
-                return None
-            if req == "job-status-req":
-                if first_call[0]:
-                    first_call[0] = False
-                    raise ClusterNotUpError("provisioning", cluster_status=ClusterStatus.INIT)
-                return {1: sky.JobStatus.SUCCEEDED}
-            raise AssertionError(f"unexpected request: {req}")
-
-        mock_sky.stream_and_get.side_effect = stream_and_get
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch_smoke._JOB_POLL_INTERVAL_SECONDS", 0
-        )
-
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-cnu")
-        assert result.exit_code == 0, result.output
-        assert "cluster not yet UP" in result.output
-        assert "retrying" in result.output
-        assert "status=SUCCEEDED" in result.output
-        mock_sky.down.assert_called_once()
 
     def test_launch_returning_none_job_id_aborts(
         self,
@@ -589,7 +501,7 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """If sky.launch yields no job_id the launcher aborts before polling/teardown."""
+        """If sky.launch yields no job_id the launcher aborts before tailing/teardown."""
         responses = {
             "launch-req": (None, MagicMock()),
         }
@@ -598,6 +510,8 @@ class TestMainCli:
         result = _invoke(config_yaml, template_yaml, env_file)
         assert result.exit_code != 0
         assert "no job_id" in result.output.lower()
+        mock_sky.tail_logs.assert_not_called()
+        mock_sky.down.assert_not_called()
 
     def test_teardown_runs_when_tail_logs_raises(
         self,
@@ -608,16 +522,12 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """A `sky.tail_logs` failure is observability-only — must not abort the launcher or skip
-        cluster teardown."""
+        """A `sky.tail_logs` transport error must not skip cluster teardown — the cluster always
+        comes down even if the log-stream side raised."""
         mock_sky.tail_logs.side_effect = RuntimeError("boom")
 
         result = _invoke(config_yaml, template_yaml, env_file)
-        # Worker job reached SUCCEEDED via the polling loop, so even though the worker-log
-        # dump in the finally raised, the launcher should still exit cleanly. The "boom"
-        # message is logged via click.echo as part of the diagnostic block.
-        assert result.exit_code == 0, result.output
-        assert "Worker log dump failed: boom" in result.output
+        assert result.exit_code != 0
         mock_sky.down.assert_called_once()
 
     def test_local_spec_persists_for_artifact_upload_even_on_launch_exception(
@@ -632,7 +542,6 @@ class TestMainCli:
     ) -> None:
         """If sky.launch raises after the launcher materialized + R2-uploaded the spec, the local
         spec file under LOCAL_SPEC_DIR is still around for downstream artifact upload."""
-        # Mock the rclone upload subprocess so this test doesn't need a real R2 endpoint.
         monkeypatch.setattr(
             "pipeline.entrypoints.skypilot_launch_smoke.subprocess.check_call",
             lambda args: None,

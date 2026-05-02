@@ -1,9 +1,11 @@
 """Launch the smoke `generate_dataset` run on RunPod via SkyPilot.
 
 Materializes a `DatasetPipelineSpec` locally from the smoke config, ships the
-frozen spec into the worker via `task.update_file_mounts`, forwards the
-worker-side env from a `.env` file via `task.update_envs`, and launches
-an unmanaged SkyPilot task (`sky.launch`) that runs the existing container CLI.
+frozen spec to the worker via R2 (per #749 — RunPod backend rejects
+`task.update_file_mounts(...)` with a pubkey-overflow at pod-create time),
+forwards worker-side env from a `.env` file via `task.update_envs`, and
+launches an unmanaged SkyPilot task (`sky.launch`) that runs the existing
+container CLI. Logs stream live via `sky.tail_logs(..., follow=True)`.
 
 `sky.jobs.launch` (managed jobs) requires a cloud-storage backend for
 controller state, which RunPod doesn't provide; cluster-level launch is
@@ -19,13 +21,11 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 import click
 import sky
 from dotenv import dotenv_values
-from sky.exceptions import ClusterDoesNotExist, ClusterNotUpError
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
@@ -57,8 +57,9 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
     "WANDB_API_KEY",
 )
 
-_JOB_POLL_INTERVAL_SECONDS = 15
-_JOB_DEADLINE_SECONDS = 25 * 60  # bound the poll loop so a stuck job can't block CI forever
+# `sky.tail_logs(..., follow=True)` returns 0 on success, 100 if the worker
+# job ended in a non-SUCCEEDED terminal status (per sky/core.py docstring).
+_TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "runpod-smoke-shard.yaml"
@@ -187,25 +188,12 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
         "$TMPDIR (avoids parallel-run collisions on a shared host)."
     ),
 )
-@click.option(
-    "--job-deadline-seconds",
-    type=int,
-    default=_JOB_DEADLINE_SECONDS,
-    show_default=True,
-    help=(
-        "Wall-clock cap on the job-status polling loop. The launcher fails fast if the "
-        "worker job has not reached a terminal status within this window — useful in "
-        "debug workflows where we want a stuck cluster to surface in seconds rather "
-        "than minutes."
-    ),
-)
 def main(
     config_path: Path,
     template_path: Path,
     env_file_path: Path,
     cluster_name: str | None,
     spec_out: Path | None,
-    job_deadline_seconds: int,
 ) -> None:
     """Launch the smoke `generate_dataset` run on RunPod via SkyPilot."""
     worker_env = resolve_worker_env(env_file_path)
@@ -232,9 +220,6 @@ def main(
     local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Materialized spec to {local_spec_path}")
 
-    # Upload the spec to R2 and pass the URI to the worker via env var. Worker
-    # downloads via load_spec_from_uri. Avoids `task.update_file_mounts(...)`
-    # which triggers SkyPilot's RunPod-backend pubkey-overflow bug (#749).
     spec_uri = upload_spec_to_r2(spec, resolved_cluster_name)
     click.echo(f"Spec uploaded to {spec_uri}")
     worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
@@ -242,20 +227,10 @@ def main(
     task = sky.Task.from_yaml(str(template_path))
     task.update_envs(worker_env)
 
-    # `sky.launch` is async (returns a RequestId). `down=True` ensures cleanup; we set
-    # `idle_minutes_to_autostop=5` rather than 0 to leave a window between job-end and
-    # cluster-down for `_wait_for_job` to catch the terminal status — at idle=0 SkyPilot
-    # bumps to 1 min internally, which races our 15-second poll cadence and leaves the
-    # cluster vanished by the time we re-poll, surfacing as ClusterDoesNotExist.
-    # `stream_and_get` on the launch request blocks until provisioning + setup +
-    # job-submission completes; it returns `(job_id, handle)`. Non-managed launch
-    # (sky.launch, not sky.jobs.launch) — managed jobs require a separate cloud-storage
-    # backend for controller state, which RunPod doesn't provide.
-    #
-    # The inner finally drives teardown explicitly so the cluster always goes away on
-    # success, exception, or worker error — even if down=True or the autodown timer is
-    # silently dropped (observed on RunPod when setup runs cleanly but the job exits via
-    # a path that doesn't trigger the autodown scheduler).
+    # Non-managed launch (sky.launch, not sky.jobs.launch) — managed jobs require a separate
+    # cloud-storage backend for controller state, which RunPod doesn't provide. `down=True`
+    # ensures cleanup on launcher exit; `idle_minutes_to_autostop=5` is a backstop in case the
+    # launcher exits via an unexpected path that skips the explicit `sky.down` in `finally`.
     click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
     launch_request_id = sky.launch(
         task,
@@ -268,81 +243,17 @@ def main(
         raise click.ClickException(f"Launch yielded no job_id for cluster {resolved_cluster_name}")
     job_id: int = launch_result[0]
     try:
-        # `sky.tail_logs(..., follow=True)` hangs on RunPod waiting for an SSH-stream EOF
-        # that never arrives after the worker exits. Poll `sky.job_status` for a terminal
-        # JobStatus instead, then dump the buffered worker log non-following so a traceback
-        # still surfaces in CI.
-        click.echo(f"Polling job {job_id} on {resolved_cluster_name} for completion")
-        final_status = _wait_for_job(
-            resolved_cluster_name, job_id, deadline_seconds=job_deadline_seconds
-        )
-        click.echo(f"Job {job_id} reached terminal status: {final_status.name}")
-
-        if final_status != sky.JobStatus.SUCCEEDED:
+        click.echo(f"Streaming logs for job {job_id} on {resolved_cluster_name}")
+        rc = sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=True)
+        click.echo(f"Job {job_id} log stream ended with rc={rc}")
+        if rc != _TAIL_LOGS_RC_SUCCESS:
             raise click.ClickException(
-                f"Worker job {job_id} ended with status {final_status.name}"
+                f"Worker job {job_id} ended in a non-SUCCEEDED status (tail_logs rc={rc})"
             )
     finally:
-        # Always dump the worker log before teardown so a worker traceback
-        # surfaces in CI even when the launcher exited via the deadline path.
-        try:
-            click.echo(f"--- Worker log (job {job_id}) ---")
-            sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=False)
-            click.echo(f"--- End worker log (job {job_id}) ---")
-        except Exception as e:  # noqa: BLE001 — best-effort diagnostic
-            click.echo(f"Worker log dump failed: {e}")
-
         click.echo(f"Tearing down cluster: {resolved_cluster_name}")
         down_request_id = sky.down(resolved_cluster_name)
         sky.stream_and_get(down_request_id)
-
-
-def _wait_for_job(
-    cluster_name: str, job_id: int, deadline_seconds: int = _JOB_DEADLINE_SECONDS
-) -> sky.JobStatus:
-    """Poll `sky.job_status` until the given job reaches a terminal status, then return it.
-
-    Used in place of `sky.tail_logs(follow=True)` because the latter hangs on RunPod
-    waiting for an SSH-stream EOF that never arrives after the worker exits. Polls every
-    `_JOB_POLL_INTERVAL_SECONDS` seconds and times out after `deadline_seconds` so a
-    truly stuck worker can't block CI forever.
-
-    `sky.job_status` raises `sky.exceptions.ClusterNotUpError` when the cluster is still
-    in INIT (provisioning slow) or transitioning. That's a "not yet ready, keep polling"
-    signal — not a terminal failure — so swallow it as long as we're inside the deadline.
-    The caller's deadline still bounds total wait, so a cluster that genuinely never
-    transitions to UP fails on the deadline check below, not on the first job_status call.
-
-    `ClusterDoesNotExist` means the cluster was torn down between polls — typically by
-    SkyPilot's autostop timer firing after the worker job completed. With
-    `idle_minutes_to_autostop=5` on launch this should be rare, but raise a clean error
-    rather than letting the unhandled exception leak into CI logs.
-    """
-    deadline = time.monotonic() + deadline_seconds
-    while time.monotonic() < deadline:
-        try:
-            statuses = sky.stream_and_get(sky.job_status(cluster_name, [job_id])) or {}
-        except ClusterNotUpError as exc:
-            click.echo(f"  cluster not yet UP ({exc.cluster_status}); retrying")
-            time.sleep(_JOB_POLL_INTERVAL_SECONDS)
-            continue
-        except ClusterDoesNotExist as exc:
-            raise click.ClickException(
-                f"Cluster {cluster_name!r} vanished mid-poll ({exc}); job {job_id} terminal "
-                "status unknown. Likely autostop fired before the next poll caught the "
-                "transition — bump idle_minutes_to_autostop or shorten _JOB_POLL_INTERVAL_SECONDS."
-            ) from exc
-        status = statuses.get(job_id)
-        if status is None:
-            click.echo(f"  job {job_id} not yet visible; retrying")
-        else:
-            click.echo(f"  status={status.name}")
-            if status.is_terminal():
-                return status
-        time.sleep(_JOB_POLL_INTERVAL_SECONDS)
-    raise click.ClickException(
-        f"Job {job_id} did not reach a terminal status within {deadline_seconds} seconds"
-    )
 
 
 if __name__ == "__main__":
