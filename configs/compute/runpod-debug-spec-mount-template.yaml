@@ -1,0 +1,38 @@
+# SkyPilot task template for RunPod — DEBUG variant: spec-mount canary.
+#
+# Layer 3 in the progressive triage matrix: builds on `noop` / `image-pull` by
+# also exercising SkyPilot's `file_mounts` (which the production launcher uses
+# via `task.update_file_mounts(...)` to ship the materialized DatasetPipelineSpec
+# to the worker). PASS = file_mounts upload during provisioning works on RunPod
+# and the worker can read the mounted file. FAIL = something about the mount
+# upload extends pod-boot timing past the SSH-readiness window, OR mounts land
+# in unexpected paths / permissions on RunPod.
+#
+# Mounts an in-repo file (this template itself) so we don't need a fixture —
+# the worker just verifies the file is present and non-empty.
+
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+file_mounts:
+  /home/build/synth-setter/data/spec-mount-probe.txt: configs/compute/runpod-debug-spec-mount-template.yaml
+
+setup: |
+  echo "synth-setter debug-spec-mount worker ready (host: $(hostname))"
+
+run: |
+  echo "spec-mount probe: file size = $(wc -c < /home/build/synth-setter/data/spec-mount-probe.txt) bytes"
+  echo "skypilot-debug spec-mount job done (host: $(hostname))"
