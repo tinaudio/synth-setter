@@ -179,25 +179,25 @@ jobs:
             template: configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher
-            config: configs/dataset/ci-smoke-test.yaml
+            config: configs/dataset/runpod-smoke-shard.yaml
           - variant: launcher-in-docker
             mode: launcher-docker
             template: configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher-docker
-            config: configs/dataset/ci-smoke-test.yaml
+            config: configs/dataset/runpod-smoke-shard.yaml
           - variant: generate-tiny
             mode: launcher-runner
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny
-            config: configs/dataset/ci-smoke-test.yaml
+            config: configs/dataset/runpod-smoke-shard.yaml
           - variant: generate-tiny-in-docker
             mode: launcher-docker
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny-docker
-            config: configs/dataset/ci-smoke-test.yaml
+            config: configs/dataset/runpod-smoke-shard.yaml
 
     steps:
       - name: Checkout

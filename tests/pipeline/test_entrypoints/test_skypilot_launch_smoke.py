@@ -79,7 +79,7 @@ def patch_materialize_io(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture()
 def config_yaml(tmp_path: Path, fake_plugin: Path) -> Path:
     """Write a valid DatasetConfig YAML pointed at the fake plugin."""
-    path = tmp_path / "ci-smoke-test.yaml"
+    path = tmp_path / "runpod-smoke-shard.yaml"
     path.write_text(yaml.safe_dump(_make_config(fake_plugin), sort_keys=False))
     return path
 

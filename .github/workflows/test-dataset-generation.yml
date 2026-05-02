@@ -1,7 +1,7 @@
 name: Test Dataset Generation
 
 # Exercises the SkyPilot RunPod launcher (pipeline/entrypoints/skypilot_launch_smoke.py)
-# with the CI smoke-test config (configs/dataset/ci-smoke-test.yaml — single-shard
+# with the CI smoke-test config (configs/dataset/runpod-smoke-shard.yaml — single-shard
 # round-trip). The launcher runs
 # inside the Docker image so materialize_spec can import pedalboard via the
 # headless X wrapper. SkyPilot streams worker logs back and waits for the
@@ -25,7 +25,7 @@ on:
       dataset_config:
         description: "Path to dataset config YAML (under configs/dataset/)"
         required: true
-        default: "configs/dataset/ci-smoke-test.yaml"
+        default: "configs/dataset/runpod-smoke-shard.yaml"
       docker_image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -63,8 +63,8 @@ jobs:
       DATASET_CONFIG: >-
         ${{
           github.event_name == 'pull_request'
-            && 'configs/dataset/ci-smoke-test.yaml'
-            || (inputs.dataset_config || 'configs/dataset/ci-smoke-test.yaml')
+            && 'configs/dataset/runpod-smoke-shard.yaml'
+            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}

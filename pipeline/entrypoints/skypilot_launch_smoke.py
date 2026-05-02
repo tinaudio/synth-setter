@@ -61,7 +61,7 @@ _JOB_POLL_INTERVAL_SECONDS = 15
 _JOB_DEADLINE_SECONDS = 25 * 60  # bound the poll loop so a stuck job can't block CI forever
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "ci-smoke-test.yaml"
+DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "runpod-smoke-shard.yaml"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 
