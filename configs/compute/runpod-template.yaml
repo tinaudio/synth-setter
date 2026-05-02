@@ -17,14 +17,21 @@
 
 resources:
   cloud: runpod
-  # CPU-only: generate_dataset.py is CPU-bound (pedalboard renders Surge XT
-  # on host, no CUDA path). cpus: 2+ excludes 1-vCPU tiers whose 10 GB disk
-  # cap can't fit the dev-snapshot image; memory: 4+ is the worker's floor
-  # under pedalboard. SkyPilot picks the cheapest matching CPU tier.
-  cpus: 2+
-  memory: 4+
+  # Any one cheap GPU is enough for the smoke run (32 samples). The set is wide
+  # so a stocked-out tier doesn't fail the launch — SkyPilot picks the cheapest
+  # available match. Add/remove tiers as RunPod inventory drifts.
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
   use_spot: false
-  disk_size: 20
+  disk_size: 50
   image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 # Placeholders. Real values are injected by the launcher via update_envs.
