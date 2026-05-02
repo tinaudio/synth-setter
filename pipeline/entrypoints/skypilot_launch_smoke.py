@@ -1,27 +1,15 @@
 """Launch the smoke `generate_dataset` run on RunPod via SkyPilot.
 
-Materializes a `DatasetPipelineSpec` locally from the smoke config, ships the
-frozen spec to the worker via R2 (per #749 — RunPod backend rejects
-`task.update_file_mounts(...)` with a pubkey-overflow at pod-create time),
-forwards worker-side env from a `.env` file via `task.update_envs`, and
-launches an unmanaged SkyPilot task (`sky.launch`) that runs the existing
-container CLI. Logs stream live via `sky.tail_logs(..., follow=True)`.
+Materializes a spec, ships it via R2 (file_mounts blocked by #749), forwards
+worker env via `task.update_envs`, and `sky.launch`-es an unmanaged task with
+live `sky.tail_logs(follow=True)`. Cluster-level launch (not jobs.launch) —
+RunPod has no managed-jobs controller backend.
 
-With `--num-workers N>1` the launcher fans out N independent single-node
-SkyPilot clusters in parallel (RunPod's backend doesn't support `num_nodes
-> 1`). Each rank gets ``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS`` injected via
-``task.update_envs``. The spec is materialized + uploaded to R2 once and
-shared across ranks, so all workers write shards under the same
-``r2_prefix``. ``pipeline.partitioning.get_my_shards`` slices each
-worker's shard ownership from the rank.
+`--num-workers N>1` fans out N single-node clusters in parallel (RunPod doesn't
+support num_nodes>1). Each rank gets SYNTH_SETTER_WORKER_RANK /
+SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
 
-`sky.jobs.launch` (managed jobs) requires a cloud-storage backend for
-controller state, which RunPod doesn't provide; cluster-level launch is
-sufficient for this single-shard smoke probe.
-
-This is the first scaffolding under the SkyPilot integration epic (#534).
-No `compute_config` schema, no `pipeline generate --backend skypilot` CLI —
-those land in the Phase A–C PRs.
+First scaffolding under #534. No `compute_config` schema yet — Phase A–C PRs.
 """
 
 from __future__ import annotations
@@ -40,24 +28,14 @@ from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
 
-# R2 prefix for launcher-uploaded specs. Each cluster gets a per-name key so
-# parallel launches don't collide. The worker downloads the spec from this URI
-# (see `pipeline.entrypoints.generate_dataset.load_spec_from_uri`) — we ship
-# specs through R2 instead of `task.update_file_mounts(...)` because that
-# SkyPilot RunPod-backend code path triggers a pubkey-overflow rejection at
-# pod-create time (see #749).
+# Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
 _WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
 
-# Worker-side env vars the launcher forwards via `task.update_envs`. Each is
-# resolved from the optional .env file first, then from the launcher's process
-# env, then skipped if neither has it. Keep in sync with the `envs:` block in
-# `configs/compute/runpod-template.yaml` — the template lists the same keys
-# (with empty defaults) so the SkyPilot Task validates as fully-specified
-# even when the launcher hasn't filled all of them.
-#
-# `WORKER_SPEC_URI` is also forwarded but isn't resolved from .env / process
-# env — the launcher injects the per-cluster R2 URI it uploads the spec to.
+# Forwarded via task.update_envs; each resolved from .env then process env.
+# Keep in sync with the envs: block in configs/compute/runpod-template.yaml.
+# WORKER_GIT_REF: pod fetches+checks out this ref before generate_dataset, to
+# bypass dev-snapshot image-bake lag in PR CI.
 _WORKER_ENV_KEYS: tuple[str, ...] = (
     "RCLONE_CONFIG_R2_TYPE",
     "RCLONE_CONFIG_R2_PROVIDER",
@@ -65,14 +43,10 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
     "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
     "RCLONE_CONFIG_R2_ENDPOINT",
     "WANDB_API_KEY",
-    # When set, the pod's `run:` block fetches+checks out this git ref before
-    # invoking generate_dataset — unblocks PR-CI from the dev-snapshot image
-    # bake lag (image source is N PRs stale; runtime sync brings it to head).
     "WORKER_GIT_REF",
 )
 
-# `sky.tail_logs(..., follow=True)` returns 0 on success, 100 if the worker
-# job ended in a non-SUCCEEDED terminal status (per sky/core.py docstring).
+# sky.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -289,14 +263,17 @@ def _run_workers(
 ) -> list[int]:
     """Launch len(cluster_names) single-node clusters in parallel; return tail_logs rc per rank.
 
-    Each rank gets its own ``sky.Task`` with ``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS`` injected via
-    ``update_envs``. Provisioning + log streaming
-    run concurrently in a ``ThreadPoolExecutor`` (one thread per rank), and all clusters get
-    torn down in parallel in the finally block regardless of which ranks succeeded.
+    Each rank's task gets SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected.
+    All clusters tear down in the finally block regardless of which ranks succeeded.
+    A rank's slot in the result is ``-1`` if launch/stream raised before tail_logs returned.
 
-    A rank's slot in the returned list is ``-1`` if launching/streaming raised before
-    ``sky.tail_logs`` could return; the caller treats anything != ``_TAIL_LOGS_RC_SUCCESS`` as
-    a failure for that rank.
+    Args:
+        worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
+        template_path: SkyPilot Task YAML to instantiate per rank.
+        cluster_names: One name per rank; ``len()`` defines the world size.
+
+    Returns:
+        Per-rank tail_logs return code (``0`` = SUCCEEDED, anything else = failed).
     """
     num_workers = len(cluster_names)
     rcs: list[int] = [-1] * num_workers

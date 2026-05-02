@@ -1,8 +1,6 @@
-# CI smoke-test config — minimum viable generation run.
-# Used by the dataset-generation workflow on pull_request events.
-# Shard count matches the workflow's SkyPilot num_nodes so each worker
-# renders exactly one shard and the partitioning code path is exercised
-# (rather than 2 of 3 workers sitting idle on an empty range).
+# CI smoke-test config (test-dataset-generation workflow on PR).
+# num_shards matches --num-workers so each rank renders exactly one shard
+# and the partitioner is actually exercised.
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3
 output_format: hdf5
