@@ -1,15 +1,21 @@
 """Tests for pipeline.partitioning.
 
-Pure functions, no env reads — every test passes ``rank`` / ``world`` /
-``total_shards`` as direct arguments and asserts on the returned range or
-the raised exception.
+``get_my_shards`` and ``validate_rank_world`` are pure — tests pass
+``rank`` / ``world`` / ``total_shards`` as direct arguments. ``read_rank_world_from_env``
+is the imperative shell that reads ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES``
+from the environment; tests inject env via ``monkeypatch.setenv`` /
+``monkeypatch.delenv``.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from pipeline.partitioning import get_my_shards, validate_rank_world
+from pipeline.partitioning import (
+    get_my_shards,
+    read_rank_world_from_env,
+    validate_rank_world,
+)
 
 
 class TestSingleWorker:
@@ -117,3 +123,75 @@ class TestValidation:
         """World < 1 is invalid and raises ValueError naming the offending world."""
         with pytest.raises(ValueError, match="world=0"):
             validate_rank_world(rank=0, world=0)
+
+
+class TestReadRankWorldFromEnv:
+    """``read_rank_world_from_env`` reads SKYPILOT env vars with no defaults.
+
+    The silent-default behavior is intentionally refused: a worker invoked
+    with a multi-shard spec but no partition env would otherwise duplicate
+    every shard across every node. Any missing/malformed/out-of-bounds env
+    must raise — callers (generate_dataset.run, verify_skypilot_env) propagate.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Strip SkyPilot rank/world env vars from the test process for isolation."""
+        monkeypatch.delenv("SKYPILOT_NODE_RANK", raising=False)
+        monkeypatch.delenv("SKYPILOT_NUM_NODES", raising=False)
+
+    def test_returns_rank_world_tuple_when_env_valid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both vars set + valid → returns (rank, world) as ints."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "2")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "4")
+        assert read_rank_world_from_env() == (2, 4)
+
+    def test_both_missing_raises_with_both_names_in_message(self) -> None:
+        """Both vars missing → ValueError naming both."""
+        with pytest.raises(ValueError) as excinfo:
+            read_rank_world_from_env()
+        message = str(excinfo.value)
+        assert "SKYPILOT_NODE_RANK" in message
+        assert "SKYPILOT_NUM_NODES" in message
+
+    def test_only_rank_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Only rank var missing → ValueError naming rank."""
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "1")
+        with pytest.raises(ValueError, match="SKYPILOT_NODE_RANK"):
+            read_rank_world_from_env()
+
+    def test_only_world_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Only world var missing → ValueError naming world."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "0")
+        with pytest.raises(ValueError, match="SKYPILOT_NUM_NODES"):
+            read_rank_world_from_env()
+
+    def test_non_integer_rank_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-integer rank ('abc') → ValueError naming SKYPILOT_NODE_RANK."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "abc")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "1")
+        with pytest.raises(ValueError, match="SKYPILOT_NODE_RANK"):
+            read_rank_world_from_env()
+
+    def test_non_integer_world_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-integer world ('xyz') → ValueError naming SKYPILOT_NUM_NODES."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "0")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "xyz")
+        with pytest.raises(ValueError, match="SKYPILOT_NUM_NODES"):
+            read_rank_world_from_env()
+
+    def test_out_of_bounds_rank_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Rank >= world is rejected by validate_rank_world."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "5")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "2")
+        with pytest.raises(ValueError, match="rank=5"):
+            read_rank_world_from_env()
+
+    def test_world_zero_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """World=0 violates the world>=1 invariant."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "0")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "0")
+        with pytest.raises(ValueError, match="world=0"):
+            read_rank_world_from_env()

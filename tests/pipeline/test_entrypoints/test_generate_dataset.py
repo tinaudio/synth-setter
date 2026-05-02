@@ -109,11 +109,17 @@ class TestRun:
     """Run() orchestrates: serialize → upload spec → generate → upload shard."""
 
     @pytest.fixture(autouse=True)
-    def _clear_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Strip SkyPilot rank/world env vars from the test process so the single-worker-default
-        tests see the helper's intended defaults regardless of where pytest runs from."""
-        monkeypatch.delenv("SKYPILOT_NODE_RANK", raising=False)
-        monkeypatch.delenv("SKYPILOT_NUM_NODES", raising=False)
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default to a single-worker rank/world for tests that don't care about partitioning.
+
+        ``run()`` now requires ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES`` to be set
+        (silent default removed — see ``read_rank_world_from_env``). Most tests in this class
+        exercise behaviors orthogonal to partitioning, so set rank=0/world=1 by default; tests
+        that probe multi-worker partitioning override via ``monkeypatch.setenv`` and tests for
+        the missing-env contract override via ``monkeypatch.delenv``.
+        """
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "0")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "1")
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
@@ -414,6 +420,32 @@ class TestRun:
 
         with pytest.raises(RuntimeError, match="Renderer version mismatch"):
             run(spec)
+        mock_rclone.assert_not_called()
+        mock_check_call.assert_not_called()
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_raises_when_skypilot_env_missing(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing SKYPILOT env → ValueError before any rclone or subprocess work.
+
+        Removes the silent-default smell where a worker invoked without partition env would
+        otherwise duplicate every shard across every node.
+        """
+        monkeypatch.delenv("SKYPILOT_NODE_RANK", raising=False)
+        monkeypatch.delenv("SKYPILOT_NUM_NODES", raising=False)
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        with pytest.raises(ValueError) as excinfo:
+            run(spec)
+        message = str(excinfo.value)
+        assert "SKYPILOT_NODE_RANK" in message
+        assert "SKYPILOT_NUM_NODES" in message
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
 

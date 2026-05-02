@@ -7,6 +7,14 @@ forwards worker-side env from a `.env` file via `task.update_envs`, and
 launches an unmanaged SkyPilot task (`sky.launch`) that runs the existing
 container CLI. Logs stream live via `sky.tail_logs(..., follow=True)`.
 
+With `--num-workers N>1` the launcher fans out N independent single-node
+SkyPilot clusters in parallel (RunPod's backend doesn't support `num_nodes
+> 1`). Each rank gets ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES``
+injected via ``task.update_envs``; the spec is materialized + uploaded to
+R2 once and shared across ranks, so all workers write shards under the same
+``r2_prefix``. ``pipeline.partitioning.get_my_shards`` slices each worker's
+shard ownership from the synthetic rank.
+
 `sky.jobs.launch` (managed jobs) requires a cloud-storage backend for
 controller state, which RunPod doesn't provide; cluster-level launch is
 sufficient for this single-shard smoke probe.
@@ -21,6 +29,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import click
@@ -60,6 +69,13 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
 # `sky.tail_logs(..., follow=True)` returns 0 on success, 100 if the worker
 # job ended in a non-SUCCEEDED terminal status (per sky/core.py docstring).
 _TAIL_LOGS_RC_SUCCESS = 0
+
+# Synthetic rank/world env vars the launcher injects per-cluster in the
+# `--num-workers N>1` fan-out path. Names match what SkyPilot would set
+# natively for a multi-node task on a backend that supports it (e.g. AWS),
+# so the worker code path is identical regardless of how rank/world arrived.
+_RANK_ENV = "SKYPILOT_NODE_RANK"
+_WORLD_ENV = "SKYPILOT_NUM_NODES"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "runpod-smoke-shard.yaml"
@@ -188,14 +204,31 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
         "$TMPDIR (avoids parallel-run collisions on a shared host)."
     ),
 )
+@click.option(
+    "--num-workers",
+    type=int,
+    default=1,
+    show_default=True,
+    help=(
+        "Number of single-node SkyPilot clusters to fan out in parallel. RunPod's backend "
+        "does not support num_nodes>1, so we synthesize multi-worker partitioning by launching "
+        "N independent clusters and injecting SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES per "
+        "rank. Each cluster downloads the same materialized spec and uses "
+        "pipeline.partitioning.get_my_shards to slice its share."
+    ),
+)
 def main(
     config_path: Path,
     template_path: Path,
     env_file_path: Path,
     cluster_name: str | None,
     spec_out: Path | None,
+    num_workers: int,
 ) -> None:
     """Launch the smoke `generate_dataset` run on RunPod via SkyPilot."""
+    if num_workers < 1:
+        raise click.ClickException(f"--num-workers must be >= 1, got {num_workers}")
+
     worker_env = resolve_worker_env(env_file_path)
     if not worker_env:
         raise click.ClickException(
@@ -208,52 +241,120 @@ def main(
     config_id = dataset_config_id_from_path(config_path)
     spec = materialize_spec(config, config_id)
 
-    resolved_cluster_name = cluster_name or f"synth-setter-smoke-{config_id[:8]}"
+    base_cluster_name = cluster_name or f"synth-setter-smoke-{config_id[:8]}"
 
     # Per-cluster filename so parallel launches (CI matrix, local dev concurrent with CI on
     # the same host) don't clobber one another's spec.
     local_spec_path = (
-        spec_out or LOCAL_SPEC_DIR / f"skypilot-launch-smoke-{resolved_cluster_name}.json"
+        spec_out or LOCAL_SPEC_DIR / f"skypilot-launch-smoke-{base_cluster_name}.json"
     )
     local_spec_path.parent.mkdir(parents=True, exist_ok=True)
     # Pin encoding so JSON output is locale-independent (workers/CI run with varied locales).
     local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Materialized spec to {local_spec_path}")
 
-    spec_uri = upload_spec_to_r2(spec, resolved_cluster_name)
+    # One spec upload, shared across all ranks. Spec is keyed by base cluster name (no -rN
+    # suffix) so all workers in a fan-out group download from the same R2 object and see the
+    # same r2_prefix — this is what makes the partition cohere as one logical dataset.
+    spec_uri = upload_spec_to_r2(spec, base_cluster_name)
     click.echo(f"Spec uploaded to {spec_uri}")
     worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
 
-    task = sky.Task.from_yaml(str(template_path))
-    task.update_envs(worker_env)
-
-    # Non-managed launch (sky.launch, not sky.jobs.launch) — managed jobs require a separate
-    # cloud-storage backend for controller state, which RunPod doesn't provide. `down=True`
-    # ensures cleanup on launcher exit; `idle_minutes_to_autostop=5` is a backstop in case the
-    # launcher exits via an unexpected path that skips the explicit `sky.down` in `finally`.
-    click.echo(f"Provisioning SkyPilot cluster: {resolved_cluster_name}")
-    launch_request_id = sky.launch(
-        task,
-        cluster_name=resolved_cluster_name,
-        idle_minutes_to_autostop=5,
-        down=True,
+    # Single-worker keeps the unsuffixed cluster name for backward compatibility with debug
+    # workflows / CI dashboards that key off it; multi-worker uses -rN suffixes.
+    cluster_names = (
+        [base_cluster_name]
+        if num_workers == 1
+        else [f"{base_cluster_name}-r{i}" for i in range(num_workers)]
     )
-    launch_result = sky.stream_and_get(launch_request_id)
-    if launch_result is None or launch_result[0] is None:
-        raise click.ClickException(f"Launch yielded no job_id for cluster {resolved_cluster_name}")
-    job_id: int = launch_result[0]
+
+    rcs = _run_workers(
+        worker_env_base=worker_env,
+        template_path=template_path,
+        cluster_names=cluster_names,
+        num_workers=num_workers,
+    )
+
+    failed = [
+        (cluster_names[i], rcs[i]) for i in range(num_workers) if rcs[i] != _TAIL_LOGS_RC_SUCCESS
+    ]
+    if failed:
+        raise click.ClickException(
+            f"{len(failed)} of {num_workers} worker(s) failed: "
+            + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
+        )
+
+
+def _run_workers(
+    worker_env_base: dict[str, str],
+    template_path: Path,
+    cluster_names: list[str],
+    num_workers: int,
+) -> list[int]:
+    """Launch N single-node clusters in parallel; return tail_logs rc for each rank.
+
+    Each rank gets its own ``sky.Task`` with ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES``
+    injected via ``update_envs``. Provisioning + log streaming run concurrently in a
+    ``ThreadPoolExecutor`` (one thread per rank), and all clusters get torn down in parallel
+    in the finally block regardless of which ranks succeeded.
+
+    A rank's slot in the returned list is ``-1`` if launching/streaming raised before
+    ``sky.tail_logs`` could return; the caller treats anything != ``_TAIL_LOGS_RC_SUCCESS`` as
+    a failure for that rank.
+    """
+    rcs: list[int] = [-1] * num_workers
+
+    def _launch_and_tail(rank: int) -> int:
+        cluster = cluster_names[rank]
+        env_for_rank = {
+            **worker_env_base,
+            _RANK_ENV: str(rank),
+            _WORLD_ENV: str(num_workers),
+        }
+        task = sky.Task.from_yaml(str(template_path))
+        task.update_envs(env_for_rank)
+        click.echo(f"[{cluster}] provisioning rank={rank}/{num_workers}")
+        launch_request_id = sky.launch(
+            task,
+            cluster_name=cluster,
+            idle_minutes_to_autostop=5,
+            down=True,
+        )
+        launch_result = sky.stream_and_get(launch_request_id)
+        if launch_result is None or launch_result[0] is None:
+            raise click.ClickException(f"[{cluster}] launch yielded no job_id")
+        job_id = launch_result[0]
+        click.echo(f"[{cluster}] streaming logs for job {job_id}")
+        rc = sky.tail_logs(cluster_name=cluster, job_id=job_id, follow=True)
+        click.echo(f"[{cluster}] tail_logs rc={rc}")
+        return rc
+
     try:
-        click.echo(f"Streaming logs for job {job_id} on {resolved_cluster_name}")
-        rc = sky.tail_logs(cluster_name=resolved_cluster_name, job_id=job_id, follow=True)
-        click.echo(f"Job {job_id} log stream ended with rc={rc}")
-        if rc != _TAIL_LOGS_RC_SUCCESS:
-            raise click.ClickException(
-                f"Worker job {job_id} ended in a non-SUCCEEDED status (tail_logs rc={rc})"
-            )
+        with ThreadPoolExecutor(max_workers=num_workers) as ex:
+            future_to_rank = {ex.submit(_launch_and_tail, i): i for i in range(num_workers)}
+            for fut, rank in future_to_rank.items():
+                try:
+                    rcs[rank] = fut.result()
+                except Exception as exc:  # noqa: BLE001 — surface any rank's failure to the
+                    # caller, but don't skip the teardowns of the OTHER ranks
+                    click.echo(f"[{cluster_names[rank]}] launch raised: {exc}")
+                    rcs[rank] = -1
     finally:
-        click.echo(f"Tearing down cluster: {resolved_cluster_name}")
-        down_request_id = sky.down(resolved_cluster_name)
+        with ThreadPoolExecutor(max_workers=max(num_workers, 1)) as ex:
+            for cluster in cluster_names:
+                ex.submit(_teardown_cluster, cluster)
+    return rcs
+
+
+def _teardown_cluster(cluster: str) -> None:
+    """Tear down a single cluster; log and swallow exceptions so one failure doesn't short-circuit
+    other teardowns."""
+    try:
+        click.echo(f"[{cluster}] tearing down")
+        down_request_id = sky.down(cluster)
         sky.stream_and_get(down_request_id)
+    except Exception as exc:  # noqa: BLE001 — best-effort, every cluster gets its turn
+        click.echo(f"[{cluster}] teardown failed: {exc}")
 
 
 if __name__ == "__main__":

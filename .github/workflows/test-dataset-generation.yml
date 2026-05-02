@@ -86,13 +86,6 @@ jobs:
             configs/compute/runpod-template.yaml
           grep image_id configs/compute/runpod-template.yaml
 
-      # Inject num_nodes: 3 so SkyPilot launches three workers; matches the
-      # smoke config's num_shards so each owns exactly one shard.
-      - name: Set num_nodes in SkyPilot template
-        run: |
-          sed -i '/^resources:/i num_nodes: 3\n' configs/compute/runpod-template.yaml
-          grep -E '^num_nodes' configs/compute/runpod-template.yaml
-
       - name: Prepare run-metadata mount
         run: mkdir -p /tmp/run-metadata
 
@@ -152,7 +145,8 @@ jobs:
               printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
-                --spec-out /tmp/input_spec.json
+                --spec-out /tmp/input_spec.json \
+                --num-workers 3
               cp /tmp/input_spec.json /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \

@@ -15,7 +15,6 @@ parses the spec and calls ``run(spec)`` in-process.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile
@@ -24,7 +23,7 @@ from pathlib import Path
 from loguru import logger
 
 from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.partitioning import get_my_shards
+from pipeline.partitioning import get_my_shards, read_rank_world_from_env
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
 
@@ -188,22 +187,22 @@ def run(spec: DatasetPipelineSpec) -> None:
         # INPUT_SPEC_FILENAME, so uploading to the prefix directory lands
         # the object at `{prefix}{INPUT_SPEC_FILENAME}` without the
         # double-name issue a full object-key destination would cause.
-        spec_path = work_dir / INPUT_SPEC_FILENAME
-        spec_path.write_text(spec.model_dump_json(indent=2))
-        logger.info(f"spec written: {spec_path}")
-        _rclone_copy(str(spec_path), r2_dest_prefix)
-        logger.info(f"spec uploaded -> {r2_dest_prefix}")
-
-        # Local-dev fallback (running outside SkyPilot); production gate is
-        # verify_skypilot_env, invoked before this in runpod-template.yaml.
-        rank = int(os.environ.get("SKYPILOT_NODE_RANK", "0"))
-        world = int(os.environ.get("SKYPILOT_NUM_NODES", "1"))
+        # Read rank/world before any R2 work — fail loudly on missing env so a
+        # misconfigured launch doesn't waste an upload before crashing.
+        rank, world = read_rank_world_from_env()
         my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
         logger.info(
             f"shard partition: rank={rank}/{world} owns shard_ids "
             f"[{my_range.start}, {my_range.stop}) "
             f"({len(my_range)} of {spec.num_shards} shards)"
         )
+
+        spec_path = work_dir / INPUT_SPEC_FILENAME
+        spec_path.write_text(spec.model_dump_json(indent=2))
+        logger.info(f"spec written: {spec_path}")
+        _rclone_copy(str(spec_path), r2_dest_prefix)
+        logger.info(f"spec uploaded -> {r2_dest_prefix}")
+
         for shard_id in my_range:
             _render_and_upload_shard(spec, spec.shards[shard_id], work_dir, r2_dest_prefix)
 

@@ -5,16 +5,21 @@ Each worker computes the contiguous slice of shard IDs it owns from
 (no leases, no claim files), so an N-node launch finishes ~N× faster than
 a single-node run with no coordination overhead.
 
-Pure functions only — neither helper reads environment variables. Callers
-(``pipeline.entrypoints.generate_dataset``, ``pipeline.entrypoints.verify_skypilot_env``)
-are the imperative shell that converts ``SKYPILOT_NODE_RANK`` /
-``SKYPILOT_NUM_NODES`` into integers and passes them in. This split keeps
-the partitioning logic trivially testable and prevents the "silent default"
-smell where a missing env var would map to a single-worker run inside the
-helper itself.
+``get_my_shards`` and ``validate_rank_world`` are pure — they don't read
+the environment. ``read_rank_world_from_env`` is the imperative shell
+that pulls ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES`` from
+``os.environ`` and fails loudly if they're missing or invalid; both
+``generate_dataset.run`` and ``verify_skypilot_env`` call it so they
+can't drift on the env-reading contract or silently default to a
+single-worker partition that would have every node render every shard.
 """
 
 from __future__ import annotations
+
+import os
+
+_RANK_ENV = "SKYPILOT_NODE_RANK"
+_WORLD_ENV = "SKYPILOT_NUM_NODES"
 
 
 def validate_rank_world(rank: int, world: int) -> None:
@@ -28,6 +33,40 @@ def validate_rank_world(rank: int, world: int) -> None:
             f"invalid rank/world: rank={rank} world={world} "
             "(require world >= 1 and 0 <= rank < world)"
         )
+
+
+def read_rank_world_from_env() -> tuple[int, int]:
+    """Read SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES from the environment.
+
+    No defaults — if either env var is missing, malformed, or out-of-bounds,
+    raise ``ValueError`` with a message naming the offending var(s). The
+    silent-default behavior (rank=0/world=1 on missing env) is intentionally
+    refused: a worker invoked with a multi-shard spec but no partition env
+    would otherwise duplicate every shard across every node, which silently
+    burns rendering work at multi-worker scale.
+
+    Returns:
+        ``(rank, world)`` as integers, validated against ``validate_rank_world``.
+
+    Raises:
+        ValueError: If either env var is missing, can't parse as int, or
+            fails the rank/world bounds check.
+    """
+    missing = [name for name in (_RANK_ENV, _WORLD_ENV) if name not in os.environ]
+    if missing:
+        raise ValueError(f"missing SkyPilot env vars: {', '.join(missing)}")
+    rank_raw = os.environ[_RANK_ENV]
+    world_raw = os.environ[_WORLD_ENV]
+    try:
+        rank = int(rank_raw)
+    except ValueError as e:
+        raise ValueError(f"{_RANK_ENV} is not an integer: {rank_raw!r}") from e
+    try:
+        world = int(world_raw)
+    except ValueError as e:
+        raise ValueError(f"{_WORLD_ENV} is not an integer: {world_raw!r}") from e
+    validate_rank_world(rank, world)
+    return rank, world
 
 
 def get_my_shards(total_shards: int, rank: int, world: int) -> range:
