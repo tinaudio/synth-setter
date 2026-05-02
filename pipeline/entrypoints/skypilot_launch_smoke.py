@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import click
@@ -304,10 +304,13 @@ def _run_workers(
         return rc
 
     try:
+        # Iterate via as_completed so a fast-failing rank surfaces immediately
+        # instead of being blocked behind a slower-but-eventually-successful one.
         # noqa: BLE001 — must catch any rank-thread exception to keep teardown loop reachable.
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             future_to_rank = {executor.submit(_launch_and_tail, i): i for i in range(num_workers)}
-            for fut, rank in future_to_rank.items():
+            for fut in as_completed(future_to_rank):
+                rank = future_to_rank[fut]
                 try:
                     rcs[rank] = fut.result()
                 except Exception as exc:  # noqa: BLE001

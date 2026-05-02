@@ -64,7 +64,7 @@ def get_my_shards(total_shards: int, rank: int, world: int) -> range:
     """Contiguous shard-ID range owned by ``rank`` of ``world``; balanced ±1 on uneven splits.
 
     Args:
-        total_shards: Total number of shards across the run.
+        total_shards: Total number of shards across the run. Must be ``>= 0``.
         rank: This worker's index in ``[0, world)``.
         world: Total number of workers.
 
@@ -73,8 +73,10 @@ def get_my_shards(total_shards: int, rank: int, world: int) -> range:
         when ``world > total_shards`` and ``rank`` is past the last shard.
 
     Raises:
-        ValueError: If ``world < 1``, ``rank < 0``, or ``rank >= world``.
+        ValueError: If ``total_shards < 0``, ``world < 1``, ``rank < 0``, or ``rank >= world``.
     """
+    if total_shards < 0:
+        raise ValueError(f"total_shards must be >= 0, got {total_shards}")
     validate_rank_world(rank, world)
     base, extra = divmod(total_shards, world)
     start = rank * base + min(rank, extra)

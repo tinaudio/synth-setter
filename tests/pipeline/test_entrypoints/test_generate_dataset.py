@@ -432,7 +432,7 @@ class TestRun:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Missing SKYPILOT env → ValueError before any rclone or subprocess work.
+        """Missing partition env → ValueError before any rclone or subprocess work.
 
         Removes the silent-default smell where a worker invoked without partition env would
         otherwise duplicate every shard across every node.

@@ -565,39 +565,48 @@ class TestNumWorkersFanOut:
 
     RunPod's backend doesn't support num_nodes>1, so the launcher synthesizes multi-worker
     partitioning by launching N clusters in parallel and injecting SYNTH_SETTER_WORKER_RANK /
-    SYNTH_SETTER_NUM_WORKERS per cluster (the OVERRIDE_ prefix sidesteps SkyPilot resetting the
-    reserved unprefixed names on each pod). Each cluster downloads the same materialized spec;
+    SYNTH_SETTER_NUM_WORKERS per cluster. Each cluster downloads the same materialized spec;
     pipeline.partitioning.get_my_shards slices each worker's shard ownership.
     """
 
     @staticmethod
     def _setup_n_workers_mock(
-        mock_sky: MagicMock, n: int, *, tail_rcs: list[int] | None = None
-    ) -> list[MagicMock]:
-        """Configure `mock_sky` for an N-cluster run; return a list of per-rank Task mocks.
+        mock_sky: MagicMock,
+        n: int,
+        *,
+        tail_rcs_by_cluster: dict[str, int] | None = None,
+        base_cluster_name: str = "smoke-job-1",
+    ) -> dict[str, MagicMock]:
+        """Configure `mock_sky` for an N-cluster run with deterministic per-cluster routing.
 
-        Each call to ``sky.Task.from_yaml`` returns a fresh MagicMock so per-rank
-        ``update_envs`` calls can be inspected independently. ``sky.launch`` returns
-        per-rank request IDs; ``sky.stream_and_get`` resolves each to a unique job_id.
-        ``sky.tail_logs`` returns ``tail_rcs[rank]`` (defaults to all-zero = success).
+        Returns a ``cluster_name -> Task`` dict keyed by the cluster name the launcher will
+        request, so tests can inspect each rank's ``update_envs`` call without depending on
+        ThreadPoolExecutor scheduling order. ``tail_logs`` and ``launch`` route by their
+        ``cluster_name`` kwarg (not by call order), so an rc=100 for ``smoke-job-1-r1``
+        deterministically attaches to rank 1 regardless of which thread ran first.
         """
-        rcs = tail_rcs if tail_rcs is not None else [0] * n
-        tasks = [MagicMock(name=f"task-r{i}") for i in range(n)]
-        mock_sky.Task.from_yaml.side_effect = list(tasks)
+        rcs = tail_rcs_by_cluster if tail_rcs_by_cluster is not None else {}
+        cluster_names = [f"{base_cluster_name}-r{i}" for i in range(n)]
+        tasks = {name: MagicMock(name=f"task-{name}") for name in cluster_names}
+        # `cluster_name` isn't a Task.from_yaml arg, so route Tasks by call order. The
+        # launcher creates exactly one Task per rank inside _launch_and_tail and immediately
+        # update_envs's it with the cluster name in the message — assertions key off the
+        # cluster_name in the env, not the Task identity, so call order doesn't matter here.
+        mock_sky.Task.from_yaml.side_effect = list(tasks.values())
 
-        launch_reqs = [f"launch-r{i}" for i in range(n)]
-        down_reqs = [f"down-r{i}" for i in range(n)]
-        mock_sky.launch.side_effect = launch_reqs
-        mock_sky.down.side_effect = down_reqs
+        # Route launch + down + stream_and_get + tail_logs by cluster_name kwarg, not order.
+        launch_reqs = {name: f"launch-{name}" for name in cluster_names}
+        down_reqs = {name: f"down-{name}" for name in cluster_names}
+        mock_sky.launch.side_effect = lambda task, **kw: launch_reqs[kw["cluster_name"]]
+        mock_sky.down.side_effect = lambda name: down_reqs[name]
 
-        responses: dict[str, object] = {
-            req: (i + 1, MagicMock()) for i, req in enumerate(launch_reqs)
+        stream_responses: dict[str, object] = {
+            launch_reqs[name]: (i + 1, MagicMock()) for i, name in enumerate(cluster_names)
         }
-        responses.update({req: None for req in down_reqs})
-        mock_sky.stream_and_get.side_effect = lambda req: responses[req]
+        stream_responses.update({req: None for req in down_reqs.values()})
+        mock_sky.stream_and_get.side_effect = lambda req: stream_responses[req]
 
-        rc_iter = iter(rcs)
-        mock_sky.tail_logs.side_effect = lambda **_kw: next(rc_iter)
+        mock_sky.tail_logs.side_effect = lambda **kw: rcs.get(kw["cluster_name"], 0)
         return tasks
 
     def test_three_workers_launches_three_clusters(
@@ -707,7 +716,7 @@ class TestNumWorkersFanOut:
         )
 
         assert result.exit_code == 0, result.output
-        forwarded = [t.update_envs.call_args.args[0] for t in tasks]
+        forwarded = [t.update_envs.call_args.args[0] for t in tasks.values()]
         ranks = sorted(env["SYNTH_SETTER_WORKER_RANK"] for env in forwarded)
         assert ranks == ["0", "1", "2"]
         for env in forwarded:
@@ -763,7 +772,7 @@ class TestNumWorkersFanOut:
     ) -> None:
         """If any rank's tail_logs returns non-zero, the launcher exits non-zero, but every cluster
         (success or fail) gets torn down — partial-failure cleanup must be uniform."""
-        self._setup_n_workers_mock(mock_sky, n=3, tail_rcs=[0, 100, 0])
+        self._setup_n_workers_mock(mock_sky, n=3, tail_rcs_by_cluster={"smoke-job-1-r1": 100})
 
         result = _invoke(
             config_yaml,
@@ -810,7 +819,7 @@ class TestNumWorkersFanOut:
         )
 
         assert result.exit_code == 0, result.output
-        forwarded = [t.update_envs.call_args.args[0] for t in tasks]
+        forwarded = [t.update_envs.call_args.args[0] for t in tasks.values()]
         for env in forwarded:
             assert env["WORKER_GIT_REF"] == "abc1234deadbeef"
 

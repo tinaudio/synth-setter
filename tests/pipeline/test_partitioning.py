@@ -104,6 +104,15 @@ class TestValidation:
         with pytest.raises(ValueError, match=f"rank={rank}"):
             get_my_shards(10, rank=rank, world=world)
 
+    def test_get_my_shards_rejects_negative_total_shards(self) -> None:
+        """Negative total_shards raises ValueError before the partition math runs.
+
+        Without this guard, divmod() produces nonsense (negative base, nonzero remainder) and
+        ranges would be silently malformed.
+        """
+        with pytest.raises(ValueError, match="total_shards must be >= 0"):
+            get_my_shards(-3, rank=0, world=4)
+
     def test_validate_rank_world_accepts_valid_inputs(self) -> None:
         """Valid rank/world pairs (rank=0/world=1, rank=3/world=4) pass without raising."""
         validate_rank_world(rank=0, world=1)
@@ -126,7 +135,8 @@ class TestValidation:
 
 
 class TestReadRankWorldFromEnv:
-    """``read_rank_world_from_env`` reads SKYPILOT env vars with no defaults.
+    """``read_rank_world_from_env`` reads SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS, no
+    defaults.
 
     The silent-default behavior is intentionally refused: a worker invoked
     with a multi-shard spec but no partition env would otherwise duplicate
@@ -135,8 +145,8 @@ class TestReadRankWorldFromEnv:
     """
 
     @pytest.fixture(autouse=True)
-    def _clear_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Strip SkyPilot rank/world env vars from the test process for isolation."""
+    def _clear_partition_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Strip partition rank/world env vars from the test process for isolation."""
         monkeypatch.delenv("SYNTH_SETTER_WORKER_RANK", raising=False)
         monkeypatch.delenv("SYNTH_SETTER_NUM_WORKERS", raising=False)
 
@@ -169,14 +179,14 @@ class TestReadRankWorldFromEnv:
             read_rank_world_from_env()
 
     def test_non_integer_rank_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Non-integer rank ('abc') → ValueError naming SKYPILOT_NODE_RANK."""
+        """Non-integer rank ('abc') → ValueError naming SYNTH_SETTER_WORKER_RANK."""
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "abc")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
         with pytest.raises(ValueError, match="SYNTH_SETTER_WORKER_RANK"):
             read_rank_world_from_env()
 
     def test_non_integer_world_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Non-integer world ('xyz') → ValueError naming SKYPILOT_NUM_NODES."""
+        """Non-integer world ('xyz') → ValueError naming SYNTH_SETTER_NUM_WORKERS."""
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "xyz")
         with pytest.raises(ValueError, match="SYNTH_SETTER_NUM_WORKERS"):
