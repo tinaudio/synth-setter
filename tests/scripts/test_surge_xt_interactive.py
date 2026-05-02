@@ -277,6 +277,7 @@ class TestLoadDatasetSynthParams:
         with pytest.raises((IndexError, ValueError)):
             surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name=SURGE_SIMPLE)
 
+    @pytest.mark.requires_vst
     @pytest.mark.slow
     def test_loads_row_from_surge_xt_smoke_fixture(
         self,
