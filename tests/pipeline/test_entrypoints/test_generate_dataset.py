@@ -14,6 +14,7 @@ recorded call args + ordering.
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -44,8 +45,12 @@ def _materialize_shard(args: list[str]) -> int:
     HDF5 to its output path. Tests that don't supply this side effect would trip the
     `shard_path.is_file()` check in `_render_and_upload_shard`.
     """
-    # Args layout: [wrapper, python, generate_vst_dataset.py, output_file, ...].
-    output_file = Path(args[3])
+    # Args layout depends on platform:
+    #   linux:     [wrapper, python, generate_vst_dataset.py, output_file, ...]
+    #   non-linux: [python, generate_vst_dataset.py, output_file, ...]
+    # Locate the script and read the output file from the next slot.
+    script_idx = next(i for i, a in enumerate(args) if a.endswith("generate_vst_dataset.py"))
+    output_file = Path(args[script_idx + 1])
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_bytes(b"")
     return 0
@@ -162,7 +167,7 @@ class TestRun:
 
         mock_check_call.assert_called_once()
         args = mock_check_call.call_args[0][0]
-        # args = [VST_HEADLESS_WRAPPER, python, generate_vst_dataset.py, ...]
+        # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.shard_size) in args
 
@@ -174,20 +179,23 @@ class TestRun:
         mock_check_call: MagicMock,
         spec: DatasetPipelineSpec,
     ) -> None:
-        """The VST subprocess is prefixed with scripts/run-linux-vst-headless.sh.
+        """The VST subprocess is prefixed with scripts/run-linux-vst-headless.sh on Linux.
 
         X11 bootstrap lives at the audio-rendering boundary (this subprocess) so the
         docker_entrypoint click CLI can stay X11-agnostic — idle and passthrough modes don't pay
-        the Xvfb startup cost.
+        the Xvfb startup cost. The wrapper is Linux-only (Xvfb is a Linux X11 server); on macOS and
+        other platforms the generator is invoked directly without a wrapper prefix.
         """
         mock_check_call.side_effect = _materialize_shard
         run(spec)
 
         args = mock_check_call.call_args[0][0]
-        assert args[0] == VST_HEADLESS_WRAPPER
-        # Wrapper prefixes the original generate_vst_dataset.py invocation,
-        # so the python interpreter + script must appear immediately after.
-        assert args[2] == "src/data/vst/generate_vst_dataset.py"
+        if sys.platform.startswith("linux"):
+            assert args[0] == VST_HEADLESS_WRAPPER
+            assert args[2] == "src/data/vst/generate_vst_dataset.py"
+        else:
+            assert VST_HEADLESS_WRAPPER not in args
+            assert args[1] == "src/data/vst/generate_vst_dataset.py"
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
@@ -261,8 +269,13 @@ class TestRun:
         rendered_filenames = []
         for call in mock_check_call.call_args_list:
             args = call[0][0]
-            # Args layout: [wrapper, python, generate_vst_dataset.py, output_file, ...].
-            output_file = args[3]
+            # Args layout depends on platform:
+            #   linux:     [wrapper, python, generate_vst_dataset.py, output_file, ...]
+            #   non-linux: [python, generate_vst_dataset.py, output_file, ...]
+            script_idx = next(
+                i for i, a in enumerate(args) if a.endswith("generate_vst_dataset.py")
+            )
+            output_file = args[script_idx + 1]
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [s.filename for s in spec.shards]
 

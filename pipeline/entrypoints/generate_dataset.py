@@ -207,7 +207,8 @@ def _render_and_upload_shard(
     Unlinking after upload bounds local disk to one shard's HDF5 at a time — necessary for multi-
     shard runs on disk-constrained workers.
     """
-    args = [VST_HEADLESS_WRAPPER, *build_generate_args(spec, shard, work_dir)]
+    args = [VST_HEADLESS_WRAPPER] if sys.platform.startswith("linux") else []
+    args += build_generate_args(spec, shard, work_dir)
     logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
     subprocess.check_call(args)  # noqa: S603 — args built from validated spec
     shard_path = work_dir / shard.filename
