@@ -2,7 +2,6 @@
 
 Public API:
     load_spec_from_uri(uri): Parse a DatasetPipelineSpec from a local path or r2:// URI.
-    run(spec): Full flow — upload spec to R2, generate shard, upload shard to R2.
     run(spec): Full flow — upload spec to R2 once, then loop over
         ``spec.shards`` rendering and uploading each.
     build_generate_args(spec, shard, output_dir): Build CLI args for
