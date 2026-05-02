@@ -108,6 +108,13 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetPipelineSpec:
 class TestRun:
     """Run() orchestrates: serialize → upload spec → generate → upload shard."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Strip SkyPilot rank/world env vars from the test process so the single-worker-default
+        tests see the helper's intended defaults regardless of where pytest runs from."""
+        monkeypatch.delenv("SKYPILOT_NODE_RANK", raising=False)
+        monkeypatch.delenv("SKYPILOT_NUM_NODES", raising=False)
+
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     def test_uploads_spec_to_r2_at_expected_path(
@@ -409,6 +416,94 @@ class TestRun:
             run(spec)
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_rank_0_of_2_renders_only_first_half_of_shards(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Worker 0 of a 2-node partition with 3 shards renders shards 0 and 1 only."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "0")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "2")
+        spec = _multi_shard_spec(tmp_path, n=3)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        rendered_filenames = [Path(call[0][0][3]).name for call in mock_check_call.call_args_list]
+        assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_rank_1_of_2_renders_only_remaining_shard(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Worker 1 of a 2-node partition with 3 shards renders shard 2 only."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "1")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "2")
+        spec = _multi_shard_spec(tmp_path, n=3)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        rendered_filenames = [Path(call[0][0][3]).name for call in mock_check_call.call_args_list]
+        assert rendered_filenames == [spec.shards[2].filename]
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_spec_uploaded_exactly_once_independent_of_partition(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Spec upload is partition-independent: every worker uploads it exactly once."""
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "1")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "2")
+        spec = _multi_shard_spec(tmp_path, n=3)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        spec_uploads = [
+            call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
+        ]
+        assert len(spec_uploads) == 1
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_excess_worker_renders_no_shards_but_still_uploads_spec(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When world > num_shards, the excess workers exit cleanly without rendering.
+
+        A 4-node partition over 3 shards leaves worker 3 with an empty range — it must still upload
+        the spec (idempotent) but render zero shards.
+        """
+        monkeypatch.setenv("SKYPILOT_NODE_RANK", "3")
+        monkeypatch.setenv("SKYPILOT_NUM_NODES", "4")
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        run(spec)
+
+        mock_check_call.assert_not_called()
+        spec_uploads = [
+            call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
+        ]
+        assert len(spec_uploads) == 1
 
 
 # ---------------------------------------------------------------------------

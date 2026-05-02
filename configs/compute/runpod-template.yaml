@@ -56,6 +56,14 @@ setup: |
 #   image's WORKDIR (`/home/build/synth-setter`) by default — it lands
 #   in `~/sky_workdir`. The cd that follows is what makes the relative
 #   path to `scripts/run-linux-vst-headless.sh` resolve.
+# - `set -euo pipefail` makes the verify step a hard gate: if
+#   verify_skypilot_env exits non-zero, generate_dataset never runs.
+# - `verify_skypilot_env` confirms SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES
+#   are set and well-formed. SkyPilot injects them automatically when a
+#   task is launched (single- or multi-node), so a failure here means the
+#   container is being run outside SkyPilot — exactly the case where the
+#   static partitioning helper would silently default to rank=0/world=1
+#   and every worker would render every shard. Fail loudly instead.
 # - The Python invocation is inlined (instead of calling the docker
 #   entrypoint's click subcommand) so we can `os._exit(0)` immediately
 #   after `run()` returns successfully. Workaround for #735: the SkyPilot
@@ -75,8 +83,10 @@ setup: |
 #   root-caused at its source. PR-B's `pedalboard-load` matrix variant
 #   is the canary that proves the revert is safe.
 run: |
+  set -euo pipefail
   echo "skypilot-run-cwd: $(pwd)"
   cd /home/build/synth-setter
+  python -m pipeline.entrypoints.verify_skypilot_env
   python -c '
   import os
   from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run

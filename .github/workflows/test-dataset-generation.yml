@@ -86,6 +86,13 @@ jobs:
             configs/compute/runpod-template.yaml
           grep image_id configs/compute/runpod-template.yaml
 
+      # Inject num_nodes: 3 so SkyPilot launches three workers; matches the
+      # smoke config's num_shards so each owns exactly one shard.
+      - name: Set num_nodes in SkyPilot template
+        run: |
+          sed -i '/^resources:/i num_nodes: 3\n' configs/compute/runpod-template.yaml
+          grep -E '^num_nodes' configs/compute/runpod-template.yaml
+
       - name: Prepare run-metadata mount
         run: mkdir -p /tmp/run-metadata
 
@@ -203,18 +210,23 @@ jobs:
 
       # R2 bucket comes from configs/image/dev-snapshot.yaml — single source of
       # truth across the image, the launcher, and this validation step. R2 prefix
-      # + shard filename come from the materialized spec, downloaded via the
+      # + shard filenames come from the materialized spec, downloaded via the
       # `test-run-metadata` artifact.
       #
-      # Two `docker run` invocations: the first uses the image's rclone to pull
-      # the shard from R2 to a host-side tmpdir; the second mounts the PR
-      # checkout (read-only) over /home/build/synth-setter so the editable
-      # install picks up our `pipeline.ci.validate_shard` module (in case it's
-      # newer than what the published image was baked against). The image has
-      # no ENTRYPOINT, so `docker run img <argv>` overrides the /bin/bash CMD
-      # with <argv> directly — that's how we get rclone / python invocations
-      # into the same image.
-      - name: Download shard from R2 and validate
+      # Multi-worker variant: every shard listed in spec.shards must exist in
+      # R2 after the run. With three SkyPilot workers and three shards, the
+      # static partitioner assigns one shard per worker; if a worker silently
+      # owned the wrong slice (or none), one of these `rclone copy` calls
+      # fails with "source not found" and the validate step fails the job.
+      #
+      # Two `docker run` invocations per shard: the first uses the image's
+      # rclone to pull the shard from R2 to a host-side tmpdir; the second
+      # mounts the PR checkout (read-only) over /home/build/synth-setter so
+      # the editable install picks up our `pipeline.ci.validate_shard` module
+      # (in case it's newer than what the published image was baked against).
+      # The image has no ENTRYPOINT, so `docker run img <argv>` overrides the
+      # /bin/bash CMD with <argv> directly.
+      - name: Download every shard from R2 and validate
         env:
           IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -223,35 +235,41 @@ jobs:
         run: |
           R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
           R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
-          SHARD_FILE=$(python3 -c "import json; print(json.load(open('input_spec.json'))['shards'][0]['filename'])")
+          mapfile -t SHARD_FILES < <(python3 -c "import json; [print(s['filename']) for s in json.load(open('input_spec.json'))['shards']]")
 
           echo "R2 bucket: ${R2_BUCKET}"
           echo "R2 prefix: ${R2_PREFIX}"
-          echo "Shard file: ${SHARD_FILE}"
+          echo "Shards to validate: ${SHARD_FILES[*]}"
 
           mkdir -p /tmp/shard-download
           docker pull "$IMAGE"
-          docker run --rm \
-            -e RCLONE_CONFIG_R2_TYPE=s3 \
-            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
-            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
-            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
-            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
-            -e PYTHONPATH=/home/build/synth-setter \
-            -v /tmp/shard-download:/download \
-            "$IMAGE" \
-            rclone copy --checksum \
-              "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
-              /download/
 
+          for SHARD_FILE in "${SHARD_FILES[@]}"; do
+            echo "::group::Download and validate ${SHARD_FILE}"
+            docker run --rm \
+              -e RCLONE_CONFIG_R2_TYPE=s3 \
+              -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+              -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
+              -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+              -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+              -e PYTHONPATH=/home/build/synth-setter \
+              -v /tmp/shard-download:/download \
+              "$IMAGE" \
+              rclone copy --checksum \
+                "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
+                /download/
+
+            docker run --rm \
+              -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+              -v /tmp/shard-download:/download:ro \
+              -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
+              -e PYTHONPATH=/home/build/synth-setter \
+              "$IMAGE" \
+              python3 -m pipeline.ci.validate_shard \
+                /spec/input_spec.json \
+                "/download/${SHARD_FILE}"
+            echo "::endgroup::"
+          done
+
+          echo "All ${#SHARD_FILES[@]} shards validated"
           ls -la /tmp/shard-download/
-
-          docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
-            -v /tmp/shard-download:/download:ro \
-            -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
-            -e PYTHONPATH=/home/build/synth-setter \
-            "$IMAGE" \
-            python3 -m pipeline.ci.validate_shard \
-              /spec/input_spec.json \
-              "/download/${SHARD_FILE}"

@@ -15,6 +15,7 @@ parses the spec and calls ``run(spec)`` in-process.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ from pathlib import Path
 from loguru import logger
 
 from pipeline.constants import INPUT_SPEC_FILENAME
+from pipeline.partitioning import get_my_shards
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
 
@@ -192,8 +194,18 @@ def run(spec: DatasetPipelineSpec) -> None:
         _rclone_copy(str(spec_path), r2_dest_prefix)
         logger.info(f"spec uploaded -> {r2_dest_prefix}")
 
-        for shard in spec.shards:
-            _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+        # Local-dev fallback (running outside SkyPilot); production gate is
+        # verify_skypilot_env, invoked before this in runpod-template.yaml.
+        rank = int(os.environ.get("SKYPILOT_NODE_RANK", "0"))
+        world = int(os.environ.get("SKYPILOT_NUM_NODES", "1"))
+        my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
+        logger.info(
+            f"shard partition: rank={rank}/{world} owns shard_ids "
+            f"[{my_range.start}, {my_range.stop}) "
+            f"({len(my_range)} of {spec.num_shards} shards)"
+        )
+        for shard_id in my_range:
+            _render_and_upload_shard(spec, spec.shards[shard_id], work_dir, r2_dest_prefix)
 
 
 def _render_and_upload_shard(
