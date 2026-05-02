@@ -25,6 +25,7 @@ from pathlib import Path
 import click
 import sky
 from dotenv import dotenv_values
+from sky.exceptions import ClusterNotUpError
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import materialize_spec
@@ -280,10 +281,21 @@ def _wait_for_job(
     waiting for an SSH-stream EOF that never arrives after the worker exits. Polls every
     `_JOB_POLL_INTERVAL_SECONDS` seconds and times out after `deadline_seconds` so a
     truly stuck worker can't block CI forever.
+
+    `sky.job_status` raises `sky.exceptions.ClusterNotUpError` when the cluster is still
+    in INIT (provisioning slow) or transitioning. That's a "not yet ready, keep polling"
+    signal — not a terminal failure — so swallow it as long as we're inside the deadline.
+    The caller's deadline still bounds total wait, so a cluster that genuinely never
+    transitions to UP fails on the deadline check below, not on the first job_status call.
     """
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
-        statuses = sky.stream_and_get(sky.job_status(cluster_name, [job_id])) or {}
+        try:
+            statuses = sky.stream_and_get(sky.job_status(cluster_name, [job_id])) or {}
+        except ClusterNotUpError as exc:
+            click.echo(f"  cluster not yet UP ({exc.cluster_status}); retrying")
+            time.sleep(_JOB_POLL_INTERVAL_SECONDS)
+            continue
         status = statuses.get(job_id)
         if status is None:
             click.echo(f"  job {job_id} not yet visible; retrying")

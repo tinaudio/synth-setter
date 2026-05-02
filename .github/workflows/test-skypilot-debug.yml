@@ -107,7 +107,7 @@ on:
       job_deadline_seconds:
         description: "Wall-clock cap on the launcher's job-status poll loop."
         required: false
-        default: "120"
+        default: "600"
 
 permissions:
   contents: read

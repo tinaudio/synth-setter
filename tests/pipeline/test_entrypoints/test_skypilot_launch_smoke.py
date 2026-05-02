@@ -532,6 +532,53 @@ class TestMainCli:
         assert "did not reach a terminal status" in result.output
         mock_sky.down.assert_called_once()
 
+    def test_cluster_not_up_error_is_swallowed_keeps_polling(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`sky.job_status` raises ClusterNotUpError when the cluster is still INIT (provisioning
+        slow).
+
+        The launcher's poll loop must treat that as 'not yet ready, keep polling' instead of
+        crashing — otherwise a slow RunPod provisioning window fails the launcher even though the
+        cluster will reach UP eventually.
+        """
+        import sky  # noqa: PLC0415
+        from sky import ClusterStatus  # noqa: PLC0415
+        from sky.exceptions import ClusterNotUpError  # noqa: PLC0415
+
+        first_call = [True]
+
+        def stream_and_get(req: str) -> object:
+            if req == "launch-req":
+                return (1, MagicMock())
+            if req == "down-req":
+                return None
+            if req == "job-status-req":
+                if first_call[0]:
+                    first_call[0] = False
+                    raise ClusterNotUpError("provisioning", cluster_status=ClusterStatus.INIT)
+                return {1: sky.JobStatus.SUCCEEDED}
+            raise AssertionError(f"unexpected request: {req}")
+
+        mock_sky.stream_and_get.side_effect = stream_and_get
+        monkeypatch.setattr(
+            "pipeline.entrypoints.skypilot_launch_smoke._JOB_POLL_INTERVAL_SECONDS", 0
+        )
+
+        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-cnu")
+        assert result.exit_code == 0, result.output
+        assert "cluster not yet UP" in result.output
+        assert "retrying" in result.output
+        assert "status=SUCCEEDED" in result.output
+        mock_sky.down.assert_called_once()
+
     def test_launch_returning_none_job_id_aborts(
         self,
         config_yaml: Path,
