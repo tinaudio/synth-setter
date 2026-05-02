@@ -43,9 +43,9 @@ on:
       - ".github/workflows/test-vst-slow.yml"
       - "requirements*.txt"
 
-concurrency:
-  group: test-vst-slow-${{ github.ref }}
-  cancel-in-progress: false
+# Backfill mode: concurrency group removed so multiple workflow_dispatch runs
+# on this branch run in parallel rather than queue/cancel — needed to capture
+# the ~50% intermittent #489 spike across N runs in reasonable wall-clock time.
 
 permissions:
   contents: read
