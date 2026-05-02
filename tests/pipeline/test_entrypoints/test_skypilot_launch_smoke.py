@@ -564,8 +564,9 @@ class TestNumWorkersFanOut:
     """`--num-workers N>1` fans out N independent single-node SkyPilot clusters.
 
     RunPod's backend doesn't support num_nodes>1, so the launcher synthesizes multi-worker
-    partitioning by launching N clusters in parallel and injecting SKYPILOT_NODE_RANK /
-    SKYPILOT_NUM_NODES per cluster. Each cluster downloads the same materialized spec;
+    partitioning by launching N clusters in parallel and injecting OVERRIDE_SKYPILOT_NODE_RANK /
+    OVERRIDE_SKYPILOT_NUM_NODES per cluster (the OVERRIDE_ prefix sidesteps SkyPilot resetting the
+    reserved unprefixed names on each pod). Each cluster downloads the same materialized spec;
     pipeline.partitioning.get_my_shards slices each worker's shard ownership.
     """
 
@@ -687,8 +688,8 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Each rank's task gets ``SKYPILOT_NODE_RANK=<i>`` and ``SKYPILOT_NUM_NODES=<N>``
-        injected.
+        """Each rank's task gets ``OVERRIDE_SKYPILOT_NODE_RANK=<i>`` and
+        ``OVERRIDE_SKYPILOT_NUM_NODES=<N>`` injected.
 
         Workers read these via ``read_rank_world_from_env`` and partition the
         shared spec via ``get_my_shards``.
@@ -707,10 +708,10 @@ class TestNumWorkersFanOut:
 
         assert result.exit_code == 0, result.output
         forwarded = [t.update_envs.call_args.args[0] for t in tasks]
-        ranks = sorted(env["SKYPILOT_NODE_RANK"] for env in forwarded)
+        ranks = sorted(env["OVERRIDE_SKYPILOT_NODE_RANK"] for env in forwarded)
         assert ranks == ["0", "1", "2"]
         for env in forwarded:
-            assert env["SKYPILOT_NUM_NODES"] == "3"
+            assert env["OVERRIDE_SKYPILOT_NUM_NODES"] == "3"
             assert env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
             assert env["WORKER_SPEC_URI"] == (
                 "r2://intermediate-data/skypilot-launcher-specs/smoke-job-1.json"

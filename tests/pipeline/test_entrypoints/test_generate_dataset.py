@@ -112,14 +112,14 @@ class TestRun:
     def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Default to a single-worker rank/world for tests that don't care about partitioning.
 
-        ``run()`` now requires ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES`` to be set
+        ``run()`` now requires ``OVERRIDE_SKYPILOT_NODE_RANK`` / ``OVERRIDE_SKYPILOT_NUM_NODES`` to be set
         (silent default removed — see ``read_rank_world_from_env``). Most tests in this class
         exercise behaviors orthogonal to partitioning, so set rank=0/world=1 by default; tests
         that probe multi-worker partitioning override via ``monkeypatch.setenv`` and tests for
         the missing-env contract override via ``monkeypatch.delenv``.
         """
-        monkeypatch.setenv("SKYPILOT_NODE_RANK", "0")
-        monkeypatch.setenv("SKYPILOT_NUM_NODES", "1")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NODE_RANK", "0")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NUM_NODES", "1")
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
@@ -437,15 +437,15 @@ class TestRun:
         Removes the silent-default smell where a worker invoked without partition env would
         otherwise duplicate every shard across every node.
         """
-        monkeypatch.delenv("SKYPILOT_NODE_RANK", raising=False)
-        monkeypatch.delenv("SKYPILOT_NUM_NODES", raising=False)
+        monkeypatch.delenv("OVERRIDE_SKYPILOT_NODE_RANK", raising=False)
+        monkeypatch.delenv("OVERRIDE_SKYPILOT_NUM_NODES", raising=False)
         spec = _multi_shard_spec(tmp_path, n=3)
 
         with pytest.raises(ValueError) as excinfo:
             run(spec)
         message = str(excinfo.value)
-        assert "SKYPILOT_NODE_RANK" in message
-        assert "SKYPILOT_NUM_NODES" in message
+        assert "OVERRIDE_SKYPILOT_NODE_RANK" in message
+        assert "OVERRIDE_SKYPILOT_NUM_NODES" in message
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
 
@@ -459,8 +459,8 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Worker 0 of a 2-node partition with 3 shards renders shards 0 and 1 only."""
-        monkeypatch.setenv("SKYPILOT_NODE_RANK", "0")
-        monkeypatch.setenv("SKYPILOT_NUM_NODES", "2")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NODE_RANK", "0")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NUM_NODES", "2")
         spec = _multi_shard_spec(tmp_path, n=3)
         mock_check_call.side_effect = _materialize_shard
 
@@ -479,8 +479,8 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Worker 1 of a 2-node partition with 3 shards renders shard 2 only."""
-        monkeypatch.setenv("SKYPILOT_NODE_RANK", "1")
-        monkeypatch.setenv("SKYPILOT_NUM_NODES", "2")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NODE_RANK", "1")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NUM_NODES", "2")
         spec = _multi_shard_spec(tmp_path, n=3)
         mock_check_call.side_effect = _materialize_shard
 
@@ -499,8 +499,8 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Spec upload is partition-independent: every worker uploads it exactly once."""
-        monkeypatch.setenv("SKYPILOT_NODE_RANK", "1")
-        monkeypatch.setenv("SKYPILOT_NUM_NODES", "2")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NODE_RANK", "1")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NUM_NODES", "2")
         spec = _multi_shard_spec(tmp_path, n=3)
         mock_check_call.side_effect = _materialize_shard
 
@@ -525,8 +525,8 @@ class TestRun:
         A 4-node partition over 3 shards leaves worker 3 with an empty range — it must still upload
         the spec (idempotent) but render zero shards.
         """
-        monkeypatch.setenv("SKYPILOT_NODE_RANK", "3")
-        monkeypatch.setenv("SKYPILOT_NUM_NODES", "4")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NODE_RANK", "3")
+        monkeypatch.setenv("OVERRIDE_SKYPILOT_NUM_NODES", "4")
         spec = _multi_shard_spec(tmp_path, n=3)
 
         run(spec)

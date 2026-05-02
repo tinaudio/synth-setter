@@ -7,8 +7,8 @@ a single-node run with no coordination overhead.
 
 ``get_my_shards`` and ``validate_rank_world`` are pure — they don't read
 the environment. ``read_rank_world_from_env`` is the imperative shell
-that pulls ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES`` from
-``os.environ`` and fails loudly if they're missing or invalid;
+that pulls ``OVERRIDE_SKYPILOT_NODE_RANK`` / ``OVERRIDE_SKYPILOT_NUM_NODES``
+from ``os.environ`` and fails loudly if they're missing or invalid;
 ``generate_dataset.run`` calls it before any R2 work so a worker
 without partition env can't silently default to a single-worker
 partition that would make every node render every shard.
@@ -18,8 +18,14 @@ from __future__ import annotations
 
 import os
 
-_RANK_ENV = "SKYPILOT_NODE_RANK"
-_WORLD_ENV = "SKYPILOT_NUM_NODES"
+# OVERRIDE_-prefixed because SkyPilot itself reserves SKYPILOT_NODE_RANK and
+# overrides our injection at runtime to the cluster-native value (0 on a
+# single-node cluster). We launch N independent single-node clusters per
+# fan-out (RunPod's backend doesn't support num_nodes>1), so the launcher
+# injects synthetic rank/world under non-reserved names that SkyPilot
+# leaves alone. The worker reads these and partitions accordingly.
+_RANK_ENV = "OVERRIDE_SKYPILOT_NODE_RANK"
+_WORLD_ENV = "OVERRIDE_SKYPILOT_NUM_NODES"
 
 
 def validate_rank_world(rank: int, world: int) -> None:
@@ -36,7 +42,7 @@ def validate_rank_world(rank: int, world: int) -> None:
 
 
 def read_rank_world_from_env() -> tuple[int, int]:
-    """Read SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES from the environment.
+    """Read OVERRIDE_SKYPILOT_NODE_RANK / OVERRIDE_SKYPILOT_NUM_NODES from the environment.
 
     No defaults — if either env var is missing, malformed, or out-of-bounds,
     raise ``ValueError`` with a message naming the offending var(s). The

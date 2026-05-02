@@ -9,11 +9,14 @@ container CLI. Logs stream live via `sky.tail_logs(..., follow=True)`.
 
 With `--num-workers N>1` the launcher fans out N independent single-node
 SkyPilot clusters in parallel (RunPod's backend doesn't support `num_nodes
-> 1`). Each rank gets ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES``
-injected via ``task.update_envs``; the spec is materialized + uploaded to
-R2 once and shared across ranks, so all workers write shards under the same
-``r2_prefix``. ``pipeline.partitioning.get_my_shards`` slices each worker's
-shard ownership from the synthetic rank.
+> 1`). Each rank gets ``OVERRIDE_SKYPILOT_NODE_RANK`` /
+``OVERRIDE_SKYPILOT_NUM_NODES`` injected via ``task.update_envs`` — the
+``OVERRIDE_`` prefix is required because SkyPilot reserves the unprefixed
+names and clobbers our injection on each pod (every single-node cluster
+sees ``SKYPILOT_NODE_RANK=0`` natively). The spec is materialized +
+uploaded to R2 once and shared across ranks, so all workers write shards
+under the same ``r2_prefix``. ``pipeline.partitioning.get_my_shards``
+slices each worker's shard ownership from the synthetic rank.
 
 `sky.jobs.launch` (managed jobs) requires a cloud-storage backend for
 controller state, which RunPod doesn't provide; cluster-level launch is
@@ -75,11 +78,12 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
 _TAIL_LOGS_RC_SUCCESS = 0
 
 # Synthetic rank/world env vars the launcher injects per-cluster in the
-# `--num-workers N>1` fan-out path. Names match what SkyPilot would set
-# natively for a multi-node task on a backend that supports it (e.g. AWS),
-# so the worker code path is identical regardless of how rank/world arrived.
-_RANK_ENV = "SKYPILOT_NODE_RANK"
-_WORLD_ENV = "SKYPILOT_NUM_NODES"
+# `--num-workers N>1` fan-out path. OVERRIDE_-prefixed because SkyPilot
+# itself reserves SKYPILOT_NODE_RANK and resets our task.update_envs
+# injection to the cluster-native value (0 on every single-node cluster).
+# Worker reads these via pipeline.partitioning.read_rank_world_from_env.
+_RANK_ENV = "OVERRIDE_SKYPILOT_NODE_RANK"
+_WORLD_ENV = "OVERRIDE_SKYPILOT_NUM_NODES"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "runpod-smoke-shard.yaml"
@@ -216,7 +220,7 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
     help=(
         "Number of single-node SkyPilot clusters to fan out in parallel. RunPod's backend "
         "does not support num_nodes>1, so we synthesize multi-worker partitioning by launching "
-        "N independent clusters and injecting SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES per "
+        "N independent clusters and injecting OVERRIDE_SKYPILOT_NODE_RANK / OVERRIDE_SKYPILOT_NUM_NODES per "
         "rank. Each cluster downloads the same materialized spec and uses "
         "pipeline.partitioning.get_my_shards to slice its share."
     ),
