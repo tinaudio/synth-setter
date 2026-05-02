@@ -211,7 +211,7 @@ docker run --rm synth-setter:dev-snapshot \
 
 ### `generate_dataset` — VST dataset generation
 
-Generates a VST dataset shard via `generate_vst_dataset.py` under
+Generates one or more VST dataset shards (looping over `spec.shards`) via `generate_vst_dataset.py` under
 headless X11 (Xvfb). The click entrypoint itself is X11-agnostic; the
 headless bootstrap (`scripts/run-linux-vst-headless.sh`) is applied
 inside `pipeline.entrypoints.generate_dataset.run()` at the

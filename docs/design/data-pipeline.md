@@ -50,11 +50,11 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 
 ### Distributed Pipeline
 
-> **Implementation status:** Only single-shard generation is implemented today
-> (`pipeline/entrypoints/generate_dataset.py`). Multi-shard generation raises
-> `NotImplementedError`. The distributed pipeline described below is the design
-> target — the CLI, backends, reconciliation, and finalize stages are planned but
-> not yet built.
+> **Implementation status:** Single-machine sequential multi-shard generation is
+> implemented today (`pipeline/entrypoints/generate_dataset.py` loops over
+> `spec.shards`). The distributed/parallel pipeline described below — CLI,
+> backends, reconciliation, and finalize stages — is the design target and not
+> yet built.
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
@@ -82,8 +82,8 @@ cat configs/dataset/surge-simple-480k-10k.yaml
 # **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)
 # is not yet implemented. Currently only single-shard generation is available via:
 DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml python -m pipeline.entrypoints.generate_dataset
-# → Single-shard MVP. Multi-shard (num_shards > 1) raises NotImplementedError.
-# `generate_dataset` is the current single-shard MVP. It will be deprecated when
+# → Sequential multi-shard MVP. Loops over spec.shards on a single worker; distributed parallelism still tracked under #411.
+# `generate_dataset` is the current MVP. It will be deprecated when
 # `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
@@ -1409,7 +1409,7 @@ pipeline/
 
   entrypoints/          # Pipeline entry points (implemented)
     __init__.py
-    generate_dataset.py # Single-shard dataset generation (MVP); deprecated when generate-shards lands (#411)
+    generate_dataset.py # Sequential multi-shard dataset generation (MVP); deprecated when generate-shards lands (#411)
 
   ci/                   # CI validation scripts (implemented)
     validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count)

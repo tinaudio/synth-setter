@@ -44,7 +44,7 @@ ______________________________________________________________________
 
 ### 3a. Data Generation
 
-> **Implementation status:** The layout below is the target architecture. The current single-shard MVP uses a flat structure: spec and shard upload directly to `data/{config_id}/{run_id}/`.
+> **Implementation status:** The layout below is the target architecture. The current MVP uses a flat structure: spec and all shards upload directly to `data/{config_id}/{run_id}/`.
 
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/

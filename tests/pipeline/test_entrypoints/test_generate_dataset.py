@@ -3,8 +3,9 @@
 The entrypoint's public surface is a single ``run(spec)`` function that:
   1. Serializes the spec to a tempfile.
   2. Uploads the spec to R2 at ``r2:{bucket}/{prefix}/input_spec.json``.
-  3. Shells out to ``generate_vst_dataset.py`` to produce the shard.
-  4. Uploads the shard to R2 at ``r2:{bucket}/{prefix}/``.
+  3. For each shard in ``spec.shards``, shells out to ``generate_vst_dataset.py``
+     to render it, uploads to R2 at ``r2:{bucket}/{prefix}/``, and unlinks the
+     local file.
 
 Tests monkeypatch ``_rclone_copy`` and ``subprocess.check_call`` and assert on
 recorded call args + ordering.
