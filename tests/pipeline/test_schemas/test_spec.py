@@ -209,9 +209,46 @@ class TestDatasetPipelineSpec:
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
             "sample_batch_size": 32,
-            "shards": (),
+            "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
         }
         with pytest.raises(ValidationError):
+            DatasetPipelineSpec(**kwargs)
+
+    def test_pipeline_spec_empty_shards_raises_validation_error(
+        self,
+        patch_materialize_io: Path,
+    ) -> None:
+        """Empty shards tuple raises ValidationError.
+
+        DatasetConfig enforces num_shards > 0 at materialize time; this mirror catches specs loaded
+        from external/hand-edited JSON where shards=[] would let generate_dataset.run() succeed as
+        a silent no-op (uploading only the spec, no shards).
+        """
+        kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
+            "created_at": FIXED_NOW,
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "hdf5",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "base_seed": 42,
+            "num_params": 92,
+            "r2_bucket": "intermediate-data",
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "plugin_path": str(patch_materialize_io),
+            "preset_path": "presets/test.vstpreset",
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "shards": (),
+        }
+        with pytest.raises(ValidationError, match="shards must not be empty"):
             DatasetPipelineSpec(**kwargs)
 
     def test_direct_construction_with_nonexistent_plugin_path_succeeds(self) -> None:

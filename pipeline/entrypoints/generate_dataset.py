@@ -176,13 +176,17 @@ def _render_and_upload_shard(
     logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
     subprocess.check_call(args)  # noqa: S603 — args built from validated spec
     shard_path = work_dir / shard.filename
-    size = shard_path.stat().st_size if shard_path.exists() else 0
-    logger.info(f"shard rendered: {shard_path} ({size} bytes)")
+    # Catches a generator that exits 0 without writing output — surfaces a clear error
+    # at the rendering boundary rather than a downstream rclone "source not found".
+    if not shard_path.is_file():
+        raise RuntimeError(
+            f"generate_vst_dataset.py exited 0 but did not write expected shard file: {shard_path}"
+        )
+    logger.info(f"shard rendered: {shard_path} ({shard_path.stat().st_size} bytes)")
     _rclone_copy(str(shard_path), r2_dest_prefix)
     logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
-    if shard_path.exists():
-        shard_path.unlink()
-        logger.info(f"shard removed locally: {shard_path}")
+    shard_path.unlink()
+    logger.info(f"shard removed locally: {shard_path}")
 
 
 if __name__ == "__main__":
