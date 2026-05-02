@@ -317,28 +317,47 @@ class TestRun:
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
-    def test_previous_shard_unlinked_before_next_render(
+    def test_each_shard_unlinked_after_its_upload(
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Each shard's local HDF5 is unlinked before the next render starts.
+        """Every shard's local HDF5 — including the final one — is unlinked after upload.
 
-        Asserted as an in-loop invariant (not post-run) — the run wraps everything in
-        ``tempfile.TemporaryDirectory()`` so a post-run existence check would pass
-        regardless of whether unlink ran. This bounds local disk to one shard's worth
-        at a time.
+        Two complementary assertions, because a single check misses a corner:
+          * In-loop: before rendering shard i (i >= 1), shard i-1 is already gone. Catches
+            mid-loop regressions but cannot see the final shard's unlink (no follow-up render).
+          * Post-run: every rendered shard path is gone after ``run()`` returns. Catches a
+            regression on the last shard's unlink. Requires patching
+            ``tempfile.TemporaryDirectory`` so the work dir persists past ``run()`` —
+            otherwise the tmpdir cleanup would erase evidence regardless of whether
+            ``unlink()`` ran.
         """
         spec = _multi_shard_spec(tmp_path, n=3)
         rendered_paths: list[Path] = []
+
+        persisted_work_dir = tmp_path / "persisted-work-dir"
+        persisted_work_dir.mkdir()
+
+        class _PersistentTempDir:
+            def __enter__(self) -> str:
+                return str(persisted_work_dir)
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+        monkeypatch.setattr(
+            "pipeline.entrypoints.generate_dataset.tempfile.TemporaryDirectory",
+            lambda: _PersistentTempDir(),
+        )
 
         def _render_side_effect(args: list[str]) -> int:
             # Args layout: [wrapper, python, generate_vst_dataset.py, output_file, ...].
             output_file = Path(args[3])
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_bytes(b"")
-            # Before rendering shard i (i >= 1), shard i-1 must already be gone.
             if rendered_paths:
                 previous = rendered_paths[-1]
                 assert not previous.exists(), (
@@ -352,8 +371,11 @@ class TestRun:
 
         run(spec)
 
-        # Sanity: the side effect must have fired once per shard.
         assert len(rendered_paths) == 3
+        for shard_path in rendered_paths:
+            assert not shard_path.exists(), (
+                f"shard {shard_path.name} still on disk after run() returned"
+            )
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")

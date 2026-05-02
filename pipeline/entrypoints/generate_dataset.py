@@ -157,6 +157,11 @@ def run(spec: DatasetPipelineSpec) -> None:
             ``spec.renderer_version``, or if the render subprocess exits 0
             without writing the expected shard file (raised from
             ``_render_and_upload_shard``).
+        subprocess.CalledProcessError: Propagated unchanged from any
+            non-zero exit of either the per-shard ``generate_vst_dataset.py``
+            render subprocess or any ``rclone copy`` call (spec upload or
+            per-shard shard upload). Fail-fast — later shards are not
+            attempted.
     """
     if spec.output_format != "hdf5":
         raise ValueError(
