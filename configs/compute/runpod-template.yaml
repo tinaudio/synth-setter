@@ -18,9 +18,11 @@
 resources:
   cloud: runpod
   # CPU-only: generate_dataset.py is CPU-bound (pedalboard renders Surge XT
-  # on the host, no CUDA path). cpu3g-2-8 = 2 vCPU / 8 GB RAM, ~$0.08/hr.
-  # disk_size capped at 20 GB by RunPod's CPU3G tier (vCPU × 10 GB).
-  instance_type: cpu3g-2-8
+  # on host, no CUDA path). cpus: 2+ excludes 1-vCPU tiers whose 10 GB disk
+  # cap can't fit the dev-snapshot image; memory: 4+ is the worker's floor
+  # under pedalboard. SkyPilot picks the cheapest matching CPU tier.
+  cpus: 2+
+  memory: 4+
   use_spot: false
   disk_size: 20
   image_id: docker:tinaudio/synth-setter:dev-snapshot
