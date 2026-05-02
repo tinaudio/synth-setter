@@ -533,6 +533,54 @@ class TestMainCli:
         assert "Worker log dump failed: boom" in result.output
         mock_sky.down.assert_called_once()
 
+    def test_help_renders_without_skypilot_installed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`--help` works without SkyPilot (lazy-import contract).
+
+        Spawns a subprocess with `sky` masked at the meta-path level so the launcher's
+        try/except sentinel branch is actually exercised (`sys.modules.pop` alone leaves
+        the package installable via finders, which is why the older test was a no-op).
+        """
+        import subprocess  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+
+        prelude = (
+            "import sys\n"
+            "class _Block:\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name == 'sky' or name.startswith('sky.'):\n"
+            "            raise ImportError('blocked for test')\n"
+            "        return None\n"
+            "sys.meta_path.insert(0, _Block())\n"
+            "for m in [k for k in sys.modules if k == 'sky' or k.startswith('sky.')]:\n"
+            "    sys.modules.pop(m, None)\n"
+            "from pipeline.entrypoints.skypilot_launch_smoke import sky, main\n"
+            "from click.testing import CliRunner\n"
+            "result = CliRunner().invoke(main, ['--help'])\n"
+            "assert result.exit_code == 0, result.output\n"
+            "assert 'Launch the smoke' in result.output\n"
+            "import click\n"
+            "try:\n"
+            "    sky.launch\n"
+            "except click.ClickException as e:\n"
+            "    assert 'pip install' in e.message, e.message\n"
+            "else:\n"
+            "    raise AssertionError('sentinel did not raise')\n"
+            "print('OK')\n"
+        )
+        completed = subprocess.run(  # noqa: S603 — hardcoded prelude, fixed sys.executable
+            [sys.executable, "-c", prelude],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, (
+            f"stdout={completed.stdout!r} stderr={completed.stderr!r}"
+        )
+        assert "OK" in completed.stdout
+
     def test_mount_source_cleaned_up_on_launch_exception(
         self,
         config_yaml: Path,

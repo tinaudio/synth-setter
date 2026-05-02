@@ -20,10 +20,31 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
-import sky
 from dotenv import dotenv_values
+
+# Optional import: keep `python -m pipeline.entrypoints.skypilot_launch_smoke --help` working
+# in environments without SkyPilot installed (e.g., a thin CI step that only needs to read
+# the CLI surface). Any real attribute access on the sentinel raises a clear ClickException.
+# Under TYPE_CHECKING the real `sky` module is imported so static analysis (pyright) keeps
+# resolving sky.Task/sky.JobStatus/etc. without falling back to `object`.
+if TYPE_CHECKING:
+    import sky
+else:
+    try:
+        import sky
+    except ImportError:
+
+        class _MissingSkyPilot:
+            def __getattr__(self, name: str) -> object:
+                raise click.ClickException(
+                    "SkyPilot is required to launch this command. "
+                    "Install it with `pip install 'skypilot[runpod]'`."
+                )
+
+        sky = _MissingSkyPilot()
 
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import materialize_spec
