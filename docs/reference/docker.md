@@ -175,10 +175,20 @@ ______________________________________________________________________
 
 ### Entrypoint
 
-`dev-snapshot` runs `python docker_entrypoint.py` as its `ENTRYPOINT`: a
-click group with five subcommands (`idle`, `passthrough`,
-`generate_dataset`, `render_eval`, `train`). A subcommand is required —
-the container fails loudly if invoked with none. See
+`dev-snapshot` has **no baked `ENTRYPOINT`** (dropped in
+[#721](https://github.com/tinaudio/synth-setter/pull/721) so SkyPilot's
+RunPod backend, which prepends its own `bash -lc` invocation, doesn't
+end up exec'ing our click group with stray argv). Callers invoke the
+click group explicitly:
+
+```bash
+docker run --rm synth-setter:dev-snapshot \
+  python scripts/docker_entrypoint.py <subcommand> [...]
+```
+
+The click group has five subcommands (`idle`, `passthrough`,
+`generate_dataset`, `render_eval`, `train`); a subcommand is required —
+the group fails loudly if invoked with none. See
 [docker-spec.md](docker-spec.md) for the full table.
 
 Prefer `docker run --env-file .env` over `set -a && source .env` to avoid

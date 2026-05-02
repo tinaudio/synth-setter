@@ -84,8 +84,11 @@ configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
 ```
 
 - Separate from Hydra — different consumer (SkyPilot's `Task.from_yaml`), different time (before worker starts)
-- Launcher takes the task template + a `DatasetConfig` and stages the materialized
-  `DatasetPipelineSpec` via `task.update_file_mounts`
+- Launcher takes the task template + a `DatasetConfig`, materializes a
+  `DatasetPipelineSpec`, uploads it to R2 (under `skypilot-launcher-specs/<cluster>.json`),
+  and forwards the `r2://` URI to the worker via `task.update_envs(WORKER_SPEC_URI=...)`.
+  R2 is used instead of `task.update_file_mounts` because the SkyPilot RunPod backend
+  rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
 - Invoked via: `python -m pipeline.entrypoints.skypilot_launch_smoke --config <yaml> --template <yaml>`
 
 Reference: `training-pipeline.md` Appendix D
