@@ -1,47 +1,62 @@
 name: Test SkyPilot Debug
 
-# Permanent diagnostic matrix for the SkyPilot+RunPod path. Four canary
-# variants, each isolating one known failure class. None of these exercise
-# the production launcher or worker — they're standalone probes. When
-# test-dataset-generation (lands in a follow-up PR) regresses, dispatch
-# this and read the green/red pattern to triage in ~10 minutes.
+# Permanent diagnostic matrix for the SkyPilot+RunPod path. Seven progressive
+# canary variants, each adding one piece of the production smoke's complexity.
+# None of these run the production launcher or worker — they're standalone
+# probes. Read the matrix's green/red pattern to identify where the production
+# smoke first breaks.
 #
-#   noop             SkyPilot/RunPod orchestration canary
-#                    (provision -> submit -> status-poll -> teardown,
-#                    no wrapper, no Python work). PASS = the platform
-#                    itself is fine; failure here means the regression
-#                    is in SkyPilot, RunPod's API, or the cluster
-#                    plumbing — not in our code.
+# Layer 1 — orchestration only (no wrapper, no Python, no mount):
 #
-#   image-pull       Image-availability canary. Same shape as `noop`
-#                    (provision a pod, run a one-line echo) but a
-#                    distinct slot in the matrix so a single RunPod
-#                    transient on `noop` doesn't look like a regression.
-#                    `noop` + `image-pull` together = two independent
-#                    pod boots per dispatch on the simplest possible
-#                    workload; both green = RunPod can reliably hand us
-#                    pods that have SSH + the dev-snapshot image ready.
+#   noop             Provision -> submit -> status-poll -> teardown.
+#                    PASS = the platform itself is fine; failure here
+#                    means the regression is in SkyPilot, RunPod's API,
+#                    or the cluster plumbing — not in our code.
 #
-#   rclone           rclone-process-exit canary
-#                    (`rclone copy <small file> r2:...`). Catches a
-#                    future image / network / rclone-version combo
-#                    where rclone hangs post-upload (the bug-#2 hang
-#                    shape from #735, currently believed gone — this
-#                    variant is the canary).
+#   image-pull       Same shape as `noop` but a distinct slot so a
+#                    single RunPod transient on `noop` doesn't look
+#                    like a regression. `noop` + `image-pull` together
+#                    = two independent pod boots per dispatch.
 #
-#   pedalboard-load  Python+pedalboard+X interpreter-shutdown canary
-#                    (`python -c "load Surge XT"` through the headless
-#                    wrapper). Closest-to-production worker shape
-#                    without rclone; collectively validates the three
-#                    wrapper-cleanup hardening commits (stdin-detach,
-#                    `wait`, `pkill -P $$`) by exercising them under
-#                    a long-lived Python interpreter. Also the canary
-#                    that tells us when bug-#3 (#735's interpreter
-#                    shutdown hang) becomes safe to revert the
-#                    `os._exit(0)` workaround for.
+# Layer 2 — add ONE production-relevant capability (in isolation):
+#
+#   spec-mount       Adds SkyPilot file_mounts (production uses this
+#                    via `task.update_file_mounts(...)` to ship the
+#                    materialized spec). PASS = mount upload during
+#                    provisioning works and the worker can read the
+#                    mounted file. FAIL = mount upload extends pod-boot
+#                    timing past SSH-readiness, OR mounts land in
+#                    unexpected paths/permissions on RunPod.
+#
+#   headless         Headless wrapper around an `echo` (Xvfb +
+#                    xsettingsd + openbox + dbus + cleanup trap).
+#                    PASS = the 3 wrapper hardening commits in #741
+#                    are working. FAIL = something in the wrapper's
+#                    child-process lifecycle is again holding the SSH
+#                    pipes open past the foreground command's exit
+#                    (#735 bug-#1).
+#
+#   rclone           `rclone copy <small file> r2:...` directly (no
+#                    wrapper). Catches `rclone copy` regressions on
+#                    RunPod's network — the bug-#2 hang shape from
+#                    #735.
+#
+# Layer 3 — combine two capabilities:
+#
+#   headless-rclone  Wrapper + rclone. If `headless` and `rclone` both
+#                    PASS but this FAILS, the failure is in their
+#                    interaction (rclone fds inheriting X-stack pipes,
+#                    dbus session seeing unexpected children, etc.).
+#
+#   pedalboard-load  Wrapper + Python interpreter (`python -c "load
+#                    Surge XT"`). Closest to production without rclone
+#                    — collectively validates the wrapper hardening
+#                    triplet under a long-lived Python interpreter.
+#                    Also the canary for #735's bug-#3 (interpreter
+#                    shutdown hang).
 #
 # Triggers: workflow_dispatch only — RunPod pods are billable. Each
-# dispatch spends ~4 pods. Add a `push` trigger only temporarily when
+# dispatch spends ~7 pods. Add a `push` trigger only temporarily when
 # actively iterating on launcher / wrapper / template behavior.
 #
 # Required secrets:
@@ -84,9 +99,18 @@ jobs:
           - variant: image-pull
             template: configs/compute/runpod-debug-image-pull-template.yaml
             cluster_suffix: image-pull
+          - variant: spec-mount
+            template: configs/compute/runpod-debug-spec-mount-template.yaml
+            cluster_suffix: spec-mount
+          - variant: headless
+            template: configs/compute/runpod-debug-headless-template.yaml
+            cluster_suffix: headless
           - variant: rclone
             template: configs/compute/runpod-debug-rclone-template.yaml
             cluster_suffix: rclone
+          - variant: headless-rclone
+            template: configs/compute/runpod-debug-headless-rclone-template.yaml
+            cluster_suffix: headless-rclone
           - variant: pedalboard-load
             template: configs/compute/runpod-debug-pedalboard-template.yaml
             cluster_suffix: pedalboard

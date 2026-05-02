@@ -1,0 +1,43 @@
+# SkyPilot task template for RunPod — DEBUG variant: headless wrapper canary.
+#
+# Layer 3 in the progressive triage matrix: builds on `noop` by invoking the
+# headless wrapper (`scripts/run-linux-vst-headless.sh`) around a no-op `echo`.
+# Tests the wrapper's full lifecycle on RunPod: Xvfb + xsettingsd + openbox +
+# dbus startup, the cleanup trap firing on `echo`'s exit, all child processes
+# reaped, the SSH command's pipes released, and SkyPilot's job-status reporter
+# observing SUCCEEDED.
+#
+# PASS = the 3 wrapper hardening commits in PR #741 are working as intended.
+# FAIL = something in the wrapper's child-process lifecycle is again holding
+# the SSH pipes open past the foreground command's exit (the original #735
+# bug-#1 hang shape).
+#
+# Pairs with `pedalboard-load` (wrapper + Python interpreter) and
+# `headless-rclone` (wrapper + rclone) to triangulate which workload shape
+# changes the result.
+#
+# `task.workdir = os.getcwd()` in test-skypilot-debug.yml syncs the GH-actions
+# checkout to the worker, so this exercises the in-repo wrapper as authored on
+# the dispatching branch — not the image-baked copy.
+
+resources:
+  cloud: runpod
+  accelerators:
+    {
+      RTX3070:1,
+      RTX3080:1,
+      RTX3090:1,
+      RTXA4000:1,
+      RTX4000Ada:1,
+      A40:1,
+      RTX4090:1,
+    }
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+setup: |
+  echo "synth-setter debug-headless worker ready (host: $(hostname))"
+
+run: |
+  bash scripts/run-linux-vst-headless.sh echo "skypilot-debug headless job done (host: $(hostname))"
