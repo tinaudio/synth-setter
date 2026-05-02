@@ -31,14 +31,6 @@ on:
         description: "Push run metrics to gh-pages (creates the page on first run)"
         type: boolean
         default: false
-      dummy_only:
-        # Fast iteration on the publish step. Skips the (slow) Docker test
-        # run entirely and writes a hardcoded ``bench.json`` so the publish
-        # step has data to push. Implies ``publish_metrics`` — flipping
-        # this on always publishes (the whole point is to debug publish).
-        description: "Skip slow tests; publish hardcoded dummy data only (debug-only)"
-        type: boolean
-        default: false
   push:
     # ``test/vst-roundtrip-xfail-tests`` listed temporarily so we can bootstrap
     # the ``gh-pages`` benchmark chart from this PR before merging to main.
@@ -77,15 +69,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Pull image
-        if: inputs.dummy_only != true
         run: docker pull "$IMAGE"
 
       # Mirrors the headless plugin-load smoke check in
       # ``docker/ubuntu22_04/Dockerfile:312-314`` (and the local-runner version
-      # in ``test-expensive.yml``) — fails fast if the plugin / image / mount
-      # layout is broken before the much-longer pytest run.
+      # in ``cpu-slow.yml``) — fails fast if the plugin / image / mount layout
+      # is broken before the much-longer pytest run.
       - name: Smoke-test Surge XT plugin load
-        if: inputs.dummy_only != true
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
@@ -100,7 +90,6 @@ jobs:
             '
 
       - name: Run VST slow tests in Docker
-        if: inputs.dummy_only != true
         # Mount the PR's tests + src into the container so we test THIS
         # branch's code against the image's environment. The image's
         # ENTRYPOINT is the ``python click`` CLI; ``passthrough <argv>``
@@ -138,7 +127,7 @@ jobs:
         # publish steps expect it. Each prefix maps 1:1 to a chart bucket.
         # Skipped cleanly if a file is missing (test deselected, xfailed
         # before emit, etc).
-        if: always() && inputs.dummy_only != true
+        if: always()
         run: |
           for f in vst-noise-floor-1-preset-n-renders.json vst-noise-floor-random-preset-replay.json; do
             if [ -f "/tmp/bench/$f" ]; then
@@ -149,37 +138,17 @@ jobs:
             fi
           done
 
-      - name: Write hardcoded dummy bench JSON files (debug-only fast path)
-        # Bypasses the slow Docker test entirely. Lets a maintainer iterate
-        # on publish-step gating / config without waiting ~5 minutes per
-        # cycle. Schema mirrors what ``_assert_round_trip_matches`` writes
-        # for the two round-trip tests; values are fictitious but plausible.
-        if: inputs.dummy_only == true
-        run: |
-          for prefix in vst-noise-floor-1-preset-n-renders vst-noise-floor-random-preset-replay; do
-            cat > "${{ github.workspace }}/${prefix}.json" <<EOF
-          [
-            {"name": "${prefix}/multi-scale-spectral-loss-max",        "unit": "dB",          "value": 1.0},
-            {"name": "${prefix}/dtw-aligned-mfcc-distance-max",        "unit": "L1",          "value": 1.0},
-            {"name": "${prefix}/spectral-optimal-transport-max",       "unit": "Wasserstein", "value": 0.001},
-            {"name": "${prefix}/rms-envelope-cosine-distance-max",     "unit": "1-cos",       "value": 0.001},
-            {"name": "${prefix}/mel-spectrogram-mean-absolute-error",  "unit": "dB",          "value": 0.5}
-          ]
-          EOF
-            echo "dummy ${prefix}.json written"
-          done
-
       - name: Publish "1 preset N renders" metrics to benchmark history
         # Bucket 1: same hardcoded patch rendered ``num_samples`` times across
         # both stages, exposing the every-other-render variance described in
         # bug #489. See ``docs/reference/audio-similarity-benchmarks.md``.
         # Push-to-main always publishes; manual dispatch requires the
-        # ``publish_metrics`` or ``dummy_only`` opt-in. ``hashFiles`` skips
-        # the step cleanly if the file is missing.
+        # ``publish_metrics`` opt-in. ``hashFiles`` skips the step cleanly if
+        # the file is missing.
         if: |
           hashFiles('vst-noise-floor-1-preset-n-renders.json') != '' && (
             (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
-            (github.event_name == 'workflow_dispatch' && (inputs.publish_metrics == true || inputs.dummy_only == true))
+            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
           )
         uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
@@ -205,7 +174,7 @@ jobs:
         if: |
           hashFiles('vst-noise-floor-random-preset-replay.json') != '' && (
             (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
-            (github.event_name == 'workflow_dispatch' && (inputs.publish_metrics == true || inputs.dummy_only == true))
+            (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
           )
         uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
         with:
