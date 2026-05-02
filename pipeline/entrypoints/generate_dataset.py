@@ -155,7 +155,9 @@ def run(spec: DatasetPipelineSpec) -> None:
     Raises:
         ValueError: If ``spec.output_format != "hdf5"``.
         RuntimeError: If the worker's plugin version disagrees with
-            ``spec.renderer_version``.
+            ``spec.renderer_version``, or if the render subprocess exits 0
+            without writing the expected shard file (raised from
+            ``_render_and_upload_shard``).
     """
     if spec.output_format != "hdf5":
         raise ValueError(

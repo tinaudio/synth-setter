@@ -80,9 +80,9 @@ cat configs/dataset/surge-simple-480k-10k.yaml
 
 # 2. Launch generation — creates spec, launches workers, exits
 # **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)
-# is not yet implemented. Currently only single-shard generation is available via:
+# is not yet implemented. Currently only single-worker sequential generation is available via:
 DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml python -m pipeline.entrypoints.generate_dataset
-# → Sequential multi-shard MVP. Loops over spec.shards on a single worker; distributed parallelism still tracked under #411.
+# → Sequential multi-shard MVP. Loops over spec.shards on a single worker; distributed parallelism still tracked under #407.
 # `generate_dataset` is the current MVP. It will be deprecated when
 # `generate-shards` lands on main (#411).
 
