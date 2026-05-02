@@ -322,6 +322,15 @@ jobs:
         if: matrix.mode == 'launcher-runner'
         run: pip install -r requirements-app.txt
 
+      # The launcher's `upload_spec_to_r2` shells out to `rclone copyto` to
+      # ship the materialized spec to R2 (#749 mitigation). The dev-snapshot
+      # image has rclone baked in, but the bare GH-actions runner doesn't —
+      # install it for launcher-runner mode only. launcher-docker mode runs
+      # the launcher inside the image and skips this.
+      - name: Install rclone (launcher-runner mode)
+        if: matrix.mode == 'launcher-runner'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
       - name: Run launcher (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
         env:
