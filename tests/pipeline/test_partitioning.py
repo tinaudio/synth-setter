@@ -2,8 +2,8 @@
 
 ``get_my_shards`` and ``validate_rank_world`` are pure — tests pass
 ``rank`` / ``world`` / ``total_shards`` as direct arguments. ``read_rank_world_from_env``
-is the imperative shell that reads ``WORKER_RANK`` /
-``NUM_WORKERS`` from the environment; tests inject env
+is the imperative shell that reads ``SYNTH_SETTER_WORKER_RANK`` /
+``SYNTH_SETTER_NUM_WORKERS`` from the environment; tests inject env
 via ``monkeypatch.setenv`` / ``monkeypatch.delenv``.
 """
 
@@ -137,15 +137,15 @@ class TestReadRankWorldFromEnv:
     @pytest.fixture(autouse=True)
     def _clear_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Strip SkyPilot rank/world env vars from the test process for isolation."""
-        monkeypatch.delenv("WORKER_RANK", raising=False)
-        monkeypatch.delenv("NUM_WORKERS", raising=False)
+        monkeypatch.delenv("SYNTH_SETTER_WORKER_RANK", raising=False)
+        monkeypatch.delenv("SYNTH_SETTER_NUM_WORKERS", raising=False)
 
     def test_returns_rank_world_tuple_when_env_valid(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Both vars set + valid → returns (rank, world) as ints."""
-        monkeypatch.setenv("WORKER_RANK", "2")
-        monkeypatch.setenv("NUM_WORKERS", "4")
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "2")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "4")
         assert read_rank_world_from_env() == (2, 4)
 
     def test_both_missing_raises_with_both_names_in_message(self) -> None:
@@ -153,45 +153,45 @@ class TestReadRankWorldFromEnv:
         with pytest.raises(ValueError) as excinfo:
             read_rank_world_from_env()
         message = str(excinfo.value)
-        assert "WORKER_RANK" in message
-        assert "NUM_WORKERS" in message
+        assert "SYNTH_SETTER_WORKER_RANK" in message
+        assert "SYNTH_SETTER_NUM_WORKERS" in message
 
     def test_only_rank_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Only rank var missing → ValueError naming rank."""
-        monkeypatch.setenv("NUM_WORKERS", "1")
-        with pytest.raises(ValueError, match="WORKER_RANK"):
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        with pytest.raises(ValueError, match="SYNTH_SETTER_WORKER_RANK"):
             read_rank_world_from_env()
 
     def test_only_world_missing_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Only world var missing → ValueError naming world."""
-        monkeypatch.setenv("WORKER_RANK", "0")
-        with pytest.raises(ValueError, match="NUM_WORKERS"):
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        with pytest.raises(ValueError, match="SYNTH_SETTER_NUM_WORKERS"):
             read_rank_world_from_env()
 
     def test_non_integer_rank_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Non-integer rank ('abc') → ValueError naming SKYPILOT_NODE_RANK."""
-        monkeypatch.setenv("WORKER_RANK", "abc")
-        monkeypatch.setenv("NUM_WORKERS", "1")
-        with pytest.raises(ValueError, match="WORKER_RANK"):
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "abc")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        with pytest.raises(ValueError, match="SYNTH_SETTER_WORKER_RANK"):
             read_rank_world_from_env()
 
     def test_non_integer_world_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Non-integer world ('xyz') → ValueError naming SKYPILOT_NUM_NODES."""
-        monkeypatch.setenv("WORKER_RANK", "0")
-        monkeypatch.setenv("NUM_WORKERS", "xyz")
-        with pytest.raises(ValueError, match="NUM_WORKERS"):
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "xyz")
+        with pytest.raises(ValueError, match="SYNTH_SETTER_NUM_WORKERS"):
             read_rank_world_from_env()
 
     def test_out_of_bounds_rank_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Rank >= world is rejected by validate_rank_world."""
-        monkeypatch.setenv("WORKER_RANK", "5")
-        monkeypatch.setenv("NUM_WORKERS", "2")
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "5")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
         with pytest.raises(ValueError, match="rank=5"):
             read_rank_world_from_env()
 
     def test_world_zero_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """World=0 violates the world>=1 invariant."""
-        monkeypatch.setenv("WORKER_RANK", "0")
-        monkeypatch.setenv("NUM_WORKERS", "0")
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "0")
         with pytest.raises(ValueError, match="world=0"):
             read_rank_world_from_env()

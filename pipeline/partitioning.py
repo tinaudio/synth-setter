@@ -7,26 +7,28 @@ a single-node run with no coordination overhead.
 
 ``get_my_shards`` and ``validate_rank_world`` are pure — they don't read
 the environment. ``read_rank_world_from_env`` is the imperative shell
-that pulls ``WORKER_RANK`` / ``NUM_WORKERS`` from ``os.environ`` and
+that pulls ``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS`` from ``os.environ`` and
 fails loudly if they're missing or invalid; ``generate_dataset.run``
 calls it before any R2 work so a worker without partition env can't
 silently default to a single-worker partition that would make every
 node render every shard.
 
-Note: we deliberately use our own env-var names rather than SkyPilot's
-``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES``. SkyPilot reserves
-``SKYPILOT_NODE_RANK`` and resets it to the cluster-native value (0 on
-every single-node cluster) at job-submission time, which would clobber
-the launcher's per-rank injection in our N-clusters fan-out path. Our
-own names are fully under our control.
+Note: we deliberately use project-namespaced env-var names rather than
+SkyPilot's ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES`` (SkyPilot
+reserves the former and resets it to the cluster-native value on every
+single-node cluster, which would clobber our per-rank injection in the
+N-clusters fan-out path) or generic ``WORKER_RANK`` / ``NUM_WORKERS``
+(which collide with conventions used by PyTorch DataLoader, dask, ray,
+and other multiprocessing toolkits). The ``SYNTH_SETTER_`` prefix keeps
+the namespace fully under our control.
 """
 
 from __future__ import annotations
 
 import os
 
-WORKER_RANK_ENV_VAR = "WORKER_RANK"
-NUM_WORKERS_ENV_VAR = "NUM_WORKERS"
+WORKER_RANK_ENV_VAR = "SYNTH_SETTER_WORKER_RANK"
+NUM_WORKERS_ENV_VAR = "SYNTH_SETTER_NUM_WORKERS"
 
 
 def validate_rank_world(rank: int, world: int) -> None:
@@ -43,7 +45,7 @@ def validate_rank_world(rank: int, world: int) -> None:
 
 
 def read_rank_world_from_env() -> tuple[int, int]:
-    """Read WORKER_RANK / NUM_WORKERS from the environment.
+    """Read SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS from the environment.
 
     No defaults — if either env var is missing, malformed, or out-of-bounds,
     raise ``ValueError`` with a message naming the offending var(s). The

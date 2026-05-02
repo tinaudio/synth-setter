@@ -9,7 +9,7 @@ container CLI. Logs stream live via `sky.tail_logs(..., follow=True)`.
 
 With `--num-workers N>1` the launcher fans out N independent single-node
 SkyPilot clusters in parallel (RunPod's backend doesn't support `num_nodes
-> 1`). Each rank gets ``WORKER_RANK`` / ``NUM_WORKERS`` injected via
+> 1`). Each rank gets ``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS`` injected via
 ``task.update_envs``. The spec is materialized + uploaded to R2 once and
 shared across ranks, so all workers write shards under the same
 ``r2_prefix``. ``pipeline.partitioning.get_my_shards`` slices each
@@ -210,7 +210,7 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
     help=(
         "Number of single-node SkyPilot clusters to fan out in parallel. RunPod's backend "
         "does not support num_nodes>1, so we synthesize multi-worker partitioning by launching "
-        "N independent clusters and injecting WORKER_RANK / NUM_WORKERS per rank. Each cluster "
+        "N independent clusters and injecting SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS per rank. Each cluster "
         "downloads the same materialized spec and uses pipeline.partitioning.get_my_shards to "
         "slice its share."
     ),
@@ -289,7 +289,7 @@ def _run_workers(
 ) -> list[int]:
     """Launch len(cluster_names) single-node clusters in parallel; return tail_logs rc per rank.
 
-    Each rank gets its own ``sky.Task`` with ``WORKER_RANK`` / ``NUM_WORKERS`` injected via
+    Each rank gets its own ``sky.Task`` with ``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS`` injected via
     ``update_envs``. Provisioning + log streaming
     run concurrently in a ``ThreadPoolExecutor`` (one thread per rank), and all clusters get
     torn down in parallel in the finally block regardless of which ranks succeeded.

@@ -49,8 +49,8 @@ envs:
   # SKYPILOT_NODE_RANK/SKYPILOT_NUM_NODES, which SkyPilot reserves and
   # resets to single-node values on every pod). Source of truth:
   # pipeline/partitioning.py.
-  WORKER_RANK: ""
-  NUM_WORKERS: ""
+  SYNTH_SETTER_WORKER_RANK: ""
+  SYNTH_SETTER_NUM_WORKERS: ""
 
 setup: |
   echo "synth-setter worker ready (host: $(hostname))"
@@ -70,7 +70,7 @@ setup: |
 #   Public repo, no creds needed; ~3s of git fetch on a small clone.
 #   Skipped silently when WORKER_GIT_REF is unset, so non-CI launches
 #   keep using baked code.
-# - WORKER_RANK / NUM_WORKERS are read inside `run()` via
+# - SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS are read inside `run()` via
 #   `pipeline.partitioning.read_rank_world_from_env`, which raises before
 #   any rclone work if either is missing or out-of-bounds. No belt-and-
 #   suspenders pre-flight needed in this YAML — the worker fails loudly
