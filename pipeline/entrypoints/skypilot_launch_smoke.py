@@ -39,6 +39,7 @@ import click
 import sky
 from dotenv import dotenv_values
 
+from pipeline.partitioning import RANK_ENV_VAR, WORLD_ENV_VAR
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
 
@@ -76,14 +77,6 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
 # `sky.tail_logs(..., follow=True)` returns 0 on success, 100 if the worker
 # job ended in a non-SUCCEEDED terminal status (per sky/core.py docstring).
 _TAIL_LOGS_RC_SUCCESS = 0
-
-# Synthetic rank/world env vars the launcher injects per-cluster in the
-# `--num-workers N>1` fan-out path. OVERRIDE_-prefixed because SkyPilot
-# itself reserves SKYPILOT_NODE_RANK and resets our task.update_envs
-# injection to the cluster-native value (0 on every single-node cluster).
-# Worker reads these via pipeline.partitioning.read_rank_world_from_env.
-_RANK_ENV = "OVERRIDE_SKYPILOT_NODE_RANK"
-_WORLD_ENV = "OVERRIDE_SKYPILOT_NUM_NODES"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "runpod-smoke-shard.yaml"
@@ -280,7 +273,6 @@ def main(
         worker_env_base=worker_env,
         template_path=template_path,
         cluster_names=cluster_names,
-        num_workers=num_workers,
     )
 
     failed = [
@@ -297,27 +289,27 @@ def _run_workers(
     worker_env_base: dict[str, str],
     template_path: Path,
     cluster_names: list[str],
-    num_workers: int,
 ) -> list[int]:
-    """Launch N single-node clusters in parallel; return tail_logs rc for each rank.
+    """Launch len(cluster_names) single-node clusters in parallel; return tail_logs rc per rank.
 
-    Each rank gets its own ``sky.Task`` with ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES``
-    injected via ``update_envs``. Provisioning + log streaming run concurrently in a
-    ``ThreadPoolExecutor`` (one thread per rank), and all clusters get torn down in parallel
-    in the finally block regardless of which ranks succeeded.
+    Each rank gets its own ``sky.Task`` with ``OVERRIDE_SKYPILOT_NODE_RANK`` /
+    ``OVERRIDE_SKYPILOT_NUM_NODES`` injected via ``update_envs``. Provisioning + log streaming
+    run concurrently in a ``ThreadPoolExecutor`` (one thread per rank), and all clusters get
+    torn down in parallel in the finally block regardless of which ranks succeeded.
 
     A rank's slot in the returned list is ``-1`` if launching/streaming raised before
     ``sky.tail_logs`` could return; the caller treats anything != ``_TAIL_LOGS_RC_SUCCESS`` as
     a failure for that rank.
     """
+    num_workers = len(cluster_names)
     rcs: list[int] = [-1] * num_workers
 
     def _launch_and_tail(rank: int) -> int:
         cluster = cluster_names[rank]
         env_for_rank = {
             **worker_env_base,
-            _RANK_ENV: str(rank),
-            _WORLD_ENV: str(num_workers),
+            RANK_ENV_VAR: str(rank),
+            WORLD_ENV_VAR: str(num_workers),
         }
         task = sky.Task.from_yaml(str(template_path))
         task.update_envs(env_for_rank)
@@ -338,25 +330,24 @@ def _run_workers(
         return rc
 
     try:
+        # noqa: BLE001 — must catch any rank-thread exception to keep teardown loop reachable.
         with ThreadPoolExecutor(max_workers=num_workers) as ex:
             future_to_rank = {ex.submit(_launch_and_tail, i): i for i in range(num_workers)}
             for fut, rank in future_to_rank.items():
                 try:
                     rcs[rank] = fut.result()
-                except Exception as exc:  # noqa: BLE001 — surface any rank's failure to the
-                    # caller, but don't skip the teardowns of the OTHER ranks
+                except Exception as exc:  # noqa: BLE001
                     click.echo(f"[{cluster_names[rank]}] launch raised: {exc}")
                     rcs[rank] = -1
     finally:
-        with ThreadPoolExecutor(max_workers=max(num_workers, 1)) as ex:
+        with ThreadPoolExecutor(max_workers=num_workers) as ex:
             for cluster in cluster_names:
                 ex.submit(_teardown_cluster, cluster)
     return rcs
 
 
 def _teardown_cluster(cluster: str) -> None:
-    """Tear down a single cluster; log and swallow exceptions so one failure doesn't short-circuit
-    other teardowns."""
+    """Tear down a single cluster, swallowing exceptions so other teardowns aren't skipped."""
     try:
         click.echo(f"[{cluster}] tearing down")
         down_request_id = sky.down(cluster)

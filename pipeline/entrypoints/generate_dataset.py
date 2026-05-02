@@ -177,6 +177,15 @@ def run(spec: DatasetPipelineSpec) -> None:
         )
     logger.info(f"renderer_version OK: plugin at {spec.plugin_path} == {spec.renderer_version}")
 
+    # Read rank/world before any tmpdir / R2 work — fail loudly on missing env.
+    rank, world = read_rank_world_from_env()
+    my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
+    logger.info(
+        f"shard partition: rank={rank}/{world} owns shard_ids "
+        f"[{my_range.start}, {my_range.stop}) "
+        f"({len(my_range)} of {spec.num_shards} shards)"
+    )
+
     r2_dest_prefix = f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
     with tempfile.TemporaryDirectory() as work_dir_str:
@@ -187,16 +196,6 @@ def run(spec: DatasetPipelineSpec) -> None:
         # INPUT_SPEC_FILENAME, so uploading to the prefix directory lands
         # the object at `{prefix}{INPUT_SPEC_FILENAME}` without the
         # double-name issue a full object-key destination would cause.
-        # Read rank/world before any R2 work — fail loudly on missing env so a
-        # misconfigured launch doesn't waste an upload before crashing.
-        rank, world = read_rank_world_from_env()
-        my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
-        logger.info(
-            f"shard partition: rank={rank}/{world} owns shard_ids "
-            f"[{my_range.start}, {my_range.stop}) "
-            f"({len(my_range)} of {spec.num_shards} shards)"
-        )
-
         spec_path = work_dir / INPUT_SPEC_FILENAME
         spec_path.write_text(spec.model_dump_json(indent=2))
         logger.info(f"spec written: {spec_path}")

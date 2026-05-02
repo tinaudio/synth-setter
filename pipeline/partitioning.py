@@ -24,8 +24,8 @@ import os
 # fan-out (RunPod's backend doesn't support num_nodes>1), so the launcher
 # injects synthetic rank/world under non-reserved names that SkyPilot
 # leaves alone. The worker reads these and partitions accordingly.
-_RANK_ENV = "OVERRIDE_SKYPILOT_NODE_RANK"
-_WORLD_ENV = "OVERRIDE_SKYPILOT_NUM_NODES"
+RANK_ENV_VAR = "OVERRIDE_SKYPILOT_NODE_RANK"
+WORLD_ENV_VAR = "OVERRIDE_SKYPILOT_NUM_NODES"
 
 
 def validate_rank_world(rank: int, world: int) -> None:
@@ -58,19 +58,19 @@ def read_rank_world_from_env() -> tuple[int, int]:
         ValueError: If either env var is missing, can't parse as int, or
             fails the rank/world bounds check.
     """
-    missing = [name for name in (_RANK_ENV, _WORLD_ENV) if name not in os.environ]
+    missing = [name for name in (RANK_ENV_VAR, WORLD_ENV_VAR) if name not in os.environ]
     if missing:
         raise ValueError(f"missing SkyPilot env vars: {', '.join(missing)}")
-    rank_raw = os.environ[_RANK_ENV]
-    world_raw = os.environ[_WORLD_ENV]
+    rank_raw = os.environ[RANK_ENV_VAR]
+    world_raw = os.environ[WORLD_ENV_VAR]
     try:
         rank = int(rank_raw)
     except ValueError as e:
-        raise ValueError(f"{_RANK_ENV} is not an integer: {rank_raw!r}") from e
+        raise ValueError(f"{RANK_ENV_VAR} is not an integer: {rank_raw!r}") from e
     try:
         world = int(world_raw)
     except ValueError as e:
-        raise ValueError(f"{_WORLD_ENV} is not an integer: {world_raw!r}") from e
+        raise ValueError(f"{WORLD_ENV_VAR} is not an integer: {world_raw!r}") from e
     validate_rank_world(rank, world)
     return rank, world
 
