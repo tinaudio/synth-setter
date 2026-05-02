@@ -1,6 +1,1095 @@
 # CHANGELOG
 
 
+## v0.7.4 (2026-05-02)
+
+### Bug Fixes
+
+- **pipeline**: Skip VST_HEADLESS_WRAPPER on non-Linux in generate_dataset
+  ([#766](https://github.com/tinaudio/synth-setter/pull/766),
+  [`2085c06`](https://github.com/tinaudio/synth-setter/commit/2085c061bd8b240caaa75ac5b08c6985637ae22b))
+
+* fix(pipeline): skip VST_HEADLESS_WRAPPER on non-Linux in generate_dataset
+
+The headless wrapper is a Linux-only X11 bootstrap (Xvfb + xsettingsd + dbus); unconditionally
+  prepending it broke `run(spec)` on macOS / other dev hosts. Gate on
+  `sys.platform.startswith("linux")` to mirror the existing pattern in tests/conftest.py and
+  tests/test_train.py.
+
+Update the test that asserted `args[0] == VST_HEADLESS_WRAPPER` and the `_materialize_shard` helper
+  to handle both arg layouts.
+
+Closes #765
+
+* fix(pipeline): address Copilot review on PR #766
+
+- generate_dataset.py: use `sys.platform == "linux"` to match the wrapper gating in
+  tests/conftest.py and tests/test_train.py (Copilot #3176950474). - test_generate_dataset.py:
+  extract `_find_script_index` helper that raises AssertionError with the offending args list when
+  the script name is not found, so a future arg-layout change surfaces a clear test failure rather
+  than an opaque StopIteration (Copilot #3176950479, #3176950480). - test_generate_dataset.py: also
+  normalize the in-test `sys.platform` branch on line 199 to `==` so the production check and its
+  test agree.
+
+Refs #765
+
+- **vst**: Raise ValueError when fixed_synth_params produces silent render
+  ([#725](https://github.com/tinaudio/synth-setter/pull/725),
+  [`85e7357`](https://github.com/tinaudio/synth-setter/commit/85e7357148167b2f17eaa804a6b149b4fff54c0a))
+
+* fix(vst): raise ValueError when fixed_synth_params produces silent render
+
+When ``generate_sample`` is called with ``fixed_synth_params`` (with or without
+  ``fixed_note_params``) and the render falls below ``min_loudness``, the function now raises
+  ``ValueError`` immediately rather than retrying. The synth patch is the dominant determinant of
+  loudness — re-sampling note params alone almost never lifts a silent patch above threshold, so the
+  existing ``while True`` loop ran forever on captured silent patches (the
+  ``surge_xt_interactive.py`` ``p`` capture path).
+
+Previously the raise condition was ``fully_fixed`` (both synth AND note fixed); the asymmetry was
+  the bug. When only ``fixed_note_params`` is supplied, retrying remains meaningful (synth
+  re-sampled each iteration), so that path is preserved.
+
+Closes #724
+
+* fix(vst): clarify ValueError wording and test-comment phrasing on PR #725
+
+Resolves two review comments on PR #725:
+
+- The ValueError raised by ``generate_sample`` now describes both cases the guard covers:
+  fully-fixed (no re-sample input at all) and only-synth-fixed (note params re-sampled but synth
+  dominates loudness). Previously the message reasoned only about re-sampled note params, which was
+  misleading when ``fixed_note_params`` was also set. - Reworded the unit-test comment header from
+  "bounded-retry semantics" to "retry/raise semantics" and noted the only-note-fixed retry path is
+  still unbounded — the prior phrasing implied a hard retry cap that this PR doesn't add.
+
+Refs #724 Part of #529
+
+* fix(vst): update surge-xt-interactive guide for silent fast-fail behavior
+
+The 'Loudness-retry loop has no iteration cap' limitation and the 'Dataset generation hangs after
+  recording' troubleshooting entry no longer match runtime behavior after the generate_sample change
+  in this PR — fixed_synth_params with a silent render now raises ValueError instead of looping.
+  Update both sections to describe the fast-fail behavior and the new workaround framing.
+
+Refs https://github.com/tinaudio/synth-setter/pull/725#discussion_r3175655759 Refs
+  https://github.com/tinaudio/synth-setter/pull/725#discussion_r3175655763
+
+---------
+
+Co-authored-by: Your Name <you@example.com>
+
+### Chores
+
+- **lint**: Enable ANN001 in ruff with per-file/dir ignores
+  ([#760](https://github.com/tinaudio/synth-setter/pull/760),
+  [`5c85393`](https://github.com/tinaudio/synth-setter/commit/5c8539385d7a64a1aba5a5994a4f60ca0d5fd8c5))
+
+Add `ANN001` (missing-type-function-argument) to ruff's `select` list as a ratchet, matching the
+  intent of #682 but silencing the existing violations via `[tool.ruff.lint.per-file-ignores]`
+  rather than per-line `# noqa: ANN001` markers.
+
+- `src/models/**`: directory-wide ANN001 ignore. - 11 non-`src/models/` files: per-file ANN001
+  ignore (extends existing ignore arrays where present, new entries otherwise). - `notebooks/**`:
+  ANN001 added to the existing notebook ignore set.
+
+Update `CLAUDE.md` and `.pre-commit-config.yaml` rule-list comments to mention `ANN001`.
+
+`pre-commit run --all-files` passes (ruff, ruff-format, pyright, all other hooks).
+
+Refs #212
+
+Co-authored-by: Your Name <you@example.com>
+
+### Continuous Integration
+
+- **docker-build**: Scope dev-snapshot to main; add per-branch tag
+  ([#756](https://github.com/tinaudio/synth-setter/pull/756),
+  [`af92bc2`](https://github.com/tinaudio/synth-setter/commit/af92bc23c76f588f0cc9f41e1d033dba1262b357))
+
+* ci(docker-build): scope dev-snapshot to main; add per-branch tag
+
+The `dev-snapshot` floating Docker tag was pushed unconditionally for any non-PR run, including
+  manual `workflow_dispatch` against feature branches. That overwrote the tag other workflows
+  (test-skypilot-debug, test-dataset-generation) consume by default, silently making them run
+  against the feature branch's image until the next main build.
+
+Changes:
+
+- `dev-snapshot` is now gated to schedule runs and dispatches that target main, mirroring the
+  existing `latest` guard. - A new `dev-snapshot-<branch_slug>` floating tag is pushed for non-main
+  dispatches and PR runs (PRs don't push, so it's a no-op there). Skipped for schedule runs and when
+  `git_ref` is already a 40-char SHA. - `dev-snapshot-<sha>` (immutable) and `latest` are unchanged.
+
+The branch slug is computed in the existing `source` step alongside the SHA; slashes become dashes,
+  the charset is restricted to Docker's tag charset, and it's truncated to 100 chars to leave room
+  for the `dev-snapshot-` prefix under Docker's 128-char tag limit.
+
+Refs #534
+
+* docs(docker): update tag scheme for dev-snapshot main-only gate + per-branch tag
+
+Reflects the workflow change in the prior commit: - dev-snapshot floating tag is now main-only (same
+  gate as latest). - New dev-snapshot-<branch> floating tag for feature-branch dispatches. - Reframe
+  the gating prose so readers understand WHY feature-branch builds are diverted (test-skypilot-debug
+  + test-dataset-generation consume dev-snapshot by default).
+
+Refs #534.
+
+* ci(docker-build): treat all main ref forms as main for floating-tag gating
+
+A dispatch with `refs/heads/main` (or `refs/remotes/origin/main`, or even the literal main HEAD SHA)
+  was being treated as a non-main build because the gating compared `github.event.inputs.git_ref`
+  against the literal string `"main"`. That meant such dispatches skipped publishing the shared
+  `dev-snapshot` and `latest` tags and instead emitted a per-branch tag like
+  `dev-snapshot-refs-heads-main` — the wrong outcome for a build that does in fact represent main.
+
+Centralize the check in the source step as a new `is_main` output. It matches `main`,
+  `refs/heads/main`, and `refs/remotes/origin/main`, and also resolves origin/main's HEAD via `git
+  ls-remote` to catch the literal-SHA-of-main case. The metadata-action gating now reads `is_main`
+  instead of inlining the string compare, and the slug computation reuses it so main-equivalent
+  dispatches no longer produce a stray branch tag.
+
+* ci(docker-build): normalize ref prefixes; skip per-branch tag for git tags
+
+Address PR #756 review feedback:
+
+- Strip refs/heads/ and refs/remotes/origin/ from git_ref before slugging, so feat/foo and
+  refs/heads/feat/foo publish to the same per-branch tag (dev-snapshot-feat-foo) instead of
+  dev-snapshot-feat-foo and dev-snapshot-refs-heads-feat-foo. - Skip the per-branch tag for git tag
+  dispatches (refs/tags/<tag> prefix or a bare ref name that exists as a tag on origin). Tags are
+  immutable, so a mutable dev-snapshot-<tag> alias adds no value. - Document the
+  SHA-equals-origin/main-HEAD branch of is_main detection in docs/reference/docker.md so the docs
+  match the workflow behavior added in 3afa3ee. - Document slug-collision as a known narrow
+  limitation (feat/foo and feat-foo collapse to the same slug; out of scope to fix here).
+
+---------
+
+Co-authored-by: Your Name <you@example.com>
+
+- **test-dataset-generation**: End-to-end SkyPilot/RunPod smoke + os._exit(0) workaround for #735
+  ([#743](https://github.com/tinaudio/synth-setter/pull/743),
+  [`adb0f04`](https://github.com/tinaudio/synth-setter/commit/adb0f04d4da293bfbadaa1f5aaa610719a07bf76))
+
+* internal-fix(configs/compute): inline run() + os._exit(0) in runpod-template.yaml — workaround for
+  #735
+
+The SkyPilot RunPod worker consistently hangs at Python interpreter shutdown after
+  `generate_dataset.run()` returns successfully — some library (most likely pedalboard / numba /
+  dask / h5py) leaves a non-daemon thread alive that prevents the interpreter from exiting.
+  SkyPilot's job-status reporter sees the SSH session's process tree still alive and the job stays
+  in RUNNING forever even though both rclone uploads have already landed in R2.
+
+The worker pod is ephemeral (`sky.launch + down=True`), so there's nothing for a clean shutdown to
+  flush. `os._exit(0)` bypasses atexit / non-daemon-thread join and lets SkyPilot register
+  SUCCEEDED.
+
+This commit relocates the workaround to the SkyPilot template's `run:` block (was an env-var-gated
+  branch in the docker_entrypoint click subcommand in the prior shape of this PR). The `run:` block
+  now inlines the call to `pipeline.entrypoints.generate_dataset.run` and fires `os._exit(0)`
+  immediately after — instead of going through the docker_entrypoint click subcommand. The os._exit
+  MUST live in Python (the hang is inside Python's interpreter shutdown, before bash sees the
+  process exit), but the *decision to fire it* now lives in the SkyPilot template alongside
+  everything else SkyPilot-specific.
+
+Why not a click env-var gate (the prior shape):
+
+- The env var was implicit. A reviewer reading runpod-template.yaml couldn't see what the worker
+  actually does on success without cross-referencing scripts/docker_entrypoint.py and grepping for
+  the env var name. - It put SkyPilot-specific behavior into a generic Click subcommand that other
+  consumers (local dev, the dataset-generation reusable workflow's docker invocation, future CI)
+  could be silently affected by if they ever set the env var. - The template now expresses the full
+  worker contract end-to-end (mount this spec, run() it, exit immediately).
+
+Why not a dedicated wrapper script (e.g. scripts/skypilot_worker_main.py):
+
+- Adds a file. The inline Python is 8 lines and entirely visible in the YAML — a reviewer reading
+  the template sees the full worker story without flipping to another file. - Avoids
+  module-import-path coupling — the inline code happens to import from
+  `pipeline.entrypoints.generate_dataset` / `pipeline.schemas.spec`, but that coupling lives in the
+  YAML, not in a separately maintained Python file that could drift.
+
+Drop the inline python -c block (and revert to invoking the docker_entrypoint click subcommand) once
+  https://github.com/tinaudio/synth-setter/issues/735 is root-caused. PR-B's `pedalboard-load`
+  matrix variant is the canary that proves the revert is safe.
+
+Refs #534 Refs #735
+
+* ci(test-dataset-generation): SkyPilot/RunPod end-to-end smoke workflow
+
+Replaces the legacy `test-dataset-generation` workflow (which called the `dataset-generation`
+  reusable workflow against a docker-only path) with a fresh end-to-end probe of the SkyPilot
+  launcher.
+
+Three jobs, run in sequence:
+
+- `generate` (`Launch generate_dataset on RunPod via SkyPilot`): Provisions a RunPod pod via
+  SkyPilot, materializes the spec inside the `tinaudio/synth-setter:dev-snapshot` image (so
+  `materialize_spec` can import pedalboard transitively under the headless X wrapper), runs the
+  launcher (`pipeline.entrypoints.skypilot_launch_smoke`), uploads the spec to R2 + renders the
+  shard + uploads it, then tears the pod down. Writes spec + launcher log to the `test-run-metadata`
+  artifact. - `validate-spec`: structural validation of the materialized spec. - `validate-shard`:
+  pulls the resulting shard from R2 and validates HDF5 layout + checksum.
+
+Path-trigger filter expands to include `configs/compute/**`, `scripts/run-linux-vst-headless.sh`,
+  and `pipeline/entrypoints/skypilot_launch_smoke.py` so a wrapper or launcher change retests the
+  round-trip on PR.
+
+`if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name ==
+  github.repository` gates the paid run to same-repo PRs only — fork PRs can't read the
+  `RUNPOD_API_KEY` / `R2_*` secrets anyway, but this fails fast and surfaces the reason instead of
+  provisioning a pod that errors on missing creds.
+
+R2 / WANDB secrets pass to the container's process env via `docker run -e RCLONE_CONFIG_R2_*=...`
+  directly. The launcher reads them through `resolve_worker_env` (process env first, then optional
+  .env file) and forwards them to the SkyPilot Task — no `.env` file is written to the runner's
+  filesystem.
+
+Smoke values: drop `shard_size` and `sample_batch_size` from 32 to 4 in
+  `configs/dataset/ci-smoke-test.yaml` so the round-trip completes in ~5 minutes instead of ~20.
+  Smoke is correctness-only — exercising the provision → render → upload → teardown contract — so
+  smaller is better.
+
+* style(yaml): move comments out of `run:` block-scalars in runpod-template +
+  test-dataset-generation
+
+YAML block-scalars (`run: |`) in SkyPilot Task templates and GitHub Actions step `run:` blocks are
+  passed verbatim to bash. Comments inside them aren't visually distinct (no syntax highlighting in
+  YAML viewers), they're indistinguishable from "real" lines, and stray `'` / `` ` `` inside a
+  comment can be picked up by bash quoting and cause unintended expansions or syntax errors.
+
+Move all in-`run:` comments to the line above the step (for .github/workflows/) or the line above
+  the `run:` key (for the SkyPilot template). The block-scalars now contain only commands.
+
+Files touched: - `configs/compute/runpod-template.yaml`: moved the `cwd` diagnostic comment, the
+  `cd` rationale, and the os._exit(0) #735 workaround rationale to a single comment block above
+  `run:`. - `.github/workflows/test-dataset-generation.yml`: - "Pin image tag" step: rationale
+  comment moved above `- name:`. - validate-shard step: "Read R2 bucket from image config", the
+  rclone-via-Docker-rationale, and the validate-shard mount comment consolidated into a single block
+  above `- name:`.
+
+No behavior change.
+
+* ci(test-skypilot-debug): add 3 progressive variants (spec-mount, headless, headless-rclone)
+
+Expand the matrix from 4 to 7 variants, structured as layered probes that each add one piece of the
+  production smoke's complexity. Reading the matrix's green/red pattern after a dispatch lights up
+  the boundary where the production smoke first fails.
+
+Layer 1 — orchestration only: - `noop` — provision/submit/status-poll/teardown - `image-pull` — same
+  shape as noop; second probe slot
+
+Layer 2 — add ONE production capability in isolation: - `spec-mount` (NEW) — adds SkyPilot
+  file_mounts (production uses `task.update_file_mounts(...)` to ship the materialized spec) -
+  `headless` (NEW) — wrapper around an `echo` (Xvfb + xsettingsd + openbox + dbus + cleanup trap;
+  tests the 3 wrapper hardening commits from #741 in isolation) - `rclone` — `rclone copy <small
+  file> r2:...` directly
+
+Layer 3 — combine two capabilities: - `headless-rclone` (NEW) — wrapper + rclone (catches
+  interactions: rclone fds inheriting X-stack pipes, dbus session seeing unexpected children, etc.)
+  - `pedalboard-load` — wrapper + Python interpreter (closest to production without rclone)
+
+Each dispatch now spends ~7 RunPod pods (was ~4); kept workflow_dispatch-only so the budget cost is
+  per-investigation, not per-push.
+
+The new templates use `task.workdir = os.getcwd()` (already configured in test-skypilot-debug.yml)
+  to sync the GH-actions checkout to the worker, so they exercise the in-repo wrapper /
+  spec-mount-source as authored on the dispatching branch — not whatever is baked into the image.
+
+* ci(test-skypilot-debug): add stickiness-probe + launcher + launcher-in-docker + generate-tiny
+
+Expands the matrix from 7 to 11 variants and from one mode (inline-sky) to three (inline-sky,
+  launcher-runner, launcher-docker). The four new variants progressively bridge the gap between the
+  standalone inline-sky probes and the production smoke (test-dataset-generation):
+
+- `stickiness-probe` same as `noop` but cluster name uses the production prefix
+  (`synth-setter-smoke-*` vs. matrix default `synth-setter-debug-*`). Tests whether RunPod
+  sticky-schedules the `*-smoke-*` namespace to a problematic pool — we saw the same pod IP across
+  multiple production-smoke failures while matrix succeeded.
+
+- `launcher` invokes `pipeline.entrypoints.skypilot_launch_smoke` CLI from the GH-actions runner
+  directly (no docker), against `runpod-debug-launcher-minimal-template.yaml` (same shape as
+  production but a noop run). PASS = launcher works on RunPod from a bare Python env. FAIL =
+  launcher itself has a bug independent of the dev-snapshot container.
+
+- `launcher-in-docker` same as `launcher` but invoked from inside the dev-snapshot container,
+  matching production-smoke's exact shape. If `launcher` PASSes and this FAILs, the docker layer
+  (OpenSSH version, network namespace, etc.) is part of the failure path.
+
+- `generate-tiny` invokes the launcher with the production template (`runpod-template.yaml`) — full
+  render + rclone upload on the worker. Acts as an in-matrix mini production smoke so triage doesn't
+  require re-dispatching the production workflow separately.
+
+Matrix entries gain three new fields: - `mode` — picks which step runs (inline-sky / launcher-runner
+  / launcher-docker) - `cluster_prefix` — defaults to `synth-setter-debug`; `stickiness-probe`
+  overrides - `config` — DatasetConfig YAML for launcher-mode variants (empty for inline-sky)
+
+The existing "Run inline SkyPilot probe" step is gated `if: matrix.mode == 'inline-sky'`. Two new
+  steps "Run launcher (launcher-runner mode)" and "Run launcher (launcher-docker mode)" handle the
+  launcher-mode variants. The launcher-runner mode adds a small `pip install python-dotenv loguru
+  pedalboard` step (skypilot[runpod] is already installed by the existing matrix step; click +
+  pydantic come with skypilot transitively).
+
+Drive-by cleanup: - Removed the "spends ~7 pods" baked count from the docstring (one pod per
+  variant, count derives itself from the matrix). - Moved the "Inline-Python probe contract"
+  comments out of the inline-Python heredoc (per the rule landed in PR #746).
+
+* fix(test-skypilot-debug): install full requirements-app.txt for launcher-runner mode
+
+The launcher's import chain pulls in the whole runtime via src.data.vst.core: mido, pedalboard,
+  numpy, loguru, plus skypilot, python-dotenv, pydantic, click. Targeted install (just python-dotenv
+  + loguru + pedalboard) crashes at the mido import:
+
+File "src/data/vst/core.py", line 8, in <module> import mido ModuleNotFoundError: No module named
+  'mido'
+
+Switch to `pip install -r requirements-app.txt` for the launcher-runner mode. Slower (~3-5 min cold
+  cache, faster warm) but predictable; any future src/data/vst/* dep added to the launcher's import
+  chain automatically lands in CI without playing whack-a-mole.
+
+The launcher-docker mode is unaffected — it uses the dev-snapshot image which has everything baked
+  in.
+
+* internal-fix(pipeline): launcher swallows ClusterNotUpError during polling
+
+`sky.job_status` raises `sky.exceptions.ClusterNotUpError` when the cluster is still in INIT
+  (provisioning slow) or transitioning. The launcher's `_wait_for_job` poll loop wasn't catching it
+  — a slow RunPod provisioning window crashed the launcher even though the cluster would have
+  reached UP eventually within the deadline.
+
+Surfaced by the matrix's `generate-tiny` variant on [run
+  25239394953](https://github.com/tinaudio/synth-setter/actions/runs/25239394953): launcher hit
+  ClusterNotUpError ~2 min after `sky.launch`'s `stream_and_get` returned (cluster status: INIT,
+  file_mounts synced but worker pod still booting).
+
+Fix: wrap the `sky.job_status` call in `_wait_for_job` in a try/except that catches
+  `ClusterNotUpError`, logs the cluster status, and continues polling. The deadline still bounds
+  total wait — a cluster that genuinely never transitions to UP fails on the deadline check below,
+  not on the first job_status call.
+
+Also bump the matrix's default `JOB_DEADLINE_SECONDS` from 120 to 600 so the launcher modes have
+  time for slow RunPod provisioning windows. The inline-sky probes still complete well under 120s;
+  only the launcher modes need the longer ceiling.
+
+Note: this hardening is for `_wait_for_job` (called AFTER `sky.launch + stream_and_get` returns).
+  The production-smoke "Failed to SSH to <ip> after timeout 600s" failures we've been seeing happen
+  INSIDE `sky.launch + stream_and_get` (SkyPilot's own SSH-readiness wait timing out), which is a
+  different code path that this commit doesn't address. That path is bounded by SkyPilot's internal
+  `provision_timeout` and isn't exposed via the SDK at our call site.
+
+* internal-feat(pipeline): ship spec via R2 URI instead of file_mounts (mitigates #749)
+
+The launcher used to ship the materialized spec to the worker via
+  `task.update_file_mounts({WORKER_SPEC_PATH: str(mount_source)})`. That SkyPilot RunPod-backend
+  code path triggers a pubkey-overflow rejection at pod-create time:
+
+sky.exceptions.CloudError: runpod error (QueryError): Public key exceeds maximum length of 65500
+  characters
+
+Surfaced and triangulated by the test-skypilot-debug matrix (#749 has the full evidence +
+  per-variant green/red).
+
+Switch the spec-shipping mechanism:
+
+- Launcher uploads the materialized spec to R2 at a per-cluster key:
+  `r2://${spec.r2_bucket}/skypilot-launcher-specs/${cluster_name}.json` via `rclone copyto` (process
+  env already has RCLONE_CONFIG_R2_*). - Launcher injects `WORKER_SPEC_URI` env var on the SkyPilot
+  Task pointing at the same URI (small string in env, not a file_mount). - Worker's inline-Python in
+  `runpod-template.yaml` reads `os.environ["WORKER_SPEC_URI"]`, calls the new
+  `pipeline.entrypoints.generate_dataset.load_spec_from_uri(...)` which downloads via rclone and
+  parses.
+
+`load_spec_from_uri` accepts both local paths (existing local-dev / test-fixture flows) and
+  `r2://bucket/key` URIs (new launcher flow), so the click subcommand `scripts/docker_entrypoint.py
+  generate_dataset --spec ...` is also URI-aware out of the box.
+
+Drops `WORKER_SPEC_PATH`, `WORKER_REPO_ROOT`, `mount_source`, `task.update_file_mounts(...)`,
+  `shutil.copyfile(...)`, and the related `finally: mount_source.unlink(...)` cleanup. Also drops
+  the now-unused `_MODE_SPEC_TYPES` dict and `_parse_spec` helper from the docker entrypoint (the
+  click subcommand routes through `load_spec_from_uri` directly).
+
+Tests updated: `test_spec_uri_forwarded_to_worker_env_after_r2_upload` asserts WORKER_SPEC_URI lands
+  in update_envs and update_file_mounts is NOT called.
+  `test_local_spec_persists_for_artifact_upload_even_on_launch_exception` asserts the launcher's
+  local materialized spec stays on disk for artifact upload by callers like the production smoke
+  workflow. Autouse `mock_rclone_subprocess` fixture no-ops the launcher's rclone subprocess for
+  tests that don't explicitly assert on the rclone command shape.
+
+Refs #534 Refs #749
+
+* fix(test-skypilot-debug): install rclone on the runner for launcher-runner mode
+
+The launcher's R2 upload (`upload_spec_to_r2` -> `rclone copyto`) needs rclone on PATH. The
+  dev-snapshot image (used by launcher-docker mode) has it baked in, but the bare GH-actions runner
+  doesn't — launcher-runner mode died with `FileNotFoundError: [Errno 2] No such file or directory:
+  'rclone'` immediately after materializing the spec.
+
+Add an `Install rclone` step gated on launcher-runner mode. Apt install is fast (~5s on the runner's
+  pre-warmed package cache).
+
+* ci(test-skypilot-debug): add generate-tiny-in-docker matrix variant
+
+Mirrors `generate-tiny` but runs the launcher inside the dev-snapshot docker image instead of bare
+  on the GH runner. If this variant succeeds while `generate-tiny` fails, the failure is in
+  launcher-runner-side infra (rclone install, GH-runner env), not in the launcher itself. Likewise,
+  if both fail with the same error, the issue is on the worker.
+
+Same template + config as the production smoke; differs only in `mode: launcher-docker` vs.
+  `launcher-runner`.
+
+* internal-fix(tests): drop _MODE_SPEC_TYPES tests + reframe nonexistent-spec test
+
+PR-743 made docker_entrypoint.py URI-aware (--spec accepts both local paths and r2:// URIs), which
+  deleted the _MODE_SPEC_TYPES mapping (no longer needed) and dropped click's exists=True path
+  validation. The corresponding tests went stale. This drops the now-unreachable
+  TestModeSpecTypesMapping class and reframes the nonexistent-path test to assert the new behavior:
+  missing local paths surface as a clean ClickException-formatted non-zero exit, not a raw
+  FileNotFoundError.
+
+* internal-fix(pipeline): widen autostop window to 5min + handle ClusterDoesNotExist
+
+The launcher's polling loop raced SkyPilot's autostop timer: - idle_minutes_to_autostop=0 → SkyPilot
+  internally bumps to 1 min - _JOB_POLL_INTERVAL_SECONDS=15 → up to 15s between job_status checks -
+  Worker exits → SkyPilot tears down cluster within ~1 min of going idle - Next poll →
+  ClusterDoesNotExist surfaces as unhandled exception → exit 1
+
+Observed in the matrix dispatch (run 25242205156) where both generate-tiny and
+  generate-tiny-in-docker failed with this race after the worker had clearly transitioned RUNNING ->
+  terminal. The 5-min autostop window gives _wait_for_job comfortable headroom to catch the terminal
+  status without compromising cleanup (down=True still teardowns after idle).
+
+Also defensively catch ClusterDoesNotExist in _wait_for_job so the rare remaining race surfaces as a
+  clean ClickException instead of a raw SkyPilot exception leaking into CI logs.
+
+* internal-fix(configs): rename ci-smoke-test → runpod-smoke-shard for fresh cluster identity
+
+The dataset config's filename stem flows through dataset_config_id_from_path into the launcher's
+  default cluster name (synth-setter-smoke-<config_id[:8]>). The old name produced cluster
+  synth-setter-smoke-ci-smoke, which RunPod has been intermittently sticky-routing to a specific pod
+  (we observed the same pod IP across multiple production-smoke failures despite each launch having
+  a unique cluster name).
+
+Renaming to runpod-smoke-shard.yaml gives the cluster a fresh identity (synth-setter-smoke-runpod-s)
+  that RunPod's pod-pool stickiness can't have prior state for. The new name also more accurately
+  describes what the config actually provisions (a single shard via RunPod, not a generic CI smoke
+  test).
+
+---------
+
+Co-authored-by: Your Name <you@example.com>
+
+- **test-skypilot-debug**: Add image-pull variant for second pod-boot probe
+  ([#745](https://github.com/tinaudio/synth-setter/pull/745),
+  [`9d7420c`](https://github.com/tinaudio/synth-setter/commit/9d7420c9ea95a1c7f460a3379a4482134e081b93))
+
+Adds a 4th matrix variant whose `run:` is just `echo "skypilot-debug image-pull job done"`. Same
+  shape as `noop` (provision -> SSH -> echo) but a distinct slot so a single RunPod transient
+  doesn't look like a regression. With both `noop` and `image-pull` running per dispatch, two green
+  = RunPod can reliably hand us pods that have SSH + the dev-snapshot image ready inside the
+  SkyPilot 600s readiness timeout.
+
+Useful in particular for triaging the `test-dataset-generation` smoke when it fails with "Failed to
+  SSH to <pod-ip> after timeout 600s" — if both `noop` and `image-pull` are green, the RunPod side
+  is healthy and the failure is downstream of pod boot.
+
+Refs #534
+
+Co-authored-by: Your Name <you@example.com>
+
+### Documentation
+
+- Add terse-comments rule to CLAUDE.md ([#762](https://github.com/tinaudio/synth-setter/pull/762),
+  [`0e5e68a`](https://github.com/tinaudio/synth-setter/commit/0e5e68aee5b39bf78452cbb34040d88805a424d0))
+
+Extend the Comment Hygiene subsection with a fourth rule: comments should be terse (typically one
+  short line). If a comment would need more than ~2 lines to be useful, that context belongs in a
+  GitHub issue, and the inline comment should be a one-line pointer to that issue.
+
+Includes a before/after Python example matching the style of the existing CLAUDE.md examples (the
+  YAML run-block subsection below). The closing "Still write comments for: WHY / invariants /
+  workarounds / surprises" bullet is preserved, so the new rule is not read as "no comments at all"
+  — workarounds keep their inline pointer, the deep context just lives in the linked issue.
+
+mdformat normalized the bullet spacing in the same list (loose-list form, blank lines between items)
+  because the new bullet contains a fenced code block; no semantic change to the existing rules.
+
+Closes #761
+
+Co-authored-by: Your Name <you@example.com>
+
+- Reflect SkyPilot launcher landing + renderer_version pin (#534)
+  ([#739](https://github.com/tinaudio/synth-setter/pull/739),
+  [`ec6c8a3`](https://github.com/tinaudio/synth-setter/commit/ec6c8a3e26c9e1f9fbbeee00fc4a1eaa76a9aebd))
+
+* docs: reflect SkyPilot launcher landing + renderer_version pin
+
+PRs #729 and #716 changed the data pipeline's compute and renderer_version contracts; bring the
+  design + reference docs into line.
+
+- data-pipeline.md §14.1 + §14.5: renderer_version is now pinned to SURGE_XT_RENDERER_VERSION at
+  materialization (interpreter-only); the worker re-derives via extract_renderer_version and refuses
+  on mismatch. - data-pipeline-implementation-plan.md: same pin documented in the spec shape and the
+  first-run flow; GP4 rewritten — plugin_path validation belongs on the worker, not the launcher. -
+  configuration-reference.md: configs/cloud/ -> configs/compute/ rename (RunPod template landed at
+  configs/compute/runpod-template.yaml; Vast.ai template still planned). §2.4 updated to describe
+  the SkyPilot launcher flow rather than the legacy RunPod-API launcher. -
+  skypilot-compute-integration.md §7 file-list: RunPod template + the required skypilot[runpod] dep
+  landed; §8.2 open question converted to a recorded decision (skypilot is required, not optional).
+  - doc-map.yaml: new mapping for skypilot-compute-integration.md covering
+  pipeline.entrypoints.skypilot_launch_smoke, configs/compute/**, the headless wrapper, the
+  production smoke workflow, and the requirements pin. Without this, the doc-drift hooks have no
+  source-pattern coverage for the SkyPilot path. - docker.md + docker-spec.md: pre-existing wrong
+  import path pipeline.ci.materialize_spec -> pipeline.schemas.spec.materialize_spec (opportunistic
+  fix while in the area).
+
+Refs #534
+
+* docs: extend PR #739 with the second-pass drift items
+
+Second doc-drift hook on PR #716 surfaced items that weren't in the original queue file. Catching
+  them here so PR #739 covers the full set:
+
+- data-pipeline-implementation-plan.md L106 + L137: lingering 'auto-extracted from bundle' /
+  'Auto-extracted at materialization' references — same fix shape as the L283-289 / L631-632 / L957
+  items already in this PR. - github-actions.md workflow catalog: rewrite the
+  test-dataset-generation row (no longer calls dataset-generation reusable workflow), add a row for
+  test-skypilot-debug, fix the workflow_call dependency map and artifact chain, and add
+  RUNPOD_API_KEY to the secrets table. - architecture.md tree: add configs/compute/, drop the
+  parenthetical enumerations under pipeline/{schemas,entrypoints,ci} (they relist on every new file
+  — point at the directory instead, per CLAUDE.md 'don't bake list contents into prose').
+
+* docs(design): document the launcher's env-var resolution contract
+
+Adds §4.2 to skypilot-compute-integration.md covering how
+  `pipeline.entrypoints.skypilot_launch_smoke` resolves the worker's env-var inputs from
+  .env-or-process-env, why each key lives where it does (workflow YAML, docker run -e, launcher
+  constant, template envs: block, runpod config.toml), and the local-dev vs CI stories.
+
+Surfaces the design choice that wasn't recorded anywhere outside the launcher source: a fixed
+  `_WORKER_ENV_KEYS` set forwarded per-key from .env-then-process-env, with no special cases between
+  local-dev and CI. The §4.2 also captures why `RUNPOD_API_KEY` is *not* in that set (launcher-only
+  credential, written to ~/.runpod/config.toml in the container) and why
+  `SYNTH_SETTER_FORCE_EXIT_AFTER_RUN` lives in the template `envs:` block rather than being injected
+  by the launcher (worker-behavior knob, scoped to the SkyPilot path, not a secret).
+
+Renumbers the previous §4.2 (Worker adaptation) to §4.3.
+
+* docs(rebase): pick up post-merge state — runpod-smoke-shard rename, R2-URI shipping, dropped
+  ENTRYPOINT
+
+After #743 + #756 merged to main, three references in this PR's scope went stale: -
+  skypilot-compute-integration.md: --config still pointed at the pre-rename ci-smoke-test.yaml (now
+  configs/dataset/runpod-smoke-shard.yaml). - configuration-reference.md: launcher description said
+  the spec is staged via task.update_file_mounts. The launcher actually uploads the spec to R2 under
+  skypilot-launcher-specs/<cluster>.json and forwards the r2:// URI via
+  task.update_envs(WORKER_SPEC_URI=...); file_mounts was abandoned because SkyPilot's RunPod backend
+  rejects programmatic file_mounts with a pubkey-overflow at pod-create time (#749). - docker.md:
+  said dev-snapshot has python docker_entrypoint.py as its baked ENTRYPOINT. The ENTRYPOINT was
+  dropped in #721 — callers invoke the click group explicitly via 'docker run <image> python
+  scripts/docker_entrypoint.py <subcommand>'.
+
+* docs(review): address PR #739 round-1 Copilot drift catches
+
+7 inline review concerns, all valid drift fixes:
+
+- skypilot-compute-integration.md:218 (#3176069335): documented SYNTH_SETTER_FORCE_EXIT_AFTER_RUN
+  env var doesn't exist; the template inlines os._exit(0) directly. Updated row to say so and to
+  swap the env-var entry for the actually-injected WORKER_SPEC_URI.
+
+- doc-map.yaml:92 (#3176069360): launcher 'covers' said 'materialize → mount → launch'; launcher
+  actually uploads the spec to R2. Reworded to 'materialize → upload-spec-to-R2 → launch' and noted
+  file_mounts was deliberately avoided per #749.
+
+- doc-map.yaml:94 (#3176069413): runpod-template 'covers' mentioned 'file_mount path contract
+  (WORKER_SPEC_PATH)'; the contract is R2-URI via WORKER_SPEC_URI. Updated.
+
+- docker.md (#3176069368, #3176069372): rewrote the entrypoint section to use the canonical
+  /usr/local/bin/entrypoint.py path baked by the Dockerfile, and updated all five downstream
+  docker-run examples (smoke test, --env-file note, idle, passthrough, generate_dataset, interactive
+  debug) to invoke the click group explicitly via that path.
+
+- configuration-reference.md:128 (#3176069388): replaced the invalid YAML example using '...' (which
+  YAML parses as a document-end marker) with a concrete single-accelerator (RTXA4000:1) example that
+  round-trips through yaml.safe_load.
+
+- configuration-reference.md:139 (#3176069397): rewrote the envs: and spec-passing snippet to match
+  the actual template — explicit RCLONE_CONFIG_R2_* keys, WORKER_SPEC_URI, the inline 'python -c'
+  load_spec_from_uri + os._exit(0) workaround, and a footnote pointing at #749 for the file_mounts
+  deviation.
+
+---------
+
+Co-authored-by: Your Name <you@example.com>
+
+- **claude-md**: Ban comments inside YAML `run:` block-scalars
+  ([#746](https://github.com/tinaudio/synth-setter/pull/746),
+  [`a283448`](https://github.com/tinaudio/synth-setter/commit/a28344883423450e85b64dd2d2bab46de447a551))
+
+Adds a "No Comments Inside YAML `run:` Block-Scalars" rule under the Comment Hygiene subsection of
+  CLAUDE.md. Covers both GitHub Actions workflow YAML (.github/workflows/*.yml `run:` blocks) and
+  SkyPilot Task YAML (configs/compute/*.yaml `run:`/`setup:` blocks).
+
+Rationale: YAML block-scalars render without syntax highlighting in most YAML viewers, are visually
+  indistinguishable from "real" command lines once bash sees them, and stray `'` / `` ` `` / `$` /
+  `\` inside a comment line can be picked up by bash quoting and cause unintended expansions or
+  syntax errors. Has caused real bugs in this repo's CI workflows and SkyPilot templates in the
+  past.
+
+Rule: put rationale comments at the YAML structural level (above the
+
+`run:` key, or above the `- name:` step), not inside the block-scalar. The block-scalar contains
+  only commands.
+
+Refs #534
+
+Co-authored-by: Your Name <you@example.com>
+
+### Internal-Feat
+
+- **pipeline**: Loop generate_dataset over spec.shards
+  ([#755](https://github.com/tinaudio/synth-setter/pull/755),
+  [`e2fc288`](https://github.com/tinaudio/synth-setter/commit/e2fc28890fab39a17dfc907c2fc8f96aa5483baa))
+
+* feat(pipeline): loop generate_dataset over spec.shards
+
+Drops the num_shards > 1 fail-fast guard and rewrites run() as a single-spec-upload + per-shard
+  render/upload/unlink loop. Spec serialization, spec upload, and the renderer-version check are now
+  pre-loop (per-run); the per-shard tempdir lifetime bounds local disk to one shard at a time.
+
+Strictly mechanical: no seed plumbing (#364), no skip-existing (#750), no continue-on-error (#751),
+  no Xvfb amortization (#752), no per-shard progress logs (#753). Fail-fast subprocess semantics
+  preserved.
+
+Refs #407
+
+* fix(pipeline): fail-fast on empty shards spec and missing render output
+
+Address PR #755 review comments:
+
+- DatasetPipelineSpec gains a `shards` validator that rejects an empty tuple. DatasetConfig already
+  enforces num_shards > 0 at materialize time, but a hand-edited / externally-materialized spec JSON
+  loaded with shards=[] previously let generate_dataset.run() succeed as a silent no-op (uploading
+  only the spec). - _render_and_upload_shard now asserts shard_path.is_file() after the render
+  subprocess exits 0. A generator that exits 0 without writing output now surfaces a clear
+  RuntimeError at the rendering boundary instead of a less-direct rclone "source not found"
+  downstream. - Tests updated to materialize the shard file via a shared _materialize_shard side
+  effect, mirroring the production contract.
+
+* docs(pipeline): refresh single-shard wording after multi-shard loop lands
+
+Update doc-map.yaml, data-pipeline design doc, storage-provenance spec, docker-spec, docker.md, and
+  the test module docstring to reflect that generate_dataset now loops over spec.shards. The "raises
+  NotImplementedError on num_shards > 1" claim was outright false after PR #755; the rest read as
+  stale framing.
+
+---------
+
+Co-authored-by: Your Name <you@example.com>
+
+- **pipeline**: Skypilot RunPod launcher + 3 wrapper hardening fixes + 3-variant matrix
+  ([#741](https://github.com/tinaudio/synth-setter/pull/741),
+  [`804f86f`](https://github.com/tinaudio/synth-setter/commit/804f86f7d0ce9242c9caa9df27957236bbf7e6ee))
+
+* internal-fix(scripts): detach stdin/stdout on backgrounded X-stack daemons
+
+Backgrounded daemons (Xvfb, xsettingsd, openbox-session) inherit the parent bash's stdin (and Xvfb
+  its stdout) — which on RunPod traces back to the SSH command pipe. Any grandchildren reparented to
+  PID 1 keep that pipe open even after the foreground command exits, so SkyPilot's RunPod backend
+  never sees EOF on the SSH command's pipes and the job stays in RUNNING forever (#735).
+
+`</dev/null` on each daemon's stdin (and `>/dev/null` on Xvfb's stdout) breaks the inheritance chain
+  at spawn time. Combined with the cleanup-trap hardening in the next two commits (synchronous
+  `wait`, orphan-grandchild `pkill -P $$`), this gives the wrapper bash a deterministic exit path
+  that doesn't leak SSH-pipe references.
+
+* internal-fix(scripts): synchronous reap (`wait`) in cleanup trap + diagnostic logging
+
+`kill PID` is async — bash returns from `kill` before the kernel finishes draining the child's exit.
+  Without an explicit `wait`, the wrapper bash can return while the X-stack daemons are still in the
+  kernel's reap queue, leaving SkyPilot's RunPod backend's view of the SSH process tree non-empty
+  for an extra moment past the wrapper's logical exit.
+
+Add `wait 2>/dev/null || true` after the SIGTERMs so the wrapper blocks until the tracked children
+  (XVFB/XSETTINGS/OPENBOX) are fully reaped before returning. The accompanying `[wrapper] cleanup:
+  …` echoes (starting, child PIDs, pre-kill `ps` snapshot, per-daemon kill notice, TMP_DIR removal,
+  done) make `tail_logs` evidence pinpoint where cleanup stalls if it ever stalls again —
+  verbose-but-only-on-cleanup, won't spam normal-path output.
+
+* internal-fix(scripts): orphan-grandchild sweep (`pkill -P $$`) in cleanup trap
+
+`wait` only reaps children the wrapper *tracked* (XVFB/XSETTINGS/OPENBOX); any grandchild forked by
+  openbox or by dbus-launch (XDG autostart, e.g.) is reparented to PID 1 the moment its parent dies,
+  escaping `wait`. On RunPod those grandchildren can hold the SSH command's stdin/stdout open past
+  the wrapper bash's exit and the job stays in RUNNING.
+
+`pkill -P $$` SIGTERMs every process whose parent is the wrapper bash. Combined with stdin-detach
+  (so grandchildren that *do* survive can't hold the SSH pipe) and `wait` (so tracked children are
+  fully reaped), this gives the cleanup trap full coverage of the wrapper's descendant tree. The
+  accompanying post-kill `ps` snapshot is the grep target for "did the sweep actually find
+  anything?" — answers itself in the `tail_logs` evidence the next time someone investigates a hang
+  here.
+
+* build(deps): add python-dotenv for SkyPilot launcher .env loading
+
+`pipeline.entrypoints.skypilot_launch_smoke` (added in the next commit) loads worker-side env vars
+  from a `.env` file via `python-dotenv`'s `dotenv_values`. The SkyPilot dependency was already
+  pinned by PR #729; this pin closes the remaining runtime-dep gap so the launcher is importable on
+  a fresh checkout without pip surprises.
+
+Refs #534
+
+* feat(configs): SkyPilot RunPod task template for the data pipeline smoke launcher
+
+Adds `configs/compute/runpod-template.yaml`, the SkyPilot Task YAML used by
+  `pipeline.entrypoints.skypilot_launch_smoke` (added in the next commit) to provision a
+  single-shard generate_dataset run on RunPod. Lands first so the launcher's `--template` default
+  (which points at this path with Click's `exists=True` validation) resolves cleanly when the
+  launcher imports.
+
+Resources block: a fanout of consumer-grade RunPod GPUs (RTX3070 through RTX4090, A40, RTXA4000,
+  RTX4000Ada) any of which is sufficient for the smoke render — letting SkyPilot pick whichever zone
+  has availability. `use_spot: false` because the smoke run is short (single shard) and a preemption
+  mid-run is more expensive than the on-demand premium. `image_id:
+  docker:tinaudio/synth-setter:dev-snapshot` so the worker has the baked-in plugin + rclone +
+  headless wrapper.
+
+`envs` block lists the keys the launcher injects via `task.update_envs` (R2 creds, R2 bucket name,
+  WANDB_API_KEY, the WORKER_SPEC_PATH file-mount contract). Empty defaults so the YAML is valid
+  as-loaded; the launcher overrides them at submit time from the operator's `.env` file.
+
+`run` block does `cd /home/build/synth-setter && python -m scripts.docker_entrypoint
+  generate_dataset --spec "\$WORKER_SPEC_PATH"`, exercising the same docker entrypoint the local
+  smoke uses.
+
+* internal-feat(pipeline): SkyPilot RunPod launcher for smoke generate_dataset
+
+Adds `pipeline.entrypoints.skypilot_launch_smoke` — the Click CLI that materializes a
+  `DatasetPipelineSpec` locally, ships it via SkyPilot `task.update_file_mounts`, and `sky.launch`es
+  an unmanaged RunPod task that runs the existing container CLI (`generate_dataset --spec ...`).
+
+CLI flags: `--config` (DatasetConfig YAML), `--template` (SkyPilot Task YAML, defaults to the
+  runpod-template.yaml added in the previous commit), `--env-file` (worker-side `.env`),
+  `--cluster-name`, `--spec-out`, `--job-deadline-seconds` (default 25 min — bound the poll loop so
+  a stuck job can't block CI forever).
+
+Two non-obvious shape decisions:
+
+- **`sky.launch` (unmanaged) instead of `sky.jobs.launch` (managed).** Managed jobs require a
+  cloud-storage backend for controller state, which RunPod doesn't provide. Cluster-level launch is
+  sufficient for this single-shard smoke probe; managed jobs become viable once we add a controller
+  backend (separate epic). - **`sky.job_status` polling instead of `sky.tail_logs(follow=True)`.**
+  On RunPod, `tail_logs(follow=True)` waits for an SSH-stream EOF that never arrives once the worker
+  exits — even though the artifacts are already in R2. Polling `sky.job_status` returns SUCCEEDED
+  reliably; worker stdout is dumped via a single `tail_logs(follow=False)` before teardown so any
+  traceback still surfaces in CI.
+
+Teardown is explicit (`sky.down` in `finally`) on top of `down=True` — `down=True` alone leaves
+  clusters up if setup errors, by design; defending in depth keeps the autostop billable wall-clock
+  low.
+
+Tests (33): mock `sky` end-to-end via a `_succeeded_run` / `_failed_run` factory pattern; covers the
+  spec materialization path, the env-file load path, the `sky.launch` argument shape, the
+  polling-loop terminal states, the `mount_source` cleanup contract on success and on launch
+  exception, and the deadline-timeout failure path.
+
+* ci(test-skypilot-debug): 3-variant SkyPilot/RunPod canary matrix (noop, rclone, pedalboard-load)
+
+Permanent `workflow_dispatch`-only diagnostic matrix for the SkyPilot+RunPod path. Three variants,
+  each isolating one known failure class:
+
+- `noop` — pure orchestration probe (provision → submit → status-poll → teardown, no wrapper). PASS
+  proves the platform itself is fine. - `rclone` — `rclone copy <small file> r2:...` canary. Catches
+  the bug-#2 hang shape from #735 (rclone hanging post-upload), currently believed gone — this
+  variant is what would regress if it returns. - `pedalboard-load` — `python -c "from pedalboard
+  import VST3Plugin; VST3Plugin('/usr/lib/vst3/Surge XT.vst3')"` through the headless wrapper.
+  Closest-to-production worker shape without rclone; collectively validates the three
+  wrapper-cleanup hardening commits (stdin-detach, `wait`, `pkill -P $$`) under a long-lived Python
+  interpreter. Also the canary that tells us when bug-#3 (#735's interpreter shutdown hang) becomes
+  safe to revert the `os._exit(0)` workaround for.
+
+Each dispatch spends ~3 RunPod pods (billable). No `push` trigger by design — the matrix is for
+  investigation, not per-PR signal.
+
+The python probe inline in the workflow's `Run inline SkyPilot probe` step deliberately doesn't
+  reuse `pipeline.entrypoints.skypilot_launch_smoke` — this matrix exercises the SkyPilot platform
+  itself, not our launcher code path. Mixing the two would mask whether a regression is in SkyPilot,
+  RunPod, or our code.
+
+`task.workdir = os.getcwd()` syncs the GH-actions checkout to the worker as `~/sky_workdir` so the
+  worker uses the in-repo wrapper, not whatever is baked into the image. Lets us iterate on the
+  wrapper without a docker rebuild between dispatches.
+
+Refs #534 Refs #735
+
+---------
+
+Co-authored-by: Your Name <you@example.com>
+
+- **pipeline**: Static range shard partitioning + N-worker fan-out launcher
+  ([#764](https://github.com/tinaudio/synth-setter/pull/764),
+  [`01efdd4`](https://github.com/tinaudio/synth-setter/commit/01efdd41124c56fbdbfbaf98555498fe517b3e1f))
+
+* internal-feat(pipeline): static range shard partitioning for SkyPilot multi-node workers
+
+Each SkyPilot worker now renders only its contiguous slice of spec.shards, computed
+  deterministically from (total_shards, rank, world). An N-node launch finishes ~N× faster with no
+  coordination overhead — no leases, claim files, or liveness checks.
+
+- pipeline.partitioning.get_my_shards(total, rank, world) -> range — pure, no env reads. Imbalance ≤
+  1 shard between any two workers on uneven divides. - pipeline.partitioning.validate_rank_world —
+  shared bounds check used by both the partitioner and the verify script so they can't drift. -
+  pipeline.entrypoints.verify_skypilot_env — deployment guard, runs ahead of generate_dataset in the
+  SkyPilot YAML and exits non-zero if SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES are missing or
+  malformed. - generate_dataset.run reads the env at the call site (defaults rank=0/ world=1 for
+  local dev) and passes ints into the helper. - runpod-template.yaml gains `set -euo pipefail` and
+  the verify step before the existing python -c block. - test-dataset-generation workflow injects
+  num_nodes: 3 via sed and the smoke config now has num_shards: 3 so each worker renders exactly one
+  shard. Validate-shard step loops over every shard so a partitioning bug fails the job instead of
+  slipping past with only shard 0 checked.
+
+34 new tests (21 partitioning + 13 verify) plus 4 new entrypoint integration tests; all 293
+  quick-suite tests green.
+
+Refs #763
+
+* internal-feat(pipeline): fan out N parallel single-node SkyPilot launches; fail loudly on missing
+  rank/world env
+
+This commit replaces a placeholder commit (the original partitioning PR) with a complete fan-out
+  implementation. Two coupled changes:
+
+(1) generate_dataset.run no longer silently defaults rank/world to 0/1 when SKYPILOT_NODE_RANK /
+  SKYPILOT_NUM_NODES are missing. The "default to single-worker" behavior would silently make every
+  worker render every shard if a multi-node deployment skipped the env-injection plumbing — exactly
+  the bug class this PR exists to prevent. Reading + validating the env now lives in
+  pipeline.partitioning.read_rank_world_from_env, shared by both generate_dataset.run and
+  verify_skypilot_env.
+
+(2) skypilot_launch_smoke gains --num-workers N (default 1). For N>1 the launcher fans out N
+  independent single-node SkyPilot clusters in parallel via ThreadPoolExecutor (RunPod's backend
+  doesn't support num_nodes>1 natively). Each rank gets SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES
+  injected via task.update_envs; the spec is materialized + uploaded to R2 once and shared across
+  ranks so all workers write under the same r2_prefix. Cluster names use a `-r{i}` suffix for N>1
+  and stay unsuffixed for N=1 (preserves debug-workflow / dashboard backward compat).
+
+The test-dataset-generation workflow now passes --num-workers 3 to the launcher, replacing the prior
+  `num_nodes: 3` template injection that RunPod rejected. The smoke config has num_shards: 3 so each
+  worker renders exactly one shard. validate-shard already iterates over every shard.
+
+7 new tests cover the fan-out CLI; existing single-launch tests still pass after small assertion
+  updates (error messages now reflect the aggregate failure shape; teardown is uniform across
+  success and partial failure).
+
+* internal-fix(pipeline): drop verify_skypilot_env — generate_dataset.run already fails loudly
+
+The worker-side `python -m pipeline.entrypoints.verify_skypilot_env` step in runpod-template.yaml's
+  run: block referenced a module that doesn't exist in the production
+  `tinaudio/synth-setter:dev-snapshot` image — PR #764 added it but the image is baked from main. CI
+  on the PR failed with "No module named pipeline.entrypoints.verify_skypilot_env" on every worker
+  (run 25246497362 / job 74031573785).
+
+The verify step was belt-and-suspenders. After this PR's amendment, generate_dataset.run reads
+  SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES via read_rank_world_from_env as the very first thing it
+  does (before any rclone work), and raises ValueError on missing/invalid env. So the verify step's
+  only added value was failing one step earlier in the deployment, which doesn't justify the
+  chicken-and-egg with image bake.
+
+Removes the module + its tests, and the run-block invocation + the set -euo pipefail that was added
+  solely to gate that invocation. Module + test deletions reduce PR surface; the partition-helper
+  coverage (read_rank_world_from_env tests in test_partitioning.py) remains exhaustive on the
+  env-reading contract.
+
+* internal-feat(pipeline): worker-side git checkout via WORKER_GIT_REF env var
+
+The worker pod runs tinaudio/synth-setter:dev-snapshot, which is baked from main but lags behind by
+  N PRs. PR #764's CI hit this twice: - After the verify_skypilot_env attempt, the baked image
+  didn't have the new module (already fixed by removing the module). - After that, the baked image
+  still had the pre-#755 NotImplementedError for num_shards > 1 — even though main itself has the
+  multi-shard loop, dev-snapshot wasn't rebuilt after that PR landed.
+
+Rather than gating CI on image rebuilds (slow + opaque dependency), the pod now optionally syncs its
+  checkout to a caller-supplied git ref before running:
+
+- runpod-template.yaml's `run:` block fetches+checks out $WORKER_GIT_REF when set; skips silently
+  when unset (preserves baked-code behavior for non-CI launches). - skypilot_launch_smoke forwards
+  WORKER_GIT_REF via _WORKER_ENV_KEYS, same propagation path as the rclone-R2 / WANDB keys. -
+  test-dataset-generation workflow sets WORKER_GIT_REF to the PR head SHA (or github.sha for non-PR
+  triggers).
+
+Public-repo only — no creds plumbed through. ~3s of git fetch on a small clone. New unit test pins
+  the per-rank propagation.
+
+* fix(pipeline): rename rank/world env vars to OVERRIDE_-prefixed (SkyPilot reserves
+  SKYPILOT_NODE_RANK)
+
+PR #764's prior CI run (job 74058537550) showed all 3 fan-out workers seeing rank=0 even though the
+  launcher injected distinct SKYPILOT_NODE_RANK values per cluster via task.update_envs. Cause:
+  SkyPilot reserves SKYPILOT_NODE_RANK internally and resets it to the cluster-native value (0 on
+  every single-node cluster), clobbering our override. SKYPILOT_NUM_NODES was not reset (worker saw
+  3), only the rank.
+
+Rename our synthetic vars to OVERRIDE_SKYPILOT_NODE_RANK / OVERRIDE_SKYPILOT_NUM_NODES. The
+  OVERRIDE_ prefix is non-reserved so SkyPilot leaves it alone, and the prefixed names still signal
+  "this is what would otherwise be SkyPilot's natively-injected rank/world."
+
+Touches: partitioning.py constants, launcher constants, runpod-template envs: declaration +
+  run-block comment, every test that monkeypatches the env vars.
+
+* address review feedback on PR #764
+
+DRY (BLOCK): - Move RANK_ENV_VAR / WORLD_ENV_VAR to pipeline.partitioning as the single source of
+  truth; launcher imports them. Was duplicated with identical rationale comments in both modules.
+
+Latent breakage (BLOCK): - .github/workflows/dataset-generation.yml (workflow_call reusable): the
+  docker run path now requires OVERRIDE_SKYPILOT_NODE_RANK / NUM_NODES after the silent-default
+  removal. Inject 0 / 1 since this path is a single-worker direct-docker run.
+
+Cleanup (WARN): - _run_workers: drop redundant num_workers param (derive from len(cluster_names)),
+  drop max(num_workers, 1) dead defense, update docstring to OVERRIDE_-prefixed names. -
+  _teardown_cluster docstring: tighten to single-line ≤99 chars. - BLE001 inline-rationale comment:
+  hoist above the try block instead of splitting across two lines next to code. -
+  generate_dataset.run: hoist read_rank_world_from_env() above the tempfile.TemporaryDirectory()
+  block so a missing-env failure never spends a tmpdir or rclone call. - runpod-template.yaml envs
+  comment: collapse the duplicated OVERRIDE_ rationale to a one-line pointer at
+  pipeline/partitioning.py. - skypilot-compute-integration.md § 4.2: drop the "6 keys" enumeration +
+  table that became stale when WORKER_GIT_REF / OVERRIDE_SKYPILOT_* joined the tuple; replace with a
+  pointer to _WORKER_ENV_KEYS as the source of truth.
+
+Left as-is (advisory): - _launch_and_tail closure: justified per python-style PY19 PASS — real
+  captures of cluster_names/worker_env_base/template_path; not just hiding a free function. - main()
+  / _run_workers function lengths: borderline, no extraction improves clarity given the click
+  decorator soup and tight loop body. - pipeline/partitioning.py absent from docs/doc-map.yaml:
+  separate doc-update PR.
+
+295 tests pass; make format clean.
+
+* refactor(pipeline): rename rank/world env vars to WORKER_RANK / NUM_WORKERS
+
+Drops the SKYPILOT-prefixed naming entirely. The OVERRIDE_SKYPILOT_* names tried to mimic SkyPilot's
+  natively-injected vars but the only reason for the OVERRIDE_ prefix was to sidestep SkyPilot's
+  reservation of SKYPILOT_NODE_RANK — which we already aren't using natively, since the launcher's
+  fan-out is N independent single-node clusters. Cleaner to use our own names with no SkyPilot
+  collision in the namespace at all.
+
+Constants in pipeline.partitioning are now WORKER_RANK_ENV_VAR / NUM_WORKERS_ENV_VAR, holding
+  "WORKER_RANK" / "NUM_WORKERS". Updated launcher import + injection, runpod-template envs:
+  declarations + run-block comments, the dataset-generation reusable workflow's docker run defaults,
+  and every test that monkeypatches the env.
+
+* refactor(pipeline): namespace partition env vars with SYNTH_SETTER_ prefix
+
+WORKER_RANK / NUM_WORKERS are generic enough to collide with conventions used by PyTorch DataLoader,
+  dask, ray, and other multiprocessing toolkits (NUM_WORKERS especially). Adding SYNTH_SETTER_
+  prefix keeps the namespace fully under our control regardless of what other tools the worker pod
+  ends up running alongside.
+
+Constants WORKER_RANK_ENV_VAR / NUM_WORKERS_ENV_VAR in pipeline.partitioning now hold
+  "SYNTH_SETTER_WORKER_RANK" / "SYNTH_SETTER_NUM_WORKERS". Updated runpod-template envs:
+  declarations, run-block comments, the dataset-generation reusable workflow's docker run defaults,
+  and every test that monkeypatches the env. The launcher's import is by constant name so that's
+  unchanged.
+
+* docs: condense overly verbose comments across the partition PR
+
+Per the comment-hygiene rule landed in PR #762 (terse, ~1-2 lines, link to issue for longer
+  context), trim multi-paragraph prose blocks I authored in this PR while preserving
+  Args/Returns/Raises sections on docstrings.
+
+- partitioning.py: module docstring → 2 short paragraphs; collapse the validate_rank_world docstring
+  to its summary; tighten get_my_shards and read_rank_world_from_env (Args/Returns/Raises kept). -
+  skypilot_launch_smoke.py: module docstring trimmed; _LAUNCHER_SPEC_R2_PREFIX + _WORKER_ENV_KEYS +
+  _TAIL_LOGS_RC_SUCCESS comment blocks compacted. _run_workers docstring tightened (Args/Returns
+  kept). - runpod-template.yaml: WORKER_GIT_REF and SYNTH_SETTER_* run-block bullets collapsed;
+  envs: comment trimmed to a one-liner pointer at partitioning.py. - runpod-smoke-shard.yaml: 5-line
+  preamble → 3 lines. - test-dataset-generation.yml: 18-line validate-shard rationale → 5 lines.
+
+* address review feedback on PR #764 (Copilot round)
+
+Bug fixes: - partitioning.py: validate total_shards >= 0 in get_my_shards (#3176212116). Negative
+  would silently produce nonsense ranges via divmod. New test pins the precondition. -
+  runpod-template.yaml: add `--` end-of-options + 7-40 hex SHA regex validation before `git fetch --
+  "$WORKER_GIT_REF"` (#3177071407, #3177115639). Quoting alone doesn't protect against `-`-prefixed
+  values being parsed as git options. - skypilot_launch_smoke.py _run_workers: switch
+  result-collection loop to concurrent.futures.as_completed so a fast-failing rank surfaces
+  immediately instead of being blocked behind a slower-but-eventually-successful rank (#3176316048).
+  - test_skypilot_launch_smoke.py TestNumWorkersFanOut: rewrite the mock setup to route launch /
+  down / tail_logs by cluster_name (deterministic) instead of consuming an iterator in
+  non-guaranteed thread-scheduling order (#3177071451). Removes a real flake risk in
+  test_one_worker_failure_among_three_fails_launcher_after_full_teardown.
+
+Docs / docstring polish: - docs/design/skypilot-compute-integration.md §4.2: clarify that partition
+  rank/world env vars are NOT in _WORKER_ENV_KEYS — they're synthesized per-rank in _run_workers
+  (#3177115647). - test_partitioning.py: docstrings say SYNTH_SETTER_* not SKYPILOT_* (#3177071443,
+  #3177115651, #3177115656). Renamed the autouse fixture to _clear_partition_env to match. -
+  test_generate_dataset.py: docstring "Missing partition env" not "Missing SKYPILOT env"
+  (#3177115620). - test_skypilot_launch_smoke.py TestNumWorkersFanOut: drop stale OVERRIDE_
+  reference in class docstring (#3177115627).
+
+Already-handled comments (verified against current branch state, no fix needed): #3176212099
+  (read_rank_world_from_env now names the offending var in errors), #3176316044 (single-shard
+  wording trimmed in 70a5acf), #3176316046 (constants centralized in 3131124), #3176316050 (template
+  correctly omits verify_skypilot_env after 0972582), #3177071417 (_run_workers docstring updated in
+  70a5acf), #3177071430 / #3177115643 (verify_skypilot_env / SkyPilot env verifier refs removed in
+  70a5acf), #3177115632 (smoke-shard yaml comment trimmed).
+
+Tests: 296 pass (was 295; +1 for the negative total_shards guard).
+
+* build(compute): switch RunPod template to cpu3g-2-8 with 20 GB disk
+
+Drop the GPU accelerator list. generate_dataset.py is CPU-bound (pedalboard renders Surge XT on the
+  host with no CUDA path), so the GPU tier was dead weight on every smoke run.
+
+cpu3g-2-8 = 2 vCPU / 8 GB RAM (RunPod CPU3G tier). disk_size capped at 20 GB by the tier's vCPU × 10
+  GB rule. ~$0.08/hr per pod, ~5× cheaper than the cheapest matching GPU tier (~$0.44/hr A40) we
+  were defaulting to.
+
+Concurrent multi-pod provisioning has historically been the smoke's biggest flake source; the
+  cheaper tier means we can also retry more aggressively on stockout without burning the budget.
+
+* build(compute): swap cpu3g-2-8 pin for cpus: 2+ / memory: 4+ floor
+
+Loosen the RAM floor to 4 GB so SkyPilot's optimizer can pick the cheapest matching CPU tier instead
+  of always paying for cpu3g-2-8's 8 GB. cpus: 2+ keeps 1-vCPU tiers (10 GB disk cap) excluded so
+  disk_size: 20 always fits.
+
+Eligible tiers (cpus ≥ 2, memory ≥ 4, disk cap ≥ 20): cpu3c-2-4 (cheapest: 2 vCPU / 4 GB / 20 cap)
+  cpu5c-2-4, cpu3g-2-8, cpu3c-4-8, cpu5c-4-8, ... SkyPilot picks based on RunPod's live pricing +
+  availability.
+
+* revert(compute): restore GPU accelerator resources block
+
+Reverts the experimental CPU-tier resources changes (c602ffd, 3485906) and returns to the original
+  GPU accelerator set + 50 GB disk. CPU pods have been unreliable at provisioning concurrency;
+  revisit as a separate follow-up alongside the image-shrink work.
+
+---------
+
+Co-authored-by: Your Name <you@example.com>
+
+### Internal-Fix
+
+- **pipeline**: Replace launcher polling helper with sky.tail_logs(follow=True)
+  ([#759](https://github.com/tinaudio/synth-setter/pull/759),
+  [`606b658`](https://github.com/tinaudio/synth-setter/commit/606b658aa8583347d137abc20d0a580f6d8cf9b2))
+
+The original tail_logs hang on RunPod was the headless.sh leaky-state bug preventing Python from
+  exiting, not a SkyPilot SSH-stream EOF bug. With that fix landed, sky.tail_logs(follow=True) is
+  the simpler primitive.
+
+Drops _wait_for_job (~50 lines) plus the --job-deadline-seconds CLI option and ClusterNotUpError /
+  ClusterDoesNotExist exception plumbing. tail_logs returns int rc directly (sky/core.py:1232 — 0 on
+  SUCCEEDED, 100 on non-SUCCEEDED terminal) so the launcher just propagates that. Net: 185 lines
+  deleted, 46 added across launcher + tests + workflow.
+
+Validation: 17/17 launcher unit tests pass, 253/253 quick suite passes. The real validation is
+  test-skypilot-debug.yml against a real RunPod cluster; if tail_logs(follow=True) hangs there, we
+  revert and reopen.
+
+Refs #758
+
+Co-authored-by: Your Name <you@example.com>
+
+
 ## v0.7.3 (2026-05-01)
 
 ### Internal-Feat
