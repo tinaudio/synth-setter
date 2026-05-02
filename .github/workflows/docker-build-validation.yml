@@ -52,9 +52,35 @@ jobs:
           # pull_request: use PR head; dispatch: use input; schedule: main
           ref: ${{ github.event.pull_request.head.sha || github.event.inputs.git_ref || 'main' }}
 
-      - name: Resolve checked-out commit SHA
+      # Emits two outputs:
+      #   sha         — 40-char commit SHA, baked into the image
+      #   branch_slug — Docker-tag-safe branch name for the `dev-snapshot-<branch>`
+      #                 floating tag, or empty when no meaningful branch applies
+      #                 (schedule run, main, or a git_ref that's already a SHA).
+      #                 Slashes become dashes; charset is restricted to
+      #                 [A-Za-z0-9_.-]; truncated to 100 chars to leave room for
+      #                 the `dev-snapshot-` prefix under Docker's 128-char limit.
+      - name: Resolve checked-out commit SHA and branch slug
         id: source
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_REF: ${{ github.event.inputs.git_ref }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          raw_branch=""
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$DISPATCH_REF" != "main" ] && ! printf '%s' "$DISPATCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+              raw_branch="$DISPATCH_REF"
+            fi
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            raw_branch="$PR_HEAD_REF"
+          fi
+          slug=""
+          if [ -n "$raw_branch" ]; then
+            slug=$(printf '%s' "$raw_branch" | tr '/' '-' | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-100)
+          fi
+          echo "branch_slug=${slug}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -120,12 +146,18 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.config.outputs.image }}
-          # `latest` is gated to schedule runs or dispatches that explicitly
-          # target the default branch. Dispatching with git_ref pointed at a
-          # non-main ref must NOT publish that ref as latest — the workflow
-          # ref can be main while the baked SHA is something else entirely.
+          # Floating tags `dev-snapshot` and `latest` are gated to schedule
+          # runs or dispatches that explicitly target main. Dispatching with
+          # git_ref pointed at a non-main ref must NOT overwrite either tag —
+          # other workflows (test-skypilot-debug, test-dataset-generation)
+          # consume `dev-snapshot` by default and would silently run against
+          # the feature branch's image until the next main build.
+          # Feature-branch dispatches get a per-branch floating tag instead
+          # (`dev-snapshot-<branch>`), gated on a non-empty branch_slug.
+          # The immutable `dev-snapshot-<sha>` tag is always pushed.
           tags: |
-            type=raw,value=dev-snapshot
+            type=raw,value=dev-snapshot,enable=${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.git_ref == 'main') }}
+            type=raw,value=dev-snapshot-${{ steps.source.outputs.branch_slug }},enable=${{ steps.source.outputs.branch_slug != '' }}
             type=raw,value=dev-snapshot-${{ steps.source.outputs.sha }}
             type=raw,value=latest,enable=${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.git_ref == 'main') }}
 
