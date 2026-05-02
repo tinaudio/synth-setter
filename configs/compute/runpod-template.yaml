@@ -17,14 +17,17 @@
 
 resources:
   cloud: runpod
-  # Experiment: CPU-only RunPod pod. generate_dataset.py is CPU-bound
-  # (pedalboard renders Surge XT on the host, no CUDA path), so a GPU
-  # tier is overkill for the smoke. `+` = SkyPilot's "at least N" syntax —
-  # picks the cheapest pod meeting the floor.
-  cpus: 4+
-  memory: 8+
+  # CPU-only experiment — pedalboard renders Surge XT on host, no CUDA needed.
+  # disk_size=40 is the cap on cpu3c-4-8 (smallest candidate); larger candidates
+  # have larger caps but we only need ~15 GB for the image.
+  cpus: 2+
+  memory: 4+
+  any_of:
+    - { instance_type: cpu3c-4-8 }
+    - { instance_type: cpu3c-8-16 }
+    - { instance_type: cpu5c-4-8 }
   use_spot: false
-  disk_size: 50
+  disk_size: 40
   image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 # Placeholders. Real values are injected by the launcher via update_envs.
