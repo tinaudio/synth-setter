@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777689096118,
+  "lastUpdate": 1777689295111,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -59,6 +59,31 @@ window.BENCHMARK_DATA = {
             "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
             "value": 5.353806434583333,
             "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 21.051050186157227,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 17.5240702496469,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.30374279618263245,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.15888166427612305,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
           }
         ]
       },
@@ -118,6 +143,31 @@ window.BENCHMARK_DATA = {
             "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
             "value": 5.2876903134166655,
             "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 21.084692001342773,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 17.81026928395033,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.31998199224472046,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.18377995491027832,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
           }
         ]
       },
@@ -177,6 +227,31 @@ window.BENCHMARK_DATA = {
             "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
             "value": 5.0601840535,
             "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 21.14731788635254,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 17.35396855942905,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.3002326488494873,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.12770217657089233,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
           }
         ]
       },
@@ -591,580 +666,6 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.052183568477630615,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
-            "value": 66,
-            "unit": "count"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688678604,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
-            "value": 4.306839466094971,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
-            "value": 6.26446424767375,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
-            "value": 0.03246460109949112,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
-            "value": 0.03411900997161865,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
-            "value": 2.4440603256225586,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
-            "value": 6,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
-            "value": 5.233031644,
-            "unit": "seconds"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
-            "value": 21.051050186157227,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
-            "value": 17.5240702496469,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
-            "value": 0.30374279618263245,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
-            "value": 0.15888166427612305,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
-            "value": 66,
-            "unit": "count"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688814423,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
-            "value": 3.7864456176757812,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
-            "value": 6.496160214829143,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
-            "value": 0.03200270235538483,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
-            "value": 0.030243635177612305,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
-            "value": 2.1496942043304443,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
-            "value": 6,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
-            "value": 5.149671491749996,
-            "unit": "seconds"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
-            "value": 21.084692001342773,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
-            "value": 17.81026928395033,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
-            "value": 0.31998199224472046,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
-            "value": 0.18377995491027832,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
-            "value": 66,
-            "unit": "count"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688874516,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
-            "value": 3.9149482250213623,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
-            "value": 6.341559846177697,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
-            "value": 0.028696542605757713,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
-            "value": 0.025065243244171143,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
-            "value": 2.1470420360565186,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
-            "value": 6,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
-            "value": 5.3055072850833325,
-            "unit": "seconds"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
-            "value": 21.14731788635254,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
-            "value": 17.35396855942905,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
-            "value": 0.3002326488494873,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
-            "value": 0.12770217657089233,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
-            "value": 66,
-            "unit": "count"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688900986,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
-            "value": 2.579798936843872,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
-            "value": 4.246406374471262,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
-            "value": 0.050857920199632645,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
-            "value": 0.00439828634262085,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
-            "value": 1.7066972255706787,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
-            "value": 6,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
-            "value": 5.386575544,
-            "unit": "seconds"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
-            "value": 20.965402603149414,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
-            "value": 17.284432331472637,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
-            "value": 0.29372525215148926,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
-            "value": 0.09493088722229004,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
-            "value": 66,
-            "unit": "count"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688922691,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
-            "value": 4.113224029541016,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
-            "value": 6.15372181173414,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
-            "value": 0.026774544268846512,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
-            "value": 0.03308910131454468,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
-            "value": 2.20428204536438,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
-            "value": 6,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
-            "value": 5.230535411416668,
-            "unit": "seconds"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
-            "value": 21.035926818847656,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
-            "value": 17.59676086708903,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
-            "value": 0.29923099279403687,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
-            "value": 0.17444992065429688,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
-            "value": 66,
-            "unit": "count"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688929087,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
-            "value": 4.152703285217285,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
-            "value": 6.995018668994308,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
-            "value": 0.036088306456804276,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
-            "value": 0.029972732067108154,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
-            "value": 2.3352980613708496,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
-            "value": 6,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
-            "value": 5.240339950916668,
-            "unit": "seconds"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
-            "value": 21.209030151367188,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
-            "value": 17.50775339022279,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
-            "value": 0.2995152473449707,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
-            "value": 0.11983788013458252,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
-            "value": 66,
-            "unit": "count"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777689092503,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
-            "value": 3.551724672317505,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
-            "value": 6.064912723202724,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
-            "value": 0.032343171536922455,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
-            "value": 0.016491174697875977,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
-            "value": 2.231782913208008,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
-            "value": 6,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
-            "value": 5.260560135000001,
-            "unit": "seconds"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
-            "value": 21.359512329101562,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
-            "value": 17.335679951533674,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
-            "value": 0.2918470501899719,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
-            "value": 0.09405821561813354,
             "unit": "1-cos"
           },
           {
@@ -1880,405 +1381,6 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 12.70911317560001,
-            "unit": "seconds"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688680689,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
-            "value": 1.599185585975647,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
-            "value": 2.3011458071321247,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
-            "value": 0.015752704814076424,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
-            "value": 0.01055532693862915,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
-            "value": 1.3278582096099854,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/num-samples",
-            "value": 5,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
-            "value": 4.447208302000002,
-            "unit": "seconds"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688817317,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
-            "value": 2.211960792541504,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
-            "value": 3.376990503668785,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
-            "value": 0.0082078967243433,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
-            "value": 0.08673083782196045,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
-            "value": 1.5405126810073853,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/num-samples",
-            "value": 5,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
-            "value": 5.095447047699997,
-            "unit": "seconds"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688877516,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
-            "value": 2.833230972290039,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
-            "value": 3.9700042925402523,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
-            "value": 0.0060719335451722145,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
-            "value": 0.0019676685333251953,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
-            "value": 1.5559887886047363,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/num-samples",
-            "value": 5,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
-            "value": 5.204950878900002,
-            "unit": "seconds"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688903913,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
-            "value": 2.204713821411133,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
-            "value": 2.7905969838798046,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
-            "value": 0.01007984671741724,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
-            "value": 0.056388139724731445,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
-            "value": 1.0127198696136475,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/num-samples",
-            "value": 5,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
-            "value": 4.8776938282,
-            "unit": "seconds"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688925152,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
-            "value": 1.7690778970718384,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
-            "value": 3.0550563913583755,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
-            "value": 0.011944548226892948,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
-            "value": 0.01829695701599121,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
-            "value": 1.7411317825317383,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/num-samples",
-            "value": 5,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
-            "value": 4.666124609100007,
-            "unit": "seconds"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777688931638,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
-            "value": 2.165435552597046,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
-            "value": 2.621824494227767,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
-            "value": 0.008256951346993446,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
-            "value": 0.003924190998077393,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
-            "value": 1.5373589992523193,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/num-samples",
-            "value": 5,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
-            "value": 4.318553449500001,
-            "unit": "seconds"
-          }
-        ]
-      },
-      {
-        "commit": {
-          "author": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "committer": {
-            "name": "KT",
-            "username": "ktinubu",
-            "email": "17952332+ktinubu@users.noreply.github.com"
-          },
-          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
-          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
-          "timestamp": "2026-05-02T02:20:18Z",
-          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
-        },
-        "date": 1777689095543,
-        "tool": "customSmallerIsBetter",
-        "benches": [
-          {
-            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
-            "value": 1.7691200971603394,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
-            "value": 2.6327823879412247,
-            "unit": "L1"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
-            "value": 0.019863665103912354,
-            "unit": "Wasserstein"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
-            "value": 0.07046955823898315,
-            "unit": "1-cos"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
-            "value": 1.5018584728240967,
-            "unit": "dB"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/num-samples",
-            "value": 5,
-            "unit": "count"
-          },
-          {
-            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
-            "value": 4.471566485900001,
             "unit": "seconds"
           }
         ]
