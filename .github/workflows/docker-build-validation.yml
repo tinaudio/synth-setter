@@ -56,18 +56,28 @@ jobs:
       #   sha         — 40-char commit SHA, baked into the image
       #   is_main     — "true" when this build represents the main branch and
       #                 should advance the shared `dev-snapshot`/`latest` tags.
-      #                 Covers schedule runs and the common ref forms a user
-      #                 might paste into the dispatch input: `main`,
-      #                 `refs/heads/main`, `refs/remotes/origin/main`, plus the
-      #                 case where the resolved HEAD equals origin/main's HEAD
-      #                 (e.g., a literal SHA dispatch that happens to be main).
+      #                 Covers schedule runs, the common ref forms a user might
+      #                 paste into the dispatch input (`main`, `refs/heads/main`,
+      #                 `refs/remotes/origin/main`), and the case where the
+      #                 resolved HEAD equals origin/main's HEAD (e.g., a literal
+      #                 SHA dispatch that happens to be main).
       #   branch_slug — Docker-tag-safe branch name for the `dev-snapshot-<branch>`
       #                 floating tag, or empty when no meaningful branch applies
-      #                 (schedule run, any main ref form, or a git_ref that's
-      #                 already a SHA). Slashes become dashes; charset is
-      #                 restricted to [A-Za-z0-9_.-]; truncated to 100 chars to
-      #                 leave room for the `dev-snapshot-` prefix under Docker's
-      #                 128-char tag limit.
+      #                 (schedule run, any main ref form, a git_ref already
+      #                 resolved to a SHA, or a git tag dispatch). Well-known
+      #                 ref prefixes (`refs/heads/`, `refs/remotes/origin/`) are
+      #                 stripped before slugging so the same branch produces the
+      #                 same tag regardless of how the operator typed it.
+      #                 Slashes become dashes; charset is restricted to
+      #                 [A-Za-z0-9_.-]; truncated to 100 chars to leave room
+      #                 for the `dev-snapshot-` prefix under Docker's 128-char
+      #                 tag limit.
+      #                 Known limitation: branches whose slugs collide after
+      #                 normalization (e.g., `feat/foo` and `feat-foo`, or two
+      #                 branches sharing their first 100 normalized chars) will
+      #                 share the same `dev-snapshot-<slug>` tag and overwrite
+      #                 each other. Branches whose names are already Docker-tag
+      #                 -safe and ≤100 chars are unaffected.
       - name: Resolve checked-out commit SHA, main flag, and branch slug
         id: source
         env:
@@ -99,7 +109,22 @@ jobs:
           raw_branch=""
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$is_main" = "false" ]; then
             if ! printf '%s' "$DISPATCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
-              raw_branch="$DISPATCH_REF"
+              candidate="$DISPATCH_REF"
+              case "$candidate" in
+                refs/heads/*)          candidate="${candidate#refs/heads/}" ;;
+                refs/remotes/origin/*) candidate="${candidate#refs/remotes/origin/}" ;;
+              esac
+              is_tag="false"
+              case "$DISPATCH_REF" in
+                refs/tags/*) is_tag="true" ;;
+              esac
+              if [ "$is_tag" = "false" ] \
+                  && git ls-remote --tags origin "refs/tags/${candidate}" 2>/dev/null | grep -q .; then
+                is_tag="true"
+              fi
+              if [ "$is_tag" = "false" ]; then
+                raw_branch="$candidate"
+              fi
             fi
           elif [ "$EVENT_NAME" = "pull_request" ]; then
             raw_branch="$PR_HEAD_REF"
