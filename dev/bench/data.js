@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777688901777,
+  "lastUpdate": 1777688904392,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -1805,6 +1805,63 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 5.204950878900002,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "KT",
+            "username": "ktinubu",
+            "email": "17952332+ktinubu@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "KT",
+            "username": "ktinubu",
+            "email": "17952332+ktinubu@users.noreply.github.com"
+          },
+          "id": "fe0802e28edd66fd0222b07a6b2402b6adb6b916",
+          "message": "backfill(ci): drop concurrency group so 5 publish runs can fan out",
+          "timestamp": "2026-05-02T02:20:18Z",
+          "url": "https://github.com/tinaudio/synth-setter/commit/fe0802e28edd66fd0222b07a6b2402b6adb6b916"
+        },
+        "date": 1777688903913,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.204713821411133,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.7905969838798046,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.01007984671741724,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.056388139724731445,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.0127198696136475,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 4.8776938282,
             "unit": "seconds"
           }
         ]
