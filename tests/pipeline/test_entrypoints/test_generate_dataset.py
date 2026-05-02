@@ -317,29 +317,43 @@ class TestRun:
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
-    def test_local_shard_file_removed_after_upload(
+    def test_previous_shard_unlinked_before_next_render(
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Each shard's local HDF5 is unlinked after upload to bound disk to one shard."""
+        """Each shard's local HDF5 is unlinked before the next render starts.
+
+        Asserted as an in-loop invariant (not post-run) — the run wraps everything in
+        ``tempfile.TemporaryDirectory()`` so a post-run existence check would pass
+        regardless of whether unlink ran. This bounds local disk to one shard's worth
+        at a time.
+        """
         spec = _multi_shard_spec(tmp_path, n=3)
-        mock_check_call.side_effect = _materialize_shard
-        # Track which paths existed at upload time, and which still exist after run().
-        uploaded_paths: list[Path] = []
+        rendered_paths: list[Path] = []
 
-        def _record_upload(src: str, dest: str) -> None:
-            uploaded_paths.append(Path(src))
+        def _render_side_effect(args: list[str]) -> int:
+            # Args layout: [wrapper, python, generate_vst_dataset.py, output_file, ...].
+            output_file = Path(args[3])
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_bytes(b"")
+            # Before rendering shard i (i >= 1), shard i-1 must already be gone.
+            if rendered_paths:
+                previous = rendered_paths[-1]
+                assert not previous.exists(), (
+                    f"previous shard {previous.name} still on disk when "
+                    f"rendering {output_file.name}"
+                )
+            rendered_paths.append(output_file)
+            return 0
 
-        mock_rclone.side_effect = _record_upload
+        mock_check_call.side_effect = _render_side_effect
 
         run(spec)
 
-        shard_uploads = [p for p in uploaded_paths if p.name != INPUT_SPEC_FILENAME]
-        assert len(shard_uploads) == 3
-        for shard_path in shard_uploads:
-            assert not shard_path.exists(), f"shard file still on disk after run: {shard_path}"
+        # Sanity: the side effect must have fired once per shard.
+        assert len(rendered_paths) == 3
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
