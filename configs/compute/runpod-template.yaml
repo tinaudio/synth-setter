@@ -44,6 +44,7 @@ envs:
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WORKER_SPEC_URI: ""
+  WORKER_GIT_REF: ""
 
 setup: |
   echo "synth-setter worker ready (host: $(hostname))"
@@ -56,6 +57,13 @@ setup: |
 #   image's WORKDIR (`/home/build/synth-setter`) by default — it lands
 #   in `~/sky_workdir`. The cd that follows is what makes the relative
 #   path to `scripts/run-linux-vst-headless.sh` resolve.
+# - When WORKER_GIT_REF is set, the pod fetches+checks out that ref so
+#   the worker runs the dispatcher's source instead of the baked image's
+#   stale checkout. Unblocks PR CI from the dev-snapshot image-bake lag
+#   (image source can be N PRs stale; runtime sync brings it to head).
+#   Public repo, no creds needed; ~3s of git fetch on a small clone.
+#   Skipped silently when WORKER_GIT_REF is unset, so non-CI launches
+#   keep using baked code.
 # - SKYPILOT_NODE_RANK / SKYPILOT_NUM_NODES are read inside `run()` via
 #   `pipeline.partitioning.read_rank_world_from_env`, which raises before
 #   any rclone work if either is missing or out-of-bounds. No belt-and-
@@ -82,6 +90,13 @@ setup: |
 run: |
   echo "skypilot-run-cwd: $(pwd)"
   cd /home/build/synth-setter
+  if [ -n "${WORKER_GIT_REF:-}" ]; then
+    echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
+    git config --global --add safe.directory /home/build/synth-setter
+    git fetch origin "$WORKER_GIT_REF" --depth=1
+    git checkout FETCH_HEAD
+    echo "Worker now at: $(git rev-parse HEAD)"
+  fi
   python -c '
   import os
   from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run

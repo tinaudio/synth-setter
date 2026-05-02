@@ -64,6 +64,10 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
     "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
     "RCLONE_CONFIG_R2_ENDPOINT",
     "WANDB_API_KEY",
+    # When set, the pod's `run:` block fetches+checks out this git ref before
+    # invoking generate_dataset — unblocks PR-CI from the dev-snapshot image
+    # bake lag (image source is N PRs stale; runtime sync brings it to head).
+    "WORKER_GIT_REF",
 )
 
 # `sky.tail_logs(..., follow=True)` returns 0 on success, 100 if the worker

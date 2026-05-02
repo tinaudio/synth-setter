@@ -779,6 +779,40 @@ class TestNumWorkersFanOut:
         assert "smoke-job-1-r1" in result.output
         assert mock_sky.down.call_count == 3
 
+    def test_worker_git_ref_forwarded_to_every_rank(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`WORKER_GIT_REF` from process env reaches every rank's task via update_envs.
+
+        The pod's `run:` block reads this and `git fetch+checkout`s before invoking
+        generate_dataset, so the worker runs the dispatcher's source instead of the baked image's
+        stale checkout.
+        """
+        tasks = self._setup_n_workers_mock(mock_sky, n=3)
+        monkeypatch.setenv("WORKER_GIT_REF", "abc1234deadbeef")
+
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--num-workers",
+            "3",
+        )
+
+        assert result.exit_code == 0, result.output
+        forwarded = [t.update_envs.call_args.args[0] for t in tasks]
+        for env in forwarded:
+            assert env["WORKER_GIT_REF"] == "abc1234deadbeef"
+
     def test_zero_or_negative_num_workers_rejected(
         self,
         config_yaml: Path,

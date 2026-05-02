@@ -119,6 +119,7 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           CONFIG_PATH: ${{ env.DATASET_CONFIG }}
+          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -o pipefail
           docker run --rm \
@@ -132,6 +133,7 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
             -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
             -e WANDB_API_KEY="${WANDB_API_KEY}" \
+            -e WORKER_GIT_REF="${WORKER_GIT_REF}" \
             -e PYTHONPATH=/home/build/synth-setter \
             "$IMAGE" \
             bash -c '
