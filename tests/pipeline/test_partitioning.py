@@ -131,7 +131,7 @@ class TestReadRankWorldFromEnv:
     The silent-default behavior is intentionally refused: a worker invoked
     with a multi-shard spec but no partition env would otherwise duplicate
     every shard across every node. Any missing/malformed/out-of-bounds env
-    must raise — callers (generate_dataset.run, verify_skypilot_env) propagate.
+    must raise — generate_dataset.run propagates the ValueError to the worker exit path.
     """
 
     @pytest.fixture(autouse=True)

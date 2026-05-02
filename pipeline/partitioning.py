@@ -8,10 +8,10 @@ a single-node run with no coordination overhead.
 ``get_my_shards`` and ``validate_rank_world`` are pure — they don't read
 the environment. ``read_rank_world_from_env`` is the imperative shell
 that pulls ``SKYPILOT_NODE_RANK`` / ``SKYPILOT_NUM_NODES`` from
-``os.environ`` and fails loudly if they're missing or invalid; both
-``generate_dataset.run`` and ``verify_skypilot_env`` call it so they
-can't drift on the env-reading contract or silently default to a
-single-worker partition that would have every node render every shard.
+``os.environ`` and fails loudly if they're missing or invalid;
+``generate_dataset.run`` calls it before any R2 work so a worker
+without partition env can't silently default to a single-worker
+partition that would make every node render every shard.
 """
 
 from __future__ import annotations
