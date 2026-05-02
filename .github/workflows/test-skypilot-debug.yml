@@ -192,6 +192,12 @@ jobs:
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny
             config: configs/dataset/ci-smoke-test.yaml
+          - variant: generate-tiny-in-docker
+            mode: launcher-docker
+            template: configs/compute/runpod-template.yaml
+            cluster_prefix: synth-setter-debug
+            cluster_suffix: generate-tiny-docker
+            config: configs/dataset/ci-smoke-test.yaml
 
     steps:
       - name: Checkout
