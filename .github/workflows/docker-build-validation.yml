@@ -52,25 +52,53 @@ jobs:
           # pull_request: use PR head; dispatch: use input; schedule: main
           ref: ${{ github.event.pull_request.head.sha || github.event.inputs.git_ref || 'main' }}
 
-      # Emits two outputs:
+      # Emits three outputs:
       #   sha         — 40-char commit SHA, baked into the image
+      #   is_main     — "true" when this build represents the main branch and
+      #                 should advance the shared `dev-snapshot`/`latest` tags.
+      #                 Covers schedule runs and the common ref forms a user
+      #                 might paste into the dispatch input: `main`,
+      #                 `refs/heads/main`, `refs/remotes/origin/main`, plus the
+      #                 case where the resolved HEAD equals origin/main's HEAD
+      #                 (e.g., a literal SHA dispatch that happens to be main).
       #   branch_slug — Docker-tag-safe branch name for the `dev-snapshot-<branch>`
       #                 floating tag, or empty when no meaningful branch applies
-      #                 (schedule run, main, or a git_ref that's already a SHA).
-      #                 Slashes become dashes; charset is restricted to
-      #                 [A-Za-z0-9_.-]; truncated to 100 chars to leave room for
-      #                 the `dev-snapshot-` prefix under Docker's 128-char limit.
-      - name: Resolve checked-out commit SHA and branch slug
+      #                 (schedule run, any main ref form, or a git_ref that's
+      #                 already a SHA). Slashes become dashes; charset is
+      #                 restricted to [A-Za-z0-9_.-]; truncated to 100 chars to
+      #                 leave room for the `dev-snapshot-` prefix under Docker's
+      #                 128-char tag limit.
+      - name: Resolve checked-out commit SHA, main flag, and branch slug
         id: source
         env:
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_REF: ${{ github.event.inputs.git_ref }}
           PR_HEAD_REF: ${{ github.head_ref }}
         run: |
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          resolved_sha=$(git rev-parse HEAD)
+          echo "sha=${resolved_sha}" >> "$GITHUB_OUTPUT"
+
+          is_main="false"
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            is_main="true"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            case "$DISPATCH_REF" in
+              main|refs/heads/main|refs/remotes/origin/main)
+                is_main="true"
+                ;;
+            esac
+            if [ "$is_main" = "false" ]; then
+              main_sha=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+              if [ -n "$main_sha" ] && [ "$resolved_sha" = "$main_sha" ]; then
+                is_main="true"
+              fi
+            fi
+          fi
+          echo "is_main=${is_main}" >> "$GITHUB_OUTPUT"
+
           raw_branch=""
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            if [ "$DISPATCH_REF" != "main" ] && ! printf '%s' "$DISPATCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$is_main" = "false" ]; then
+            if ! printf '%s' "$DISPATCH_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
               raw_branch="$DISPATCH_REF"
             fi
           elif [ "$EVENT_NAME" = "pull_request" ]; then
@@ -156,10 +184,10 @@ jobs:
           # (`dev-snapshot-<branch>`), gated on a non-empty branch_slug.
           # The immutable `dev-snapshot-<sha>` tag is always pushed.
           tags: |
-            type=raw,value=dev-snapshot,enable=${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.git_ref == 'main') }}
+            type=raw,value=dev-snapshot,enable=${{ steps.source.outputs.is_main == 'true' }}
             type=raw,value=dev-snapshot-${{ steps.source.outputs.branch_slug }},enable=${{ steps.source.outputs.branch_slug != '' }}
             type=raw,value=dev-snapshot-${{ steps.source.outputs.sha }}
-            type=raw,value=latest,enable=${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.git_ref == 'main') }}
+            type=raw,value=latest,enable=${{ steps.source.outputs.is_main == 'true' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
