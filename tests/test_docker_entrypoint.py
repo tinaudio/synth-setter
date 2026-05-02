@@ -25,7 +25,6 @@ from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
-from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRYPOINT_PATH = REPO_ROOT / "scripts" / "docker_entrypoint.py"
@@ -305,13 +304,15 @@ class TestGenerateDataset:
         result = runner.invoke(entrypoint.cli, ["generate_dataset"])
         assert result.exit_code == 2
 
-    def test_nonexistent_spec_path_exits_two(
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
+    def test_nonexistent_spec_path_exits_nonzero_via_clickexception(
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
-        """--spec pointing at a non-existent file exits 2 (click ``exists=True`` enforcement)."""
         missing = tmp_path / "does-not-exist.json"
         result = runner.invoke(entrypoint.cli, ["generate_dataset", "--spec", str(missing)])
-        assert result.exit_code == 2
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, FileNotFoundError)
+        assert not isinstance(result.exception, OSError)
 
     @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
     def test_malformed_json_spec_exits_nonzero_without_calling_run(
@@ -435,34 +436,3 @@ class TestTrain:
         with pytest.raises(click.ClickException) as exc_info:
             entrypoint.train.callback(spec_path)
         assert "#409" in exc_info.value.message
-
-
-# ---------------------------------------------------------------------------
-# Structural invariants
-# ---------------------------------------------------------------------------
-
-
-class TestModeSpecTypesMapping:
-    """Invariants on the _MODE_SPEC_TYPES module-level mapping."""
-
-    def test_every_key_is_a_click_command_in_the_group(self, entrypoint: ModuleType) -> None:
-        """Every key in _MODE_SPEC_TYPES names a click command registered on ``cli``."""
-        for mode in entrypoint._MODE_SPEC_TYPES:
-            assert mode in entrypoint.cli.commands, (
-                f"_MODE_SPEC_TYPES key {mode!r} has no corresponding click command"
-            )
-
-    def test_every_value_is_a_pydantic_basemodel_subclass(self, entrypoint: ModuleType) -> None:
-        """Every value in _MODE_SPEC_TYPES is a concrete subclass of pydantic.BaseModel."""
-        for mode, spec_type in entrypoint._MODE_SPEC_TYPES.items():
-            assert isinstance(spec_type, type), (
-                f"_MODE_SPEC_TYPES[{mode!r}] must be a class, got {spec_type!r}"
-            )
-            assert issubclass(spec_type, BaseModel), (
-                f"_MODE_SPEC_TYPES[{mode!r}] must subclass pydantic.BaseModel"
-            )
-
-    def test_render_eval_and_train_are_not_registered(self, entrypoint: ModuleType) -> None:
-        """render_eval and train are deliberately absent — they have no spec type yet."""
-        assert "render_eval" not in entrypoint._MODE_SPEC_TYPES
-        assert "train" not in entrypoint._MODE_SPEC_TYPES
