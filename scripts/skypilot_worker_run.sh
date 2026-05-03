@@ -2,7 +2,7 @@
 # Worker python entrypoint shared by RunPod + OCI compute templates.
 # Caller (template) is responsible for cd into the synth-setter checkout
 # and (optionally) syncing it to WORKER_GIT_REF before invoking this.
-# os._exit(0) workaround for #735 — see configs/compute/runpod-template.yaml.
+# Workaround for #735.
 set -euo pipefail
 python - <<'PY'
 import os

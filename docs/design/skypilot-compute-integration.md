@@ -120,7 +120,7 @@ block (provider, accelerators vs. CPU/memory floor, region) and the
 provider-specific credential setup in CI. Future targets follow the same
 pattern.
 
-The `run:` block is overridden programmatically by the pipeline CLI when launching managed jobs. Each worker gets its shard range injected.
+The launcher (`pipeline.entrypoints.skypilot_launch_smoke`) does not override the `run:` block — it instantiates the Task from YAML and only calls `task.update_envs(...)` to inject the per-launch credential set + the spec URI. The `run:` block in each template handles the worker invocation; per-rank shard scoping is forwarded via `SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS` envs.
 
 ### 4.2 Env-var resolution: launcher → worker
 
