@@ -207,15 +207,16 @@ jobs:
       - name: Pull image
         run: docker pull "$IMAGE"
 
-      # Pin the OCI template's image_id from its default (`dev-snapshot`) to
-      # the tag this run was dispatched with, so the worker pulls the same
-      # image we just smoke-tested locally in the prior step.
-      - name: Pin image tag in SkyPilot OCI template
+      # Pin the worker docker image the OCI template's run: block pulls and
+      # runs. The OCI template doesn't carry a SkyPilot `image_id:` field
+      # (SkyPilot's OCI backend rejects docker:<image>); the worker image
+      # lives in the `WORKER_IMAGE` env default, which we sed-pin here.
+      - name: Pin worker image tag in OCI template
         run: |
           sed -i \
-            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
+            "s|WORKER_IMAGE: \"tinaudio/synth-setter:dev-snapshot\"|WORKER_IMAGE: \"tinaudio/synth-setter:${IMAGE_TAG}\"|" \
             configs/compute/oci-cpu-template.yaml
-          grep image_id configs/compute/oci-cpu-template.yaml
+          grep WORKER_IMAGE configs/compute/oci-cpu-template.yaml
 
       - name: Prepare run-metadata mount
         run: mkdir -p /tmp/run-metadata-oci
@@ -277,8 +278,12 @@ jobs:
                 "$OCI_USER_OCID" "$OCI_FINGERPRINT" "$OCI_TENANCY_OCID" "$OCI_REGION" "$HOME" \
                 > "$HOME/.oci/config"
               chmod 600 "$HOME/.oci/config"
-              printf "oci:\n  default:\n    compartment_ocid: %s\n" "$OCI_COMPARTMENT_OCID" \
+              printf "oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: skypilot:cpu-ubuntu-2204\n" "$OCI_COMPARTMENT_OCID" \
                 > "$HOME/.sky/config.yaml"
+              if ! python -c "import oci" 2>/dev/null; then
+                echo "[oci-bridge] dev-snapshot lacks oci sdk; installing skypilot[oci] at runtime"
+                pip install --quiet "skypilot[oci]==0.12.0"
+              fi
               sky check oci
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
