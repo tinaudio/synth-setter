@@ -3,36 +3,30 @@
 # OCI sibling of configs/compute/runpod-debug-template.yaml. Used by
 # .github/workflows/test-skypilot-debug.yml to exercise the launcher
 # (provision -> setup -> submit -> poll -> tail -> teardown) on OCI without
-# running the real worker pipeline. The run block prints a single line and
-# exits 0, so any hang or failure surfaced here is in the launcher's
-# SkyPilot/OCI interaction, NOT in the dataset generation code.
+# running the real worker pipeline. Any hang or failure here is in the
+# launcher's SkyPilot/OCI interaction, NOT in the dataset generation code.
 #
-# IMPORTANT — no `image_id` here. SkyPilot's OCI backend rejects the
-# `docker:<image>` syntax with "Docker image is currently not supported on
-# OCI." The production OCI template (oci-cpu-template.yaml) handles the
-# worker container by running `docker pull` + `docker run` inside its run:
-# block. The noop probe doesn't need the worker image at all — it just
-# echoes — so it doesn't even need docker. SkyPilot picks the OCI Ubuntu
-# marketplace image via `image_tag_general` in ~/.sky/config.yaml (set by
-# the workflow at cred-write time).
+# OCI-specific: no `image_id` field — SkyPilot's OCI backend rejects the
+# `docker:<image>` syntax. The noop probe doesn't need the worker image
+# (it just echoes), so it skips docker entirely. SkyPilot picks the OCI
+# Ubuntu marketplace image via `image_tag_general` in ~/.sky/config.yaml
+# (set by the workflow at cred-write time).
 #
 # Region intentionally not pinned — `~/.oci/config` is the single source
 # of truth (set via OCI_REGION at CI cred-write time).
 
 resources:
   cloud: oci
-  # VM.Standard.E2.1.Micro is OCI's "Always Free" tier shape (1 OCPU, 1 GB).
-  # Pinning by name (instead of cpus/memory floors) ensures noop launches
-  # against a shape every tenancy has by default — even fresh ones with
-  # zero paid compute quota. The prod OCI template (oci-cpu-template.yaml)
-  # still asks for cpus: 4+, memory: 16+, which requires actual compute
-  # quota in the operator's tenancy.
+  # Always-Free shape so noop launches against fresh tenancies with zero
+  # paid compute quota. The prod template uses cpus/memory floors instead.
   instance_type: VM.Standard.E2.1.Micro
   use_spot: false
   disk_size: 30
 
 setup: |
+  set -euo pipefail
   echo "synth-setter debug worker ready (host: $(hostname), uname: $(uname -a))"
 
 run: |
+  set -euo pipefail
   echo "skypilot-debug job done (host: $(hostname), pwd: $(pwd))"

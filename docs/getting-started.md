@@ -389,7 +389,20 @@ If you are exercising the OCI target:
 
    `chmod 600 ~/.oci/oci_api_key.pem` and `chmod 600 ~/.oci/config`.
 
-3. Smoke check the credentials:
+3. Write `~/.sky/config.yaml` so SkyPilot launches target your compartment
+   on the supported Ubuntu image:
+
+   ```yaml
+   oci:
+     default:
+       compartment_ocid: <compartment-ocid>
+       image_tag_general: skypilot:cpu-ubuntu-2204
+   ```
+
+   Use the tenancy OCID for the root compartment, or a child compartment
+   OCID for cleaner quota / IAM scoping.
+
+4. Smoke check the credentials:
 
    ```
    sky check oci

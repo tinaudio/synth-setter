@@ -1,44 +1,25 @@
 # SkyPilot task template for OCI (Oracle Cloud Infrastructure), CPU-only.
+# Sibling of runpod-template.yaml — see docs/design/skypilot-compute-integration.md.
 #
-# Loaded by pipeline/entrypoints/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
-# The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`)
-# and injects credentials + the spec URI via task.update_envs(...) before
-# calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
-# (not sky.jobs.launch) — the smoke probe is a single-shot, single-shard
-# round-trip and managed jobs would require a controller-state cloud bucket
-# we don't have provisioned for OCI yet.
-#
-# IMPORTANT — no `image_id` field here. SkyPilot's OCI backend rejects the
-# `docker:<image>` syntax with "Docker image is currently not supported on
-# OCI." Instead the worker image (tinaudio/synth-setter:dev-snapshot) is
-# pulled and run as a sub-docker invocation inside the run: block. The OCI
-# VM base is Canonical Ubuntu 22.04 (selected via `image_tag_general:
-# skypilot:cpu-ubuntu-2204` in the workflow's ~/.sky/config.yaml writer);
-# setup: ensures docker.io is installed and the daemon is running.
-#
-# Spec ships via R2 (not file_mounts) for parity with the RunPod template.
-#
-# Image: tinaudio/synth-setter:dev-snapshot must be pushed to Docker Hub
-# (`make docker-build-dev-snapshot` then `docker push`) before launch. Pin
-# at workflow-dispatch time via the `docker_image_tag` input or by editing
-# the IMAGE_TAG in the workflow.
+# OCI-specific: SkyPilot's OCI backend rejects `image_id: docker:<image>`
+# ("Docker image is currently not supported on OCI"), so the worker image
+# is pulled and run as a sub-docker invocation inside the run: block on a
+# stock Ubuntu 22.04 VM (selected via `image_tag_general:
+# skypilot:cpu-ubuntu-2204` in the workflow's ~/.sky/config.yaml writer).
+# Operators dispatching locally pin the image tag via `docker_image_tag`
+# in the workflow input, OR by editing WORKER_IMAGE below; PR CI rewrites
+# WORKER_IMAGE via sed before launch.
 
 resources:
   cloud: oci
-  # Flex shape — SkyPilot picks the smallest VM.Standard.E5.Flex variant
-  # that satisfies these floors. CPU-only is sufficient for the smoke
-  # probe (the workload is single-shard and short-lived; GPU acceleration
-  # buys nothing here).
   cpus: 4+
   memory: 16+
-  # Region is intentionally NOT pinned here — `~/.oci/config` is the single
-  # source of truth (set via OCI_REGION at CI cred-write time).
   use_spot: false
   disk_size: 50
+  # Region intentionally not pinned — `~/.oci/config` is the single source
+  # of truth (set via OCI_REGION at CI cred-write time).
 
 # Placeholders. Real values are injected by the launcher via update_envs.
-# WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the
-# uploaded spec; the worker downloads from there via load_spec_from_uri.
 envs:
   RCLONE_CONFIG_R2_TYPE: ""
   RCLONE_CONFIG_R2_PROVIDER: ""
@@ -46,30 +27,16 @@ envs:
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WORKER_SPEC_URI: ""
+  # Default below is the CI sed pin target — see "Pin worker image tag"
+  # step in .github/workflows/test-dataset-generation.yml.
   WORKER_IMAGE: "tinaudio/synth-setter:dev-snapshot"
-  # Optional git ref the worker checks out before running generate_dataset
-  # (lets PR CI bypass dev-snapshot image-bake lag). Mirrors the RunPod
-  # template's contract; ignored when empty.
   WORKER_GIT_REF: ""
-  # Per-rank partition env. Source of truth: pipeline/partitioning.py.
   SYNTH_SETTER_WORKER_RANK: ""
   SYNTH_SETTER_NUM_WORKERS: ""
 
-# `setup:` notes (kept out of the heredoc — comments inside YAML
-# block-scalars are read by bash and stray quotes / backticks have caused
-# unintended shell expansions in the past):
-#
-# - SkyPilot's OCI Canonical-Ubuntu-22.04 image (image_tag_general:
-#   skypilot:cpu-ubuntu-2204) does NOT preinstall docker. Install docker.io
-#   from Ubuntu's apt repos. `apt-get update -qq` once, install, start
-#   daemon, add the SkyPilot user to the `docker` group so `docker run`
-#   doesn't require sudo (the run: block uses sudo as a belt-and-braces
-#   fallback so we don't depend on group-membership taking effect in this
-#   shell session).
-# - Pre-pulling the worker image here, while setup: is timed against
-#   SkyPilot's separate setup-timeout, keeps the run: block fast and the
-#   pull-time visible in setup: logs (debugging surface) rather than
-#   buried under run:'s tee.
+# setup: installs docker.io on the stock OCI Ubuntu VM (no docker preinstalled
+# in skypilot:cpu-ubuntu-2204) and pre-pulls the worker image so run: stays
+# fast and pull errors surface in setup: logs.
 setup: |
   set -euo pipefail
   if command -v cloud-init >/dev/null 2>&1; then
@@ -84,35 +51,10 @@ setup: |
   sudo -E docker pull "$WORKER_IMAGE"
   echo "synth-setter worker ready (host: $(hostname), docker: $(sudo -E docker --version))"
 
-# `run:` block notes:
-#
-# - sub-docker invocation: SkyPilot's OCI backend can't ingest a docker
-#   image_id, so we run the worker container ourselves on the OCI VM. The
-#   container is the exact same dev-snapshot image used on RunPod; only
-#   the launch path differs.
-# - --privileged + --ulimit nofile=65536:65536 are the expedient hammer
-#   for the Xvfb / dbus / pedalboard preset-load X11 stack. Justifiable
-#   on a single-tenant ephemeral OCI VM (the container IS the workload),
-#   but bigger than necessary. Follow-up to identify the minimal cap
-#   set: #776 (drop --privileged; replace with the smallest cap-add /
-#   shm-size combination that still lets Surge XT preset load work).
-# - Env propagation: `task.update_envs(...)` sets RCLONE_*+WORKER_SPEC_URI
-#   in the OCI VM's shell environment (via SkyPilot's env-file source).
-#   `docker run -e VAR_NAME` (no value) inherits each named var from the
-#   parent shell — so the launcher's injected R2 creds + spec URI flow
-#   through one indirection (host shell -> container env) without ever
-#   landing on disk.
-# - The Python invocation is inlined (instead of calling the docker
-#   entrypoint's click subcommand) so we can `os._exit(0)` immediately
-#   after `run()` returns successfully. Workaround for #735: same root
-#   cause kept defensively across providers until the underlying
-#   non-daemon-thread leak is root-caused.
-# - The python -c body lines sit at the YAML block-scalar's minimum
-#   indent (2 spaces in source) — visually less indented than the
-#   surrounding bash. After YAML strips the block-scalar's 2-space
-#   prefix, the python content reaches the interpreter at column 0,
-#   which is the only indent level Python -c accepts for top-level
-#   statements. Don't re-indent the python lines to match the bash.
+# run: launches the worker container ourselves (OCI backend can't ingest a
+# docker image_id). --privileged + --ulimit nofile is the expedient hammer
+# for the Xvfb/dbus stack — follow-up to find the minimal cap set: #776.
+# Worker run-block is shared with the RunPod template via scripts/skypilot_worker_run.sh.
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd) host: $(hostname)"
@@ -130,25 +72,4 @@ run: |
     -e SYNTH_SETTER_NUM_WORKERS \
     -e PYTHONPATH=/home/build/synth-setter \
     "$WORKER_IMAGE" \
-    bash -c '
-      set -euo pipefail
-      cd /home/build/synth-setter
-      if [ -n "${WORKER_GIT_REF:-}" ]; then
-        echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
-        if ! [[ "$WORKER_GIT_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
-          echo "ERROR: WORKER_GIT_REF must be a 7-40 char hex git SHA, got: $WORKER_GIT_REF" >&2
-          exit 1
-        fi
-        git config --global --add safe.directory /home/build/synth-setter
-        git fetch --depth=1 origin -- "$WORKER_GIT_REF"
-        git checkout FETCH_HEAD
-        echo "Worker now at: $(git rev-parse HEAD)"
-      fi
-      python -c "
-  import os
-  from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
-  run(load_spec_from_uri(os.environ[\"WORKER_SPEC_URI\"]))
-  print(\"forcing interpreter exit (#735 workaround) — bypassing atexit\", flush=True)
-  os._exit(0)
-  "
-    '
+    bash /home/build/synth-setter/scripts/skypilot_worker_run.sh
