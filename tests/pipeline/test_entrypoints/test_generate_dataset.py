@@ -14,6 +14,7 @@ recorded call args + ordering.
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -37,6 +38,19 @@ TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPl
 TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+def _find_script_index(args: list[str]) -> int:
+    """Locate generate_vst_dataset.py in subprocess args, with a clear failure on miss.
+
+    The args layout depends on platform — `[wrapper, python, script, output, ...]` on Linux
+    versus `[python, script, output, ...]` elsewhere — so callers locate the script by name
+    rather than fixed index.
+    """
+    for i, a in enumerate(args):
+        if a.endswith("generate_vst_dataset.py"):
+            return i
+    raise AssertionError(f"generate_vst_dataset.py not found in subprocess args: {args}")
+
+
 def _materialize_shard(args: list[str]) -> int:
     """subprocess.check_call side effect that writes the expected shard file.
 
@@ -44,8 +58,8 @@ def _materialize_shard(args: list[str]) -> int:
     HDF5 to its output path. Tests that don't supply this side effect would trip the
     `shard_path.is_file()` check in `_render_and_upload_shard`.
     """
-    # Args layout: [wrapper, python, generate_vst_dataset.py, output_file, ...].
-    output_file = Path(args[3])
+    script_idx = _find_script_index(args)
+    output_file = Path(args[script_idx + 1])
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_bytes(b"")
     return 0
@@ -108,6 +122,19 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetPipelineSpec:
 class TestRun:
     """Run() orchestrates: serialize → upload spec → generate → upload shard."""
 
+    @pytest.fixture(autouse=True)
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default to a single-worker rank/world for tests that don't care about partitioning.
+
+        ``run()`` now requires ``SYNTH_SETTER_WORKER_RANK`` / ``SYNTH_SETTER_NUM_WORKERS`` to be set
+        (silent default removed — see ``read_rank_world_from_env``). Most tests in this class
+        exercise behaviors orthogonal to partitioning, so set rank=0/world=1 by default; tests
+        that probe multi-worker partitioning override via ``monkeypatch.setenv`` and tests for
+        the missing-env contract override via ``monkeypatch.delenv``.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     def test_uploads_spec_to_r2_at_expected_path(
@@ -162,7 +189,7 @@ class TestRun:
 
         mock_check_call.assert_called_once()
         args = mock_check_call.call_args[0][0]
-        # args = [VST_HEADLESS_WRAPPER, python, generate_vst_dataset.py, ...]
+        # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.shard_size) in args
 
@@ -174,20 +201,23 @@ class TestRun:
         mock_check_call: MagicMock,
         spec: DatasetPipelineSpec,
     ) -> None:
-        """The VST subprocess is prefixed with scripts/run-linux-vst-headless.sh.
+        """The VST subprocess is prefixed with scripts/run-linux-vst-headless.sh on Linux.
 
         X11 bootstrap lives at the audio-rendering boundary (this subprocess) so the
         docker_entrypoint click CLI can stay X11-agnostic — idle and passthrough modes don't pay
-        the Xvfb startup cost.
+        the Xvfb startup cost. The wrapper is Linux-only (Xvfb is a Linux X11 server); on macOS and
+        other platforms the generator is invoked directly without a wrapper prefix.
         """
         mock_check_call.side_effect = _materialize_shard
         run(spec)
 
         args = mock_check_call.call_args[0][0]
-        assert args[0] == VST_HEADLESS_WRAPPER
-        # Wrapper prefixes the original generate_vst_dataset.py invocation,
-        # so the python interpreter + script must appear immediately after.
-        assert args[2] == "src/data/vst/generate_vst_dataset.py"
+        if sys.platform == "linux":
+            assert args[0] == VST_HEADLESS_WRAPPER
+            assert args[2] == "src/data/vst/generate_vst_dataset.py"
+        else:
+            assert VST_HEADLESS_WRAPPER not in args
+            assert args[1] == "src/data/vst/generate_vst_dataset.py"
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
@@ -261,8 +291,7 @@ class TestRun:
         rendered_filenames = []
         for call in mock_check_call.call_args_list:
             args = call[0][0]
-            # Args layout: [wrapper, python, generate_vst_dataset.py, output_file, ...].
-            output_file = args[3]
+            output_file = args[_find_script_index(args) + 1]
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [s.filename for s in spec.shards]
 
@@ -409,6 +438,128 @@ class TestRun:
             run(spec)
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_raises_when_skypilot_env_missing(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing partition env → ValueError before any rclone or subprocess work.
+
+        Removes the silent-default smell where a worker invoked without partition env would
+        otherwise duplicate every shard across every node.
+        """
+        monkeypatch.delenv("SYNTH_SETTER_WORKER_RANK", raising=False)
+        monkeypatch.delenv("SYNTH_SETTER_NUM_WORKERS", raising=False)
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        with pytest.raises(ValueError) as excinfo:
+            run(spec)
+        message = str(excinfo.value)
+        assert "SYNTH_SETTER_WORKER_RANK" in message
+        assert "SYNTH_SETTER_NUM_WORKERS" in message
+        mock_rclone.assert_not_called()
+        mock_check_call.assert_not_called()
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_rank_0_of_2_renders_only_first_half_of_shards(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Worker 0 of a 2-node partition with 3 shards renders shards 0 and 1 only."""
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
+        spec = _multi_shard_spec(tmp_path, n=3)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        rendered_filenames = []
+        for call in mock_check_call.call_args_list:
+            args = call[0][0]
+            output_file = args[_find_script_index(args) + 1]
+            rendered_filenames.append(Path(output_file).name)
+        assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_rank_1_of_2_renders_only_remaining_shard(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Worker 1 of a 2-node partition with 3 shards renders shard 2 only."""
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
+        spec = _multi_shard_spec(tmp_path, n=3)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        rendered_filenames = []
+        for call in mock_check_call.call_args_list:
+            args = call[0][0]
+            output_file = args[_find_script_index(args) + 1]
+            rendered_filenames.append(Path(output_file).name)
+        assert rendered_filenames == [spec.shards[2].filename]
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_spec_uploaded_exactly_once_independent_of_partition(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Spec upload is partition-independent: every worker uploads it exactly once."""
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
+        spec = _multi_shard_spec(tmp_path, n=3)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        spec_uploads = [
+            call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
+        ]
+        assert len(spec_uploads) == 1
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_excess_worker_renders_no_shards_but_still_uploads_spec(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When world > num_shards, the excess workers exit cleanly without rendering.
+
+        A 4-node partition over 3 shards leaves worker 3 with an empty range — it must still upload
+        the spec (idempotent) but render zero shards.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "3")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "4")
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        run(spec)
+
+        mock_check_call.assert_not_called()
+        spec_uploads = [
+            call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
+        ]
+        assert len(spec_uploads) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 synth-setter: Synth inversion, sound matching and preset exploration tools
 
 - Python 3.10+, PyTorch Lightning, Hydra configs
-- Data pipeline: distributed shard generation on RunPod, stored in Cloudflare R2
+- Data pipeline: distributed shard generation on SkyPilot-managed compute (RunPod + OCI), stored in Cloudflare R2
 - Design doc: `docs/design/data-pipeline.md`
 
 ## Code Standards
@@ -13,7 +13,7 @@ synth-setter: Synth inversion, sound matching and preset exploration tools
 ### Formatting & Linting (enforced by pre-commit)
 
 - **Ruff format** (line-length=99)
-- **Ruff** (rules: E, F, I, S, T, UP, W)
+- **Ruff** (rules: E, F, I, S, T, UP, W, ANN001)
 - Run `make format` before committing
 
 ### Commit Messages
@@ -54,8 +54,26 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 Comments that restate values, counts, or list contents go stale the moment the code changes. The code is the source of truth — name it, don't mirror it.
 
 - **Don't restate constant values.** Next to `num_samples = 6`, never write `# 6 samples (12 renders total)`. Reference the symbol (`each stage renders num_samples times`) or describe behavior without numbers.
+
 - **Don't bake in counts the code already reports.** `# 29 review comments triaged` or `# 5 metric series` belongs in a PR description (a snapshot in time), not in a docstring or inline comment that lives next to the data and will drift the next time someone adds an item. Prefer "the metric series listed below" or reference the data source.
+
 - **Don't enumerate list contents in prose.** Next to `THINGS = ["a", "b", "c"]`, never write `# three things: a, b, and c` — both the count and the contents will mismatch the list within a release. The list is the source of truth; a comment can name the *category*, not its contents.
+
+- **Keep comments terse — typically one short line.** Multi-sentence prose explanations inline are a smell. If a comment would need more than ~2 lines to be useful, that's a signal the context belongs in a GitHub issue, not in the source. Make the inline comment a one-line pointer to the issue.
+
+  ```python
+  # Bad — multi-sentence essay inline:
+  # We use os._exit(0) here instead of sys.exit(0) because SkyPilot's
+  # job runner wraps the process in a shell that doesn't propagate the
+  # exit code correctly when atexit handlers raise during interpreter
+  # shutdown — see the long investigation in the PR description.
+  os._exit(0)
+
+  # Good — one-line pointer to the issue with the full context:
+  # Workaround for atexit-during-shutdown hang — see #735.
+  os._exit(0)
+  ```
+
 - Still write comments for: WHY a non-obvious choice was made, hidden invariants, workarounds (with bug ID), and surprising behavior.
 
 #### No Comments Inside YAML `run:` Block-Scalars

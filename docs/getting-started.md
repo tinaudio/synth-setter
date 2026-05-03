@@ -364,6 +364,50 @@ If you are working on the data pipeline and need to run distributed generation:
 RUNPOD_API_KEY=<your-api-key>
 ```
 
+### 4e. OCI (Optional -- Second Compute Target)
+
+[Oracle Cloud Infrastructure](https://www.oracle.com/cloud/) is wired up as a
+second SkyPilot target alongside RunPod for the `generate_dataset` smoke
+pipeline (CPU-only Flex shapes via `configs/compute/oci-cpu-template.yaml`).
+**You do not need OCI for local development or training.**
+
+If you are exercising the OCI target:
+
+1. Generate an API signing key pair following Oracle's
+   [Required Keys and OCIDs](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/apisigningkey.htm) guide.
+
+2. Write `~/.oci/config` with the standard skeleton:
+
+   ```
+   [DEFAULT]
+   user=<user-ocid>
+   fingerprint=<key-fingerprint>
+   tenancy=<tenancy-ocid>
+   region=<your-region>
+   key_file=~/.oci/oci_api_key.pem
+   ```
+
+   `chmod 600 ~/.oci/oci_api_key.pem` and `chmod 600 ~/.oci/config`.
+
+3. Write `~/.sky/config.yaml` so SkyPilot launches target your compartment
+   on the supported Ubuntu image:
+
+   ```yaml
+   oci:
+     default:
+       compartment_ocid: <compartment-ocid>
+       image_tag_general: skypilot:cpu-ubuntu-2204
+   ```
+
+   Use the tenancy OCID for the root compartment, or a child compartment
+   OCID for cleaner quota / IAM scoping.
+
+4. Smoke check the credentials:
+
+   ```
+   sky check oci
+   ```
+
 ______________________________________________________________________
 
 ## 5. Hydra Configuration System

@@ -23,6 +23,7 @@ from pathlib import Path
 from loguru import logger
 
 from pipeline.constants import INPUT_SPEC_FILENAME
+from pipeline.partitioning import get_my_shards, read_rank_world_from_env
 from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
 
@@ -176,6 +177,15 @@ def run(spec: DatasetPipelineSpec) -> None:
         )
     logger.info(f"renderer_version OK: plugin at {spec.plugin_path} == {spec.renderer_version}")
 
+    # Read rank/world before any tmpdir / R2 work — fail loudly on missing env.
+    rank, world = read_rank_world_from_env()
+    my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
+    logger.info(
+        f"shard partition: rank={rank}/{world} owns shard_ids "
+        f"[{my_range.start}, {my_range.stop}) "
+        f"({len(my_range)} of {spec.num_shards} shards)"
+    )
+
     r2_dest_prefix = f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
     with tempfile.TemporaryDirectory() as work_dir_str:
@@ -192,8 +202,8 @@ def run(spec: DatasetPipelineSpec) -> None:
         _rclone_copy(str(spec_path), r2_dest_prefix)
         logger.info(f"spec uploaded -> {r2_dest_prefix}")
 
-        for shard in spec.shards:
-            _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+        for shard_id in my_range:
+            _render_and_upload_shard(spec, spec.shards[shard_id], work_dir, r2_dest_prefix)
 
 
 def _render_and_upload_shard(
@@ -207,7 +217,8 @@ def _render_and_upload_shard(
     Unlinking after upload bounds local disk to one shard's HDF5 at a time — necessary for multi-
     shard runs on disk-constrained workers.
     """
-    args = [VST_HEADLESS_WRAPPER, *build_generate_args(spec, shard, work_dir)]
+    args = [VST_HEADLESS_WRAPPER] if sys.platform == "linux" else []
+    args += build_generate_args(spec, shard, work_dir)
     logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
     subprocess.check_call(args)  # noqa: S603 — args built from validated spec
     shard_path = work_dir / shard.filename

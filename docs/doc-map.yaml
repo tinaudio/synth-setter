@@ -84,6 +84,28 @@ docs:
       - pattern: "pipeline/schemas/spec.py"
         covers: "DatasetPipelineSpec, ShardSpec, materialize_spec() flow"
 
+  # ── SkyPilot compute integration design doc ─────────────────────
+  - doc: docs/design/skypilot-compute-integration.md
+    description: SkyPilot launcher for the data pipeline (RunPod + OCI smoke)
+    sources:
+      - pattern: "pipeline/entrypoints/skypilot_launch_smoke.py"
+        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → launch flow, sky.launch (unmanaged) + down=True, _wait_for_job polling vs tail_logs follow=True (RunPod hang), per-cluster R2 spec key (skypilot-launcher-specs/<cluster>.json) — file_mounts deliberately avoided, see #749"
+      - pattern: "configs/compute/runpod-template.yaml"
+        covers: "SkyPilot Task YAML for RunPod: resources block, image_id pin, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
+      - pattern: "configs/compute/oci-cpu-template.yaml"
+        covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), shared worker run-block via scripts/skypilot_worker_run.sh"
+      - pattern: "configs/compute/oci-debug-template.yaml"
+        covers: "OCI noop probe template (Always-Free VM.Standard.E2.1.Micro). Not currently in any CI matrix — wired locally when iterating on OCI plumbing in test-skypilot-debug.yml; the OCI matrix entry lands in a follow-up PR with cred-write coverage."
+      - pattern: "scripts/skypilot_worker_run.sh"
+        covers: "Shared worker python entrypoint: load_spec_from_uri/run + os._exit(0) #735 workaround. Invoked by both RunPod and OCI templates after they cd + git fetch + checkout WORKER_GIT_REF."
+      - pattern: "scripts/run-linux-vst-headless.sh"
+        covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
+      - pattern: ".github/workflows/test-dataset-generation.yml"
+        covers: "End-to-end production smoke matrixed over RunPod + OCI: launcher inside dev-snapshot container → generate → validate-spec → validate-shard, per-provider artifacts"
+      - pattern: "requirements-app.txt"
+        covers: "skypilot[runpod,oci]==0.12.0 required dependency (decision: not optional — see §8.2)"
+        scope: "skypilot"
+
   # ── Storage provenance spec ─────────────────────────────────────
   - doc: docs/design/storage-provenance-spec.md
     description: R2 bucket layout, path conventions, ID schemes

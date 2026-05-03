@@ -1,0 +1,34 @@
+# SkyPilot task template for OCI — DEBUG / no-op variant.
+#
+# OCI sibling of configs/compute/runpod-debug-template.yaml. Intended for
+# local iteration on the OCI launcher path (provision -> setup -> submit
+# -> poll -> tail -> teardown) without running the real worker pipeline.
+# Not currently in any CI matrix — see test-skypilot-debug.yml for the
+# follow-up that adds an OCI cell with cred-write coverage. Any hang or
+# failure when launched is in the launcher's SkyPilot/OCI interaction,
+# NOT in the dataset generation code.
+#
+# OCI-specific: no `image_id` field — SkyPilot's OCI backend rejects the
+# `docker:<image>` syntax. The noop probe doesn't need the worker image
+# (it just echoes), so it skips docker entirely. SkyPilot picks the OCI
+# Ubuntu marketplace image via `image_tag_general` in ~/.sky/config.yaml
+# (set by the workflow at cred-write time).
+#
+# Region intentionally not pinned — `~/.oci/config` is the single source
+# of truth (set via OCI_REGION at CI cred-write time).
+
+resources:
+  cloud: oci
+  # Always-Free shape so noop launches against fresh tenancies with zero
+  # paid compute quota. The prod template uses cpus/memory floors instead.
+  instance_type: VM.Standard.E2.1.Micro
+  use_spot: false
+  disk_size: 30
+
+setup: |
+  set -euo pipefail
+  echo "synth-setter debug worker ready (host: $(hostname), uname: $(uname -a))"
+
+run: |
+  set -euo pipefail
+  echo "skypilot-debug job done (host: $(hostname), pwd: $(pwd))"

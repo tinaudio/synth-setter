@@ -90,6 +90,8 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
             -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
             -e WANDB_API_KEY="${WANDB_API_KEY}" \
+            -e SYNTH_SETTER_WORKER_RANK=0 \
+            -e SYNTH_SETTER_NUM_WORKERS=1 \
             -e PYTHONPATH=/home/build/synth-setter \
             tinaudio/synth-setter:${{ inputs.image_tag }} \
             python /usr/local/bin/entrypoint.py generate_dataset --spec /run-metadata/input_spec.json \

@@ -1,6 +1,6 @@
 [project]
 name = "synth-permutations"
-version = "0.7.3"
+version = "0.7.4"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -43,16 +43,17 @@ extend-exclude = []
 
 [tool.ruff.lint]
 # E=pycodestyle errors, F=pyflakes, I=isort, S=bandit security,
-# T=T10 (print) + T20 (debugger), UP=pyupgrade, W=pycodestyle warnings
-select = ["E", "F", "I", "S", "T", "UP", "W"]
+# T=T10 (print) + T20 (debugger), UP=pyupgrade, W=pycodestyle warnings,
+# ANN001=missing-type-function-argument
+select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001"]
 # E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
 
 [tool.ruff.lint.per-file-ignores]
-"notebooks/**" = ["E702", "E722", "F841", "T201"]
+"notebooks/**" = ["E702", "E722", "F841", "T201", "ANN001"]
 "scripts/add_music2latent.py" = ["S605"]
-"scripts/compute_audio_metrics.py" = ["T201"]
-"scripts/get_dataset_stats.py" = ["E402", "T201"]
+"scripts/compute_audio_metrics.py" = ["T201", "ANN001"]
+"scripts/get_dataset_stats.py" = ["E402", "T201", "ANN001"]
 "scripts/make_sig_perf.py" = ["E402", "T201"]
 "scripts/model_from_wandb_repl.py" = ["E402"]
 "scripts/paramspec_to_table.py" = ["E402", "T201"]
@@ -70,17 +71,29 @@ ignore = ["E501", "S101"]
 # with a partial path — `gh` is on PATH by design (same pattern used by the
 # scripts/r2_shard_report.py exemption above).
 ".claude/skills/_shared/post_review.py" = ["T201", "S603", "S607"]
-"scripts/subdir_funtime.py" = ["F841"]
+"scripts/rewrite_dataset_to_latest.py" = ["ANN001"]
+"scripts/subdir_funtime.py" = ["F841", "ANN001"]
 # S603/S607: rclone subprocess calls in R2 integration test fixtures.
 "tests/scripts/test_r2_shard_report.py" = ["S603", "S607"]
+# ANN001: pytest fixture-injected args left un-annotated on legacy callsites.
+"tests/scripts/test_surge_xt_interactive.py" = ["ANN001"]
+"tests/pipeline/test_schemas/test_config.py" = ["ANN001"]
+"tests/pipeline/test_schemas/test_prefix.py" = ["ANN001"]
+"tests/test_benchmarks.py" = ["ANN001"]
+"tests/test_configs.py" = ["ANN001"]
 "src/eval.py" = ["E402", "F841"]
+# ANN001: directory-wide ignore for legacy untyped function args under src/models/.
+# New code under src/models/ should still annotate; remove this entry once legacy
+# callsites are cleaned up.
+"src/models/**" = ["ANN001"]
 "src/models/components/transformer.py" = ["F841"]
 "src/models/components/vae.py" = ["E402", "T201"]
 "src/models/ksin_ff_module.py" = ["F821"]
 "src/models/surge_ff_module.py" = ["F821"]
 "src/train.py" = ["E402"]
 "src/utils/__init__.py" = ["F401"]
-"src/utils/callbacks.py" = ["F821", "T201"]
+"src/utils/callbacks.py" = ["F821", "T201", "ANN001"]
+"src/utils/math.py" = ["ANN001"]
 
 [tool.interrogate]
 verbose = 2

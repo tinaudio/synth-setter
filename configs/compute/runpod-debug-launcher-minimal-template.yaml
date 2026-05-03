@@ -10,7 +10,7 @@
 # render flow."
 #
 # PASS = launcher's materialize_spec, task.update_envs, task.update_file_mounts,
-#        sky.launch + stream_and_get, _wait_for_job, sky.down all work on RunPod.
+#        sky.launch + stream_and_get, sky.tail_logs, sky.down all work on RunPod.
 # FAIL = the launcher itself has a bug, or the launcher's specific provisioning
 #        shape (cluster name pattern, mount upload, env injection) is what
 #        triggers RunPod failures the matrix's other variants don't see.

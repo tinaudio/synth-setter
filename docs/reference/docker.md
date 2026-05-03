@@ -83,7 +83,7 @@ After building, verify the image works:
 
 ```bash
 docker run --rm synth-setter:dev-snapshot \
-  passthrough python -c "import torch; print('torch', torch.__version__)"
+  python /usr/local/bin/entrypoint.py passthrough python -c "import torch; print('torch', torch.__version__)"
 ```
 
 ______________________________________________________________________
@@ -175,23 +175,38 @@ ______________________________________________________________________
 
 ### Entrypoint
 
-`dev-snapshot` runs `python docker_entrypoint.py` as its `ENTRYPOINT`: a
-click group with five subcommands (`idle`, `passthrough`,
-`generate_dataset`, `render_eval`, `train`). A subcommand is required —
-the container fails loudly if invoked with none. See
+`dev-snapshot` has **no baked `ENTRYPOINT`** (dropped in
+[#721](https://github.com/tinaudio/synth-setter/pull/721) so SkyPilot's
+RunPod backend, which prepends its own `bash -lc` invocation, doesn't
+end up exec'ing our click group with stray argv). Callers invoke the
+click group explicitly:
+
+The click CLI is copied to `/usr/local/bin/entrypoint.py` (see
+`docker/ubuntu22_04/Dockerfile`). Invoke it via:
+
+```bash
+docker run --rm synth-setter:dev-snapshot \
+  python /usr/local/bin/entrypoint.py <subcommand> [...]
+```
+
+The click group has five subcommands (`idle`, `passthrough`,
+`generate_dataset`, `render_eval`, `train`); a subcommand is required —
+the group fails loudly if invoked with none. See
 [docker-spec.md](docker-spec.md) for the full table.
 
 Prefer `docker run --env-file .env` over `set -a && source .env` to avoid
 polluting your host shell:
 
 ```bash
-docker run --rm --env-file .env synth-setter:dev-snapshot passthrough ...
+docker run --rm --env-file .env synth-setter:dev-snapshot \
+  python /usr/local/bin/entrypoint.py passthrough ...
 ```
 
 ### `idle` — debug shell
 
 ```bash
-docker run -d --name debug synth-setter:dev-snapshot idle
+docker run -d --name debug synth-setter:dev-snapshot \
+  python /usr/local/bin/entrypoint.py idle
 docker exec -it debug bash
 # Clean up when done
 docker stop debug && docker rm debug
@@ -202,7 +217,8 @@ docker stop debug && docker rm debug
 ```bash
 # Run a one-off command (no creds needed — just a torch import)
 docker run --rm synth-setter:dev-snapshot \
-  passthrough python -c "import torch; print(torch.cuda.is_available())"
+  python /usr/local/bin/entrypoint.py passthrough \
+  python -c "import torch; print(torch.cuda.is_available())"
 ```
 
 > **Note:** add `--env-file .env` to any passthrough invocation that needs
@@ -232,7 +248,7 @@ docker run --rm \
   --env-file .env \
   -v "$(pwd)/run-metadata:/run-metadata" \
   synth-setter:dev-snapshot \
-  generate_dataset --spec /run-metadata/input_spec.json
+  python /usr/local/bin/entrypoint.py generate_dataset --spec /run-metadata/input_spec.json
 ```
 
 The example assumes your `.env` already contains the 5 `RCLONE_CONFIG_R2_*`
@@ -242,8 +258,9 @@ vars plus `WANDB_API_KEY`. If you prefer to keep the
 
 ### Workflow artifact bundle (generate_dataset)
 
-When the test workflow runs, it uploads an artifact bundle named
-`test-run-metadata`. The bundle contains two files:
+When the test workflow runs, it uploads one artifact bundle per provider:
+`test-run-metadata-runpod` and `test-run-metadata-oci`. Each bundle
+contains two files:
 
 | File              | Contents                                                                         |
 | ----------------- | -------------------------------------------------------------------------------- |
@@ -253,7 +270,11 @@ When the test workflow runs, it uploads an artifact bundle named
 **Download:**
 
 ```bash
-gh run download <run_id> -n test-run-metadata
+# Per-provider:
+gh run download <run_id> -n test-run-metadata-runpod
+gh run download <run_id> -n test-run-metadata-oci
+# Or grab everything for this run:
+gh run download <run_id>
 ```
 
 **Inspect:**
@@ -377,7 +398,8 @@ ______________________________________________________________________
 docker exec -it <container> bash
 
 # Start a fresh interactive debug session (drops into a shell)
-docker run --rm -it synth-setter:dev-snapshot passthrough bash
+docker run --rm -it synth-setter:dev-snapshot \
+  python /usr/local/bin/entrypoint.py passthrough bash
 ```
 
 ### OOM during builds
@@ -419,7 +441,7 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 | `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train` |
 | `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                          |
 | `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)         |
-| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `pipeline.ci.materialize_spec`                  |
+| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `pipeline.schemas.spec.materialize_spec`        |
 
 ______________________________________________________________________
 
