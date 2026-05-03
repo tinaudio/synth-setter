@@ -134,6 +134,9 @@ jobs:
       # timeout-minutes: 60 is the safety bound. Cred-write switches on
       # $PROVIDER inside the heredoc; umask 077 keeps every cred file 600.
       # R2/W&B secrets land in container env via -e flags (no .env on disk).
+      # Provider-specific secrets are gated on matrix.provider — the OCI cell
+      # never sees RUNPOD_API_KEY and vice versa, so a leaky dependency in
+      # one cell can't exfiltrate the other provider's credentials.
       # The runtime `pip install skypilot[oci]` bridge is removed once
       # dev-snapshot rebuilds with [oci] baked in (post-merge follow-up).
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
@@ -142,13 +145,13 @@ jobs:
           TEMPLATE: ${{ matrix.template }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
           OCI_IMAGE_TAG: ${{ matrix.oci_image_tag }}
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_REGION: ${{ secrets.OCI_REGION }}
-          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
+          RUNPOD_API_KEY: ${{ matrix.provider == 'runpod' && secrets.RUNPOD_API_KEY || '' }}
+          OCI_USER_OCID: ${{ matrix.provider == 'oci' && secrets.OCI_USER_OCID || '' }}
+          OCI_TENANCY_OCID: ${{ matrix.provider == 'oci' && secrets.OCI_TENANCY_OCID || '' }}
+          OCI_FINGERPRINT: ${{ matrix.provider == 'oci' && secrets.OCI_FINGERPRINT || '' }}
+          OCI_REGION: ${{ matrix.provider == 'oci' && secrets.OCI_REGION || '' }}
+          OCI_COMPARTMENT_OCID: ${{ matrix.provider == 'oci' && secrets.OCI_COMPARTMENT_OCID || '' }}
+          OCI_API_KEY_PEM: ${{ matrix.provider == 'oci' && secrets.OCI_API_KEY_PEM || '' }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
