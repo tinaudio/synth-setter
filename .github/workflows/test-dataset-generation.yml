@@ -288,6 +288,7 @@ jobs:
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --template configs/compute/oci-cpu-template.yaml \
+                --cluster-name "synth-setter-smoke-oci-${{ github.run_id }}" \
                 --spec-out /tmp/input_spec.json
               cp /tmp/input_spec.json /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
