@@ -482,7 +482,11 @@ class TestRun:
 
         run(spec)
 
-        rendered_filenames = [Path(call[0][0][3]).name for call in mock_check_call.call_args_list]
+        rendered_filenames = []
+        for call in mock_check_call.call_args_list:
+            args = call[0][0]
+            output_file = args[_find_script_index(args) + 1]
+            rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
@@ -502,7 +506,11 @@ class TestRun:
 
         run(spec)
 
-        rendered_filenames = [Path(call[0][0][3]).name for call in mock_check_call.call_args_list]
+        rendered_filenames = []
+        for call in mock_check_call.call_args_list:
+            args = call[0][0]
+            output_file = args[_find_script_index(args) + 1]
+            rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [spec.shards[2].filename]
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
