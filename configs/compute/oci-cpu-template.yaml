@@ -47,6 +47,8 @@ envs:
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WORKER_SPEC_URI: ""
   WORKER_IMAGE: "tinaudio/synth-setter:dev-snapshot"
+  SYNTH_SETTER_WORKER_RANK: "0"
+  SYNTH_SETTER_NUM_WORKERS: "1"
 
 # `setup:` notes (kept out of the heredoc — comments inside YAML
 # block-scalars are read by bash and stray quotes / backticks have caused
@@ -101,6 +103,8 @@ run: |
     -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
     -e RCLONE_CONFIG_R2_ENDPOINT \
     -e WORKER_SPEC_URI \
+    -e SYNTH_SETTER_WORKER_RANK \
+    -e SYNTH_SETTER_NUM_WORKERS \
     -e PYTHONPATH=/home/build/synth-setter \
     "$WORKER_IMAGE" \
     bash -c 'set -euo pipefail; cd /home/build/synth-setter; mkdir -p plugins; ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"; python -c "import os; from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run; run(load_spec_from_uri(os.environ[\"WORKER_SPEC_URI\"])); print(\"forcing interpreter exit (#735 workaround) — bypassing atexit\", flush=True); os._exit(0)"'
