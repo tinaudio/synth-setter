@@ -120,4 +120,4 @@ run: |
     -e SYNTH_SETTER_NUM_WORKERS \
     -e PYTHONPATH=/home/build/synth-setter \
     "$WORKER_IMAGE" \
-    bash -c 'set -euo pipefail; cd /home/build/synth-setter; mkdir -p plugins; ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"; python -c "import os; from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run; run(load_spec_from_uri(os.environ[\"WORKER_SPEC_URI\"])); print(\"forcing interpreter exit (#735 workaround) — bypassing atexit\", flush=True); os._exit(0)"'
+    bash -c 'set -euo pipefail; cd /home/build/synth-setter; python -c "import os; from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run; run(load_spec_from_uri(os.environ[\"WORKER_SPEC_URI\"])); print(\"forcing interpreter exit (#735 workaround) — bypassing atexit\", flush=True); os._exit(0)"'
