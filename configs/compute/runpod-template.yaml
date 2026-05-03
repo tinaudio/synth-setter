@@ -50,45 +50,19 @@ envs:
   SYNTH_SETTER_NUM_WORKERS: ""
 
 setup: |
+  set -euo pipefail
   echo "synth-setter worker ready (host: $(hostname))"
 
-# `run:` block notes (kept out of the heredoc — comments inside YAML
-# block-scalars are read by bash and stray quotes / backticks have caused
-# unintended shell expansions in the past):
-#
-# - First echo is a diagnostic: SkyPilot's run block does NOT cd to the
-#   image's WORKDIR (`/home/build/synth-setter`) by default — it lands
-#   in `~/sky_workdir`. The cd that follows is what makes the relative
-#   path to `scripts/run-linux-vst-headless.sh` resolve.
-# - WORKER_GIT_REF (when set): pod git-checks-out that ref before invoking
-#   generate_dataset, bypassing dev-snapshot image-bake lag in PR CI.
-#   Skipped silently when unset.
-# - SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS: per-rank partition env,
-#   read inside run() via pipeline.partitioning.read_rank_world_from_env
-#   (which raises loudly on missing/invalid). See pipeline/partitioning.py for
-#   why the SYNTH_SETTER_ prefix.
-# - The Python invocation is inlined (instead of calling the docker
-#   entrypoint's click subcommand) so we can `os._exit(0)` immediately
-#   after `run()` returns successfully. Workaround for #735: the SkyPilot
-#   RunPod worker consistently hangs at Python interpreter shutdown —
-#   some library (most likely pedalboard / numba / dask / h5py) leaves
-#   a non-daemon thread alive and the interpreter never exits. SkyPilot's
-#   job-status reporter sees the SSH session's process tree still alive
-#   and the job stays in RUNNING forever even though both rclone uploads
-#   have already landed in R2. `os._exit(0)` bypasses atexit /
-#   non-daemon-thread join and lets SkyPilot register SUCCEEDED.
-# - Scoping the workaround to this template (vs. an env-var gate in
-#   scripts/docker_entrypoint.py) keeps `generate_dataset` clean for
-#   local dev and other CI consumers; only the SkyPilot worker context
-#   force-exits.
-# - Drop this whole inline block (and revert to `python -m
-#   scripts.docker_entrypoint generate_dataset --spec ...`) once #735 is
-#   root-caused at its source. PR-B's `pedalboard-load` matrix variant
-#   is the canary that proves the revert is safe.
+# Bootstrap (cd + git fetch + checkout) is inline because scripts/skypilot_worker_run.sh
+# isn't on the not-yet-rebuilt dev-snapshot image until the checkout itself lands
+# — the script can't run a checkout it depends on existing. After dev-snapshot
+# rebuilds post-merge, the script is baked in and this bootstrap is a no-op when
+# WORKER_GIT_REF is unset.
 run: |
+  set -euo pipefail
   echo "skypilot-run-cwd: $(pwd)"
   cd /home/build/synth-setter
-  if [ -n "${WORKER_GIT_REF:-}" ]; then
+  if [[ -n "${WORKER_GIT_REF:-}" ]]; then
     echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
     if ! [[ "$WORKER_GIT_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
       echo "ERROR: WORKER_GIT_REF must be a 7-40 char hex git SHA, got: $WORKER_GIT_REF" >&2
@@ -99,11 +73,4 @@ run: |
     git checkout FETCH_HEAD
     echo "Worker now at: $(git rev-parse HEAD)"
   fi
-  python -c '
-  import os
-  from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
-  spec = load_spec_from_uri(os.environ["WORKER_SPEC_URI"])
-  run(spec)
-  print("forcing interpreter exit (#735 workaround) — bypassing atexit", flush=True)
-  os._exit(0)
-  '
+  bash scripts/skypilot_worker_run.sh

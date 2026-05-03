@@ -87,6 +87,13 @@ name: Test SkyPilot Debug
 #                    that exists in the matrix so triage doesn't require
 #                    re-dispatching the production workflow separately.
 #
+# An OCI sibling of runpod-debug-template.yaml exists at
+# configs/compute/oci-debug-template.yaml — useful when iterating on the
+# OCI launcher path. The matrix below is RunPod-only by default; add an
+# OCI noop entry locally when bringing up new OCI plumbing, but don't
+# merge OCI entries here until they have stable cred-write + sky-check
+# coverage in this workflow.
+#
 # Triggers: workflow_dispatch only — RunPod pods are billable. Each
 # dispatch spends one pod per matrix variant. Add a `push` trigger only
 # temporarily when actively iterating on launcher / wrapper / template
@@ -204,13 +211,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
           cache: pip
 
       - name: Install skypilot
-        run: pip install "skypilot[runpod]==0.12.0"
+        run: pip install "skypilot[runpod,oci]==0.12.0"
 
       - name: Pin image tag in debug template
         env:

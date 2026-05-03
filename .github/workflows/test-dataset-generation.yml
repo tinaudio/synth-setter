@@ -1,23 +1,16 @@
 name: Test Dataset Generation
 
-# Exercises the SkyPilot RunPod launcher (pipeline/entrypoints/skypilot_launch_smoke.py)
-# with the CI smoke-test config (configs/dataset/runpod-smoke-shard.yaml — single-shard
-# round-trip). The launcher runs
-# inside the Docker image so materialize_spec can import pedalboard via the
-# headless X wrapper. SkyPilot streams worker logs back and waits for the
-# unmanaged cluster launch (sky.launch + stream_and_get) to complete; the
-# materialized spec is then validated and the resulting shard pulled from
-# R2 and structurally validated.
-#
-# Triggers:
-# - Manual dispatch: test with custom image tag and config
-# - Pull request: smoke test on dataset-related path changes
+# Smoke test for the SkyPilot launcher (pipeline.entrypoints.skypilot_launch_smoke)
+# matrixed over RunPod + OCI. See docs/design/skypilot-compute-integration.md.
 #
 # Required secrets:
-#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
-#   RUNPOD_API_KEY — used by this workflow to write ~/.runpod/config.toml,
-#                    which SkyPilot's RunPod backend reads at provision time
-#                    (env var alone is not sufficient for `sky check runpod`)
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2.
+#   RUNPOD_API_KEY — written to ~/.runpod/config.toml so SkyPilot's RunPod
+#     backend can `sky check runpod` (env var alone is insufficient).
+#   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
+#     OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — written to ~/.oci/config +
+#     ~/.sky/config.yaml so SkyPilot's OCI backend can `sky check oci`.
+#     OCI runs continue-on-error while the second target beds in.
 
 on:
   workflow_dispatch:
@@ -39,6 +32,7 @@ on:
       - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.py"
       - "scripts/run-linux-vst-headless.sh"
+      - "scripts/skypilot_worker_run.sh"
       - "pipeline/entrypoints/skypilot_launch_smoke.py"
       - ".github/workflows/test-dataset-generation.yml"
       - "requirements*.txt"
@@ -46,19 +40,48 @@ on:
 permissions:
   contents: read
 
+# Provisions billable RunPod/OCI capacity — coalesce stacked PR pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Matrix over RunPod + OCI. Both cells exercise the same provider-neutral
+  # launcher (pipeline.entrypoints.skypilot_launch_smoke) against a
+  # provider-specific compute template, with --num-workers 3 so the
+  # partitioner is exercised end-to-end. Cluster names include
+  # github.run_attempt so re-running a failed job doesn't collide on the
+  # launcher's R2 spec key. continue-on-error flows from matrix.continue_on_error
+  # so flipping OCI to blocking is a one-line change in three matrices.
   generate:
-    name: Launch generate_dataset on RunPod via SkyPilot
+    name: Launch generate_dataset on ${{ matrix.provider }} via SkyPilot
     runs-on: ubuntu-latest
-    # Spends real RunPod + R2 dollars and needs RUNPOD_API_KEY in the job env.
-    # Only run for PRs opened from the same repository (forks can't read the
-    # secrets anyway, but this fails fast and surfaces the reason instead of
-    # provisioning a pod that errors on missing creds). workflow_dispatch is
-    # always allowed because it's gated by repo write permissions.
+    # Forks can't read the secrets — fail fast instead of provisioning a
+    # pod/VM that errors on missing creds. workflow_dispatch is gated by
+    # repo write permissions.
     if: >-
       github.event_name == 'workflow_dispatch'
       || github.event.pull_request.head.repo.full_name == github.repository
+    continue-on-error: ${{ matrix.continue_on_error }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: runpod
+            template: configs/compute/runpod-template.yaml
+            cluster_prefix: synth-setter-smoke-runpod
+            pin_search: "image_id: docker:tinaudio/synth-setter:dev-snapshot"
+            pin_replace: "image_id: docker:tinaudio/synth-setter:{IMAGE_TAG}"
+            oci_image_tag: ""
+            continue_on_error: false
+          - provider: oci
+            template: configs/compute/oci-cpu-template.yaml
+            cluster_prefix: synth-setter-smoke-oci
+            pin_search: 'WORKER_IMAGE: "tinaudio/synth-setter:dev-snapshot"'
+            pin_replace: 'WORKER_IMAGE: "tinaudio/synth-setter:{IMAGE_TAG}"'
+            oci_image_tag: skypilot:cpu-ubuntu-2204
+            continue_on_error: true
     env:
       DATASET_CONFIG: >-
         ${{
@@ -74,46 +97,58 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Pull image
-        run: docker pull "$IMAGE"
+        run: docker pull "${IMAGE}"
 
-      # Pin the template's image_id from its default (`dev-snapshot`) to the tag
-      # this run was dispatched with, so the worker pulls the same image we just
-      # smoke-tested locally in the prior step.
-      - name: Pin image tag in SkyPilot template
+      # Pin the per-provider image reference so the worker pulls the same
+      # image we just smoke-tested locally above. Bash substitutes the
+      # literal `{IMAGE_TAG}` placeholder in matrix.pin_replace at runtime.
+      - name: Pin worker image tag in compute template
+        env:
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          TEMPLATE: ${{ matrix.template }}
+          PIN_SEARCH: ${{ matrix.pin_search }}
+          PIN_REPLACE: ${{ matrix.pin_replace }}
         run: |
-          sed -i \
-            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
-            configs/compute/runpod-template.yaml
-          grep image_id configs/compute/runpod-template.yaml
+          set -euo pipefail
+          REPLACE="${PIN_REPLACE//\{IMAGE_TAG\}/${IMAGE_TAG}}"
+          PIN_COUNT=$(grep -cF "${PIN_SEARCH}" "${TEMPLATE}" || true)
+          if [[ "${PIN_COUNT}" != "1" ]]; then
+            echo "::error::expected exactly 1 occurrence of PIN_SEARCH in ${TEMPLATE}, found ${PIN_COUNT}" >&2
+            exit 1
+          fi
+          sed -i "s|${PIN_SEARCH}|${REPLACE}|" "${TEMPLATE}"
+          if ! grep -qF "${REPLACE}" "${TEMPLATE}"; then
+            echo "::error::sed pin failed: '${REPLACE}' not found in ${TEMPLATE} after substitution" >&2
+            exit 1
+          fi
+          if [[ "${REPLACE}" != "${PIN_SEARCH}" ]] && grep -qF "${PIN_SEARCH}" "${TEMPLATE}"; then
+            echo "::error::sed pin failed: '${PIN_SEARCH}' still present in ${TEMPLATE} after substitution" >&2
+            exit 1
+          fi
+          grep -F "${REPLACE}" "${TEMPLATE}"
 
       - name: Prepare run-metadata mount
-        run: mkdir -p /tmp/run-metadata
+        run: mkdir -p "/tmp/run-metadata-${{ matrix.provider }}"
 
-      # Launch step notes (kept out of the heredoc so quoting is simple):
-      #   - The launcher (pipeline.entrypoints.skypilot_launch_smoke) submits
-      #     a SkyPilot job via sky.launch + stream_and_get, blocking until
-      #     the cluster is provisioned, the worker runs, and (down=True)
-      #     the cluster is torn down. The job-level `timeout-minutes: 60`
-      #     above is the safety bound on that block.
-      #   - SkyPilot validates RunPod credentials from ~/.runpod/config.toml
-      #     (env var alone is not enough), hence the in-container write of
-      #     that file with `umask 077` to keep the API key 600.
-      #   - R2 / WANDB secrets land in the container's process env via
-      #     `docker run -e ...` directly. The launcher reads them through
-      #     `resolve_worker_env` (process env first, then optional .env
-      #     file) and forwards them to the SkyPilot Task via
-      #     `task.update_envs(...)` — no .env file ever touches the
-      #     runner's filesystem in CI.
-      #   - --spec-out lands the materialized spec under $TMPDIR (shared FS
-      #     with SkyPilot staging); bind-mounted repo paths trip EXDEV on
-      #     os.rename in-container, so we copy the spec to /run-metadata
-      #     afterwards. `chmod 0644` is required because the in-container
-      #     `umask 077` above would otherwise leave the staged spec 600
-      #     root-owned and unreadable to the host runner for `head` /
-      #     upload-artifact.
+      # Launcher submits via sky.launch + stream_and_get; job-level
+      # timeout-minutes: 60 is the safety bound. Cred-write switches on
+      # $PROVIDER inside the heredoc; umask 077 keeps every cred file 600.
+      # R2/W&B secrets land in container env via -e flags (no .env on disk).
+      # The runtime `pip install skypilot[oci]` bridge is removed once
+      # dev-snapshot rebuilds with [oci] baked in (post-merge follow-up).
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         env:
+          PROVIDER: ${{ matrix.provider }}
+          TEMPLATE: ${{ matrix.template }}
+          CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+          OCI_IMAGE_TAG: ${{ matrix.oci_image_tag }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -121,61 +156,118 @@ jobs:
           CONFIG_PATH: ${{ env.DATASET_CONFIG }}
           WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v /tmp/run-metadata:/run-metadata \
+            -v "/tmp/run-metadata-${PROVIDER}:/run-metadata" \
+            -e PROVIDER \
+            -e TEMPLATE \
+            -e CLUSTER_NAME \
+            -e OCI_IMAGE_TAG \
             -e RUNPOD_API_KEY \
+            -e OCI_USER_OCID \
+            -e OCI_TENANCY_OCID \
+            -e OCI_FINGERPRINT \
+            -e OCI_REGION \
+            -e OCI_COMPARTMENT_OCID \
+            -e OCI_API_KEY_PEM \
             -e CONFIG_PATH \
+            -e WORKER_GIT_REF \
             -e RCLONE_CONFIG_R2_TYPE=s3 \
             -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
             -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
             -e WANDB_API_KEY="${WANDB_API_KEY}" \
-            -e WORKER_GIT_REF="${WORKER_GIT_REF}" \
             -e PYTHONPATH=/home/build/synth-setter \
-            "$IMAGE" \
+            "${IMAGE}" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               mkdir -p plugins
               ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
-              mkdir -p ~/.runpod
               umask 077
-              printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+              case "$PROVIDER" in
+                runpod)
+                  mkdir -p "$HOME/.runpod"
+                  printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > "$HOME/.runpod/config.toml"
+                  ;;
+                oci)
+                  mkdir -p "$HOME/.oci" "$HOME/.sky"
+                  printf "%s\n" "$OCI_API_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
+                  chmod 600 "$HOME/.oci/oci_api_key.pem"
+                  printf "[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/oci_api_key.pem\n" \
+                    "$OCI_USER_OCID" "$OCI_FINGERPRINT" "$OCI_TENANCY_OCID" "$OCI_REGION" "$HOME" \
+                    > "$HOME/.oci/config"
+                  chmod 600 "$HOME/.oci/config"
+                  printf "oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n" \
+                    "$OCI_COMPARTMENT_OCID" "$OCI_IMAGE_TAG" \
+                    > "$HOME/.sky/config.yaml"
+                  grep -Eq "^region=.+" "$HOME/.oci/config" || { echo "::error::OCI_REGION secret is empty" >&2; exit 1; }
+                  grep -Eq "compartment_ocid: .+" "$HOME/.sky/config.yaml" || { echo "::error::OCI_COMPARTMENT_OCID secret is empty" >&2; exit 1; }
+                  if ! python -c "import oci" 2>/dev/null; then
+                    echo "[oci-bridge] dev-snapshot lacks oci sdk; installing skypilot[oci] at runtime"
+                    pip install --quiet "skypilot[oci]==0.12.0" || { echo "::error::oci bridge install failed" >&2; exit 1; }
+                  fi
+                  sky check oci
+                  ;;
+                *)
+                  echo "ERROR: unknown PROVIDER=$PROVIDER" >&2
+                  exit 1
+                  ;;
+              esac
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
-                --spec-out /tmp/input_spec.json \
-                --num-workers 3
+                --template "$TEMPLATE" \
+                --cluster-name "$CLUSTER_NAME" \
+                --num-workers 3 \
+                --spec-out /tmp/input_spec.json
               cp /tmp/input_spec.json /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \
-            2>&1 | tee /tmp/run-metadata/generate.log
+            2>&1 | tee "/tmp/run-metadata-${PROVIDER}/generate.log"
 
       - name: Validate spec exists
         run: |
-          if [ ! -f /tmp/run-metadata/input_spec.json ]; then
-            echo "::error::input_spec.json not found in /tmp/run-metadata/"
+          set -euo pipefail
+          SPEC_PATH="/tmp/run-metadata-${{ matrix.provider }}/input_spec.json"
+          if [[ ! -f "${SPEC_PATH}" ]]; then
+            echo "::error::input_spec.json not found at ${SPEC_PATH}"
             exit 1
           fi
-          echo "=== Materialized Spec ==="
-          head -20 /tmp/run-metadata/input_spec.json
+          echo "=== Materialized Spec (${{ matrix.provider }}) ==="
+          head -20 "${SPEC_PATH}"
 
       - name: Upload run metadata
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-run-metadata
-          path: /tmp/run-metadata/
+          name: test-run-metadata-${{ matrix.provider }}
+          path: /tmp/run-metadata-${{ matrix.provider }}/
           retention-days: 7
           if-no-files-found: warn
 
+  # validate_spec is provider-neutral; per-cell variation is the artifact
+  # name. `if: !cancelled()` decouples each provider's validate cell from
+  # the OTHER provider's generate outcome — RunPod transients won't skip
+  # OCI validation. continue-on-error flows from matrix include for
+  # symmetry with `generate`.
   validate-spec:
+    name: Validate ${{ matrix.provider }} spec structure
     needs: generate
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    continue-on-error: ${{ matrix.continue_on_error }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: runpod
+            continue_on_error: false
+          - provider: oci
+            continue_on_error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -183,15 +275,28 @@ jobs:
       - name: Download run metadata artifact
         uses: actions/download-artifact@v4
         with:
-          name: test-run-metadata
+          name: test-run-metadata-${{ matrix.provider }}
 
       - name: Validate spec structure
         run: python3 -m pipeline.ci.validate_spec input_spec.json
 
+  # validate_shard.py is provider-neutral; per-cell variation is the
+  # artifact name. See validate-spec for `if: !cancelled()` rationale.
   validate-shard:
+    name: Validate ${{ matrix.provider }} shards
     needs: generate
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: ${{ matrix.continue_on_error }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: runpod
+            continue_on_error: false
+          - provider: oci
+            continue_on_error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -199,16 +304,15 @@ jobs:
       - name: Download run metadata artifact
         uses: actions/download-artifact@v4
         with:
-          name: test-run-metadata
+          name: test-run-metadata-${{ matrix.provider }}
 
       - name: Install PyYAML for config parsing
         run: pip install pyyaml
 
-      # R2 bucket from configs/image/dev-snapshot.yaml; R2 prefix + shard filenames
-      # from the materialized spec artifact. Every shard in spec.shards must exist
-      # in R2 — a partitioning bug shows up as a missing-shard rclone failure.
-      # Per-shard pair of docker runs: first pulls from R2, second validates with
-      # the PR's pipeline.ci.validate_shard mounted read-only.
+      # R2 bucket from configs/image/dev-snapshot.yaml; R2 prefix + shard
+      # filenames from the materialized spec artifact. Every shard in
+      # spec.shards must exist in R2 — partitioning bugs surface as
+      # missing-shard rclone failures.
       - name: Download every shard from R2 and validate
         env:
           IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -216,7 +320,10 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
+          set -euo pipefail
+          R2_BUCKET=
           R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
+          R2_PREFIX=
           R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
           mapfile -t SHARD_FILES < <(python3 -c "import json; [print(s['filename']) for s in json.load(open('input_spec.json'))['shards']]")
 
@@ -225,7 +332,7 @@ jobs:
           echo "Shards to validate: ${SHARD_FILES[*]}"
 
           mkdir -p /tmp/shard-download
-          docker pull "$IMAGE"
+          docker pull "${IMAGE}"
 
           for SHARD_FILE in "${SHARD_FILES[@]}"; do
             echo "::group::Download and validate ${SHARD_FILE}"
@@ -237,7 +344,7 @@ jobs:
               -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
               -e PYTHONPATH=/home/build/synth-setter \
               -v /tmp/shard-download:/download \
-              "$IMAGE" \
+              "${IMAGE}" \
               rclone copy --checksum \
                 "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
                 /download/
@@ -247,7 +354,7 @@ jobs:
               -v /tmp/shard-download:/download:ro \
               -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
               -e PYTHONPATH=/home/build/synth-setter \
-              "$IMAGE" \
+              "${IMAGE}" \
               python3 -m pipeline.ci.validate_shard \
                 /spec/input_spec.json \
                 "/download/${SHARD_FILE}"

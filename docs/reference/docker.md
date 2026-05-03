@@ -258,8 +258,9 @@ vars plus `WANDB_API_KEY`. If you prefer to keep the
 
 ### Workflow artifact bundle (generate_dataset)
 
-When the test workflow runs, it uploads an artifact bundle named
-`test-run-metadata`. The bundle contains two files:
+When the test workflow runs, it uploads one artifact bundle per provider:
+`test-run-metadata-runpod` and `test-run-metadata-oci`. Each bundle
+contains two files:
 
 | File              | Contents                                                                         |
 | ----------------- | -------------------------------------------------------------------------------- |
@@ -269,7 +270,11 @@ When the test workflow runs, it uploads an artifact bundle named
 **Download:**
 
 ```bash
-gh run download <run_id> -n test-run-metadata
+# Per-provider:
+gh run download <run_id> -n test-run-metadata-runpod
+gh run download <run_id> -n test-run-metadata-oci
+# Or grab everything for this run:
+gh run download <run_id>
 ```
 
 **Inspect:**
