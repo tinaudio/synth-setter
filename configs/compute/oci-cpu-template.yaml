@@ -54,7 +54,9 @@ setup: |
 # run: launches the worker container ourselves (OCI backend can't ingest a
 # docker image_id). --privileged + --ulimit nofile is the expedient hammer
 # for the Xvfb/dbus stack — follow-up to find the minimal cap set: #776.
-# Worker run-block is shared with the RunPod template via scripts/skypilot_worker_run.sh.
+# WORKER_GIT_REF checkout happens inside the container before invoking the
+# shared script — the checkout is what brings scripts/skypilot_worker_run.sh
+# into the baked image's working tree until the next dev-snapshot rebuild.
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd) host: $(hostname)"
@@ -72,4 +74,19 @@ run: |
     -e SYNTH_SETTER_NUM_WORKERS \
     -e PYTHONPATH=/home/build/synth-setter \
     "$WORKER_IMAGE" \
-    bash /home/build/synth-setter/scripts/skypilot_worker_run.sh
+    bash -c '
+      set -euo pipefail
+      cd /home/build/synth-setter
+      if [[ -n "${WORKER_GIT_REF:-}" ]]; then
+        echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
+        if ! [[ "$WORKER_GIT_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
+          echo "ERROR: WORKER_GIT_REF must be a 7-40 char hex git SHA, got: $WORKER_GIT_REF" >&2
+          exit 1
+        fi
+        git config --global --add safe.directory /home/build/synth-setter
+        git fetch --depth=1 origin -- "$WORKER_GIT_REF"
+        git checkout FETCH_HEAD
+        echo "Worker now at: $(git rev-parse HEAD)"
+      fi
+      bash scripts/skypilot_worker_run.sh
+    '
