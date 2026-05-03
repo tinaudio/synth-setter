@@ -71,8 +71,8 @@ setup: |
   fi
   sudo systemctl enable --now docker || sudo service docker start
   sudo usermod -aG docker "$USER" || true
-  sudo docker pull "$WORKER_IMAGE"
-  echo "synth-setter worker ready (host: $(hostname), docker: $(sudo docker --version))"
+  sudo -E docker pull "$WORKER_IMAGE"
+  echo "synth-setter worker ready (host: $(hostname), docker: $(sudo -E docker --version))"
 
 # `run:` block notes:
 #
@@ -94,7 +94,7 @@ setup: |
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd) host: $(hostname)"
-  sudo docker run --rm \
+  sudo -E docker run --rm \
     -e RCLONE_CONFIG_R2_TYPE \
     -e RCLONE_CONFIG_R2_PROVIDER \
     -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
