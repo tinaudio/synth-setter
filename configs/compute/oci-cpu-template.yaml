@@ -104,6 +104,12 @@ setup: |
 #   after `run()` returns successfully. Workaround for #735: same root
 #   cause kept defensively across providers until the underlying
 #   non-daemon-thread leak is root-caused.
+# - The python -c body lines sit at the YAML block-scalar's minimum
+#   indent (2 spaces in source) — visually less indented than the
+#   surrounding bash. After YAML strips the block-scalar's 2-space
+#   prefix, the python content reaches the interpreter at column 0,
+#   which is the only indent level Python -c accepts for top-level
+#   statements. Don't re-indent the python lines to match the bash.
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd) host: $(hostname)"
@@ -120,4 +126,14 @@ run: |
     -e SYNTH_SETTER_NUM_WORKERS \
     -e PYTHONPATH=/home/build/synth-setter \
     "$WORKER_IMAGE" \
-    bash -c 'set -euo pipefail; cd /home/build/synth-setter; python -c "import os; from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run; run(load_spec_from_uri(os.environ[\"WORKER_SPEC_URI\"])); print(\"forcing interpreter exit (#735 workaround) — bypassing atexit\", flush=True); os._exit(0)"'
+    bash -c '
+      set -euo pipefail
+      cd /home/build/synth-setter
+      python -c "
+  import os
+  from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
+  run(load_spec_from_uri(os.environ[\"WORKER_SPEC_URI\"]))
+  print(\"forcing interpreter exit (#735 workaround) — bypassing atexit\", flush=True)
+  os._exit(0)
+  "
+    '
