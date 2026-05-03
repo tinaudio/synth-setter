@@ -282,6 +282,33 @@ jobs:
           printf "oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: skypilot:cpu-ubuntu-2204\n" "$OCI_COMPARTMENT_OCID" \
             > "$HOME/.sky/config.yaml"
           sky check oci
+          python - <<'PY'
+          import oci
+          cfg = oci.config.from_file()
+          print(f"[diag] tenancy={cfg['tenancy'][:30]}... region(home)={cfg['region']}")
+          identity = oci.identity.IdentityClient(cfg)
+          subs = identity.list_region_subscriptions(cfg['tenancy']).data
+          print(f"[diag] subscribed regions: {len(subs)}")
+          for r in subs:
+              print(f"[diag]   region={r.region_name} status={r.status} home={r.is_home_region}")
+          # Service limits for compute in subscribed regions
+          for r in subs:
+              if r.status != 'READY':
+                  continue
+              rcfg = dict(cfg); rcfg['region'] = r.region_name
+              try:
+                  client = oci.limits.LimitsClient(rcfg)
+                  limits = client.list_limit_values(compartment_id=cfg['tenancy'], service_name='compute').data
+                  flex = [l for l in limits if 'standard-e' in l.name.lower() and 'flex' in l.name.lower()]
+                  if flex:
+                      print(f"[diag] {r.region_name} E*-Flex limits:")
+                      for l in flex:
+                          print(f"[diag]   {l.name}={l.value} (scope={l.scope_type})")
+                  else:
+                      print(f"[diag] {r.region_name}: no E*-Flex limits returned")
+              except Exception as e:
+                  print(f"[diag] {r.region_name}: query failed: {type(e).__name__}: {str(e)[:100]}")
+          PY
 
           python - <<'PY' 2>&1 | tee "$LOG_PATH"
           import os, time
