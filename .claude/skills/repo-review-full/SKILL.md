@@ -1,11 +1,9 @@
 ---
 name: repo-review-full
 description: |
-  Full multi-skill PR review. Fans out parallel agents (code-health, shell-style,
-  gha-workflow-validator, synth-setter-project-standards, python-style,
-  tdd-refactor, plus tdd-implementation/ml-data-pipeline/ml-test when the diff
-  warrants) and posts every BLOCK/WARN as an individual unresolved inline PR
-  review comment. Reproduces the workflow demoed on PR #777. Requires the
+  Full multi-skill PR review. Fans out one parallel agent per applicable plugin
+  checklist (selection rules in Step 2) and posts every BLOCK/WARN as an
+  individual unresolved inline PR review comment. Requires the
   tinaudio-synth-setter-skills plugin.
 ---
 

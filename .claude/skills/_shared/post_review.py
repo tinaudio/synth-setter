@@ -22,9 +22,8 @@ Input format on stdin:
     }
 
 The submitted review uses event=COMMENT so threads stay open (not approved or
-rejected). Designed for the workflow proven on PR #777: 45 comments in one
-review, three nearest-in-diff fallbacks for findings whose natural lines lay
-outside the diff hunks.
+rejected). Verified end-to-end on PR #777 — see that PR's description for the
+trace.
 """
 
 from __future__ import annotations
@@ -72,18 +71,6 @@ class AnchoredComment:
 HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
-def gh_api(args: list[str]) -> str:
-    """Run `gh api` and return stdout.
-
-    Surfaces stderr on failure.
-    """
-    result = subprocess.run(["gh", "api", *args], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr)
-        sys.exit(result.returncode)
-    return result.stdout
-
-
 def fetch_diff(repo: str, pr_number: int) -> str:
     """Fetch the PR diff via gh — raw unified diff."""
     result = subprocess.run(
@@ -112,7 +99,9 @@ def parse_diff_hunks(diff_text: str) -> dict[str, list[Hunk]]:
 
     def flush() -> None:
         if current_path is not None and new_start is not None and new_line is not None:
-            hunks[current_path].append(Hunk(new_start, new_line - 1))
+            new_end = new_line - 1
+            if new_end >= new_start:
+                hunks[current_path].append(Hunk(new_start, new_end))
 
     for raw_line in diff_text.splitlines():
         if raw_line.startswith("+++ b/"):
@@ -139,8 +128,7 @@ def parse_diff_hunks(diff_text: str) -> dict[str, list[Hunk]]:
             new_line += 1
         # `-` lines: skip; only present in the old side.
 
-    if current_path is not None and new_start is not None and new_line is not None:
-        hunks[current_path].append(Hunk(new_start, new_line - 1))
+    flush()
 
     return hunks
 
@@ -199,7 +187,8 @@ def build_review_payload(
     if orphaned:
         body += "\n\n## Findings on files outside the diff\n\n"
         for finding in orphaned:
-            body += f"- `{finding.path}:{finding.line}` — {finding.body}\n"
+            indented = finding.body.replace("\n", "\n  ")
+            body += f"- `{finding.path}:{finding.line}` — {indented}\n"
     return {
         "body": body,
         "event": "COMMENT",

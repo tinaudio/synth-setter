@@ -130,8 +130,8 @@ The block-scalar should contain only commands. The reader who wants to know *why
 
 Two project-local skills package the review workflow:
 
-- **`/repo-review`** (MVP, default) — single agent, inline core checklist sourced from this CLAUDE.md (comment hygiene, no comments inside YAML `run:` block-scalars, type annotations, no bare `except`, `structlog` vs `logging`, `rclone --checksum`, conventional-commit prefixes, PR-issue link, stale-reference audit, secret/input doc parity). No plugin dependency — works on a fresh clone, in CI, for external contributors.
-- **`/repo-review-full`** (heavyweight) — fans out parallel agents (`code-health`, `synth-setter-project-standards` always; `python-style` + `tdd-implementation` for `*.py`; `shell-style` for bash; `gha-workflow-validator` for `.github/workflows/`; `ml-data-pipeline` + `ml-test` for ML code; `tdd-refactor` when files move/rename). Each agent invokes the corresponding `tinaudio-synth-setter-skills:*` plugin skill — requires the plugin enabled.
+- **`/repo-review`** (MVP, default) — single agent, inline core checklist sourced from this CLAUDE.md's hard rules. See `.claude/skills/repo-review/SKILL.md` for the authoritative checklist. No plugin dependency — works on a fresh clone, in CI, for external contributors.
+- **`/repo-review-full`** (heavyweight) — fans out one parallel agent per applicable plugin checklist. Selection rules live in `.claude/skills/repo-review-full/SKILL.md`. Requires the `tinaudio-synth-setter-skills` plugin.
 
 Both skills aggregate BLOCK/WARN findings, prefix each with `[<skill>:<severity>]`, and post every one as an individual unresolved inline review comment via `.claude/skills/_shared/post_review.py`. The helper anchors each finding to a line in the diff's hunks; findings whose natural line is outside the hunks fall back to the nearest in-hunk line on the same file with a cross-ref note in the body, and findings on files entirely outside the diff are rolled into the top-level review body.
 
