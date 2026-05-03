@@ -67,6 +67,17 @@ envs:
 #   buried under run:'s tee.
 setup: |
   set -euo pipefail
+  if command -v cloud-init >/dev/null 2>&1; then
+    echo "waiting for cloud-init to finish before touching apt..."
+    sudo cloud-init status --wait || true
+  fi
+  for i in $(seq 1 60); do
+    if ! sudo fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; then
+      break
+    fi
+    echo "apt/dpkg locked by another process; retry $i/60..."
+    sleep 5
+  done
   if ! command -v docker >/dev/null 2>&1; then
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
