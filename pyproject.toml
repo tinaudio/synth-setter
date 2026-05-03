@@ -65,6 +65,11 @@ ignore = ["E501", "S101"]
 # T201: click.echo used for CLI output.
 "scripts/r2_shard_report.py" = ["S603", "S607", "T201"]
 "scripts/reshard_data.py" = ["T201"]
+# .claude/skills/_shared/post_review.py: CLI helper that shells out to `gh` and
+# prints html_url on success. S603/S607 are the bandit warnings for subprocess
+# with a partial path — `gh` is on PATH by design (same pattern used by the
+# scripts/r2_shard_report.py exemption above).
+".claude/skills/_shared/post_review.py" = ["T201", "S603", "S607"]
 "scripts/subdir_funtime.py" = ["F841"]
 # S603/S607: rclone subprocess calls in R2 integration test fixtures.
 "tests/scripts/test_r2_shard_report.py" = ["S603", "S607"]
