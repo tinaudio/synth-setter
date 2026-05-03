@@ -53,20 +53,24 @@ setup: |
   set -euo pipefail
   echo "synth-setter worker ready (host: $(hostname))"
 
-# Bootstraps scripts/skypilot_worker_run.sh from the ref's git objects — the
-# not-yet-rebuilt dev-snapshot image doesn't have it yet. Process substitution
-# means the script is read straight from git's object DB without touching the
-# working tree until the script itself does the checkout.
+# Bootstrap (cd + git fetch + checkout) is inline because scripts/skypilot_worker_run.sh
+# isn't on the not-yet-rebuilt dev-snapshot image until the checkout itself lands
+# — the script can't run a checkout it depends on existing. After dev-snapshot
+# rebuilds post-merge, the script is baked in and this bootstrap is a no-op when
+# WORKER_GIT_REF is unset.
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd)"
   cd /home/build/synth-setter
-  git config --global --add safe.directory /home/build/synth-setter
   if [[ -n "${WORKER_GIT_REF:-}" ]]; then
+    echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
     if ! [[ "$WORKER_GIT_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
       echo "ERROR: WORKER_GIT_REF must be a 7-40 char hex git SHA, got: $WORKER_GIT_REF" >&2
       exit 1
     fi
+    git config --global --add safe.directory /home/build/synth-setter
     git fetch --depth=1 origin -- "$WORKER_GIT_REF"
+    git checkout FETCH_HEAD
+    echo "Worker now at: $(git rev-parse HEAD)"
   fi
-  bash <(git show "${WORKER_GIT_REF:-HEAD}:scripts/skypilot_worker_run.sh")
+  bash scripts/skypilot_worker_run.sh
