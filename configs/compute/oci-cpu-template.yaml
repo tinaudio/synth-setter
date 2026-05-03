@@ -85,6 +85,12 @@ setup: |
 #   image_id, so we run the worker container ourselves on the OCI VM. The
 #   container is the exact same dev-snapshot image used on RunPod; only
 #   the launch path differs.
+# - --privileged + --ulimit nofile=65536:65536 are the expedient hammer
+#   for the Xvfb / dbus / pedalboard preset-load X11 stack. Justifiable
+#   on a single-tenant ephemeral OCI VM (the container IS the workload),
+#   but bigger than necessary. Follow-up to identify the minimal cap
+#   set: #776 (drop --privileged; replace with the smallest cap-add /
+#   shm-size combination that still lets Surge XT preset load work).
 # - Env propagation: `task.update_envs(...)` sets RCLONE_*+WORKER_SPEC_URI
 #   in the OCI VM's shell environment (via SkyPilot's env-file source).
 #   `docker run -e VAR_NAME` (no value) inherits each named var from the
