@@ -53,23 +53,23 @@ setup: |
   set -euo pipefail
   echo "synth-setter worker ready (host: $(hostname))"
 
-# WORKER_GIT_REF checkout must happen before invoking the shared script —
-# the checkout is what brings scripts/skypilot_worker_run.sh into the
-# baked image's working tree on PRs that touch it (until the next
-# dev-snapshot rebuild bakes it in).
+# scripts/skypilot_worker_checkout.sh isn't on the not-yet-rebuilt dev-snapshot
+# image. Fetch the ref's objects via the image's existing git clone, extract
+# the script's blob with git show (no working-tree changes), then bash it —
+# the script does the actual `git checkout`, after which both shared scripts
+# are on disk for the worker invocation.
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd)"
   cd /home/build/synth-setter
   if [[ -n "${WORKER_GIT_REF:-}" ]]; then
-    echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
     if ! [[ "$WORKER_GIT_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
       echo "ERROR: WORKER_GIT_REF must be a 7-40 char hex git SHA, got: $WORKER_GIT_REF" >&2
       exit 1
     fi
     git config --global --add safe.directory /home/build/synth-setter
     git fetch --depth=1 origin -- "$WORKER_GIT_REF"
-    git checkout FETCH_HEAD
-    echo "Worker now at: $(git rev-parse HEAD)"
+    git show "${WORKER_GIT_REF}:scripts/skypilot_worker_checkout.sh" > /tmp/skypilot_worker_checkout.sh
+    bash /tmp/skypilot_worker_checkout.sh
   fi
   bash scripts/skypilot_worker_run.sh
