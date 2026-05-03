@@ -88,17 +88,17 @@ DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml python -m pipeline.ent
 
 # --- Target state (distributed pipeline, not yet implemented) ---
 # python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
-# → Created run surge-simple-480k-10k-20260313T100000Z
+# → Created run surge-simple-480k-10k-20260313T100000123Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
 #
-# python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
+# python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 # → Valid: 44/48  Missing: 2  Quarantined: 2
 #
-# python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000Z
+# python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 4 shards missing, launching 1 worker
 #
-# python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000Z
+# python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 48/48 valid. output_format: hdf5
 # → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
 # → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
@@ -111,8 +111,8 @@ Make targets are thin aliases for convenience:
 
 ```bash
 make generate ARGS="--config configs/dataset/surge-simple-480k-10k.yaml --workers 10"
-make status ARGS="--run-id surge-simple-480k-10k-20260313T100000Z"
-make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000Z"
+make status ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
+make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 ```
 
 ## 3. Goals, Non-Goals & Design Principles
@@ -282,7 +282,7 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 > R2 root path follows [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout). Pipeline-specific internal structure (workers/, lifecycle markers) is additive detail.
 
 ```
-data/{dataset_config_id}/{dataset_wandb_run_id}/   # e.g. data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022Z/
+data/{dataset_config_id}/{dataset_wandb_run_id}/   # e.g. data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/
   shards/                              # Written ONLY by finalize (promoted from staging)
     shard-000000.h5                    # Canonical finalized shards
     shard-000001.h5
@@ -572,9 +572,9 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 `make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for `.h5` + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
 
 ```
-$ python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
+$ python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 
-Run: surge-simple-480k-10k-20260313T100000Z
+Run: surge-simple-480k-10k-20260313T100000123Z
 Spec shards: 48
 Staged (valid):   44
 Missing:           2
@@ -1386,11 +1386,11 @@ On first `generate`:
 
 > ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
 
-| Pipeline concept          | Storage spec concept                               | Example                                                              |
-| ------------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
-| Config filename (no ext)  | `dataset_config_id`                                | `surge-simple-480k-10k`                                              |
-| Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022Z`                             |
-| R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022Z/` |
+| Pipeline concept          | Storage spec concept                               | Example                                                                 |
+| ------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| Config filename (no ext)  | `dataset_config_id`                                | `surge-simple-480k-10k`                                                 |
+| Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022500Z`                             |
+| R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/` |
 
 Config filenames live in `configs/dataset/` and use the pattern `{name}-{total_train_samples}-{shard_size}.yaml`. The filename without extension is the `dataset_config_id`.
 
