@@ -285,29 +285,44 @@ jobs:
           python - <<'PY'
           import oci
           cfg = oci.config.from_file()
-          print(f"[diag] tenancy={cfg['tenancy'][:30]}... region(home)={cfg['region']}")
+          print(f"[diag] tenancy={cfg['tenancy'][:30]}...")
           identity = oci.identity.IdentityClient(cfg)
           subs = identity.list_region_subscriptions(cfg['tenancy']).data
           print(f"[diag] subscribed regions: {len(subs)}")
           for r in subs:
               print(f"[diag]   region={r.region_name} status={r.status} home={r.is_home_region}")
-          # Service limits for compute in subscribed regions
           for r in subs:
               if r.status != 'READY':
                   continue
-              rcfg = dict(cfg); rcfg['region'] = r.region_name
+              rname = r.region_name
+              rcfg = dict(cfg); rcfg['region'] = rname
               try:
                   client = oci.limits.LimitsClient(rcfg)
-                  limits = client.list_limit_values(compartment_id=cfg['tenancy'], service_name='compute').data
-                  flex = [l for l in limits if 'standard-e' in l.name.lower() and 'flex' in l.name.lower()]
-                  if flex:
-                      print(f"[diag] {r.region_name} E*-Flex limits:")
-                      for l in flex:
-                          print(f"[diag]   {l.name}={l.value} (scope={l.scope_type})")
-                  else:
-                      print(f"[diag] {r.region_name}: no E*-Flex limits returned")
+                  limits = client.list_limit_values(
+                      compartment_id=cfg['tenancy'], service_name='compute'
+                  ).data
+                  print(f"[diag] {rname} ALL compute limits ({len(limits)}):")
+                  for l in limits:
+                      print(f"[diag]   {l.name}={l.value} (scope={l.scope_type}, ad={l.availability_domain})")
               except Exception as e:
-                  print(f"[diag] {r.region_name}: query failed: {type(e).__name__}: {str(e)[:100]}")
+                  print(f"[diag] {rname}: limits query failed: {type(e).__name__}: {str(e)[:120]}")
+              try:
+                  ic = oci.identity.IdentityClient(rcfg)
+                  ads = ic.list_availability_domains(cfg['tenancy']).data
+                  print(f"[diag] {rname} ADs: {[ad.name for ad in ads]}")
+                  for shape_name in ['VM.Standard.E4.Flex', 'VM.Standard.E5.Flex', 'VM.Standard.A1.Flex', 'VM.Standard.E2.1.Micro']:
+                      try:
+                          ra = client.get_resource_availability(
+                              service_name='compute',
+                              limit_name=shape_name.lower().replace('vm.standard.', '').replace('.', '-') + '-count',
+                              compartment_id=cfg['tenancy'],
+                              availability_domain=ads[0].name,
+                          ).data
+                          print(f"[diag] {rname} avail({shape_name}, {ads[0].name}): used={ra.used} avail={ra.available} fa={ra.fractional_availability}")
+                      except Exception as e:
+                          print(f"[diag] {rname} avail({shape_name}) failed: {type(e).__name__}: {str(e)[:80]}")
+              except Exception as e:
+                  print(f"[diag] {rname}: AD/availability query failed: {type(e).__name__}: {str(e)[:120]}")
           PY
 
           python - <<'PY' 2>&1 | tee "$LOG_PATH"
