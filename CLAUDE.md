@@ -128,17 +128,24 @@ The block-scalar should contain only commands. The reader who wants to know *why
 
 ## Code Review
 
-When reviewing code or PRs, invoke these skills in order:
+Two project-local skills package the review workflow:
 
-1. `tdd-implementation` — TDD compliance checklist (16 items)
-2. `code-health` — code quality checklist (24 items)
-3. `ml-data-pipeline` — ML pipeline checklist (12 items)
-4. `synth-setter-project-standards` — project-specific checklist (30 items)
-5. `python-style` — Google Python Style Guide checklist (21 items)
-6. `shell-style` — Google Shell Style Guide checklist (19 items, `.sh` files only)
-7. `ml-test` — ML testing checklist (25 items, model/pipeline test code)
+- **`/repo-review`** (MVP, default) — single agent, inline core checklist sourced from this CLAUDE.md (comment hygiene, no comments inside YAML `run:` block-scalars, type annotations, no bare `except`, `structlog` vs `logging`, `rclone --checksum`, conventional-commit prefixes, PR-issue link, stale-reference audit, secret/input doc parity). No plugin dependency — works on a fresh clone, in CI, for external contributors.
+- **`/repo-review-full`** (heavyweight) — fans out parallel agents (`code-health`, `synth-setter-project-standards` always; `python-style` + `tdd-implementation` for `*.py`; `shell-style` for bash; `gha-workflow-validator` for `.github/workflows/`; `ml-data-pipeline` + `ml-test` for ML code; `tdd-refactor` when files move/rename). Each agent invokes the corresponding `tinaudio-synth-setter-skills:*` plugin skill — requires the plugin enabled.
 
-Review all changed code against every checklist. Prefix findings with BLOCK: (must fix) or WARN: (advisory). Skip style issues (Ruff handles formatting and linting).
+Both skills aggregate BLOCK/WARN findings, prefix each with `[<skill>:<severity>]`, and post every one as an individual unresolved inline review comment via `.claude/skills/_shared/post_review.py`. The helper anchors each finding to a line in the diff's hunks; findings whose natural line is outside the hunks fall back to the nearest in-hunk line on the same file with a cross-ref note in the body, and findings on files entirely outside the diff are rolled into the top-level review body.
+
+Canonical checklist reference (full content lives in the plugin):
+
+1. `tdd-implementation` — TDD compliance (16 items)
+2. `code-health` — code quality (24 items)
+3. `ml-data-pipeline` — ML pipeline (12 items)
+4. `synth-setter-project-standards` — project-specific (30 items)
+5. `python-style` — Google Python Style Guide (21 items)
+6. `shell-style` — Google Shell Style Guide (19 items, `.sh` files + bash inside YAML `run:` blocks)
+7. `ml-test` — ML testing (25 items, model/pipeline test code)
+
+Review all changed code against every applicable checklist. Skip style issues (Ruff handles formatting and linting).
 
 ## Refactoring
 
