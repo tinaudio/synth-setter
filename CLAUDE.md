@@ -102,7 +102,7 @@ The block-scalar should contain only commands. The reader who wants to know *why
   - `constants.py` — shared constants (R2 bucket, spec filename)
   - `stages/` — generate and finalize stage logic (planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
   - `backends/` — compute providers: local, RunPod (planned — [#71](https://github.com/tinaudio/synth-setter/issues/71))
-- `scripts/` — standalone scripts
+- `scripts/` — **deprecated, being depopulated.** Do not add new scripts here. New scripts live next to the source code they belong to (e.g., `src/pipeline/...`, `pipeline/entrypoints/...`). See the "Don't" section.
 - `configs/` — Hydra YAML configs (`data/`, `trainer/`) and pipeline configs (`dataset/`)
 - `tests/` — mirrors `src/` and `pipeline/` structure
 - `docs/design/` — design documents
@@ -205,6 +205,7 @@ Only skip as "no GPU available" if both probes indicate no usable CUDA GPU: `nvi
 - Don't run `make docker-*` or RunPod commands without asking first.
 - Don't add unnecessary abstractions — only abstract when there are two concrete uses.
 - Don't add comments to code you didn't change.
+- Don't add new scripts to `scripts/`. The directory is being depopulated. New scripts must live next to the source code they belong to (e.g., a pipeline helper goes under `pipeline/` or `src/pipeline/`, not `scripts/`). If you think you need an exception, ask first.
 
 ## Commands
 
