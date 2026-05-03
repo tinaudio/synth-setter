@@ -53,23 +53,20 @@ setup: |
   set -euo pipefail
   echo "synth-setter worker ready (host: $(hostname))"
 
-# scripts/skypilot_worker_checkout.sh isn't on the not-yet-rebuilt dev-snapshot
-# image. Fetch the ref's objects via the image's existing git clone, extract
-# the script's blob with git show (no working-tree changes), then bash it —
-# the script does the actual `git checkout`, after which both shared scripts
-# are on disk for the worker invocation.
+# Bootstraps scripts/skypilot_worker_run.sh from the ref's git objects — the
+# not-yet-rebuilt dev-snapshot image doesn't have it yet. Process substitution
+# means the script is read straight from git's object DB without touching the
+# working tree until the script itself does the checkout.
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd)"
   cd /home/build/synth-setter
+  git config --global --add safe.directory /home/build/synth-setter
   if [[ -n "${WORKER_GIT_REF:-}" ]]; then
     if ! [[ "$WORKER_GIT_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
       echo "ERROR: WORKER_GIT_REF must be a 7-40 char hex git SHA, got: $WORKER_GIT_REF" >&2
       exit 1
     fi
-    git config --global --add safe.directory /home/build/synth-setter
     git fetch --depth=1 origin -- "$WORKER_GIT_REF"
-    git show "${WORKER_GIT_REF}:scripts/skypilot_worker_checkout.sh" > /tmp/skypilot_worker_checkout.sh
-    bash /tmp/skypilot_worker_checkout.sh
   fi
-  bash scripts/skypilot_worker_run.sh
+  bash <(git show "${WORKER_GIT_REF:-HEAD}:scripts/skypilot_worker_run.sh")
