@@ -133,6 +133,19 @@ jobs:
         run: |
           REPLACE="${PIN_REPLACE//\{IMAGE_TAG\}/$IMAGE_TAG}"
           sed -i "s|${PIN_SEARCH}|${REPLACE}|" "$TEMPLATE"
+          # Assert the substitution actually happened. sed silently no-ops
+          # if PIN_SEARCH drifts from the template text — without this
+          # check, CI would proceed with the wrong (default) image tag.
+          # The PIN_SEARCH-still-present check covers PR CI where REPLACE
+          # ends in the dev-snapshot tag and would match the original.
+          if grep -qF "$PIN_SEARCH" "$TEMPLATE" && [ "$REPLACE" != "$PIN_SEARCH" ]; then
+            echo "::error::sed pin failed: '${PIN_SEARCH}' still present in $TEMPLATE after substitution" >&2
+            exit 1
+          fi
+          if ! grep -qF "$REPLACE" "$TEMPLATE"; then
+            echo "::error::sed pin failed: '${REPLACE}' not found in $TEMPLATE after substitution" >&2
+            exit 1
+          fi
           grep "$PIN_GREP" "$TEMPLATE"
 
       - name: Prepare run-metadata mount
@@ -278,9 +291,19 @@ jobs:
   # Matrixed over the same providers as `generate`. validate_spec is
   # provider-neutral (reads required fields out of input_spec.json), so
   # the only per-cell variation is the artifact name.
+  #
+  # `if: ${{ !cancelled() }}` decouples each provider's validate cell
+  # from the OTHER provider's generate outcome — if RunPod's generate
+  # fails, OCI's validate-spec still runs (and vice versa). The cell
+  # whose generate didn't produce an artifact will fail at download-
+  # artifact, which is the right per-cell signal. Without this, a
+  # RunPod transient (its generate cell is continue-on-error: false)
+  # would mark `needs: generate` as failed and skip BOTH validate
+  # cells — losing OCI signal for reasons unrelated to OCI.
   validate-spec:
     name: Validate ${{ matrix.provider }} spec structure
     needs: generate
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: ${{ matrix.provider == 'oci' }}
@@ -303,10 +326,13 @@ jobs:
   # Matrixed over the same providers as `generate`. validate_shard.py is
   # provider-neutral (downloads each shard from R2 using the spec's
   # r2_prefix + shards[*].filename, then runs h5py structural checks),
-  # so the only per-cell variation is the artifact name.
+  # so the only per-cell variation is the artifact name. See validate-spec
+  # for the rationale on `if: ${{ !cancelled() }}` (per-provider
+  # decoupling from cross-provider generate failures).
   validate-shard:
     name: Validate ${{ matrix.provider }} shards
     needs: generate
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     continue-on-error: ${{ matrix.provider == 'oci' }}
