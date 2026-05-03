@@ -42,7 +42,7 @@ class DatasetPipelineSpec(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    run_id: DatasetRunId  # unique run ID: {config_id}-{YYYYMMDDTHHMMSSZ}
+    run_id: DatasetRunId  # unique run ID: {config_id}-{YYYYMMDDTHHMMSSsssZ}
     r2_prefix: R2Prefix  # R2 storage path: data/{config_id}/{run_id}/
     created_at: datetime  # UTC, timezone-aware materialization timestamp
     code_version: str  # git commit SHA at materialization time

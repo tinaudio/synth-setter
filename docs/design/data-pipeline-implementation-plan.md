@@ -124,7 +124,7 @@ min_loudness: -55.0
 sample_batch_size: 32
 ```
 
-**Run ID derivation:** `dataset_wandb_run_id = {dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (e.g., `surge-simple-480k-10k-20260313T100000Z`). Maps to `run_id` in pipeline code.
+**Run ID derivation:** `dataset_wandb_run_id = {dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (e.g., `surge-simple-480k-10k-20260313T100000500Z`). Maps to `run_id` in pipeline code. The `sss` suffix is a zero-padded 3-digit millisecond field.
 
 CLI (compute/storage are not in config):
 
@@ -285,7 +285,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `splits` (sample counts, not shard counts), `stats`, `validation_summary`,
   `worker_architectures` (list of unique CPU archs), `shard_manifest: list[dict]`
   (per-shard `{shard_id, filename, content_hash}`), `input_spec_sha256`, `input_spec_path`.
-- Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
+- Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
   `dataset_config_id` is the config filename stem, which encodes runtime params for readability.
 - `materialize_spec(config: DatasetConfig, config_id: DatasetConfigId) -> DatasetPipelineSpec`.
   Derives all runtime state internally (git SHA, repo dirty status, pinned renderer version

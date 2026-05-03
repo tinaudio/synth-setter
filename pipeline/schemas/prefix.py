@@ -16,7 +16,8 @@ def make_dataset_wandb_run_id(
 
     :param dataset_config_id: The dataset config identifier (e.g. filename stem).
     :param timestamp: Optional UTC datetime; defaults to now.
-    :returns: A string like ``<config_id>-<YYYYMMDD>T<HHMMSS>Z``.
+    :returns: A string like ``<config_id>-<YYYYMMDD>T<HHMMSSsss>Z`` where ``sss`` is
+        a zero-padded 3-digit millisecond field.
     """
     if timestamp is None:
         timestamp = datetime.now(timezone.utc)
@@ -25,7 +26,8 @@ def make_dataset_wandb_run_id(
     offset = timestamp.utcoffset()
     if offset is None or offset.total_seconds() != 0:
         raise ValueError("timestamp must be UTC")
-    formatted = timestamp.strftime("%Y%m%dT%H%M%SZ")
+    millis = timestamp.microsecond // 1000
+    formatted = timestamp.strftime("%Y%m%dT%H%M%S") + f"{millis:03d}Z"
     return DatasetRunId(f"{dataset_config_id}-{formatted}")
 
 

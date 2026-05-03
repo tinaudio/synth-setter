@@ -1228,7 +1228,7 @@ class DatasetPipelineSpec(BaseModel):
     """Frozen runtime specification materialized from DatasetConfig."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    run_id: DatasetRunId    # unique run ID: {config_id}-{YYYYMMDDTHHMMSSZ}
+    run_id: DatasetRunId    # unique run ID: {config_id}-{YYYYMMDDTHHMMSSsssZ}
     r2_prefix: R2Prefix     # R2 storage path: data/{config_id}/{run_id}/
     created_at: datetime    # UTC, timezone-aware
     code_version: str       # git commit SHA
@@ -1373,7 +1373,7 @@ On first `generate`:
 
 1. Load YAML, validate against Pydantic `DatasetConfig` (strict mode)
 2. Pin `renderer_version` to `SURGE_XT_RENDERER_VERSION` (the constant in `pipeline/schemas/spec.py`, kept in lockstep with the `dev-snapshot` image's `SURGE_GIT_REF`). The launcher path stays interpreter-only — the worker re-derives via `extract_renderer_version` (`Version` from `moduleinfo.json` on Linux, `CFBundleShortVersionString` from `Info.plist` on macOS, pedalboard fallback if neither is present) and refuses to render on mismatch.
-3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`
+3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision)
 4. Materialize `DatasetPipelineSpec` — expand config into per-shard specs (seeds, filenames) and capture runtime state (git SHA, pinned renderer version, num_params)
 5. Upload spec + source config to R2
 6. Proceed with reconciliation
@@ -1462,7 +1462,7 @@ configs/
 | **Virtual dataset**        | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                                                                                                       |
 | **Input spec**             | JSON file (`input_spec.json`) defining the frozen input specification for a run — shard specs, seeds, shapes, splits, renderer version. Written once on first `generate`, never modified.                                                                                                                          |
 | **dataset_config_id**      | Stable identifier for a dataset configuration, derived from the config filename (without extension). Format: `{name}-{total_train_samples}-{shard_size}`. Example: `surge-simple-480k-10k`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                 |
-| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`. Example: `surge-simple-480k-10k-20260312T143022Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                                            |
+| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). Example: `surge-simple-480k-10k-20260312T143022500Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                              |
 | **Shard ID**               | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                                                                                                       |
 | **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                          |
 | **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                       |
