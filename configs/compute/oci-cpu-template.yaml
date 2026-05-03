@@ -68,22 +68,14 @@ envs:
 setup: |
   set -euo pipefail
   if command -v cloud-init >/dev/null 2>&1; then
-    echo "waiting for cloud-init to finish before touching apt..."
-    sudo cloud-init status --wait || true
+    echo "waiting for cloud-init to finish before touching apt (cap 5min)..."
+    sudo timeout 300 cloud-init status --wait || true
   fi
-  for i in $(seq 1 60); do
-    if ! sudo fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; then
-      break
-    fi
-    echo "apt/dpkg locked by another process; retry $i/60..."
-    sleep 5
-  done
   if ! command -v docker >/dev/null 2>&1; then
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
+    sudo apt-get -o DPkg::Lock::Timeout=300 update -qq
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y -qq docker.io
   fi
-  sudo systemctl enable --now docker || sudo service docker start
-  sudo usermod -aG docker "$USER" || true
+  sudo systemctl enable --now docker
   sudo -E docker pull "$WORKER_IMAGE"
   echo "synth-setter worker ready (host: $(hostname), docker: $(sudo -E docker --version))"
 
