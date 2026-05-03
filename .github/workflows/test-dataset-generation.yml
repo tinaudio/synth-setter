@@ -300,10 +300,20 @@ jobs:
       - name: Validate spec structure
         run: python3 -m pipeline.ci.validate_spec input_spec.json
 
+  # Matrixed over the same providers as `generate`. validate_shard.py is
+  # provider-neutral (downloads each shard from R2 using the spec's
+  # r2_prefix + shards[*].filename, then runs h5py structural checks),
+  # so the only per-cell variation is the artifact name.
   validate-shard:
+    name: Validate ${{ matrix.provider }} shards
     needs: generate
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: ${{ matrix.provider == 'oci' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [runpod, oci]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -311,7 +321,7 @@ jobs:
       - name: Download run metadata artifact
         uses: actions/download-artifact@v4
         with:
-          name: test-run-metadata-runpod
+          name: test-run-metadata-${{ matrix.provider }}
 
       - name: Install PyYAML for config parsing
         run: pip install pyyaml
