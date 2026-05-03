@@ -92,10 +92,28 @@ name: Test SkyPilot Debug
 # temporarily when actively iterating on launcher / wrapper / template
 # behavior.
 #
+# ==========================================================================
+# TEMPORARY ITERATION MODE — OCI noop-only (iteration/oci-debug-noop branch)
+# ==========================================================================
+# All RunPod variants are commented out below; only the `noop` variant is
+# active and points at configs/compute/oci-debug-template.yaml. This branch
+# is for iterating on OCI plumbing fast (cred-write, sky check oci, single
+# pod boot + teardown). To progressively re-enable variants:
+#   1. Pick a commented-out matrix entry below.
+#   2. Either point its `template:` at an OCI sibling (create one mirroring
+#      configs/compute/oci-debug-template.yaml) or leave it on RunPod.
+#   3. Uncomment.
+# Do NOT merge this branch into main. The persistent OCI work lives on
+# feat/skypilot-oci-cpu-target (PR #769).
+# ==========================================================================
+#
 # Required secrets:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
-#   RUNPOD_API_KEY  — written to ~/.runpod/config.toml so SkyPilot can
-#                     provision a pod
+#   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
+#   OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — written to ~/.oci/config +
+#                     ~/.sky/config.yaml so SkyPilot can `sky check oci` and
+#                     provision an OCI VM. (RUNPOD_API_KEY is still required
+#                     for any RunPod variants you re-enable.)
 
 on:
   workflow_dispatch:
@@ -128,76 +146,78 @@ jobs:
         include:
           - variant: noop
             mode: inline-sky
-            template: configs/compute/runpod-debug-template.yaml
+            template: configs/compute/oci-debug-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: noop
             config: ""
-          - variant: image-pull
-            mode: inline-sky
-            template: configs/compute/runpod-debug-image-pull-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: image-pull
-            config: ""
-          - variant: spec-mount
-            mode: inline-sky
-            template: configs/compute/runpod-debug-spec-mount-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: spec-mount
-            config: ""
-          - variant: headless
-            mode: inline-sky
-            template: configs/compute/runpod-debug-headless-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: headless
-            config: ""
-          - variant: rclone
-            mode: inline-sky
-            template: configs/compute/runpod-debug-rclone-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: rclone
-            config: ""
-          - variant: headless-rclone
-            mode: inline-sky
-            template: configs/compute/runpod-debug-headless-rclone-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: headless-rclone
-            config: ""
-          - variant: pedalboard-load
-            mode: inline-sky
-            template: configs/compute/runpod-debug-pedalboard-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: pedalboard
-            config: ""
-          - variant: stickiness-probe
-            mode: inline-sky
-            template: configs/compute/runpod-debug-template.yaml
-            cluster_prefix: synth-setter-smoke
-            cluster_suffix: stickiness
-            config: ""
-          - variant: launcher
-            mode: launcher-runner
-            template: configs/compute/runpod-debug-launcher-minimal-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: launcher
-            config: configs/dataset/runpod-smoke-shard.yaml
-          - variant: launcher-in-docker
-            mode: launcher-docker
-            template: configs/compute/runpod-debug-launcher-minimal-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: launcher-docker
-            config: configs/dataset/runpod-smoke-shard.yaml
-          - variant: generate-tiny
-            mode: launcher-runner
-            template: configs/compute/runpod-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: generate-tiny
-            config: configs/dataset/runpod-smoke-shard.yaml
-          - variant: generate-tiny-in-docker
-            mode: launcher-docker
-            template: configs/compute/runpod-template.yaml
-            cluster_prefix: synth-setter-debug
-            cluster_suffix: generate-tiny-docker
-            config: configs/dataset/runpod-smoke-shard.yaml
+          # ITERATION MODE: variants below are intentionally disabled. Re-enable
+          # one at a time as OCI plumbing stabilises. See header banner.
+          # - variant: image-pull
+          #   mode: inline-sky
+          #   template: configs/compute/runpod-debug-image-pull-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: image-pull
+          #   config: ""
+          # - variant: spec-mount
+          #   mode: inline-sky
+          #   template: configs/compute/runpod-debug-spec-mount-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: spec-mount
+          #   config: ""
+          # - variant: headless
+          #   mode: inline-sky
+          #   template: configs/compute/runpod-debug-headless-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: headless
+          #   config: ""
+          # - variant: rclone
+          #   mode: inline-sky
+          #   template: configs/compute/runpod-debug-rclone-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: rclone
+          #   config: ""
+          # - variant: headless-rclone
+          #   mode: inline-sky
+          #   template: configs/compute/runpod-debug-headless-rclone-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: headless-rclone
+          #   config: ""
+          # - variant: pedalboard-load
+          #   mode: inline-sky
+          #   template: configs/compute/runpod-debug-pedalboard-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: pedalboard
+          #   config: ""
+          # - variant: stickiness-probe
+          #   mode: inline-sky
+          #   template: configs/compute/runpod-debug-template.yaml
+          #   cluster_prefix: synth-setter-smoke
+          #   cluster_suffix: stickiness
+          #   config: ""
+          # - variant: launcher
+          #   mode: launcher-runner
+          #   template: configs/compute/runpod-debug-launcher-minimal-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: launcher
+          #   config: configs/dataset/runpod-smoke-shard.yaml
+          # - variant: launcher-in-docker
+          #   mode: launcher-docker
+          #   template: configs/compute/runpod-debug-launcher-minimal-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: launcher-docker
+          #   config: configs/dataset/runpod-smoke-shard.yaml
+          # - variant: generate-tiny
+          #   mode: launcher-runner
+          #   template: configs/compute/runpod-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: generate-tiny
+          #   config: configs/dataset/runpod-smoke-shard.yaml
+          # - variant: generate-tiny-in-docker
+          #   mode: launcher-docker
+          #   template: configs/compute/runpod-template.yaml
+          #   cluster_prefix: synth-setter-debug
+          #   cluster_suffix: generate-tiny-docker
+          #   config: configs/dataset/runpod-smoke-shard.yaml
 
     steps:
       - name: Checkout
@@ -210,7 +230,7 @@ jobs:
           cache: pip
 
       - name: Install skypilot
-        run: pip install "skypilot[runpod]==0.12.0"
+        run: pip install "skypilot[runpod,oci]==0.12.0"
 
       - name: Pin image tag in debug template
         env:
@@ -234,7 +254,12 @@ jobs:
       - name: Run inline SkyPilot probe
         if: matrix.mode == 'inline-sky'
         env:
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -246,9 +271,17 @@ jobs:
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -o pipefail
-          mkdir -p ~/.runpod
+          mkdir -p "$HOME/.oci" "$HOME/.sky"
           umask 077
-          printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+          printf "%s\n" "$OCI_API_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          printf "[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/oci_api_key.pem\n" \
+            "$OCI_USER_OCID" "$OCI_FINGERPRINT" "$OCI_TENANCY_OCID" "$OCI_REGION" "$HOME" \
+            > "$HOME/.oci/config"
+          chmod 600 "$HOME/.oci/config"
+          printf "oci:\n  default:\n    compartment_ocid: %s\n" "$OCI_COMPARTMENT_OCID" \
+            > "$HOME/.sky/config.yaml"
+          sky check oci
 
           python - <<'PY' 2>&1 | tee "$LOG_PATH"
           import os, time

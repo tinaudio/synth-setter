@@ -1,0 +1,38 @@
+# SkyPilot task template for OCI — DEBUG / no-op variant.
+#
+# OCI (CPU Flex) sibling of configs/compute/runpod-debug-template.yaml.
+# Used by .github/workflows/test-skypilot-debug.yml to exercise the launcher
+# (provision -> setup -> submit -> poll -> tail -> teardown) on OCI without
+# running the real worker pipeline. The run block prints a single line and
+# exits 0, so any hang surfaced under this template is in the launcher's
+# SkyPilot/OCI interaction, NOT in the dataset generation code.
+#
+# Same image as the production OCI template (configs/compute/oci-cpu-template.yaml)
+# so we don't have to publish a separate debug image. The launcher still
+# injects env via update_envs; the worker just ignores them.
+#
+# Region intentionally not pinned — `~/.oci/config` is the single source
+# of truth (set via OCI_REGION at CI cred-write time).
+
+resources:
+  cloud: oci
+  cpus: 4+
+  memory: 16+
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+# Placeholders — the launcher will overwrite these with real values via
+# update_envs. The worker's run block doesn't read them, so anything works.
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+
+setup: |
+  echo "synth-setter debug worker ready (host: $(hostname))"
+
+run: |
+  echo "skypilot-debug job done (host: $(hostname), pwd: $(pwd))"
