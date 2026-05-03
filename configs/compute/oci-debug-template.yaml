@@ -21,8 +21,13 @@
 
 resources:
   cloud: oci
-  cpus: 2+
-  memory: 4+
+  # VM.Standard.E2.1.Micro is OCI's "Always Free" tier shape (1 OCPU, 1 GB).
+  # Pinning by name (instead of cpus/memory floors) ensures noop launches
+  # against a shape every tenancy has by default — even fresh ones with
+  # zero paid compute quota. The prod OCI template (oci-cpu-template.yaml)
+  # still asks for cpus: 4+, memory: 16+, which requires actual compute
+  # quota in the operator's tenancy.
+  instance_type: VM.Standard.E2.1.Micro
   use_spot: false
   disk_size: 30
 
