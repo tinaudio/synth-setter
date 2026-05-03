@@ -49,7 +49,7 @@ BLOCK: <path>:<line> — [<category>] <description>
 WARN:  <path>:<line> — [<category>] <description>
 ```
 
-Categories: `comment-hygiene`, `yaml-bash`, `python`, `pipeline`, `commit-style`, `pr-link`, `stale-ref`, `secret-doc`.
+Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `security`, `commit-style`, `pr-link`, `stale-ref`, `secret-doc`.
 
 ### The core checklist (sourced from CLAUDE.md)
 
@@ -59,18 +59,40 @@ Categories: `comment-hygiene`, `yaml-bash`, `python`, `pipeline`, `commit-style`
 - [comment-hygiene] No multi-paragraph essay-comments. If a comment runs more than ~2 lines, replace with a one-line pointer to a GitHub issue.
 - [yaml-bash] **No `#`-comments inside `run: |` or `setup: |` block-scalars** in `.github/workflows/*.{yml,yaml}` or `configs/compute/*.yaml`. Comments belong ABOVE the `run:` key, not inside the bash. This is a HARD project rule — flag every occurrence as BLOCK.
 
-**Python (CLAUDE.md "Writing Code")**
+**Python (CLAUDE.md "Writing Code" + plugin `python-style` BLOCK items)**
 
-- [python] All function signatures are type-annotated. No `Any` — use `Union`, `Optional`, or specific types.
-- [python] No bare `except:`. Always catch a specific exception class.
+- [python] All function signatures are type-annotated. No `Any` — use `Union`, `Optional`, or specific types. (PY8)
+- [python] No bare `except:`. Always catch a specific exception class. (PY2)
+- [python] No mutable default arguments (`def f(x: list = [])` is a footgun — defaults are shared across calls). Use `None` + initialize inside. (PY3)
+- [python] No `assert` for input validation or invariants — `python -O` strips them. Raise an explicit exception. (PY4)
+- [python] Use `with` statements for every file / socket / resource open. No bare `open(...)` without `with`. (PY13)
 - [python] Pydantic `BaseModel` with `strict=True` at trust boundaries (config parsing, JSON from R2, worker reports).
-- [python] `structlog` for logging in pipeline code; Python's `logging` module elsewhere — no `print()` in production code.
+- [python] `structlog` for logging in pipeline code; Python's `logging` module elsewhere.
+- [python] No `print()` statements in production code. CLI helpers + tests excepted (and exempted in `pyproject.toml` per-file-ignores). (P29)
 
-**Pipeline (CLAUDE.md "Pipeline-Specific Rules")**
+**Shell (plugin `shell-style` BLOCK items — applies to `.sh` files AND bash inside YAML `run:` / `setup:` block-scalars in `.github/workflows/*.{yml,yaml}` and `configs/compute/*.yaml`)**
 
-- [pipeline] All `rclone` operations include `--checksum`.
-- [pipeline] No writes to `data/shards/` outside `finalize` stage.
-- [pipeline] Workers only write under `metadata/workers/`.
+- [shell] `set -euo pipefail` at the top of every shell script and every YAML `run: |` / `setup: |` block-scalar. Inner `bash -c '...'` shells get their own `set -euo pipefail`. (SH1)
+- [shell] All variable expansions are double-quoted: `"${VAR}"` not `$VAR`. Exceptions: integers and `$?`. (SH2)
+- [shell] `[[ ]]` not `[ ]` for tests. Single-bracket is BLOCK. (SH3)
+- [shell] Return values of every command are checked — failure of `var=$(cmd)` or `mkdir`, `printf`, `cd` does not silently continue. With `set -e` this is automatic; without it the assignment-substitution variant must be split or wrapped. (SH8)
+- [shell] No `eval`. Refactor whatever needed `eval` into an array invocation or a function. (SH11)
+
+**Pipeline (CLAUDE.md "Pipeline-Specific Rules" + plugin invariants)**
+
+- [pipeline] All `rclone` operations include `--checksum`. (P13)
+- [pipeline] No writes to `data/shards/` outside `finalize` stage. (P12)
+- [pipeline] Workers only write under `metadata/workers/`. Finalize only writes to `data/`. (P11)
+- [pipeline] Shard IDs are logical (`shard-000042`), deterministic, infrastructure-independent. No `pod_id` / `host` / `runner_id` in shard names. (P14)
+- [pipeline] Specs are immutable after creation — no code path mutates a frozen spec in place. (P15)
+- [pipeline] `.valid` marker is written as the last step of shard lifecycle (commit point). Earlier writes leave shards in a partial state with no marker. (P16)
+- [pipeline] Array shapes match spec (sample rate, spectrogram bins, parameter count). dtypes are explicit — `float32` where expected, not `float64`. (P23, P24)
+
+**Security (plugin `synth-setter-project-standards` security block)**
+
+- [security] No credential leaks. API keys, tokens, OCIDs do not appear in code, logs, or error messages. Tracing-back-from-an-error to the secret value is also a leak. (P19)
+- [security] No command injection via subprocess. User-controlled input never gets interpolated into a shell command — pass argv arrays, never `shell=True` with concatenated strings. (P20)
+- [security] No unsafe deserialization. `pickle.loads` from untrusted sources is forbidden — use JSON / msgpack / protobuf for cross-trust-boundary data. (P21)
 
 **Commit style (CLAUDE.md "Commit Messages")**
 
