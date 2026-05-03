@@ -1,0 +1,91 @@
+# SkyPilot task template for OCI (Oracle Cloud Infrastructure), CPU-only.
+#
+# Loaded by pipeline/entrypoints/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
+# The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`)
+# and injects credentials + the spec URI via task.update_envs(...) before
+# calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
+# (not sky.jobs.launch) — the smoke probe is a single-shot, single-shard
+# round-trip; managed jobs would require a controller-state cloud bucket
+# we don't have provisioned for OCI yet, and unmanaged sky.launch is
+# sufficient at this scope.
+#
+# Spec ships via R2 (not file_mounts) for parity with the RunPod template
+# (see #749 for the original RunPod-backend pubkey-overflow rationale —
+# even though OCI's backend doesn't share that bug, keeping the launcher
+# provider-neutral means specs always travel through R2).
+#
+# Image: tinaudio/synth-setter:dev-snapshot must be pushed to Docker Hub
+# (`make docker-build-dev-snapshot` then `docker push`) before launch.
+# The image is built `linux/amd64` so x86 OCI shapes pull it directly.
+# Tag pinning to a git SHA is deferred to the Phase B PR per the design doc
+# at docs/design/skypilot-compute-integration.md.
+
+resources:
+  cloud: oci
+  # Flex shape — SkyPilot picks the smallest VM.Standard.E5.Flex variant that
+  # satisfies these floors. CPU-only is sufficient for the smoke probe (the
+  # workload is single-shard and short-lived; GPU acceleration buys nothing).
+  cpus: 4+
+  memory: 16+
+  # Region is intentionally NOT pinned here — `~/.oci/config` is the single
+  # source of truth (set via OCI_REGION at CI cred-write time, or directly
+  # for local launches). Pinning region in two places risks `sky check oci`
+  # validating one region while launches go to another.
+  use_spot: false
+  disk_size: 50
+  image_id: docker:tinaudio/synth-setter:dev-snapshot
+
+# Placeholders. Real values are injected by the launcher via update_envs.
+# WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the
+# uploaded spec; the worker downloads from there via load_spec_from_uri.
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+  WORKER_SPEC_URI: ""
+
+setup: |
+  echo "synth-setter worker ready (host: $(hostname))"
+
+# `run:` block notes (kept out of the heredoc — comments inside YAML
+# block-scalars are read by bash and stray quotes / backticks have caused
+# unintended shell expansions in the past):
+#
+# - First echo is a diagnostic: SkyPilot's run block does NOT cd to the
+#   image's WORKDIR (`/home/build/synth-setter`) by default — it lands
+#   in `~/sky_workdir`. The cd that follows is what lets the inlined
+#   `python -c '...'` resolve `pipeline.entrypoints.generate_dataset`
+#   from the repo root, since the worker runs without PYTHONPATH set.
+# - The Python invocation is inlined (instead of calling the docker
+#   entrypoint's click subcommand) so we can `os._exit(0)` immediately
+#   after `run()` returns successfully. Workaround for #735: the SkyPilot
+#   worker (originally observed on RunPod, kept here defensively for OCI
+#   too until #735 is root-caused) consistently hangs at Python
+#   interpreter shutdown — some library (most likely pedalboard / numba /
+#   dask / h5py) leaves a non-daemon thread alive and the interpreter
+#   never exits. SkyPilot's job-status reporter sees the SSH session's
+#   process tree still alive and the job stays in RUNNING forever even
+#   though both rclone uploads have already landed in R2. `os._exit(0)`
+#   bypasses atexit / non-daemon-thread join and lets SkyPilot register
+#   SUCCEEDED.
+# - Scoping the workaround to this template (vs. an env-var gate in
+#   scripts/docker_entrypoint.py) keeps `generate_dataset` clean for
+#   local dev and other CI consumers; only the SkyPilot worker context
+#   force-exits.
+# - Drop this whole inline block (and revert to `python -m
+#   scripts.docker_entrypoint generate_dataset --spec ...`) once #735 is
+#   root-caused at its source. PR-B's `pedalboard-load` matrix variant
+#   is the canary that proves the revert is safe.
+run: |
+  echo "skypilot-run-cwd: $(pwd)"
+  cd /home/build/synth-setter
+  python -c '
+  import os
+  from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
+  spec = load_spec_from_uri(os.environ["WORKER_SPEC_URI"])
+  run(spec)
+  print("forcing interpreter exit (#735 workaround) — bypassing atexit", flush=True)
+  os._exit(0)
+  '

@@ -18,6 +18,12 @@ name: Test Dataset Generation
 #   RUNPOD_API_KEY — used by this workflow to write ~/.runpod/config.toml,
 #                    which SkyPilot's RunPod backend reads at provision time
 #                    (env var alone is not sufficient for `sky check runpod`)
+#   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
+#   OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — used to write ~/.oci/config and
+#                    the API key PEM that SkyPilot's OCI backend reads at
+#                    `sky check oci` / provision time. The OCI variant of the
+#                    generate job runs with `continue-on-error: true` while
+#                    the second target beds in.
 
 on:
   workflow_dispatch:
@@ -169,6 +175,135 @@ jobs:
         with:
           name: test-run-metadata
           path: /tmp/run-metadata/
+          retention-days: 7
+          if-no-files-found: warn
+
+  generate-oci:
+    name: Launch generate_dataset on OCI (CPU) via SkyPilot
+    runs-on: ubuntu-latest
+    # Spends real OCI + R2 dollars and needs OCI creds + R2 creds in env.
+    # `continue-on-error: true` while the OCI target beds in — failures here
+    # must not block PRs that don't touch the OCI path. Same fork-secret /
+    # workflow_dispatch gating as the RunPod job above.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    continue-on-error: true
+    timeout-minutes: 60
+    env:
+      DATASET_CONFIG: >-
+        ${{
+          github.event_name == 'pull_request'
+            && 'configs/dataset/runpod-smoke-shard.yaml'
+            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+        }}
+      IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: docker pull "$IMAGE"
+
+      # Pin the OCI template's image_id from its default (`dev-snapshot`) to
+      # the tag this run was dispatched with, so the worker pulls the same
+      # image we just smoke-tested locally in the prior step.
+      - name: Pin image tag in SkyPilot OCI template
+        run: |
+          sed -i \
+            "s|image_id: docker:tinaudio/synth-setter:dev-snapshot|image_id: docker:tinaudio/synth-setter:${IMAGE_TAG}|" \
+            configs/compute/oci-cpu-template.yaml
+          grep image_id configs/compute/oci-cpu-template.yaml
+
+      - name: Prepare run-metadata mount
+        run: mkdir -p /tmp/run-metadata-oci
+
+      # OCI cred-write step notes (kept out of the heredoc):
+      #   - SkyPilot's OCI backend reads ~/.oci/config + the referenced PEM
+      #     file at `sky check oci` / provision time. We write both inside
+      #     the container so the same `umask 077` discipline used for the
+      #     RunPod config.toml applies (PEM and config 600 root-owned).
+      #   - `compartment_ocid` is OCI-specific and must be passed to
+      #     SkyPilot via ~/.sky/config.yaml under `oci.default.compartment_ocid`
+      #     so launches land in the operator's intended compartment.
+      #   - Region lives only in ~/.oci/config (single source of truth);
+      #     the template intentionally omits `region:` to avoid duplication.
+      - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
+        env:
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
+        run: |
+          set -o pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v /tmp/run-metadata-oci:/run-metadata \
+            -e OCI_USER_OCID \
+            -e OCI_TENANCY_OCID \
+            -e OCI_FINGERPRINT \
+            -e OCI_REGION \
+            -e OCI_COMPARTMENT_OCID \
+            -e OCI_API_KEY_PEM \
+            -e CONFIG_PATH \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+            -e WANDB_API_KEY="${WANDB_API_KEY}" \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "$IMAGE" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              mkdir -p plugins
+              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              mkdir -p "$HOME/.oci" "$HOME/.sky"
+              umask 077
+              printf "%s\n" "$OCI_API_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
+              chmod 600 "$HOME/.oci/oci_api_key.pem"
+              printf "[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/oci_api_key.pem\n" \
+                "$OCI_USER_OCID" "$OCI_FINGERPRINT" "$OCI_TENANCY_OCID" "$OCI_REGION" "$HOME" \
+                > "$HOME/.oci/config"
+              chmod 600 "$HOME/.oci/config"
+              printf "oci:\n  default:\n    compartment_ocid: %s\n" "$OCI_COMPARTMENT_OCID" \
+                > "$HOME/.sky/config.yaml"
+              sky check oci
+              python -m pipeline.entrypoints.skypilot_launch_smoke \
+                --config "$CONFIG_PATH" \
+                --template configs/compute/oci-cpu-template.yaml \
+                --spec-out /tmp/input_spec.json
+              cp /tmp/input_spec.json /run-metadata/input_spec.json
+              chmod 0644 /run-metadata/input_spec.json
+            ' \
+            2>&1 | tee /tmp/run-metadata-oci/generate.log
+
+      - name: Validate spec exists
+        run: |
+          if [[ ! -f /tmp/run-metadata-oci/input_spec.json ]]; then
+            echo "::error::input_spec.json not found in /tmp/run-metadata-oci/"
+            exit 1
+          fi
+          echo "=== Materialized Spec (OCI) ==="
+          head -20 /tmp/run-metadata-oci/input_spec.json
+
+      - name: Upload run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-run-metadata-oci
+          path: /tmp/run-metadata-oci/
           retention-days: 7
           if-no-files-found: warn
 
