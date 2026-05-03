@@ -108,6 +108,8 @@ run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd) host: $(hostname)"
   sudo -E docker run --rm \
+    --privileged \
+    --ulimit nofile=65536:65536 \
     -e RCLONE_CONFIG_R2_TYPE \
     -e RCLONE_CONFIG_R2_PROVIDER \
     -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
