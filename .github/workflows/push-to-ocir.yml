@@ -4,14 +4,18 @@ name: Push To OCIR
 # workers can pull it in-region instead of cross-cloud. Pulls
 # tinaudio/synth-setter:dev-snapshot, retags for OCIR, pushes.
 #
-# Triggers on workflow_dispatch and pull_request — the PR trigger is
-# kept for end-to-end verification while the workflow is being validated;
-# remove it once the mirror is proven reliable (the dev-snapshot image is
-# multi-GB and PR-triggered pulls are expensive).
+# Required secrets:
+#   OCIR_REGION_KEY        — OCIR region key (e.g. iad, phx, fra); forms the
+#                            registry hostname <key>.ocir.io.
+#   OCIR_TENANCY_NAMESPACE — Object Storage namespace for the tenancy; the
+#                            second segment of the OCIR image path.
+#   OCIR_USERNAME          — full OCIR username, including any
+#                            <namespace>/ prefix the tenancy requires.
+#   OCIR_TOKEN             — OCI Auth Token with repos:push scope on the
+#                            target repository.
 
 on:
   workflow_dispatch:
-  pull_request:
 
 jobs:
   push-to-ocir:
@@ -22,10 +26,7 @@ jobs:
       contents: read
 
     steps:
-      # Fork PRs can't read repo secrets — gate auth/push steps so they no-op
-      # cleanly rather than failing with a misleading "denied" error.
       - name: Log in to OCIR
-        if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.OCIR_REGION_KEY }}.ocir.io
@@ -33,12 +34,12 @@ jobs:
           password: ${{ secrets.OCIR_TOKEN }}
 
       - name: Pull dev-snapshot from Docker Hub, retag, push to OCIR
-        if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           SOURCE_IMAGE: tinaudio/synth-setter:dev-snapshot
           OCIR_REGION_KEY: ${{ secrets.OCIR_REGION_KEY }}
           OCIR_TENANCY_NAMESPACE: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
         run: |
+          set -euo pipefail
           docker pull "$SOURCE_IMAGE"
           target="${OCIR_REGION_KEY}.ocir.io/${OCIR_TENANCY_NAMESPACE}/synth-setter:dev-snapshot"
           docker tag "$SOURCE_IMAGE" "$target"
