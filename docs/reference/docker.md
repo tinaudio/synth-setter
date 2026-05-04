@@ -320,8 +320,8 @@ dev-snapshot image, pushes to Docker Hub, and runs smoke tests.
 
 1. Validates the image config (`configs/image/dev-snapshot.yaml` via Pydantic)
 2. Builds the image using Docker Buildx
-3. Pushes tagged images to Docker Hub (dispatch/schedule only)
-4. Runs smoke tests against the SHA-pinned tag (dispatch/schedule only)
+3. Pushes tagged images to Docker Hub (dispatch/push-to-main only)
+4. Runs smoke tests against the SHA-pinned tag (dispatch/push-to-main only)
 
 On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
 as build validation — no push, no smoke tests.
@@ -340,7 +340,7 @@ If the YAML violates the schema, the workflow fails before any build starts.
 | `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
 
 Both `latest` and `dev-snapshot` are gated to runs that represent the main
-branch — schedule runs, dispatches with `git_ref` in `{main, refs/heads/main, refs/remotes/origin/main}`, and dispatches with a 40-char SHA that resolves
+branch — push-to-main runs, dispatches with `git_ref` in `{main, refs/heads/main, refs/remotes/origin/main}`, and dispatches with a 40-char SHA that resolves
 to the current `origin/main` HEAD (so a deliberate "rebuild main at this
 exact commit" still advances the floating tags). Feature-branch dispatches
 publish to `dev-snapshot-<branch>` instead of overwriting `dev-snapshot`.
