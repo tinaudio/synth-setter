@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1777938547013,
+  "lastUpdate": 1777938548964,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -1608,6 +1608,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.73689364579999,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b17b4c2264ca6d279a4edf56250971ec7308d3e0",
+          "message": "refactor(pipeline): drop OCI bridge + collapse provider matrix (#803)\n\n`skypilot[runpod,oci]==0.12.0` ships in dev-snapshot via requirements-app.txt\n(Dockerfile installs requirements.txt, which includes requirements-app.txt),\nand #797 made the image rebuild on every merge to main, so the runtime\n\"bridge\" workarounds in test-dataset-generation.yml + skypilot_launch_smoke.py\nare dead weight.\n\nRemoves:\n- Conditional `pip install skypilot[oci]==0.12.0` + `sky check oci` block\n  inside the OCI launch step. `sky check oci` itself stays — useful as a\n  fast-fail probe of the cred file we just wrote.\n- `try/except ImportError` around `from sky.clouds import OCI` in\n  `_override_image_id` (now a direct module-level import inside the\n  function). The matching test_does_not_crash_when_oci_extras_missing\n  test goes with it.\n- Stale comment block in requirements-app.txt referring to the bridge.\n\nFolded in: collapse the dynamic-matrix setup script. Once `oci_image_tag`\nno longer needs to ride along, the matrix only needs the provider name —\ntemplate / cluster prefix / OCI image tag derive cleanly from\n`matrix.provider` via expressions in the consuming step. The `setup` job\nnow publishes a single `providers` JSON array; `generate_matrix`,\n`validate_matrix`, and `has_jobs` outputs are gone, as are the three\n`needs.setup.outputs.has_jobs == 'true'` gates (empty `fromJSON('[]')`\nalready skips a matrix job natively). Setup script: ~60 lines → ~15.\n\nCloses #800.",
+          "timestamp": "2026-05-04T19:37:03-04:00",
+          "tree_id": "9787aa628b823a54193284279684cc74034c8a2d",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b17b4c2264ca6d279a4edf56250971ec7308d3e0"
+        },
+        "date": 1777938548447,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 1.8589763641357422,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.7423885188996793,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.011311789974570274,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.005052447319030762,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.199535608291626,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 10.601110537300002,
             "unit": "seconds"
           }
         ]
