@@ -191,6 +191,7 @@ jobs:
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
               mkdir -p plugins
               ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
               python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
