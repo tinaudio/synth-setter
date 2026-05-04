@@ -18,10 +18,9 @@
 
 resources:
   cloud: oci
-  cpus: 4+
-  memory: 16+
-  use_spot: false
-  disk_size: 50
+  cpus: 2+
+  memory: 8+
+  disk_size: 20
   image_id: synth-setter:dev-snapshot
 
 setup: |
