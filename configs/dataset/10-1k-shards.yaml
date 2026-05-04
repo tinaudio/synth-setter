@@ -1,4 +1,5 @@
-# CI smoke-test config (test-dataset-generation workflow on PR).
+# Small production-ish dataset for experimentation (10 shards × 1k samples = 10k total).
+# Production sample_rate (44.1 kHz) and min_loudness (-50.0) — not a smoke-test config.
 # num_shards matches --num-workers so each rank renders exactly one shard
 # and the partitioner is actually exercised.
 param_spec: surge_simple
@@ -15,7 +16,7 @@ splits:
   val: 0
   test: 0
 
-preset_path: presets/surge-base.vstpreset
+preset_path: presets/surge-simple.vstpreset
 channels: 2
 velocity: 100
 signal_duration_seconds: 4.0
