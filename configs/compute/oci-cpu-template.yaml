@@ -6,7 +6,10 @@
 # Region intentionally not pinned — `~/.oci/config` is the single source of truth.
 
 resources:
-  cloud: oci
+  any_of:
+    - { cloud: oci, instance_type: VM.Standard.E4.Flex, cpus: 4+, memory: 16+ }
+    - { cloud: oci, instance_type: VM.Standard.E5.Flex, cpus: 4+, memory: 16+ }
+    - { cloud: oci, instance_type: VM.Standard.E6.Flex, cpus: 4+, memory: 16+ }
   cpus: 4+
   memory: 16+
   use_spot: false
