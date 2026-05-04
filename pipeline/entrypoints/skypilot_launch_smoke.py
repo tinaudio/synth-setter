@@ -1,12 +1,21 @@
-"""Launch the smoke `generate_dataset` run on RunPod via SkyPilot.
+"""Launch the smoke `generate_dataset` run on RunPod or OCI via SkyPilot.
 
+Provider-neutral entrypoint: the same binary launches against either
+`configs/compute/runpod-template.yaml` or `configs/compute/oci-cpu-template.yaml`.
 Materializes a spec, ships it via R2 (file_mounts blocked by #749), forwards
 worker env via `task.update_envs`, and `sky.launch`-es an unmanaged task with
 live `sky.tail_logs(follow=True)`. Cluster-level launch (not jobs.launch) —
-RunPod has no managed-jobs controller backend.
+neither RunPod nor OCI has a managed-jobs controller backend wired up here.
 
-`--num-workers N>1` fans out N single-node clusters in parallel (RunPod doesn't
-support num_nodes>1). Each rank gets SYNTH_SETTER_WORKER_RANK /
+Per-backend image handling (driven by `--worker-image-tag`):
+- RunPod: `docker:<image>` is set on each Resources entry's `image_id`, so SkyPilot
+  pulls the image at provision time.
+- OCI: SkyPilot's OCI backend rejects `docker:<image>` for `image_id`, so the
+  YAML's `run:` block performs a sub-docker invocation that consumes
+  `WORKER_IMAGE` from env. The launcher always injects `WORKER_IMAGE`.
+
+`--num-workers N>1` fans out N single-node clusters in parallel (neither backend
+supports num_nodes>1 for this workload). Each rank gets SYNTH_SETTER_WORKER_RANK /
 SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
 """
 
@@ -21,7 +30,6 @@ from pathlib import Path
 import click
 import sky
 from dotenv import dotenv_values
-from sky.clouds import OCI as SkyOCI
 
 from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
@@ -211,7 +219,7 @@ def main(
     num_workers: int,
     worker_image_tag: str,
 ) -> None:
-    """Launch the smoke `generate_dataset` run on RunPod via SkyPilot."""
+    """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
     if num_workers < 1:
         raise click.ClickException(f"--num-workers must be >= 1, got {num_workers}")
 
@@ -278,11 +286,22 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
     a sub-docker invocation inside the YAML's run: block and consumes WORKER_IMAGE from env, so
     OCI Resources are left untouched here.
     """
+    # Lazy-import: the RunPod CI cell runs this launcher inside a dev-snapshot
+    # image that doesn't always carry `skypilot[oci]` extras (the OCI matrix
+    # cell pip-installs the bridge at runtime, RunPod doesn't). Importing at
+    # module level would break the RunPod cell on those images.
+    try:
+        from sky.clouds import OCI as SkyOCI
+
+        oci_cls: type | None = SkyOCI
+    except ImportError:
+        oci_cls = None
+
     docker_ref = f"docker:{worker_image}"
     new_resources: list[sky.Resources] = []
     mutated = False
     for res in task.resources:
-        if isinstance(res.cloud, SkyOCI):
+        if oci_cls is not None and isinstance(res.cloud, oci_cls):
             new_resources.append(res)
             continue
         new_resources.append(res.copy(image_id=docker_ref))
