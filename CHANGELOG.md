@@ -1,6 +1,898 @@
 # CHANGELOG
 
 
+## v0.8.0 (2026-05-04)
+
+### Build System
+
+- **skypilot**: Add worker bootstrap script (unused, awaiting dev-snapshot rebuild)
+  ([#783](https://github.com/tinaudio/synth-setter/pull/783),
+  [`064b118`](https://github.com/tinaudio/synth-setter/commit/064b118b549e1e7f8c7a164babde87cc0b25eb90))
+
+* internal-feat(skypilot): add worker bootstrap script (unused, awaiting dev-snapshot rebuild)
+
+Adds scripts/skypilot_worker_bootstrap.sh containing the cd + WORKER_GIT_REF fetch+checkout that's
+  currently inlined at the top of both compute templates' run: blocks. The script is not called from
+  anywhere in this PR — the templates keep their inline bootstrap.
+
+Reason: the dev-snapshot Docker image is rebuilt post-merge. PRs that introduce
+
+new files in scripts/ can't reference those files from the templates' run: blocks until the next
+  image rebuild lands, because the worker invokes the template's bash from the not-yet-rebuilt
+  image. This PR ships the script onto main so the next dev-snapshot rebuild bakes it in. The
+  follow-up PR will swap the templates' inline bootstrap for `bash
+  scripts/skypilot_worker_bootstrap.sh`.
+
+Refs #782
+
+* internal-fix(skypilot): self-locate REPO_DIR and make safe.directory add idempotent
+
+Two changes to scripts/skypilot_worker_bootstrap.sh, both addressing PR #783 review feedback:
+
+1. Self-locate the repo root from $BASH_SOURCE instead of hardcoding /home/build/synth-setter. The
+  path was duplicated in two places (cd target and safe.directory arg) and would silently break if
+  the Dockerfile WORKDIR ever moves. Self-location decouples the script from the image's WORKDIR —
+  the script works wherever it's invoked from, as long as it lives at <repo-root>/scripts/.
+
+2. Make `git config --global --add safe.directory` idempotent. Without the guard, repeated worker
+  starts on the same long-lived host append a duplicate entry every invocation, bloating
+  ~/.gitconfig over time. The new pattern checks for an existing entry first (Copilot review thread
+  #3178592611).
+
+Also makes the trailing exec target an absolute path ("$REPO_DIR/scripts/skypilot_worker_run.sh")
+  for the same reason — no implicit dependency on cwd surviving the cd.
+
+### Chores
+
+- **skills**: Add /repo-review and /repo-review-full multi-skill PR review skills
+  ([#781](https://github.com/tinaudio/synth-setter/pull/781),
+  [`3826305`](https://github.com/tinaudio/synth-setter/commit/38263056e9b98dba3060e3f98b4fa5e95a86f6b0))
+
+* internal-feat(skills): add post_review.py PR-comment helper
+
+Adds .claude/skills/_shared/post_review.py — the shared PR-comment-posting helper consumed by the
+  upcoming /repo-review and /repo-review-full skills.
+
+Reads a JSON review payload on stdin, parses the PR's diff hunks via gh pr diff, anchors each
+  finding to its target line if that line falls inside a hunk, falls back to the nearest in-hunk
+  line on the same file with a cross-ref note prepended to the body, and rolls findings on files
+  entirely outside the diff into the review body. Submits one review with event=COMMENT so threads
+  stay unresolved.
+
+Verified end-to-end: 45 inline comments posted in one review, three nearest-in-diff fallbacks
+  correctly anchored with cross-ref bodies, zero unresolved-line errors from the GitHub API.
+
+pyproject.toml: per-file-ignores for T201/S603/S607 (CLI helper that shells out to gh and prints
+  html_url on success).
+
+Refs #778
+
+* feat(skills): add /repo-review and /repo-review-full PR review skills
+
+Two project-local skills under .claude/skills/ that package the multi-skill PR review workflow
+  demoed on PR #777 — fan out review agents (one per checklist), aggregate BLOCK/WARN findings, and
+  post each as an individual unresolved inline review comment via the shared post_review.py helper.
+
+/repo-review (MVP, default) Single agent, inline core checklist sourced directly from CLAUDE.md
+  (comment hygiene, no comments inside YAML run: block-scalars, type annotations, no bare except,
+  structlog vs logging, rclone --checksum, conventional-commit prefixes, PR-issue link,
+  stale-reference audit, secret/input doc parity). No plugin dependency — works on a fresh clone, in
+  CI, for external contributors. Drift bounded because the checklist is sourced from CLAUDE.md
+  verbatim.
+
+/repo-review-full (heavyweight) Fans out parallel general-purpose agents based on diff content:
+  code-health and synth-setter-project-standards always; python-style + tdd-implementation for *.py;
+  shell-style for bash; gha-workflow- validator for .github/workflows/; ml-data-pipeline + ml-test
+  for ML code; tdd-refactor when files move/rename. Each agent invokes the corresponding
+  tinaudio-synth-setter-skills:* plugin skill — requires the plugin enabled.
+
+Both skills emit findings as `[<skill>:<severity>]` -prefixed comment bodies and submit via
+  post_review.py with event=COMMENT, so threads stay unresolved without approving or rejecting the
+  PR.
+
+* docs(claude-md): point Code Review section at /repo-review and /repo-review-full
+
+Updates the "Code Review" section to surface the new project-local review skills:
+
+- /repo-review (MVP, default) — inline core checklist sourced from this CLAUDE.md, no plugin
+  dependency. - /repo-review-full (heavyweight) — parallel fan-out across the
+  tinaudio-synth-setter-skills plugin checklists.
+
+Both prefix findings with [<skill>:<severity>] and post each as an individual unresolved inline PR
+  review comment via the shared post_review.py helper. The canonical 7-skill checklist list stays as
+  the reference for which checklists apply to which file types.
+
+* internal-feat(skills): expand /repo-review core checklist with universal BLOCK rules
+
+Pulls 13 always-applicable, BLOCK-level items from the plugin checklists into /repo-review's inline
+  core checklist, so the MVP (plugin-independent) skill catches more high-signal failures without
+  needing fan-out:
+
+- python: PY3 (no mutable default args), PY4 (no assert for validation), PY13 (with for resources),
+  P29 (no print() in production code). - shell: NEW category covering bash inside YAML run:/setup:
+  blocks too — SH1 (set -euo pipefail), SH2 (quote variables), SH3 ([[ ]] not [ ]), SH8 (check
+  return values), SH11 (no eval). - pipeline: P14 (logical shard IDs), P15 (specs immutable), P16
+  (.valid marker last), P23/P24 (array shapes + dtypes). - security: NEW category — P19 (no
+  credential leaks), P20 (no command injection), P21 (no unsafe deserialization).
+
+Selection criteria: items that are universal, low-churn, BLOCK-level, and trip the same kind of
+  issues /repo-review-full would surface but that the plugin's authoritative checklist owns.
+  Code-health, ml-test, ml-data-pipeline, and tdd-implementation remain in /repo-review-full only —
+  they're judgment-heavy and benefit from the fan-out.
+
+* fix(skills): address PR #781 review feedback
+
+Bug fixes: - post_review.py: parse_diff_hunks skips empty hunks (new_end < new_start) so
+  file-deletion hunks (`@@ -1,N +0,0 @@`) don't produce Hunk(0, -1) and trip the GitHub line>=1
+  anchor requirement (Copilot 3178548267). - post_review.py: orphan findings with multi-line bodies
+  now indent continuation lines so Markdown bullet rendering stays grouped under one list item
+  (Copilot 3178548281).
+
+Code health: - post_review.py: drop unused gh_api() helper (Copilot 3178548275). - post_review.py:
+  collapse PR-#777 snapshot counts in module docstring to a one-line pointer; counts go stale on
+  every reuse (3178548967).
+
+Comment hygiene: - CLAUDE.md: drop the prose enumeration of MVP-checklist contents in the
+  /repo-review bullet; point at the SKILL.md as the authoritative list (3178548968). -
+  repo-review-full/SKILL.md: drop the per-file-type skill list from frontmatter; let Step 2's
+  selection table own it (3178548969).
+
+Left as-is: - repo-review/SKILL.md:36 (Copilot 3178548252) — Step 2's `<N>` / `<owner>/<repo>` are
+  skill-template parameters, not literal shell. The skill is read by an LLM that fills them in from
+  Step 1's resolved values; duplicating Step 1's resolution recipe inside Step 2 would introduce
+  drift, not reduce it. Replying with this rationale.
+
+### Continuous Integration
+
+- **ci-automation**: Run test-gpu.yml inside dev-snapshot Docker image
+  ([#789](https://github.com/tinaudio/synth-setter/pull/789),
+  [`d33e90a`](https://github.com/tinaudio/synth-setter/commit/d33e90a91fe2908d2dfb84713becbeda86394943))
+
+Replaces the bare-metal install (Python + uv + torch<2.7.0 constraint + Surge XT .deb + apt headless
+  X11 stack) with `docker pull` + `docker run --gpus all` against
+  `tinaudio/synth-setter:dev-snapshot`, mirroring the pattern already proven in `test-vst-slow.yml`.
+  The image ships cu128 torch matching the gpu-x64 runner driver, Surge XT 1.3.4 at
+  `/usr/lib/vst3/Surge XT.vst3`, and the headless X11/dbus stack — so the duplicated install steps
+  are no longer needed and CI now runs against the same runtime as production workers.
+
+Adds a workflow_dispatch `image_tag` input so a maintainer can pin a `dev-snapshot-<sha>` tag, and a
+  GPU-visibility smoke step before the longer pytest run so toolkit/driver issues surface fast.
+
+Refs #787
+
+- **docker**: Rebuild dev-snapshot on merge to main instead of weekly cron
+  ([#797](https://github.com/tinaudio/synth-setter/pull/797),
+  [`11917a1`](https://github.com/tinaudio/synth-setter/commit/11917a1eea7d9716b681e9dc48a2e6b35cf319f0))
+
+* ci(docker): rebuild dev-snapshot on merge to main instead of weekly cron
+
+The `docker-build-validation.yml` schedule trigger rebuilt `dev-snapshot` weekly on Sunday at 06:00
+  UTC. Newly-added Python requirements (e.g. `skypilot[runpod,oci]==0.12.0` from #777) sit in
+  `requirements-app.txt` but aren't baked into the published `tinaudio/synth-setter:dev-snapshot`
+  image until the next Sunday rebuild — so CI workflows have to paper over the gap with runtime `pip
+  install` bridges (see the `pip install skypilot[oci]` in `test-dataset-generation.yml` and
+  `test-skypilot-debug.yml`).
+
+Replace the weekly schedule with `push: branches: [main]`. Every merge to main now rebuilds + pushes
+  `dev-snapshot` and `latest` immediately, so the published image always tracks HEAD-of-main and
+  dependency PRs land in the image as soon as they merge.
+
+Knock-on edits inside the same workflow: - Header trigger comment: "weekly schedule" -> "push to
+  main". - Inline comments referencing `schedule runs` -> `push-to-main runs`. - The is_main
+  resolver's first branch (`EVENT_NAME = "schedule"`) is now `EVENT_NAME = "push"` so push-to-main
+  builds advance the shared `dev-snapshot`/`latest` floating tags exactly as schedule runs did.
+
+`workflow_dispatch` and the PR-validation `pull_request:` paths trigger are unchanged.
+
+Follow-up (separate PR, after the new image actually exists): strip the runtime `pip install
+  skypilot[oci]` bridge from `test-dataset-generation.yml` and `test-skypilot-debug.yml`.
+
+Part of #796
+
+* ci(docker): pin push-event checkout to triggering SHA
+
+Replace the `'main'` fallback in the checkout `ref:` chain with `github.sha` so push-to-main runs
+  build the commit that fired the workflow, not whatever HEAD is at the moment the runner starts.
+
+Without this, two merges landing in quick succession can both check out the second SHA, and the
+  first run never produces a `dev-snapshot-<sha>` tag for its triggering commit.
+
+Refs #796
+
+* docs(docker): update docker-build-validation trigger description to push-to-main
+
+Doc-side of the cron-to-push-to-main switch in this PR; aligns the docker.md reference text with the
+  workflow's new trigger surface.
+
+* ci(docker): gate is_main on push by current origin/main HEAD
+
+Push runs whose triggering SHA has been overtaken by a newer main commit (delayed/queued runs,
+  manual re-runs of older pushes) previously set is_main="true" unconditionally and would clobber
+  the floating dev-snapshot/latest tags with an older commit's image. Reuse the dispatch path's
+  "resolved_sha == origin/main HEAD" gate for push events so only the current main HEAD advances
+  floating tags; older push runs still publish the immutable dev-snapshot-<sha> tag.
+
+Addresses review comment #3184063073 on PR #797.
+
+Refs #670
+
+- **test-dataset-generation**: Add provider chooser to workflow_dispatch
+  ([#788](https://github.com/tinaudio/synth-setter/pull/788),
+  [`8c86123`](https://github.com/tinaudio/synth-setter/commit/8c86123e75171a3e5c90b9d6c5d425660d602d2c))
+
+Adds a 'provider' choice input (all | runpod | oci, default all) so a maintainer manually triggering
+  the smoke pipeline can scope it to a single provider — useful when iterating on one cell's
+  template/secrets without provisioning the other half of the matrix.
+
+Filter is ANDed into the if: of generate, validate-spec, and validate-shard. PR-event runs are
+  unchanged: github.event_name != 'workflow_dispatch' short-circuits the filter, and inputs.provider
+  is empty on PR events anyway.
+
+Refs #786
+
+- **workflows**: Add Push To OCIR (mirror dev-snapshot to OCIR)
+  ([#795](https://github.com/tinaudio/synth-setter/pull/795),
+  [`c2e6621`](https://github.com/tinaudio/synth-setter/commit/c2e662162c8aacfe6a56ec0ff0a9d246d13b5e53))
+
+* ci(workflows): add Push To OCIR smoke-test workflow
+
+Adds a minimal workflow that pushes a dummy `hello-world` image (retagged) to OCIR. Goal is to
+  verify auth + push end-to-end against the configured OCIR region/tenancy before committing to a
+  real image-build pipeline against OCIR.
+
+Triggers on workflow_dispatch and on every pull_request. The auth/push steps are gated to skip
+  cleanly on fork PRs (which can't read repo secrets), so the workflow reports a clean pass instead
+  of a misleading "denied" failure.
+
+Consumes four secrets: OCIR_REGION, OCIR_TENANCY_NAMESPACE, OCIR_USERNAME, OCIR_TOKEN. The login
+  string is constructed as `<tenancy_namespace>/<username>` — assumes OCIR_USERNAME holds the bare
+  user component (no embedded namespace prefix).
+
+* fix OCIR region key usage in workflow
+
+* Update Docker login action in workflow
+
+Simplified Docker login action by removing tenancy namespace from username.
+
+* ci(workflows): mirror dev-snapshot to OCIR instead of pushing hello-world
+
+Switches Push To OCIR from a hello-world auth smoke test to its real job: mirror
+  tinaudio/synth-setter:dev-snapshot from Docker Hub to OCIR so OCI workers can pull in-region.
+
+- Source: tinaudio/synth-setter:dev-snapshot (public, no Docker Hub auth) - Target:
+  <region>.ocir.io/<tenancy_namespace>/synth-setter:dev-snapshot
+
+Drops the pull_request trigger and the fork-PR `if:` guard — the dev-snapshot image is multi-GB and
+  not worth pulling/pushing on every PR push. Workflow is workflow_dispatch only; future iteration
+  could chain it to docker-build-validation via workflow_run if continuous mirroring is desired.
+
+OCIR repo name drops the `-smoketest` suffix to match the source (`synth-setter`).
+
+* ci(workflows): keep pull_request trigger on Push To OCIR for verification
+
+Restores the pull_request trigger and the fork-PR `if:` guard so the mirror runs on every PR push
+  while it's being validated end-to-end. Plan: remove the pull_request trigger once the workflow is
+  proven reliable on real dev-snapshot pulls — pulling/pushing a multi-GB image on every PR is
+  otherwise wasteful.
+
+* ci(workflows): address Copilot review on Push To OCIR
+
+- Add `set -euo pipefail` to the run block so a missing/renamed secret or a failing pull/tag/push
+  step fails the job at the use site instead of pushing to a malformed target URL (`-u` is the
+  meaningful add over GHA's default `bash -eo pipefail`). - Enumerate the four required secrets in
+  the file header (mirrors the convention in `test-dataset-generation.yml`) so operators can
+  configure the workflow without reading the job body. - Drop the `pull_request` trigger and the
+  fork-PR `if:` guard.
+
+### Features
+
+- **pipeline**: Bump run_id timestamp granularity from seconds to milliseconds
+  ([#771](https://github.com/tinaudio/synth-setter/pull/771),
+  [`ef1b2d8`](https://github.com/tinaudio/synth-setter/commit/ef1b2d809e2a65731f158de3ae681a801e8564d5))
+
+* feat(pipeline): bump run_id timestamp granularity from seconds to milliseconds
+
+Two `materialize_spec` calls inside the same wall-clock second produce identical
+  `dataset_wandb_run_id` values, which collide on R2. Bump the timestamp segment from seconds
+  (`%Y%m%dT%H%M%SZ`) to milliseconds by appending a 3-digit zero-padded millisecond field before the
+  trailing `Z` (e.g. `cfg-20260503T133633Z` -> `cfg-20260503T133633456Z`).
+
+run_ids are opaque strings everywhere they're consumed (R2 prefix, W&B run id, validate_spec,
+  finalize), so pre-existing run_ids continue to parse fine and no migration is needed.
+
+Closes #770
+
+* docs: align remaining run_id examples with millisecond format
+
+Copilot reviewer flagged that the format change in #771 left other docs internally inconsistent —
+  readers would see both `...T143022Z` and `...T143022500Z` as the supposed canonical format.
+
+- data-pipeline.md: update remaining seconds-only examples (lines 91/95/98/101/114/115/575/577 and
+  the 14.x mapping table) - training-pipeline.md: update the train_wandb_run_id glossary format
+  token to YYYYMMDDTHHMMSSsssZ - eval-pipeline.md: update all dataset/train/eval run_id examples
+
+Refs #770
+
+---------
+
+Co-authored-by: Your Name <you@example.com>
+
+### Internal-Feat
+
+- **skypilot**: Matrix-driven RunPod + OCI generate-dataset CI
+  ([#777](https://github.com/tinaudio/synth-setter/pull/777),
+  [`adfd7ab`](https://github.com/tinaudio/synth-setter/commit/adfd7ab4e1fdba639f812db874e1086dccddc471))
+
+* feat(skypilot): add OCI x86 CPU as a second SkyPilot smoke target
+
+Mirrors the existing RunPod path with a CPU-only Flex template (VM.Standard.E5.Flex),
+  provider-neutral launcher (no code changes), a parallel `generate-oci` CI job (continue-on-error:
+  true while bedding in), and a brief operator setup guide. The launcher's R2-uploaded spec contract
+  and the #735 os._exit(0) workaround are preserved across providers.
+
+Region lives only in ~/.oci/config so `sky check oci` and the launch agree on a single source of
+  truth. ~/.oci paths are derived from $HOME inside the container so the cred-write step is portable
+  across base images.
+
+The dev-snapshot Docker image must be rebuilt+pushed with skypilot[oci] in requirements-app.txt
+  before the OCI CI job can pass.
+
+Refs #534
+
+* internal-feat(skypilot): add OCI debug noop template + temporarily switch debug workflow to OCI
+  noop for iteration
+
+Adds configs/compute/oci-debug-template.yaml as the OCI/CPU sibling of runpod-debug-template.yaml,
+  updates the runner-side skypilot install in test-skypilot-debug.yml to carry the [oci] extra, and
+  TEMPORARILY:
+
+- Comments out all RunPod debug matrix variants except 'noop'. - Points 'noop' at
+  configs/compute/oci-debug-template.yaml. - Swaps the inline-sky cred-write step from
+  ~/.runpod/config.toml to ~/.oci/config + ~/.sky/config.yaml + 'sky check oci' fail-fast gate.
+
+The temporary changes (matrix gating + cred-write swap) are iteration scaffolding for landing the
+  OCI target. Re-enable variants progressively as OCI plumbing stabilises; back the gating out
+  before marking PR #769 ready for review.
+
+Refs #768
+
+* fix(skypilot): rewrite OCI templates to docker-in-run; SkyPilot OCI rejects image_id
+
+OCI's SkyPilot backend rejects 'image_id: docker:<image>' with 'Docker image is currently not
+  supported on OCI'. Rewrite both OCI templates to provision a stock OCI Ubuntu VM
+  (image_tag_general: skypilot:cpu-ubuntu-2204) and run the worker container ourselves inside the
+  run: block:
+
+- oci-debug-template.yaml: drop image_id entirely (noop probe just echoes; no docker needed). -
+  oci-cpu-template.yaml: setup: installs docker.io, starts daemon, pre-pulls worker image; run:
+  invokes 'sudo docker run' with the same env-injection contract the launcher uses on RunPod. Worker
+  image moved from a SkyPilot image_id to a WORKER_IMAGE env var that the workflow sed-pins. -
+  test-dataset-generation.yml + test-skypilot-debug.yml: write image_tag_general into
+  ~/.sky/config.yaml; sed-pin updated to rewrite WORKER_IMAGE (not image_id);
+  test-dataset-generation also runtime-installs skypilot[oci] inside dev-snapshot if 'oci' SDK is
+  missing (bridge until the post-rebuild dev-snapshot lands).
+
+* fix(skypilot): pin OCI noop debug to VM.Standard.E2.1.Micro (Always Free)
+
+us-ashburn-1 returned ResourcesUnavailableError across all 3 ADs for SkyPilot's auto-picked
+  VM.Standard.E4.Flex (cpus=2, mem=8). Likely zero E4.Flex compute quota in the operator's tenancy.
+
+Pin the noop probe to VM.Standard.E2.1.Micro instead — it's OCI's 'Always Free' shape (1 OCPU, 1 GB
+  AMD64), available to every tenancy without a quota request. This lets us validate the OCI launcher
+  plumbing (cred-write, sky check, provision, teardown) independently of whether the operator has
+  paid compute quota for E4.Flex.
+
+Production template (oci-cpu-template.yaml) still asks for cpus: 4+, memory: 16+ (needed for the
+  VST/numpy worker); a green test-dataset-generation OCI run depends on the operator having actual
+  compute quota.
+
+* diag(skypilot): list OCI region subscriptions + E-Flex compute limits in noop probe
+
+Adds a one-shot diagnostic to test-skypilot-debug.yml's inline-sky step to print the operator's
+  tenancy region subscriptions and service limit values for any VM.Standard.E*.Flex compute in each
+  region. Output guides which region the OCI templates should target (right now provisioning fails
+  with ResourcesUnavailableError in us-ashburn-1, suggesting zero quota there for E4.Flex).
+
+* diag(skypilot): expand OCI diagnostic to dump ALL compute limits + per-shape resource availability
+
+Previous filter ('standard-e' AND 'flex' in limit name) returned empty across the operator's home
+  region — but the actual OCI limit names may not match that regex. Print every compute limit
+  verbatim, list ADs in the region, and call get_resource_availability for E4.Flex / E5.Flex /
+  A1.Flex / E2.1.Micro to surface used/available counts. This pinpoints whether the tenancy has zero
+  paid quota (so OCI is a non-starter for the prod template) or just regional capacity issues.
+
+* fix(skypilot): sudo -E to preserve env vars into nested docker run on OCI
+
+Worker container started successfully on OCI but failed at: KeyError: 'WORKER_SPEC_URI'
+
+inside the inlined python -c. Root cause: bare 'sudo' strips the caller's environment, so 'docker
+  run -e WORKER_SPEC_URI' (no value; inherit from parent shell) reaches docker with WORKER_SPEC_URI
+  unset. Pass -E to sudo to preserve all caller env vars (RCLONE_CONFIG_R2_*, WORKER_SPEC_URI,
+  WORKER_IMAGE) into the docker invocation.
+
+* fix(skypilot): propagate SYNTH_SETTER_WORKER_RANK/NUM_WORKERS into OCI worker container
+
+The launcher injects partition env vars per rank via task.update_envs(). On RunPod they reach the
+  worker process directly because SkyPilot owns the docker container. On OCI we run docker ourselves
+  inside the run: block, so we have to forward each env var explicitly via 'docker run -e'. Add the
+  two partition vars to both the placeholder envs: block (so SkyPilot doesn't reject the task) and
+  the docker -e list (so the inner python process inherits them).
+
+* fix(skypilot): give OCI launcher a run-id-scoped cluster name to avoid R2 collision with RunPod
+
+Both 'generate' (RunPod) and 'generate-oci' jobs in the same workflow run invoke
+  skypilot_launch_smoke concurrently. With the default cluster name
+  ('synth-setter-smoke-{config_id[:8]}' = 'synth-setter-smoke-runpod-s'), both jobs upload their
+  materialized spec to the SAME R2 key:
+  'r2:.../skypilot-launcher-specs/synth-setter-smoke-runpod-s.json'. Whichever uploads last wins;
+  both clouds' workers then download that spec and write shards under its r2_prefix. validate-shard
+  reads RunPod's local /tmp/input_spec.json (the loser's run_id), gets the wrong prefix, and fails
+  to find shards in R2.
+
+Fix: pass --cluster-name explicitly for the OCI step, scoped to the github.run_id so it's distinct
+  from RunPod's default and unique across PR pushes. RunPod keeps the default for backwards compat
+  with existing debug/dispatch tooling.
+
+* fix(skypilot): wait for cloud-init + apt lock before installing docker on OCI VM
+
+Setup failed with: E: Could not get lock /var/lib/apt/lists/lock. It is held by process 3178 (apt)
+  on a freshly-provisioned OCI Ubuntu VM. SkyPilot launches concurrently with cloud-init's own apt
+  activity. Wait for cloud-init to finish, then poll the apt+dpkg locks (up to 5 min) before our
+  'apt-get update' fires.
+
+* fix(skypilot): give OCI worker docker container full privileges + raised nofile
+
+Worker exited on: X Error of failed request: BadWindow (invalid Window parameter) Major opcode of
+  failed request: 20 (X_GetProperty) during pedalboard's Surge XT preset load on OCI. Preceded by:
+  dbus-daemon: Failed to set fd limit to 65536: Operation not permitted
+
+Both symptoms are an under-privileged docker container. RunPod pods ARE the SkyPilot container
+  (RunPod's runtime grants full privileges); on OCI we run docker ourselves inside the VM,
+  default-unprivileged, so the dbus / Xvfb / pedalboard X-stack can't operate. Match RunPod's
+  privilege level: add --privileged and --ulimit nofile=65536:65536.
+
+--privileged is correct here even by least-privilege standards: the OCI VM is single-tenant per-job
+  (sky.launch + down=True) and the inner container is the entire workload — there's no other process
+  or user on the VM to escape to.
+
+* chore(skypilot): drop redundant plugins/ symlink from OCI template run block
+
+The Dockerfile pre-creates plugins/Surge XT.vst3 -> /usr/lib/vst3/Surge XT.vst3 inside WORKDIR at
+  build time (docker/ubuntu22_04/Dockerfile:322-323), and git init/fetch/checkout is used (instead
+  of clone) specifically to preserve that symlink across the source layer. The OCI template's run
+  block does not task.workdir-override or volume-mount over that path, so the runtime 'mkdir -p
+  plugins && ln -sf ...' was dead code.
+
+The workflow's launcher container still needs the runtime symlink because docker run -v
+  $github.workspace:/home/build/synth-setter masks the image's WORKDIR contents — leave that one
+  alone.
+
+* style(skypilot): expand single-line OCI python -c into multi-line form
+
+Replace the one-liner python -c with a properly-formatted multi-line block. Comment block above run:
+  documents why the python body lines sit at the YAML block-scalar minimum indent (2 spaces in
+  source = 0 after YAML strip) instead of matching the surrounding bash indent — Python -c rejects
+  leading whitespace on top-level statements even when uniform.
+
+No behavioral change.
+
+* fix(skypilot): tighten OCI setup — apt-native lock wait, drop dead usermod, hard timeout on
+  cloud-init
+
+Five fixes from review:
+
+- apt-get -o DPkg::Lock::Timeout=300 — apt itself waits for the lock (no race between fuser and the
+  next command). Drops the manual fuser-poll loop. - timeout 300 sudo cloud-init status --wait —
+  bounds the wait explicitly; --wait has no internal timeout and could hang ~10min silently. - Drop
+  sudo systemctl enable --now docker || sudo service ... fallback. SkyPilot's OCI Canonical Ubuntu
+  22.04 image is systemd; the service fallback masks real failures (apt incomplete, dpkg lock, etc).
+  - Drop sudo usermod -aG docker "$USER" — dead code. Group membership requires re-login and run:
+  uses sudo -E docker throughout. Was only useful for human SSH debugging on a VM that gets torn
+  down post-job. - Removes the "$USER" reference, which was fragile under set -u in SkyPilot's run
+  shell.
+
+* docs(skypilot): link #776 follow-up next to OCI --privileged invocation
+
+Issue #776 tracks the work to drop --privileged and replace it with the minimal cap-add / shm-size /
+  ulimit combination needed for Xvfb + dbus + pedalboard's Surge XT preset load. Comment block above
+  run: now points the reader at it so the temporary nature of the privilege escalation is documented
+  in-source.
+
+Refs #768, #776
+
+* ci(skypilot): drop OCI iteration scaffolding from debug workflow
+
+Restores the 12-variant RunPod debug matrix and the RunPod cred-write step that c2e1030 temporarily
+  gated to OCI noop only, and drops the diagnostic dumps from 0d44582 + d549fb2 (transient quota
+  false-alarm chase, no longer needed). Keeps:
+
+- configs/compute/oci-debug-template.yaml — useful sibling reference for future OCI debug variants.
+  - skypilot[runpod,oci] installer extra — the [oci] dep is harmless on RunPod-only matrix cells and
+  avoids a re-install when an OCI noop is added back later.
+
+Header banner updated to point readers at the OCI sibling template without making it part of the
+  default matrix.
+
+* internal-fix(skypilot): use empty-string env placeholders in OCI template
+
+SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS were set to "0" / "1" defaults, which lied about
+  the contract: the launcher's task.update_envs(...) injects per-rank values, so the defaults were
+  shadowed and never read. Switch to "" placeholders matching every other launcher-injected key (and
+  matching runpod-template.yaml).
+
+No runtime behavior change today (update_envs already overwrites), but the bogus defaults would mask
+  the missing-env failure mode at exactly the worst time: a future regression where the launcher
+  fails to inject per-rank values would silently render rank=0/1 on every worker instead of raising
+  in pipeline.partitioning.read_rank_world_from_env.
+
+* ci(skypilot): collapse RunPod + OCI generate jobs into one matrix
+
+Replaces two parallel `generate` + `generate-oci` jobs with a single matrix-driven `generate` job
+  over [runpod, oci]. Both cells exercise the same provider-neutral launcher
+  (pipeline.entrypoints.skypilot_launch_smoke) against per-provider compute templates.
+
+Load-bearing changes vs the prior shape:
+
+- Both cells now run --num-workers 3, so the shard partitioner is exercised end-to-end on every PR
+  (previously RunPod was passing --num-workers 3 explicitly; OCI was implicitly 1). - RunPod gets a
+  run-id-scoped cluster name (synth-setter-smoke-runpod-${run_id}) — fixes the same R2 spec-key race
+  that the OCI step was patched for in e371a13. Without this, the launcher's R2 spec key would still
+  collide if a future PR adds a parallel generate-oci-style job. - The launch step is one `docker
+  run` whose bash heredoc switches on $PROVIDER for cred-write (case "$PROVIDER" in runpod) ... ;;
+  oci) ... ;; esac), avoiding two divergent docker invocations. - `continue-on-error` is
+  per-matrix-cell (false for RunPod, true for OCI while it accumulates a track record). Flip OCI to
+  false once 3+ consecutive runs are green. - `fail-fast: false` so a transient on one provider
+  doesn't kill the other. - Artifacts renamed to test-run-metadata-${provider}; validate-spec and
+  validate-shard updated to reference test-run-metadata-runpod (matrixing them follows in the next
+  commit).
+
+The OCI cell still carries the runtime `pip install skypilot[oci]` bridge — that's dropped once the
+  post-merge dev-snapshot rebuild bakes in the [oci] extra.
+
+* ci(skypilot): matrix validate-spec over RunPod + OCI
+
+validate_spec.py is provider-neutral (reads required fields from input_spec.json structurally), so
+  the only per-cell variation is the artifact name. fail-fast: false mirrors the generate matrix;
+  OCI cell stays continue-on-error: true while it accumulates a track record.
+
+* ci(skypilot): matrix validate-shard over RunPod + OCI
+
+Same pattern as the prior validate-spec matrixing. The per-shard download + h5py validation loop
+  already iterates spec.shards[*] and parses r2_prefix from the spec, so it works as-is for both
+  providers once the artifact name is parameterized.
+
+After this lands, every PR exercises 6 matrix cells: 2 generate, 2 validate-spec, 2 validate-shard.
+
+* fix(skypilot): wire WORKER_GIT_REF through OCI worker container
+
+The launcher already forwards WORKER_GIT_REF via task.update_envs (it's in
+  pipeline.entrypoints.skypilot_launch_smoke._WORKER_ENV_KEYS), but the OCI template's run: block
+  was dropping it on the floor:
+
+- envs: had no WORKER_GIT_REF placeholder, so SkyPilot's update_envs wouldn't set it on the OCI VM.
+  - The nested `sudo -E docker run ...` lacked `-e WORKER_GIT_REF`, so even if the VM had the value,
+  it wouldn't reach the worker. - The inner bash had no fetch/checkout logic.
+
+Result: OCI matrix cell ran whatever code was baked into the dev-snapshot image, ignoring the PR's
+  commit. RunPod and OCI cells gave inconsistent smoke signals on PR CI.
+
+Mirror the RunPod template's contract: placeholder in envs:, forward via -e, guarded fetch+checkout
+  (validate ref looks like a 7-40 char hex SHA before passing to git, and use safe.directory +
+  FETCH_HEAD to avoid touching the working tree's index permissions).
+
+* ci(skypilot): assert sed pin substitution and decouple per-provider validators
+
+Two PR-feedback fixes bundled (both in the same workflow file):
+
+1. Pin step now asserts the sed substitution actually happened (drift- resistance for Copilot review
+  #3178403620). sed silently no-ops when PIN_SEARCH stops matching the template text (e.g. someone
+  reformats the template, or renames the env key). Without this check, CI would proceed against the
+  dev-snapshot default tag instead of the dispatched IMAGE_TAG. Now: fail the workflow if PIN_SEARCH
+  is still present after sed and REPLACE != PIN_SEARCH (PR CI's no-op case), AND fail if REPLACE is
+  not present.
+
+2. validate-spec / validate-shard now run with `if: ${{ !cancelled() }}` so each provider's
+  validator is decoupled from the OTHER provider's generate outcome. Previously, a RunPod transient
+  would skip BOTH validate cells (needs: generate marks the whole job failed) — losing OCI signal
+  for reasons unrelated to OCI. Now: each provider's validator runs as long as the workflow wasn't
+  cancelled; the cell whose generate didn't produce an artifact fails at download-artifact, which is
+  the right per-cell signal.
+
+* refactor(skypilot): address PR #777 review feedback
+
+Code-health BLOCKs: - Trim multi-paragraph rationale comments in oci-cpu-template.yaml,
+  runpod-template.yaml, and test-dataset-generation.yml (CLAUDE.md one-line rule). Canonical context
+  lives in design doc / #735 / #776. - Extract shared worker run-block to
+  scripts/skypilot_worker_run.sh (RunPod + OCI both invoke). Removes the duplicated git-checkout +
+  python -c os._exit(0) block that had to be edited in two places.
+
+Shell-style BLOCKs: - Add set -euo pipefail to outer GHA run: blocks (pin step, launch step,
+  validate-spec, validate-shard) and to oci-debug-template.yaml. - Replace single-bracket [ ] with
+  [[ ]] in oci-cpu-template / workflow. - Move comment block out of "Pin worker image tag"
+  run-scalar (CLAUDE.md no-comments-inside-run rule); rationale now sits above the step.
+
+Synth-setter BLOCK: - Fix pin-assertion logic: previous logic short-circuited in the default
+  dev-snapshot PR-CI path because REPLACE == PIN_SEARCH made both checks no-ops. Replace with
+  pre-count assertion (PIN_SEARCH must occur exactly once before sed) + post-state checks. Verified
+  locally that drift cases (missing/duplicated PIN_SEARCH) now fail loudly.
+
+Tdd-refactor BLOCKs (doc drift caused by this PR): - Update docs/reference/github-actions.md:
+  artifact name (now per-provider), test-dataset-generation description, secrets table (six new
+  OCI_* secrets). - Update docs/reference/docker.md: per-provider artifact name + gh run download
+  examples.
+
+Code-health WARNs: - Drop redundant pin_grep matrix field; final grep prints the rewritten line
+  directly. - Consolidate continue-on-error pattern: all three jobs (generate, validate-spec,
+  validate-shard) now read continue_on_error from matrix include for symmetry. - Add concurrency
+  group at workflow level (cancel-in-progress) so back-to-back PR pushes don't queue stacked
+  billable RunPod/OCI runs. - Hoist the skypilot:cpu-ubuntu-2204 magic literal into matrix include
+  (oci_image_tag) so workflow + template comments share a single source. - Mark the WORKER_IMAGE
+  default in oci-cpu-template.yaml as the CI sed pin target (one-line comment) so readers don't
+  mistake it for inert. - Bump cluster name to include github.run_attempt — re-running a failed job
+  no longer collides on the launcher's R2 spec key.
+
+Shell-style WARNs: - Consistent braced quoting in pin step. - Separate decl from cmd-sub for
+  R2_BUCKET / R2_PREFIX (SH10).
+
+GHA WARNs: - Bump actions/setup-python @v5 → @v6 in test-skypilot-debug.yml (consistency with other
+  workflows). - Assert ~/.oci/config region= and ~/.sky/config.yaml compartment_ocid are non-empty
+  before sky check oci — opaque empty-secret failures surface a clear error instead. - pip install
+  bridge wraps in explicit failure path; fall-through error message is clearer than the downstream
+  import error.
+
+Synth-setter WARNs: - Drop sibling-YAML cross-reference and OCPU/GB restatement comments in
+  oci-debug-template.yaml (CLAUDE.md "don't bake values into comments"). - Update CLAUDE.md project
+  blurb to mention SkyPilot-managed compute (RunPod + OCI), not just RunPod. - Add
+  OCI_COMPARTMENT_OCID + image_tag_general step to getting-started §4e so local operators don't hit
+  a missing-compartment failure. - Add three-places-in-sync invariant comment next to the skypilot
+  pin in requirements-app.txt.
+
+Tdd-refactor WARNs: - Update docs/doc-map.yaml SkyPilot-integration block: add OCI templates,
+  scripts/skypilot_worker_run.sh, the new per-provider workflow shape, and bump the
+  requirements-app.txt extras string.
+
+Justified as-is (won't fix, with reasons posted on each thread): - oci-debug-template.yaml YAGNI:
+  deferred per the linked comment in test-skypilot-debug.yml until OCI cred-write lands in debug
+  workflow. - "|| true" on cloud-init wait: deliberate fail-open documented above the block;
+  reviewer marked advisory. - git fetch retry: reviewer suggested "consider"; not adding. - Vast.ai
+  drift in skypilot-compute-integration.md lines 277-278/362: PR description explicitly defers to a
+  follow-up doc PR. - Rename runpod-smoke-shard.yaml → smoke-shard.yaml: reviewer's own suggestion
+  is "post-merge"; deferred.
+
+Refs #777 Refs #768
+
+* fix(skypilot): move WORKER_GIT_REF checkout out of shared worker script
+
+The previous extraction (19db966) put the git-checkout *inside* scripts/skypilot_worker_run.sh, but
+  PR CI invokes the script BEFORE the checkout has run — and the dev-snapshot image hasn't been
+  rebuilt yet, so the script doesn't exist on disk at invocation time. Worker exited 127 (command
+  not found) on both providers.
+
+Fix: keep the script for the python heredoc + #735 workaround only;
+
+move the WORKER_GIT_REF git checkout back into each template's run: block, before the script
+  invocation. The checkout is what brings scripts/skypilot_worker_run.sh into the baked image's
+  working tree until the next dev-snapshot rebuild bakes it in.
+
+Refs #777
+
+* refactor(skypilot): extract worker checkout logic to its own script
+
+Splits the WORKER_GIT_REF git checkout out of the templates' inline bootstrap into
+  scripts/skypilot_worker_checkout.sh. Both compute templates now share one place for checkout logic
+  too — symmetric with the existing scripts/skypilot_worker_run.sh extraction.
+
+Bootstrapping for the not-yet-rebuilt dev-snapshot image: the templates fetch the ref's git objects
+  via the image's existing baked clone, then git show <ref>:scripts/skypilot_worker_checkout.sh
+  extracts the script content into /tmp without touching the working tree. bash that, which does the
+  actual git checkout, after which scripts/skypilot_worker_run.sh is on disk for the worker
+  invocation. No external endpoints involved.
+
+* refactor(skypilot): collapse worker bootstrap into a single script
+
+scripts/skypilot_worker_run.sh now owns the full worker side: optional git checkout to
+  WORKER_GIT_REF + the python invocation with the #735 os._exit(0) workaround.
+  scripts/skypilot_worker_checkout.sh deleted.
+
+Templates do the irreducible bootstrap (cd + git config + WORKER_GIT_REF format-check + git fetch)
+  and then `bash <(git show <ref>:scripts/skypilot_worker_run.sh)`, which streams the script
+  straight from git's object DB through process substitution. No separate temp-file stage, no second
+  extracted script.
+
+* refactor(skypilot): keep bootstrap inline; script owns python only
+
+scripts/skypilot_worker_run.sh now owns just the python invocation + #735 os._exit(0) workaround —
+  the original B2 review concern. Each template's run: block keeps the inline bootstrap (cd + git
+  config + WORKER_GIT_REF format-check + git fetch + git checkout FETCH_HEAD) because the script
+  must be on disk for bash to run it, and the not-yet-rebuilt dev-snapshot image doesn't have the
+  script until the checkout itself lands.
+
+Reverts c75f7c2 + 1acf114 (separate checkout script + bash <(git show) process-substitution
+  bootstrap).
+
+* docs(skypilot): address PR #777 Copilot review nits
+
+Doc/comment-only fixes — no behavioral change.
+
+- docs/doc-map.yaml: skypilot_worker_run.sh `covers` no longer claims the script does the
+  WORKER_GIT_REF checkout (it doesn't — templates do). oci-debug-template.yaml `covers` clarifies
+  it's not currently in any CI matrix. - docs/design/skypilot-compute-integration.md: replace
+  incorrect "the run: block is overridden programmatically" with the actual launcher contract
+  (instantiates Task from YAML, only calls update_envs). - configs/compute/oci-debug-template.yaml:
+  header no longer claims the template is "used by test-skypilot-debug.yml" — that workflow's matrix
+  is RunPod-only; the OCI cell lands in a follow-up PR. - scripts/skypilot_worker_run.sh: collapse
+  stale "see runpod-template" pointer to a one-line `# Workaround for #735.` per CLAUDE.md.
+
+### Refactoring
+
+- **pipeline**: Simplify OCI SkyPilot workflow + config
+  ([#792](https://github.com/tinaudio/synth-setter/pull/792),
+  [`60a8c39`](https://github.com/tinaudio/synth-setter/commit/60a8c399264c892a29431a403acef4697d977c30))
+
+* refactor(pipeline): simplify OCI SkyPilot workflow + config
+
+- Call scripts/skypilot_worker_bootstrap.sh from RunPod + OCI templates instead of duplicating the
+  WORKER_GIT_REF checkout block inline. - Have skypilot_launch_smoke.py inject WORKER_IMAGE /
+  image_id at launch time via --worker-image-tag, replacing the GHA sed-pin step. - Extract
+  per-provider cred-write into scripts/skypilot_write_provider_creds.sh to shrink the workflow's
+  docker-run-bash-c quoting depth. - Add skypilot[oci] to requirements (runtime bridge stays for one
+  cycle while dev-snapshot rebuilds; follow-up PR removes it). - Delete unused
+  configs/compute/oci-debug-template.yaml. - Flip OCI from continue-on-error: true to false and
+  collapse the per-job matrix continue_on_error indirection. - Trim stale launcher docstring + OCI
+  YAML header comments.
+
+* docs(skypilot): update references for OCI cleanup PR
+
+- github-actions.md: drop "OCI runs continue-on-error" gotcha (OCI now blocks like RunPod after PR
+  #792). - doc-map.yaml: update covers blurbs for runpod-template (image_id is injected per-launch
+  via --worker-image-tag, not pinned in YAML), oci-cpu-template (bootstrap script swap),
+  skypilot_worker_run.sh (cd/git-fetch/checkout moved to bootstrap). Add entries for
+  scripts/skypilot_worker_bootstrap.sh and scripts/skypilot_write_provider_creds.sh as load-bearing
+  sources of the SkyPilot integration design doc. - configuration-reference.md: drop the now-removed
+  image_id literal from the abridged runpod-template snippet; add a one-line note that the launcher
+  injects it.
+
+* refactor(pipeline): lazy-import OCI cloud class + provider-agnostic docstrings
+
+Module-level `from sky.clouds import OCI as SkyOCI` would break the RunPod CI cell on dev-snapshot
+  images that don't yet carry `skypilot[oci]` extras (the OCI matrix cell installs the bridge at
+  runtime; the RunPod cell doesn't). Move the import inside `_override_image_id` so import failure
+  is tolerated (treats all resources as non-OCI, which matches reality without the SDK).
+
+Also fix two stale RunPod-specific docstrings (module-level + `main()`) now that the launcher is
+  provider-neutral.
+
+* docs(skypilot): parameterize runpod-template image-tag header comment
+
+Header still hard-coded 'tinaudio/synth-setter:dev-snapshot' as the required Docker Hub image;
+  rewrite to '<worker-image-tag>' with dev-snapshot called out as the default tag. Comment-only
+  change.
+
+Refs #791
+
+* ci(test-dataset-generation): dynamic provider matrix; OCI-only on PR events
+
+GH Actions rejects `matrix.<x>` inside a job-level `if:`, so the provider gating from #788 produced
+  an invalid workflow once the runner tried to evaluate it. Replace it with a `setup` job that emits
+  `generate_matrix` and `validate_matrix` JSON outputs based on the event/inputs; downstream jobs
+  consume them via `fromJSON()` and gate on `has_jobs == 'true'`.
+
+Provider policy: * pull_request from the same repo → OCI only (RunPod off on PR runs) * pull_request
+  from a fork → empty (forks can't read secrets) * workflow_dispatch → respect inputs.provider
+  (all|runpod|oci)
+
+* fix(skypilot): poll apt/dpkg locks before installing docker on OCI
+
+OCI smoke runs are failing in setup with: E: Could not get lock /var/lib/apt/lists/lock. It is held
+  by process N (apt)
+
+`cloud-init status --wait` returns "done" before apt-daily / unattended-upgrades release
+  /var/lib/dpkg/lock-frontend on stock OCI Ubuntu images, so the immediately-following apt-get
+  update races and loses. Add a polling loop on fuser of the three apt/dpkg lock files, capped at
+  10min, before the apt-get update + install.
+
+Refs #776.
+
+* refactor(skypilot): address PR #792 review round (Copilot)
+
+OCI template: - Fail loud if WORKER_IMAGE is unset/empty in setup: and run: blocks (previously a
+  confusing `docker pull ""` error). Closes thread on CID 3182574743 (ktinubu agreed).
+
+Launcher (skypilot_launch_smoke): - Validate `--worker-image-tag` against the OCI tag grammar
+  ([A-Za-z0-9_][A-Za-z0-9_.-]{0,127}); reject early with a clear ClickException so callers can't
+  smuggle `:`, `/`, or whitespace into the docker ref. New parameterized regression test covers 6
+  invalid tags. CID 3183742691.
+
+Workflow + docs (no behavior change): - test-dataset-generation.yml: header now describes the
+  dynamic matrix policy (PR same-repo → OCI-only; fork PR → empty; dispatch → choice). CID
+  3183742667. - docs/reference/github-actions.md: `test-dataset-generation` row rewritten to match
+  the new policy. CID 3183742621. - docs/reference/configuration-reference.md: prose now names the
+  removed literal explicitly (`image_id: docker:tinaudio/synth-setter:dev-snapshot`). CID
+  3183742589.
+
+* fix(skypilot): bind-mount sky_workdir into OCI worker container
+
+The dev-snapshot image hasn't been rebuilt to include scripts/skypilot_worker_bootstrap.sh from
+  #783, so the OCI smoke run fails inside the container with: bash:
+  scripts/skypilot_worker_bootstrap.sh: No such file or directory
+
+OCI's docker run is launched manually from the template's run: block (the OCI SkyPilot backend can't
+  ingest `image_id: docker:...`), so unlike RunPod nothing was overlaying the synced sky_workdir on
+  top of the image. Bind-mount $(pwd) (the synced workdir) at /home/build/synth-setter and set that
+  as WORKDIR. The container now sees the PR's checkout, including the bootstrap script, and the
+  bootstrap's WORKER_GIT_REF flow continues to function for pinning the SHA.
+
+This mirrors the workdir-overlay behavior of SkyPilot's RunPod backend.
+
+Refs #776 #783.
+
+* fix(skypilot): set task.workdir so OCI bind-mount sees the PR checkout
+
+The launcher never set `task.workdir`, so sky.launch synced nothing to the cluster —
+  `/home/ubuntu/sky_workdir` on the OCI VM was empty. The prior bind-mount fix mounted that empty
+  directory over the image's baked /home/build/synth-setter, hiding the baked code without supplying
+  a replacement, leaving `scripts/skypilot_worker_bootstrap.sh` invisible inside the worker
+  container.
+
+Set `task.workdir = str(REPO_ROOT)` after `sky.Task.from_yaml(...)` so SkyPilot rsyncs the
+  launcher's checkout (the PR's code) to the cluster's sky_workdir. The OCI template's bind-mount of
+  $(pwd) now exposes the bootstrap script, scripts/, pipeline/, etc. inside the container.
+
+This matches the pattern in test-skypilot-debug.yml's inline launcher.
+
+Refs #783.
+
+* fix(skypilot): recreate VST plugin symlink inside OCI worker container
+
+`plugins/` is .gitignored, so SkyPilot's rsync skips it on workdir sync. Combined with the
+  bind-mount overlay, the OCI worker container sees an empty plugins/ where the dev-snapshot image
+  had the `/usr/lib/vst3/Surge XT.vst3` symlink baked in, so `extract_renderer_version` fails with
+  FileNotFoundError on the relative plugin_path.
+
+Recreate the symlink inside the worker container before invoking the bootstrap. `ln -sf` is
+  idempotent. The target lives outside the bind-mounted /home/build/synth-setter, so it remains
+  accessible from inside the container.
+
+* test(skypilot): cover _override_image_id; track shared scripts in PR path filter
+
+- TestOverrideImageId: unit-tests for the per-backend image_id mutation helper. Asserts (1) non-OCI
+  Resources get image_id rewritten to docker:<image>, (2) multi-Resources alt-sets all mutate, (3)
+  OCI Resources are passed through untouched and set_resources is not called when nothing mutated,
+  (4) no-crash fallback when skypilot[oci] extras are absent (lazy import raises ImportError,
+  function treats every Resource as non-OCI). - test-dataset-generation.yml: add
+  scripts/skypilot_worker_bootstrap.sh and scripts/skypilot_write_provider_creds.sh to the
+  on.pull_request paths filter so future edits to those shared launcher scripts trigger the smoke
+  workflow.
+
+* fix(skypilot): remove apostrophe-bearing comment from OCI bash -c block
+
+The previous fix introduced inline comments inside the docker run `bash -c '...'` script. One
+  comment contained "SkyPilot's" — the apostrophe terminated the outer single-quoted argument
+  prematurely, splitting the docker invocation in half. Bash silently treated everything after as a
+  separate command on the OCI VM host, so the bootstrap + worker_run.sh + python heredoc all ran on
+  the unprovisioned host (Python from the OCI VM, no loguru) instead of the dev-snapshot container.
+  That is why the traceback path was `/home/ubuntu/sky_workdir/...` not
+  `/home/build/synth-setter/...`.
+
+CLAUDE.md explicitly bans comments inside YAML `run:` block-scalars for exactly this reason. Move
+  the comment out, leave a pointer above the block, and keep the bash script apostrophe-free.
+
+### Testing
+
+- **pipeline**: Fix platform-dependent args index in rank/world partition tests
+  ([#774](https://github.com/tinaudio/synth-setter/pull/774),
+  [`1854638`](https://github.com/tinaudio/synth-setter/commit/1854638ec4adb98a9b8459dd3b3051a500a283d7))
+
+Two partition tests hard-coded args[3] as the shard output filename. That layout only holds when
+  args[0] is VST_HEADLESS_WRAPPER (Linux). After #766 made the wrapper Linux-only, args[3] became
+  the shard_size string on macOS, breaking these tests on every macOS build of every branch.
+
+Switch both tests to the existing _find_script_index(args) + 1 lookup, mirroring
+  test_run_with_three_shards_renders_each_shard.
+
+Closes #773
+
+
 ## v0.7.4 (2026-05-02)
 
 ### Bug Fixes
