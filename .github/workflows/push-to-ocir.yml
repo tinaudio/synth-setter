@@ -36,19 +36,19 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.OCIR_REGION }}.ocir.io
+          registry: ${{ secrets.OCIR_REGION_KEY }}.ocir.io
           username: ${{ secrets.OCIR_TENANCY_NAMESPACE }}/${{ secrets.OCIR_USERNAME }}
           password: ${{ secrets.OCIR_TOKEN }}
 
       - name: Pull, retag, push hello-world
         if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
         env:
-          OCIR_REGION: ${{ secrets.OCIR_REGION }}
+          OCIR_REGION_KEY: ${{ secrets.OCIR_REGION_KEY }}
           OCIR_TENANCY_NAMESPACE: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
           SHA: ${{ steps.source.outputs.sha }}
         run: |
           docker pull hello-world:latest
-          target="${OCIR_REGION}.ocir.io/${OCIR_TENANCY_NAMESPACE}/synth-setter-smoketest:${SHA}"
+          target="${OCIR_REGION_KEY}.ocir.io/${OCIR_TENANCY_NAMESPACE}/synth-setter-smoketest:${SHA}"
           docker tag hello-world:latest "$target"
           docker push "$target"
           echo "Pushed $target"
