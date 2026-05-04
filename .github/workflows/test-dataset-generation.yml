@@ -23,7 +23,7 @@ on:
         required: false
         default: "dev-snapshot"
       provider:
-        description: "Provider(s) to launch on (manual runs only; PR runs always exercise all)"
+        description: "Provider(s) to launch on (manual runs only; PR runs are OCI-only)"
         required: false
         type: choice
         default: all
@@ -54,37 +54,94 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Matrix over RunPod + OCI. Both cells exercise the same provider-neutral
-  # launcher (pipeline.entrypoints.skypilot_launch_smoke) against a
-  # provider-specific compute template, with --num-workers 3 so the
+  # Compute the provider matrix at runtime. GH rejects `matrix.<x>` inside a
+  # job-level `if:`, so gating moves into this job's script and downstream
+  # jobs consume `generate_matrix` / `validate_matrix` via `fromJSON()`.
+  #
+  # Policy:
+  #   * pull_request (same repo) → OCI only
+  #   * pull_request (fork)      → empty (forks can't read secrets)
+  #   * workflow_dispatch        → respect `inputs.provider` (all|runpod|oci)
+  setup:
+    name: Compute provider matrix
+    runs-on: ubuntu-latest
+    outputs:
+      generate_matrix: ${{ steps.matrix.outputs.generate_matrix }}
+      validate_matrix: ${{ steps.matrix.outputs.validate_matrix }}
+      has_jobs: ${{ steps.matrix.outputs.has_jobs }}
+    steps:
+      - id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PROVIDER_INPUT: ${{ inputs.provider || 'all' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          providers=()
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if [[ "${PR_HEAD_REPO}" == "${REPO}" ]]; then
+              providers=("oci")
+            fi
+          elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            case "${PROVIDER_INPUT}" in
+              runpod) providers=("runpod") ;;
+              oci)    providers=("oci") ;;
+              *)      providers=("runpod" "oci") ;;
+            esac
+          fi
+
+          runpod_entry='{"provider":"runpod","template":"configs/compute/runpod-template.yaml","cluster_prefix":"synth-setter-smoke-runpod","oci_image_tag":""}'
+          oci_entry='{"provider":"oci","template":"configs/compute/oci-cpu-template.yaml","cluster_prefix":"synth-setter-smoke-oci","oci_image_tag":"skypilot:cpu-ubuntu-2204"}'
+
+          gen_entries=()
+          val_entries=()
+          if (( ${#providers[@]} > 0 )); then
+            for p in "${providers[@]}"; do
+              case "${p}" in
+                runpod) gen_entries+=("${runpod_entry}") ;;
+                oci)    gen_entries+=("${oci_entry}") ;;
+              esac
+              val_entries+=("\"${p}\"")
+            done
+          fi
+
+          gen_json="[$(IFS=,; echo "${gen_entries[*]:-}")]"
+          val_json="[$(IFS=,; echo "${val_entries[*]:-}")]"
+
+          if (( ${#providers[@]} > 0 )); then
+            has_jobs=true
+          else
+            has_jobs=false
+          fi
+
+          {
+            echo "generate_matrix=${gen_json}"
+            echo "validate_matrix=${val_json}"
+            echo "has_jobs=${has_jobs}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "providers: ${providers[*]:-<none>}"
+          echo "generate_matrix: ${gen_json}"
+          echo "validate_matrix: ${val_json}"
+
+  # Matrix over the providers selected by `setup`. Each cell exercises the
+  # same provider-neutral launcher (pipeline.entrypoints.skypilot_launch_smoke)
+  # against a provider-specific compute template, with --num-workers 3 so the
   # partitioner is exercised end-to-end. Cluster names include
   # github.run_attempt so re-running a failed job doesn't collide on the
   # launcher's R2 spec key.
   generate:
     name: Launch generate_dataset on ${{ matrix.provider }} via SkyPilot
+    needs: setup
+    if: needs.setup.outputs.has_jobs == 'true'
     runs-on: ubuntu-latest
-    # Forks can't read the secrets — fail fast instead of provisioning a
-    # pod/VM that errors on missing creds. workflow_dispatch is gated by
-    # repo write permissions.
-    if: >-
-      (github.event_name == 'workflow_dispatch'
-       || github.event.pull_request.head.repo.full_name == github.repository)
-      && (github.event_name != 'workflow_dispatch'
-          || inputs.provider == 'all'
-          || inputs.provider == matrix.provider)
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - provider: runpod
-            template: configs/compute/runpod-template.yaml
-            cluster_prefix: synth-setter-smoke-runpod
-            oci_image_tag: ""
-          - provider: oci
-            template: configs/compute/oci-cpu-template.yaml
-            cluster_prefix: synth-setter-smoke-oci
-            oci_image_tag: skypilot:cpu-ubuntu-2204
+        include: ${{ fromJSON(needs.setup.outputs.generate_matrix) }}
     env:
       DATASET_CONFIG: >-
         ${{
@@ -210,18 +267,14 @@ jobs:
   # OCI validation.
   validate-spec:
     name: Validate ${{ matrix.provider }} spec structure
-    needs: generate
-    if: >-
-      !cancelled()
-      && (github.event_name != 'workflow_dispatch'
-          || inputs.provider == 'all'
-          || inputs.provider == matrix.provider)
+    needs: [setup, generate]
+    if: needs.setup.outputs.has_jobs == 'true' && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
-        provider: [runpod, oci]
+        provider: ${{ fromJSON(needs.setup.outputs.validate_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -238,18 +291,14 @@ jobs:
   # artifact name. See validate-spec for `if: !cancelled()` rationale.
   validate-shard:
     name: Validate ${{ matrix.provider }} shards
-    needs: generate
-    if: >-
-      !cancelled()
-      && (github.event_name != 'workflow_dispatch'
-          || inputs.provider == 'all'
-          || inputs.provider == matrix.provider)
+    needs: [setup, generate]
+    if: needs.setup.outputs.has_jobs == 'true' && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        provider: [runpod, oci]
+        provider: ${{ fromJSON(needs.setup.outputs.validate_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
