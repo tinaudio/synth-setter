@@ -22,6 +22,15 @@ on:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
         default: "dev-snapshot"
+      provider:
+        description: "Provider(s) to launch on (manual runs only; PR runs always exercise all)"
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - runpod
+          - oci
   pull_request:
     paths:
       - "src/data/vst/**"
@@ -58,8 +67,11 @@ jobs:
     # pod/VM that errors on missing creds. workflow_dispatch is gated by
     # repo write permissions.
     if: >-
-      github.event_name == 'workflow_dispatch'
-      || github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name == 'workflow_dispatch'
+       || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name != 'workflow_dispatch'
+          || inputs.provider == 'all'
+          || inputs.provider == matrix.provider)
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -199,7 +211,11 @@ jobs:
   validate-spec:
     name: Validate ${{ matrix.provider }} spec structure
     needs: generate
-    if: ${{ !cancelled() }}
+    if: >-
+      !cancelled()
+      && (github.event_name != 'workflow_dispatch'
+          || inputs.provider == 'all'
+          || inputs.provider == matrix.provider)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -223,7 +239,11 @@ jobs:
   validate-shard:
     name: Validate ${{ matrix.provider }} shards
     needs: generate
-    if: ${{ !cancelled() }}
+    if: >-
+      !cancelled()
+      && (github.event_name != 'workflow_dispatch'
+          || inputs.provider == 'all'
+          || inputs.provider == matrix.provider)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
