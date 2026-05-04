@@ -4,7 +4,7 @@ name: Docker Image Build and Push
 # tests against the pushed image.
 #
 # Triggers:
-# - Manual dispatch or weekly schedule: full build + push + smoke tests
+# - Manual dispatch or push to main: full build + push + smoke tests
 # - Pull request (Docker-related paths): build-only validation (no push)
 #
 # git_ref resolution:
@@ -27,9 +27,8 @@ on:
         description: "GitHub issue number for config metadata."
         required: false
         default: "311"
-  schedule:
-    # Weekly: Sunday 06:00 UTC
-    - cron: "0 6 * * 0"
+  push:
+    branches: [main]
   pull_request:
     paths:
       - "docker/**"
@@ -49,21 +48,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # pull_request: use PR head; dispatch: use input; schedule: main
-          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.git_ref || 'main' }}
+          # pull_request: use PR head; dispatch: use input; push: triggering SHA.
+          # `github.sha` pins push runs to the commit that fired the workflow so
+          # back-to-back merges don't cause one run to build a later main commit
+          # (and skip the immutable dev-snapshot-<sha> tag for the triggering one).
+          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.git_ref || github.sha }}
 
       # Emits three outputs:
       #   sha         — 40-char commit SHA, baked into the image
-      #   is_main     — "true" when this build represents the main branch and
-      #                 should advance the shared `dev-snapshot`/`latest` tags.
-      #                 Covers schedule runs, the common ref forms a user might
-      #                 paste into the dispatch input (`main`, `refs/heads/main`,
-      #                 `refs/remotes/origin/main`), and the case where the
-      #                 resolved HEAD equals origin/main's HEAD (e.g., a literal
-      #                 SHA dispatch that happens to be main).
+      #   is_main     — "true" when this build represents the *current* main
+      #                 HEAD and should advance the shared `dev-snapshot`/`latest`
+      #                 tags. Covers push-to-main runs whose triggering SHA still
+      #                 equals origin/main's HEAD, the common ref forms a user
+      #                 might paste into the dispatch input (`main`,
+      #                 `refs/heads/main`, `refs/remotes/origin/main`), and the
+      #                 case where the resolved HEAD equals origin/main's HEAD
+      #                 (e.g., a literal SHA dispatch that happens to be main).
+      #                 Push runs whose triggering SHA has been overtaken by a
+      #                 newer main commit (delayed/queued runs, manual re-runs
+      #                 of older pushes) fall through to `false` so they only
+      #                 publish the immutable `dev-snapshot-<sha>` tag and don't
+      #                 clobber the floating tags with an older commit.
       #   branch_slug — Docker-tag-safe branch name for the `dev-snapshot-<branch>`
       #                 floating tag, or empty when no meaningful branch applies
-      #                 (schedule run, any main ref form, a git_ref already
+      #                 (push-to-main run, any main ref form, a git_ref already
       #                 resolved to a SHA, or a git tag dispatch). Well-known
       #                 ref prefixes (`refs/heads/`, `refs/remotes/origin/`) are
       #                 stripped before slugging so the same branch produces the
@@ -89,19 +97,18 @@ jobs:
           echo "sha=${resolved_sha}" >> "$GITHUB_OUTPUT"
 
           is_main="false"
-          if [ "$EVENT_NAME" = "schedule" ]; then
-            is_main="true"
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             case "$DISPATCH_REF" in
               main|refs/heads/main|refs/remotes/origin/main)
                 is_main="true"
                 ;;
             esac
-            if [ "$is_main" = "false" ]; then
-              main_sha=$(git ls-remote origin refs/heads/main | awk '{print $1}')
-              if [ -n "$main_sha" ] && [ "$resolved_sha" = "$main_sha" ]; then
-                is_main="true"
-              fi
+          fi
+          if [ "$is_main" = "false" ] \
+              && { [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; }; then
+            main_sha=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+            if [ -n "$main_sha" ] && [ "$resolved_sha" = "$main_sha" ]; then
+              is_main="true"
             fi
           fi
           echo "is_main=${is_main}" >> "$GITHUB_OUTPUT"
@@ -199,7 +206,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.config.outputs.image }}
-          # Floating tags `dev-snapshot` and `latest` are gated to schedule
+          # Floating tags `dev-snapshot` and `latest` are gated to push-to-main
           # runs or dispatches that explicitly target main. Dispatching with
           # git_ref pointed at a non-main ref must NOT overwrite either tag —
           # other workflows (test-skypilot-debug, test-dataset-generation)
