@@ -1,7 +1,10 @@
 name: Test Dataset Generation
 
-# Smoke test for the SkyPilot launcher (pipeline.entrypoints.skypilot_launch_smoke)
-# matrixed over RunPod + OCI. See docs/design/skypilot-compute-integration.md.
+# Smoke test for the SkyPilot launcher (pipeline.entrypoints.skypilot_launch_smoke).
+# The provider matrix is computed at runtime by the `setup` job (see its `Policy:`
+# block): same-repo PR → OCI only; fork PR → empty (no secrets); workflow_dispatch
+# → respects `inputs.provider` (all/runpod/oci). See
+# docs/design/skypilot-compute-integration.md.
 #
 # Required secrets:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2.

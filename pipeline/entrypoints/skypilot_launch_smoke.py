@@ -22,6 +22,7 @@ SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -40,6 +41,9 @@ _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
 _WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
+
+# OCI distribution tag grammar: leading alnum/_, then up to 127 of [A-Za-z0-9_.-].
+_DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 # Forwarded via task.update_envs; each resolved from .env then process env.
 # Keep in sync with the envs: block in configs/compute/runpod-template.yaml.
@@ -222,6 +226,12 @@ def main(
     """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
     if num_workers < 1:
         raise click.ClickException(f"--num-workers must be >= 1, got {num_workers}")
+
+    if not _DOCKER_TAG_RE.fullmatch(worker_image_tag):
+        raise click.ClickException(
+            f"--worker-image-tag must match OCI tag grammar [A-Za-z0-9_][A-Za-z0-9_.-]{{0,127}}; "
+            f"got {worker_image_tag!r}"
+        )
 
     worker_env = resolve_worker_env(env_file_path)
     if not worker_env:

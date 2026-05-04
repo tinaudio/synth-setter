@@ -845,3 +845,40 @@ class TestNumWorkersFanOut:
         assert result.exit_code != 0
         assert "must be >= 1" in result.output
         mock_sky.launch.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "bad_tag",
+        [
+            "foo:bar",
+            "foo bar",
+            "foo/bar",
+            ".dotleader",
+            "-dashleader",
+            "",
+        ],
+    )
+    def test_invalid_worker_image_tag_rejected(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        bad_tag: str,
+    ) -> None:
+        """`--worker-image-tag` is interpolated into a docker ref; invalid tags must fail before
+        sky.* is touched, not produce surprising image refs like `tinaudio/synth-
+        setter:foo:bar`."""
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--worker-image-tag",
+            bad_tag,
+        )
+        assert result.exit_code != 0
+        assert "--worker-image-tag" in result.output
+        mock_sky.launch.assert_not_called()
