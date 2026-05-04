@@ -87,12 +87,8 @@ name: Test SkyPilot Debug
 #                    that exists in the matrix so triage doesn't require
 #                    re-dispatching the production workflow separately.
 #
-# An OCI sibling of runpod-debug-template.yaml exists at
-# configs/compute/oci-debug-template.yaml — useful when iterating on the
-# OCI launcher path. The matrix below is RunPod-only by default; add an
-# OCI noop entry locally when bringing up new OCI plumbing, but don't
-# merge OCI entries here until they have stable cred-write + sky-check
-# coverage in this workflow.
+# OCI noop coverage lives in test-skypilot-oci-debug.yml; this matrix is
+# RunPod-only by design.
 #
 # Triggers: workflow_dispatch only — RunPod pods are billable. Each
 # dispatch spends one pod per matrix variant. Add a `push` trigger only
