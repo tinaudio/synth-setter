@@ -48,8 +48,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # pull_request: use PR head; dispatch: use input; push: main
-          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.git_ref || 'main' }}
+          # pull_request: use PR head; dispatch: use input; push: triggering SHA.
+          # `github.sha` pins push runs to the commit that fired the workflow so
+          # back-to-back merges don't cause one run to build a later main commit
+          # (and skip the immutable dev-snapshot-<sha> tag for the triggering one).
+          ref: ${{ github.event.pull_request.head.sha || github.event.inputs.git_ref || github.sha }}
 
       # Emits three outputs:
       #   sha         — 40-char commit SHA, baked into the image
