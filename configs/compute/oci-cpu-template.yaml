@@ -7,14 +7,12 @@
 
 resources:
   any_of:
-    - { cloud: oci, instance_type: VM.Standard.E4.Flex, cpus: 4+, memory: 16+ }
-    - { cloud: oci, instance_type: VM.Standard.E5.Flex, cpus: 4+, memory: 16+ }
-    - { cloud: oci, instance_type: VM.Standard.E6.Flex, cpus: 4+, memory: 16+ }
-  cpus: 4+
-  memory: 16+
-  use_spot: false
-  disk_size: 50
-
+    - { cloud: oci, instance_type: VM.Standard.E5.Flex$_4_16, disk_size: 50 }
+    - { cloud: oci, instance_type: VM.Standard.E4.Flex$_4_16, disk_size: 50 }
+    - { cloud: oci, instance_type: VM.Standard.E5.Flex$_2_16, disk_size: 50 }
+    - { cloud: oci, instance_type: VM.Standard.E4.Flex$_2_16, disk_size: 50 }
+    - { cloud: oci, instance_type: VM.Standard.E5.Flex$_2_8, disk_size: 50 }
+    - { cloud: oci, instance_type: VM.Standard.E4.Flex$_2_8, disk_size: 50 }
 # Placeholders. Real values are injected by the launcher via update_envs;
 # WORKER_IMAGE is set per-launch from --worker-image-tag.
 envs:
