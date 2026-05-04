@@ -189,20 +189,20 @@ Gaps are configuration inputs that design docs specify or that standard practice
 
 ### 5.1 Identity & Provenance
 
-| Input                          | Type   | What's Needed                                                               | Reference                   |
-| ------------------------------ | ------ | --------------------------------------------------------------------------- | --------------------------- |
-| `train_wandb_run_id`           | string | `{train_config_id}-{YYYYMMDDTHHMMSSZ}` — structured, reconstructible run ID | storage-provenance-spec §1  |
-| `dataset_config_id` linkage    | string | Explicit link from training config to consumed dataset                      | storage-provenance-spec §2  |
-| `dataset_wandb_run_id` linkage | string | Explicit link to specific dataset run version                               | storage-provenance-spec §2  |
-| `job_type`                     | string | Must be `"training"` in W&B config — currently empty                        | storage-provenance-spec §7  |
-| `github_sha` in `wandb.config` | string | Logged via `log_wandb_provenance()` but not in Hydra config                 | wandb-integration.md gap #3 |
+| Input                          | Type   | What's Needed                                                                  | Reference                   |
+| ------------------------------ | ------ | ------------------------------------------------------------------------------ | --------------------------- |
+| `train_wandb_run_id`           | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` — structured, reconstructible run ID | storage-provenance-spec §1  |
+| `dataset_config_id` linkage    | string | Explicit link from training config to consumed dataset                         | storage-provenance-spec §2  |
+| `dataset_wandb_run_id` linkage | string | Explicit link to specific dataset run version                                  | storage-provenance-spec §2  |
+| `job_type`                     | string | Must be `"training"` in W&B config — currently empty                           | storage-provenance-spec §7  |
+| `github_sha` in `wandb.config` | string | Logged via `log_wandb_provenance()` but not in Hydra config                    | wandb-integration.md gap #3 |
 
 ### 5.2 W&B / Artifact Lineage
 
 | Input                        | Type   | What's Needed                                                    | Reference                   |
 | ---------------------------- | ------ | ---------------------------------------------------------------- | --------------------------- |
 | `logger.wandb.log_model`     | string | `"all"` — uploads every checkpoint immediately (crash-resilient) | training-pipeline.md §6.2   |
-| `logger.wandb.id`            | string | `{train_config_id}-{YYYYMMDDTHHMMSSZ}` instead of null/random    | wandb-integration.md gap #8 |
+| `logger.wandb.id`            | string | `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` instead of null/random | wandb-integration.md gap #8 |
 | `logger.wandb.job_type`      | string | `"training"` instead of empty                                    | storage-provenance-spec §7  |
 | `logger.wandb.resume`        | string | `"allow"` for W&B resume support                                 | training-pipeline.md §5.3   |
 | Dataset `run.use_artifact()` | code   | Lineage link to consumed dataset artifact                        | storage-provenance-spec §5  |

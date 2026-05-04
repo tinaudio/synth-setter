@@ -99,22 +99,22 @@ cp .env.example .env
 make eval EXPERIMENT=surge/flow_simple
 # → Checkpoint auto-downloaded from W&B via ${wandb:...} resolver (cached after)
 # → Predictions, audio, and metrics written to
-#   logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/
+#   logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/
 
 # Or run stages individually:
 make predict EXPERIMENT=surge/flow_simple
 make render \
-  PRED_DIR=logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/predictions/ \
-  OUTPUT_DIR=logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/audio/
+  PRED_DIR=logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/predictions/ \
+  OUTPUT_DIR=logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/audio/
 make metrics \
-  AUDIO_DIR=logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/audio/ \
-  OUTPUT_DIR=logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/metrics/
+  AUDIO_DIR=logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/audio/ \
+  OUTPUT_DIR=logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/metrics/
 
 # 3. (Optional) Upload artifacts to R2
 make upload-eval
 # → rclone sync \
-#     logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/ \
-#     r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022Z/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/ \
+#     logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/ \
+#     r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/ \
 #     --checksum
 ```
 
@@ -227,7 +227,7 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 **Key behaviors:**
 
-- Dataset path resolved from `data.dataset_root` (default: `${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z`, CLI override for cluster)
+- Dataset path resolved from `data.dataset_root` (default: `${paths.data_dir}/surge_simple/surge_simple-20260312T143022500Z`, CLI override for cluster)
 - If `data.r2_path` is explicitly set, `SurgeDataModule.prepare_data()` syncs from R2 before loading
 - Checkpoint path supports `${wandb:...}` resolver — auto-downloads from W&B artifacts to local cache
 - Output directory: `${paths.output_dir}/predictions` (see `configs/callbacks/prediction_writer.yaml`)
@@ -287,7 +287,7 @@ When `data.r2_path` is explicitly provided (via CLI override or experiment confi
 ```yaml
 # configs/data/surge_simple.yaml — no r2_path, no env vars for paths
 _target_: src.data.surge_datamodule.SurgeDataModule
-dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z  # {dataset_config_id}/{dataset_wandb_run_id}
+dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022500Z  # {dataset_config_id}/{dataset_wandb_run_id}
 # r2_path: deliberately absent — must be specified explicitly when needed
 batch_size: 128
 num_workers: 11
@@ -297,12 +297,12 @@ To use R2, pass it explicitly:
 
 ```bash
 # CLI override — explicit, visible, no hidden state
-python src/eval.py data.r2_path=r2:intermediate-data/data/surge_simple/surge_simple-20260312T143022Z/ ...
+python src/eval.py data.r2_path=r2:intermediate-data/data/surge_simple/surge_simple-20260312T143022500Z/ ...
 
 # Or in an experiment config that opts in
 # configs/experiment/surge/flow_simple.yaml
 data:
-  r2_path: r2:intermediate-data/data/surge_simple/surge_simple-20260312T143022Z/
+  r2_path: r2:intermediate-data/data/surge_simple/surge_simple-20260312T143022500Z/
 ```
 
 Behavior:
@@ -375,8 +375,8 @@ After metrics, optionally upload all eval outputs to R2:
 ```bash
 make upload-eval
 # rclone sync \
-#   logs/eval/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/ \
-#   r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022Z/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/ \
+#   logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/ \
+#   r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/ \
 #   --checksum
 ```
 
@@ -386,13 +386,13 @@ Not automatic — explicit `make` target. Toggle via Hydra config or CLI flag.
 
 ```bash
 # All evals for a given training dataset generation run
-rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022Z/
+rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/
 
 # All evals of a specific training run
-rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022Z/flow_simple/flow_simple-20260315T091500Z/
+rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/
 
 # A specific eval run (fully qualified 6-segment path)
-rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022Z/flow_simple/flow_simple-20260315T091500Z/surge_simple/surge_simple-20260320T160000Z/
+rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/
 ```
 
 ### 6.4 W&B Eval Lineage
@@ -408,11 +408,11 @@ eval_run = wandb.init(
     job_type="evaluation",
     config={
         "dataset_config_id": "surge_simple",
-        "dataset_wandb_run_id": "surge_simple-20260312T143022Z",
+        "dataset_wandb_run_id": "surge_simple-20260312T143022500Z",
         "train_config_id": "flow_simple",
-        "train_wandb_run_id": "flow_simple-20260315T091500Z",
+        "train_wandb_run_id": "flow_simple-20260315T091500250Z",
         "eval_config_id": "surge_simple",
-        "eval_wandb_run_id": "surge_simple-20260320T160000Z",
+        "eval_wandb_run_id": "surge_simple-20260320T160000750Z",
         "github_sha": os.environ.get("GITHUB_SHA", "local"),
     },
 )
@@ -429,9 +429,9 @@ eval_artifact = wandb.Artifact(
     "eval-surge_simple", type="eval-results"
 )
 eval_artifact.add_reference(
-    "s3://intermediate-data/eval/surge_simple/surge_simple-20260312T143022Z/"
-    "flow_simple/flow_simple-20260315T091500Z/"
-    "surge_simple/surge_simple-20260320T160000Z/"
+    "s3://intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/"
+    "flow_simple/flow_simple-20260315T091500250Z/"
+    "surge_simple/surge_simple-20260320T160000750Z/"
 )
 eval_run.log_artifact(eval_artifact)
 eval_run.finish()
@@ -440,7 +440,7 @@ eval_run.finish()
 This creates a lineage graph in W&B:
 
 ```
-data-surge_simple:v2 ──→ training run flow_simple-20260315T091500Z ──→ model-flow_simple:latest
+data-surge_simple:v2 ──→ training run flow_simple-20260315T091500250Z ──→ model-flow_simple:latest
                                                                                │
 data-surge_simple:v2 ──→ eval run (job_type=evaluation) ◄─────────────────────┘
                                   │
@@ -605,8 +605,8 @@ This section consolidates every configuration and environment behavior change in
 
 | Concern                      | Proposed mechanism                                                                                                                                                       | Where defined                                 | Portable? | Change from current                              |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | --------- | ------------------------------------------------ |
-| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z` (paths convention + run ID)                                                                 | `configs/data/surge_simple.yaml`              | Yes       | Hardcoded → paths convention + run ID            |
-| **Dataset path override**    | CLI: `data.dataset_root=/cluster/path/surge_simple-20260312T143022Z/`                                                                                                    | Command line                                  | Yes       | Implicit → explicit                              |
+| **Dataset path**             | `dataset_root: ${paths.data_dir}/surge_simple/surge_simple-20260312T143022500Z` (paths convention + run ID)                                                              | `configs/data/surge_simple.yaml`              | Yes       | Hardcoded → paths convention + run ID            |
+| **Dataset path override**    | CLI: `data.dataset_root=/cluster/path/surge_simple-20260312T143022500Z/`                                                                                                 | Command line                                  | Yes       | Implicit → explicit                              |
 | **Checkpoint resolution**    | `ckpt_path: ???` (base), pinned in experiment configs                                                                                                                    | `configs/eval.yaml` + `configs/experiment/`   | Yes       | Shell script → Hydra config                      |
 | **Checkpoint: ad-hoc**       | CLI: `ckpt_path=./local/best.ckpt`                                                                                                                                       | Command line                                  | No        | Same as today but without shell wrapper          |
 | **Checkpoint: reproducible** | `ckpt_path: ${wandb:tinaudio/synth-setter/model-flow_simple:latest}` in experiment config                                                                                | `configs/experiment/surge/flow_simple.yaml`   | Yes       | **New** — portable, pinned                       |
@@ -659,12 +659,12 @@ Cloud evaluation runs as `MODE=eval` (planned — [#410](https://github.com/tina
 
 **3. Dataset access (§6.3)**
 
-|                     | Current                    | Proposed                                                                                                      |
-| ------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Local data**      | Hardcoded path, must exist | `${paths.data_dir}/surge_simple/surge_simple-20260312T143022Z` ({config_id}/{wandb_run_id}), override via CLI |
-| **Remote data**     | Not supported              | `r2_path` opt-in triggers auto-download                                                                       |
-| **Risk eliminated** | —                          | "Data is on the cluster" — R2 makes it available everywhere                                                   |
-| **Trade-off**       | —                          | First download of a 100GB dataset takes time; cached after that                                               |
+|                     | Current                    | Proposed                                                                                                         |
+| ------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Local data**      | Hardcoded path, must exist | `${paths.data_dir}/surge_simple/surge_simple-20260312T143022500Z` ({config_id}/{wandb_run_id}), override via CLI |
+| **Remote data**     | Not supported              | `r2_path` opt-in triggers auto-download                                                                          |
+| **Risk eliminated** | —                          | "Data is on the cluster" — R2 makes it available everywhere                                                      |
+| **Trade-off**       | —                          | First download of a 100GB dataset takes time; cached after that                                                  |
 
 **4. Display handling (§7.1)**
 

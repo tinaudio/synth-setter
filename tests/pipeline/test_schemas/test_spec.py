@@ -330,7 +330,7 @@ class TestMaterializeSpec:
         config_id = DatasetConfigId("ci-smoke-test")
         spec = materialize_spec(config, config_id)
 
-        assert spec.run_id == "ci-smoke-test-20260328T120000Z"
+        assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
         assert spec.created_at == FIXED_NOW
         assert spec.code_version == "abc123def456"
         assert spec.is_repo_dirty is False
@@ -395,7 +395,7 @@ class TestMaterializeSpec:
         config_id = DatasetConfigId("ci-smoke-test")
         spec = materialize_spec(config, config_id)
 
-        assert spec.run_id == "ci-smoke-test-20260328T120000Z"
+        assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
 
     def test_created_at_is_utc_iso_format(
         self,

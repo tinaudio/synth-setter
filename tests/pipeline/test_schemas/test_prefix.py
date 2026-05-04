@@ -17,10 +17,24 @@ class TestMakeDatasetWandbRunId:
     """Tests for make_dataset_wandb_run_id."""
 
     def test_make_run_id_fixed_timestamp_format(self):
-        """Fixed UTC timestamp produces the expected run ID string."""
+        """Fixed UTC timestamp (microsecond=0) produces the expected run ID string."""
         ts = datetime(2026, 3, 13, 10, 0, 0, tzinfo=timezone.utc)
         result = make_dataset_wandb_run_id(DatasetConfigId("surge-simple-480k-10k"), timestamp=ts)
-        assert result == "surge-simple-480k-10k-20260313T100000Z"
+        assert result == "surge-simple-480k-10k-20260313T100000000Z"
+
+    def test_make_run_id_includes_millisecond_field(self):
+        """A timestamp with microseconds produces a 3-digit millisecond suffix."""
+        ts = datetime(2026, 5, 3, 13, 36, 33, 456789, tzinfo=timezone.utc)
+        result = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts)
+        assert result == "cfg-20260503T133633456Z"
+
+    def test_make_run_id_milliseconds_disambiguate_within_same_second(self):
+        """Two timestamps within the same wall-clock second produce different IDs."""
+        ts1 = datetime(2026, 3, 13, 10, 0, 0, 100_000, tzinfo=timezone.utc)
+        ts2 = datetime(2026, 3, 13, 10, 0, 0, 900_000, tzinfo=timezone.utc)
+        id1 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts1)
+        id2 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts2)
+        assert id1 != id2
 
     @patch("pipeline.schemas.prefix.datetime")
     def test_make_run_id_default_timestamp_is_utc(self, mock_datetime):
@@ -29,7 +43,7 @@ class TestMakeDatasetWandbRunId:
         mock_datetime.side_effect = lambda *a, **kw: datetime(*a, **kw)
         result = make_dataset_wandb_run_id(DatasetConfigId("test-config"))
         mock_datetime.now.assert_called_once_with(timezone.utc)
-        assert result == "test-config-20260615T123045Z"
+        assert result == "test-config-20260615T123045000Z"
 
     def test_make_run_id_rejects_naive_timestamp(self):
         """Naive datetime (no tzinfo) raises ValueError."""
@@ -70,9 +84,9 @@ class TestMakeR2Prefix:
         """Prefix matches the expected data/<config_id>/<run_id>/ pattern."""
         result = make_r2_prefix(
             DatasetConfigId("surge-simple-480k-10k"),
-            DatasetRunId("surge-simple-480k-10k-20260313T100000Z"),
+            DatasetRunId("surge-simple-480k-10k-20260313T100000000Z"),
         )
-        assert result == "data/surge-simple-480k-10k/surge-simple-480k-10k-20260313T100000Z/"
+        assert result == "data/surge-simple-480k-10k/surge-simple-480k-10k-20260313T100000000Z/"
 
     def test_make_r2_prefix_trailing_slash(self):
         """Prefix always ends with a trailing slash."""

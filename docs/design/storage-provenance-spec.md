@@ -13,18 +13,18 @@ ______________________________________________________________________
 
 ## 1. IDs
 
-| ID                     | Construction                                                   | Source                             | Example                        |
-| ---------------------- | -------------------------------------------------------------- | ---------------------------------- | ------------------------------ |
-| `dataset_config_id`    | Config filename (stem)                                         | `configs/dataset/{id}.yaml`        | `diva-v1`                      |
-| `dataset_wandb_run_id` | Configurable, default `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022Z`     |
-| `train_config_id`      | Config filename (stem)                                         | `configs/experiment/.../{id}.yaml` | `flow-simple`                  |
-| `train_wandb_run_id`   | Configurable, default `{train_config_id}-{YYYYMMDDTHHMMSSZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500Z` |
-| `eval_config_id`       | Eval dataset config filename (stem)                            | `configs/dataset/{id}.yaml`        | `nsynth-v1`                    |
-| `eval_wandb_run_id`    | Configurable, default `{eval_config_id}-{YYYYMMDDTHHMMSSZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000Z`   |
+| ID                     | Construction                                                      | Source                             | Example                           |
+| ---------------------- | ----------------------------------------------------------------- | ---------------------------------- | --------------------------------- |
+| `dataset_config_id`    | Config filename (stem)                                            | `configs/dataset/{id}.yaml`        | `diva-v1`                         |
+| `dataset_wandb_run_id` | Configurable, default `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022500Z`     |
+| `train_config_id`      | Config filename (stem)                                            | `configs/experiment/.../{id}.yaml` | `flow-simple`                     |
+| `train_wandb_run_id`   | Configurable, default `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500250Z` |
+| `eval_config_id`       | Eval dataset config filename (stem)                               | `configs/dataset/{id}.yaml`        | `nsynth-v1`                       |
+| `eval_wandb_run_id`    | Configurable, default `{eval_config_id}-{YYYYMMDDTHHMMSSsssZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000750Z`   |
 
 - `*_config_id` = filename of the YAML config, without extension
 - `*_wandb_run_id` = the W&B run ID, set via `wandb.init(id=...)`. Default convention is `{*_config_id}-{timestamp}`, but the path format is agnostic to how the ID is generated.
-- Default timestamp format: `YYYYMMDDTHHMMSSZ` (seconds, UTC, filesystem-safe)
+- Default timestamp format: `YYYYMMDDTHHMMSSsssZ` (millisecond precision, UTC, filesystem-safe). The `sss` suffix is a zero-padded 3-digit millisecond field; it disambiguates run IDs minted within the same wall-clock second by concurrent launchers.
 - W&B run ID limit: 64 characters. Keep config filenames short.
 
 ______________________________________________________________________

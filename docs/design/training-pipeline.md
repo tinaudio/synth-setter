@@ -510,13 +510,13 @@ ______________________________________________________________________
 
 ## Appendix A: Glossary
 
-| Term                     | Definition                                                                                                                                                             |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`train_config_id`**    | Config filename stem for the training experiment. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                               |
-| **`train_wandb_run_id`** | W&B run ID for a specific training run. Default format: `{train_config_id}-{YYYYMMDDTHHMMSSZ}`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
-| **durable checkpoint**   | A checkpoint persisted outside the training pod as a W&B model artifact.                                                                                               |
-| **promotion**            | Converting a trained model artifact into a GitHub Release / production alias. See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md).     |
-| **RunPod launcher**      | Thin script that creates one training pod — not a backend abstraction.                                                                                                 |
+| Term                     | Definition                                                                                                                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`train_config_id`**    | Config filename stem for the training experiment. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                          |
+| **`train_wandb_run_id`** | W&B run ID for a specific training run. Default format: `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
+| **durable checkpoint**   | A checkpoint persisted outside the training pod as a W&B model artifact.                                                                                                                          |
+| **promotion**            | Converting a trained model artifact into a GitHub Release / production alias. See [promotion-pipeline-reference.md](../reference/promotion-pipeline-reference.md).                                |
+| **RunPod launcher**      | Thin script that creates one training pod — not a backend abstraction.                                                                                                                            |
 
 ## Appendix B: Current File Inventory
 

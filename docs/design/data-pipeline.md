@@ -88,17 +88,17 @@ DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml python -m pipeline.ent
 
 # --- Target state (distributed pipeline, not yet implemented) ---
 # python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
-# → Created run surge-simple-480k-10k-20260313T100000Z
+# → Created run surge-simple-480k-10k-20260313T100000123Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
 #
-# python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
+# python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 # → Valid: 44/48  Missing: 2  Quarantined: 2
 #
-# python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000Z
+# python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 4 shards missing, launching 1 worker
 #
-# python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000Z
+# python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 48/48 valid. output_format: hdf5
 # → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
 # → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
@@ -111,8 +111,8 @@ Make targets are thin aliases for convenience:
 
 ```bash
 make generate ARGS="--config configs/dataset/surge-simple-480k-10k.yaml --workers 10"
-make status ARGS="--run-id surge-simple-480k-10k-20260313T100000Z"
-make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000Z"
+make status ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
+make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 ```
 
 ## 3. Goals, Non-Goals & Design Principles
@@ -282,7 +282,7 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 > R2 root path follows [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout). Pipeline-specific internal structure (workers/, lifecycle markers) is additive detail.
 
 ```
-data/{dataset_config_id}/{dataset_wandb_run_id}/   # e.g. data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022Z/
+data/{dataset_config_id}/{dataset_wandb_run_id}/   # e.g. data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/
   shards/                              # Written ONLY by finalize (promoted from staging)
     shard-000000.h5                    # Canonical finalized shards
     shard-000001.h5
@@ -572,9 +572,9 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 `make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for `.h5` + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
 
 ```
-$ python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000Z
+$ python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 
-Run: surge-simple-480k-10k-20260313T100000Z
+Run: surge-simple-480k-10k-20260313T100000123Z
 Spec shards: 48
 Staged (valid):   44
 Missing:           2
@@ -1228,7 +1228,7 @@ class DatasetPipelineSpec(BaseModel):
     """Frozen runtime specification materialized from DatasetConfig."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    run_id: DatasetRunId    # unique run ID: {config_id}-{YYYYMMDDTHHMMSSZ}
+    run_id: DatasetRunId    # unique run ID: {config_id}-{YYYYMMDDTHHMMSSsssZ}
     r2_prefix: R2Prefix     # R2 storage path: data/{config_id}/{run_id}/
     created_at: datetime    # UTC, timezone-aware
     code_version: str       # git commit SHA
@@ -1373,7 +1373,7 @@ On first `generate`:
 
 1. Load YAML, validate against Pydantic `DatasetConfig` (strict mode)
 2. Pin `renderer_version` to `SURGE_XT_RENDERER_VERSION` (the constant in `pipeline/schemas/spec.py`, kept in lockstep with the `dev-snapshot` image's `SURGE_GIT_REF`). The launcher path stays interpreter-only — the worker re-derives via `extract_renderer_version` (`Version` from `moduleinfo.json` on Linux, `CFBundleShortVersionString` from `Info.plist` on macOS, pedalboard fallback if neither is present) and refuses to render on mismatch.
-3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`
+3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision)
 4. Materialize `DatasetPipelineSpec` — expand config into per-shard specs (seeds, filenames) and capture runtime state (git SHA, pinned renderer version, num_params)
 5. Upload spec + source config to R2
 6. Proceed with reconciliation
@@ -1386,11 +1386,11 @@ On first `generate`:
 
 > ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).
 
-| Pipeline concept          | Storage spec concept                               | Example                                                              |
-| ------------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
-| Config filename (no ext)  | `dataset_config_id`                                | `surge-simple-480k-10k`                                              |
-| Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022Z`                             |
-| R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022Z/` |
+| Pipeline concept          | Storage spec concept                               | Example                                                                 |
+| ------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| Config filename (no ext)  | `dataset_config_id`                                | `surge-simple-480k-10k`                                                 |
+| Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022500Z`                             |
+| R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/` |
 
 Config filenames live in `configs/dataset/` and use the pattern `{name}-{total_train_samples}-{shard_size}.yaml`. The filename without extension is the `dataset_config_id`.
 
@@ -1462,7 +1462,7 @@ configs/
 | **Virtual dataset**        | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                                                                                                       |
 | **Input spec**             | JSON file (`input_spec.json`) defining the frozen input specification for a run — shard specs, seeds, shapes, splits, renderer version. Written once on first `generate`, never modified.                                                                                                                          |
 | **dataset_config_id**      | Stable identifier for a dataset configuration, derived from the config filename (without extension). Format: `{name}-{total_train_samples}-{shard_size}`. Example: `surge-simple-480k-10k`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                 |
-| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`. Example: `surge-simple-480k-10k-20260312T143022Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                                            |
+| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). Example: `surge-simple-480k-10k-20260312T143022500Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                              |
 | **Shard ID**               | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                                                                                                       |
 | **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                          |
 | **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                       |

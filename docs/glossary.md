@@ -63,9 +63,9 @@ Project terminology for synth-setter. Grouped by domain.
 | Term                     | Definition                                                                                                                                                                                        |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **dataset_config_id**    | Stable identifier for a dataset configuration, derived from the config YAML filename stem. Example: `surge-simple-480k-10k`. See [storage-provenance-spec.md](design/storage-provenance-spec.md). |
-| **dataset_wandb_run_id** | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSZ}`. Example: `surge-simple-480k-10k-20260312T143022Z`.                                                  |
+| **dataset_wandb_run_id** | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). Example: `surge-simple-480k-10k-20260312T143022500Z`.                    |
 | **train_config_id**      | Config filename stem for a training experiment. Example: `flow-simple`.                                                                                                                           |
-| **train_wandb_run_id**   | W&B run ID for a specific training run. Format: `{train_config_id}-{YYYYMMDDTHHMMSSZ}`.                                                                                                           |
+| **train_wandb_run_id**   | W&B run ID for a specific training run. Format: `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision).                                                                                |
 | **worker_id**            | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                         |
 
 ## Infrastructure & Tools
