@@ -18,11 +18,10 @@
 
 resources:
   cloud: oci
-  # Always-Free shape so noop launches against fresh tenancies with zero
-  # paid compute quota. The prod template uses cpus/memory floors instead.
-  instance_type: VM.Standard.E2.1.Micro
+  cpus: 4+
+  memory: 16+
   use_spot: false
-  disk_size: 30
+  disk_size: 50
 
 setup: |
   set -euo pipefail
