@@ -19,6 +19,7 @@ from click.testing import CliRunner
 from pipeline.entrypoints.skypilot_launch_smoke import (
     _WORKER_ENV_KEYS,
     _WORKER_SPEC_URI_ENV,
+    _override_image_id,
     load_worker_env,
     main,
 )
@@ -882,3 +883,98 @@ class TestNumWorkersFanOut:
         assert result.exit_code != 0
         assert "--worker-image-tag" in result.output
         mock_sky.launch.assert_not_called()
+
+
+class TestOverrideImageId:
+    """Per-backend `image_id` mutation in `_override_image_id`.
+
+    Direct unit tests on the helper, independent of the CLI path. RunPod (and any non-OCI cloud)
+    accepts ``image_id: docker:<image>``; OCI's backend rejects it and runs the worker via a
+    sub-docker invocation in the YAML's run: block, so OCI Resources must be left untouched.
+    """
+
+    @staticmethod
+    def _make_resource(cloud: object) -> MagicMock:
+        """Fake `sky.Resources` with a `.cloud` attr and a `.copy()` that records image_id."""
+        res = MagicMock(spec=["cloud", "copy"])
+        res.cloud = cloud
+
+        def _copy(**kwargs: Any) -> MagicMock:
+            new = MagicMock(spec=["cloud", "image_id"])
+            new.cloud = cloud
+            new.image_id = kwargs.get("image_id")
+            return new
+
+        res.copy.side_effect = _copy
+        return res
+
+    @staticmethod
+    def _make_task(resources: list[Any]) -> MagicMock:
+        """Fake `sky.Task` carrying `resources` (as a list, so `type(...)` is `list`)."""
+        task = MagicMock(spec=["resources", "set_resources"])
+        task.resources = list(resources)
+        return task
+
+    def test_non_oci_resource_gets_image_id_overridden(self) -> None:
+        """A non-OCI Resources entry has its `image_id` rewritten to `docker:<worker_image>`."""
+        runpod_cloud = MagicMock(name="RunPodCloud")
+        res = self._make_resource(runpod_cloud)
+        task = self._make_task([res])
+
+        _override_image_id(task, "tinaudio/synth-setter:test-tag")
+
+        res.copy.assert_called_once_with(image_id="docker:tinaudio/synth-setter:test-tag")
+        task.set_resources.assert_called_once()
+        new_resources = list(task.set_resources.call_args.args[0])
+        assert len(new_resources) == 1
+        assert new_resources[0].image_id == "docker:tinaudio/synth-setter:test-tag"
+
+    def test_multiple_non_oci_resources_all_get_image_id_overridden(self) -> None:
+        """Every entry in a multi-Resources alt-set (RunPod has 7) is mutated, not just the
+        first."""
+        runpod_cloud = MagicMock(name="RunPodCloud")
+        resources = [self._make_resource(runpod_cloud) for _ in range(3)]
+        task = self._make_task(resources)
+
+        _override_image_id(task, "tinaudio/synth-setter:test-tag")
+
+        for res in resources:
+            res.copy.assert_called_once_with(image_id="docker:tinaudio/synth-setter:test-tag")
+        new_resources = list(task.set_resources.call_args.args[0])
+        assert len(new_resources) == 3
+        assert all(r.image_id == "docker:tinaudio/synth-setter:test-tag" for r in new_resources)
+
+    def test_oci_resource_left_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An OCI Resources entry is passed through unchanged — no `.copy(image_id=...)`, and
+        `set_resources` is not called when nothing mutated."""
+        import sky.clouds
+
+        class FakeOCI:
+            pass
+
+        monkeypatch.setattr(sky.clouds, "OCI", FakeOCI, raising=False)
+
+        oci_res = self._make_resource(FakeOCI())
+        task = self._make_task([oci_res])
+
+        _override_image_id(task, "tinaudio/synth-setter:test-tag")
+
+        oci_res.copy.assert_not_called()
+        task.set_resources.assert_not_called()
+
+    def test_does_not_crash_when_oci_extras_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When `skypilot[oci]` extras aren't installed (e.g. RunPod-only dev-snapshot images), the
+        lazy `from sky.clouds import OCI` raises ImportError; the function falls back to treating
+        every Resource as non-OCI and still mutates them."""
+        import sky.clouds
+
+        monkeypatch.delattr(sky.clouds, "OCI", raising=False)
+
+        runpod_cloud = MagicMock(name="RunPodCloud")
+        res = self._make_resource(runpod_cloud)
+        task = self._make_task([res])
+
+        _override_image_id(task, "tinaudio/synth-setter:test-tag")
+
+        res.copy.assert_called_once_with(image_id="docker:tinaudio/synth-setter:test-tag")
+        task.set_resources.assert_called_once()

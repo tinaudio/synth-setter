@@ -44,6 +44,8 @@ on:
       - "scripts/docker_entrypoint.py"
       - "scripts/run-linux-vst-headless.sh"
       - "scripts/skypilot_worker_run.sh"
+      - "scripts/skypilot_worker_bootstrap.sh"
+      - "scripts/skypilot_write_provider_creds.sh"
       - "pipeline/entrypoints/skypilot_launch_smoke.py"
       - ".github/workflows/test-dataset-generation.yml"
       - "requirements*.txt"
