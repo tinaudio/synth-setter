@@ -177,7 +177,7 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v "/tmp/run-metadata-local:/run-metadata" \
+            -v "/tmp/run-metadata-${{ matrix.provider }}:/run-metadata" \
             -e CONFIG_PATH \
             -e RCLONE_CONFIG_R2_TYPE=s3 \
             -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
@@ -199,7 +199,7 @@ jobs:
                 --spec /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \
-            2>&1 | tee /tmp/run-metadata-local/generate.log
+            2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}/generate.log"
 
       # Launcher submits via sky.launch + stream_and_get; job-level
       # timeout-minutes: 60 is the safety bound. Cred-write is delegated to
