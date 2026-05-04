@@ -59,21 +59,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Compute the provider matrix at runtime. GH rejects `matrix.<x>` inside a
-  # job-level `if:`, so gating moves into this job's script and downstream
-  # jobs consume `generate_matrix` / `validate_matrix` via `fromJSON()`.
+  # Compute the provider list at runtime. Provider-specific values
+  # (template, cluster prefix, OCI image tag) are derived from the provider
+  # name in the consuming jobs via expressions, so the only thing this job
+  # has to publish is the JSON array.
   #
   # Policy:
   #   * pull_request (same repo) → OCI only
   #   * pull_request (fork)      → empty (forks can't read secrets)
   #   * workflow_dispatch        → respect `inputs.provider` (all|runpod|oci)
+  #
+  # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
   setup:
-    name: Compute provider matrix
+    name: Compute provider list
     runs-on: ubuntu-latest
     outputs:
-      generate_matrix: ${{ steps.matrix.outputs.generate_matrix }}
-      validate_matrix: ${{ steps.matrix.outputs.validate_matrix }}
-      has_jobs: ${{ steps.matrix.outputs.has_jobs }}
+      providers: ${{ steps.matrix.outputs.providers }}
     steps:
       - id: matrix
         env:
@@ -83,53 +84,19 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-
-          providers=()
-          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
-            if [[ "${PR_HEAD_REPO}" == "${REPO}" ]]; then
-              providers=("oci")
-            fi
+          if [[ "${EVENT_NAME}" == "pull_request" && "${PR_HEAD_REPO}" == "${REPO}" ]]; then
+            providers='["oci"]'
           elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${PROVIDER_INPUT}" in
-              runpod) providers=("runpod") ;;
-              oci)    providers=("oci") ;;
-              *)      providers=("runpod" "oci") ;;
+              runpod) providers='["runpod"]' ;;
+              oci)    providers='["oci"]' ;;
+              *)      providers='["runpod","oci"]' ;;
             esac
-          fi
-
-          runpod_entry='{"provider":"runpod","template":"configs/compute/runpod-template.yaml","cluster_prefix":"synth-setter-smoke-runpod","oci_image_tag":""}'
-          oci_entry='{"provider":"oci","template":"configs/compute/oci-cpu-template.yaml","cluster_prefix":"synth-setter-smoke-oci","oci_image_tag":"skypilot:cpu-ubuntu-2204"}'
-
-          gen_entries=()
-          val_entries=()
-          if (( ${#providers[@]} > 0 )); then
-            for p in "${providers[@]}"; do
-              case "${p}" in
-                runpod) gen_entries+=("${runpod_entry}") ;;
-                oci)    gen_entries+=("${oci_entry}") ;;
-              esac
-              val_entries+=("\"${p}\"")
-            done
-          fi
-
-          gen_json="[$(IFS=,; echo "${gen_entries[*]:-}")]"
-          val_json="[$(IFS=,; echo "${val_entries[*]:-}")]"
-
-          if (( ${#providers[@]} > 0 )); then
-            has_jobs=true
           else
-            has_jobs=false
+            providers='[]'
           fi
-
-          {
-            echo "generate_matrix=${gen_json}"
-            echo "validate_matrix=${val_json}"
-            echo "has_jobs=${has_jobs}"
-          } >> "${GITHUB_OUTPUT}"
-
-          echo "providers: ${providers[*]:-<none>}"
-          echo "generate_matrix: ${gen_json}"
-          echo "validate_matrix: ${val_json}"
+          echo "providers=${providers}" >> "${GITHUB_OUTPUT}"
+          echo "providers: ${providers}"
 
   # Matrix over the providers selected by `setup`. Each cell exercises the
   # same provider-neutral launcher (pipeline.entrypoints.skypilot_launch_smoke)
@@ -140,13 +107,12 @@ jobs:
   generate:
     name: Launch generate_dataset on ${{ matrix.provider }} via SkyPilot
     needs: setup
-    if: needs.setup.outputs.has_jobs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.setup.outputs.generate_matrix) }}
+        provider: ${{ fromJSON(needs.setup.outputs.providers) }}
     env:
       DATASET_CONFIG: >-
         ${{
@@ -171,15 +137,13 @@ jobs:
       # timeout-minutes: 60 is the safety bound. Cred-write is delegated to
       # scripts/skypilot_write_provider_creds.sh (umask 077; mode 600 on
       # every cred file). R2/W&B secrets land in container env via -e flags
-      # (no .env on disk). The runtime `pip install skypilot[oci]` bridge
-      # stays in until dev-snapshot rebuilds against the requirements bump
-      # in this PR; follow-up PR removes it.
+      # (no .env on disk).
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         env:
           PROVIDER: ${{ matrix.provider }}
-          TEMPLATE: ${{ matrix.template }}
-          CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
-          OCI_IMAGE_TAG: ${{ matrix.oci_image_tag }}
+          TEMPLATE: configs/compute/${{ matrix.provider == 'oci' && 'oci-cpu' || matrix.provider }}-template.yaml
+          CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
+          OCI_IMAGE_TAG: ${{ matrix.provider == 'oci' && 'skypilot:cpu-ubuntu-2204' || '' }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
@@ -228,10 +192,6 @@ jobs:
               ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
               bash scripts/skypilot_write_provider_creds.sh
               if [[ "$PROVIDER" == "oci" ]]; then
-                if ! python -c "import oci" 2>/dev/null; then
-                  echo "[oci-bridge] dev-snapshot lacks oci sdk; installing skypilot[oci] at runtime"
-                  pip install --quiet "skypilot[oci]==0.12.0" || { echo "::error::oci bridge install failed" >&2; exit 1; }
-                fi
                 sky check oci
               fi
               python -m pipeline.entrypoints.skypilot_launch_smoke \
@@ -273,13 +233,13 @@ jobs:
   validate-spec:
     name: Validate ${{ matrix.provider }} spec structure
     needs: [setup, generate]
-    if: needs.setup.outputs.has_jobs == 'true' && !cancelled()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
-        provider: ${{ fromJSON(needs.setup.outputs.validate_matrix) }}
+        provider: ${{ fromJSON(needs.setup.outputs.providers) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -297,13 +257,13 @@ jobs:
   validate-shard:
     name: Validate ${{ matrix.provider }} shards
     needs: [setup, generate]
-    if: needs.setup.outputs.has_jobs == 'true' && !cancelled()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        provider: ${{ fromJSON(needs.setup.outputs.validate_matrix) }}
+        provider: ${{ fromJSON(needs.setup.outputs.providers) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6

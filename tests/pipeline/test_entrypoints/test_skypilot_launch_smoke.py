@@ -961,20 +961,3 @@ class TestOverrideImageId:
 
         oci_res.copy.assert_not_called()
         task.set_resources.assert_not_called()
-
-    def test_does_not_crash_when_oci_extras_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When `skypilot[oci]` extras aren't installed (e.g. RunPod-only dev-snapshot images), the
-        lazy `from sky.clouds import OCI` raises ImportError; the function falls back to treating
-        every Resource as non-OCI and still mutates them."""
-        import sky.clouds
-
-        monkeypatch.delattr(sky.clouds, "OCI", raising=False)
-
-        runpod_cloud = MagicMock(name="RunPodCloud")
-        res = self._make_resource(runpod_cloud)
-        task = self._make_task([res])
-
-        _override_image_id(task, "tinaudio/synth-setter:test-tag")
-
-        res.copy.assert_called_once_with(image_id="docker:tinaudio/synth-setter:test-tag")
-        task.set_resources.assert_called_once()

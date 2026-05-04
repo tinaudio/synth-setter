@@ -296,22 +296,13 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
     a sub-docker invocation inside the YAML's run: block and consumes WORKER_IMAGE from env, so
     OCI Resources are left untouched here.
     """
-    # Lazy-import: the RunPod CI cell runs this launcher inside a dev-snapshot
-    # image that doesn't always carry `skypilot[oci]` extras (the OCI matrix
-    # cell pip-installs the bridge at runtime, RunPod doesn't). Importing at
-    # module level would break the RunPod cell on those images.
-    try:
-        from sky.clouds import OCI as SkyOCI
-
-        oci_cls: type | None = SkyOCI
-    except ImportError:
-        oci_cls = None
+    from sky.clouds import OCI
 
     docker_ref = f"docker:{worker_image}"
     new_resources: list[sky.Resources] = []
     mutated = False
     for res in task.resources:
-        if oci_cls is not None and isinstance(res.cloud, oci_cls):
+        if isinstance(res.cloud, OCI):
             new_resources.append(res)
             continue
         new_resources.append(res.copy(image_id=docker_ref))
