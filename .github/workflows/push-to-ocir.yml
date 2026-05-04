@@ -37,7 +37,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.OCIR_REGION_KEY }}.ocir.io
-          username: ${{ secrets.OCIR_TENANCY_NAMESPACE }}/${{ secrets.OCIR_USERNAME }}
+          username: ${{ secrets.OCIR_USERNAME }}
           password: ${{ secrets.OCIR_TOKEN }}
 
       - name: Pull, retag, push hello-world
