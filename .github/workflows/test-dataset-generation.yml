@@ -1,13 +1,27 @@
 name: Test Dataset Generation
 
-# Smoke test for the SkyPilot launcher (pipeline.entrypoints.skypilot_launch_smoke).
-# The provider matrix is computed at runtime by the `setup` job (see its `Policy:`
-# block): same-repo PR → OCI only; fork PR → empty (no secrets); workflow_dispatch
-# → respects `inputs.provider` (all/runpod/oci). See
-# docs/design/skypilot-compute-integration.md.
+# Smoke test for the data-pipeline. Two execution modes share the same
+# matrix shape and the same `validate-spec` / `validate-shard` downstream:
+#
+#   * `local`  — runs `pipeline.ci.materialize_spec` + `docker_entrypoint.py
+#     generate_dataset` directly inside the dev-snapshot container on the
+#     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). PR
+#     default — fast and free, but skips the launcher code path. Should be
+#     graduated to SkyPilot's `local` cloud (new local-template.yaml) so
+#     all three providers go through the same launcher — tracked in #806.
+#   * `runpod` / `oci` — invoke `pipeline.entrypoints.skypilot_launch_smoke`
+#     against the matching `configs/compute/*-template.yaml`. Manual dispatch
+#     only. See docs/design/skypilot-compute-integration.md.
+#
+# Provider matrix policy (computed in the `setup` job):
+#   * pull_request (same repo) → local only
+#   * pull_request (fork)      → empty (forks can't read secrets)
+#   * workflow_dispatch        → respect `inputs.provider`
+#                                (all = runpod + oci; or local/runpod/oci)
 #
 # Required secrets:
-#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2.
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
+#     (used by every provider; `local` uses *only* these).
 #   RUNPOD_API_KEY — written to ~/.runpod/config.toml so SkyPilot's RunPod
 #     backend can `sky check runpod` (env var alone is insufficient).
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
@@ -26,12 +40,13 @@ on:
         required: false
         default: "dev-snapshot"
       provider:
-        description: "Provider(s) to launch on (manual runs only; PR runs are OCI-only)"
+        description: "Provider(s) to launch on (manual runs only; PR runs are local-only)"
         required: false
         type: choice
         default: all
         options:
           - all
+          - local
           - runpod
           - oci
   pull_request:
@@ -53,21 +68,25 @@ on:
 permissions:
   contents: read
 
-# Provisions billable RunPod/OCI capacity — coalesce stacked PR pushes.
+# Coalesce stacked PR pushes — saves runner minutes on `local` PRs and
+# avoids burning RunPod/OCI capacity on superseded `workflow_dispatch` runs.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # Compute the provider list at runtime. Provider-specific values
-  # (template, cluster prefix, OCI image tag) are derived from the provider
-  # name in the consuming jobs via expressions, so the only thing this job
-  # has to publish is the JSON array.
+  # (template, cluster prefix) are derived from the provider name in the
+  # consuming jobs via expressions, so the only thing this job has to
+  # publish is the JSON array.
   #
   # Policy:
-  #   * pull_request (same repo) → OCI only
+  #   * pull_request (same repo) → local only (no cloud capacity per push)
   #   * pull_request (fork)      → empty (forks can't read secrets)
-  #   * workflow_dispatch        → respect `inputs.provider` (all|runpod|oci)
+  #   * workflow_dispatch        → respect `inputs.provider`
+  #     - `all` expands to runpod + oci (the cloud providers); `local` is
+  #       opt-in via the dropdown so manual runs that want full coverage
+  #       don't waste a runner-side render.
   #
   # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
   setup:
@@ -85,9 +104,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${EVENT_NAME}" == "pull_request" && "${PR_HEAD_REPO}" == "${REPO}" ]]; then
-            providers='["oci"]'
+            providers='["local"]'
           elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${PROVIDER_INPUT}" in
+              local)  providers='["local"]' ;;
               runpod) providers='["runpod"]' ;;
               oci)    providers='["oci"]' ;;
               *)      providers='["runpod","oci"]' ;;
@@ -98,14 +118,21 @@ jobs:
           echo "providers=${providers}" >> "${GITHUB_OUTPUT}"
           echo "providers: ${providers}"
 
-  # Matrix over the providers selected by `setup`. Each cell exercises the
-  # same provider-neutral launcher (pipeline.entrypoints.skypilot_launch_smoke)
-  # against a provider-specific compute template, with --num-workers 3 so the
-  # partitioner is exercised end-to-end. Cluster names include
-  # github.run_attempt so re-running a failed job doesn't collide on the
-  # launcher's R2 spec key.
+  # Matrix over the providers selected by `setup`. Cells fork by provider:
+  #
+  #   * `local` — runs `pipeline.ci.materialize_spec` and
+  #     `scripts/docker_entrypoint.py generate_dataset` directly inside the
+  #     dev-snapshot container, single-rank. No SkyPilot, no cloud creds. Pragmatic
+  #     PR smoke; should be replaced by SkyPilot's `local` cloud (#806) so all
+  #     providers exercise the same launcher path.
+  #   * `runpod` / `oci` — invoke the same provider-neutral launcher
+  #     (`pipeline.entrypoints.skypilot_launch_smoke`) against the matching
+  #     `configs/compute/*-template.yaml`, with `--num-workers 3` so the
+  #     partitioner is exercised end-to-end. Cluster names include
+  #     `github.run_attempt` so re-running a failed job doesn't collide on the
+  #     launcher's R2 spec key.
   generate:
-    name: Launch generate_dataset on ${{ matrix.provider }} via SkyPilot
+    name: Run generate_dataset (${{ matrix.provider }})
     needs: setup
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -133,12 +160,53 @@ jobs:
       - name: Prepare run-metadata mount
         run: mkdir -p "/tmp/run-metadata-${{ matrix.provider }}"
 
+      # `local` provider: skip SkyPilot entirely. Materialize the spec on the
+      # runner and invoke `docker_entrypoint.py generate_dataset` in-process
+      # against rank=0/world=1. Output spec lands in /run-metadata/input_spec.json,
+      # matching the shape produced by the SkyPilot launcher branch so the
+      # downstream `validate-spec` / `validate-shard` jobs are provider-agnostic.
+      # Should be replaced by a SkyPilot local-cloud template (#806).
+      - name: Run generate_dataset locally (inside container)
+        if: ${{ matrix.provider == 'local' }}
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v "/tmp/run-metadata-local:/run-metadata" \
+            -e CONFIG_PATH \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+            -e SYNTH_SETTER_WORKER_RANK=0 \
+            -e SYNTH_SETTER_NUM_WORKERS=1 \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "${IMAGE}" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              mkdir -p plugins
+              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
+              python scripts/docker_entrypoint.py generate_dataset \
+                --spec /run-metadata/input_spec.json
+              chmod 0644 /run-metadata/input_spec.json
+            ' \
+            2>&1 | tee /tmp/run-metadata-local/generate.log
+
       # Launcher submits via sky.launch + stream_and_get; job-level
       # timeout-minutes: 60 is the safety bound. Cred-write is delegated to
       # scripts/skypilot_write_provider_creds.sh (umask 077; mode 600 on
       # every cred file). R2/W&B secrets land in container env via -e flags
       # (no .env on disk).
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
+        if: ${{ matrix.provider != 'local' }}
         env:
           PROVIDER: ${{ matrix.provider }}
           TEMPLATE: configs/compute/${{ matrix.provider == 'oci' && 'oci-cpu' || matrix.provider }}-template.yaml
