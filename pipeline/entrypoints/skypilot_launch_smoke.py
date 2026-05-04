@@ -354,6 +354,11 @@ def _run_workers(
             _WORKER_IMAGE_ENV: worker_image,
         }
         task = sky.Task.from_yaml(str(template_path))
+        # Sync the launcher's checkout to the cluster so the synced sky_workdir
+        # contains scripts/skypilot_worker_bootstrap.sh — needed while
+        # dev-snapshot lags behind #783 and the OCI template's run: bind-mounts
+        # the workdir into the worker container.
+        task.workdir = str(REPO_ROOT)
         _override_image_id(task, worker_image)
         task.update_envs(env_for_rank)
         click.echo(f"[{cluster}] provisioning rank={rank}/{num_workers}")
