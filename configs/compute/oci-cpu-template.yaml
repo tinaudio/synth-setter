@@ -85,4 +85,13 @@ run: |
     -e SYNTH_SETTER_NUM_WORKERS \
     -e PYTHONPATH=/home/build/synth-setter \
     "$WORKER_IMAGE" \
-    bash scripts/skypilot_worker_bootstrap.sh
+    bash -c '
+      set -euo pipefail
+      # plugins/ is .gitignored, so SkyPilot's rsync skips it. Recreate the
+      # symlink inside the container — the target path is from the dev-snapshot
+      # image and is preserved despite the bind-mount overlay because the
+      # symlink target lives outside /home/build/synth-setter.
+      mkdir -p plugins
+      ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+      exec bash scripts/skypilot_worker_bootstrap.sh
+    '
