@@ -1,14 +1,9 @@
 # SkyPilot task template for OCI (Oracle Cloud Infrastructure), CPU-only.
 # Sibling of runpod-template.yaml — see docs/design/skypilot-compute-integration.md.
 #
-# OCI-specific: SkyPilot's OCI backend rejects `image_id: docker:<image>`
-# ("Docker image is currently not supported on OCI"), so the worker image
-# is pulled and run as a sub-docker invocation inside the run: block on a
-# stock Ubuntu 22.04 VM (selected via `image_tag_general:
-# skypilot:cpu-ubuntu-2204` in the workflow's ~/.sky/config.yaml writer).
-# Operators dispatching locally pin the image tag via `docker_image_tag`
-# in the workflow input, OR by editing WORKER_IMAGE below; PR CI rewrites
-# WORKER_IMAGE via sed before launch.
+# OCI-specific: the worker image is pulled and run as a sub-docker invocation
+# inside the run: block because SkyPilot's OCI backend rejects `image_id: docker:<image>`.
+# Region intentionally not pinned — `~/.oci/config` is the single source of truth.
 
 resources:
   cloud: oci
@@ -16,10 +11,9 @@ resources:
   memory: 16+
   use_spot: false
   disk_size: 50
-  # Region intentionally not pinned — `~/.oci/config` is the single source
-  # of truth (set via OCI_REGION at CI cred-write time).
 
-# Placeholders. Real values are injected by the launcher via update_envs.
+# Placeholders. Real values are injected by the launcher via update_envs;
+# WORKER_IMAGE is set per-launch from --worker-image-tag.
 envs:
   RCLONE_CONFIG_R2_TYPE: ""
   RCLONE_CONFIG_R2_PROVIDER: ""
@@ -27,9 +21,7 @@ envs:
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WORKER_SPEC_URI: ""
-  # Default below is the CI sed pin target — see "Pin worker image tag"
-  # step in .github/workflows/test-dataset-generation.yml.
-  WORKER_IMAGE: "tinaudio/synth-setter:dev-snapshot"
+  WORKER_IMAGE: ""
   WORKER_GIT_REF: ""
   SYNTH_SETTER_WORKER_RANK: ""
   SYNTH_SETTER_NUM_WORKERS: ""
@@ -54,9 +46,6 @@ setup: |
 # run: launches the worker container ourselves (OCI backend can't ingest a
 # docker image_id). --privileged + --ulimit nofile is the expedient hammer
 # for the Xvfb/dbus stack — follow-up to find the minimal cap set: #776.
-# WORKER_GIT_REF checkout happens inside the container before invoking the
-# shared script — the checkout is what brings scripts/skypilot_worker_run.sh
-# into the baked image's working tree until the next dev-snapshot rebuild.
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd) host: $(hostname)"
@@ -74,19 +63,4 @@ run: |
     -e SYNTH_SETTER_NUM_WORKERS \
     -e PYTHONPATH=/home/build/synth-setter \
     "$WORKER_IMAGE" \
-    bash -c '
-      set -euo pipefail
-      cd /home/build/synth-setter
-      if [[ -n "${WORKER_GIT_REF:-}" ]]; then
-        echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
-        if ! [[ "$WORKER_GIT_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
-          echo "ERROR: WORKER_GIT_REF must be a 7-40 char hex git SHA, got: $WORKER_GIT_REF" >&2
-          exit 1
-        fi
-        git config --global --add safe.directory /home/build/synth-setter
-        git fetch --depth=1 origin -- "$WORKER_GIT_REF"
-        git checkout FETCH_HEAD
-        echo "Worker now at: $(git rev-parse HEAD)"
-      fi
-      bash scripts/skypilot_worker_run.sh
-    '
+    bash scripts/skypilot_worker_bootstrap.sh

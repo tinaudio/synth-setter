@@ -12,8 +12,7 @@
 #
 # Image: tinaudio/synth-setter:dev-snapshot must be pushed to Docker Hub
 # (`make docker-build-dev-snapshot` then `docker push`) before launch.
-# Tag pinning to a git SHA is deferred to the Phase B PR per the design doc
-# at docs/design/skypilot-compute-integration.md.
+# `image_id` is set per-launch by the launcher from --worker-image-tag.
 
 resources:
   cloud: runpod
@@ -32,7 +31,6 @@ resources:
     }
   use_spot: false
   disk_size: 50
-  image_id: docker:tinaudio/synth-setter:dev-snapshot
 
 # Placeholders. Real values are injected by the launcher via update_envs.
 # WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the
@@ -53,24 +51,7 @@ setup: |
   set -euo pipefail
   echo "synth-setter worker ready (host: $(hostname))"
 
-# Bootstrap (cd + git fetch + checkout) is inline because scripts/skypilot_worker_run.sh
-# isn't on the not-yet-rebuilt dev-snapshot image until the checkout itself lands
-# — the script can't run a checkout it depends on existing. After dev-snapshot
-# rebuilds post-merge, the script is baked in and this bootstrap is a no-op when
-# WORKER_GIT_REF is unset.
 run: |
   set -euo pipefail
   echo "skypilot-run-cwd: $(pwd)"
-  cd /home/build/synth-setter
-  if [[ -n "${WORKER_GIT_REF:-}" ]]; then
-    echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
-    if ! [[ "$WORKER_GIT_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
-      echo "ERROR: WORKER_GIT_REF must be a 7-40 char hex git SHA, got: $WORKER_GIT_REF" >&2
-      exit 1
-    fi
-    git config --global --add safe.directory /home/build/synth-setter
-    git fetch --depth=1 origin -- "$WORKER_GIT_REF"
-    git checkout FETCH_HEAD
-    echo "Worker now at: $(git rev-parse HEAD)"
-  fi
-  bash scripts/skypilot_worker_run.sh
+  bash /home/build/synth-setter/scripts/skypilot_worker_bootstrap.sh

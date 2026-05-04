@@ -10,7 +10,6 @@ name: Test Dataset Generation
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
 #     OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — written to ~/.oci/config +
 #     ~/.sky/config.yaml so SkyPilot's OCI backend can `sky check oci`.
-#     OCI runs continue-on-error while the second target beds in.
 
 on:
   workflow_dispatch:
@@ -51,8 +50,7 @@ jobs:
   # provider-specific compute template, with --num-workers 3 so the
   # partitioner is exercised end-to-end. Cluster names include
   # github.run_attempt so re-running a failed job doesn't collide on the
-  # launcher's R2 spec key. continue-on-error flows from matrix.continue_on_error
-  # so flipping OCI to blocking is a one-line change in three matrices.
+  # launcher's R2 spec key.
   generate:
     name: Launch generate_dataset on ${{ matrix.provider }} via SkyPilot
     runs-on: ubuntu-latest
@@ -62,7 +60,6 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       || github.event.pull_request.head.repo.full_name == github.repository
-    continue-on-error: ${{ matrix.continue_on_error }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -71,17 +68,11 @@ jobs:
           - provider: runpod
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-smoke-runpod
-            pin_search: "image_id: docker:tinaudio/synth-setter:dev-snapshot"
-            pin_replace: "image_id: docker:tinaudio/synth-setter:{IMAGE_TAG}"
             oci_image_tag: ""
-            continue_on_error: false
           - provider: oci
             template: configs/compute/oci-cpu-template.yaml
             cluster_prefix: synth-setter-smoke-oci
-            pin_search: 'WORKER_IMAGE: "tinaudio/synth-setter:dev-snapshot"'
-            pin_replace: 'WORKER_IMAGE: "tinaudio/synth-setter:{IMAGE_TAG}"'
             oci_image_tag: skypilot:cpu-ubuntu-2204
-            continue_on_error: true
     env:
       DATASET_CONFIG: >-
         ${{
@@ -99,43 +90,16 @@ jobs:
       - name: Pull image
         run: docker pull "${IMAGE}"
 
-      # Pin the per-provider image reference so the worker pulls the same
-      # image we just smoke-tested locally above. Bash substitutes the
-      # literal `{IMAGE_TAG}` placeholder in matrix.pin_replace at runtime.
-      - name: Pin worker image tag in compute template
-        env:
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
-          TEMPLATE: ${{ matrix.template }}
-          PIN_SEARCH: ${{ matrix.pin_search }}
-          PIN_REPLACE: ${{ matrix.pin_replace }}
-        run: |
-          set -euo pipefail
-          REPLACE="${PIN_REPLACE//\{IMAGE_TAG\}/${IMAGE_TAG}}"
-          PIN_COUNT=$(grep -cF "${PIN_SEARCH}" "${TEMPLATE}" || true)
-          if [[ "${PIN_COUNT}" != "1" ]]; then
-            echo "::error::expected exactly 1 occurrence of PIN_SEARCH in ${TEMPLATE}, found ${PIN_COUNT}" >&2
-            exit 1
-          fi
-          sed -i "s|${PIN_SEARCH}|${REPLACE}|" "${TEMPLATE}"
-          if ! grep -qF "${REPLACE}" "${TEMPLATE}"; then
-            echo "::error::sed pin failed: '${REPLACE}' not found in ${TEMPLATE} after substitution" >&2
-            exit 1
-          fi
-          if [[ "${REPLACE}" != "${PIN_SEARCH}" ]] && grep -qF "${PIN_SEARCH}" "${TEMPLATE}"; then
-            echo "::error::sed pin failed: '${PIN_SEARCH}' still present in ${TEMPLATE} after substitution" >&2
-            exit 1
-          fi
-          grep -F "${REPLACE}" "${TEMPLATE}"
-
       - name: Prepare run-metadata mount
         run: mkdir -p "/tmp/run-metadata-${{ matrix.provider }}"
 
       # Launcher submits via sky.launch + stream_and_get; job-level
-      # timeout-minutes: 60 is the safety bound. Cred-write switches on
-      # $PROVIDER inside the heredoc; umask 077 keeps every cred file 600.
-      # R2/W&B secrets land in container env via -e flags (no .env on disk).
-      # The runtime `pip install skypilot[oci]` bridge is removed once
-      # dev-snapshot rebuilds with [oci] baked in (post-merge follow-up).
+      # timeout-minutes: 60 is the safety bound. Cred-write is delegated to
+      # scripts/skypilot_write_provider_creds.sh (umask 077; mode 600 on
+      # every cred file). R2/W&B secrets land in container env via -e flags
+      # (no .env on disk). The runtime `pip install skypilot[oci]` bridge
+      # stays in until dev-snapshot rebuilds against the requirements bump
+      # in this PR; follow-up PR removes it.
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         env:
           PROVIDER: ${{ matrix.provider }}
@@ -163,6 +127,7 @@ jobs:
             -e PROVIDER \
             -e TEMPLATE \
             -e CLUSTER_NAME \
+            -e IMAGE_TAG \
             -e OCI_IMAGE_TAG \
             -e RUNPOD_API_KEY \
             -e OCI_USER_OCID \
@@ -187,40 +152,19 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               mkdir -p plugins
               ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
-              umask 077
-              case "$PROVIDER" in
-                runpod)
-                  mkdir -p "$HOME/.runpod"
-                  printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > "$HOME/.runpod/config.toml"
-                  ;;
-                oci)
-                  mkdir -p "$HOME/.oci" "$HOME/.sky"
-                  printf "%s\n" "$OCI_API_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
-                  chmod 600 "$HOME/.oci/oci_api_key.pem"
-                  printf "[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/oci_api_key.pem\n" \
-                    "$OCI_USER_OCID" "$OCI_FINGERPRINT" "$OCI_TENANCY_OCID" "$OCI_REGION" "$HOME" \
-                    > "$HOME/.oci/config"
-                  chmod 600 "$HOME/.oci/config"
-                  printf "oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n" \
-                    "$OCI_COMPARTMENT_OCID" "$OCI_IMAGE_TAG" \
-                    > "$HOME/.sky/config.yaml"
-                  grep -Eq "^region=.+" "$HOME/.oci/config" || { echo "::error::OCI_REGION secret is empty" >&2; exit 1; }
-                  grep -Eq "compartment_ocid: .+" "$HOME/.sky/config.yaml" || { echo "::error::OCI_COMPARTMENT_OCID secret is empty" >&2; exit 1; }
-                  if ! python -c "import oci" 2>/dev/null; then
-                    echo "[oci-bridge] dev-snapshot lacks oci sdk; installing skypilot[oci] at runtime"
-                    pip install --quiet "skypilot[oci]==0.12.0" || { echo "::error::oci bridge install failed" >&2; exit 1; }
-                  fi
-                  sky check oci
-                  ;;
-                *)
-                  echo "ERROR: unknown PROVIDER=$PROVIDER" >&2
-                  exit 1
-                  ;;
-              esac
+              bash scripts/skypilot_write_provider_creds.sh
+              if [[ "$PROVIDER" == "oci" ]]; then
+                if ! python -c "import oci" 2>/dev/null; then
+                  echo "[oci-bridge] dev-snapshot lacks oci sdk; installing skypilot[oci] at runtime"
+                  pip install --quiet "skypilot[oci]==0.12.0" || { echo "::error::oci bridge install failed" >&2; exit 1; }
+                fi
+                sky check oci
+              fi
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
                 --cluster-name "$CLUSTER_NAME" \
+                --worker-image-tag "$IMAGE_TAG" \
                 --num-workers 3 \
                 --spec-out /tmp/input_spec.json
               cp /tmp/input_spec.json /run-metadata/input_spec.json
@@ -251,23 +195,17 @@ jobs:
   # validate_spec is provider-neutral; per-cell variation is the artifact
   # name. `if: !cancelled()` decouples each provider's validate cell from
   # the OTHER provider's generate outcome — RunPod transients won't skip
-  # OCI validation. continue-on-error flows from matrix include for
-  # symmetry with `generate`.
+  # OCI validation.
   validate-spec:
     name: Validate ${{ matrix.provider }} spec structure
     needs: generate
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    continue-on-error: ${{ matrix.continue_on_error }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - provider: runpod
-            continue_on_error: false
-          - provider: oci
-            continue_on_error: true
+        provider: [runpod, oci]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -288,15 +226,10 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: ${{ matrix.continue_on_error }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - provider: runpod
-            continue_on_error: false
-          - provider: oci
-            continue_on_error: true
+        provider: [runpod, oci]
     steps:
       - name: Checkout
         uses: actions/checkout@v6

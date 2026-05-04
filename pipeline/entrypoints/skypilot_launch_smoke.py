@@ -8,8 +8,6 @@ RunPod has no managed-jobs controller backend.
 `--num-workers N>1` fans out N single-node clusters in parallel (RunPod doesn't
 support num_nodes>1). Each rank gets SYNTH_SETTER_WORKER_RANK /
 SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
-
-First scaffolding under #534. No `compute_config` schema yet — Phase A–C PRs.
 """
 
 from __future__ import annotations
@@ -23,6 +21,7 @@ from pathlib import Path
 import click
 import sky
 from dotenv import dotenv_values
+from sky.clouds import OCI as SkyOCI
 
 from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
@@ -31,6 +30,8 @@ from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
 _WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
+_WORKER_IMAGE_ENV = "WORKER_IMAGE"
+_WORKER_IMAGE_REPO = "tinaudio/synth-setter"
 
 # Forwarded via task.update_envs; each resolved from .env then process env.
 # Keep in sync with the envs: block in configs/compute/runpod-template.yaml.
@@ -189,6 +190,18 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
         "slice its share."
     ),
 )
+@click.option(
+    "--worker-image-tag",
+    type=str,
+    default="dev-snapshot",
+    show_default=True,
+    help=(
+        "Worker Docker image tag (under tinaudio/synth-setter). Injected as WORKER_IMAGE env "
+        "for the OCI sub-docker invocation, and as Resources.image_id for backends that accept "
+        "`docker:<image>` (e.g. RunPod). OCI's backend rejects `docker:<image>` so its "
+        "image_id is left untouched."
+    ),
+)
 def main(
     config_path: Path,
     template_path: Path,
@@ -196,6 +209,7 @@ def main(
     cluster_name: str | None,
     spec_out: Path | None,
     num_workers: int,
+    worker_image_tag: str,
 ) -> None:
     """Launch the smoke `generate_dataset` run on RunPod via SkyPilot."""
     if num_workers < 1:
@@ -244,6 +258,7 @@ def main(
         worker_env_base=worker_env,
         template_path=template_path,
         cluster_names=cluster_names,
+        worker_image_tag=worker_image_tag,
     )
 
     failed = [
@@ -256,10 +271,31 @@ def main(
         )
 
 
+def _override_image_id(task: sky.Task, worker_image: str) -> None:
+    """Pin every Resources entry's image_id to ``docker:<worker_image>`` for backends that take it.
+
+    SkyPilot's OCI backend rejects ``image_id: docker:<image>`` — that path runs the worker via
+    a sub-docker invocation inside the YAML's run: block and consumes WORKER_IMAGE from env, so
+    OCI Resources are left untouched here.
+    """
+    docker_ref = f"docker:{worker_image}"
+    new_resources: list[sky.Resources] = []
+    mutated = False
+    for res in task.resources:
+        if isinstance(res.cloud, SkyOCI):
+            new_resources.append(res)
+            continue
+        new_resources.append(res.copy(image_id=docker_ref))
+        mutated = True
+    if mutated:
+        task.set_resources(type(task.resources)(new_resources))
+
+
 def _run_workers(
     worker_env_base: dict[str, str],
     template_path: Path,
     cluster_names: list[str],
+    worker_image_tag: str,
 ) -> list[int]:
     """Launch len(cluster_names) single-node clusters in parallel; return tail_logs rc per rank.
 
@@ -271,12 +307,14 @@ def _run_workers(
         worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
         template_path: SkyPilot Task YAML to instantiate per rank.
         cluster_names: One name per rank; ``len()`` defines the world size.
+        worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
 
     Returns:
         Per-rank tail_logs return code (``0`` = SUCCEEDED, anything else = failed).
     """
     num_workers = len(cluster_names)
     rcs: list[int] = [-1] * num_workers
+    worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
 
     def _launch_and_tail(rank: int) -> int:
         cluster = cluster_names[rank]
@@ -284,8 +322,10 @@ def _run_workers(
             **worker_env_base,
             WORKER_RANK_ENV_VAR: str(rank),
             NUM_WORKERS_ENV_VAR: str(num_workers),
+            _WORKER_IMAGE_ENV: worker_image,
         }
         task = sky.Task.from_yaml(str(template_path))
+        _override_image_id(task, worker_image)
         task.update_envs(env_for_rank)
         click.echo(f"[{cluster}] provisioning rank={rank}/{num_workers}")
         launch_request_id = sky.launch(
