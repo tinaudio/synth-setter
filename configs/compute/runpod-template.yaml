@@ -10,9 +10,10 @@
 # triggers a SkyPilot RunPod-backend pubkey-overflow rejection at pod-create
 # time (see #749 for evidence + investigation status).
 #
-# Image: tinaudio/synth-setter:dev-snapshot must be pushed to Docker Hub
-# (`make docker-build-dev-snapshot` then `docker push`) before launch.
-# `image_id` is set per-launch by the launcher from --worker-image-tag.
+# Image: `tinaudio/synth-setter:<worker-image-tag>` must exist on Docker Hub
+# (e.g. `make docker-build-dev-snapshot` then `docker push` for the default
+# `dev-snapshot` tag) before launch. `image_id` is set per-launch by the
+# launcher from --worker-image-tag.
 
 resources:
   cloud: runpod
