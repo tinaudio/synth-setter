@@ -174,6 +174,74 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # OCIR mirror: pushes the same dev-snapshot manifest under an OCI
+      # Container Registry tag so the OCI SkyPilot workflow
+      # (test-dataset-generation.yml's `oci` matrix cell) can pull
+      # in-region instead of cross-cloud from Docker Hub. Only the two
+      # tags that workflow consumes are mirrored — `dev-snapshot` (when
+      # main) and `dev-snapshot-<sha>`. `latest`, `dev-snapshot-<branch>`,
+      # and the devcontainer-tools target stay Docker Hub only.
+      #
+      # OCIR coordinates are derived rather than baked in:
+      #   - Region key: mapped from the existing OCI_REGION secret.
+      #   - Namespace: extracted from OCIR_USERNAME's leading
+      #     `<namespace>/...` component (OCIR docker-login convention).
+      # New secrets required for push: OCIR_USERNAME + OCIR_AUTH_TOKEN
+      # (OCI Auth Token, not the API signing key in OCI_API_KEY_PEM).
+      - name: Derive OCIR coordinates
+        id: ocir
+        if: github.event_name != 'pull_request'
+        env:
+          OCIR_USERNAME: ${{ secrets.OCIR_USERNAME }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OCIR_USERNAME:-}" ]; then
+            echo "::error::OCIR_USERNAME secret is empty — generate an OCI Auth Token and set OCIR_USERNAME (form: <namespace>/<oci-user>) and OCIR_AUTH_TOKEN before this workflow can push to OCIR." >&2
+            exit 1
+          fi
+          if [ -z "${OCI_REGION:-}" ]; then
+            echo "::error::OCI_REGION secret is empty — required to derive the OCIR registry host." >&2
+            exit 1
+          fi
+          ocir_namespace="${OCIR_USERNAME%%/*}"
+          if [ -z "${ocir_namespace}" ] || [ "${ocir_namespace}" = "${OCIR_USERNAME}" ]; then
+            echo "::error::OCIR_USERNAME='${OCIR_USERNAME}' must have form <namespace>/<oci-user>" >&2
+            exit 1
+          fi
+          case "${OCI_REGION}" in
+            us-ashburn-1)    region_key=iad ;;
+            us-phoenix-1)    region_key=phx ;;
+            eu-frankfurt-1)  region_key=fra ;;
+            eu-amsterdam-1)  region_key=ams ;;
+            uk-london-1)     region_key=lhr ;;
+            ap-tokyo-1)      region_key=nrt ;;
+            ap-mumbai-1)     region_key=bom ;;
+            ap-seoul-1)      region_key=icn ;;
+            ap-sydney-1)     region_key=syd ;;
+            ap-singapore-1)  region_key=sin ;;
+            ca-toronto-1)    region_key=yyz ;;
+            ca-montreal-1)   region_key=yul ;;
+            sa-saopaulo-1)   region_key=gru ;;
+            *)
+              echo "::error::OCI_REGION='${OCI_REGION}' has no region-key mapping in this workflow. Add it to the case statement above." >&2
+              exit 1
+              ;;
+          esac
+          ocir_host="${region_key}.ocir.io"
+          ocir_image="${ocir_host}/${ocir_namespace}/synth-setter"
+          echo "host=${ocir_host}" >> "$GITHUB_OUTPUT"
+          echo "image=${ocir_image}" >> "$GITHUB_OUTPUT"
+          echo "OCIR push target: ${ocir_image}"
+
+      - name: Log in to OCIR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.ocir.outputs.host }}
+          username: ${{ secrets.OCIR_USERNAME }}
+          password: ${{ secrets.OCIR_AUTH_TOKEN }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -214,6 +282,20 @@ jobs:
             type=raw,value=dev-snapshot-${{ steps.source.outputs.sha }}
             type=raw,value=latest,enable=${{ steps.source.outputs.is_main == 'true' }}
 
+      # OCIR mirror tag set: only the two tags consumed by the OCI SkyPilot
+      # workflow. Same `is_main` gate as Docker Hub for the floating
+      # `dev-snapshot` tag; the immutable `dev-snapshot-<sha>` always
+      # pushed. PR runs skip this step (no push, no OCIR login).
+      - name: Docker metadata (OCIR)
+        id: meta_ocir
+        if: github.event_name != 'pull_request'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.ocir.outputs.image }}
+          tags: |
+            type=raw,value=dev-snapshot,enable=${{ steps.source.outputs.is_main == 'true' }}
+            type=raw,value=dev-snapshot-${{ steps.source.outputs.sha }}
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -223,7 +305,13 @@ jobs:
           platforms: ${{ steps.config.outputs.target_platform }}
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          # Concatenated multi-registry tag list: buildx pushes one build
+          # under all listed names (Docker Hub + OCIR) in a single push,
+          # so the same digest lands at both. meta_ocir is empty on PR
+          # runs (the step is gated off); empty trailing lines are ignored.
+          tags: |
+            ${{ steps.meta.outputs.tags }}
+            ${{ steps.meta_ocir.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}

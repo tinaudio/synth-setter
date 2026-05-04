@@ -75,11 +75,16 @@ jobs:
             pin_replace: "image_id: docker:tinaudio/synth-setter:{IMAGE_TAG}"
             oci_image_tag: ""
             continue_on_error: false
+          # OCI cell rewrites the worker image to OCIR (docker-build-validation.yml
+          # mirrors the same dev-snapshot tag set there) so the OCI VM pulls
+          # in-region instead of cross-cloud from Docker Hub. The {OCIR_PREFIX}
+          # placeholder is substituted at runtime in the "Pin worker image tag"
+          # step from the existing OCI_REGION + OCIR_USERNAME secrets.
           - provider: oci
             template: configs/compute/oci-cpu-template.yaml
             cluster_prefix: synth-setter-smoke-oci
             pin_search: 'WORKER_IMAGE: "tinaudio/synth-setter:dev-snapshot"'
-            pin_replace: 'WORKER_IMAGE: "tinaudio/synth-setter:{IMAGE_TAG}"'
+            pin_replace: 'WORKER_IMAGE: "{OCIR_PREFIX}/synth-setter:{IMAGE_TAG}"'
             oci_image_tag: skypilot:cpu-ubuntu-2204
             continue_on_error: true
     env:
@@ -99,18 +104,74 @@ jobs:
       - name: Pull image
         run: docker pull "${IMAGE}"
 
+      # OCI cell only: derive the OCIR registry prefix
+      # (`<region-key>.ocir.io/<namespace>`) from the existing OCI_REGION
+      # secret and the leading `<namespace>/...` component of OCIR_USERNAME.
+      # Substituted into matrix.pin_replace's {OCIR_PREFIX} placeholder
+      # in the next step. Region-key mapping kept in sync with
+      # docker-build-validation.yml's "Derive OCIR coordinates" step.
+      - name: Derive OCIR prefix
+        id: ocir_prefix
+        if: matrix.provider == 'oci'
+        env:
+          OCIR_USERNAME: ${{ secrets.OCIR_USERNAME }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OCIR_USERNAME:-}" ]; then
+            echo "::error::OCIR_USERNAME secret is empty — required to extract the OCIR namespace." >&2
+            exit 1
+          fi
+          if [ -z "${OCI_REGION:-}" ]; then
+            echo "::error::OCI_REGION secret is empty — required to derive the OCIR registry host." >&2
+            exit 1
+          fi
+          ocir_namespace="${OCIR_USERNAME%%/*}"
+          if [ -z "${ocir_namespace}" ] || [ "${ocir_namespace}" = "${OCIR_USERNAME}" ]; then
+            echo "::error::OCIR_USERNAME='${OCIR_USERNAME}' must have form <namespace>/<oci-user>" >&2
+            exit 1
+          fi
+          case "${OCI_REGION}" in
+            us-ashburn-1)    region_key=iad ;;
+            us-phoenix-1)    region_key=phx ;;
+            eu-frankfurt-1)  region_key=fra ;;
+            eu-amsterdam-1)  region_key=ams ;;
+            uk-london-1)     region_key=lhr ;;
+            ap-tokyo-1)      region_key=nrt ;;
+            ap-mumbai-1)     region_key=bom ;;
+            ap-seoul-1)      region_key=icn ;;
+            ap-sydney-1)     region_key=syd ;;
+            ap-singapore-1)  region_key=sin ;;
+            ca-toronto-1)    region_key=yyz ;;
+            ca-montreal-1)   region_key=yul ;;
+            sa-saopaulo-1)   region_key=gru ;;
+            *)
+              echo "::error::OCI_REGION='${OCI_REGION}' has no region-key mapping (also update docker-build-validation.yml)." >&2
+              exit 1
+              ;;
+          esac
+          ocir_prefix="${region_key}.ocir.io/${ocir_namespace}"
+          echo "prefix=${ocir_prefix}" >> "$GITHUB_OUTPUT"
+          echo "OCIR prefix: ${ocir_prefix}"
+
       # Pin the per-provider image reference so the worker pulls the same
       # image we just smoke-tested locally above. Bash substitutes the
-      # literal `{IMAGE_TAG}` placeholder in matrix.pin_replace at runtime.
+      # literal `{IMAGE_TAG}` placeholder in matrix.pin_replace at runtime;
+      # for the OCI cell, `{OCIR_PREFIX}` is also substituted (from the
+      # prior "Derive OCIR prefix" step). Other providers' pin_replace
+      # contains neither `{OCIR_PREFIX}` nor an empty OCIR_PREFIX env, so
+      # the second substitution is a no-op there.
       - name: Pin worker image tag in compute template
         env:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
           TEMPLATE: ${{ matrix.template }}
           PIN_SEARCH: ${{ matrix.pin_search }}
           PIN_REPLACE: ${{ matrix.pin_replace }}
+          OCIR_PREFIX: ${{ steps.ocir_prefix.outputs.prefix }}
         run: |
           set -euo pipefail
           REPLACE="${PIN_REPLACE//\{IMAGE_TAG\}/${IMAGE_TAG}}"
+          REPLACE="${REPLACE//\{OCIR_PREFIX\}/${OCIR_PREFIX}}"
           PIN_COUNT=$(grep -cF "${PIN_SEARCH}" "${TEMPLATE}" || true)
           if [[ "${PIN_COUNT}" != "1" ]]; then
             echo "::error::expected exactly 1 occurrence of PIN_SEARCH in ${TEMPLATE}, found ${PIN_COUNT}" >&2
