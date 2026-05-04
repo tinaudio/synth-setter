@@ -60,6 +60,11 @@ setup: |
 # run: launches the worker container ourselves (OCI backend can't ingest a
 # docker image_id). --privileged + --ulimit nofile is the expedient hammer
 # for the Xvfb/dbus stack — follow-up to find the minimal cap set: #776.
+#
+# The synced sky_workdir is bind-mounted into the image's baked repo path so
+# the worker runs the PR's checkout (incl. scripts/skypilot_worker_bootstrap.sh
+# while dev-snapshot lags behind #783). This mirrors what SkyPilot's RunPod
+# backend does automatically for `image_id: docker:...` pods.
 run: |
   set -euo pipefail
   : "${WORKER_IMAGE:?WORKER_IMAGE must be set by the launcher (--worker-image-tag); refusing to docker run an unset image}"
@@ -67,6 +72,8 @@ run: |
   sudo -E docker run --rm \
     --privileged \
     --ulimit nofile=65536:65536 \
+    -v "$(pwd):/home/build/synth-setter" \
+    -w /home/build/synth-setter \
     -e RCLONE_CONFIG_R2_TYPE \
     -e RCLONE_CONFIG_R2_PROVIDER \
     -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
