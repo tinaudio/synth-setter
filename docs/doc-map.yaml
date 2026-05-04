@@ -95,7 +95,7 @@ docs:
       - pattern: "configs/compute/oci-cpu-template.yaml"
         covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), shared worker run-block via scripts/skypilot_worker_run.sh"
       - pattern: "configs/compute/oci-debug-template.yaml"
-        covers: "OCI noop probe template (Always-Free VM.Standard.E2.1.Micro). Exercised on every PR by .github/workflows/test-skypilot-oci-debug.yml — provision/setup/submit/poll/tail/teardown probe of the OCI launcher path."
+        covers: "OCI noop probe template (echo-only setup + run). Exercised on every PR by .github/workflows/test-skypilot-oci-debug.yml — provision/setup/submit/poll/tail/teardown probe of the OCI launcher path."
       - pattern: "scripts/skypilot_worker_run.sh"
         covers: "Shared worker python entrypoint: load_spec_from_uri/run + os._exit(0) #735 workaround. Invoked by both RunPod and OCI templates after they cd + git fetch + checkout WORKER_GIT_REF."
       - pattern: "scripts/run-linux-vst-headless.sh"
