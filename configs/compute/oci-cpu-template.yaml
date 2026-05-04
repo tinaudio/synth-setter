@@ -65,6 +65,12 @@ setup: |
 # the worker runs the PR's checkout (incl. scripts/skypilot_worker_bootstrap.sh
 # while dev-snapshot lags behind #783). This mirrors what SkyPilot's RunPod
 # backend does automatically for `image_id: docker:...` pods.
+#
+# plugins/ is .gitignored, so the symlink to /usr/lib/vst3 from the GHA
+# launcher container is not in the synced workdir. Recreated below before
+# bootstrap so extract_renderer_version finds the VST3 bundle. The bash -c
+# script must be apostrophe-free — see CLAUDE.md "No Comments Inside YAML
+# run: Block-Scalars".
 run: |
   set -euo pipefail
   : "${WORKER_IMAGE:?WORKER_IMAGE must be set by the launcher (--worker-image-tag); refusing to docker run an unset image}"
@@ -87,10 +93,6 @@ run: |
     "$WORKER_IMAGE" \
     bash -c '
       set -euo pipefail
-      # plugins/ is .gitignored, so SkyPilot's rsync skips it. Recreate the
-      # symlink inside the container — the target path is from the dev-snapshot
-      # image and is preserved despite the bind-mount overlay because the
-      # symlink target lives outside /home/build/synth-setter.
       mkdir -p plugins
       ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
       exec bash scripts/skypilot_worker_bootstrap.sh
