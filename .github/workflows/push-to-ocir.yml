@@ -1,0 +1,47 @@
+name: Push To OCIR
+
+# Mirrors the dev-snapshot Docker image from Docker Hub to OCIR so OCI
+# workers can pull it in-region instead of cross-cloud. Pulls
+# tinaudio/synth-setter:dev-snapshot, retags for OCIR, pushes.
+#
+# Required secrets:
+#   OCIR_REGION_KEY        — OCIR region key (e.g. iad, phx, fra); forms the
+#                            registry hostname <key>.ocir.io.
+#   OCIR_TENANCY_NAMESPACE — Object Storage namespace for the tenancy; the
+#                            second segment of the OCIR image path.
+#   OCIR_USERNAME          — full OCIR username, including any
+#                            <namespace>/ prefix the tenancy requires.
+#   OCIR_TOKEN             — OCI Auth Token with repos:push scope on the
+#                            target repository.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  push-to-ocir:
+    name: Mirror dev-snapshot to OCIR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Log in to OCIR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.OCIR_REGION_KEY }}.ocir.io
+          username: ${{ secrets.OCIR_USERNAME }}
+          password: ${{ secrets.OCIR_TOKEN }}
+
+      - name: Pull dev-snapshot from Docker Hub, retag, push to OCIR
+        env:
+          SOURCE_IMAGE: tinaudio/synth-setter:dev-snapshot
+          OCIR_REGION_KEY: ${{ secrets.OCIR_REGION_KEY }}
+          OCIR_TENANCY_NAMESPACE: ${{ secrets.OCIR_TENANCY_NAMESPACE }}
+        run: |
+          set -euo pipefail
+          docker pull "$SOURCE_IMAGE"
+          target="${OCIR_REGION_KEY}.ocir.io/${OCIR_TENANCY_NAMESPACE}/synth-setter:dev-snapshot"
+          docker tag "$SOURCE_IMAGE" "$target"
+          docker push "$target"
+          echo "Pushed $target"
