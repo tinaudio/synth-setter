@@ -103,7 +103,7 @@ docs:
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
-        covers: "End-to-end production smoke matrixed over RunPod + OCI: launcher inside dev-snapshot container → generate → validate-spec → validate-shard, per-provider artifacts"
+        covers: "End-to-end smoke matrixed over `local` (PR default, in-runner container, no SkyPilot) + RunPod + OCI (manual dispatch): generate → validate-spec → validate-shard, per-provider artifacts"
       - pattern: "requirements-app.txt"
         covers: "skypilot[runpod,oci]==0.12.0 required dependency (decision: not optional — see §8.2)"
         scope: "skypilot"

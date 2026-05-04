@@ -159,7 +159,7 @@ The launcher finds `<repo_root>/.env`, parses it via `python-dotenv`, and resolv
 
 Source of truth: the GitHub-Actions runner's process env, populated from `secrets.*` and passed into the container via `docker run -e ...`. **No `.env` file is ever written to the runner's filesystem.** The launcher's default `--env-file` path doesn't resolve, the `.env` branch is silently skipped, and resolution falls through to the container's process env.
 
-The launch step in `.github/workflows/test-dataset-generation.yml`:
+The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (only fires on `runpod` / `oci` matrix cells; same-repo PRs run a non-SkyPilot `local` cell — see [github-actions.md](../reference/github-actions.md)):
 
 ```yaml
 - name: Launch SkyPilot job
