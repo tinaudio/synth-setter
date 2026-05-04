@@ -1,0 +1,176 @@
+name: Test SkyPilot OCI Debug
+
+# OCI sibling of test-skypilot-debug.yml's `noop` variant. Provisions OCI's
+# Always-Free VM.Standard.E2.1.Micro shape via SkyPilot's OCI backend, runs
+# the noop probe from configs/compute/oci-debug-template.yaml (echo from
+# setup + run), and tears down. PASS = the OCI launcher path itself
+# (provision -> setup -> submit -> poll -> tail -> teardown) is healthy;
+# FAIL means the regression is in SkyPilot, OCI's API, or our cred-write
+# plumbing — NOT in the dataset generation code.
+#
+# Always-Free shape consumes zero paid OCI compute quota. Safe to run on
+# every PR touching OCI plumbing. Provisioning a fresh VM is slower than a
+# RunPod pod (~3-5 min vs. ~30-60s) — `timeout-minutes: 30` and a 20-min
+# job-status poll deadline are sized for that.
+#
+# Required secrets (same as test-dataset-generation.yml's OCI cell):
+#   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
+#   OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — written to ~/.oci/config +
+#   ~/.sky/config.yaml so SkyPilot's OCI backend can `sky check oci`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_deadline_seconds:
+        description: "Wall-clock cap on the inline probe's job-status poll loop."
+        required: false
+        default: "1200"
+  pull_request:
+    paths:
+      - "configs/compute/oci-debug-template.yaml"
+      - ".github/workflows/test-skypilot-oci-debug.yml"
+
+permissions:
+  contents: read
+
+# OCI Always-Free quota is small (one E2.1.Micro per tenancy) — coalesce
+# stacked PR pushes so two concurrent runs don't fight over the shape.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oci-debug:
+    name: OCI noop probe (oci-debug-template)
+    runs-on: ubuntu-latest
+    # Forks can't read OCI secrets — fail fast instead of provisioning a
+    # VM that errors on missing creds. workflow_dispatch is gated by repo
+    # write permissions.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 30
+    env:
+      JOB_DEADLINE_SECONDS: ${{ inputs.job_deadline_seconds || '1200' }}
+      CLUSTER_NAME: synth-setter-oci-debug-${{ github.run_id }}-${{ github.run_attempt }}
+      TEMPLATE: configs/compute/oci-debug-template.yaml
+      # OCI marketplace image SkyPilot picks via `image_tag_general` in
+      # ~/.sky/config.yaml. cpu-ubuntu-2204 is x86_64 and works for the
+      # E2.1.Micro shape that oci-debug-template.yaml pins.
+      OCI_IMAGE_TAG: skypilot:cpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install skypilot[oci]
+        run: pip install "skypilot[oci]==0.12.0"
+
+      # Cred-write pattern mirrors the OCI branch of test-dataset-generation.yml's
+      # case-PROVIDER block. Keeping the two in sync is intentional — both
+      # exercise the same SkyPilot OCI backend, so any cred-write fix
+      # belongs in both places.
+      - name: Write OCI creds and run sky check
+        env:
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.oci" "$HOME/.sky"
+          umask 077
+          printf "%s\n" "$OCI_API_KEY_PEM" > "$HOME/.oci/oci_api_key.pem"
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+          printf "[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/oci_api_key.pem\n" \
+            "$OCI_USER_OCID" "$OCI_FINGERPRINT" "$OCI_TENANCY_OCID" "$OCI_REGION" "$HOME" \
+            > "$HOME/.oci/config"
+          chmod 600 "$HOME/.oci/config"
+          printf "oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n" \
+            "$OCI_COMPARTMENT_OCID" "$OCI_IMAGE_TAG" \
+            > "$HOME/.sky/config.yaml"
+          grep -Eq "^region=.+" "$HOME/.oci/config" || { echo "::error::OCI_REGION secret is empty" >&2; exit 1; }
+          grep -Eq "compartment_ocid: .+" "$HOME/.sky/config.yaml" || { echo "::error::OCI_COMPARTMENT_OCID secret is empty" >&2; exit 1; }
+          sky check oci
+
+      # Inline-sky probe — same shape as test-skypilot-debug.yml's noop
+      # variant. task.workdir = os.getcwd() syncs the GH-actions checkout
+      # to the worker as ~/sky_workdir so template iterations land on the
+      # dispatching branch without a docker rebuild.
+      - name: Run inline SkyPilot OCI probe
+        env:
+          DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}
+          LOG_PATH: /tmp/oci-debug-noop.log
+        run: |
+          set -o pipefail
+          python - <<'PY' 2>&1 | tee "$LOG_PATH"
+          import os, time
+          import sky
+
+          cluster = os.environ["CLUSTER_NAME"]
+          deadline_seconds = int(os.environ["DEADLINE"])
+          template_path = os.environ["TEMPLATE"]
+
+          print(f"[probe] launching cluster={cluster} template={template_path}")
+          task = sky.Task.from_yaml(template_path)
+          task.workdir = os.getcwd()
+          print(f"[probe] workdir set to {task.workdir}")
+          launch_req = sky.launch(
+              task,
+              cluster_name=cluster,
+              idle_minutes_to_autostop=0,
+              down=True,
+          )
+          job_id, _ = sky.stream_and_get(launch_req)
+          print(f"[probe] launch resolved, job_id={job_id}")
+
+          deadline = time.monotonic() + deadline_seconds
+          terminal = {
+              sky.JobStatus.SUCCEEDED,
+              sky.JobStatus.FAILED,
+              sky.JobStatus.FAILED_SETUP,
+              sky.JobStatus.FAILED_DRIVER,
+              sky.JobStatus.CANCELLED,
+          }
+          final = None
+          while time.monotonic() < deadline:
+              statuses = sky.stream_and_get(sky.job_status(cluster, [job_id])) or {}
+              status = statuses.get(job_id)
+              print(f"[probe]   status={status.name if status else 'None'}")
+              if status in terminal:
+                  final = status
+                  break
+              time.sleep(5)
+
+          try:
+              print(f"[probe] --- worker log ---")
+              sky.tail_logs(cluster_name=cluster, job_id=job_id, follow=False)
+              print(f"[probe] --- end worker log ---")
+          except Exception as e:
+              print(f"[probe] tail_logs failed: {e}")
+
+          print(f"[probe] tearing down cluster={cluster}")
+          sky.stream_and_get(sky.down(cluster))
+          print(f"[probe] done, final_status={final.name if final else 'TIMED_OUT'}")
+          if final != sky.JobStatus.SUCCEEDED:
+              raise SystemExit(
+                  f"probe did not see SUCCEEDED within {deadline_seconds}s "
+                  f"(final={final})"
+              )
+          PY
+
+      - name: Upload run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oci-debug-noop-metadata
+          path: /tmp/oci-debug-noop.log
+          retention-days: 7
+          if-no-files-found: warn
