@@ -56,13 +56,19 @@ jobs:
 
       # Emits three outputs:
       #   sha         — 40-char commit SHA, baked into the image
-      #   is_main     — "true" when this build represents the main branch and
-      #                 should advance the shared `dev-snapshot`/`latest` tags.
-      #                 Covers push-to-main runs, the common ref forms a user might
-      #                 paste into the dispatch input (`main`, `refs/heads/main`,
-      #                 `refs/remotes/origin/main`), and the case where the
-      #                 resolved HEAD equals origin/main's HEAD (e.g., a literal
-      #                 SHA dispatch that happens to be main).
+      #   is_main     — "true" when this build represents the *current* main
+      #                 HEAD and should advance the shared `dev-snapshot`/`latest`
+      #                 tags. Covers push-to-main runs whose triggering SHA still
+      #                 equals origin/main's HEAD, the common ref forms a user
+      #                 might paste into the dispatch input (`main`,
+      #                 `refs/heads/main`, `refs/remotes/origin/main`), and the
+      #                 case where the resolved HEAD equals origin/main's HEAD
+      #                 (e.g., a literal SHA dispatch that happens to be main).
+      #                 Push runs whose triggering SHA has been overtaken by a
+      #                 newer main commit (delayed/queued runs, manual re-runs
+      #                 of older pushes) fall through to `false` so they only
+      #                 publish the immutable `dev-snapshot-<sha>` tag and don't
+      #                 clobber the floating tags with an older commit.
       #   branch_slug — Docker-tag-safe branch name for the `dev-snapshot-<branch>`
       #                 floating tag, or empty when no meaningful branch applies
       #                 (push-to-main run, any main ref form, a git_ref already
@@ -91,19 +97,18 @@ jobs:
           echo "sha=${resolved_sha}" >> "$GITHUB_OUTPUT"
 
           is_main="false"
-          if [ "$EVENT_NAME" = "push" ]; then
-            is_main="true"
-          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             case "$DISPATCH_REF" in
               main|refs/heads/main|refs/remotes/origin/main)
                 is_main="true"
                 ;;
             esac
-            if [ "$is_main" = "false" ]; then
-              main_sha=$(git ls-remote origin refs/heads/main | awk '{print $1}')
-              if [ -n "$main_sha" ] && [ "$resolved_sha" = "$main_sha" ]; then
-                is_main="true"
-              fi
+          fi
+          if [ "$is_main" = "false" ] \
+              && { [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; }; then
+            main_sha=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+            if [ -n "$main_sha" ] && [ "$resolved_sha" = "$main_sha" ]; then
+              is_main="true"
             fi
           fi
           echo "is_main=${is_main}" >> "$GITHUB_OUTPUT"
