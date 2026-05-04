@@ -1,17 +1,20 @@
 name: Test SkyPilot OCI Debug
 
-# OCI sibling of test-skypilot-debug.yml's `noop` variant. Provisions OCI's
-# Always-Free VM.Standard.E2.1.Micro shape via SkyPilot's OCI backend, runs
-# the noop probe from configs/compute/oci-debug-template.yaml (echo from
-# setup + run), and tears down. PASS = the OCI launcher path itself
-# (provision -> setup -> submit -> poll -> tail -> teardown) is healthy;
-# FAIL means the regression is in SkyPilot, OCI's API, or our cred-write
-# plumbing — NOT in the dataset generation code.
+# OCI sibling of test-skypilot-debug.yml's `noop` variant. Provisions an
+# OCI VM via SkyPilot's OCI backend (shape resolved from
+# configs/compute/oci-debug-template.yaml's `cpus`/`memory` floors against
+# SkyPilot's bundled OCI catalog — currently the cheapest VM.Standard.E4.Flex
+# size that satisfies them), runs the noop probe (echo from setup + run),
+# and tears down. PASS = the OCI launcher path itself (provision -> setup
+# -> submit -> poll -> tail -> teardown) is healthy; FAIL means the
+# regression is in SkyPilot, OCI's API, or our cred-write plumbing — NOT
+# in the dataset generation code.
 #
-# Always-Free shape consumes zero paid OCI compute quota. Safe to run on
-# every PR touching OCI plumbing. Provisioning a fresh VM is slower than a
-# RunPod pod (~3-5 min vs. ~30-60s) — `timeout-minutes: 30` and a 20-min
-# job-status poll deadline are sized for that.
+# Provisioning a fresh OCI VM is slower than a RunPod pod (~3-5 min vs.
+# ~30-60s) — `timeout-minutes: 30` and a 20-min job-status poll deadline
+# are sized for that. Per-PR cost is small (Flex shapes bill per-second
+# and the probe runs only a few minutes) but non-zero — the `paths` filter
+# limits runs to PRs that actually change OCI plumbing.
 #
 # Required secrets (same as test-dataset-generation.yml's OCI cell):
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
@@ -33,8 +36,9 @@ on:
 permissions:
   contents: read
 
-# OCI Always-Free quota is small (one E2.1.Micro per tenancy) — coalesce
-# stacked PR pushes so two concurrent runs don't fight over the shape.
+# Coalesce stacked PR pushes on the same ref so two concurrent runs
+# don't pile up OCI VMs (each costs money and the probe is fast enough
+# that older runs are wasted work once a newer push lands).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -55,8 +59,9 @@ jobs:
       CLUSTER_NAME: synth-setter-oci-debug-${{ github.run_id }}-${{ github.run_attempt }}
       TEMPLATE: configs/compute/oci-debug-template.yaml
       # OCI marketplace image SkyPilot picks via `image_tag_general` in
-      # ~/.sky/config.yaml. cpu-ubuntu-2204 is x86_64 and works for the
-      # E2.1.Micro shape that oci-debug-template.yaml pins.
+      # ~/.sky/config.yaml. cpu-ubuntu-2204 is x86_64 and matches the
+      # VM.Standard.E4.Flex shape that oci-debug-template.yaml's
+      # cpus/memory floors resolve to.
       OCI_IMAGE_TAG: skypilot:cpu-ubuntu-2204
     steps:
       - name: Checkout
@@ -122,42 +127,52 @@ jobs:
           task = sky.Task.from_yaml(template_path)
           task.workdir = os.getcwd()
           print(f"[probe] workdir set to {task.workdir}")
-          launch_req = sky.launch(
-              task,
-              cluster_name=cluster,
-              idle_minutes_to_autostop=0,
-              down=True,
-          )
-          job_id, _ = sky.stream_and_get(launch_req)
-          print(f"[probe] launch resolved, job_id={job_id}")
 
-          deadline = time.monotonic() + deadline_seconds
-          terminal = {
-              sky.JobStatus.SUCCEEDED,
-              sky.JobStatus.FAILED,
-              sky.JobStatus.FAILED_SETUP,
-              sky.JobStatus.FAILED_DRIVER,
-              sky.JobStatus.CANCELLED,
-          }
           final = None
-          while time.monotonic() < deadline:
-              statuses = sky.stream_and_get(sky.job_status(cluster, [job_id])) or {}
-              status = statuses.get(job_id)
-              print(f"[probe]   status={status.name if status else 'None'}")
-              if status in terminal:
-                  final = status
-                  break
-              time.sleep(5)
-
           try:
-              print(f"[probe] --- worker log ---")
-              sky.tail_logs(cluster_name=cluster, job_id=job_id, follow=False)
-              print(f"[probe] --- end worker log ---")
-          except Exception as e:
-              print(f"[probe] tail_logs failed: {e}")
+              launch_req = sky.launch(
+                  task,
+                  cluster_name=cluster,
+                  idle_minutes_to_autostop=0,
+                  down=True,
+              )
+              job_id, _ = sky.stream_and_get(launch_req)
+              print(f"[probe] launch resolved, job_id={job_id}")
 
-          print(f"[probe] tearing down cluster={cluster}")
-          sky.stream_and_get(sky.down(cluster))
+              deadline = time.monotonic() + deadline_seconds
+              terminal = {
+                  sky.JobStatus.SUCCEEDED,
+                  sky.JobStatus.FAILED,
+                  sky.JobStatus.FAILED_SETUP,
+                  sky.JobStatus.FAILED_DRIVER,
+                  sky.JobStatus.CANCELLED,
+              }
+              while time.monotonic() < deadline:
+                  statuses = sky.stream_and_get(sky.job_status(cluster, [job_id])) or {}
+                  status = statuses.get(job_id)
+                  print(f"[probe]   status={status.name if status else 'None'}")
+                  if status in terminal:
+                      final = status
+                      break
+                  time.sleep(5)
+
+              try:
+                  print(f"[probe] --- worker log ---")
+                  sky.tail_logs(cluster_name=cluster, job_id=job_id, follow=False)
+                  print(f"[probe] --- end worker log ---")
+              except Exception as e:
+                  print(f"[probe] tail_logs failed: {e}")
+          finally:
+              # Best-effort teardown — runs even if sky.launch / stream_and_get
+              # raised partway through provisioning. sky.launch(down=True)
+              # auto-teardowns on job completion, but a mid-launch exception
+              # can still leak a half-provisioned cluster.
+              print(f"[probe] tearing down cluster={cluster}")
+              try:
+                  sky.stream_and_get(sky.down(cluster))
+              except Exception as e:
+                  print(f"[probe] sky.down failed: {e}")
+
           print(f"[probe] done, final_status={final.name if final else 'TIMED_OUT'}")
           if final != sky.JobStatus.SUCCEEDED:
               raise SystemExit(

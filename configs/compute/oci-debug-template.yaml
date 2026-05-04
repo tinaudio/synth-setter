@@ -21,7 +21,6 @@ resources:
   cpus: 2+
   memory: 8+
   disk_size: 20
-  image_id: synth-setter:dev-snapshot
 
 setup: |
   set -euo pipefail
