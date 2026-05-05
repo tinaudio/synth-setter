@@ -160,12 +160,13 @@ jobs:
       - name: Prepare run-metadata mount
         run: mkdir -p "/tmp/run-metadata-${{ matrix.provider }}"
 
-      # `local` provider: skip SkyPilot entirely. Materialize the spec on the
-      # runner and invoke `docker_entrypoint.py generate_dataset` in-process
-      # against rank=0/world=1. Output spec lands in /run-metadata/input_spec.json,
-      # matching the shape produced by the SkyPilot launcher branch so the
-      # downstream `validate-spec` / `validate-shard` jobs are provider-agnostic.
-      # Should be replaced by a SkyPilot local-cloud template (#806).
+      # `local` provider: skip SkyPilot entirely. Materialize the spec inside
+      # the dev-snapshot container, then invoke `docker_entrypoint.py
+      # generate_dataset` there against rank=0/world=1. Output spec lands in
+      # /run-metadata/input_spec.json, matching the shape produced by the
+      # SkyPilot launcher branch so the downstream `validate-spec` /
+      # `validate-shard` jobs are provider-agnostic. Should be replaced by a
+      # SkyPilot local-cloud template (#806).
       - name: Run generate_dataset locally (inside container)
         if: ${{ matrix.provider == 'local' }}
         env:
