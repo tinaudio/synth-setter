@@ -1055,3 +1055,26 @@ SURGE_SIMPLE_PARAM_SPEC = ParamSpec(
         NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
     ],
 )
+
+
+# 4-parameter mini-example spec — amp envelope attack, filter cutoff, LFO amplitude/rate. Used by
+# the smoke-test fixture and the predict_vst_audio end-to-end test against
+# ``presets/surge-mini.vstpreset``.
+SURGE_4_PARAM_SPEC = ParamSpec(
+    [
+        ContinuousParameter(name="a_amp_eg_attack", min=0.0, max=0.77),
+        ContinuousParameter(name="a_filter_1_cutoff", min=0.0, max=1.0),
+        ContinuousParameter(
+            name="a_lfo_1_amplitude", min=0.0, max=1.0, constant_val_p=0.67
+        ),
+        ContinuousParameter(name="a_lfo_1_rate", min=0.0, max=1.0),
+    ],
+    [
+        DiscreteLiteralParameter(
+            name="pitch",
+            min=48,
+            max=72,
+        ),
+        NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
+    ],
+)

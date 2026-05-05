@@ -45,28 +45,29 @@ training pairs that random sampling can't reach.
 
 ## Quick start
 
-Bare audition — open the editor on the base preset, no preloaded params:
+Bare audition — open the editor on the base preset for a given spec, no preloaded params:
 
 ```bash
-python scripts/surge_xt_interactive.py
+python scripts/surge_xt_interactive.py --param-spec-name surge_xt
 ```
 
 Audition a single prediction row (row index 0 inside `outputs/pred-0.pt`):
 
 ```bash
-python scripts/surge_xt_interactive.py --pred outputs/pred-0.pt:0
+python scripts/surge_xt_interactive.py --param-spec-name surge_xt --pred outputs/pred-0.pt:0
 ```
 
 Audition a row from an existing HDF5 dataset:
 
 ```bash
-python scripts/surge_xt_interactive.py --dataset-ref outputs/test.h5:0
+python scripts/surge_xt_interactive.py --param-spec-name surge_xt --dataset-ref outputs/test.h5:0
 ```
 
 Record patches and render them into a fresh dataset:
 
 ```bash
 python scripts/surge_xt_interactive.py \
+    --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0 \
     --output-dataset-path outputs/curated-patches.h5
 ```
@@ -77,6 +78,7 @@ diffs of model predictions:
 
 ```bash
 python scripts/surge_xt_interactive.py \
+    --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0 \
     --session-recording-path outputs/session.wav
 ```
@@ -100,10 +102,10 @@ raises `click.UsageError`.
 | Flag                       | Type               | Default                        | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | -------------------------- | ------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--plugin-path` / `-p`     | path               | `plugins/Surge XT.vst3`        | Path to VST3 plugin.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--preset-path` / `-r`     | path               | `presets/surge-base.vstpreset` | Base preset to load before applying any `--pred` / `--dataset-ref` params.                                                                                                                                                                                                                                                                                                                                                                  |
+| `--preset-path` / `-r`     | path               | `presets/surge-base.vstpreset` | Base preset to load before applying any `--pred` / `--dataset-ref` params. Pick the preset that matches `--param-spec-name` (see `preset_paths` in `src/data/vst/__init__.py`).                                                                                                                                                                                                                                                             |
 | `--pred`                   | `PATH:BATCH_IDX`   | unset                          | Prediction reference. When set, the predicted row is decoded and applied to the plugin before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                                                                                                             |
 | `--dataset-ref`            | `PATH:DATASET_IDX` | unset                          | Dataset reference. When set, the dataset row is decoded and applied to the plugin before the editor opens. Example: `outputs/test.h5:0`.                                                                                                                                                                                                                                                                                                    |
-| `--param-spec-name`        | str                | `surge_xt`                     | Parameter spec name (key into `param_specs`) used to decode prediction/dataset rows applied to the plugin and to enumerate which synth params are captured when recording patches.                                                                                                                                                                                                                                                          |
+| `--param-spec-name`        | str                | `surge_xt`                     | Parameter spec name (key into `param_specs`) used to decode prediction/dataset rows applied to the plugin and to enumerate which synth params are captured when recording patches. Use the matching `preset_paths` entry for `--preset-path`.                                                                                                                                                                                               |
 | `--output-dataset-path`    | path               | unset                          | HDF5 file to write recorded patches to. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to this dataset via `src.data.vst.generate_vst_dataset.make_dataset`. Must not already exist — `make_dataset` writes fixed-size HDF5 datasets and cannot append.                                                                                  |
 | `--session-recording-path` | path               | unset                          | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set. |
 
@@ -209,10 +211,11 @@ Worked example:
 python -m src.eval +experiment=surge/eval ckpt_path=...
 
 # 2. Audition row 0 of the resulting predictions.
-python scripts/surge_xt_interactive.py --pred outputs/pred-0.pt:0
+python scripts/surge_xt_interactive.py --param-spec-name surge_xt --pred outputs/pred-0.pt:0
 
 # 3. When you find sounds you like, record them and produce a dataset.
 python scripts/surge_xt_interactive.py \
+    --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0 \
     --output-dataset-path outputs/curated-patches.h5
 
