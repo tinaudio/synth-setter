@@ -10,6 +10,7 @@ wandb
 # --------- pipeline --------- #
 click<8.2
 numpy
+oci
 pydantic>=2
 pyyaml
 # Pin must stay in sync with the bare-runner install in
