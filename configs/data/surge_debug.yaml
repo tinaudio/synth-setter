@@ -1,8 +1,8 @@
 _target_: src.data.surge_datamodule.SurgeDataModule
-dataset_root: /data/scratch/acw585/surge-mini/
+dataset_root: ???
 use_saved_mean_and_variance: true
 batch_size: 128
 ot: true
 num_workers: 11
-predict_file: /data/scratch/acw585/surge-mini/shard-1.h5
+predict_file: ???
 repeat_first_batch: true
