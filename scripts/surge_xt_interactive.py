@@ -17,11 +17,26 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from pedalboard import VST3Plugin  # noqa: E402
 from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
+from rich.console import Console  # noqa: E402
+from rich.logging import RichHandler  # noqa: E402
 
 from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[
+        RichHandler(
+            console=Console(width=200),
+            rich_tracebacks=True,
+            markup=True,
+            show_path=True,
+        )
+    ],
+)
 logger = logging.getLogger(__name__)
 
 CHANNELS = 2
@@ -151,7 +166,8 @@ def decode_prediction_row(
     batch_idx: int,
     param_spec_name: str,
 ) -> dict[str, float]:
-    """Decode a single predicted row into raw VST synth params (functional core — pure transform).
+    """Decode a single predicted row into raw VST synth params (functional core — pure
+    transform).
 
     :param pred_tensor: Float tensor of shape ``(batch_size, num_params)`` with
         values in ``[-1, 1]`` (inverse of the ``(x + 1) / 2`` scale used by
@@ -455,8 +471,6 @@ def main(
     4. After the editor is closed, render every recorded patch through the plugin and append
        the resulting samples to ``--output-dataset-path`` via ``make_dataset``.
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
     if dataset_ref is not None and pred is not None:
         raise click.UsageError(
             "--pred and --dataset-ref are mutually exclusive; pass at most one."
