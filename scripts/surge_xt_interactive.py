@@ -460,6 +460,7 @@ def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
             f"command: {args}\n"
             f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
         )
+        raise
     if result.returncode != 0:
         logger.error(
             f"predict_vst_audio failed (exit {result.returncode})\n"
@@ -548,14 +549,16 @@ def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
 )
 @click.option(
     "--output-dataset-dir-path",
-    type=click.Path(dir_okay=True, path_type=Path),
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
     default=None,
     help=(
-        "Directory to be created with the recorded patches. Must not already exist — "
+        "Directory to create for the recorded patches. Must not already exist — "
         "``make_dataset`` writes fixed-size HDF5 datasets without ``maxshape`` and cannot "
         "append to existing files. After the editor is closed, patches captured via the "
         "keyboard loop (press 'p' to record, 'q' to quit) are rendered through the plugin "
-        "and written to this file via ``src.data.vst.generate_vst_dataset.make_dataset``."
+        "and written to ``train.h5`` inside this directory via "
+        "``src.data.vst.generate_vst_dataset.make_dataset`` (plus ``val.h5``/``test.h5``/"
+        "``predict.h5`` siblings when ``--checkpoint-path`` is set)."
     ),
 )
 @click.option(
@@ -597,8 +600,9 @@ def main(
     3. Open the plugin's GUI editor; in parallel, stream audio to the default output device
        and run a keyboard loop (press ``p`` to snapshot the current synth params as a patch,
        ``q`` to quit).
-    4. After the editor is closed, render every recorded patch through the plugin and append
-       the resulting samples to ``--output-dataset-path`` via ``make_dataset``.
+    4. After the editor is closed, render every recorded patch through the plugin and write
+       the resulting samples to ``train.h5`` inside ``--output-dataset-dir-path`` via
+       ``make_dataset``.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -613,8 +617,8 @@ def main(
     # patches have been captured. Better to reject up front.
     if output_dataset_dir_path is not None and output_dataset_dir_path.exists():
         raise click.UsageError(
-            f"--output-dataset-path {output_dataset_dir_path} already exists; "
-            f"this script writes a new file (fixed-size HDF5 datasets cannot be "
+            f"--output-dataset-dir-path {output_dataset_dir_path} already exists; "
+            f"this script creates a new directory (fixed-size HDF5 datasets cannot be "
             f"appended to). Choose a path that does not exist yet."
         )
 
