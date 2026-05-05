@@ -105,10 +105,11 @@ stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-pr
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3    # renderer_version pinned via SURGE_XT_RENDERER_VERSION constant; worker verifies
 output_format: hdf5                   # "hdf5" (local training) or "wds" (multi-GPU streaming)
-sample_rate: 16000
+sample_rate: 44100
 shard_size: 10000
 num_shards: 48
 base_seed: 42
+r2_bucket: intermediate-data
 
 splits:
   train: 44
@@ -116,11 +117,11 @@ splits:
   test: 2
 
 # Generation params (needed by generate_vst_dataset)
-preset_path: presets/surge-base.vstpreset
+preset_path: presets/surge-simple.vstpreset
 channels: 2
 velocity: 100
 signal_duration_seconds: 4.0
-min_loudness: -55.0
+min_loudness: -50.0
 sample_batch_size: 32
 ```
 
@@ -286,7 +287,9 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `worker_architectures` (list of unique CPU archs), `shard_manifest: list[dict]`
   (per-shard `{shard_id, filename, content_hash}`), `input_spec_sha256`, `input_spec_path`.
 - Run ID format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)).
-  `dataset_config_id` is the config filename stem, which encodes runtime params for readability.
+  `dataset_config_id` is the config filename stem. Production training configs follow
+  `{name}-{total_train_samples}-{shard_size}`; CI smoke and partitioner-exercise configs use
+  role-descriptive names (see design doc §14.6).
 - `materialize_spec(config: DatasetConfig, config_id: DatasetConfigId) -> DatasetPipelineSpec`.
   Derives all runtime state internally (git SHA, repo dirty status, pinned renderer version
   from `SURGE_XT_RENDERER_VERSION`, UTC timestamp). The launcher path stays interpreter-only;
