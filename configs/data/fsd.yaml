@@ -4,4 +4,4 @@ batch_size: 32
 num_workers: 4
 segment_length_seconds: 4.0
 shuffle: true
-stats_file: /data/scratch/acw585/surge/stats.npz
+stats_file: ???
