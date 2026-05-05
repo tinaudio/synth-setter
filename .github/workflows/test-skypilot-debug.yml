@@ -366,6 +366,7 @@ jobs:
             --config "$CONFIG_PATH" \
             --template "$TEMPLATE" \
             --cluster-name "$CLUSTER_NAME" \
+            --tail \
             2>&1 | tee "$LOG_PATH"
 
       - name: Run launcher (launcher-docker mode)
@@ -406,7 +407,8 @@ jobs:
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
-                --cluster-name "$CLUSTER_NAME"
+                --cluster-name "$CLUSTER_NAME" \
+                --tail
             ' \
             2>&1 | tee "$LOG_PATH"
 

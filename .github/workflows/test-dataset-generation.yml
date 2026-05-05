@@ -268,7 +268,8 @@ jobs:
                 --cluster-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \
                 --num-workers 3 \
-                --spec-out /tmp/input_spec.json
+                --spec-out /tmp/input_spec.json \
+                --tail
               cp /tmp/input_spec.json /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \
