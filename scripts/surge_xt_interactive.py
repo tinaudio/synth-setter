@@ -68,7 +68,7 @@ _KEEP_LOOPING = True
 _STOP_LOOPING = False
 
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
-VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
+_VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
 
 # Below this peak, librosa RMS norms underflow and ``compute_rms`` produces
 # 0/0 → NaN (see ``compute_rms`` in ``scripts/compute_audio_metrics.py``).
@@ -402,8 +402,13 @@ def _run_predict(
 
 
 def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> None:
-    """Verify ``PredictionWriter`` (``src/utils/callbacks.py``) wrote the expected ``pred-/target-
-    audio-/target-params-{i}.pt`` files and that prediction tensors are finite."""
+    """Verify ``PredictionWriter`` (``src/utils/callbacks.py``) wrote the expected per-sample
+    ``pred-{i}.pt``, ``target-audio-{i}.pt``, and ``target-params-{i}.pt`` files, and that
+    prediction tensors are finite.
+
+    Tensors are loaded onto CPU regardless of the device they were saved from so this works across
+    mps/cuda/cpu predict runs.
+    """
     expected_names = sorted(
         f"{prefix}-{i}.pt"
         for prefix in ("pred", "target-audio", "target-params")
@@ -415,7 +420,9 @@ def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> Non
         f"got {actual_names}, expected {expected_names}"
     )
     for i in range(num_samples):
-        pred = torch.load(predictions_output_dir / f"pred-{i}.pt", weights_only=True)
+        pred = torch.load(
+            predictions_output_dir / f"pred-{i}.pt", map_location="cpu", weights_only=True
+        )
         assert torch.isfinite(pred).all(), f"pred-{i}.pt contains NaN/Inf"
 
 
@@ -426,7 +433,7 @@ def _render_predicted_audio(
     non-silent WAVs)."""
     args: list[str] = []
     if sys.platform == "linux":
-        args.append(VST_HEADLESS_WRAPPER)
+        args.append(_VST_HEADLESS_WRAPPER)
     args += [
         sys.executable,
         "scripts/predict_vst_audio.py",
@@ -604,6 +611,10 @@ def main(
     4. After the editor is closed, render every recorded patch through the plugin and write
        the resulting samples to ``train.h5`` inside ``--output-dataset-dir-path`` via
        ``make_dataset``.
+    5. If ``--checkpoint-path`` is also set, copy ``train.h5`` to ``val.h5``/``test.h5``/
+       ``predict.h5`` siblings and run ``src/eval.py mode=predict`` followed by audio
+       rendering (``predict_vst_audio.py``) and metric computation
+       (``compute_audio_metrics.py``) on the captured patches.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -687,7 +698,7 @@ def main(
         pool.shutdown(wait=not audio_timed_out, cancel_futures=audio_timed_out)
 
     if output_dataset_dir_path is None:
-        logger.info("No output dataset path provided, skipping dataset creation.")
+        logger.info("No --output-dataset-dir-path provided, skipping dataset creation.")
         return
     if not synth_patches:
         logger.info("No patches recorded, skipping dataset creation.")
