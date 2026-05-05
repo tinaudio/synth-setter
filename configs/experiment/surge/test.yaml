@@ -1,0 +1,53 @@
+# @package _global_
+
+# Smoke-test experiment for Surge XT on MPS. Mirrors the bake-ins in
+# `cfg_surge_xt_global` (tests/conftest.py) for the MPS branch — one training
+# step, one device, single-sample batches, no logger, no test stage.
+
+defaults:
+  - override /model: surge_ffn
+  - override /data: surge
+  - override /trainer: mps
+  - override /callbacks: [default_surge, eval_surge]
+  - _self_
+
+run_name: ffn
+experiment_name: surge-test-mps
+
+tags:
+  - surge
+  - test
+
+logger: null
+test: false
+
+model:
+  compile: false
+  scheduler: null
+  net:
+    d_out: 300
+
+data:
+  batch_size: 1
+  pin_memory: false
+  ot: false
+  use_saved_mean_and_variance: false
+  num_workers: 0
+
+trainer:
+  devices: 1
+  precision: "32-true"
+  gradient_clip_val: 0.5
+  max_steps: 1
+  check_val_every_n_epoch: 1
+  val_check_interval: 1.0
+  log_every_n_steps: 1
+  enable_model_summary: false
+  limit_val_batches: 1.0
+  deterministic: true
+
+callbacks:
+  lr_monitor: null
+  plot_proj_ii: null
+  model_checkpoint:
+    save_last: true

@@ -1,11 +1,15 @@
 """Interactive Surge XT preview with real-time audio streaming via pedalboard."""
 
 import logging
+import shutil
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
 import rootutils
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -62,6 +66,9 @@ _PLUGIN_FLUSH_BUFFER_SIZE = 2048
 # quit" from "action completed, keep listening".
 _KEEP_LOOPING = True
 _STOP_LOOPING = False
+
+_VST_SUBPROCESS_TIMEOUT_SECONDS = 300
+VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
 
 
 @dataclass(frozen=True)
@@ -369,6 +376,137 @@ def keyboard_loop(
     return synth_patches
 
 
+def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path) -> None:
+    """Render the captured patches through the plugin and optionally run eval on them."""
+    NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
+    METRICS_FILE_EXPECTATIONS = {
+        "aggregated_metrics.csv": {
+            "rows": NUM_AUDIO_METRICS,
+            "columns": {"mean", "std"},
+        },
+        "metrics.csv": {
+            "rows": num_samples,
+            "columns": {"mss", "wmfcc", "sot", "rms"},
+        },
+    }
+
+    predict_file = dataset_root_dir / "predict.h5"
+    # base_dir = Path("data/junk3")
+    # checkpoint_path = base_dir / "junk.ckpt"
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
+    if not dataset_root_dir.is_dir():
+        raise NotADirectoryError(f"dataset root directory not found: {dataset_root_dir}")
+    if not (dataset_root_dir / "predict.h5").is_file():
+        raise FileNotFoundError(
+            f"predict.h5 not found in dataset root directory: {dataset_root_dir}"
+        )
+    if not predict_file.is_file():
+        raise FileNotFoundError(f"predict.h5 not found: {predict_file}")
+
+    audio_dir = dataset_root_dir / "audio"
+    metrics_dir = dataset_root_dir / "metrics"
+    predictions_output_dir = dataset_root_dir / "prediction_outputs"
+
+    assert checkpoint_path.is_file(), f"checkpoint not found: {checkpoint_path}"
+    # evaluate(cfg_surge_xt_eval)
+    subprocess.check_call(  # noqa: S603 — args built from validated spec
+        [
+            sys.executable,
+            "src/eval.py",
+            "experiment=surge/test",
+            "ckpt_path=" + str(checkpoint_path),
+            "data.predict_file=" + str(predict_file),
+            "data.dataset_root=" + str(dataset_root_dir),
+            "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir),
+            "mode=predict",
+        ],
+    )
+
+    # `PredictionWriter` (in `src/utils/callbacks.py`) with `write_interval=batch` saves three
+    # tensors per predict batch: `pred-{i}.pt`, `target-audio-{i}.pt`, `target-params-{i}.pt`.
+    expected_names = sorted(
+        f"{prefix}-{i}.pt"
+        for prefix in ("pred", "target-audio", "target-params")
+        for i in range(num_samples)
+    )
+    assert sorted(p.name for p in predictions_output_dir.iterdir()) == expected_names
+
+    for i in range(num_samples):
+        pred = torch.load(predictions_output_dir / f"pred-{i}.pt", weights_only=True)
+        assert torch.isfinite(pred).all(), f"pred-{i}.pt contains NaN/Inf"
+
+    args = []
+    if sys.platform == "linux":
+        args.append(VST_HEADLESS_WRAPPER)
+
+    args += [
+        sys.executable,
+        "scripts/predict_vst_audio.py",
+        str(predictions_output_dir),
+        str(audio_dir),
+        "-t",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603, S607
+            args,
+            text=True,
+            check=False,
+            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            f"predict_vst_audio timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"command: {args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+        )
+    if result.returncode != 0:
+        logger.error(
+            f"predict_vst_audio failed (exit {result.returncode})\n"
+            f"command: {args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+        )
+
+    sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
+    assert [d.name for d in sample_dirs] == [f"sample_{i}" for i in range(num_samples)]
+    # ~-80 dBFS — below this, librosa RMS norms underflow and `compute_rms`
+    # produces 0/0 → NaN (see `compute_rms` in `scripts/compute_audio_metrics.py`).
+    SILENCE_PEAK_THRESHOLD = 1e-4
+    for sample_dir in sample_dirs:
+        assert (sample_dir / "target.wav").is_file()
+        assert (sample_dir / "pred.wav").is_file()
+        assert (sample_dir / "spec.png").is_file()
+        assert (sample_dir / "params.csv").is_file()
+
+        for wav_name in ("target.wav", "pred.wav"):
+            with AudioFile(str(sample_dir / wav_name)) as f:
+                audio = f.read(f.frames)
+            peak = float(np.abs(audio).max())
+            assert peak > SILENCE_PEAK_THRESHOLD, (
+                f"{sample_dir.name}/{wav_name} is silent (peak={peak:.2e})"
+            )
+
+    # Compute audio distance metrics (MSS, wMFCC, SOT, RMS) on the rendered pairs.
+    subprocess.check_call(  # noqa: S603 — args built from validated spec
+        [
+            sys.executable,
+            "scripts/compute_audio_metrics.py",
+            str(audio_dir),
+            str(metrics_dir),
+            "-w",
+            "1",
+        ],
+    )
+
+    for metrics_file, expected in METRICS_FILE_EXPECTATIONS.items():
+        assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found in {metrics_dir}"
+        metrics_df = pd.read_csv(metrics_dir / metrics_file)
+        assert len(metrics_df) == expected["rows"]
+        assert expected["columns"].issubset(metrics_df.columns)
+        numeric = metrics_df[sorted(expected["columns"])].to_numpy()
+        assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"
+
+
 @click.command()
 @click.option("--plugin-path", "-p", default="plugins/Surge XT.vst3", help="Path to VST3 plugin.")
 @click.option(
@@ -409,16 +547,22 @@ def keyboard_loop(
     ),
 )
 @click.option(
-    "--output-dataset-path",
-    type=click.Path(dir_okay=False, path_type=Path),
+    "--output-dataset-dir-path",
+    type=click.Path(dir_okay=True, path_type=Path),
     default=None,
     help=(
-        "HDF5 file to be created with the recorded patches. Must not already exist — "
+        "Directory to be created with the recorded patches. Must not already exist — "
         "``make_dataset`` writes fixed-size HDF5 datasets without ``maxshape`` and cannot "
         "append to existing files. After the editor is closed, patches captured via the "
         "keyboard loop (press 'p' to record, 'q' to quit) are rendered through the plugin "
         "and written to this file via ``src.data.vst.generate_vst_dataset.make_dataset``."
     ),
+)
+@click.option(
+    "--checkpoint-path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=("Optional checkpoint path to run standalone eval on after rendering captured patches. "),
 )
 @click.option(
     "--session-recording-path",
@@ -439,7 +583,8 @@ def main(
     dataset_ref: DatasetRef | None,
     preset_path: str,
     param_spec_name: str,
-    output_dataset_path: Path | None,
+    output_dataset_dir_path: Path | None,
+    checkpoint_path: Path | None,
     session_recording_path: Path | None,
 ) -> None:
     """Open Surge XT GUI with real-time audio streaming and record patches to an HDF5 dataset.
@@ -466,9 +611,9 @@ def main(
     # ``maxshape`` and cannot append, so a pre-existing path would either
     # silently overwrite (when re-creating datasets) or fail mid-render after
     # patches have been captured. Better to reject up front.
-    if output_dataset_path is not None and output_dataset_path.exists():
+    if output_dataset_dir_path is not None and output_dataset_dir_path.exists():
         raise click.UsageError(
-            f"--output-dataset-path {output_dataset_path} already exists; "
+            f"--output-dataset-path {output_dataset_dir_path} already exists; "
             f"this script writes a new file (fixed-size HDF5 datasets cannot be "
             f"appended to). Choose a path that does not exist yet."
         )
@@ -536,13 +681,15 @@ def main(
         # wait for any remaining work to drain normally.
         pool.shutdown(wait=not audio_timed_out, cancel_futures=audio_timed_out)
 
-    if output_dataset_path is None:
+    if output_dataset_dir_path is None:
         logger.info("No output dataset path provided, skipping dataset creation.")
         return
     if not synth_patches:
         logger.info("No patches recorded, skipping dataset creation.")
         return
-    with h5py.File(output_dataset_path, "w") as f:
+    output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
+    patch_file_path = output_dataset_dir_path / "train.h5"
+    with h5py.File(patch_file_path, "w") as f:
         make_dataset(
             hdf5_file=f,
             num_samples=len(synth_patches),
@@ -557,6 +704,15 @@ def main(
             sample_batch_size=MAKE_DATASET_SAMPLE_BATCH_SIZE,
             fixed_synth_params_list=synth_patches,
         )
+    if checkpoint_path is None:
+        logger.info("No checkpoint path provided, skipping patch evaluation.")
+        return
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
+    shutil.copyfile(patch_file_path, output_dataset_dir_path / "test.h5")
+    shutil.copyfile(patch_file_path, output_dataset_dir_path / "val.h5")
+    shutil.copyfile(patch_file_path, output_dataset_dir_path / "predict.h5")
+    eval_patches(len(synth_patches), output_dataset_dir_path, checkpoint_path)
 
 
 if __name__ == "__main__":
