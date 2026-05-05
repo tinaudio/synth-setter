@@ -1,6 +1,8 @@
 """Interactive Surge XT preview with real-time audio streaming via pedalboard."""
 
 import logging
+import math
+import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -13,6 +15,7 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 import click  # noqa: E402
 import h5py  # noqa: E402
 import hdf5plugin  # noqa: F401, E402  side-effect: registers HDF5_PLUGIN_PATH for Blosc2 filters
+import mido  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from pedalboard import VST3Plugin  # noqa: E402
@@ -21,6 +24,8 @@ from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
+
+MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
 logger = logging.getLogger(__name__)
 
@@ -242,25 +247,32 @@ def _flush_plugin(plugin: VST3Plugin) -> None:
     plugin.reset()
 
 
-def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
-    """Stream silence through Surge XT and write synthesized audio to the output device.
+def play_audio(plugin: VST3Plugin, stop_event: threading.Event, midi_queue: queue.Queue) -> None:
+    """Stream Surge XT output to the audio device, processing any pending MIDI messages.
 
     Runs until ``stop_event`` is set (typically by ``keyboard_loop``'s quit action or by
-    ``main`` after the plugin editor is closed). Resamples to ``PLAYBACK_SAMPLE_RATE`` if
-    it differs from ``SAMPLE_RATE`` so the output device gets a rate it supports.
+    ``main`` after the plugin editor is closed). Drains ``midi_queue`` each iteration so the
+    plugin sees incoming notes/CCs from the MIDI listener thread. Resamples to
+    ``PLAYBACK_SAMPLE_RATE`` if it differs from ``SAMPLE_RATE`` so the output device gets a
+    rate it supports.
     """
-    silence = np.zeros((CHANNELS, BUFFER_SIZE), dtype=np.float32)
     needs_resample = SAMPLE_RATE != PLAYBACK_SAMPLE_RATE
     stream_resampler = (
         StreamResampler(SAMPLE_RATE, PLAYBACK_SAMPLE_RATE, CHANNELS) if needs_resample else None
     )
+    buffer_duration_seconds = BUFFER_SIZE / SAMPLE_RATE
     with AudioStream(
         output_device_name=AudioStream.default_output_device_name,
         sample_rate=PLAYBACK_SAMPLE_RATE,
         buffer_size=BUFFER_SIZE,
     ) as stream:
         while not stop_event.is_set():
-            synth_output = plugin(silence, SAMPLE_RATE, reset=False)
+            messages = []
+            while not midi_queue.empty():
+                messages.append(midi_queue.get_nowait())
+            synth_output = plugin.process(
+                messages, buffer_duration_seconds, SAMPLE_RATE, CHANNELS, BUFFER_SIZE, False
+            )
             if synth_output.shape != (CHANNELS, BUFFER_SIZE):
                 raise ValueError(
                     f"expected synth output shape ({CHANNELS}, {BUFFER_SIZE}), "
@@ -270,6 +282,20 @@ def play_audio(plugin: VST3Plugin, stop_event: threading.Event) -> None:
                 stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
             else:
                 stream.write(synth_output, SAMPLE_RATE)
+
+
+def midi_listener(port_name: str, midi_queue: queue.Queue) -> None:
+    """Listen on a MIDI input port and push relevant messages onto ``midi_queue``.
+
+    Filters to performance-relevant types (notes, CC, pitch wheel, aftertouch); other
+    message types (e.g. ``polytouch``, ``sysex``, ``clock``) are dropped. Designed to run on
+    a daemon thread alongside :func:`play_audio`.
+    """
+    logger.info("Listening on MIDI port: %s", port_name)
+    with mido.open_input(port_name) as port_handle:
+        for msg in port_handle:
+            if msg.type in MIDI_LISTEN_MESSAGE_TYPES:
+                midi_queue.put(msg)
 
 
 def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> None:
@@ -320,14 +346,19 @@ def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> Non
 
 
 def keyboard_loop(
-    plugin: VST3Plugin, stop_event: threading.Event, param_spec_name: str
+    plugin: VST3Plugin,
+    stop_event: threading.Event,
+    param_spec_name: str,
+    default_params: dict[str, float],
 ) -> list[dict[str, float]]:
     """Read keystrokes and snapshot the live plugin params into a list of patches.
 
     Keys:
 
     - ``p`` — record the current values of every synth param in
-      ``param_specs[param_spec_name]`` as a patch dict.
+      ``param_specs[param_spec_name]`` as a patch dict. Fails if any non-spec parameter
+      has drifted from its post-preset-load default (caught at record time so the user
+      can revert before the editor closes).
     - ``q`` — set ``stop_event`` and exit.
 
     Also exits when ``stop_event`` is set externally (e.g. when the plugin editor is
@@ -342,8 +373,18 @@ def keyboard_loop(
         return _STOP_LOOPING
 
     def record_patch() -> bool:
-        patch: dict[str, float] = {}
         logger.info("Recording patch...")
+        for param_name in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
+            if param_name in spec.synth_param_names:
+                continue
+            current = plugin.parameters[param_name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
+            default = default_params.get(param_name, 0.0)
+            if not math.isclose(current, default, abs_tol=1e-6):
+                raise ValueError(
+                    f"plugin parameter {param_name!r} drifted from default "
+                    f"{default:.6f} to {current:.6f}; revert it before recording"
+                )
+        patch: dict[str, float] = {}
         for param_name in spec.synth_param_names:
             if param_name not in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
                 raise KeyError(f"parameter {param_name!r} not found in plugin parameters")
@@ -364,8 +405,17 @@ def keyboard_loop(
     while not stop_event.is_set():
         ch = click.getchar()
         action = actions.get(ch)
-        if action is not None and action() == _STOP_LOOPING:
-            return synth_patches
+        if action is None:
+            continue
+        try:
+            if action() == _STOP_LOOPING:
+                return synth_patches
+        except (KeyError, ValueError):
+            # Surface the traceback now; without this it stays buffered in
+            # ``keyboard_future`` until ``main`` reaches ``.result()`` after the editor closes.
+            logger.exception("keyboard action %r failed", ch)
+            stop_event.set()
+            raise
     return synth_patches
 
 
@@ -421,6 +471,18 @@ def keyboard_loop(
     ),
 )
 @click.option(
+    "--midi-port",
+    type=str,
+    default=None,
+    help=(
+        "Name of a MIDI input port to listen on (matched against ``mido.get_input_names()``). "
+        "When set, a daemon thread forwards MIDI note/CC/pitch-wheel/aftertouch messages to "
+        "the plugin while the editor is open. Pass an empty string ``''`` to auto-select the "
+        "first available input. When unset, no MIDI input is opened. List ports with "
+        '``python -c "import mido; print(mido.get_input_names())"``.'
+    ),
+)
+@click.option(
     "--session-recording-path",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
@@ -440,6 +502,7 @@ def main(
     preset_path: str,
     param_spec_name: str,
     output_dataset_path: Path | None,
+    midi_port: str | None,
     session_recording_path: Path | None,
 ) -> None:
     """Open Surge XT GUI with real-time audio streaming and record patches to an HDF5 dataset.
@@ -484,6 +547,13 @@ def main(
     _flush_plugin(plugin)
     _flush_plugin(plugin)
 
+    # Snapshot the post-preset-flush parameter values so ``record_patch`` can detect drift
+    # in any non-spec parameter at record time.
+    default_params: dict[str, float] = {
+        name: plugin.parameters[name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
+        for name in plugin.parameters  # pyright: ignore[reportAttributeAccessIssue]
+    }
+
     if dataset_ref is not None:
         synth_params = load_dataset_synth_params(dataset_ref, param_spec_name)
         set_params(plugin, synth_params)
@@ -498,14 +568,36 @@ def main(
     if session_recording_path is not None:
         play_audio_recorded(plugin, session_recording_path)
 
+    midi_queue: queue.Queue = queue.Queue()
+    if midi_port is not None:
+        available_ports = mido.get_input_names()
+        if not available_ports:
+            raise click.UsageError("--midi-port set but no MIDI input ports are available.")
+        if midi_port == "":
+            resolved_port = available_ports[0]
+            logger.info("--midi-port='' — auto-selected first input: %s", resolved_port)
+        elif midi_port in available_ports:
+            resolved_port = midi_port
+        else:
+            raise click.UsageError(
+                f"--midi-port {midi_port!r} not in available inputs {available_ports!r}"
+            )
+        threading.Thread(
+            target=midi_listener, args=(resolved_port, midi_queue), daemon=True
+        ).start()
+
     stop_event = threading.Event()
     pool = ThreadPoolExecutor()
     audio_timed_out = False
     try:
         audio_future = (
-            pool.submit(play_audio, plugin, stop_event) if session_recording_path is None else None
+            pool.submit(play_audio, plugin, stop_event, midi_queue)
+            if session_recording_path is None
+            else None
         )
-        keyboard_future = pool.submit(keyboard_loop, plugin, stop_event, param_spec_name)
+        keyboard_future = pool.submit(
+            keyboard_loop, plugin, stop_event, param_spec_name, default_params
+        )
 
         try:
             plugin.show_editor(stop_event)

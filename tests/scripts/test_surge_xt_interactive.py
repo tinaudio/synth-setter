@@ -371,3 +371,76 @@ class TestPlayAudioRecorded:
         assert note_on_bytes[1] == surge_xt_interactive.SESSION_RECORDING_MIDI_NOTE
         assert note_off_bytes[1] == surge_xt_interactive.SESSION_RECORDING_MIDI_NOTE
         assert note_on_bytes[2] == surge_xt_interactive.SESSION_RECORDING_VELOCITY
+
+
+class _FakeMidiMessage:
+    """Minimal stand-in for a ``mido.Message`` — exposes ``type`` and prints recognizably."""
+
+    def __init__(self, msg_type: str) -> None:
+        self.type = msg_type
+
+    def __repr__(self) -> str:
+        return f"_FakeMidiMessage({self.type!r})"
+
+
+class _FakeMidiPortHandle:
+    """Iterable mido-input replacement; used as a context manager that yields fake messages."""
+
+    def __init__(self, messages: list[_FakeMidiMessage]) -> None:
+        self._messages = messages
+
+    def __enter__(self) -> "_FakeMidiPortHandle":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def __iter__(self):
+        return iter(self._messages)
+
+
+class TestMidiListener:
+    """``midi_listener`` filters mido messages by type and forwards them to a queue."""
+
+    def test_only_relevant_message_types_are_forwarded(
+        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """note_on/off, control_change, pitchwheel, aftertouch are queued; others are dropped."""
+        import queue as _queue
+
+        forwarded = [
+            _FakeMidiMessage("note_on"),
+            _FakeMidiMessage("note_off"),
+            _FakeMidiMessage("control_change"),
+            _FakeMidiMessage("pitchwheel"),
+            _FakeMidiMessage("aftertouch"),
+        ]
+        dropped = [
+            _FakeMidiMessage("polytouch"),
+            _FakeMidiMessage("sysex"),
+            _FakeMidiMessage("clock"),
+        ]
+        # Interleave to make sure the filter doesn't depend on order.
+        all_messages = [
+            forwarded[0],
+            dropped[0],
+            forwarded[1],
+            dropped[1],
+            *forwarded[2:],
+            dropped[2],
+        ]
+
+        monkeypatch.setattr(
+            surge_xt_interactive.mido,
+            "open_input",
+            lambda port_name: _FakeMidiPortHandle(all_messages),
+        )
+
+        midi_queue: _queue.Queue = _queue.Queue()
+        surge_xt_interactive.midi_listener("fake-port", midi_queue)
+
+        drained: list[_FakeMidiMessage] = []
+        while not midi_queue.empty():
+            drained.append(midi_queue.get_nowait())
+
+        assert [m.type for m in drained] == [m.type for m in forwarded]
