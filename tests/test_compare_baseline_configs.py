@@ -309,6 +309,10 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "logger.wandb.entity",  # env-derived (${oc.env:WANDB_ENTITY,null})
     "logger.wandb.log_model",  # changed `true` → "all" (artifact upload policy, not training)
     "logger.wandb.project",  # env-derived (${oc.env:WANDB_PROJECT,synth-setter})
+    # Cleared to `???` (mandatory override) in #809 — dataset locality, not a model knob.
+    "data.dataset_root",
+    "data.predict_file",
+    "data.stats_file",
 )
 
 
