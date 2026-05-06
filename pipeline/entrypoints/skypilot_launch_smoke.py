@@ -236,10 +236,10 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
     show_default=True,
     help=(
         "Tail worker logs and tear down clusters in `finally`. Default `--no-tail` waits for "
-        "`sky.launch` to return a `job_id` per rank (i.e. through provisioning), prints the "
-        "`sky logs` / `sky down` commands the operator can run, and exits without tailing or "
-        "tearing down — `idle_minutes_to_autostop=5, down=True` on `sky.launch` is the safety "
-        "net for left-running clusters."
+        "`sky.launch` + `sky.stream_and_get` to return a `job_id` per rank (i.e. through "
+        "provisioning), prints the `sky logs` / `sky down` commands the operator can run, and "
+        "exits without tailing or tearing down — `idle_minutes_to_autostop=5, down=True` on "
+        "`sky.launch` is the safety net for left-running clusters."
     ),
 )
 def main(
@@ -356,9 +356,9 @@ def _run_workers(
 
     With ``tail=True``, every cluster is torn down in the ``finally`` block regardless of
     rank outcome and the rc reflects ``sky.tail_logs``. With ``tail=False`` the launcher
-    detaches after `sky.launch` returns a `job_id`, prints the `sky logs` / `sky down`
-    commands the operator can run, and only tears down clusters whose own launch raised
-    (half-provisioned).
+    detaches after `sky.launch` + `sky.stream_and_get` return a `job_id`, prints the
+    `sky logs` / `sky down` commands the operator can run, and only tears down clusters
+    whose own launch raised (half-provisioned).
 
     Args:
         worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
@@ -426,7 +426,7 @@ def _run_workers_tail(
                 try:
                     rcs[rank] = fut.result()
                 except Exception as exc:  # noqa: BLE001 — keep teardown reachable for every rank.
-                    click.echo(f"[{cluster_names[rank]}] launch raised: {exc}")
+                    click.echo(f"[{cluster_names[rank]}] launch or tail raised: {exc}")
                     rcs[rank] = -1
     finally:
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
