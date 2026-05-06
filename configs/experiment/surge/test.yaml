@@ -27,7 +27,10 @@ model:
   compile: false
   scheduler: null
   net:
-    d_out: 300
+    # Mandatory override — must equal the encoded width of the param_spec used by the run.
+    # The smoke fixture passes ``len(param_specs["surge_4"])``; production callers should
+    # set this to ``len(param_specs[<their-spec>])`` via the CLI override.
+    d_out: ???
 
 data:
   batch_size: 1
