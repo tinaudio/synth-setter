@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778073001369,
+  "lastUpdate": 1778073003738,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -1751,6 +1751,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.601110537300002,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f940b9f16a7f39029eaca346ab50d1a5b752f150",
+          "message": "build(deps): add oci sdk as standalone dep in requirements-app.txt (#825)\n\nCurrently pulled in transitively via skypilot[oci]. Adding it as a\ntop-level dep so we can import it directly without relying on the\nSkyPilot extra's resolution.\n\nRefs #785",
+          "timestamp": "2026-05-06T08:58:50-04:00",
+          "tree_id": "4e17e8814d1207ee40be40fc9538ae537bb1094b",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f940b9f16a7f39029eaca346ab50d1a5b752f150"
+        },
+        "date": 1778073003256,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 1.4508261680603027,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.0363807892939074,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.005627259612083435,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0015625357627868652,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.3222322463989258,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.968921669400014,
             "unit": "seconds"
           }
         ]
