@@ -14,7 +14,10 @@ if [[ -z "${WORKER_GIT_REF:-}" ]]; then
 fi
 
 echo "Syncing worker checkout to git ref: $WORKER_GIT_REF"
-git config --global --add safe.directory /home/build/synth-setter
+repo_dir="$(pwd)"
+if ! git config --global --get-all safe.directory | grep -Fxq -- "$repo_dir"; then
+  git config --global --add safe.directory "$repo_dir"
+fi
 git fetch --depth=1 origin -- "$WORKER_GIT_REF"
 git checkout FETCH_HEAD
 echo "Worker now at: $(git rev-parse HEAD)"

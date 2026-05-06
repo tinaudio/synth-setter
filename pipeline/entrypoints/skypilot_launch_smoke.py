@@ -109,7 +109,9 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
             resolved[key] = os.environ[key]
     git_ref = resolved.get("WORKER_GIT_REF", "")
     if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
-        raise ValueError(f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}")
+        raise click.ClickException(
+            f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
+        )
     return resolved
 
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import click
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -247,9 +248,9 @@ class TestResolveWorkerEnvGitRefValidation:
         ],
     )
     def test_invalid_git_ref_raises(self, monkeypatch: pytest.MonkeyPatch, bad_sha: str) -> None:
-        """Non-SHA values raise ValueError before the launcher provisions anything."""
+        """Non-SHA values fail with ClickException before the launcher provisions anything."""
         monkeypatch.setenv("WORKER_GIT_REF", bad_sha)
-        with pytest.raises(ValueError, match="WORKER_GIT_REF"):
+        with pytest.raises(click.ClickException, match="WORKER_GIT_REF"):
             resolve_worker_env(None)
 
 

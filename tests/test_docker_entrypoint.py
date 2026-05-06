@@ -314,8 +314,9 @@ class TestGenerateDataset:
             patch.object(entrypoint, "run", lambda _spec: None),
             patch.object(entrypoint.os, "_exit", lambda code: exit_calls.append(code)),
         ):
-            runner.invoke(entrypoint.cli, ["generate_dataset", "--spec", str(spec_path)])
+            result = runner.invoke(entrypoint.cli, ["generate_dataset", "--spec", str(spec_path)])
 
+        assert result.exit_code == 0, result.output
         assert exit_calls == [0], (
             f"expected os._exit(0) after run() returns (#735 workaround), got {exit_calls}"
         )
