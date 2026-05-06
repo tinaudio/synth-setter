@@ -378,15 +378,12 @@ gh workflow run docker-build-validation.yml --ref main
 
 ### Required secrets
 
-| Secret                 | Purpose                                                                                                |
-| ---------------------- | ------------------------------------------------------------------------------------------------------ |
-| `DOCKERHUB_USERNAME`   | Docker Hub login (push-only; pulls are anonymous)                                                      |
-| `DOCKERHUB_TOKEN`      | Docker Hub access token (push-only)                                                                    |
-| `R2_ACCESS_KEY_ID`     | R2 credentials (runtime; bridged to `RCLONE_CONFIG_R2_ACCESS_KEY_ID` by the launcher's cred-bootstrap) |
-| `R2_SECRET_ACCESS_KEY` | R2 credentials (bridged to `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`)                                       |
-| `R2_ENDPOINT`          | R2 endpoint (bridged to `RCLONE_CONFIG_R2_ENDPOINT`)                                                   |
-| `R2_ACCOUNT_ID`        | Cloudflare account ID (written to `~/.cloudflare/accountid` for SkyPilot's R2 storage adaptor)         |
-| `WANDB_API_KEY`        | W&B auth (runtime)                                                                                     |
+| Secret               | Purpose                                           |
+| -------------------- | ------------------------------------------------- |
+| `DOCKERHUB_USERNAME` | Docker Hub login (push-only; pulls are anonymous) |
+| `DOCKERHUB_TOKEN`    | Docker Hub access token (push-only)               |
+
+The R2 / W&B secrets the published image *consumes at runtime* are documented in `docs/reference/github-actions.md` — they belong to the workflows that actually invoke the image (e.g. `dataset-generation.yml`, `test-dataset-generation.yml`), not to `docker-build-validation.yml`, which only builds and pushes.
 
 ______________________________________________________________________
 
