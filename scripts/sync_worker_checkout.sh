@@ -21,4 +21,4 @@ fi
 git fetch --depth=1 origin -- "$WORKER_GIT_REF"
 git checkout FETCH_HEAD
 echo "Worker now at: $(git rev-parse HEAD)"
-uv pip install --no-deps -r requirements.txt
+uv pip install -r requirements.txt
