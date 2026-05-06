@@ -183,7 +183,7 @@ The API server uses **its own** credentials to launch jobs, not your laptop's. S
 
 ```bash
 mkdir -p ~/.runpod
-cat > ~/.runpod/config.toml <<EOF
+cat > ~/.runpod/config.toml <<'EOF'
 api_key = "your-runpod-api-key-here"
 EOF
 chmod 600 ~/.runpod/config.toml
@@ -217,7 +217,7 @@ Enter your access key, secret, default region.
 curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-arm.tar.gz
 tar -xf google-cloud-cli-linux-arm.tar.gz
 ./google-cloud-sdk/install.sh
-exec -l $SHELL
+exec -l "$SHELL"
 gcloud auth application-default login
 gcloud config set project YOUR_PROJECT_ID
 ```
@@ -708,7 +708,7 @@ uv tool install --python 3.11 --with pip "skypilot-nightly[runpod,kubernetes]"
 
 # RunPod creds
 mkdir -p ~/.runpod
-cat > ~/.runpod/config.toml <<EOF
+cat > ~/.runpod/config.toml <<'EOF'
 api_key = "YOUR_RUNPOD_KEY"
 EOF
 chmod 600 ~/.runpod/config.toml

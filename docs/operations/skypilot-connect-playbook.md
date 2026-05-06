@@ -342,7 +342,7 @@ WantedBy=default.target
 EOF
 
 # Secrets out of the unit file
-cat > ~/.config/cloudflared-sky.env <<EOF
+cat > ~/.config/cloudflared-sky.env <<'EOF'
 CF_ACCESS_CLIENT_ID=abc123def456.access
 CF_ACCESS_CLIENT_SECRET=your-secret-value
 EOF
@@ -419,7 +419,8 @@ grep -q "healthy" /tmp/sky-info.txt && pass "sky api info reports healthy" \
   || { cat /tmp/sky-info.txt; fail "sky api info did not return healthy"; }
 
 echo "[4/5] sky check (cloud credentials on the server)"
-sky check 2>&1 | tee /tmp/sky-check.txt | tail -20
+sky check > /tmp/sky-check.txt 2>&1 || true
+tail -20 /tmp/sky-check.txt
 grep -qE "enabled|✓" /tmp/sky-check.txt \
   && pass "At least one cloud is enabled on the server" \
   || fail "No cloud reported enabled. Fix credentials on the server."
