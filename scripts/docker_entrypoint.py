@@ -127,6 +127,9 @@ def generate_dataset(spec_path_or_uri: str) -> None:
         logger.error("Spec validation failed for %s: %s", spec_path_or_uri, exc)
         raise click.ClickException(f"Invalid spec at {spec_path_or_uri}: {exc}") from exc
     run(cast(DatasetPipelineSpec, spec))
+    # Defensive force-exit — see #735.
+    logger.info("Exiting after run() (#735 defensive)")
+    os._exit(0)
 
 
 @cli.command("render_eval")

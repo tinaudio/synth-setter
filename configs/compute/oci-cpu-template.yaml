@@ -60,18 +60,9 @@ setup: |
 
 # run: launches the worker container ourselves (OCI backend can't ingest a
 # docker image_id). --privileged + --ulimit nofile is the expedient hammer
-# for the Xvfb/dbus stack — follow-up to find the minimal cap set: #776.
-#
-# The synced sky_workdir is bind-mounted into the image's baked repo path so
-# the worker runs the PR's checkout (incl. scripts/skypilot_worker_bootstrap.sh
-# while dev-snapshot lags behind #783). This mirrors what SkyPilot's RunPod
-# backend does automatically for `image_id: docker:...` pods.
-#
-# plugins/ is .gitignored, so the symlink to /usr/lib/vst3 from the GHA
-# launcher container is not in the synced workdir. Recreated below before
-# bootstrap so extract_renderer_version finds the VST3 bundle. The bash -c
-# script must be apostrophe-free — see CLAUDE.md "No Comments Inside YAML
-# run: Block-Scalars".
+# for the Xvfb/dbus stack — follow-up to find the minimal cap set: #776. No
+# bind-mount: image is source of truth, sync_worker_checkout.sh handles the
+# WORKER_GIT_REF PR-CI bake-lag bypass without clobbering image-baked symlinks.
 run: |
   set -euo pipefail
   : "${WORKER_IMAGE:?WORKER_IMAGE must be set by the launcher (--worker-image-tag); refusing to docker run an unset image}"
@@ -79,8 +70,6 @@ run: |
   sudo -E docker run --rm \
     --privileged \
     --ulimit nofile=65536:65536 \
-    -v "$(pwd):/home/build/synth-setter" \
-    -w /home/build/synth-setter \
     -e RCLONE_CONFIG_R2_TYPE \
     -e RCLONE_CONFIG_R2_PROVIDER \
     -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
@@ -90,11 +79,10 @@ run: |
     -e WORKER_GIT_REF \
     -e SYNTH_SETTER_WORKER_RANK \
     -e SYNTH_SETTER_NUM_WORKERS \
-    -e PYTHONPATH=/home/build/synth-setter \
     "$WORKER_IMAGE" \
     bash -c '
       set -euo pipefail
-      mkdir -p plugins
-      ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
-      exec bash scripts/skypilot_worker_bootstrap.sh
+      cd /home/build/synth-setter
+      bash scripts/sync_worker_checkout.sh
+      exec python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
     '

@@ -45,6 +45,10 @@ _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
 # OCI distribution tag grammar: leading alnum/_, then up to 127 of [A-Za-z0-9_.-].
 _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
+# Validates WORKER_GIT_REF when set — must be a 7-40 char hex git SHA. Worker
+# templates pass this verbatim into `git fetch + checkout` inside the container.
+_WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
 # Forwarded via task.update_envs; each resolved from .env then process env.
 # Keep in sync with the envs: block in configs/compute/runpod-template.yaml.
 # WORKER_GIT_REF: pod fetches+checks out this ref before generate_dataset, to
@@ -103,6 +107,9 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
             resolved[key] = file_env[key]
         elif key in os.environ:
             resolved[key] = os.environ[key]
+    git_ref = resolved.get("WORKER_GIT_REF", "")
+    if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
+        raise ValueError(f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}")
     return resolved
 
 
@@ -345,11 +352,6 @@ def _run_workers(
             _WORKER_IMAGE_ENV: worker_image,
         }
         task = sky.Task.from_yaml(str(template_path))
-        # Sync the launcher's checkout to the cluster so the synced sky_workdir
-        # contains scripts/skypilot_worker_bootstrap.sh — needed while
-        # dev-snapshot lags behind #783 and the OCI template's run: bind-mounts
-        # the workdir into the worker container.
-        task.workdir = str(REPO_ROOT)
         _override_image_id(task, worker_image)
         task.update_envs(env_for_rank)
         click.echo(f"[{cluster}] provisioning rank={rank}/{num_workers}")

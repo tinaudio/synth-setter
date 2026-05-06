@@ -22,6 +22,7 @@ from pipeline.entrypoints.skypilot_launch_smoke import (
     _override_image_id,
     load_worker_env,
     main,
+    resolve_worker_env,
 )
 from pipeline.schemas.config import dataset_config_id_from_path
 from pipeline.schemas.spec import DatasetPipelineSpec
@@ -206,6 +207,50 @@ class TestLoadWorkerEnv:
         path = tmp_path / ".env"
         path.write_text("FOO=bar\nBARE\n")
         assert load_worker_env(path) == {"FOO": "bar"}
+
+
+class TestResolveWorkerEnvGitRefValidation:
+    """`WORKER_GIT_REF`, when set, must be a 7-40 char hex git SHA.
+
+    The validation lives at the env-resolution seam (host-side) instead of in the worker template's
+    bash because the SHA is rendered into a `git fetch + checkout` invocation; rejecting a
+    malformed value at the launcher gives a clear error before the cluster is ever provisioned.
+    """
+
+    def test_unset_git_ref_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty/unset WORKER_GIT_REF is the common case (no PR-CI bake-lag bypass)."""
+        monkeypatch.delenv("WORKER_GIT_REF", raising=False)
+        resolved = resolve_worker_env(None)
+        assert "WORKER_GIT_REF" not in resolved
+
+    @pytest.mark.parametrize(
+        "good_sha",
+        ["abc1234", "abc1234deadbeef", "0" * 40, "f" * 40],
+    )
+    def test_valid_hex_sha_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, good_sha: str
+    ) -> None:
+        """7-40 char lowercase hex strings pass — both short and long form."""
+        monkeypatch.setenv("WORKER_GIT_REF", good_sha)
+        resolved = resolve_worker_env(None)
+        assert resolved["WORKER_GIT_REF"] == good_sha
+
+    @pytest.mark.parametrize(
+        "bad_sha",
+        [
+            "main",  # branch name, not SHA
+            "ABC1234",  # uppercase rejected
+            "abc",  # too short
+            "g" * 7,  # non-hex char
+            "abc1234; rm -rf /",  # injection attempt
+            "abc 1234",  # whitespace
+        ],
+    )
+    def test_invalid_git_ref_raises(self, monkeypatch: pytest.MonkeyPatch, bad_sha: str) -> None:
+        """Non-SHA values raise ValueError before the launcher provisions anything."""
+        monkeypatch.setenv("WORKER_GIT_REF", bad_sha)
+        with pytest.raises(ValueError, match="WORKER_GIT_REF"):
+            resolve_worker_env(None)
 
 
 # ---------------------------------------------------------------------------

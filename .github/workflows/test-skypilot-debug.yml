@@ -399,8 +399,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              bash scripts/ensure_plugin_symlinks.sh
               mkdir -p ~/.runpod
               umask 077
               printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml

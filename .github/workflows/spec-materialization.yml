@@ -59,9 +59,7 @@ jobs:
               cd /home/build/synth-setter
               # Runner UID != container UID; git refuses to run in untrusted dirs
               git config --global --add safe.directory /home/build/synth-setter
-              # Volume mount hides the image plugins/ symlink — recreate it
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              bash scripts/ensure_plugin_symlinks.sh
               # Headless X11 needed because importing pedalboard (via param_specs) requires it
               scripts/run-linux-vst-headless.sh \
                 python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /spec-output

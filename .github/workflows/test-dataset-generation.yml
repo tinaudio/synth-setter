@@ -58,8 +58,8 @@ on:
       - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.py"
       - "scripts/run-linux-vst-headless.sh"
-      - "scripts/skypilot_worker_run.sh"
-      - "scripts/skypilot_worker_bootstrap.sh"
+      - "scripts/ensure_plugin_symlinks.sh"
+      - "scripts/sync_worker_checkout.sh"
       - "scripts/skypilot_write_provider_creds.sh"
       - "pipeline/entrypoints/skypilot_launch_smoke.py"
       - ".github/workflows/test-dataset-generation.yml"
@@ -193,8 +193,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              bash scripts/ensure_plugin_symlinks.sh
               python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
               python scripts/docker_entrypoint.py generate_dataset \
                 --spec /run-metadata/input_spec.json
@@ -258,8 +257,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              bash scripts/ensure_plugin_symlinks.sh
               bash scripts/skypilot_write_provider_creds.sh
               if [[ "$PROVIDER" == "oci" ]]; then
                 sky check oci
