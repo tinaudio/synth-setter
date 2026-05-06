@@ -6,9 +6,12 @@ Materializes a spec, ships it via R2 (file_mounts blocked by #749), forwards
 worker env via `task.update_envs`, and `sky.launch`-es an unmanaged task. By
 default the launcher waits for `sky.launch` + `sky.stream_and_get` to return a
 `job_id` for each rank (provisioning completes), prints the `sky logs` /
-`sky down` commands the operator can run, then exits — without tailing logs or
-tearing clusters down. Pass `--tail` to opt into live
-`sky.tail_logs(follow=True)` and `finally`-block teardown.
+`sky down` commands the operator can run, then exits — without tailing logs and
+without tearing successfully-provisioned clusters down. Half-provisioned
+clusters (whose `sky.launch`/`sky.stream_and_get` raised or yielded no
+`job_id`) are still torn down so SkyPilot state doesn't accumulate orphans.
+Pass `--tail` to opt into live `sky.tail_logs(follow=True)` and unconditional
+`finally`-block teardown of every cluster.
 Cluster-level launch (not jobs.launch) — neither RunPod nor OCI has a
 managed-jobs controller backend wired up here.
 
@@ -235,11 +238,14 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
     default=False,
     show_default=True,
     help=(
-        "Tail worker logs and tear down clusters in `finally`. Default `--no-tail` waits for "
-        "`sky.launch` + `sky.stream_and_get` to return a `job_id` per rank (i.e. through "
-        "provisioning), prints the `sky logs` / `sky down` commands the operator can run, and "
-        "exits without tailing or tearing down — `idle_minutes_to_autostop=5, down=True` on "
-        "`sky.launch` is the safety net for left-running clusters."
+        "Tail worker logs and unconditionally tear down every cluster in `finally`. Default "
+        "`--no-tail` waits for `sky.launch` + `sky.stream_and_get` to return a `job_id` per "
+        "rank (i.e. through provisioning), prints the `sky logs` / `sky down` commands the "
+        "operator can run, and exits without tailing logs and without tearing down "
+        "successfully-provisioned clusters — `idle_minutes_to_autostop=5, down=True` on "
+        "`sky.launch` is the safety net for those left-running clusters. Half-provisioned "
+        "clusters (whose `sky.launch`/`sky.stream_and_get` raised or yielded no `job_id`) "
+        "are still torn down in `--no-tail` so SkyPilot state doesn't accumulate orphans."
     ),
 )
 def main(
@@ -357,8 +363,9 @@ def _run_workers(
     With ``tail=True``, every cluster is torn down in the ``finally`` block regardless of
     rank outcome and the rc reflects ``sky.tail_logs``. With ``tail=False`` the launcher
     detaches after `sky.launch` + `sky.stream_and_get` return a `job_id`, prints the
-    `sky logs` / `sky down` commands the operator can run, and only tears down clusters
-    whose own launch raised (half-provisioned).
+    `sky logs` / `sky down` commands the operator can run, and only tears down
+    half-provisioned clusters — those whose `sky.launch`/`sky.stream_and_get` raised or
+    yielded no `job_id`.
 
     Args:
         worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
@@ -442,8 +449,10 @@ def _run_workers_detached(
 
     Successful clusters are intentionally left running — `idle_minutes_to_autostop=5,
     down=True` on `sky.launch` is the safety net so a clean exit doesn't kill in-flight work.
-    Half-provisioned clusters (whose own launch raised) still get torn down here so SkyPilot
-    state doesn't accumulate orphans.
+    Half-provisioned clusters — those whose `sky.launch`/`sky.stream_and_get` raised or
+    yielded no `job_id` (the latter surfaces as a `ClickException` from
+    ``launch_get_job_id``) — still get torn down here so SkyPilot state doesn't accumulate
+    orphans.
     """
     num_workers = len(cluster_names)
     rcs: list[int] = [-1] * num_workers
