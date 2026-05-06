@@ -340,6 +340,10 @@ jobs:
         if: matrix.mode == 'launcher-runner'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
+      # Launcher invokes scripts/skypilot_write_provider_creds.sh itself;
+      # CI just forwards the bare-named secrets. The bootstrap writes
+      # ~/.runpod/config.toml + ~/.cloudflare/ and emits rclone-prefixed
+      # R2 env vars the launcher merges into the worker env.
       - name: Run launcher (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
         env:
@@ -347,8 +351,7 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          RCLONE_CONFIG_R2_TYPE: s3
-          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           PYTHONPATH: ${{ github.workspace }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           CONFIG_PATH: ${{ matrix.config }}
@@ -356,12 +359,6 @@ jobs:
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -o pipefail
-          mkdir -p ~/.runpod
-          umask 077
-          printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
-          export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-          export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-          export RCLONE_CONFIG_R2_ENDPOINT="$R2_ENDPOINT"
           python -m pipeline.entrypoints.skypilot_launch_smoke \
             --config "$CONFIG_PATH" \
             --template "$TEMPLATE" \
@@ -375,6 +372,7 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           CONFIG_PATH: ${{ matrix.config }}
           TEMPLATE: ${{ matrix.template }}
@@ -388,11 +386,10 @@ jobs:
             -e CLUSTER_NAME \
             -e CONFIG_PATH \
             -e TEMPLATE \
-            -e RCLONE_CONFIG_R2_TYPE=s3 \
-            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
-            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
-            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
-            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+            -e R2_ACCESS_KEY_ID \
+            -e R2_SECRET_ACCESS_KEY \
+            -e R2_ENDPOINT \
+            -e R2_ACCOUNT_ID \
             -e PYTHONPATH=/home/build/synth-setter \
             "$IMAGE" \
             bash -c '
@@ -400,9 +397,6 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              mkdir -p ~/.runpod
-              umask 077
-              printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --template "$TEMPLATE" \

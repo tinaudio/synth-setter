@@ -270,6 +270,8 @@ RCLONE_CONFIG_R2_PROVIDER=Cloudflare
 RCLONE_CONFIG_R2_ACCESS_KEY_ID=<your-access-key>
 RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=<your-secret-key>
 RCLONE_CONFIG_R2_ENDPOINT=<your-r2-endpoint-url>
+# --- Cloudflare account ID (for SkyPilot's R2 storage adaptor) ---
+R2_ACCOUNT_ID=<your-cloudflare-account-id>
 # --- Target bucket name (read by pipeline entrypoints) ---
 R2_BUCKET=<bucket-name>
 # --- W&B logging ---

@@ -89,7 +89,7 @@ docs:
     description: SkyPilot launcher for the data pipeline (RunPod + OCI smoke)
     sources:
       - pattern: "pipeline/entrypoints/skypilot_launch_smoke.py"
-        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → launch flow, sky.launch (unmanaged) + down=True, _wait_for_job polling vs tail_logs follow=True (RunPod hang), per-cluster R2 spec key (skypilot-launcher-specs/<cluster>.json) — file_mounts deliberately avoided, see #749"
+        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → cred-bootstrap → launch flow. `_detect_provider` reads `task.resources.cloud` to pick `--provider runpod|oci` for the bootstrap; rclone-prefixed env lines from bootstrap stdout are merged into per-rank `task.update_envs`. `resolve_worker_env` accepts deprecated bare `R2_*` during the migration window. sky.launch (unmanaged) + down=True, _wait_for_job polling vs tail_logs follow=True (RunPod hang), per-cluster R2 spec key (skypilot-launcher-specs/<cluster>.json) — file_mounts deliberately avoided, see #749"
       - pattern: "configs/compute/runpod-template.yaml"
         covers: "SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`--worker-image-tag`, default `dev-snapshot`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "configs/compute/oci-cpu-template.yaml"
@@ -101,7 +101,7 @@ docs:
       - pattern: "scripts/sync_worker_checkout.sh"
         covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install -r requirements.txt` helper called by both runpod-template.yaml and oci-cpu-template.yaml run: blocks. No-op when WORKER_GIT_REF is unset (operators); when set, full transitive resolve handles PRs that add new top-level packages."
       - pattern: "scripts/skypilot_write_provider_creds.sh"
-        covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem + ~/.sky/config.yaml (compartment_ocid, image_tag_general). Mode 600 via umask 077; require_var fails closed on missing secrets."
+        covers: "Cred-bootstrap invoked by the launcher pre-`sky.launch`. `--provider runpod` writes `~/.runpod/config.toml`; `--provider oci` writes `~/.oci/config` + `~/.oci/oci_api_key.pem` + `~/.sky/config.yaml`. R2 is shared across providers — always writes `~/.cloudflare/r2.credentials` + `~/.cloudflare/accountid` for SkyPilot's storage adaptor and prints rclone-prefixed `RCLONE_CONFIG_R2_*=...` lines to stdout for the launcher to merge into worker env. Idempotent (skips non-empty existing files); `--force` overwrites. Mode 600 via umask 077; require_var fails closed on missing secrets."
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"

@@ -21,6 +21,7 @@ SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
@@ -35,6 +36,8 @@ from dotenv import dotenv_values
 from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
+
+logger = logging.getLogger(__name__)
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
@@ -62,6 +65,21 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
     "WANDB_API_KEY",
     "WORKER_GIT_REF",
 )
+
+# Migration-window aliases: bare R2_* names mapped to their rclone-prefixed
+# canonical form. `resolve_worker_env` accepts either, with a deprecation
+# warning when only the bare form is present. Drop in the follow-up PR per #829.
+_BARE_TO_RCLONE_R2: dict[str, str] = {
+    "R2_ACCESS_KEY_ID": "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY": "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
+    "R2_ENDPOINT": "RCLONE_CONFIG_R2_ENDPOINT",
+}
+_BARE_R2_KEYS: tuple[str, ...] = tuple(_BARE_TO_RCLONE_R2)
+
+_CRED_BOOTSTRAP_SCRIPT = (
+    Path(__file__).resolve().parent.parent.parent / "scripts" / "skypilot_write_provider_creds.sh"
+)
+_RCLONE_ENV_PREFIX = "RCLONE_CONFIG_R2_"
 
 # sky.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
@@ -94,6 +112,11 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     default (typically the empty string) — `task.update_envs` only overrides
     keys that are actually resolved here.
 
+    Migration window (#829): if a rclone-prefixed R2 key is unresolved but its
+    bare alias (`R2_ACCESS_KEY_ID` etc.) is set, the bare value is used and a
+    deprecation warning is logged. The bare-form fallback is dropped in the
+    follow-up PR after CI/docs settle on the prefixed names.
+
     `.env` is the local-dev source of truth; CI flows pass secrets via
     `docker run -e KEY=VAL` and never touch a .env on disk.
     """
@@ -107,12 +130,99 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
             resolved[key] = file_env[key]
         elif key in os.environ:
             resolved[key] = os.environ[key]
+
+    bare_used = _apply_bare_r2_fallback(resolved, file_env)
+    if bare_used:
+        logger.warning(
+            "Resolved R2 credentials from deprecated bare names %s; rename to "
+            "RCLONE_CONFIG_R2_* to silence this warning. The bare-form fallback "
+            "will be removed in a follow-up PR (see #829).",
+            sorted(bare_used),
+        )
+
     git_ref = resolved.get("WORKER_GIT_REF", "")
     if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
         raise click.ClickException(
             f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
         )
     return resolved
+
+
+def _apply_bare_r2_fallback(resolved: dict[str, str], file_env: dict[str, str]) -> list[str]:
+    """Fill missing rclone-prefixed R2 keys in `resolved` from bare aliases.
+
+    Returns the list of bare keys that were used, so the caller can log a
+    deprecation warning when any fallback fired. Mutates `resolved` in place.
+    """
+    used: list[str] = []
+    for bare, prefixed in _BARE_TO_RCLONE_R2.items():
+        if prefixed in resolved:
+            continue
+        bare_value = file_env.get(bare) or os.environ.get(bare)
+        if bare_value:
+            resolved[prefixed] = bare_value
+            used.append(bare)
+    return used
+
+
+def _detect_provider(task: sky.Task) -> str:
+    """Auto-detect the cred-bootstrap `--provider` flag from a task's resources.
+
+    SkyPilot's cloud classes are imported lazily so the launcher doesn't import
+    every cloud backend at module load. The first Resources entry's `cloud`
+    determines the provider — every entry in a task's alt-set is the same cloud
+    in our templates.
+    """
+    from sky.clouds import OCI, RunPod
+
+    cloud = next(iter(task.resources)).cloud
+    if isinstance(cloud, RunPod):
+        return "runpod"
+    if isinstance(cloud, OCI):
+        return "oci"
+    raise click.ClickException(
+        f"Unsupported cloud {type(cloud).__name__} in task.resources; cred bootstrap "
+        "supports runpod and oci only"
+    )
+
+
+def _run_cred_bootstrap(*, provider: str) -> str:
+    """Invoke `scripts/skypilot_write_provider_creds.sh` and return its stdout.
+
+    Stdout carries `RCLONE_CONFIG_R2_*=<value>` lines that the caller parses and
+    merges into the worker env. Stderr is forwarded to the launcher's stderr so
+    the operator sees the bootstrap's diagnostic output (`::notice::` skip-existing
+    lines, `::error::` validation failures, etc.).
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 — controlled args, in-repo script
+            ["bash", str(_CRED_BOOTSTRAP_SCRIPT), "--provider", provider],  # noqa: S607
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise click.ClickException(
+            f"cred bootstrap failed (rc={exc.returncode}): {exc.stderr.strip()}"
+        ) from exc
+    if result.stderr:
+        click.echo(result.stderr, err=True)
+    return result.stdout
+
+
+def _parse_rclone_env_lines(stdout: str) -> dict[str, str]:
+    """Parse the bootstrap's stdout into a dict of `RCLONE_CONFIG_R2_*` env vars.
+
+    Lines that don't start with the rclone prefix or aren't `KEY=VALUE` shaped are skipped —
+    defensive against future stdout chatter even though the current script only emits env lines.
+    """
+    env: dict[str, str] = {}
+    for line in stdout.splitlines():
+        if not line.startswith(_RCLONE_ENV_PREFIX) or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key] = value
+    return env
 
 
 def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
@@ -281,6 +391,15 @@ def main(
         else [f"{base_cluster_name}-r{i}" for i in range(num_workers)]
     )
 
+    # Cred bootstrap is launcher-host scoped (writes ~/.cloudflare/, ~/.runpod/,
+    # ~/.oci/) and runs once per launcher invocation regardless of fan-out width.
+    # Provider auto-detected from the template's `resources.cloud`. The rclone
+    # env vars on stdout are merged into the per-rank env so the spec-upload
+    # rclone subprocess sees rclone-style creds without manual bridging.
+    provider = _detect_provider(sky.Task.from_yaml(str(template_path)))
+    bootstrap_stdout = _run_cred_bootstrap(provider=provider)
+    worker_env = {**worker_env, **_parse_rclone_env_lines(bootstrap_stdout)}
+
     rcs = _run_workers(
         worker_env_base=worker_env,
         template_path=template_path,
@@ -331,6 +450,10 @@ def _run_workers(
     Each rank's task gets SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected.
     All clusters tear down in the finally block regardless of which ranks succeeded.
     A rank's slot in the result is ``-1`` if launch/stream raised before tail_logs returned.
+
+    Cred bootstrap runs once before any sky.launch — provider auto-detected from
+    the task's resources.cloud — and the rclone-prefixed R2 env vars it emits are
+    merged into every rank's update_envs payload.
 
     Args:
         worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).

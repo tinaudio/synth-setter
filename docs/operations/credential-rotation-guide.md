@@ -21,19 +21,20 @@ ______________________________________________________________________
 
 ## Credential Inventory
 
-| Credential                 | Where Used                                        | Storage Locations          |
-| -------------------------- | ------------------------------------------------- | -------------------------- |
-| `R2_ACCESS_KEY_ID`         | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
-| `R2_SECRET_ACCESS_KEY`     | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
-| `R2_ENDPOINT`              | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
-| `WANDB_API_KEY`            | Training, evaluation, promotion (runtime env var) | GitHub Secrets, `.env`     |
-| `GITHUB_TOKEN`             | CI workflows (automatic)                          | Automatic per workflow run |
-| `RUNPOD_API_KEY`           | Pipeline orchestration                            | GitHub Secrets, `.env`     |
-| `DOCKERHUB_USERNAME`       | CI image push workflows                           | GitHub Secrets             |
-| `DOCKERHUB_TOKEN`          | CI image push workflows                           | GitHub Secrets             |
-| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow           | GitHub Secrets             |
-| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow           | GitHub Secrets             |
-| `ANTHROPIC_API_KEY`        | Claude review workflow                            | GitHub Secrets             |
+| Credential                 | Where Used                                                                                              | Storage Locations          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `R2_ACCESS_KEY_ID`         | Pipeline workers, rclone (bridged to `RCLONE_CONFIG_R2_ACCESS_KEY_ID` by the launcher's cred bootstrap) | GitHub Secrets, `.env`     |
+| `R2_SECRET_ACCESS_KEY`     | Pipeline workers, rclone (bridged to `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`)                              | GitHub Secrets, `.env`     |
+| `R2_ENDPOINT`              | Pipeline workers, rclone (bridged to `RCLONE_CONFIG_R2_ENDPOINT`)                                       | GitHub Secrets, `.env`     |
+| `R2_ACCOUNT_ID`            | SkyPilot R2 storage adaptor (`~/.cloudflare/accountid` written by cred bootstrap)                       | GitHub Secrets, `.env`     |
+| `WANDB_API_KEY`            | Training, evaluation, promotion (runtime env var)                                                       | GitHub Secrets, `.env`     |
+| `GITHUB_TOKEN`             | CI workflows (automatic)                                                                                | Automatic per workflow run |
+| `RUNPOD_API_KEY`           | Pipeline orchestration                                                                                  | GitHub Secrets, `.env`     |
+| `DOCKERHUB_USERNAME`       | CI image push workflows                                                                                 | GitHub Secrets             |
+| `DOCKERHUB_TOKEN`          | CI image push workflows                                                                                 | GitHub Secrets             |
+| `APPROVAL_BOT_APP_ID`      | Auto-approve workflow, release workflow                                                                 | GitHub Secrets             |
+| `APPROVAL_BOT_PRIVATE_KEY` | Auto-approve workflow, release workflow                                                                 | GitHub Secrets             |
+| `ANTHROPIC_API_KEY`        | Claude review workflow                                                                                  | GitHub Secrets             |
 
 ______________________________________________________________________
 
@@ -43,10 +44,17 @@ ______________________________________________________________________
 
 **What:** S3-compatible API token for reading/writing pipeline data in Cloudflare R2.
 
+**Naming convention:** GitHub Secrets are stored under bare names (`R2_ACCESS_KEY_ID`,
+etc.). At launch time the SkyPilot launcher's cred-bootstrap step
+(`scripts/skypilot_write_provider_creds.sh`) bridges the bare names to their
+rclone-prefixed equivalents (`RCLONE_CONFIG_R2_ACCESS_KEY_ID`, etc.) and writes
+SkyPilot's `~/.cloudflare/r2.credentials` file. Local `.env` files use the
+rclone-prefixed names directly — see `.env.example`.
+
 **Where stored:**
 
 - GitHub Secrets: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
-- Local `.env` files on developer machines
+- Local `.env` files on developer machines (under the `RCLONE_CONFIG_R2_*` names)
 
 **Rotation steps:**
 
@@ -59,7 +67,8 @@ ______________________________________________________________________
    - Go to the repo **Settings > Secrets and variables > Actions**.
    - Update `R2_ACCESS_KEY_ID` with the new access key ID.
    - Update `R2_SECRET_ACCESS_KEY` with the new secret access key.
-6. Update local `.env` files on all developer machines.
+6. Update local `.env` files on all developer machines (under the rclone-prefixed
+   names: `RCLONE_CONFIG_R2_ACCESS_KEY_ID`, `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`).
 7. Revoke the old API token in the Cloudflare dashboard.
 
 **Verification:**
@@ -82,10 +91,26 @@ the account ID in git history.
 **Where stored:**
 
 - GitHub Secrets (`R2_ENDPOINT`) — forwarded to jobs and containers at runtime
-- Local `.env` files
+- Local `.env` files (under `RCLONE_CONFIG_R2_ENDPOINT`)
 
 **Rotation:** Only changes if the Cloudflare account ID changes. Update the
 GitHub Secret and `.env` files if the account is migrated.
+
+______________________________________________________________________
+
+### R2 Account ID (`R2_ACCOUNT_ID`)
+
+**What:** The Cloudflare account ID required by SkyPilot's R2 storage adaptor.
+The launcher's cred-bootstrap step writes it to `~/.cloudflare/accountid` so
+SkyPilot's `sky/adaptors/cloudflare.py` can read it at file_mounts time.
+
+**Where stored:**
+
+- GitHub Secrets: `R2_ACCOUNT_ID`
+- Local `.env` files: `R2_ACCOUNT_ID`
+
+**Rotation:** Only changes if the Cloudflare account changes. Available in the
+Cloudflare dashboard sidebar; not derivable from any other R2 cred.
 
 ______________________________________________________________________
 
@@ -252,8 +277,9 @@ Use this checklist when performing a full credential rotation (e.g., pre-public
 audit):
 
 - [ ] **Cloudflare R2:** Create new API token, update `R2_ACCESS_KEY_ID` and
-  `R2_SECRET_ACCESS_KEY` in GitHub Secrets and `.env`,
-  revoke old token
+  `R2_SECRET_ACCESS_KEY` in GitHub Secrets and the corresponding
+  `RCLONE_CONFIG_R2_ACCESS_KEY_ID` / `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` in
+  local `.env`, revoke old token
 - [ ] **W&B:** Regenerate API key, update `WANDB_API_KEY` in GitHub Secrets and
   `.env`
 - [ ] **RunPod:** Create new API key, update `RUNPOD_API_KEY` in GitHub Secrets
