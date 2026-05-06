@@ -15,6 +15,7 @@ from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
+from src.data.vst import param_specs
 from src.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
@@ -316,6 +317,7 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
             cfg.trainer.deterministic = True
 
             cfg.model.scheduler = None
+            cfg.model.net.d_out = len(param_specs["surge_4"])
             cfg.logger = None
             cfg.test = False
             mc = cfg.callbacks.model_checkpoint
@@ -347,6 +349,8 @@ def surge_xt_smoke_datasets(tmp_path: Path) -> Path:
         "src/data/vst/generate_vst_dataset.py",
         str(smoke_dataset_dir / "train.h5"),
         str(NUM_FIXTURE_SAMPLES),
+        "--preset_path=presets/surge-mini.vstpreset",
+        "--param_spec=surge_4",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
