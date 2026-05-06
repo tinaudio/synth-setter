@@ -21,7 +21,6 @@ SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
 
 from __future__ import annotations
 
-import logging
 import os
 import re
 import subprocess
@@ -36,8 +35,6 @@ from dotenv import dotenv_values
 from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
 from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
-
-logger = logging.getLogger(__name__)
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
@@ -133,11 +130,11 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
 
     bare_used = _apply_bare_r2_fallback(resolved, file_env)
     if bare_used:
-        logger.warning(
-            "Resolved R2 credentials from deprecated bare names %s; rename to "
-            "RCLONE_CONFIG_R2_* to silence this warning. The bare-form fallback "
+        click.echo(
+            f"WARN: resolved R2 credentials from deprecated bare names {sorted(bare_used)}; "
+            "rename to RCLONE_CONFIG_R2_* to silence this warning. The bare-form fallback "
             "will be removed in a follow-up PR (see #829).",
-            sorted(bare_used),
+            err=True,
         )
 
     git_ref = resolved.get("WORKER_GIT_REF", "")

@@ -1225,39 +1225,35 @@ class TestBareR2DeprecationFallback:
     def test_bare_r2_alone_emits_deprecation_warning(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Operators relying on the bare form are warned to migrate before the next PR drops the
         fallback."""
-        import logging
-
-        caplog.set_level(logging.WARNING)
         monkeypatch.setenv("R2_ACCESS_KEY_ID", "bare-ak")
         monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "bare-sk")
         monkeypatch.setenv("R2_ENDPOINT", "https://bare.r2.cloudflarestorage.com")
 
         resolve_worker_env(None)
 
-        assert any("deprecat" in rec.message.lower() for rec in caplog.records), (
-            f"expected a deprecation warning, got: {[r.message for r in caplog.records]}"
+        stderr = capsys.readouterr().err
+        assert "deprecat" in stderr.lower(), (
+            f"expected a deprecation warning on stderr, got: {stderr!r}"
         )
 
     def test_rclone_prefixed_form_does_not_emit_deprecation_warning(
         self,
         monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """The current/prefixed form is the long-term contract and must not warn."""
-        import logging
-
-        caplog.set_level(logging.WARNING)
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "rclone-ak")
         monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "rclone-sk")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://rclone.r2.cloudflarestorage.com")
 
         resolve_worker_env(None)
 
-        assert not any("deprecat" in rec.message.lower() for rec in caplog.records)
+        stderr = capsys.readouterr().err
+        assert "deprecat" not in stderr.lower()
 
     def test_rclone_prefixed_overrides_bare_when_both_set(
         self, monkeypatch: pytest.MonkeyPatch
