@@ -22,7 +22,7 @@ import torch  # noqa: E402
 from pedalboard import VST3Plugin  # noqa: E402
 from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 
-from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
+from src.data.vst import load_plugin, load_preset, param_specs, preset_paths  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
 
@@ -385,6 +385,7 @@ def _run_predict(
     dataset_root_dir: Path,
     predict_file: Path,
     predictions_output_dir: Path,
+    param_spec_name: str,
 ) -> None:
     """Run model prediction via ``src/eval.py`` with ``mode=predict``."""
     subprocess.check_call(  # noqa: S603 — args built from validated spec
@@ -396,6 +397,7 @@ def _run_predict(
             "data.predict_file=" + str(predict_file),
             "data.dataset_root=" + str(dataset_root_dir),
             "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir),
+            "model.net.d_out=" + str(len(param_specs[param_spec_name])),
             "mode=predict",
         ],
     )
@@ -427,7 +429,11 @@ def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> Non
 
 
 def _render_predicted_audio(
-    predictions_output_dir: Path, audio_dir: Path, num_samples: int
+    predictions_output_dir: Path,
+    audio_dir: Path,
+    num_samples: int,
+    preset_path: str,
+    param_spec_name: str,
 ) -> None:
     """Render audio for the predicted patches and validate per-sample outputs (file presence and
     non-silent WAVs)."""
@@ -439,6 +445,8 @@ def _render_predicted_audio(
         "scripts/predict_vst_audio.py",
         str(predictions_output_dir),
         str(audio_dir),
+        f"--preset_path={preset_path}",
+        f"--param_spec={param_spec_name}",
         "-t",
     ]
     try:
@@ -496,7 +504,13 @@ def _compute_and_validate_metrics(audio_dir: Path, metrics_dir: Path, num_sample
         assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"
 
 
-def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path) -> None:
+def eval_patches(
+    num_samples: int,
+    dataset_root_dir: Path,
+    checkpoint_path: Path,
+    param_spec_name: str,
+    preset_path: str,
+) -> None:
     """Run model eval on captured patches: predict params, render audio, compute metrics."""
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
@@ -510,9 +524,21 @@ def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
     audio_dir = dataset_root_dir / "audio"
     metrics_dir = dataset_root_dir / "metrics"
 
-    _run_predict(checkpoint_path, dataset_root_dir, predict_file, predictions_output_dir)
+    _run_predict(
+        checkpoint_path,
+        dataset_root_dir,
+        predict_file,
+        predictions_output_dir,
+        param_spec_name,
+    )
     _validate_predictions(predictions_output_dir, num_samples)
-    _render_predicted_audio(predictions_output_dir, audio_dir, num_samples)
+    _render_predicted_audio(
+        predictions_output_dir,
+        audio_dir,
+        num_samples,
+        preset_path,
+        param_spec_name,
+    )
     _compute_and_validate_metrics(audio_dir, metrics_dir, num_samples)
 
 
@@ -539,20 +565,13 @@ def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
     ),
 )
 @click.option(
-    "--preset-path",
-    "-r",
-    type=str,
-    default="presets/surge-base.vstpreset",
-    help="Base preset to load before applying any --pred / --dataset-ref params.",
-)
-@click.option(
     "--param-spec-name",
-    type=str,
-    default="surge_xt",
+    type=click.Choice(sorted(param_specs.keys())),
+    required=True,
     help=(
-        "Parameter spec name (key into ``param_specs``) used to decode prediction/dataset "
-        "rows applied to the plugin and to enumerate which synth params are captured when "
-        "recording patches."
+        "Parameter spec name (key into ``param_specs``). Determines which synth params are "
+        "captured when recording patches, decodes prediction/dataset rows applied to the "
+        "plugin, and selects the matching base preset via ``preset_paths``."
     ),
 )
 @click.option(
@@ -592,7 +611,6 @@ def main(
     plugin_path: str,
     pred: PredictionRef | None,
     dataset_ref: DatasetRef | None,
-    preset_path: str,
     param_spec_name: str,
     output_dataset_dir_path: Path | None,
     checkpoint_path: Path | None,
@@ -602,7 +620,8 @@ def main(
 
     Flow:
 
-    1. Load the plugin and base preset.
+    1. Load the plugin and the base preset selected by ``--param-spec-name`` via
+       ``preset_paths``.
     2. If ``--pred`` or ``--dataset-ref`` is provided, decode the referenced row and apply
        it to the plugin before the editor opens.
     3. Open the plugin's GUI editor; in parallel, stream audio to the default output device
@@ -633,6 +652,8 @@ def main(
             f"this script creates a new directory (fixed-size HDF5 datasets cannot be "
             f"appended to). Choose a path that does not exist yet."
         )
+
+    preset_path = preset_paths[param_spec_name]
 
     plugin = load_plugin(plugin_path)
     if not isinstance(plugin, VST3Plugin):
@@ -725,6 +746,8 @@ def main(
         output_dataset_dir_path,
         len(synth_patches),
         checkpoint_path,
+        param_spec_name,
+        preset_path,
     )
 
 
@@ -733,6 +756,8 @@ def _maybe_eval_captured_patches(
     output_dataset_dir_path: Path,
     num_patches: int,
     checkpoint_path: Path | None,
+    param_spec_name: str,
+    preset_path: str,
 ) -> None:
     """Replicate captured patches into the four eval-pipeline splits and run eval_patches if a
     checkpoint is provided; no-op otherwise."""
@@ -743,7 +768,13 @@ def _maybe_eval_captured_patches(
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
     for split_name in ("test.h5", "val.h5", "predict.h5"):
         shutil.copyfile(patch_file_path, output_dataset_dir_path / split_name)
-    eval_patches(num_patches, output_dataset_dir_path, checkpoint_path)
+    eval_patches(
+        num_patches,
+        output_dataset_dir_path,
+        checkpoint_path,
+        param_spec_name,
+        preset_path,
+    )
 
 
 if __name__ == "__main__":
