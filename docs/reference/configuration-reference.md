@@ -80,7 +80,7 @@ configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
   → launcher script (pipeline.entrypoints.skypilot_launch_smoke)
     reads YAML, materializes spec, mounts spec into worker
     → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
-      → pod runs: python -m pipeline.entrypoints.generate_dataset --spec ...
+      → pod runs: python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
 ```
 
 - Separate from Hydra — different consumer (SkyPilot's `Task.from_yaml`), different time (before worker starts)
@@ -121,8 +121,9 @@ ______________________________________________________________________
 The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet implemented.
 
 **RunPod** (`configs/compute/runpod-template.yaml`) — landed. Abridged
-shape (see the file for the full template, including the inline `os._exit(0)`
-workaround for [#735](https://github.com/tinaudio/synth-setter/issues/735)):
+shape (see the file for the full template; the `os._exit(0)` workaround for
+[#735](https://github.com/tinaudio/synth-setter/issues/735) lives inside the
+`generate_dataset` subcommand of `scripts/docker_entrypoint.py`):
 
 The launcher injects `image_id` per-launch via `--worker-image-tag` (default `dev-snapshot`) for non-OCI backends, so the template no longer carries a literal `image_id: docker:tinaudio/synth-setter:dev-snapshot`:
 
@@ -143,12 +144,10 @@ envs:
   WORKER_SPEC_URI: ""                 # set by the launcher to r2://<bucket>/skypilot-launcher-specs/<cluster>.json
 
 run: |
-  cd /home/build/synth-setter && python -c '
-  from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
-  import os
-  run(load_spec_from_uri(os.environ["WORKER_SPEC_URI"]))
-  os._exit(0)
-  '
+  set -euo pipefail
+  cd /home/build/synth-setter
+  bash scripts/sync_worker_checkout.sh
+  exec python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
 ```
 
 The launcher uploads the materialized spec to R2 (under
