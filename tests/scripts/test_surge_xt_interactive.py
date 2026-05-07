@@ -435,9 +435,7 @@ class _FakeMidiPortHandle:
 class TestMidiListener:
     """``midi_listener`` filters mido messages by type and forwards them to a queue."""
 
-    def test_only_relevant_message_types_are_forwarded(
-        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_only_relevant_message_types_are_forwarded(self, surge_xt_interactive) -> None:
         """note_on/off, control_change, pitchwheel, aftertouch are queued; others are dropped."""
         forwarded = [
             _FakeMidiMessage("note_on", [0x90, 0x3C, 0x40]),
@@ -462,17 +460,16 @@ class TestMidiListener:
         ]
 
         drain_event = threading.Event()
-        monkeypatch.setattr(
-            surge_xt_interactive.mido,
-            "open_input",
-            lambda port_name: _FakeMidiPortHandle(all_messages, drain_event=drain_event),
-        )
+
+        def fake_port_opener(_port_name: str) -> _FakeMidiPortHandle:
+            return _FakeMidiPortHandle(all_messages, drain_event=drain_event)
 
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         stop_event = threading.Event()
         listener_thread = threading.Thread(
             target=surge_xt_interactive.midi_listener,
             args=("fake-port", midi_queue, stop_event),
+            kwargs={"port_opener": fake_port_opener},
         )
         listener_thread.start()
         # ``_FakeMidiPortHandle`` flips ``drain_event`` once the queued list is empty,
@@ -504,31 +501,25 @@ class TestMidiListener:
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         stop_event = threading.Event()
         stop_event.set()
-        # Drop in the idle port via a class-attribute swap so we don't reach the real
-        # mido backend (which would still try to enumerate hardware on import).
-        original_open_input = surge_xt_interactive.mido.open_input
-        surge_xt_interactive.mido.open_input = lambda _port: _IdlePort()
-        try:
-            surge_xt_interactive.midi_listener("fake-port", midi_queue, stop_event)
-        finally:
-            surge_xt_interactive.mido.open_input = original_open_input
+
+        surge_xt_interactive.midi_listener(
+            "fake-port", midi_queue, stop_event, port_opener=lambda _port: _IdlePort()
+        )
 
         assert midi_queue.empty()
 
-    def test_open_input_failure_logs_and_exits_thread(
-        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch, caplog
-    ) -> None:
+    def test_open_input_failure_logs_and_exits_thread(self, surge_xt_interactive, caplog) -> None:
         """``midi_listener`` must not raise; failures are logged so the daemon exits cleanly."""
 
-        def _raise(_port_name: str) -> object:
+        def raising_port_opener(_port_name: str) -> object:
             raise OSError("device disconnected")
-
-        monkeypatch.setattr(surge_xt_interactive.mido, "open_input", _raise)
 
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         stop_event = threading.Event()
         with caplog.at_level("ERROR"):
-            surge_xt_interactive.midi_listener("fake-port", midi_queue, stop_event)
+            surge_xt_interactive.midi_listener(
+                "fake-port", midi_queue, stop_event, port_opener=raising_port_opener
+            )
 
         assert midi_queue.empty()
         assert any("MIDI listener thread aborted" in rec.message for rec in caplog.records)
