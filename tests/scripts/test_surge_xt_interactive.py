@@ -985,8 +985,9 @@ class _RecordingEvalRunner:
     """Test fake matching the ``EvalRunner`` shape from ``surge_xt_interactive``.
 
     Records the positional args from each invocation and the call count so tests can assert
-    on real state instead of patching the module-level ``eval_patches`` symbol. Reused by the
-    two ``TestMaybeEvalCapturedPatches`` tests that need to observe whether eval was invoked.
+    on real state instead of patching the module-level ``eval_patches`` symbol. Reused
+    across ``TestMaybeEvalCapturedPatches`` whenever a test needs to observe whether (and
+    with what arguments) eval was invoked.
     """
 
     def __init__(self) -> None:
