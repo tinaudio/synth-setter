@@ -1,6 +1,7 @@
 """Interactive Surge XT preview with real-time audio streaming via pedalboard."""
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import rootutils
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+_REPO_ROOT = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 import click  # noqa: E402
 import h5py  # noqa: E402
@@ -68,11 +69,55 @@ _KEEP_LOOPING = True
 _STOP_LOOPING = False
 
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
-_VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
+_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
+_METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
+_VST_HEADLESS_WRAPPER = _REPO_ROOT / "scripts" / "run-linux-vst-headless.sh"
+_EVAL_SCRIPT = _REPO_ROOT / "src" / "eval.py"
+_PREDICT_VST_AUDIO_SCRIPT = _REPO_ROOT / "scripts" / "predict_vst_audio.py"
+_COMPUTE_AUDIO_METRICS_SCRIPT = _REPO_ROOT / "scripts" / "compute_audio_metrics.py"
 
 # Below this peak, librosa RMS norms underflow and ``compute_rms`` produces
 # 0/0 → NaN (see ``compute_rms`` in ``scripts/compute_audio_metrics.py``).
 SILENCE_PEAK_THRESHOLD = 1e-4
+
+_METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
+
+
+@dataclass(frozen=True)
+class _MetricsFileSpec:
+    """Expected shape of a metrics CSV produced by ``compute_audio_metrics.py``."""
+
+    rows: int
+    columns: frozenset[str]
+
+
+def _expected_prediction_filenames(num_samples: int) -> list[str]:
+    """Return the sorted list of filenames ``PredictionWriter`` writes per sample."""
+    return sorted(
+        f"{prefix}-{i}.pt"
+        for prefix in ("pred", "target-audio", "target-params")
+        for i in range(num_samples)
+    )
+
+
+def _validate_metrics_df(
+    metrics_path: Path,
+    metrics_df: pd.DataFrame,
+    expected: _MetricsFileSpec,
+) -> None:
+    """Verify ``metrics_df`` has the expected row count and a superset of expected columns, and
+    that the expected columns are entirely finite."""
+    if len(metrics_df) != expected.rows:
+        raise ValueError(f"{metrics_path}: expected {expected.rows} rows, got {len(metrics_df)}")
+    missing_columns = expected.columns - set(metrics_df.columns)
+    if missing_columns:
+        raise ValueError(
+            f"{metrics_path}: missing expected columns {sorted(missing_columns)}; "
+            f"got {sorted(metrics_df.columns)}"
+        )
+    numeric = metrics_df[sorted(expected.columns)].to_numpy()
+    if not np.isfinite(numeric).all():
+        raise ValueError(f"{metrics_path} contains NaN/Inf:\n{metrics_df}")
 
 
 @dataclass(frozen=True)
@@ -386,11 +431,16 @@ def _run_predict(
     predict_file: Path,
     predictions_output_dir: Path,
 ) -> None:
-    """Run model prediction via ``src/eval.py`` with ``mode=predict``."""
-    subprocess.check_call(  # noqa: S603 — args built from validated spec
+    """Run model prediction via ``src/eval.py`` with ``mode=predict``.
+
+    ``checkpoint_path``, ``dataset_root_dir``, and ``predict_file`` are validated by the caller
+    (``eval_patches``); paths are also resolved relative to the repo root so the script works from
+    any CWD.
+    """
+    subprocess.check_call(  # noqa: S603
         [
             sys.executable,
-            "src/eval.py",
+            str(_EVAL_SCRIPT),
             "experiment=surge/test",
             "ckpt_path=" + str(checkpoint_path),
             "data.predict_file=" + str(predict_file),
@@ -398,6 +448,7 @@ def _run_predict(
             "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir),
             "mode=predict",
         ],
+        timeout=_EVAL_SUBPROCESS_TIMEOUT_SECONDS,
     )
 
 
@@ -408,41 +459,54 @@ def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> Non
 
     Tensors are loaded onto CPU regardless of the device they were saved from so this works across
     mps/cuda/cpu predict runs.
+
+    :raises FileNotFoundError: if the expected files are missing or extras are present.
+    :raises ValueError: if any ``pred-{i}.pt`` tensor contains NaN/Inf.
     """
-    expected_names = sorted(
-        f"{prefix}-{i}.pt"
-        for prefix in ("pred", "target-audio", "target-params")
-        for i in range(num_samples)
-    )
+    expected_names = _expected_prediction_filenames(num_samples)
     actual_names = sorted(p.name for p in predictions_output_dir.iterdir())
-    assert actual_names == expected_names, (
-        f"unexpected prediction outputs in {predictions_output_dir}: "
-        f"got {actual_names}, expected {expected_names}"
-    )
-    for i in range(num_samples):
-        pred = torch.load(
-            predictions_output_dir / f"pred-{i}.pt", map_location="cpu", weights_only=True
+    if actual_names != expected_names:
+        missing = sorted(set(expected_names) - set(actual_names))
+        unexpected = sorted(set(actual_names) - set(expected_names))
+        raise FileNotFoundError(
+            f"unexpected prediction outputs in {predictions_output_dir}: "
+            f"missing={missing}, unexpected={unexpected}"
         )
-        assert torch.isfinite(pred).all(), f"pred-{i}.pt contains NaN/Inf"
+    for i in range(num_samples):
+        pred_path = predictions_output_dir / f"pred-{i}.pt"
+        pred = torch.load(pred_path, map_location="cpu", weights_only=True)
+        if not torch.isfinite(pred).all():
+            raise ValueError(f"{pred_path} contains NaN/Inf")
 
 
 def _render_predicted_audio(
     predictions_output_dir: Path, audio_dir: Path, num_samples: int
 ) -> None:
     """Render audio for the predicted patches and validate per-sample outputs (file presence and
-    non-silent WAVs)."""
+    non-silent WAVs).
+
+    :raises FileNotFoundError: if the headless wrapper is missing on Linux, if any sample directory
+        is missing, or if a per-sample artifact (target.wav, pred.wav, spec.png, params.csv) is
+        absent.
+    :raises ValueError: if a rendered WAV's peak amplitude is below ``SILENCE_PEAK_THRESHOLD``.
+    """
     args: list[str] = []
     if sys.platform == "linux":
-        args.append(_VST_HEADLESS_WRAPPER)
+        if not _VST_HEADLESS_WRAPPER.is_file():
+            raise FileNotFoundError(
+                f"VST headless wrapper not found at {_VST_HEADLESS_WRAPPER}; "
+                f"this script needs it on Linux to run predict_vst_audio.py headlessly."
+            )
+        args.append(str(_VST_HEADLESS_WRAPPER))
     args += [
         sys.executable,
-        "scripts/predict_vst_audio.py",
+        str(_PREDICT_VST_AUDIO_SCRIPT),
         str(predictions_output_dir),
         str(audio_dir),
         "-t",
     ]
     try:
-        subprocess.run(  # noqa: S603, S607
+        subprocess.run(  # noqa: S603
             args,
             check=True,
             timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
@@ -456,48 +520,82 @@ def _render_predicted_audio(
         raise
 
     sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
-    assert [d.name for d in sample_dirs] == [f"sample_{i}" for i in range(num_samples)]
+    actual_sample_names = [d.name for d in sample_dirs]
+    expected_sample_names = [f"sample_{i}" for i in range(num_samples)]
+    if actual_sample_names != expected_sample_names:
+        raise FileNotFoundError(
+            f"unexpected sample directories in {audio_dir}: "
+            f"got {actual_sample_names}, expected {expected_sample_names}"
+        )
     for sample_dir in sample_dirs:
         for fname in ("target.wav", "pred.wav", "spec.png", "params.csv"):
-            assert (sample_dir / fname).is_file(), f"{sample_dir / fname} not found"
+            artifact_path = sample_dir / fname
+            if not artifact_path.is_file():
+                raise FileNotFoundError(f"{artifact_path} not found")
         for wav_name in ("target.wav", "pred.wav"):
             with AudioFile(str(sample_dir / wav_name)) as f:
                 audio = f.read(f.frames)
             peak = float(np.abs(audio).max())
-            assert peak > SILENCE_PEAK_THRESHOLD, (
-                f"{sample_dir.name}/{wav_name} is silent (peak={peak:.2e})"
-            )
+            if peak <= SILENCE_PEAK_THRESHOLD:
+                raise ValueError(f"{sample_dir.name}/{wav_name} is silent (peak={peak:.2e})")
 
 
 def _compute_and_validate_metrics(audio_dir: Path, metrics_dir: Path, num_samples: int) -> None:
-    """Compute MSS / wMFCC / SOT / RMS metrics on the rendered pairs and verify the CSV outputs."""
-    metric_columns = {"mss", "wmfcc", "sot", "rms"}
-    metrics_file_expectations = {
-        "aggregated_metrics.csv": {"rows": len(metric_columns), "columns": {"mean", "std"}},
-        "metrics.csv": {"rows": num_samples, "columns": metric_columns},
+    """Compute MSS / wMFCC / SOT / RMS metrics on the rendered pairs and verify the CSV outputs.
+
+    :raises FileNotFoundError: if either metrics CSV is missing.
+    :raises ValueError: if a metrics CSV has unexpected shape or columns, or contains NaN/Inf.
+    """
+    metrics_file_expectations: dict[str, _MetricsFileSpec] = {
+        "aggregated_metrics.csv": _MetricsFileSpec(
+            rows=len(_METRIC_COLUMNS), columns=frozenset({"mean", "std"})
+        ),
+        "metrics.csv": _MetricsFileSpec(rows=num_samples, columns=_METRIC_COLUMNS),
     }
-    subprocess.check_call(  # noqa: S603 — args built from validated spec
+    subprocess.check_call(  # noqa: S603
         [
             sys.executable,
-            "scripts/compute_audio_metrics.py",
+            str(_COMPUTE_AUDIO_METRICS_SCRIPT),
             str(audio_dir),
             str(metrics_dir),
             "-w",
             "1",
         ],
+        timeout=_METRICS_SUBPROCESS_TIMEOUT_SECONDS,
     )
     for metrics_file, expected in metrics_file_expectations.items():
         metrics_path = metrics_dir / metrics_file
-        assert metrics_path.is_file(), f"{metrics_file} not found in {metrics_dir}"
+        if not metrics_path.is_file():
+            raise FileNotFoundError(f"{metrics_file} not found in {metrics_dir}")
         metrics_df = pd.read_csv(metrics_path)
-        assert len(metrics_df) == expected["rows"]
-        assert expected["columns"].issubset(metrics_df.columns)
-        numeric = metrics_df[sorted(expected["columns"])].to_numpy()
-        assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"
+        _validate_metrics_df(metrics_path, metrics_df, expected)
 
 
 def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path) -> None:
-    """Run model eval on captured patches: predict params, render audio, compute metrics."""
+    """Run model eval on captured patches end-to-end.
+
+    Pipeline (each step gated on the previous one's success):
+
+    1. Predict params via ``src/eval.py mode=predict`` (``_run_predict``).
+    2. Verify the per-sample ``pred-{i}.pt`` / ``target-audio-{i}.pt`` / ``target-params-{i}.pt``
+       files were written and that prediction tensors are finite (``_validate_predictions``).
+    3. Render predicted vs. target audio via ``scripts/predict_vst_audio.py`` and verify the
+       per-sample artifacts (``_render_predicted_audio``).
+    4. Compute MSS / wMFCC / SOT / RMS metrics via ``scripts/compute_audio_metrics.py`` and verify
+       the resulting CSVs (``_compute_and_validate_metrics``).
+
+    Re-runs against the same ``dataset_root_dir`` clear the previous prediction/audio/metrics
+    output directories so stale files don't leak into validation.
+
+    :param num_samples: Number of patches predicted/rendered (matches ``predict.h5``'s row count).
+    :param dataset_root_dir: Directory containing ``predict.h5``; receives ``prediction_outputs/``,
+        ``audio/``, and ``metrics/`` subdirectories.
+    :param checkpoint_path: Path to the ``.ckpt`` file to load weights from.
+    :raises FileNotFoundError: if ``checkpoint_path`` is missing, ``dataset_root_dir`` is not a
+        directory, ``predict.h5`` is missing, or any expected pipeline output is absent.
+    :raises ValueError: if predictions contain NaN/Inf, a rendered WAV is silent, or a metrics CSV
+        has the wrong shape/columns or contains NaN/Inf.
+    """
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
     if not dataset_root_dir.is_dir():
@@ -509,6 +607,12 @@ def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
     predictions_output_dir = dataset_root_dir / "prediction_outputs"
     audio_dir = dataset_root_dir / "audio"
     metrics_dir = dataset_root_dir / "metrics"
+
+    # Stale outputs from a prior run would leak into validation (e.g. extra ``pred-N.pt`` files
+    # from a larger previous run). Clear and recreate per-run output dirs up front.
+    for output_dir in (predictions_output_dir, audio_dir, metrics_dir):
+        shutil.rmtree(output_dir, ignore_errors=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     _run_predict(checkpoint_path, dataset_root_dir, predict_file, predictions_output_dir)
     _validate_predictions(predictions_output_dir, num_samples)
@@ -571,7 +675,7 @@ def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
 )
 @click.option(
     "--checkpoint-path",
-    type=click.Path(dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
     help=("Optional checkpoint path to run standalone eval on after rendering captured patches. "),
 )
@@ -612,9 +716,10 @@ def main(
        the resulting samples to ``train.h5`` inside ``--output-dataset-dir-path`` via
        ``make_dataset``.
     5. If ``--checkpoint-path`` is also set, copy ``train.h5`` to ``val.h5``/``test.h5``/
-       ``predict.h5`` siblings and run ``src/eval.py mode=predict`` followed by audio
-       rendering (``predict_vst_audio.py``) and metric computation
-       (``compute_audio_metrics.py``) on the captured patches.
+       ``predict.h5`` siblings (rolled back if any copy fails) and call ``eval_patches`` to
+       run ``src/eval.py mode=predict`` followed by audio rendering
+       (``predict_vst_audio.py``) and metric computation (``compute_audio_metrics.py``) on
+       the captured patches.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -698,7 +803,7 @@ def main(
         pool.shutdown(wait=not audio_timed_out, cancel_futures=audio_timed_out)
 
     if output_dataset_dir_path is None:
-        logger.info("No --output-dataset-dir-path provided, skipping dataset creation.")
+        logger.info("No --output-dataset-dir-path provided; skipping dataset creation.")
         return
     if not synth_patches:
         logger.info("No patches recorded, skipping dataset creation.")
@@ -735,14 +840,29 @@ def _maybe_eval_captured_patches(
     checkpoint_path: Path | None,
 ) -> None:
     """Replicate captured patches into the four eval-pipeline splits and run eval_patches if a
-    checkpoint is provided; no-op otherwise."""
+    checkpoint is provided; no-op otherwise.
+
+    The Click ``--checkpoint-path`` option already validates ``exists=True``, so when this is
+    invoked from ``main`` ``checkpoint_path`` is guaranteed to refer to an existing file.
+    """
     if checkpoint_path is None:
-        logger.info("No checkpoint path provided, skipping patch evaluation.")
+        logger.info("No --checkpoint-path provided; skipping patch evaluation.")
         return
-    if not checkpoint_path.is_file():
-        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
-    for split_name in ("test.h5", "val.h5", "predict.h5"):
-        shutil.copyfile(patch_file_path, output_dataset_dir_path / split_name)
+    sibling_paths = [
+        output_dataset_dir_path / name for name in ("test.h5", "val.h5", "predict.h5")
+    ]
+    copied: list[Path] = []
+    try:
+        for sibling_path in sibling_paths:
+            shutil.copyfile(patch_file_path, sibling_path)
+            copied.append(sibling_path)
+    except OSError:
+        for created in copied:
+            try:
+                os.remove(created)
+            except OSError:
+                logger.exception("failed to roll back partial sibling copy at %s", created)
+        raise
     eval_patches(num_patches, output_dataset_dir_path, checkpoint_path)
 
 
