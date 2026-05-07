@@ -1,0 +1,55 @@
+# SkyPilot task template for the local Kubernetes ("kind") backend — DEBUG
+# variant: rclone-against-R2 canary, no cloud capacity.
+#
+# Used by .github/workflows/test-skypilot-local.yml after `sky local up` to
+# verify that the rclone-prefixed R2 env vars (RCLONE_CONFIG_R2_*) get
+# forwarded into the worker pod via task.update_envs and that the worker
+# can talk to Cloudflare R2 from inside a kind-hosted pod.
+#
+# No `image_id`: defer to SkyPilot's stock kubernetes image, which has
+# python + sudo + the SSH server pre-baked. We install rclone in setup so
+# the test doesn't depend on a custom image.
+#
+# Worker-side env (RCLONE_CONFIG_R2_*) is forwarded by the launcher (see
+# .github/workflows/test-skypilot-local.yml).
+
+resources:
+  cloud: kubernetes
+  cpus: 1+
+  memory: 2+
+
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+  R2_BUCKET: ""
+  R2_DEBUG_PREFIX: ""
+
+setup: |
+  set -euo pipefail
+  if ! command -v rclone >/dev/null 2>&1; then
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq rclone
+  fi
+  rclone --version
+
+run: |
+  set -euo pipefail
+  echo "skypilot-local-debug worker ready (host: $(hostname))"
+  echo "[debug] R2 endpoint: ${RCLONE_CONFIG_R2_ENDPOINT}"
+  echo "[debug] R2 bucket:   ${R2_BUCKET}"
+  echo "[debug] R2 prefix:   ${R2_DEBUG_PREFIX}"
+
+  printf "%s\n" "$(hostname) $(date -u +%FT%TZ)" > /tmp/skypilot-local-debug-sentinel.txt
+  rclone copy \
+    -vv \
+    --checksum \
+    --contimeout=30s \
+    --timeout=300s \
+    --retries=3 \
+    /tmp/skypilot-local-debug-sentinel.txt \
+    "r2:${R2_BUCKET}/${R2_DEBUG_PREFIX}"
+  rclone lsf "r2:${R2_BUCKET}/${R2_DEBUG_PREFIX}"
+  echo "skypilot-local-debug variant=rclone done (host: $(hostname))"

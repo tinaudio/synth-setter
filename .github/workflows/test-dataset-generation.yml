@@ -204,8 +204,12 @@ jobs:
       # Launcher submits via sky.launch + stream_and_get; job-level
       # timeout-minutes: 60 is the safety bound. Cred-write is delegated to
       # scripts/skypilot_write_provider_creds.sh (umask 077; mode 600 on
-      # every cred file). R2/W&B secrets land in container env via -e flags
-      # (no .env on disk).
+      # every cred file) — but skipped when SKYPILOT_API_SERVER_ENDPOINT is
+      # set, since the remote API server (see #785) holds provider creds and
+      # the local container only needs to talk to it. R2/W&B secrets land in
+      # container env via -e flags (no .env on disk) — those are forwarded to
+      # the worker via task.update_envs regardless of where SkyPilot is
+      # running.
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         if: ${{ matrix.provider != 'local' }}
         env:
@@ -260,7 +264,11 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              bash scripts/skypilot_write_provider_creds.sh
+              if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
+                bash scripts/skypilot_write_provider_creds.sh
+              else
+                echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
+              fi
               if [[ "$PROVIDER" == "oci" ]]; then
                 sky check oci
               fi

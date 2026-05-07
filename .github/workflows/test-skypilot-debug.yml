@@ -97,8 +97,18 @@ name: Test SkyPilot Debug
 #
 # Required secrets:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
-#   RUNPOD_API_KEY  — written to ~/.runpod/config.toml so SkyPilot can
-#                     provision a pod
+#   RUNPOD_API_KEY  — written to ~/.runpod/config.toml by
+#                     scripts/skypilot_write_provider_creds.sh so SkyPilot
+#                     can provision a pod. Skipped when
+#                     SKYPILOT_API_SERVER_ENDPOINT is set (see #785) — the
+#                     remote API server holds provider creds and the local
+#                     SkyPilot client only needs the endpoint URL.
+#
+# Optional secrets:
+#   SKYPILOT_API_SERVER_ENDPOINT — basic-auth URL to a remote SkyPilot API
+#                     server. When set, all sky.* calls dispatch to that
+#                     server (which has its own provider creds), so the
+#                     local cred bootstrap is skipped.
 
 on:
   workflow_dispatch:
@@ -237,6 +247,8 @@ jobs:
       - name: Run inline SkyPilot probe
         if: matrix.mode == 'inline-sky'
         env:
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
+          PROVIDER: runpod
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -248,10 +260,12 @@ jobs:
           VARIANT: ${{ matrix.variant }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
-          set -o pipefail
-          mkdir -p ~/.runpod
-          umask 077
-          printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+          set -euo pipefail
+          if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
+            bash scripts/skypilot_write_provider_creds.sh
+          else
+            echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
+          fi
 
           python - <<'PY' 2>&1 | tee "$LOG_PATH"
           import os, time
@@ -343,6 +357,8 @@ jobs:
       - name: Run launcher (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
         env:
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
+          PROVIDER: runpod
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -355,10 +371,12 @@ jobs:
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
-          set -o pipefail
-          mkdir -p ~/.runpod
-          umask 077
-          printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+          set -euo pipefail
+          if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
+            bash scripts/skypilot_write_provider_creds.sh
+          else
+            echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
+          fi
           export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
           export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
           export RCLONE_CONFIG_R2_ENDPOINT="$R2_ENDPOINT"
@@ -372,6 +390,7 @@ jobs:
       - name: Run launcher (launcher-docker mode)
         if: matrix.mode == 'launcher-docker'
         env:
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -381,10 +400,12 @@ jobs:
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
-          set -o pipefail
+          set -euo pipefail
           docker pull "$IMAGE"
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -e SKYPILOT_API_SERVER_ENDPOINT \
+            -e PROVIDER=runpod \
             -e RUNPOD_API_KEY \
             -e CLUSTER_NAME \
             -e CONFIG_PATH \
@@ -401,9 +422,11 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              mkdir -p ~/.runpod
-              umask 077
-              printf "[default]\napi_key = \"%s\"\n" "$RUNPOD_API_KEY" > ~/.runpod/config.toml
+              if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
+                bash scripts/skypilot_write_provider_creds.sh
+              else
+                echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
+              fi
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
