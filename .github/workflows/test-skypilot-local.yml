@@ -89,14 +89,19 @@ jobs:
       - name: sky local up
         run: sky local up --no-gpus
 
-      - name: sky check kubernetes
-        run: sky check kubernetes
-
       # Launch the local-debug rclone task. R2 env vars are forwarded into
       # the worker pod via task.update_envs — same wiring the production
       # launcher uses on the cloud backends, so a regression here flags an
       # env-forwarding bug that would otherwise only surface on a billable
       # provider.
+      #
+      # The Python script runs `sky.check.check(['kubernetes'])` IN-PROCESS
+      # before `sky.launch`. Without it, `sky.launch` raises
+      # NoCloudAccessError on a fresh ubuntu-latest runner: SkyPilot 0.12's
+      # API-server architecture caches enabled-clouds per process, and a
+      # CLI-step `sky check` doesn't always populate the cache the SDK reads
+      # — sharing the call from inside the same Python process is the
+      # robust workaround.
       - name: sky launch (local-debug rclone task)
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -109,9 +114,13 @@ jobs:
           import sys
 
           import sky
+          import sky.check
 
           cluster = os.environ["CLUSTER_NAME"]
           template_path = os.environ["TEMPLATE"]
+
+          print("[probe] sky.check.check(['kubernetes'])")
+          sky.check.check(clouds=["kubernetes"], quiet=False)
 
           print(f"[probe] launching cluster={cluster} on local kind kubernetes")
           task = sky.Task.from_yaml(template_path)
