@@ -32,7 +32,7 @@ logging.basicConfig(
         RichHandler(
             console=Console(width=200),
             rich_tracebacks=True,
-            markup=True,
+            markup=False,
             show_path=True,
         )
     ],
