@@ -533,9 +533,7 @@ class TestMidiListener:
 
 
 class _FakeStream:
-    """Captures buffers written by ``play_audio``; serves as an ``AudioStream`` stand-in."""
-
-    default_output_device_name: str = "fake-device"
+    """Captures buffers written by ``play_audio``; an ``AudioStreamProtocol`` stand-in."""
 
     def __init__(self) -> None:
         self.writes: list[np.ndarray] = []
@@ -551,11 +549,26 @@ class _FakeStream:
 
 
 class _RecordingPlugin:
-    """Stand-in for a ``VST3Plugin`` that records the ``messages`` arg to ``process()``."""
+    """Stand-in for a ``VST3Plugin`` that records the ``messages`` arg to ``process()``.
 
-    def __init__(self, channels: int, buffer_size: int) -> None:
+    When ``stop_event`` and ``stop_after_n_calls`` are provided, the Nth ``process()``
+    invocation flips ``stop_event`` so ``play_audio`` exits its loop deterministically.
+    This replaces the late ``monkeypatch.setattr(plugin, "process", ...)`` re-bind that
+    earlier versions of ``TestPlayAudioQueueDrain`` used to drive shutdown.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        buffer_size: int,
+        *,
+        stop_event: threading.Event | None = None,
+        stop_after_n_calls: int = 1,
+    ) -> None:
         self._channels = channels
         self._buffer_size = buffer_size
+        self._stop_event = stop_event
+        self._stop_after_n_calls = stop_after_n_calls
         self.messages_per_call: list[list[tuple[list[int], float]]] = []
 
     def process(
@@ -569,108 +582,79 @@ class _RecordingPlugin:
     ) -> np.ndarray:
         assert reset is False
         self.messages_per_call.append(list(messages))
+        if (
+            self._stop_event is not None
+            and len(self.messages_per_call) >= self._stop_after_n_calls
+        ):
+            self._stop_event.set()
         return np.zeros((self._channels, self._buffer_size), dtype=np.float32)
 
 
 class TestPlayAudioQueueDrain:
     """``play_audio`` drains the MIDI queue into ``plugin.process`` once per buffer."""
 
-    def test_queued_events_are_forwarded_to_plugin_process(
-        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_queued_events_are_forwarded_to_plugin_process(self, surge_xt_interactive) -> None:
         """Tuples enqueued by the listener are drained and passed to ``plugin.process``."""
-        plugin = _RecordingPlugin(surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE)
+        stop_event = threading.Event()
+        plugin = _RecordingPlugin(
+            surge_xt_interactive.CHANNELS,
+            surge_xt_interactive.BUFFER_SIZE,
+            stop_event=stop_event,
+            stop_after_n_calls=1,
+        )
         stream = _FakeStream()
-
-        class _AudioStreamStub:
-            default_output_device_name = "fake-device"
-
-            def __new__(cls, **_kwargs: object) -> "_FakeStream":  # type: ignore[misc]
-                return stream
-
-        monkeypatch.setattr(surge_xt_interactive, "AudioStream", _AudioStreamStub)
 
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         midi_queue.put(([0x90, 0x3C, 0x40], 0.0))
         midi_queue.put(([0x80, 0x3C, 0x00], 0.0))
 
-        stop_event = threading.Event()
-
-        def _stop_after_first_buffer(*_args: object, **_kwargs: object) -> np.ndarray:
-            stop_event.set()
-            plugin.messages_per_call.append(list(_args[0]))  # type: ignore[arg-type]
-            return np.zeros(
-                (surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE),
-                dtype=np.float32,
-            )
-
-        monkeypatch.setattr(plugin, "process", _stop_after_first_buffer)
-        surge_xt_interactive.play_audio(plugin, stop_event, midi_queue)
+        surge_xt_interactive.play_audio(
+            plugin, stop_event, midi_queue, audio_stream_factory=lambda: stream
+        )
 
         assert plugin.messages_per_call == [[([0x90, 0x3C, 0x40], 0.0), ([0x80, 0x3C, 0x00], 0.0)]]
+        assert stop_event.is_set()
+        assert len(stream.writes) == 1
 
-    def test_none_queue_passes_empty_messages_list(
-        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_none_queue_passes_empty_messages_list(self, surge_xt_interactive) -> None:
         """When no MIDI port is configured, ``play_audio`` is invoked with ``midi_queue=None``."""
-        plugin = _RecordingPlugin(surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE)
+        stop_event = threading.Event()
+        plugin = _RecordingPlugin(
+            surge_xt_interactive.CHANNELS,
+            surge_xt_interactive.BUFFER_SIZE,
+            stop_event=stop_event,
+            stop_after_n_calls=1,
+        )
         stream = _FakeStream()
 
-        class _AudioStreamStub:
-            default_output_device_name = "fake-device"
-
-            def __new__(cls, **_kwargs: object) -> "_FakeStream":  # type: ignore[misc]
-                return stream
-
-        monkeypatch.setattr(surge_xt_interactive, "AudioStream", _AudioStreamStub)
-
-        stop_event = threading.Event()
-
-        def _stop_after_first_buffer(*_args: object, **_kwargs: object) -> np.ndarray:
-            stop_event.set()
-            plugin.messages_per_call.append(list(_args[0]))  # type: ignore[arg-type]
-            return np.zeros(
-                (surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE),
-                dtype=np.float32,
-            )
-
-        monkeypatch.setattr(plugin, "process", _stop_after_first_buffer)
-        surge_xt_interactive.play_audio(plugin, stop_event, None)
+        surge_xt_interactive.play_audio(
+            plugin, stop_event, None, audio_stream_factory=lambda: stream
+        )
 
         assert plugin.messages_per_call == [[]]
+        assert stop_event.is_set()
 
-    def test_drain_is_capped_at_max_midi_events_per_buffer(
-        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_drain_is_capped_at_max_midi_events_per_buffer(self, surge_xt_interactive) -> None:
         """A queue larger than ``_MAX_MIDI_EVENTS_PER_BUFFER`` drains in chunks across buffers,
         preventing one realtime callback from stretching to process the full backlog."""
         cap = surge_xt_interactive._MAX_MIDI_EVENTS_PER_BUFFER
-        plugin = _RecordingPlugin(surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE)
+        stop_event = threading.Event()
+        plugin = _RecordingPlugin(
+            surge_xt_interactive.CHANNELS,
+            surge_xt_interactive.BUFFER_SIZE,
+            stop_event=stop_event,
+            stop_after_n_calls=1,  # stop after the first buffer to assert the per-buffer cap
+        )
         stream = _FakeStream()
-
-        class _AudioStreamStub:
-            default_output_device_name = "fake-device"
-
-            def __new__(cls, **_kwargs: object) -> "_FakeStream":  # type: ignore[misc]
-                return stream
-
-        monkeypatch.setattr(surge_xt_interactive, "AudioStream", _AudioStreamStub)
 
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         # Enqueue cap + 5 events; first buffer should drain ``cap``, leaving 5 in the queue.
         for _ in range(cap + 5):
             midi_queue.put(([0x90, 0x3C, 0x40], 0.0))
 
-        stop_event = threading.Event()
-        # Stop after the first buffer so we can assert the per-buffer cap directly.
-        original_process = plugin.process
-
-        def _stop_after_first_buffer(*args: object, **kwargs: object) -> np.ndarray:
-            stop_event.set()
-            return original_process(*args, **kwargs)  # type: ignore[arg-type]
-
-        monkeypatch.setattr(plugin, "process", _stop_after_first_buffer)
-        surge_xt_interactive.play_audio(plugin, stop_event, midi_queue)
+        surge_xt_interactive.play_audio(
+            plugin, stop_event, midi_queue, audio_stream_factory=lambda: stream
+        )
 
         assert len(plugin.messages_per_call) == 1
         assert len(plugin.messages_per_call[0]) == cap
