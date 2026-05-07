@@ -466,17 +466,24 @@ class TestMidiListener:
 
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         stop_event = threading.Event()
+        # ``daemon=True`` so a hung listener can't block pytest shutdown if the
+        # fixture-side ``drain_event`` assertion below fails before we set ``stop_event``.
         listener_thread = threading.Thread(
             target=surge_xt_interactive.midi_listener,
             args=("fake-port", midi_queue, stop_event),
             kwargs={"port_opener": fake_port_opener},
+            daemon=True,
         )
         listener_thread.start()
-        # ``_FakeMidiPortHandle`` flips ``drain_event`` once the queued list is empty,
-        # so we know the listener has observed every message before we ask it to stop.
-        assert drain_event.wait(timeout=2.0), "listener did not drain fake messages"
-        stop_event.set()
-        listener_thread.join(timeout=2.0)
+        # Belt-and-suspenders: even though the thread is now daemonic, signal shutdown
+        # and join in a finally block so a failed drain assertion still cleans up.
+        try:
+            # ``_FakeMidiPortHandle`` flips ``drain_event`` once the queued list is empty,
+            # so we know the listener has observed every message before we ask it to stop.
+            assert drain_event.wait(timeout=2.0), "listener did not drain fake messages"
+        finally:
+            stop_event.set()
+            listener_thread.join(timeout=2.0)
         assert not listener_thread.is_alive(), "listener did not exit on stop_event"
 
         drained: list[tuple[list[int], float]] = []
