@@ -397,15 +397,15 @@ def midi_listener(
     midi_queue: "queue.Queue[tuple[list[int], float]]",
     stop_event: threading.Event,
 ) -> None:
-    """Listen on a MIDI input port and push (bytes, time) tuples onto ``midi_queue``.
+    """Listen on a MIDI input port and push ``(list[int], float)`` tuples onto ``midi_queue``.
 
     Filters to performance-relevant types (notes, CC, pitch wheel, aftertouch); other
     message types (e.g. ``polytouch``, ``sysex``, ``clock``) are dropped. Each forwarded
     message is converted to ``(msg.bytes(), 0.0)`` so ``plugin.process`` schedules it at the
     start of the next audio buffer — the format used elsewhere in the repo (see
     :func:`src.data.vst.core.make_midi_events`). ``mido.Message.bytes()`` returns
-    ``list[int]``, matching the ``List[int]`` form accepted by pedalboard's
-    ``plugin.process(...)``.
+    ``list[int]`` (a sequence of MIDI status bytes), matching the ``List[int]`` form
+    accepted by pedalboard's ``plugin.process(...)``.
 
     Polls ``port.poll()`` non-blockingly so the loop checks ``stop_event`` every
     ``_MIDI_POLL_INTERVAL_SECONDS`` and exits cleanly when ``main`` signals shutdown
