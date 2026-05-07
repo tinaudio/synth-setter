@@ -173,3 +173,6 @@ plugins/
 # Git worktrees
 .worktrees/
 /worktrees/
+
+# Surge-XT mini-example local artifacts (e.g. learned-model presets)
+presets/*.fxp

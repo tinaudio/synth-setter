@@ -1,0 +1,63 @@
+# @package _global_
+
+# Smoke-test experiment for Surge XT on MPS. Resolves to the same cfg as
+# ``cfg_surge_xt_global(accelerator="mps", param_spec_name="surge_4")``
+# (tests/conftest.py). The cfg-equality contract is enforced by
+# ``test_test_mps_yaml_matches_cfg_surge_xt_global`` in ``tests/test_configs.py``;
+# adding/removing knobs in the fixture or here will fail that test until both sides
+# stay in lockstep.
+
+defaults:
+  - surge/base
+  - override /model: surge_ffn
+  - override /data: surge
+  - override /trainer: mps
+  - override /callbacks: [default_surge, eval_surge]
+  - _self_
+
+run_name: ffn
+experiment_name: surge-full-onehot
+
+tags:
+  - surge
+
+logger: null
+test: false
+
+model:
+  compile: false
+  scheduler: null
+  net:
+    # Mandatory override — must equal the encoded width of the param_spec used by the run.
+    # The smoke fixture passes ``len(param_specs["surge_4"])``; production callers should
+    # set this to ``len(param_specs[<their-spec>])`` via the CLI override.
+    d_out: ???
+
+data:
+  batch_size: 1
+  pin_memory: false
+  ot: false
+  use_saved_mean_and_variance: false
+  num_workers: 0
+
+trainer:
+  devices: 1
+  precision: "32-true"
+  max_steps: 1
+  check_val_every_n_epoch: 1
+  val_check_interval: 1.0
+  log_every_n_steps: 1
+  enable_model_summary: false
+  limit_val_batches: 1.0
+  deterministic: true
+
+callbacks:
+  log_per_param_mse:
+    _target_: src.utils.callbacks.LogPerParamMSE
+    param_spec: surge_4
+  plot_proj_ii: null
+  model_checkpoint:
+    save_last: true
+  # The fixture sets lr_monitor to None (was: ``del``); ``instantiate_callbacks`` skips
+  # entries without ``_target_``, so ``null`` here is behaviorally equivalent.
+  lr_monitor: null
