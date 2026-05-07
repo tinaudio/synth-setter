@@ -3,7 +3,7 @@ name: Test SkyPilot Debug
 # Permanent diagnostic matrix for the SkyPilot+RunPod path. Progressive
 # canary variants, each adding one piece of the production smoke's complexity.
 # Most variants use a standalone inline-Python probe; the `launcher*` and
-# `generate-tiny` variants invoke the actual `skypilot_launch_smoke` launcher
+# `generate-tiny` variants invoke the actual `skypilot_launch` launcher
 # so we can compare its behavior to the inline probe. Read the matrix's
 # green/red pattern to identify where the production smoke first breaks.
 #
@@ -66,7 +66,7 @@ name: Test SkyPilot Debug
 #                    saw the same pod IP across multiple production-smoke
 #                    failures while matrix succeeded.
 #
-#   launcher         Invokes the actual `pipeline.entrypoints.skypilot_launch_smoke`
+#   launcher         Invokes the actual `pipeline.entrypoints.skypilot_launch`
 #                    launcher CLI from the GH-actions runner directly (no
 #                    docker), against a minimal template that no-ops on the
 #                    worker. PASS = launcher works on RunPod from a bare
@@ -339,7 +339,7 @@ jobs:
 
       # Full requirements-app.txt install (skypilot + python-dotenv + loguru +
       # pedalboard + mido + numpy + pydantic + click + ...). The launcher's
-      # import chain (skypilot_launch_smoke -> spec.py -> src.data.vst ->
+      # import chain (skypilot_launch -> spec.py -> src.data.vst ->
       # core.py) pulls in the whole runtime, so a targeted install is
       # whack-a-mole — full requirements-app keeps the launcher-runner mode
       # honestly mirroring what a developer would have on their laptop.
@@ -376,7 +376,7 @@ jobs:
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -euo pipefail
-          python -m pipeline.entrypoints.skypilot_launch_smoke \
+          python -m pipeline.entrypoints.skypilot_launch \
             --config "$CONFIG_PATH" \
             --template "$TEMPLATE" \
             --cluster-name "$CLUSTER_NAME" \
@@ -419,7 +419,7 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              python -m pipeline.entrypoints.skypilot_launch_smoke \
+              python -m pipeline.entrypoints.skypilot_launch \
                 --config "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
                 --cluster-name "$CLUSTER_NAME" \

@@ -1,6 +1,6 @@
 # SkyPilot task template for RunPod.
 #
-# Loaded by pipeline/entrypoints/skypilot_launch_smoke.py via sky.Task.from_yaml(...).
+# Loaded by pipeline/entrypoints/skypilot_launch.py via sky.Task.from_yaml(...).
 # The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`)
 # and injects credentials + the spec URI via task.update_envs(...) before
 # calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch

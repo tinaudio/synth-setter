@@ -1,0 +1,288 @@
+name: Generate Dataset Shards
+
+# Reusable workflow that owns one provider's launcher invocation. Callers fan
+# out across providers (see test-dataset-generation.yml) and pass per-provider
+# values via inputs. Behavior is identical to the inline blocks this replaced —
+# inputs are simple passthroughs to `pipeline.entrypoints.skypilot_launch` flags
+# plus the artifact-name knob the validate-dataset-shards.yaml downstream
+# expects to find on disk.
+#
+# Provider-specific behavior:
+#   * `skypilot-local` — provisions a kind cluster on the runner via
+#     `sky local up`, loads the dev-snapshot image into kind, and invokes the
+#     launcher against `configs/compute/local-template.yaml` (cloud:
+#     kubernetes). Always tears down kind in `if: always()`.
+#   * `runpod` / `oci` — in-container launcher invocation against the matching
+#     `configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
+#     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
+#     is set, the bootstrap is skipped (the remote API server holds creds).
+#
+# Required secrets (callers should `secrets: inherit`):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — every provider.
+#   RUNPOD_API_KEY — runpod row.
+#   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
+#     OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — oci row.
+#   SKYPILOT_API_SERVER_ENDPOINT (optional) — when set, launcher skips local
+#     cred bootstrap.
+#   WANDB_API_KEY (optional) — forwarded to the worker.
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: "skypilot-local, runpod, or oci"
+        required: true
+        type: string
+      dataset_config:
+        description: "Path to dataset config YAML (under configs/dataset/)"
+        required: true
+        type: string
+      image_tag:
+        description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
+        required: true
+        type: string
+      cluster_name:
+        description: "SkyPilot cluster name (caller computes; include run_id + run_attempt for uniqueness)"
+        required: true
+        type: string
+      num_workers:
+        description: "Override --num-workers. Empty (default) = use config's num_workers."
+        required: false
+        type: string
+        default: ""
+      tail:
+        description: "Pass --tail to launcher (stream logs, unconditional teardown)."
+        required: false
+        type: boolean
+        default: true
+      api_server:
+        description: "Remote SkyPilot API server URL. Empty = inherit env (default)."
+        required: false
+        type: string
+        default: ""
+      local:
+        description: "Pass --local to launcher (force local SDK dispatch, clear inherited SKYPILOT_API_SERVER_ENDPOINT)."
+        required: false
+        type: boolean
+        default: false
+      artifact_name:
+        description: "Name of the uploaded run-metadata artifact."
+        required: false
+        type: string
+        default: "run-metadata"
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: Run generate_dataset (${{ inputs.provider }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag }}
+      CONFIG_PATH: ${{ inputs.dataset_config }}
+      PROVIDER: ${{ inputs.provider }}
+      RUN_METADATA_DIR: /tmp/run-metadata-${{ inputs.provider }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Pull image
+        run: docker pull --quiet "${IMAGE}"
+
+      - name: Prepare run-metadata mount
+        run: mkdir -p "${RUN_METADATA_DIR}"
+
+      # ----- skypilot-local row: kind setup + launcher
+      - name: Install kind (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+          version: v0.24.0
+
+      - name: Install kubectl (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        uses: azure/setup-kubectl@v4
+
+      - name: Install socat (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq socat
+
+      - name: Set up Python (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements-app.txt"
+
+      - name: Install launcher deps (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        run: |
+          uv pip install --system -r requirements-app.txt "skypilot[kubernetes]==0.12.0"
+          sudo apt-get install -y -qq rclone
+
+      - name: sky local up (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        run: sky local up --no-gpus
+
+      - name: Load dev-snapshot image into kind (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        run: kind load docker-image "${IMAGE}" --name skypilot
+
+      # The launcher's local-vs-remote dispatch flags (`--local`, `--api-server`)
+      # are passed through from inputs; today's skypilot-local caller passes
+      # `local: true` to clear inherited SKYPILOT_API_SERVER_ENDPOINT (#841)
+      # and `num_workers: '1'` to override the config's value (kind cluster
+      # can't host parallel workers — see #843). The argument array is built
+      # conditionally so optional flags don't expand to empty strings.
+      - name: Run launcher against local-template (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        env:
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          PYTHONPATH: ${{ github.workspace }}
+          INPUT_LOCAL: ${{ inputs.local }}
+          INPUT_TAIL: ${{ inputs.tail }}
+          INPUT_API_SERVER: ${{ inputs.api_server }}
+          INPUT_NUM_WORKERS: ${{ inputs.num_workers }}
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --config "$CONFIG_PATH"
+            --template configs/compute/local-template.yaml
+            --cluster-name "$CLUSTER_NAME"
+            --worker-image-tag "$IMAGE_TAG"
+            --spec-out "${RUN_METADATA_DIR}/input_spec.json"
+          )
+          if [[ "$INPUT_LOCAL" == "true" ]]; then
+            ARGS+=(--local)
+          fi
+          if [[ -n "$INPUT_API_SERVER" ]]; then
+            ARGS+=(--api-server "$INPUT_API_SERVER")
+          fi
+          if [[ -n "$INPUT_NUM_WORKERS" ]]; then
+            ARGS+=(--num-workers "$INPUT_NUM_WORKERS")
+          fi
+          if [[ "$INPUT_TAIL" == "true" ]]; then
+            ARGS+=(--tail)
+          fi
+          python -m pipeline.entrypoints.skypilot_launch "${ARGS[@]}" \
+            2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
+          chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
+
+      - name: sky local down (skypilot-local row)
+        if: ${{ always() && inputs.provider == 'skypilot-local' }}
+        run: sky local down || true
+
+      # ----- runpod / oci row: in-container launcher
+      # Optional launcher flags are pre-rendered into env-var strings on the
+      # outer step (so GHA expression evaluation stays out of the bash
+      # block-scalar) and expanded unquoted inside docker so empty values
+      # disappear. Today's caller passes neither api_server nor num_workers
+      # for these rows, so $API_SERVER_FLAG / $NUM_WORKERS_FLAG are empty —
+      # net behavior unchanged.
+      - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
+        if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
+        env:
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
+          TEMPLATE: configs/compute/${{ inputs.provider == 'oci' && 'oci-cpu' || inputs.provider }}-template.yaml
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          OCI_IMAGE_TAG: ${{ inputs.provider == 'oci' && 'skypilot:cpu-ubuntu-2204' || '' }}
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          NUM_WORKERS_FLAG: ${{ inputs.num_workers != '' && format('--num-workers {0}', inputs.num_workers) || '' }}
+          TAIL_FLAG: ${{ inputs.tail && '--tail' || '' }}
+          LOCAL_FLAG: ${{ inputs.local && '--local' || '' }}
+          API_SERVER_FLAG: ${{ inputs.api_server != '' && format('--api-server {0}', inputs.api_server) || '' }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v "${RUN_METADATA_DIR}:/run-metadata" \
+            -e SKYPILOT_API_SERVER_ENDPOINT \
+            -e PROVIDER \
+            -e TEMPLATE \
+            -e CLUSTER_NAME \
+            -e IMAGE_TAG \
+            -e OCI_IMAGE_TAG \
+            -e RUNPOD_API_KEY \
+            -e OCI_USER_OCID \
+            -e OCI_TENANCY_OCID \
+            -e OCI_FINGERPRINT \
+            -e OCI_REGION \
+            -e OCI_COMPARTMENT_OCID \
+            -e OCI_API_KEY_PEM \
+            -e CONFIG_PATH \
+            -e WORKER_GIT_REF \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e R2_ACCOUNT_ID \
+            -e WANDB_API_KEY \
+            -e NUM_WORKERS_FLAG \
+            -e TAIL_FLAG \
+            -e LOCAL_FLAG \
+            -e API_SERVER_FLAG \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "${IMAGE}" \
+            bash -c '
+              set -euo pipefail
+              cd /home/build/synth-setter
+              git config --global --add safe.directory /home/build/synth-setter
+              bash scripts/ensure_plugin_symlinks.sh
+              python -m pipeline.entrypoints.skypilot_launch \
+                --config "$CONFIG_PATH" \
+                --template "$TEMPLATE" \
+                --cluster-name "$CLUSTER_NAME" \
+                --worker-image-tag "$IMAGE_TAG" \
+                --spec-out /tmp/input_spec.json \
+                $LOCAL_FLAG $API_SERVER_FLAG $NUM_WORKERS_FLAG $TAIL_FLAG
+              cp /tmp/input_spec.json /run-metadata/input_spec.json
+              chmod 0644 /run-metadata/input_spec.json
+            ' \
+            2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
+
+      - name: Validate spec exists
+        run: |
+          set -euo pipefail
+          SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
+          if [[ ! -f "${SPEC_PATH}" ]]; then
+            echo "::error::input_spec.json not found at ${SPEC_PATH}"
+            exit 1
+          fi
+          echo "=== Materialized Spec (${PROVIDER}) ==="
+          head -20 "${SPEC_PATH}"
+
+      - name: Upload run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: /tmp/run-metadata-${{ inputs.provider }}/
+          retention-days: 7
+          if-no-files-found: warn

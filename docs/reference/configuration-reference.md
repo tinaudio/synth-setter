@@ -77,7 +77,7 @@ Reference: `eval-pipeline.md` §4–5
 
 ```
 configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
-  → launcher script (pipeline.entrypoints.skypilot_launch_smoke)
+  → launcher script (pipeline.entrypoints.skypilot_launch)
     reads YAML, materializes spec, mounts spec into worker
     → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
       → pod runs: python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
@@ -89,7 +89,7 @@ configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
   and forwards the `r2://` URI to the worker via `task.update_envs(WORKER_SPEC_URI=...)`.
   R2 is used instead of `task.update_file_mounts` because the SkyPilot RunPod backend
   rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
-- Invoked via: `python -m pipeline.entrypoints.skypilot_launch_smoke --config <yaml> --template <yaml>`
+- Invoked via: `python -m pipeline.entrypoints.skypilot_launch --config <yaml> --template <yaml>`
 
 Reference: `training-pipeline.md` Appendix D
 

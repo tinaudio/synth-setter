@@ -6,7 +6,7 @@
 # worker fetches+checks out that ref over the image's pre-baked checkout.
 #
 # Caller is responsible for `cd`-ing into the synth-setter checkout. The SHA
-# format is validated host-side by skypilot_launch_smoke.resolve_worker_env.
+# format is validated host-side by skypilot_launch.resolve_worker_env.
 set -euo pipefail
 
 if [[ -z "${WORKER_GIT_REF:-}" ]]; then

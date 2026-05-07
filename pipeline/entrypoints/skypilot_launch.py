@@ -1,4 +1,4 @@
-"""Launch the smoke `generate_dataset` run on RunPod, OCI, or local kind via SkyPilot.
+"""Launch a `generate_dataset` run on RunPod, OCI, or local kind via SkyPilot.
 
 Provider-neutral entrypoint: the same binary launches against
 `configs/compute/runpod-template.yaml`, `configs/compute/oci-cpu-template.yaml`,

@@ -1,27 +1,28 @@
 name: Test Dataset Generation
 
 # Smoke test for the data-pipeline. Three execution modes share the same
-# matrix shape and the same `validate-spec` / `validate-shard` downstream:
+# `validate-dataset-shards.yaml` downstream:
 #
 #   * `local`  — runs `pipeline.ci.materialize_spec` + `docker_entrypoint.py
 #     generate_dataset` directly inside the dev-snapshot container on the
 #     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). Manual
 #     dispatch fallback for ad-hoc smoke; superseded by `skypilot-local` for
-#     PR coverage.
-#   * `skypilot-local` — provisions a kind cluster on the runner via
-#     `sky local up`, loads the dev-snapshot image into kind, and invokes the
-#     unified launcher against `configs/compute/local-template.yaml`
-#     (cloud: kubernetes). PR default — exercises the same launcher /
-#     cred-bootstrap path as the cloud providers, closing the #806 unification
-#     gap. No billable capacity.
-#   * `runpod` / `oci` — invoke `pipeline.entrypoints.skypilot_launch_smoke`
-#     against the matching `configs/compute/*-template.yaml`. Manual dispatch
-#     only. See docs/design/skypilot-compute-integration.md.
+#     PR coverage. Stays inline here — it doesn't go through the
+#     `generate-dataset-shards.yaml` reusable.
+#   * `skypilot-local` — invokes `generate-dataset-shards.yaml` with
+#     `local: true, num_workers: '1'` to provision a kind cluster on the
+#     runner, load dev-snapshot into kind, and launch against
+#     `configs/compute/local-template.yaml`. PR default — exercises the same
+#     launcher / cred-bootstrap path as the cloud providers, closing the #806
+#     unification gap. No billable capacity.
+#   * `runpod` / `oci` — invoke `generate-dataset-shards.yaml` against the
+#     matching cloud template. Manual dispatch only. See
+#     docs/design/skypilot-compute-integration.md.
 #
 # All non-`local` rows let the launcher invoke the cred-bootstrap script
-# (`pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap`); the
-# launcher captures the script's stdout via `subprocess.run(capture_output=True)`
-# so a `tee`'d caller workflow can't leak secrets.
+# (`pipeline.entrypoints.skypilot_launch._run_cred_bootstrap`); the launcher
+# captures the script's stdout via `subprocess.run(capture_output=True)` so a
+# `tee`'d caller workflow can't leak secrets.
 #
 # Provider matrix policy (computed in the `setup` job):
 #   * pull_request (same repo) → skypilot-local only
@@ -78,8 +79,10 @@ on:
       - "scripts/ensure_plugin_symlinks.sh"
       - "scripts/sync_worker_checkout.sh"
       - "scripts/skypilot_write_provider_creds.sh"
-      - "pipeline/entrypoints/skypilot_launch_smoke.py"
+      - "pipeline/entrypoints/skypilot_launch.py"
       - ".github/workflows/test-dataset-generation.yml"
+      - ".github/workflows/generate-dataset-shards.yaml"
+      - ".github/workflows/validate-dataset-shards.yaml"
       - "requirements*.txt"
 
 permissions:
@@ -92,10 +95,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Compute the provider list at runtime. Provider-specific values
-  # (template, cluster prefix) are derived from the provider name in the
-  # consuming jobs via expressions, so the only thing this job has to
-  # publish is the JSON array.
+  # Compute the provider list at runtime. Three outputs:
+  #   * `providers`           — full union (drives the validate matrix).
+  #   * `providers_local`     — subset routed through the inline `generate-local`
+  #                             job (no launcher).
+  #   * `providers_launcher`  — subset routed through the
+  #                             `generate-dataset-shards.yaml` reusable.
+  # Reusable workflows can't be invoked conditionally inside a single matrix
+  # job (each `uses:` job is fixed), so the split happens here.
   #
   # Policy:
   #   * pull_request (same repo) → skypilot-local only (free; exercises the
@@ -109,8 +116,11 @@ jobs:
   setup:
     name: Compute provider list
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       providers: ${{ steps.matrix.outputs.providers }}
+      providers_local: ${{ steps.matrix.outputs.providers_local }}
+      providers_launcher: ${{ steps.matrix.outputs.providers_launcher }}
     steps:
       - id: matrix
         env:
@@ -133,33 +143,31 @@ jobs:
           else
             providers='[]'
           fi
+          providers_local=$(python3 -c "import json,sys; ps=json.loads(sys.argv[1]); print(json.dumps([p for p in ps if p == 'local']))" "${providers}")
+          providers_launcher=$(python3 -c "import json,sys; ps=json.loads(sys.argv[1]); print(json.dumps([p for p in ps if p != 'local']))" "${providers}")
           echo "providers=${providers}" >> "${GITHUB_OUTPUT}"
+          echo "providers_local=${providers_local}" >> "${GITHUB_OUTPUT}"
+          echo "providers_launcher=${providers_launcher}" >> "${GITHUB_OUTPUT}"
           echo "providers: ${providers}"
+          echo "providers_local: ${providers_local}"
+          echo "providers_launcher: ${providers_launcher}"
 
-  # Matrix over the providers selected by `setup`. Cells fork by provider:
-  #
-  #   * `local` — runs `pipeline.ci.materialize_spec` and
-  #     `scripts/docker_entrypoint.py generate_dataset` directly inside the
-  #     dev-snapshot container, single-rank. No SkyPilot, no cloud creds. Pragmatic
-  #     PR smoke; should be replaced by SkyPilot's `local` cloud (#806) so all
-  #     providers exercise the same launcher path.
-  #   * `runpod` / `oci` — invoke the same provider-neutral launcher
-  #     (`pipeline.entrypoints.skypilot_launch_smoke`) against the matching
-  #     `configs/compute/*-template.yaml`. Worker fan-out comes from
-  #     the dataset config's `num_workers` field
-  #     (`configs/dataset/runpod-smoke-shard.yaml`) so the partitioner is
-  #     exercised end-to-end. Cluster names include `github.run_attempt`
-  #     so re-running a failed job doesn't collide on the launcher's R2
-  #     spec key.
-  generate:
+  # `local` provider: inline docker run, no SkyPilot. Materializes the spec
+  # inside dev-snapshot, then `docker_entrypoint.py generate_dataset`
+  # against rank=0/world=1. Output spec lands in /run-metadata/input_spec.json,
+  # matching the shape produced by the launcher branch so validate-spec /
+  # validate-shard are provider-agnostic. Should be replaced by a SkyPilot
+  # local-cloud template (#806).
+  generate-local:
     name: Run generate_dataset (${{ matrix.provider }})
     needs: setup
+    if: ${{ needs.setup.outputs.providers_local != '[]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        provider: ${{ fromJSON(needs.setup.outputs.providers) }}
+        provider: ${{ fromJSON(needs.setup.outputs.providers_local) }}
     env:
       DATASET_CONFIG: >-
         ${{
@@ -169,7 +177,6 @@ jobs:
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -180,15 +187,7 @@ jobs:
       - name: Prepare run-metadata mount
         run: mkdir -p "/tmp/run-metadata-${{ matrix.provider }}"
 
-      # `local` provider: skip SkyPilot entirely. Materialize the spec inside
-      # the dev-snapshot container, then invoke `docker_entrypoint.py
-      # generate_dataset` there against rank=0/world=1. Output spec lands in
-      # /run-metadata/input_spec.json, matching the shape produced by the
-      # SkyPilot launcher branch so the downstream `validate-spec` /
-      # `validate-shard` jobs are provider-agnostic. Should be replaced by a
-      # SkyPilot local-cloud template (#806).
       - name: Run generate_dataset locally (inside container)
-        if: ${{ matrix.provider == 'local' }}
         env:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
@@ -221,179 +220,6 @@ jobs:
             ' \
             2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}/generate.log"
 
-      # ------------------------------------------------------------------
-      # `skypilot-local` row: provision a local kind cluster on the runner
-      # and invoke the launcher against configs/compute/local-template.yaml.
-      # The launcher (`pipeline.entrypoints.skypilot_launch_smoke`) detects
-      # `cloud: kubernetes` → runs the cred-bootstrap with `--provider local`
-      # (R2 only) and calls `sky.check.check(['kubernetes'])` in-process before
-      # `sky.launch` to populate the SDK's enabled-clouds cache (see
-      # test-skypilot-local.yml from #834 for the cache-quirk write-up).
-      # ------------------------------------------------------------------
-      - name: Install kind (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        uses: helm/kind-action@v1
-        with:
-          install_only: true
-          version: v0.24.0
-
-      - name: Install kubectl (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        uses: azure/setup-kubectl@v4
-
-      - name: Install socat (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq socat
-
-      - name: Set up Python (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10"
-
-      - name: Install uv (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: "requirements-app.txt"
-
-      - name: Install launcher deps (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        run: |
-          uv pip install --system -r requirements-app.txt "skypilot[kubernetes]==0.12.0"
-          sudo apt-get install -y -qq rclone
-
-      - name: sky local up (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        run: sky local up --no-gpus
-
-      - name: Load dev-snapshot image into kind (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        run: kind load docker-image "${IMAGE}" --name skypilot
-
-      # Launcher invokes the cred-bootstrap script itself (capturing stdout
-      # via subprocess.run, never tee'ing to logs). For `--provider local`
-      # the bootstrap writes only R2 cred files — kind needs no compute
-      # provider auth. RCLONE_CONFIG_R2_* env vars are bridged from the
-      # workflow env to os.environ inside main() so upload_spec_to_r2's
-      # rclone subprocess sees them.
-      #
-      # `--local` makes the launcher's local-vs-remote dispatch explicit
-      # (#841): it clears any inherited SKYPILOT_API_SERVER_ENDPOINT before
-      # any sky.* call so this row can't accidentally route remote and miss
-      # the runner-local kind cluster (`sky local up` above) — which is
-      # where the kind-loaded dev-snapshot image lives.
-      #
-      # `num_workers` defaults from the dataset config
-      # (`configs/dataset/runpod-smoke-shard.yaml`), but this row passes
-      # `--num-workers 1` to override the config's value (3): the
-      # single-node kind cluster can't fit 3 concurrent worker pods of
-      # cpus=2+, mem=4+. See #843 for the deeper design discussion
-      # (multi-node kind, retry-on-pod-free).
-      - name: Run launcher against local-template (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        env:
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
-          CLUSTER_NAME: synth-setter-smoke-skypilot-local-${{ github.run_id }}-${{ github.run_attempt }}
-          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-          PYTHONPATH: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          python -m pipeline.entrypoints.skypilot_launch_smoke \
-            --config "$CONFIG_PATH" \
-            --template configs/compute/local-template.yaml \
-            --cluster-name "$CLUSTER_NAME" \
-            --worker-image-tag "$IMAGE_TAG" \
-            --local \
-            --num-workers 1 \
-            --spec-out "/tmp/run-metadata-${{ matrix.provider }}/input_spec.json" \
-            --tail \
-            2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}/generate.log"
-          chmod 0644 "/tmp/run-metadata-${{ matrix.provider }}/input_spec.json"
-
-      - name: sky local down (skypilot-local row)
-        if: ${{ always() && matrix.provider == 'skypilot-local' }}
-        run: sky local down || true
-
-      # ------------------------------------------------------------------
-      # `runpod` / `oci` rows: in-container launcher invocation. The launcher
-      # invokes scripts/skypilot_write_provider_creds.sh itself with
-      # `subprocess.run(capture_output=True)` — its stdout never touches the
-      # workflow log. When SKYPILOT_API_SERVER_ENDPOINT is set the launcher
-      # skips the bootstrap entirely (the remote API server holds provider
-      # creds — see #785).
-      # ------------------------------------------------------------------
-      - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
-        if: ${{ matrix.provider == 'runpod' || matrix.provider == 'oci' }}
-        env:
-          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          PROVIDER: ${{ matrix.provider }}
-          TEMPLATE: configs/compute/${{ matrix.provider == 'oci' && 'oci-cpu' || matrix.provider }}-template.yaml
-          CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
-          OCI_IMAGE_TAG: ${{ matrix.provider == 'oci' && 'skypilot:cpu-ubuntu-2204' || '' }}
-          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_REGION: ${{ secrets.OCI_REGION }}
-          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
-          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
-          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v "/tmp/run-metadata-${PROVIDER}:/run-metadata" \
-            -e SKYPILOT_API_SERVER_ENDPOINT \
-            -e PROVIDER \
-            -e TEMPLATE \
-            -e CLUSTER_NAME \
-            -e IMAGE_TAG \
-            -e OCI_IMAGE_TAG \
-            -e RUNPOD_API_KEY \
-            -e OCI_USER_OCID \
-            -e OCI_TENANCY_OCID \
-            -e OCI_FINGERPRINT \
-            -e OCI_REGION \
-            -e OCI_COMPARTMENT_OCID \
-            -e OCI_API_KEY_PEM \
-            -e CONFIG_PATH \
-            -e WORKER_GIT_REF \
-            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
-            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
-            -e RCLONE_CONFIG_R2_ENDPOINT \
-            -e R2_ACCOUNT_ID \
-            -e WANDB_API_KEY \
-            -e PYTHONPATH=/home/build/synth-setter \
-            "${IMAGE}" \
-            bash -c '
-              set -euo pipefail
-              cd /home/build/synth-setter
-              git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
-              python -m pipeline.entrypoints.skypilot_launch_smoke \
-                --config "$CONFIG_PATH" \
-                --template "$TEMPLATE" \
-                --cluster-name "$CLUSTER_NAME" \
-                --worker-image-tag "$IMAGE_TAG" \
-                --spec-out /tmp/input_spec.json \
-                --tail
-              cp /tmp/input_spec.json /run-metadata/input_spec.json
-              chmod 0644 /run-metadata/input_spec.json
-            ' \
-            2>&1 | tee "/tmp/run-metadata-${PROVIDER}/generate.log"
-
       - name: Validate spec exists
         run: |
           set -euo pipefail
@@ -414,107 +240,51 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  # validate_spec is provider-neutral; per-cell variation is the artifact
-  # name. `if: !cancelled()` decouples each provider's validate cell from
-  # the OTHER provider's generate outcome — RunPod transients won't skip
-  # OCI validation.
-  validate-spec:
-    name: Validate ${{ matrix.provider }} spec structure
-    needs: [setup, generate]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+  # `skypilot-local` / `runpod` / `oci` rows: route through the official
+  # launcher reusable. Cluster name includes `github.run_attempt` so re-running
+  # a failed job doesn't collide on the launcher's R2 spec key. The
+  # `--num-workers 1` override for skypilot-local mirrors today's hardcoded
+  # behavior — the single-node kind cluster can't host parallel workers (#843).
+  generate-launcher:
+    name: Run generate_dataset (${{ matrix.provider }})
+    needs: setup
+    if: ${{ needs.setup.outputs.providers_launcher != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJSON(needs.setup.outputs.providers_launcher) }}
+    uses: ./.github/workflows/generate-dataset-shards.yaml
+    with:
+      provider: ${{ matrix.provider }}
+      dataset_config: >-
+        ${{
+          github.event_name == 'pull_request'
+            && 'configs/dataset/runpod-smoke-shard.yaml'
+            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+        }}
+      image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
+      num_workers: ${{ matrix.provider == 'skypilot-local' && '1' || '' }}
+      tail: true
+      local: ${{ matrix.provider == 'skypilot-local' }}
+      api_server: ""
+      artifact_name: test-run-metadata-${{ matrix.provider }}
+    secrets: inherit
+
+  # validate-spec + validate-shard are provider-neutral; per-cell variation
+  # is the artifact name. `if: !cancelled()` decouples each provider's
+  # validate cell from the OTHER provider's generate outcome — RunPod
+  # transients won't skip OCI validation.
+  validate:
+    name: Validate ${{ matrix.provider }} dataset
+    needs: [setup, generate-local, generate-launcher]
+    if: ${{ !cancelled() && needs.setup.outputs.providers != '[]' }}
     strategy:
       fail-fast: false
       matrix:
         provider: ${{ fromJSON(needs.setup.outputs.providers) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Download run metadata artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: test-run-metadata-${{ matrix.provider }}
-
-      - name: Validate spec structure
-        run: python3 -m pipeline.ci.validate_spec input_spec.json
-
-  # validate_shard.py is provider-neutral; per-cell variation is the
-  # artifact name. See validate-spec for `if: !cancelled()` rationale.
-  validate-shard:
-    name: Validate ${{ matrix.provider }} shards
-    needs: [setup, generate]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        provider: ${{ fromJSON(needs.setup.outputs.providers) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Download run metadata artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: test-run-metadata-${{ matrix.provider }}
-
-      - name: Install PyYAML for config parsing
-        run: pip install pyyaml
-
-      # R2 bucket from configs/image/dev-snapshot.yaml; R2 prefix + shard
-      # filenames from the materialized spec artifact. Every shard in
-      # spec.shards must exist in R2 — partitioning bugs surface as
-      # missing-shard rclone failures.
-      - name: Download every shard from R2 and validate
-        env:
-          IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-        run: |
-          set -euo pipefail
-          R2_BUCKET=
-          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
-          R2_PREFIX=
-          R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
-          mapfile -t SHARD_FILES < <(python3 -c "import json; [print(s['filename']) for s in json.load(open('input_spec.json'))['shards']]")
-
-          echo "R2 bucket: ${R2_BUCKET}"
-          echo "R2 prefix: ${R2_PREFIX}"
-          echo "Shards to validate: ${SHARD_FILES[*]}"
-
-          mkdir -p /tmp/shard-download
-          docker pull "${IMAGE}"
-
-          for SHARD_FILE in "${SHARD_FILES[@]}"; do
-            echo "::group::Download and validate ${SHARD_FILE}"
-            docker run --rm \
-              -e RCLONE_CONFIG_R2_TYPE=s3 \
-              -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
-              -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
-              -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
-              -e RCLONE_CONFIG_R2_ENDPOINT \
-              -e PYTHONPATH=/home/build/synth-setter \
-              -v /tmp/shard-download:/download \
-              "${IMAGE}" \
-              rclone copy --checksum \
-                "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
-                /download/
-
-            docker run --rm \
-              -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
-              -v /tmp/shard-download:/download:ro \
-              -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
-              -e PYTHONPATH=/home/build/synth-setter \
-              "${IMAGE}" \
-              python3 -m pipeline.ci.validate_shard \
-                /spec/input_spec.json \
-                "/download/${SHARD_FILE}"
-            echo "::endgroup::"
-          done
-
-          echo "All ${#SHARD_FILES[@]} shards validated"
-          ls -la /tmp/shard-download/
+    uses: ./.github/workflows/validate-dataset-shards.yaml
+    with:
+      image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      artifact_name: test-run-metadata-${{ matrix.provider }}
+    secrets: inherit

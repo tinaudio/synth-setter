@@ -1,0 +1,118 @@
+name: Validate Dataset Shards
+
+# Reusable workflow that validates a generated dataset's spec + shards.
+# Consumes the run-metadata artifact uploaded by generate-dataset-shards.yaml
+# (or any caller that uploads a matching artifact containing input_spec.json).
+#
+# Two jobs:
+#   * validate-spec   — structural checks on input_spec.json
+#                       (pipeline.ci.validate_spec).
+#   * validate-shard  — downloads each shard from R2 and runs
+#                       pipeline.ci.validate_shard inside dev-snapshot.
+#
+# Required secrets (callers should `secrets: inherit`):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT — used to download shards from R2 for validation.
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Docker image tag for validate_shard container."
+        required: true
+        type: string
+      artifact_name:
+        description: "Name of the run-metadata artifact to download."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate-spec:
+    name: Validate spec structure
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download run metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+
+      - name: Validate spec structure
+        run: python3 -m pipeline.ci.validate_spec input_spec.json
+
+  validate-shard:
+    name: Validate shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download run metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+
+      - name: Install PyYAML for config parsing
+        run: pip install pyyaml
+
+      # R2 bucket from configs/image/dev-snapshot.yaml; R2 prefix + shard
+      # filenames from the materialized spec artifact. Every shard in
+      # spec.shards must exist in R2 — partitioning bugs surface as
+      # missing-shard rclone failures.
+      - name: Download every shard from R2 and validate
+        env:
+          IMAGE: tinaudio/synth-setter:${{ inputs.image_tag }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          R2_BUCKET=
+          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
+          R2_PREFIX=
+          R2_PREFIX=$(python3 -c "import json; print(json.load(open('input_spec.json'))['r2_prefix'])")
+          mapfile -t SHARD_FILES < <(python3 -c "import json; [print(s['filename']) for s in json.load(open('input_spec.json'))['shards']]")
+
+          echo "R2 bucket: ${R2_BUCKET}"
+          echo "R2 prefix: ${R2_PREFIX}"
+          echo "Shards to validate: ${SHARD_FILES[*]}"
+
+          mkdir -p /tmp/shard-download
+          docker pull "${IMAGE}"
+
+          for SHARD_FILE in "${SHARD_FILES[@]}"; do
+            echo "::group::Download and validate ${SHARD_FILE}"
+            docker run --rm \
+              -e RCLONE_CONFIG_R2_TYPE=s3 \
+              -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+              -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+              -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+              -e RCLONE_CONFIG_R2_ENDPOINT \
+              -e PYTHONPATH=/home/build/synth-setter \
+              -v /tmp/shard-download:/download \
+              "${IMAGE}" \
+              rclone copy --checksum \
+                "r2:${R2_BUCKET}/${R2_PREFIX}${SHARD_FILE}" \
+                /download/
+
+            docker run --rm \
+              -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+              -v /tmp/shard-download:/download:ro \
+              -v "$(pwd)/input_spec.json:/spec/input_spec.json:ro" \
+              -e PYTHONPATH=/home/build/synth-setter \
+              "${IMAGE}" \
+              python3 -m pipeline.ci.validate_shard \
+                /spec/input_spec.json \
+                "/download/${SHARD_FILE}"
+            echo "::endgroup::"
+          done
+
+          echo "All ${#SHARD_FILES[@]} shards validated"
+          ls -la /tmp/shard-download/

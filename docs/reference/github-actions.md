@@ -63,7 +63,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 - `test-spec-materialization` calls `spec-materialization`
 
 (`test-dataset-generation` no longer calls `dataset-generation` after PR #716. On
-`runpod` / `oci` matrix cells it invokes `pipeline.entrypoints.skypilot_launch_smoke`
+`runpod` / `oci` matrix cells it invokes `pipeline.entrypoints.skypilot_launch`
 directly inside the `tinaudio/synth-setter:dev-snapshot` image and provisions a
 RunPod pod or OCI VM via SkyPilot. On the `local` cell — the same-repo-PR default —
 it runs `pipeline.ci.materialize_spec` + `scripts/docker_entrypoint.py generate_dataset`

@@ -965,7 +965,7 @@ no workers launched.
 
 **GP4. Plugin-path validation belongs on the worker, not the launcher.**
 The launcher path is interpreter-only (the SkyPilot launcher in
-`pipeline/entrypoints/skypilot_launch_smoke.py` cannot load a VST3 plugin — no X11),
+`pipeline/entrypoints/skypilot_launch.py` cannot load a VST3 plugin — no X11),
 so `materialize_spec` no longer extracts `renderer_version` from the plugin bundle and
 no longer enforces a `plugin_path.exists()` precondition. Pin `renderer_version` to
 `SURGE_XT_RENDERER_VERSION` at materialization; the worker calls
