@@ -709,23 +709,33 @@ def _build_predict_vst_audio_argv(
     audio_dir: Path,
     param_spec_name: str,
     preset_path: str,
+    *,
+    platform: str | None = None,
+    wrapper_path: Path | None = None,
 ) -> list[str]:
     """Build the argv list for ``scripts/predict_vst_audio.py`` rendering.
 
     On Linux the VST headless wrapper is prepended so the subprocess inherits a Xvfb display.
     No subprocess execution and no writes; the only side effects are reading ``sys.platform``
-    and an existence check on ``_VST_HEADLESS_WRAPPER`` when running on Linux.
+    (or the explicit ``platform`` override) and an existence check on the wrapper path when
+    running on Linux.
 
-    :raises FileNotFoundError: on Linux when ``_VST_HEADLESS_WRAPPER`` is absent.
+    :param platform: Override for ``sys.platform``; ``None`` reads ``sys.platform`` at call time.
+    :param wrapper_path: Override for ``_VST_HEADLESS_WRAPPER``; ``None`` reads the module-level
+        constant at call time.
+
+    :raises FileNotFoundError: on Linux when the wrapper path is absent.
     """
+    resolved_platform = platform if platform is not None else sys.platform
+    resolved_wrapper = wrapper_path if wrapper_path is not None else _VST_HEADLESS_WRAPPER
     args: list[str] = []
-    if sys.platform == "linux":
-        if not _VST_HEADLESS_WRAPPER.is_file():
+    if resolved_platform == "linux":
+        if not resolved_wrapper.is_file():
             raise FileNotFoundError(
-                f"VST headless wrapper not found at {_VST_HEADLESS_WRAPPER}; "
+                f"VST headless wrapper not found at {resolved_wrapper}; "
                 f"this script needs it on Linux to run predict_vst_audio.py headlessly."
             )
-        args.append(str(_VST_HEADLESS_WRAPPER))
+        args.append(str(resolved_wrapper))
     args += [
         sys.executable,
         str(_PREDICT_VST_AUDIO_SCRIPT),
