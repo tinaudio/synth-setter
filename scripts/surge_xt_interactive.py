@@ -163,9 +163,9 @@ class MidiPortProtocol(Protocol):
 
 PortOpener = Callable[[str], AbstractContextManager[MidiPortProtocol]]
 
-# Factory returning an entered audio-output stream. Production binds
-# ``AudioStream.default_output_device_name`` lazily so test factories never trigger a
-# real-device probe.
+# Factory returning an audio-output stream context manager — entered by ``play_audio`` via
+# ``with factory() as stream``. Production binds ``AudioStream.default_output_device_name``
+# lazily so test factories never trigger a real-device probe.
 AudioStreamFactory = Callable[[], AbstractContextManager[AudioStreamProtocol]]
 
 
