@@ -1,5 +1,5 @@
 # CI smoke-test config (test-dataset-generation workflow on PR).
-# num_shards matches --num-workers so each rank renders exactly one shard
+# num_shards matches num_workers so each rank renders exactly one shard
 # and the partitioner is actually exercised.
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3
@@ -7,6 +7,7 @@ output_format: hdf5
 sample_rate: 16000
 shard_size: 4
 num_shards: 3
+num_workers: 3
 base_seed: 42
 r2_bucket: intermediate-data
 

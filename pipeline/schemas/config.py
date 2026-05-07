@@ -39,6 +39,10 @@ class DatasetConfig(BaseModel):
     signal_duration_seconds: float
     min_loudness: float
     sample_batch_size: int
+    # Number of single-node SkyPilot clusters the launcher fans out in parallel for this
+    # dataset. Default 1 matches the pre-config launcher default (#841); the launcher's
+    # `--num-workers` overrides this when explicitly passed.
+    num_workers: int = 1
 
     @field_validator("r2_bucket")
     @classmethod
@@ -75,6 +79,8 @@ class DatasetConfig(BaseModel):
             raise ValueError("signal_duration_seconds must be positive")
         if self.sample_batch_size <= 0:
             raise ValueError("sample_batch_size must be positive")
+        if self.num_workers < 1:
+            raise ValueError("num_workers must be >= 1")
         return self
 
 

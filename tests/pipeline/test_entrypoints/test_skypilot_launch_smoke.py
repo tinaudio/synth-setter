@@ -1417,6 +1417,91 @@ class TestRunCredBootstrap:
 # ---------------------------------------------------------------------------
 
 
+class TestNumWorkersConfigPrecedence:
+    """`num_workers` resolution order: `--num-workers` CLI flag wins; else dataset config's
+    `num_workers` field; else schema default.
+
+    Drops the workflow's hardcoded `--num-workers 3` in favor of the dataset config field (#841) so
+    the same config produces the same fan-out across call sites.
+    """
+
+    def test_config_num_workers_drives_fan_out_when_cli_flag_omitted(
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """`num_workers: 3` in the dataset config drives a 3-cluster fan-out without any CLI
+        flag."""
+        config_dict = _make_config(fake_plugin)
+        config_dict["num_workers"] = 3
+        config_dict["num_shards"] = 3
+        config_dict["splits"] = {"train": 3, "val": 0, "test": 0}
+        config_path = tmp_path / "three-workers.yaml"
+        config_path.write_text(yaml.safe_dump(config_dict, sort_keys=False))
+
+        TestNumWorkersFanOut._setup_n_workers_mock(mock_sky, n=3)
+
+        result = _invoke(config_path, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+
+        assert result.exit_code == 0, result.output
+        assert mock_sky.launch.call_count == 3
+
+    def test_cli_num_workers_overrides_config(
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """`--num-workers 2` overrides a config that says `num_workers: 5` — CLI wins so an
+        operator can override a config without editing it."""
+        config_dict = _make_config(fake_plugin)
+        config_dict["num_workers"] = 5
+        config_dict["num_shards"] = 5
+        config_dict["splits"] = {"train": 5, "val": 0, "test": 0}
+        config_path = tmp_path / "five-workers.yaml"
+        config_path.write_text(yaml.safe_dump(config_dict, sort_keys=False))
+
+        TestNumWorkersFanOut._setup_n_workers_mock(mock_sky, n=2)
+
+        result = _invoke(
+            config_path,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--num-workers",
+            "2",
+        )
+
+        assert result.exit_code == 0, result.output
+        assert mock_sky.launch.call_count == 2
+
+    def test_default_when_neither_cli_nor_config_sets_num_workers(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """The fixture's config_yaml has no `num_workers`, and no `--num-workers` is passed — the
+        schema default (1) drives a single-cluster fan-out."""
+        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+
+        assert result.exit_code == 0, result.output
+        assert mock_sky.launch.call_count == 1
+
+
 class TestDispatchMode:
     """`--api-server` / `--local` make the launcher's remote-vs-local dispatch explicit (#841).
 

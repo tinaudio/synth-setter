@@ -119,6 +119,25 @@ class TestDatasetConfigValidation:
         with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
             DatasetConfig(**valid_config_dict)
 
+    def test_dataset_config_num_workers_defaults_to_one(self, valid_config_dict):
+        """Omitting num_workers defaults to 1 — matches the launcher's pre-config default."""
+        valid_config_dict.pop("num_workers", None)
+        cfg = DatasetConfig(**valid_config_dict)
+        assert cfg.num_workers == 1
+
+    def test_dataset_config_num_workers_explicit_value_kept(self, valid_config_dict):
+        """An explicit num_workers value passes through unchanged."""
+        valid_config_dict["num_workers"] = 5
+        cfg = DatasetConfig(**valid_config_dict)
+        assert cfg.num_workers == 5
+
+    def test_dataset_config_rejects_zero_num_workers(self, valid_config_dict):
+        """num_workers < 1 raises ValidationError — caught before the launcher provisions
+        anything."""
+        valid_config_dict["num_workers"] = 0
+        with pytest.raises(ValidationError, match="num_workers must be >= 1"):
+            DatasetConfig(**valid_config_dict)
+
     def test_dataset_config_velocity_bounds(self, valid_config_dict):
         """Velocity outside [0, 127] raises; boundary values pass."""
         valid_config_dict["velocity"] = 200

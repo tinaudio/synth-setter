@@ -351,14 +351,14 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
 @click.option(
     "--num-workers",
     type=int,
-    default=1,
-    show_default=True,
+    default=None,
     help=(
-        "Number of single-node SkyPilot clusters to fan out in parallel. RunPod's backend "
-        "does not support num_nodes>1, so we synthesize multi-worker partitioning by launching "
-        "N independent clusters and injecting SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS per rank. Each cluster "
-        "downloads the same materialized spec and uses pipeline.partitioning.get_my_shards to "
-        "slice its share."
+        "Number of single-node SkyPilot clusters to fan out in parallel. Overrides the dataset "
+        "config's `num_workers` field; if neither is set, the schema default applies. RunPod's "
+        "backend does not support num_nodes>1, so we synthesize multi-worker partitioning by "
+        "launching N independent clusters and injecting SYNTH_SETTER_WORKER_RANK / "
+        "SYNTH_SETTER_NUM_WORKERS per rank. Each cluster downloads the same materialized spec "
+        "and uses pipeline.partitioning.get_my_shards to slice its share."
     ),
 )
 @click.option(
@@ -418,7 +418,7 @@ def main(
     env_file_path: Path,
     cluster_name: str | None,
     spec_out: Path | None,
-    num_workers: int,
+    num_workers: int | None,
     worker_image_tag: str,
     tail: bool,
     api_server: str | None,
@@ -427,7 +427,7 @@ def main(
     """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
     _apply_dispatch_mode(api_server=api_server, local=local)
 
-    if num_workers < 1:
+    if num_workers is not None and num_workers < 1:
         raise click.ClickException(f"--num-workers must be >= 1, got {num_workers}")
 
     if not _DOCKER_TAG_RE.fullmatch(worker_image_tag):
@@ -461,6 +461,11 @@ def main(
     config = load_dataset_config(config_path)
     config_id = dataset_config_id_from_path(config_path)
     spec = materialize_spec(config, config_id)
+
+    # `--num-workers` (if passed) wins over the dataset config's `num_workers`. Schema
+    # default applies when neither is set. The launcher's run-time fan-out is the single
+    # source of truth for worker count from here on.
+    resolved_num_workers = num_workers if num_workers is not None else config.num_workers
 
     base_cluster_name = cluster_name or f"synth-setter-smoke-{config_id[:8]}"
 
@@ -505,8 +510,8 @@ def main(
     # workflows / CI dashboards that key off it; multi-worker uses -rN suffixes.
     cluster_names = (
         [base_cluster_name]
-        if num_workers == 1
-        else [f"{base_cluster_name}-r{i}" for i in range(num_workers)]
+        if resolved_num_workers == 1
+        else [f"{base_cluster_name}-r{i}" for i in range(resolved_num_workers)]
     )
 
     rcs = _run_workers(
@@ -518,11 +523,13 @@ def main(
     )
 
     failed = [
-        (cluster_names[i], rcs[i]) for i in range(num_workers) if rcs[i] != _TAIL_LOGS_RC_SUCCESS
+        (cluster_names[i], rcs[i])
+        for i in range(resolved_num_workers)
+        if rcs[i] != _TAIL_LOGS_RC_SUCCESS
     ]
     if failed:
         raise click.ClickException(
-            f"{len(failed)} of {num_workers} worker(s) failed: "
+            f"{len(failed)} of {resolved_num_workers} worker(s) failed: "
             + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
         )
 

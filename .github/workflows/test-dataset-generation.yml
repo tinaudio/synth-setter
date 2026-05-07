@@ -145,10 +145,12 @@ jobs:
   #     providers exercise the same launcher path.
   #   * `runpod` / `oci` — invoke the same provider-neutral launcher
   #     (`pipeline.entrypoints.skypilot_launch_smoke`) against the matching
-  #     `configs/compute/*-template.yaml`, with `--num-workers 3` so the
-  #     partitioner is exercised end-to-end. Cluster names include
-  #     `github.run_attempt` so re-running a failed job doesn't collide on the
-  #     launcher's R2 spec key.
+  #     `configs/compute/*-template.yaml`. Worker fan-out comes from
+  #     the dataset config's `num_workers` field
+  #     (`configs/dataset/runpod-smoke-shard.yaml`) so the partitioner is
+  #     exercised end-to-end. Cluster names include `github.run_attempt`
+  #     so re-running a failed job doesn't collide on the launcher's R2
+  #     spec key.
   generate:
     name: Run generate_dataset (${{ matrix.provider }})
     needs: setup
@@ -283,10 +285,12 @@ jobs:
       # the runner-local kind cluster (`sky local up` above) — which is
       # where the kind-loaded dev-snapshot image lives.
       #
-      # `--num-workers 1` overrides the dataset config's value (3) just for
-      # this row — the single-node kind cluster can't fit 3 concurrent
-      # worker pods of cpus=2+, mem=4+. See #843 for the deeper design
-      # discussion (multi-node kind, retry-on-pod-free).
+      # `num_workers` defaults from the dataset config
+      # (`configs/dataset/runpod-smoke-shard.yaml`), but this row passes
+      # `--num-workers 1` to override the config's value (3): the
+      # single-node kind cluster can't fit 3 concurrent worker pods of
+      # cpus=2+, mem=4+. See #843 for the deeper design discussion
+      # (multi-node kind, retry-on-pod-free).
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ matrix.provider == 'skypilot-local' }}
         env:
@@ -383,7 +387,6 @@ jobs:
                 --template "$TEMPLATE" \
                 --cluster-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \
-                --num-workers 3 \
                 --spec-out /tmp/input_spec.json \
                 --tail
               cp /tmp/input_spec.json /run-metadata/input_spec.json
