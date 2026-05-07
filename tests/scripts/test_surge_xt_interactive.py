@@ -444,3 +444,113 @@ class TestMidiListener:
             drained.append(midi_queue.get_nowait())
 
         assert [m.type for m in drained] == [m.type for m in forwarded]
+
+
+class TestResolveMidiPort:
+    """``_resolve_midi_port`` maps the click flag value to a concrete port name."""
+
+    def test_returns_first_available_when_requested_is_empty_string(
+        self, surge_xt_interactive
+    ) -> None:
+        """Empty string means auto-pick: return ``available[0]``."""
+        resolved = surge_xt_interactive._resolve_midi_port("", ["port-a", "port-b"])
+        assert resolved == "port-a"
+
+    def test_returns_requested_when_present_in_available(self, surge_xt_interactive) -> None:
+        """A named port that exists in ``available`` is returned verbatim."""
+        resolved = surge_xt_interactive._resolve_midi_port("port-b", ["port-a", "port-b"])
+        assert resolved == "port-b"
+
+    def test_raises_usage_error_when_requested_not_in_available(
+        self, surge_xt_interactive
+    ) -> None:
+        """A named port absent from ``available`` raises ``click.UsageError``."""
+        with pytest.raises(click.UsageError, match="port-z"):
+            surge_xt_interactive._resolve_midi_port("port-z", ["port-a", "port-b"])
+
+    def test_raises_usage_error_when_available_is_empty_and_auto(
+        self, surge_xt_interactive
+    ) -> None:
+        """Auto-pick with no ports available raises ``click.UsageError``."""
+        with pytest.raises(click.UsageError, match="no MIDI input"):
+            surge_xt_interactive._resolve_midi_port("", [])
+
+    def test_raises_usage_error_when_available_is_empty_and_named(
+        self, surge_xt_interactive
+    ) -> None:
+        """Named port with no ports available raises ``click.UsageError``."""
+        with pytest.raises(click.UsageError, match="no MIDI input"):
+            surge_xt_interactive._resolve_midi_port("port-a", [])
+
+
+class _FakeParam:
+    """Stand-in for a pedalboard plugin parameter — exposes only ``raw_value``."""
+
+    def __init__(self, raw_value: float) -> None:
+        self.raw_value = raw_value
+
+
+class _FakePlugin:
+    """Stand-in plugin with a ``.parameters`` dict-like for drift-detection tests."""
+
+    def __init__(self, params: dict[str, float]) -> None:
+        self.parameters = {name: _FakeParam(value) for name, value in params.items()}
+
+
+class _FakeSpec:
+    """Stand-in ParamSpec exposing only the ``synth_param_names`` attribute."""
+
+    def __init__(self, synth_param_names: list[str]) -> None:
+        self.synth_param_names = synth_param_names
+
+
+class TestValidateNoDrift:
+    """``_validate_no_drift`` raises if a non-spec param drifted from its default."""
+
+    def test_returns_none_when_all_non_spec_params_at_default(self, surge_xt_interactive) -> None:
+        """No drift on any non-spec param → no exception."""
+        plugin = _FakePlugin({"a_synth": 0.5, "fx_amount": 0.3, "global_volume": 0.7})
+        spec = _FakeSpec(["a_synth"])
+        defaults = {"a_synth": 0.5, "fx_amount": 0.3, "global_volume": 0.7}
+
+        result = surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+
+        assert result is None
+
+    def test_raises_value_error_when_non_spec_param_drifted(self, surge_xt_interactive) -> None:
+        """A non-spec param away from its default → ``ValueError`` naming the param."""
+        plugin = _FakePlugin({"a_synth": 0.5, "fx_amount": 0.9})
+        spec = _FakeSpec(["a_synth"])
+        defaults = {"a_synth": 0.5, "fx_amount": 0.3}
+
+        with pytest.raises(ValueError, match="fx_amount"):
+            surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+
+    def test_ignores_drift_on_spec_params(self, surge_xt_interactive) -> None:
+        """Spec params are allowed to vary; only non-spec drift is flagged."""
+        plugin = _FakePlugin({"a_synth": 0.99, "fx_amount": 0.3})
+        spec = _FakeSpec(["a_synth"])
+        defaults = {"a_synth": 0.5, "fx_amount": 0.3}
+
+        result = surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+
+        assert result is None
+
+    def test_drift_within_tolerance_does_not_raise(self, surge_xt_interactive) -> None:
+        """Tiny float deviation within abs_tol=1e-6 is treated as equal."""
+        plugin = _FakePlugin({"fx_amount": 0.3 + 5e-7})
+        spec = _FakeSpec([])
+        defaults = {"fx_amount": 0.3}
+
+        result = surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
+
+        assert result is None
+
+    def test_drift_just_above_tolerance_raises(self, surge_xt_interactive) -> None:
+        """Deviation just above abs_tol=1e-6 is flagged."""
+        plugin = _FakePlugin({"fx_amount": 0.3 + 1e-3})
+        spec = _FakeSpec([])
+        defaults = {"fx_amount": 0.3}
+
+        with pytest.raises(ValueError, match="fx_amount"):
+            surge_xt_interactive._validate_no_drift(plugin, spec, defaults)

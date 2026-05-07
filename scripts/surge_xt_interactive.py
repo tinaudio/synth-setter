@@ -24,6 +24,7 @@ from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
+from src.data.vst.param_spec import ParamSpec  # noqa: E402
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
@@ -268,8 +269,11 @@ def play_audio(plugin: VST3Plugin, stop_event: threading.Event, midi_queue: queu
     ) as stream:
         while not stop_event.is_set():
             messages = []
-            while not midi_queue.empty():
-                messages.append(midi_queue.get_nowait())
+            while True:
+                try:
+                    messages.append(midi_queue.get_nowait())
+                except queue.Empty:
+                    break
             synth_output = plugin.process(
                 messages, buffer_duration_seconds, SAMPLE_RATE, CHANNELS, BUFFER_SIZE, False
             )
@@ -292,10 +296,46 @@ def midi_listener(port_name: str, midi_queue: queue.Queue) -> None:
     a daemon thread alongside :func:`play_audio`.
     """
     logger.info("Listening on MIDI port: %s", port_name)
-    with mido.open_input(port_name) as port_handle:
+    with mido.open_input(port_name) as port_handle:  # pyright: ignore[reportAttributeAccessIssue]
         for msg in port_handle:
             if msg.type in MIDI_LISTEN_MESSAGE_TYPES:
                 midi_queue.put(msg)
+
+
+def _resolve_midi_port(requested: str, available: list[str]) -> str:
+    """Map the ``--midi-port`` flag value to a concrete port name.
+
+    ``requested == ""`` selects ``available[0]`` (auto-pick); a non-empty value
+    must match one of ``available`` exactly. Either form raises ``click.UsageError``
+    when ``available`` is empty or the requested name is not present.
+    """
+    if not available:
+        raise click.UsageError("--midi-port set but no MIDI input ports are available.")
+    if requested == "":
+        return available[0]
+    if requested in available:
+        return requested
+    raise click.UsageError(f"--midi-port {requested!r} not in available inputs {available!r}")
+
+
+def _validate_no_drift(
+    plugin: VST3Plugin, spec: ParamSpec, default_params: dict[str, float]
+) -> None:
+    """Raise ``ValueError`` if any non-spec plugin param drifted from its default.
+
+    Only parameters absent from ``spec.synth_param_names`` are checked; spec params
+    are expected to vary between recordings. Tolerance is ``abs_tol=1e-6``.
+    """
+    for param_name in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
+        if param_name in spec.synth_param_names:
+            continue
+        current = plugin.parameters[param_name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
+        default = default_params[param_name]
+        if not math.isclose(current, default, abs_tol=1e-6):
+            raise ValueError(
+                f"plugin parameter {param_name!r} drifted from default "
+                f"{default:.6f} to {current:.6f}; revert it before recording"
+            )
 
 
 def play_audio_recorded(plugin: VST3Plugin, session_recording_path: Path) -> None:
@@ -374,16 +414,7 @@ def keyboard_loop(
 
     def record_patch() -> bool:
         logger.info("Recording patch...")
-        for param_name in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
-            if param_name in spec.synth_param_names:
-                continue
-            current = plugin.parameters[param_name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
-            default = default_params.get(param_name, 0.0)
-            if not math.isclose(current, default, abs_tol=1e-6):
-                raise ValueError(
-                    f"plugin parameter {param_name!r} drifted from default "
-                    f"{default:.6f} to {current:.6f}; revert it before recording"
-                )
+        _validate_no_drift(plugin, spec, default_params)
         patch: dict[str, float] = {}
         for param_name in spec.synth_param_names:
             if param_name not in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
@@ -570,18 +601,12 @@ def main(
 
     midi_queue: queue.Queue = queue.Queue()
     if midi_port is not None:
-        available_ports = mido.get_input_names()
-        if not available_ports:
-            raise click.UsageError("--midi-port set but no MIDI input ports are available.")
+        resolved_port = _resolve_midi_port(
+            midi_port,
+            mido.get_input_names(),  # pyright: ignore[reportAttributeAccessIssue]
+        )
         if midi_port == "":
-            resolved_port = available_ports[0]
             logger.info("--midi-port='' — auto-selected first input: %s", resolved_port)
-        elif midi_port in available_ports:
-            resolved_port = midi_port
-        else:
-            raise click.UsageError(
-                f"--midi-port {midi_port!r} not in available inputs {available_ports!r}"
-            )
         threading.Thread(
             target=midi_listener, args=(resolved_port, midi_queue), daemon=True
         ).start()
