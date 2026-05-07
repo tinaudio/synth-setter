@@ -1,0 +1,147 @@
+name: Test SkyPilot Local
+
+# Smoke test for SkyPilot's local Kubernetes ("kind") backend on a GitHub
+# Actions runner. Spins up a kind cluster via `sky local up`, registers it as
+# the SkyPilot "kubernetes" cloud, and launches the
+# `local-debug-rclone-template.yaml` task — which uploads a sentinel file to
+# Cloudflare R2 from inside the pod. No RunPod / OCI capacity used.
+#
+# Goal: verify the rclone-prefixed R2 env vars (RCLONE_CONFIG_R2_*) flow
+# through `task.update_envs` into the worker pod, and that the worker can
+# talk to R2 from inside kind. If this passes but the cloud-provider matrices
+# (test-dataset-generation.yml runpod/oci) fail, the regression is in the
+# cloud backend wiring, not the launcher's env or task wiring.
+#
+# Triggers: workflow_dispatch only — `sky local up` + image pull + sky launch
+# is ~5–10 min of runner time per dispatch. No PR trigger by default.
+#
+# Required secrets:
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2.
+#
+# No provider creds: kind doesn't need RunPod / OCI keys. The
+# `skypilot_write_provider_creds.sh` cred bootstrap is therefore not invoked
+# here — provider keys are a no-op for the kubernetes backend.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind_node_image:
+        description: "kind node image (pin a specific kindest/node tag if needed)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local:
+    name: SkyPilot local kind + R2 rclone smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLUSTER_NAME: synth-setter-local-${{ github.run_id }}-${{ github.run_attempt }}
+      TEMPLATE: configs/compute/local-debug-rclone-template.yaml
+      LOG_PATH: /tmp/skypilot-local-debug.log
+      R2_BUCKET: intermediate-data
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      # `sky local up` shells out to kind + kubectl. The runner image has
+      # docker preinstalled but neither kind nor kubectl, so install both.
+      - name: Install kind
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          sudo install -o root -g root -m 0755 /tmp/kind /usr/local/bin/kind
+          kind --version
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install SkyPilot (kubernetes extra)
+        run: pip install "skypilot[kubernetes]==0.12.0"
+
+      # Provision the local kind cluster. `--no-gpus` keeps the cluster CPU-
+      # only so the runner image's missing nvidia-container-toolkit doesn't
+      # gate the smoke. Default cluster name "skypilot" is what `sky check`
+      # and `sky launch` look for.
+      - name: sky local up
+        run: sky local up --no-gpus
+
+      - name: sky check kubernetes
+        run: sky check kubernetes
+
+      # Launch the local-debug rclone task. R2 env vars are forwarded into
+      # the worker pod via task.update_envs — same wiring the production
+      # launcher uses on the cloud backends, so a regression here flags an
+      # env-forwarding bug that would otherwise only surface on a billable
+      # provider.
+      - name: sky launch (local-debug rclone task)
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          set -o pipefail
+          python - <<'PY' 2>&1 | tee "$LOG_PATH"
+          import os
+          import sys
+
+          import sky
+
+          cluster = os.environ["CLUSTER_NAME"]
+          template_path = os.environ["TEMPLATE"]
+
+          print(f"[probe] launching cluster={cluster} on local kind kubernetes")
+          task = sky.Task.from_yaml(template_path)
+          task.update_envs(
+              {
+                  "RCLONE_CONFIG_R2_TYPE": "s3",
+                  "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+                  "RCLONE_CONFIG_R2_ACCESS_KEY_ID": os.environ["R2_ACCESS_KEY_ID"],
+                  "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": os.environ["R2_SECRET_ACCESS_KEY"],
+                  "RCLONE_CONFIG_R2_ENDPOINT": os.environ["R2_ENDPOINT"],
+                  "R2_BUCKET": os.environ["R2_BUCKET"],
+                  "R2_DEBUG_PREFIX": f"data/skypilot-local-debug/{cluster}/",
+              }
+          )
+          launch_req = sky.launch(
+              task,
+              cluster_name=cluster,
+              idle_minutes_to_autostop=0,
+              down=True,
+          )
+          job_id, _ = sky.stream_and_get(launch_req)
+          print(f"[probe] launched job_id={job_id}, tailing logs")
+          rc = sky.tail_logs(cluster_name=cluster, job_id=job_id, follow=True)
+          print(f"[probe] tail_logs rc={rc}")
+          if rc != 0:
+              sys.exit(rc)
+          PY
+
+      # Always tear down the kind cluster so concurrent dispatches don't
+      # collide on the same cluster name and the runner's docker daemon
+      # exits clean.
+      - name: sky local down
+        if: always()
+        run: sky local down || true
+
+      - name: Upload run metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skypilot-local-debug-metadata
+          path: /tmp/skypilot-local-debug.log
+          retention-days: 7
+          if-no-files-found: warn
