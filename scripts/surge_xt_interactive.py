@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import pandas as pd
 import rootutils
@@ -139,24 +140,42 @@ _METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
 # callers either ignore the result or read ``.returncode`` from a ``CompletedProcess``.
 SubprocessRunner = Callable[..., object]
 
-# ``mido.open_input`` returns an ``IOPort`` context-managed object that exposes ``.poll()``
-# (and historically iteration). We type the value as a context manager whose entered handle
-# satisfies ``midi_listener``'s structural needs.
-PortOpener = Callable[[str], AbstractContextManager[object]]
 
-# A no-arg factory returning an entered audio-output stream. Production binds
+class AudioStreamProtocol(Protocol):
+    """Structural surface ``play_audio`` needs from an entered audio-output stream."""
+
+    def write(self, buffer: np.ndarray, sample_rate: int) -> object: ...
+
+
+class MidiMessageProtocol(Protocol):
+    """Structural surface ``midi_listener`` needs from a polled mido message."""
+
+    type: str
+
+    def bytes(self) -> list[int]: ...
+
+
+class MidiPortProtocol(Protocol):
+    """Structural surface ``midi_listener`` needs from an entered mido input port."""
+
+    def poll(self) -> MidiMessageProtocol | None: ...
+
+
+PortOpener = Callable[[str], AbstractContextManager[MidiPortProtocol]]
+
+# Factory returning an entered audio-output stream. Production binds
 # ``AudioStream.default_output_device_name`` lazily so test factories never trigger a
 # real-device probe.
-AudioStreamFactory = Callable[[], AbstractContextManager[object]]
+AudioStreamFactory = Callable[[], AbstractContextManager[AudioStreamProtocol]]
 
 
-def _default_audio_stream_factory() -> AbstractContextManager[object]:
+def _default_audio_stream_factory() -> AbstractContextManager[AudioStreamProtocol]:
     """Build the production ``AudioStream`` used by ``play_audio``.
 
-    Wrapped in a closure so the default-device lookup happens only when the seam is left at its
-    default — fake factories used in tests never trigger PortAudio device probing.
+    Defined as a separate helper so the default-device lookup happens only when the seam is left at
+    its default — fake factories used in tests never trigger PortAudio device probing.
     """
-    return AudioStream(
+    return AudioStream(  # pyright: ignore[reportReturnType]
         output_device_name=AudioStream.default_output_device_name,
         sample_rate=PLAYBACK_SAMPLE_RATE,
         buffer_size=BUFFER_SIZE,
@@ -427,9 +446,9 @@ def play_audio(
                     f"got {synth_output.shape}"
                 )
             if stream_resampler is not None:
-                stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)  # pyright: ignore[reportAttributeAccessIssue]
+                stream.write(stream_resampler.process(synth_output), PLAYBACK_SAMPLE_RATE)
             else:
-                stream.write(synth_output, SAMPLE_RATE)  # pyright: ignore[reportAttributeAccessIssue]
+                stream.write(synth_output, SAMPLE_RATE)
 
 
 def midi_listener(
@@ -463,7 +482,7 @@ def midi_listener(
     try:
         with opener(port_name) as port_handle:
             while not stop_event.is_set():
-                msg = port_handle.poll()  # pyright: ignore[reportAttributeAccessIssue]
+                msg = port_handle.poll()
                 if msg is None:
                     time.sleep(_MIDI_POLL_INTERVAL_SECONDS)
                     continue
