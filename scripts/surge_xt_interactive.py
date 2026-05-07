@@ -17,12 +17,36 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from pedalboard import VST3Plugin  # noqa: E402
 from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
+from rich.console import Console  # noqa: E402
+from rich.logging import RichHandler  # noqa: E402
 
 from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Install the Rich root-logger handler used when this script runs as a CLI.
+
+    Kept out of import-time side effects so importing the module (e.g. from the test suite) doesn't
+    reconfigure the root logger or construct a Console.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[
+            RichHandler(
+                console=Console(width=200),
+                rich_tracebacks=True,
+                markup=False,
+                show_path=True,
+            )
+        ],
+    )
+
 
 CHANNELS = 2
 SAMPLE_RATE = 44100
@@ -455,8 +479,6 @@ def main(
     4. After the editor is closed, render every recorded patch through the plugin and append
        the resulting samples to ``--output-dataset-path`` via ``make_dataset``.
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
     if dataset_ref is not None and pred is not None:
         raise click.UsageError(
             "--pred and --dataset-ref are mutually exclusive; pass at most one."
@@ -560,4 +582,5 @@ def main(
 
 
 if __name__ == "__main__":
+    _configure_logging()
     main()  # type: ignore[call-arg]

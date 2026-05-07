@@ -1,6 +1,365 @@
 # CHANGELOG
 
 
+## v0.10.0 (2026-05-07)
+
+### Features
+
+- **skypilot**: Make detach (--no-tail) the default for skypilot_launch_smoke launcher
+  ([#824](https://github.com/tinaudio/synth-setter/pull/824),
+  [`784b79c`](https://github.com/tinaudio/synth-setter/commit/784b79c01fc3d045ff882c84d2a877ee98bf8a13))
+
+* feat(skypilot): make detach (--no-tail) the default for skypilot_launch_smoke launcher
+
+Add `--tail/--no-tail` to `pipeline/entrypoints/skypilot_launch_smoke.py`, defaulting to
+  `--no-tail`. The new default waits for `sky.launch` + `sky.stream_and_get` to return a `job_id`
+  per rank (i.e. through provisioning), prints the `sky logs` / `sky down` commands the operator can
+  run, then exits without tailing logs or tearing clusters down. The pre-existing
+  `idle_minutes_to_autostop=5, down=True` on `sky.launch` is the safety net for left-running
+  clusters.
+
+`--tail` preserves the old behavior end-to-end: tail logs per rank, aggregate return codes, tear
+  down all clusters in the `finally` block, raise ClickException on any rank failure.
+
+If a `--no-tail` `sky.launch` itself raises or yields no `job_id` (the cluster may be
+  half-provisioned), only that specific cluster is torn down so SkyPilot state doesn't accumulate
+  orphans; sibling clusters that launched cleanly are left running.
+
+Refactor: the shared launch+job_id step is extracted into a small closure (`_launch_get_job_id`),
+  and the two modes become separate small runners (`_run_workers_tail`, `_run_workers_detached`)
+  that consume that closure. The module docstring and the new Click `--tail/--no-tail` help text
+  document the new default.
+
+Closes #823
+
+* ci(skypilot): pass --tail in CI launcher invocations + sync doc-drift
+
+Three CI lanes invoke `pipeline.entrypoints.skypilot_launch_smoke` and rely on the launcher's exit
+  code reflecting worker success and on uniform finally-block teardown:
+
+- `.github/workflows/test-dataset-generation.yml` — `runpod`/`oci` matrix lane -
+  `.github/workflows/test-skypilot-debug.yml` — `launcher` and `launcher-docker` modes
+
+With the previous commit flipping the default to `--no-tail`, those lanes would silently exit 0 once
+  `job_id` is known (i.e. before the worker job finishes) and would not tear down clusters. Pass
+  `--tail` explicitly so CI semantics are unchanged.
+
+Also resolve docs flagged as drift by the doc-drift agent against this PR:
+
+- `docs/design/skypilot-compute-integration.md`: §8.1 "Launch mode" was an open question; now
+  resolved by `--tail/--no-tail`. Move it out of "Open Questions" into a new §4.1.1 Launch mode
+  subsection that points at the Click option for the live default. - `docs/doc-map.yaml`: drop the
+  stale `_wait_for_job` symbol reference and describe the new `_run_workers_tail` /
+  `_run_workers_detached` split.
+
+Refs #823
+
+* docs(skypilot): clarify launcher wording per PR #824 review
+
+Three Copilot nits on PR #824, all wording-only:
+
+- `--tail` Click help: replace "`sky.launch` to return a `job_id`" with "`sky.launch` +
+  `sky.stream_and_get` to return a `job_id`" (matches the module docstring). - `_run_workers`
+  docstring: same wording fix on the `tail=False` branch. - `_run_workers_tail` exception log:
+  rename "launch raised" to "launch or tail raised" since `fut.result()` may surface a
+  `sky.tail_logs` failure, not just a launch failure. The same message in `_run_workers_detached` is
+  left as-is — that path never tails.
+
+* docs(skypilot): clarify --no-tail teardown of half-provisioned clusters
+
+Address PR #824 Copilot review (commit 7f34480, 5 inline comments). The --no-tail prose previously
+  said the launcher exits "without tearing clusters down", but the implementation also tears down
+  half-provisioned clusters — both when sky.launch raises and when sky.stream_and_get yields no
+  job_id (raised as ClickException at line 392). Update the wording in all five spots so operators
+  aren't surprised when a failed launch leaves no orphan cluster behind.
+
+Updated surfaces: - skypilot_launch_smoke.py module docstring (comment 3192270033) -
+  --tail/--no-tail Click help text (comment 3192270054) - _run_workers docstring tail=False branch
+  (comment 3192270065) - _run_workers_detached docstring (comment 3192270088) -
+  docs/design/skypilot-compute-integration.md §4.1.1 (comment 3192270097)
+
+No code logic change — pure doc drift fix. tests/pipeline/ 193 passed.
+
+
+## v0.9.0 (2026-05-07)
+
+### Build System
+
+- **deps**: Add oci sdk as standalone dep in requirements-app.txt
+  ([#825](https://github.com/tinaudio/synth-setter/pull/825),
+  [`f940b9f`](https://github.com/tinaudio/synth-setter/commit/f940b9f16a7f39029eaca346ab50d1a5b752f150))
+
+Currently pulled in transitively via skypilot[oci]. Adding it as a top-level dep so we can import it
+  directly without relying on the SkyPilot extra's resolution.
+
+Refs #785
+
+- **devcontainer**: Add root_gpu variant with docker-in-docker + act
+  ([#813](https://github.com/tinaudio/synth-setter/pull/813),
+  [`00eff3d`](https://github.com/tinaudio/synth-setter/commit/00eff3dd9eb28a99b76a7a34a334a4484b43df03))
+
+Adds a third devcontainer flavor under .devcontainer/root_gpu/ that mirrors the gpu variant but:
+
+- Defaults remoteUser to root (${localEnv:DEVCONTAINER_USER:root}) so the container starts as root
+  unless overridden, matching how the worker images run in CI/cloud. - Adds the docker-in-docker and
+  act devcontainer features so workflow authors can run nested docker and exercise GitHub Actions
+  locally with act inside the container. - Drops the gpu variant's named bashhistory volume,
+  plugins-overlay volume, and explicit workspaceMount so the container uses devcontainer defaults —
+  keeps this flavor a thin tools-on-top variant.
+
+Closes #812
+
+### Chores
+
+- **config**: Clear stale absolute data paths in configs/data/*.yaml
+  ([#809](https://github.com/tinaudio/synth-setter/pull/809),
+  [`b4262a6`](https://github.com/tinaudio/synth-setter/commit/b4262a68cc470008c6240d5edeafa86056197870))
+
+* config(hydra): replace stale data path values with ???
+
+Co-authored-by: Copilot <copilot@github.com>
+
+* docs(eval-pipeline): align with PR #809 (configs/data/* now use `???`)
+
+Update stale references to `/data/scratch/acw585/...` defaults in `configs/data/*.yaml`. After PR
+  #809 those values are `???` (Hydra mandatory override), not hardcoded cluster paths.
+
+- docs/design/eval-pipeline.md: 4 references (coupling table, as-is comparison, Appendix B file
+  inventory, Appendix B data-configs table) - docs/reference/configuration-reference.md: 2 "Data
+  Portability" gap rows now describe the remaining open work (migrate `???` to `${paths.data_dir}` /
+  run-id-aware defaults) rather than the already- done removal.
+
+Refs #808
+
+---------
+
+### Continuous Integration
+
+- **test-dataset-generation**: Add `local` provider; default PRs to local
+  ([#807](https://github.com/tinaudio/synth-setter/pull/807),
+  [`c76773a`](https://github.com/tinaudio/synth-setter/commit/c76773a495741360490a3af8b16565d00ccb830e))
+
+* ci(test-dataset-generation): add `local` provider; default PRs to local
+
+Adds a third provider (`local`) to the smoke workflow that runs `pipeline.ci.materialize_spec` +
+  `scripts/docker_entrypoint.py generate_dataset` directly inside the dev-snapshot Docker container
+  on the GitHub runner — no SkyPilot launcher, no RunPod/OCI capacity, R2 the only cloud surface.
+
+PR-event policy flips from `["oci"]` to `["local"]`: every push runs the Python+Docker smoke without
+  billable cloud time. `workflow_dispatch` keeps all four choices (`all`, `local`, `runpod`, `oci`);
+  `all` still expands to runpod+oci so manual full-coverage runs are unchanged.
+
+`validate-spec` and `validate-shard` are unaffected — both consume the same `input_spec.json`
+  artifact regardless of provider, and shards land in the same R2 location either way.
+
+The local branch should graduate to SkyPilot's `local` cloud (new
+  `configs/compute/local-template.yaml`) so all three providers exercise the same launcher code
+  path; tracked in #806.
+
+Closes #805
+
+* docs: refresh test-dataset-generation references for `local` provider
+
+Doc-drift cleanup paired with the workflow change:
+
+- `docs/reference/github-actions.md`: same-repo-PR policy is `local`-only, not OCI-only;
+  `inputs.provider` adds `local`; the dependency-map parenthetical splits SkyPilot vs `local` code
+  paths; the artifact-chain bullet now reads "per-provider artifact named
+  test-run-metadata-<provider>" so it tracks the matrix automatically; the secrets table qualifies
+  the RunPod/OCI rows as workflow_dispatch-only. - `docs/design/skypilot-compute-integration.md`:
+  §4.2 "CI story" now says "the SkyPilot launch step" (not "the launch step") and points to
+  github-actions.md for the `local` cell. - `docs/doc-map.yaml`: covers: text for the workflow lists
+  `local` as the PR default alongside RunPod + OCI.
+
+* fix(ci): mark bind-mounted workspace as safe.directory in `local` cell
+
+`pipeline.schemas.spec.materialize_spec` calls `git rev-parse HEAD` to populate `code_version` on
+  the materialized spec. The bind-mounted `/home/build/synth-setter` is owned by a UID that differs
+  from the container user, so without `safe.directory` git refuses to read it ("dubious ownership")
+  and exits 128 — the SkyPilot launch step already does the same `git config --global --add
+  safe.directory ...` for this reason. Mirror it here.
+
+Surfaced by the first PR run on this branch (job "Run generate_dataset (local)" in run 25349900633).
+
+* ci(test-dataset-generation): use matrix.provider in `local` cell paths
+
+Replaces the literal `/tmp/run-metadata-local` in the bind-mount and `tee` destination with
+  `/tmp/run-metadata-${{ matrix.provider }}`, matching the sibling SkyPilot branch (and every other
+  run-metadata reference in this workflow). Also adds the missing quoting on the `tee` argument.
+
+Pure rename — same path on every PR run because `matrix.provider == 'local'` in that branch.
+  Eliminates the only place in the file where the provider→path mapping didn't follow the matrix
+  variable.
+
+Addresses Copilot review comment #3185205118.
+
+* update comment
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+### Features
+
+- **pipeline**: Add SkyPilot remote server
+  ([#830](https://github.com/tinaudio/synth-setter/pull/830),
+  [`f4e25b1`](https://github.com/tinaudio/synth-setter/commit/f4e25b1cec4a8a4b78e17409d7d3c64994eb2101))
+
+* docs: Add playbook to stand up sypilot remote server
+
+* add playbook for connecting to remote server
+
+* docs(operations): tighten shell snippets in SkyPilot playbooks
+
+Address /review feedback on PR #830: - quote heredoc delimiters (`<<'EOF'`) when the body contains
+  user-pasted secrets (RunPod API key in 2 places, Cloudflare Access secret) so a `$` in the value
+  isn't expanded by the shell before the file is written - quote `$SHELL` in `exec -l "$SHELL"` per
+  shell-style SH2 - in smoke_test.sh, replace `sky check 2>&1 | tee … | tail -20` with a redirected
+  capture + separate tail; under `set -euo pipefail` the pipeline propagated `sky check`'s non-zero
+  exit and aborted the script before the next `grep -qE` line could fire the "no cloud enabled"
+  branch
+
+Refs #785
+
+* add endpoint to dataset workflow, update docs
+
+* fix comment
+
+### Refactoring
+
+- **pipeline**: Align dataset configs with surge_simple training defaults
+  ([#804](https://github.com/tinaudio/synth-setter/pull/804),
+  [`bc8d25f`](https://github.com/tinaudio/synth-setter/commit/bc8d25ff2dff25891aa8461aa4c0fc5637c9fd88))
+
+Overhauls all four dataset generation configs to a consistent surge_simple baseline:
+
+- preset_path: presets/surge-simple.vstpreset (was surge-base.vstpreset) - min_loudness: -50.0 (was
+  -55.0) - param_spec: surge_simple (already on every config)
+
+Training-purpose configs (surge-simple-480k-10k.yaml) also pick up sample_rate: 44100. CI smoke
+  configs (runpod-smoke-shard.yaml,
+
+ci-materialize-test.yaml) keep sample_rate: 16000 and their small shard sizes — they exercise
+  pipeline shape, not training audio quality.
+
+Aligns docs/design/data-pipeline.md §14.5 and §14.6 (and the implementation plan's §3 + §4 examples)
+  with the canonical surge-simple-480k-10k.yaml: the §14.5 YAML example now includes all required
+  DatasetConfig fields (base_seed, r2_bucket, preset_path, channels, velocity,
+  signal_duration_seconds, min_loudness, sample_batch_size) so the snippet passes
+  load_dataset_config validation. The §14.6 / glossary naming guidance now says production training
+  configs follow {name}-{total_train_samples}-{shard_size} while CI smoke and partitioner-exercise
+  configs use role-descriptive names — matching the impl plan §3 note.
+
+10-1k-shards.yaml is intentionally not modified here — it landed via #802.
+
+Closes #801
+
+- **pipeline**: Drop OCI bridge + collapse provider matrix
+  ([#803](https://github.com/tinaudio/synth-setter/pull/803),
+  [`b17b4c2`](https://github.com/tinaudio/synth-setter/commit/b17b4c2264ca6d279a4edf56250971ec7308d3e0))
+
+`skypilot[runpod,oci]==0.12.0` ships in dev-snapshot via requirements-app.txt (Dockerfile installs
+  requirements.txt, which includes requirements-app.txt), and #797 made the image rebuild on every
+  merge to main, so the runtime "bridge" workarounds in test-dataset-generation.yml +
+  skypilot_launch_smoke.py are dead weight.
+
+Removes: - Conditional `pip install skypilot[oci]==0.12.0` + `sky check oci` block inside the OCI
+  launch step. `sky check oci` itself stays — useful as a fast-fail probe of the cred file we just
+  wrote. - `try/except ImportError` around `from sky.clouds import OCI` in `_override_image_id` (now
+  a direct module-level import inside the function). The matching
+  test_does_not_crash_when_oci_extras_missing test goes with it. - Stale comment block in
+  requirements-app.txt referring to the bridge.
+
+Folded in: collapse the dynamic-matrix setup script. Once `oci_image_tag` no longer needs to ride
+  along, the matrix only needs the provider name — template / cluster prefix / OCI image tag derive
+  cleanly from `matrix.provider` via expressions in the consuming step. The `setup` job now
+  publishes a single `providers` JSON array; `generate_matrix`, `validate_matrix`, and `has_jobs`
+  outputs are gone, as are the three `needs.setup.outputs.has_jobs == 'true'` gates (empty
+  `fromJSON('[]')` already skips a matrix job natively). Setup script: ~60 lines → ~15.
+
+Closes #800.
+
+- **pipeline**: Unify SkyPilot worker invocation; drop OCI bind-mount
+  ([#828](https://github.com/tinaudio/synth-setter/pull/828),
+  [`6cbf807`](https://github.com/tinaudio/synth-setter/commit/6cbf8077c2d571cc27d8fb8ebf685b171752afe1))
+
+* refactor(pipeline): unify SkyPilot worker invocation; drop OCI bind-mount
+
+Collapses the three SkyPilot dispatch shapes (local CI, RunPod, OCI) into one click entrypoint and
+  eliminates the OCI bind-mount that destroyed the image-baked plugins/Surge XT.vst3 symlink.
+
+- Delete scripts/skypilot_worker_bootstrap.sh + scripts/skypilot_worker_run.sh. RunPod and OCI
+  templates now call `python /usr/local/bin/entrypoint.py generate_dataset --spec $WORKER_SPEC_URI`
+  directly — same CLI the local-CI provider already uses. - Move the #735 os._exit(0) defensive
+  workaround into docker_entrypoint.py's generate_dataset subcommand (with regression tests pinning
+  both the happy path and the failure path). - Add scripts/sync_worker_checkout.sh — single helper
+  for the WORKER_GIT_REF PR-CI bake-lag bypass (git fetch + checkout + uv pip install --no-deps,
+  conditional on WORKER_GIT_REF being set), called by both compute templates. - Drop OCI's `-v
+  $(pwd):/home/build/synth-setter` bind-mount and the runtime `mkdir + ln -sf` it forced. Image is
+  now the source of truth on OCI; the baked symlink survives. Drop the now-unused `task.workdir =
+  REPO_ROOT` in the launcher. - Add scripts/ensure_plugin_symlinks.sh helper for the 5 GHA `docker
+  run` workflows that still bind-mount $(pwd) over the workdir on GHA runners (they don't have a
+  WORKER_GIT_REF mechanism). Reads SYNTH_SETTER_PLUGIN_PATH. - Move WORKER_GIT_REF SHA-regex
+  validation from the deleted bash script into resolve_worker_env() so a malformed value fails fast
+  at the launcher seam, before a cluster is provisioned.
+
+Closes #826
+
+* internal-fix(pipeline): address PR #828 Copilot review feedback
+
+- skypilot_launch_smoke.resolve_worker_env: raise click.ClickException (not bare ValueError) on
+  malformed WORKER_GIT_REF so the launcher fails with a single-line error instead of a Python
+  traceback (#3195485181). - sync_worker_checkout.sh: derive repo dir from $(pwd) and skip the
+  safe.directory add when already present, so re-runs don't bloat ~/.gitconfig (#3195485230). -
+  ensure_plugin_symlinks.sh: fail fast if SYNTH_SETTER_PLUGIN_PATH target is missing instead of
+  creating a dangling symlink (#3195485252). - test_docker_entrypoint: assert result.exit_code == 0
+  in os._exit(0) regression test for clearer failure signal (#3195485274).
+
+* docs: align reference + design docs with PR #828 entrypoint unification
+
+doc-drift sweep after the SkyPilot worker invocation refactor:
+
+- docs/reference/configuration-reference.md: replace stale inline-python run: snippet with the new
+  shell-form block; drop the obsolete parenthetical about an inline os._exit(0) (now lives in
+  docker_entrypoint.py); fix the pre-existing imprecise `python -m
+  pipeline.entrypoints.generate_dataset` invocation to the canonical click-CLI form. -
+  docs/design/skypilot-compute-integration.md: rewrite the §4.2 cell that claimed the #735
+  workaround was template-inline and SkyPilot-only — both are now false. Touch up the §4.1 "shared
+  by both providers" framing for consistency. - docs/doc-map.yaml: drop "inline" wording on the
+  OCI-template entry; it delegates to scripts/sync_worker_checkout.sh now (matches the runpod
+  entry). - docs/reference/docker-spec.md: surface the os._exit(0) post-run() behavior in the
+  subcommand table and the exit-code table (defensive #735 workaround now applies CLI-wide, not just
+  to the SkyPilot worker code path).
+
+Refs #826
+
+* fix(scripts): drop --no-deps from sync_worker_checkout.sh uv install
+
+PRs that add a brand-new top-level package were silently broken at runtime because --no-deps skipped
+  resolving its transitive deps against the image's pre-baked /venv/main. Full resolve runs in
+  seconds when the deps are already satisfied (uv detects no work to do), so the cost-vs-correctness
+  trade-off no longer favors --no-deps.
+
+### Testing
+
+- **testing**: Allow data.* path drift vs MODEL_BASELINE after #809
+  ([#817](https://github.com/tinaudio/synth-setter/pull/817),
+  [`000503b`](https://github.com/tinaudio/synth-setter/commit/000503b8def0b41d02d708e3e67f3224b9f40a43))
+
+PR #809 replaced the absolute cluster paths in `configs/data/*.yaml` with Hydra's `???`
+  mandatory-override sentinel. The `MODEL_BASELINE` ref (`v0.0.0`) still resolves to the old paths,
+  so every parametrized case in `test_surge_train_configs_are_equal` and
+  `test_predict_configs_are_equal` now diverges on `data.dataset_root`, `data.predict_file`, and
+  `data.stats_file`.
+
+Add those three keys to `ACCEPTED_DIFFS`. Dataset locality is a caller-supplied input, not a
+  model-behavior knob — same rationale as the existing `logger.wandb.entity`/`logger.wandb.project`
+  env-derived entries. A baseline bump would be the wrong fix; `MODEL_BASELINE` pins the
+  published-results-relevant snapshot, and PR #809 didn't change any training behavior.
+
+Refs #816
+
+
 ## v0.8.0 (2026-05-04)
 
 ### Build System

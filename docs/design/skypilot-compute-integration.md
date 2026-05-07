@@ -123,6 +123,10 @@ Future targets follow the same pattern.
 
 The launcher (`pipeline.entrypoints.skypilot_launch_smoke`) does not override the `run:` block — it instantiates the Task from YAML and only calls `task.update_envs(...)` to inject the per-launch credential set + the spec URI. The `run:` block in each template handles the worker invocation; per-rank shard scoping is forwarded via `SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS` envs.
 
+#### 4.1.1 Launch mode (`--tail` / `--no-tail`)
+
+The launcher accepts `--tail/--no-tail` (default `--no-tail`) — see the Click option in `pipeline/entrypoints/skypilot_launch_smoke.py` for the live help text and defaults. `--no-tail` waits for `sky.launch` + `sky.stream_and_get` to return a `job_id` per rank (provisioning completes), prints `sky logs <cluster> <job_id>` and `sky down <cluster>` commands the operator can run, and exits without tailing logs and without tearing successfully-provisioned clusters down — `idle_minutes_to_autostop=5, down=True` on `sky.launch` is the safety net for those left-running clusters. Half-provisioned clusters (those whose `sky.launch`/`sky.stream_and_get` raised or yielded no `job_id`) are still torn down in `--no-tail` so SkyPilot state doesn't accumulate orphans; sibling clusters that launched cleanly are left running. `--tail` opts into `sky.tail_logs(follow=True)` and unconditional `finally`-block teardown of every cluster; CI lanes that need exit-code-reflects-worker-success-and-uniform-cleanup pass `--tail` explicitly.
+
 ### 4.2 Env-var resolution: launcher → worker
 
 The SkyPilot launcher (`pipeline.entrypoints.skypilot_launch_smoke`) needs to forward a small fixed set of secrets and configuration values from the operator's environment into the worker pod's environment. The contract is deliberately narrow — only the keys the worker actually reads — and the resolution is per-key so local dev and CI can share the same launcher code without special cases.
@@ -331,19 +335,7 @@ Training/eval SkyPilot integration is architecturally simpler than the pipeline 
 
 ## 8. Open Questions
 
-### 8.1 Launch mode: fire-and-forget vs block
-
-After `pipeline generate` launches managed jobs, should the CLI exit immediately or wait?
-
-| Option                     | Pro                                                                      | Con                                                       |
-| -------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------- |
-| **Fire and forget**        | Matches "launch before bed" design goal. `pipeline status` checks later. | No inline progress feedback. User must remember to check. |
-| **Block with progress**    | See shard completion in real-time. Single command to completion.         | Blocks terminal. Must handle Ctrl-C gracefully.           |
-| **Both via `--wait` flag** | Best of both worlds. Default fire-and-forget, `--wait` for interactive.  | More CLI code.                                            |
-
-**Recommendation:** Fire-and-forget as default (matches data-pipeline.md §2 design goal: "Two commands, no babysitting"). Add `--wait` later if needed (YAGNI).
-
-### 8.2 SkyPilot as optional dependency
+### 8.1 SkyPilot as optional dependency
 
 Should `skypilot` be a required or optional dependency?
 

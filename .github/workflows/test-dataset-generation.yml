@@ -215,6 +215,8 @@ jobs:
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         if: ${{ matrix.provider != 'local' }}
         env:
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
+          PROVIDER: ${{ matrix.provider }}
           TEMPLATE: configs/compute/${{ matrix.provider == 'oci' && 'oci-cpu' || matrix.provider }}-template.yaml
           CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
           OCI_IMAGE_TAG: ${{ matrix.provider == 'oci' && 'skypilot:cpu-ubuntu-2204' || '' }}
@@ -232,12 +234,13 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           CONFIG_PATH: ${{ env.DATASET_CONFIG }}
           WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-          PROVIDER: ${{ matrix.provider }}
         run: |
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v "/tmp/run-metadata-${PROVIDER}:/run-metadata" \
+            -e SKYPILOT_API_SERVER_ENDPOINT \
+            -e PROVIDER \
             -e TEMPLATE \
             -e CLUSTER_NAME \
             -e IMAGE_TAG \
@@ -269,7 +272,8 @@ jobs:
                 --cluster-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \
                 --num-workers 3 \
-                --spec-out /tmp/input_spec.json
+                --spec-out /tmp/input_spec.json \
+                --tail
               cp /tmp/input_spec.json /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \
