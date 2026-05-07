@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +98,8 @@ _PLUGIN_FLUSH_BUFFER_SIZE = 2048
 # quit" from "action completed, keep listening".
 _KEEP_LOOPING = True
 _STOP_LOOPING = False
+
+_DRIFT_TOLERANCE = 1e-6
 
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
@@ -328,14 +331,18 @@ def _flush_plugin(plugin: VST3Plugin) -> None:
     plugin.reset()
 
 
-def play_audio(plugin: VST3Plugin, stop_event: threading.Event, midi_queue: queue.Queue) -> None:
+def play_audio(
+    plugin: VST3Plugin,
+    stop_event: threading.Event,
+    midi_queue: "queue.Queue[tuple[bytes, float]] | None",
+) -> None:
     """Stream Surge XT output to the audio device, processing any pending MIDI messages.
 
     Runs until ``stop_event`` is set (typically by ``keyboard_loop``'s quit action or by
-    ``main`` after the plugin editor is closed). Drains ``midi_queue`` each iteration so the
-    plugin sees incoming notes/CCs from the MIDI listener thread. Resamples to
-    ``PLAYBACK_SAMPLE_RATE`` if it differs from ``SAMPLE_RATE`` so the output device gets a
-    rate it supports.
+    ``main`` after the plugin editor is closed). When ``midi_queue`` is provided, drains it
+    each iteration so the plugin sees incoming notes/CCs from the MIDI listener thread.
+    Resamples to ``PLAYBACK_SAMPLE_RATE`` if it differs from ``SAMPLE_RATE`` so the output
+    device gets a rate it supports.
     """
     needs_resample = SAMPLE_RATE != PLAYBACK_SAMPLE_RATE
     stream_resampler = (
@@ -348,14 +355,20 @@ def play_audio(plugin: VST3Plugin, stop_event: threading.Event, midi_queue: queu
         buffer_size=BUFFER_SIZE,
     ) as stream:
         while not stop_event.is_set():
-            messages = []
-            while True:
-                try:
-                    messages.append(midi_queue.get_nowait())
-                except queue.Empty:
-                    break
+            messages: list[tuple[bytes, float]] = []
+            if midi_queue is not None:
+                while True:
+                    try:
+                        messages.append(midi_queue.get_nowait())
+                    except queue.Empty:
+                        break
             synth_output = plugin.process(
-                messages, buffer_duration_seconds, SAMPLE_RATE, CHANNELS, BUFFER_SIZE, False
+                messages,
+                buffer_duration_seconds,
+                SAMPLE_RATE,
+                CHANNELS,
+                BUFFER_SIZE,
+                reset=False,
             )
             if synth_output.shape != (CHANNELS, BUFFER_SIZE):
                 raise ValueError(
@@ -368,21 +381,27 @@ def play_audio(plugin: VST3Plugin, stop_event: threading.Event, midi_queue: queu
                 stream.write(synth_output, SAMPLE_RATE)
 
 
-def midi_listener(port_name: str, midi_queue: queue.Queue) -> None:
-    """Listen on a MIDI input port and push relevant messages onto ``midi_queue``.
+def midi_listener(port_name: str, midi_queue: "queue.Queue[tuple[bytes, float]]") -> None:
+    """Listen on a MIDI input port and push (bytes, time) tuples onto ``midi_queue``.
 
     Filters to performance-relevant types (notes, CC, pitch wheel, aftertouch); other
-    message types (e.g. ``polytouch``, ``sysex``, ``clock``) are dropped. Designed to run on
-    a daemon thread alongside :func:`play_audio`.
+    message types (e.g. ``polytouch``, ``sysex``, ``clock``) are dropped. Each forwarded
+    message is converted to ``(msg.bytes(), 0.0)`` so ``plugin.process`` schedules it at the
+    start of the next audio buffer — the format used elsewhere in the repo (see
+    :func:`src.data.vst.core.make_midi_events`). Designed to run on a daemon thread
+    alongside :func:`play_audio`.
     """
     logger.info("Listening on MIDI port: %s", port_name)
-    with mido.open_input(port_name) as port_handle:  # pyright: ignore[reportAttributeAccessIssue]
-        for msg in port_handle:
-            if msg.type in MIDI_LISTEN_MESSAGE_TYPES:
-                midi_queue.put(msg)
+    try:
+        with mido.open_input(port_name) as port_handle:  # pyright: ignore[reportAttributeAccessIssue]
+            for msg in port_handle:
+                if msg.type in MIDI_LISTEN_MESSAGE_TYPES:
+                    midi_queue.put((msg.bytes(), 0.0))
+    except Exception:
+        logger.exception("MIDI listener thread aborted on port %r", port_name)
 
 
-def _resolve_midi_port(requested: str, available: list[str]) -> str:
+def _resolve_midi_port(requested: str, available: Sequence[str]) -> str:
     """Map the ``--midi-port`` flag value to a concrete port name.
 
     ``requested == ""`` selects ``available[0]`` (auto-pick); a non-empty value
@@ -404,14 +423,14 @@ def _validate_no_drift(
     """Raise ``ValueError`` if any non-spec plugin param drifted from its default.
 
     Only parameters absent from ``spec.synth_param_names`` are checked; spec params
-    are expected to vary between recordings. Tolerance is ``abs_tol=1e-6``.
+    are expected to vary between recordings.
     """
     for param_name in plugin.parameters:  # pyright: ignore[reportAttributeAccessIssue]
         if param_name in spec.synth_param_names:
             continue
         current = plugin.parameters[param_name].raw_value  # pyright: ignore[reportAttributeAccessIssue]
         default = default_params[param_name]
-        if not math.isclose(current, default, abs_tol=1e-6):
+        if not math.isclose(current, default, abs_tol=_DRIFT_TOLERANCE):
             raise ValueError(
                 f"plugin parameter {param_name!r} drifted from default "
                 f"{default:.6f} to {current:.6f}; revert it before recording"
@@ -522,8 +541,7 @@ def keyboard_loop(
             if action() == _STOP_LOOPING:
                 return synth_patches
         except (KeyError, ValueError):
-            # Surface the traceback now; without this it stays buffered in
-            # ``keyboard_future`` until ``main`` reaches ``.result()`` after the editor closes.
+            # Log now so the traceback isn't buffered until ``main`` calls ``.result()``.
             logger.exception("keyboard action %r failed", ch)
             stop_event.set()
             raise
@@ -875,6 +893,14 @@ def main(
             "--pred and --dataset-ref are mutually exclusive; pass at most one."
         )
 
+    # ``--session-recording-path`` skips ``play_audio``, so a MIDI listener would enqueue
+    # forever with no consumer. Reject the combination up front.
+    if session_recording_path is not None and midi_port is not None:
+        raise click.UsageError(
+            "--midi-port and --session-recording-path are mutually exclusive; "
+            "the live audio thread doesn't run during deterministic clip rendering."
+        )
+
     # Fail fast — ``make_dataset`` writes fixed-size HDF5 datasets without
     # ``maxshape`` and cannot append, so a pre-existing path would either
     # silently overwrite (when re-creating datasets) or fail mid-render after
@@ -918,7 +944,7 @@ def main(
     if session_recording_path is not None:
         play_audio_recorded(plugin, session_recording_path)
 
-    midi_queue: queue.Queue = queue.Queue()
+    midi_queue: queue.Queue[tuple[bytes, float]] | None = None
     if midi_port is not None:
         resolved_port = _resolve_midi_port(
             midi_port,
@@ -926,6 +952,7 @@ def main(
         )
         if midi_port == "":
             logger.info("--midi-port='' — auto-selected first input: %s", resolved_port)
+        midi_queue = queue.Queue()
         threading.Thread(
             target=midi_listener, args=(resolved_port, midi_queue), daemon=True
         ).start()

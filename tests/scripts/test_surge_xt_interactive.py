@@ -1,7 +1,10 @@
 """Tests for scripts/surge_xt_interactive.py prediction decoding helpers."""
 
 import importlib
+import queue
 import subprocess
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 import click
@@ -376,10 +379,14 @@ class TestPlayAudioRecorded:
 
 
 class _FakeMidiMessage:
-    """Minimal stand-in for a ``mido.Message`` — exposes ``type`` and prints recognizably."""
+    """Minimal stand-in for a ``mido.Message`` — exposes ``type`` and ``bytes()``."""
 
-    def __init__(self, msg_type: str) -> None:
+    def __init__(self, msg_type: str, payload: bytes = b"\x90\x3c\x40") -> None:
         self.type = msg_type
+        self._payload = payload
+
+    def bytes(self) -> bytes:
+        return self._payload
 
     def __repr__(self) -> str:
         return f"_FakeMidiMessage({self.type!r})"
@@ -397,7 +404,7 @@ class _FakeMidiPortHandle:
     def __exit__(self, *_exc: object) -> None:
         return None
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[_FakeMidiMessage]:
         return iter(self._messages)
 
 
@@ -408,14 +415,12 @@ class TestMidiListener:
         self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """note_on/off, control_change, pitchwheel, aftertouch are queued; others are dropped."""
-        import queue as _queue
-
         forwarded = [
-            _FakeMidiMessage("note_on"),
-            _FakeMidiMessage("note_off"),
-            _FakeMidiMessage("control_change"),
-            _FakeMidiMessage("pitchwheel"),
-            _FakeMidiMessage("aftertouch"),
+            _FakeMidiMessage("note_on", b"\x90\x3c\x40"),
+            _FakeMidiMessage("note_off", b"\x80\x3c\x00"),
+            _FakeMidiMessage("control_change", b"\xb0\x07\x7f"),
+            _FakeMidiMessage("pitchwheel", b"\xe0\x00\x40"),
+            _FakeMidiMessage("aftertouch", b"\xd0\x40"),
         ]
         dropped = [
             _FakeMidiMessage("polytouch"),
@@ -438,14 +443,140 @@ class TestMidiListener:
             lambda port_name: _FakeMidiPortHandle(all_messages),
         )
 
-        midi_queue: _queue.Queue = _queue.Queue()
+        midi_queue: queue.Queue[tuple[bytes, float]] = queue.Queue()
         surge_xt_interactive.midi_listener("fake-port", midi_queue)
 
-        drained: list[_FakeMidiMessage] = []
+        drained: list[tuple[bytes, float]] = []
         while not midi_queue.empty():
             drained.append(midi_queue.get_nowait())
 
-        assert [m.type for m in drained] == [m.type for m in forwarded]
+        assert drained == [(m.bytes(), 0.0) for m in forwarded]
+
+    def test_open_input_failure_logs_and_exits_thread(
+        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch, caplog
+    ) -> None:
+        """``midi_listener`` must not raise; failures are logged so the daemon exits cleanly."""
+
+        def _raise(_port_name: str) -> object:
+            raise OSError("device disconnected")
+
+        monkeypatch.setattr(surge_xt_interactive.mido, "open_input", _raise)
+
+        midi_queue: queue.Queue[tuple[bytes, float]] = queue.Queue()
+        with caplog.at_level("ERROR"):
+            surge_xt_interactive.midi_listener("fake-port", midi_queue)
+
+        assert midi_queue.empty()
+        assert any("MIDI listener thread aborted" in rec.message for rec in caplog.records)
+
+
+class _FakeStream:
+    """Captures buffers written by ``play_audio``; serves as an ``AudioStream`` stand-in."""
+
+    default_output_device_name: str = "fake-device"
+
+    def __init__(self) -> None:
+        self.writes: list[np.ndarray] = []
+
+    def __enter__(self) -> "_FakeStream":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def write(self, buffer: np.ndarray, _sample_rate: int) -> None:
+        self.writes.append(np.asarray(buffer))
+
+
+class _RecordingPlugin:
+    """Stand-in for a ``VST3Plugin`` that records the ``messages`` arg to ``process()``."""
+
+    def __init__(self, channels: int, buffer_size: int) -> None:
+        self._channels = channels
+        self._buffer_size = buffer_size
+        self.messages_per_call: list[list[tuple[bytes, float]]] = []
+
+    def process(
+        self,
+        messages: list[tuple[bytes, float]],
+        _duration_seconds: float,
+        _sample_rate: int,
+        _channels: int,
+        _buffer_size: int,
+        *,
+        reset: bool,
+    ) -> np.ndarray:
+        assert reset is False
+        self.messages_per_call.append(list(messages))
+        return np.zeros((self._channels, self._buffer_size), dtype=np.float32)
+
+
+class TestPlayAudioQueueDrain:
+    """``play_audio`` drains the MIDI queue into ``plugin.process`` once per buffer."""
+
+    def test_queued_events_are_forwarded_to_plugin_process(
+        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tuples enqueued by the listener are drained and passed to ``plugin.process``."""
+        plugin = _RecordingPlugin(surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE)
+        stream = _FakeStream()
+
+        class _AudioStreamStub:
+            default_output_device_name = "fake-device"
+
+            def __new__(cls, **_kwargs: object) -> "_FakeStream":  # type: ignore[misc]
+                return stream
+
+        monkeypatch.setattr(surge_xt_interactive, "AudioStream", _AudioStreamStub)
+
+        midi_queue: queue.Queue[tuple[bytes, float]] = queue.Queue()
+        midi_queue.put((b"\x90\x3c\x40", 0.0))
+        midi_queue.put((b"\x80\x3c\x00", 0.0))
+
+        stop_event = threading.Event()
+
+        def _stop_after_first_buffer(*_args: object, **_kwargs: object) -> np.ndarray:
+            stop_event.set()
+            plugin.messages_per_call.append(list(_args[0]))  # type: ignore[arg-type]
+            return np.zeros(
+                (surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE),
+                dtype=np.float32,
+            )
+
+        monkeypatch.setattr(plugin, "process", _stop_after_first_buffer)
+        surge_xt_interactive.play_audio(plugin, stop_event, midi_queue)
+
+        assert plugin.messages_per_call == [[(b"\x90\x3c\x40", 0.0), (b"\x80\x3c\x00", 0.0)]]
+
+    def test_none_queue_passes_empty_messages_list(
+        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When no MIDI port is configured, ``play_audio`` is invoked with ``midi_queue=None``."""
+        plugin = _RecordingPlugin(surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE)
+        stream = _FakeStream()
+
+        class _AudioStreamStub:
+            default_output_device_name = "fake-device"
+
+            def __new__(cls, **_kwargs: object) -> "_FakeStream":  # type: ignore[misc]
+                return stream
+
+        monkeypatch.setattr(surge_xt_interactive, "AudioStream", _AudioStreamStub)
+
+        stop_event = threading.Event()
+
+        def _stop_after_first_buffer(*_args: object, **_kwargs: object) -> np.ndarray:
+            stop_event.set()
+            plugin.messages_per_call.append(list(_args[0]))  # type: ignore[arg-type]
+            return np.zeros(
+                (surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE),
+                dtype=np.float32,
+            )
+
+        monkeypatch.setattr(plugin, "process", _stop_after_first_buffer)
+        surge_xt_interactive.play_audio(plugin, stop_event, None)
+
+        assert plugin.messages_per_call == [[]]
 
 
 class TestResolveMidiPort:
