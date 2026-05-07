@@ -209,16 +209,22 @@ _SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
 def _apply_dispatch_mode(api_server: str | None, local: bool) -> None:
     """Apply the launcher's explicit dispatch-mode selection to ``os.environ``.
 
-    Mutually exclusive — Click validates that, but assert again so a programmatic caller
-    can't bypass. ``--api-server`` exports ``SKYPILOT_API_SERVER_ENDPOINT`` so all
-    subsequent ``sky.*`` calls dispatch to the remote server. ``--local`` clears that env
-    var so an inherited value can't accidentally route remote (the failure mode #841
-    captures). Neither flag passed → leave the env untouched (backward-compat).
+    This function is the sole enforcer of the ``--api-server`` / ``--local`` contract —
+    Click does not natively gate mutually-exclusive options, so the runtime check below
+    is what catches both CLI users and programmatic callers. ``--api-server`` exports
+    ``SKYPILOT_API_SERVER_ENDPOINT`` (after stripping surrounding whitespace; blank values
+    rejected) so all subsequent ``sky.*`` calls dispatch to the remote server.
+    ``--local`` clears that env var so an inherited value can't accidentally route
+    remote (the failure mode #841 captures). Neither flag passed → leave the env
+    untouched (backward-compat).
     """
     if api_server is not None and local:
         raise click.ClickException("--api-server and --local are mutually exclusive")
     if api_server is not None:
-        os.environ[_SKYPILOT_API_SERVER_ENV] = api_server
+        stripped = api_server.strip()
+        if not stripped:
+            raise click.ClickException("--api-server must be a non-empty URL")
+        os.environ[_SKYPILOT_API_SERVER_ENV] = stripped
     elif local:
         os.environ.pop(_SKYPILOT_API_SERVER_ENV, None)
 

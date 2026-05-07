@@ -1421,8 +1421,8 @@ class TestNumWorkersConfigPrecedence:
     """`num_workers` resolution order: `--num-workers` CLI flag wins; else dataset config's
     `num_workers` field; else schema default.
 
-    Drops the workflow's hardcoded `--num-workers 3` in favor of the dataset config field (#841) so
-    the same config produces the same fan-out across call sites.
+    Drops the workflow's hardcoded `--num-workers 3` in favor of the dataset config field so the
+    same config produces the same fan-out across call sites.
     """
 
     def test_config_num_workers_drives_fan_out_when_cli_flag_omitted(
@@ -1557,6 +1557,60 @@ class TestDispatchMode:
 
         assert result.exit_code == 0, result.output
         assert os.environ.get("SKYPILOT_API_SERVER_ENDPOINT") == "https://api.example.com"
+
+    def test_api_server_flag_strips_surrounding_whitespace(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-empty URL with surrounding whitespace is stripped before being exported."""
+        monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--api-server",
+            "  https://api.example.com  ",
+        )
+
+        assert result.exit_code == 0, result.output
+        assert os.environ.get("SKYPILOT_API_SERVER_ENDPOINT") == "https://api.example.com"
+
+    def test_api_server_flag_rejects_blank_value(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A blank/whitespace-only value is rejected with a clear error rather than silently
+        setting an empty endpoint that makes downstream cred-bootstrap behavior confusing."""
+        monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--api-server",
+            "   ",
+        )
+
+        assert result.exit_code != 0
+        assert "non-empty" in result.output.lower() or "blank" in result.output.lower()
+        assert "SKYPILOT_API_SERVER_ENDPOINT" not in os.environ
 
     def test_api_server_flag_skips_cred_bootstrap(
         self,

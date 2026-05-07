@@ -40,7 +40,7 @@ class DatasetConfig(BaseModel):
     min_loudness: float
     sample_batch_size: int
     # Number of single-node SkyPilot clusters the launcher fans out in parallel for this
-    # dataset. Default 1 matches the pre-config launcher default (#841); the launcher's
+    # dataset. Default 1 matches the pre-config launcher default; the launcher's
     # `--num-workers` overrides this when explicitly passed.
     num_workers: int = 1
 
