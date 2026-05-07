@@ -139,9 +139,15 @@ def _validate_metrics_df(
             f"{metrics_path}: missing expected columns {sorted(missing_columns)}; "
             f"got {sorted(metrics_df.columns)}"
         )
-    numeric = metrics_df[sorted(expected.columns)].to_numpy()
+    expected_cols = sorted(expected.columns)
+    numeric = metrics_df[expected_cols].to_numpy()
     if not np.isfinite(numeric).all():
-        raise ValueError(f"{metrics_path} contains NaN/Inf:\n{metrics_df}")
+        bad_mask = ~np.isfinite(numeric).all(axis=1)
+        bad_rows = metrics_df.loc[bad_mask, expected_cols]
+        raise ValueError(
+            f"{metrics_path} contains NaN/Inf in {len(bad_rows)} of {len(metrics_df)} rows:\n"
+            f"{bad_rows}"
+        )
 
 
 @dataclass(frozen=True)
@@ -732,7 +738,7 @@ def eval_patches(
     "--checkpoint-path",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     default=None,
-    help=("Optional checkpoint path to run standalone eval on after rendering captured patches. "),
+    help="Optional checkpoint path to run standalone eval on after rendering captured patches.",
 )
 @click.option(
     "--session-recording-path",
