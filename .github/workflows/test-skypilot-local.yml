@@ -12,8 +12,12 @@ name: Test SkyPilot Local
 # (test-dataset-generation.yml runpod/oci) fail, the regression is in the
 # cloud backend wiring, not the launcher's env or task wiring.
 #
-# Triggers: workflow_dispatch only — `sky local up` + image pull + sky launch
-# is ~5–10 min of runner time per dispatch. No PR trigger by default.
+# Triggers: `workflow_dispatch` for ad-hoc runs, plus a `pull_request` trigger
+# scoped narrowly to changes in this workflow or the local-debug template (the
+# only inputs to the smoke). `sky local up` + image pull + sky launch is ~5–10
+# min of runner time per dispatch — keep the path filter tight so unrelated PRs
+# don't pay the runner cost. Fork PRs are skipped via the job-level `if:` since
+# they can't read the R2 secrets.
 #
 # Required secrets:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2.
@@ -24,6 +28,10 @@ name: Test SkyPilot Local
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "configs/compute/local-debug-rclone-template.yaml"
+      - ".github/workflows/test-skypilot-local.yml"
 
 permissions:
   contents: read
@@ -35,6 +43,9 @@ concurrency:
 jobs:
   local:
     name: SkyPilot local kind + R2 rclone smoke
+    # Fork PRs can't read repo secrets, so the R2 step would fail with empty
+    # values. Workflow_dispatch is unrestricted; PR runs are gated to same-repo.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
