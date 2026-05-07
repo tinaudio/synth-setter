@@ -173,7 +173,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Pull image
-        run: docker pull "${IMAGE}"
+        run: docker pull --quiet "${IMAGE}"
 
       - name: Prepare run-metadata mount
         run: mkdir -p "/tmp/run-metadata-${{ matrix.provider }}"
@@ -248,13 +248,18 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.10"
-          cache: pip
+
+      - name: Install uv (skypilot-local row)
+        if: ${{ matrix.provider == 'skypilot-local' }}
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements-app.txt"
 
       - name: Install launcher deps (skypilot-local row)
         if: ${{ matrix.provider == 'skypilot-local' }}
         run: |
-          pip install -r requirements-app.txt
-          pip install "skypilot[kubernetes]==0.12.0"
+          uv pip install --system -r requirements-app.txt "skypilot[kubernetes]==0.12.0"
           sudo apt-get install -y -qq rclone
 
       - name: sky local up (skypilot-local row)
