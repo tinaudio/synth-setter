@@ -1062,12 +1062,13 @@ class TestMaybeEvalCapturedPatches:
     def test_failed_copy_rolls_back_partial_siblings(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """If a later ``shutil.copyfile`` raises, earlier siblings are removed and eval_runner is
-        not invoked.
+        """If a later ``shutil.copyfile`` raises ``OSError``, earlier siblings are removed and
+        eval_runner is not invoked.
 
-        The failure is triggered by a *real* ``IsADirectoryError``: ``val.h5``
-        is pre-created as a directory, so the second copy fails when trying to write a file
-        to a directory path.
+        Failure is triggered by a *real* OS error: ``val.h5`` is pre-created as a directory, so
+        the second copy fails. The exact subclass varies by platform (``IsADirectoryError`` on
+        POSIX, ``PermissionError`` on Windows); asserting on ``OSError`` matches the SUT's
+        ``except OSError:`` contract.
         """
         train_path = tmp_path / "train.h5"
         train_path.write_bytes(b"train-content")
@@ -1079,7 +1080,7 @@ class TestMaybeEvalCapturedPatches:
 
         runner = _RecordingEvalRunner()
 
-        with pytest.raises(IsADirectoryError):
+        with pytest.raises(OSError):
             surge_xt_interactive._maybe_eval_captured_patches(
                 patch_file_path=train_path,
                 output_dataset_dir_path=tmp_path,
