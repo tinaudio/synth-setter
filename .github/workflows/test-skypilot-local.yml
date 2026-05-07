@@ -75,6 +75,14 @@ jobs:
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
 
+      # SkyPilot's Kubernetes backend uses `kubectl port-forward` for the SSH
+      # control channel into pods, which delegates to `socat` under the hood.
+      # The stock ubuntu-latest runner doesn't ship it, so `sky check
+      # kubernetes` reports "Kubernetes: disabled" and the subsequent
+      # sky.launch raises NoCloudAccessError.
+      - name: Install socat (kubectl port-forward dependency)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq socat
+
       - name: Install SkyPilot (kubernetes extra)
         run: pip install "skypilot[kubernetes]==0.12.0"
 
