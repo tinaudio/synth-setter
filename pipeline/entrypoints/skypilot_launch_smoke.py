@@ -169,11 +169,26 @@ def _detect_provider(template_path: Path) -> str:
             "expected a YAML mapping with a `resources` key, got empty/non-mapping content."
         )
     resources = doc.get("resources") or {}
+    if not isinstance(resources, dict):
+        raise click.ClickException(
+            f"Could not detect cloud from {template_path}; expected `resources` to be a mapping."
+        )
     cloud_value = resources.get("cloud")
     if cloud_value is None:
         any_of = resources.get("any_of") or []
+        if not isinstance(any_of, list):
+            raise click.ClickException(
+                f"Could not detect cloud from {template_path}; "
+                "expected `resources.any_of` to be a list."
+            )
         if any_of:
-            cloud_value = (any_of[0] or {}).get("cloud")
+            first = any_of[0]
+            if not isinstance(first, dict):
+                raise click.ClickException(
+                    f"Could not detect cloud from {template_path}; "
+                    "expected `resources.any_of[0]` to be a mapping."
+                )
+            cloud_value = first.get("cloud")
     if not isinstance(cloud_value, str):
         raise click.ClickException(
             f"Could not detect cloud from {template_path}; "
@@ -410,20 +425,24 @@ def main(
     local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Materialized spec to {local_spec_path}")
 
+    # Cred bootstrap is launcher-host scoped (writes ~/.cloudflare/, ~/.runpod/,
+    # ~/.oci/) and runs once per launcher invocation. Provider auto-detected
+    # from the template's `resources.cloud`. Subprocess inherits os.environ +
+    # any --env-file values; bootstrap script captures stdout (which it never
+    # emits anyway by design) so a tee'd caller workflow can't leak secrets.
+    #
+    # Runs BEFORE `upload_spec_to_r2` so a bootstrap failure (e.g. missing
+    # provider env) fails the launcher fast without polluting R2 with a spec
+    # that no worker will ever consume.
+    provider = _detect_provider(template_path)
+    _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
+
     # One spec upload, shared across all ranks. Spec is keyed by base cluster name (no -rN
     # suffix) so all workers in a fan-out group download from the same R2 object and see the
     # same r2_prefix — this is what makes the partition cohere as one logical dataset.
     spec_uri = upload_spec_to_r2(spec, base_cluster_name)
     click.echo(f"Spec uploaded to {spec_uri}")
     worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
-
-    # Cred bootstrap is launcher-host scoped (writes ~/.cloudflare/, ~/.runpod/,
-    # ~/.oci/) and runs once per launcher invocation. Provider auto-detected
-    # from the template's `resources.cloud`. Subprocess inherits os.environ +
-    # any --env-file values; bootstrap script captures stdout (which it never
-    # emits anyway by design) so a tee'd caller workflow can't leak secrets.
-    provider = _detect_provider(template_path)
-    _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
     # Kubernetes-specific: SkyPilot 0.12 caches enabled-clouds in-process; a
     # CLI `sky check` doesn't always populate the cache the SDK reads, and

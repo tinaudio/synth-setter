@@ -1283,6 +1283,30 @@ class TestDetectProvider:
         with pytest.raises(click.ClickException, match="(?i)could not detect cloud"):
             _real_detect_provider(path)
 
+    def test_non_mapping_resources_raises_click_exception(self, tmp_path: Path) -> None:
+        """A template whose `resources` key is a list / string / scalar raises a clean
+        ClickException instead of bubbling AttributeError from `resources.get(...)`."""
+        path = tmp_path / "scalar-resources.yaml"
+        path.write_text(yaml.dump({"resources": "not-a-mapping"}))
+        with pytest.raises(click.ClickException, match="(?i)resources.*mapping"):
+            _real_detect_provider(path)
+
+    def test_non_list_any_of_raises_click_exception(self, tmp_path: Path) -> None:
+        """A template whose `resources.any_of` is something other than a list raises a clean
+        ClickException — defends `(any_of[0] or {}).get(...)` against scalar `any_of`."""
+        path = tmp_path / "scalar-any-of.yaml"
+        path.write_text(yaml.dump({"resources": {"any_of": "not-a-list"}}))
+        with pytest.raises(click.ClickException, match="(?i)any_of.*list"):
+            _real_detect_provider(path)
+
+    def test_non_mapping_any_of_first_entry_raises_click_exception(self, tmp_path: Path) -> None:
+        """A template where `resources.any_of[0]` is a string / scalar raises a clean
+        ClickException instead of bubbling AttributeError from `.get('cloud')`."""
+        path = tmp_path / "scalar-any-of-entry.yaml"
+        path.write_text(yaml.dump({"resources": {"any_of": ["not-a-mapping"]}}))
+        with pytest.raises(click.ClickException, match="(?i)any_of\\[0\\].*mapping"):
+            _real_detect_provider(path)
+
 
 # ---------------------------------------------------------------------------
 # _run_cred_bootstrap — invokes the script; honors SKYPILOT_API_SERVER_ENDPOINT;
