@@ -172,15 +172,16 @@ ______________________________________________________________________
 
 ## 8. GitHub Actions Workflows
 
-| Workflow        | File                     | Trigger               | Runner                          | Secrets             | Key Inputs                                                       |
-| --------------- | ------------------------ | --------------------- | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
-| Tests           | `test.yml`               | push, PR, dispatch    | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
-| GPU Tests       | `test-gpu.yml`           | schedule, dispatch    | `gpu-x64`                       | —                   | —                                                                |
-| CPU Slow Tests  | `cpu-slow.yml`           | push (main), dispatch | `ubuntu-latest-4core`           | —                   | —                                                                |
-| Data Generation | `dataset-generation.yml` | `workflow_call`       | `ubuntu-latest-4core`           | DockerHub           | `image_tag`, `config_path`, `artifact_name`                      |
-| Training        | TBD                      | `workflow_dispatch`   | TBD                             | R2, W&B, RunPod     | experiment, overrides                                            |
-| Evaluation      | TBD                      | `workflow_dispatch`   | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                           |
-| Model Promotion | `promote.yml` (planned)  | `workflow_dispatch`   | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
+| Workflow        | File                           | Trigger               | Runner                          | Secrets             | Key Inputs                                                                                                               |
+| --------------- | ------------------------------ | --------------------- | ------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Tests           | `test.yml`                     | push, PR, dispatch    | `ubuntu-latest`, `macos-latest` | —                   | —                                                                                                                        |
+| GPU Tests       | `test-gpu.yml`                 | schedule, dispatch    | `gpu-x64`                       | —                   | —                                                                                                                        |
+| CPU Slow Tests  | `cpu-slow.yml`                 | push (main), dispatch | `ubuntu-latest-4core`           | —                   | —                                                                                                                        |
+| Data Generation | `generate-dataset-shards.yaml` | `workflow_call`       | `ubuntu-latest`                 | R2, RunPod, OCI     | `provider`, `dataset_config`, `image_tag`, `cluster_name`, `num_workers`, `tail`, `local`, `api_server`, `artifact_name` |
+| Data Validation | `validate-dataset-shards.yaml` | `workflow_call`       | `ubuntu-latest`                 | R2                  | `image_tag`, `artifact_name`                                                                                             |
+| Training        | TBD                            | `workflow_dispatch`   | TBD                             | R2, W&B, RunPod     | experiment, overrides                                                                                                    |
+| Evaluation      | TBD                            | `workflow_dispatch`   | TBD                             | R2, W&B             | `train_wandb_run_id`, `eval_config_id`                                                                                   |
+| Model Promotion | `promote.yml` (planned)        | `workflow_dispatch`   | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run`                                                         |
 
 - All workflows that create W&B runs must export `GITHUB_SHA` into the run environment.
 - Evaluation requires `train_wandb_run_id` (to find the model artifact) and `eval_config_id` (which dataset to evaluate on).
