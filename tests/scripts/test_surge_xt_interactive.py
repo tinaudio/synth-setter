@@ -422,6 +422,55 @@ class TestExpectedPredictionFilenames:
         assert surge_xt_interactive._expected_prediction_filenames(num_samples=0) == []
 
 
+class TestRunPredict:
+    """``_run_predict`` builds the ``src/eval.py`` invocation with the right Hydra overrides."""
+
+    def test_passes_d_out_override_and_absolute_paths(
+        self,
+        surge_xt_interactive,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``_run_predict`` overrides ``model.net.d_out`` with the encoded width of
+        ``param_spec_name`` (otherwise the ``???`` sentinel in ``surge/test.yaml`` would error),
+        and resolves all paths to absolute (otherwise Hydra's ``chdir`` would break relative
+        refs)."""
+        # Use relative paths so the test fails if .resolve() is dropped.
+        ckpt = Path("relative/ckpt.ckpt")
+        dataset_root = Path("relative/dataset")
+        predict_file = Path("relative/dataset/predict.h5")
+        predictions_dir = Path("relative/preds")
+
+        captured: dict = {}
+
+        def fake_check_call(args: list[str], **_kwargs: object) -> int:
+            captured["args"] = list(args)
+            return 0
+
+        monkeypatch.setattr(surge_xt_interactive.subprocess, "check_call", fake_check_call)
+
+        surge_xt_interactive._run_predict(
+            ckpt, dataset_root, predict_file, predictions_dir, SURGE_SIMPLE
+        )
+
+        args = captured["args"]
+        assert "experiment=surge/test" in args
+        assert "mode=predict" in args
+        # d_out must equal len(param_specs[SURGE_SIMPLE]) = synth+note width.
+        expected_d_out = len(param_specs[SURGE_SIMPLE])
+        assert f"model.net.d_out={expected_d_out}" in args
+        # Every path-bearing override must be absolute.
+        for prefix, original in (
+            ("ckpt_path=", ckpt),
+            ("data.predict_file=", predict_file),
+            ("data.dataset_root=", dataset_root),
+            ("callbacks.prediction_writer.output_dir=", predictions_dir),
+        ):
+            arg = next(a for a in args if a.startswith(prefix))
+            value = arg.removeprefix(prefix)
+            assert Path(value).is_absolute(), f"{prefix} should be absolute, got {value!r}"
+            assert value == str(original.resolve())
+
+
 class TestValidatePredictions:
     """``_validate_predictions`` checks expected files exist and tensors are finite."""
 
@@ -516,6 +565,8 @@ class TestMaybeEvalCapturedPatches:
             output_dataset_dir_path=tmp_path,
             num_patches=1,
             checkpoint_path=None,
+            param_spec_name=SURGE_SIMPLE,
+            preset_path="presets/surge-base.vstpreset",
         )
 
         for sibling in ("test.h5", "val.h5", "predict.h5"):
@@ -527,7 +578,8 @@ class TestMaybeEvalCapturedPatches:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When ``--checkpoint-path`` is given, ``train.h5`` is copied to test/val/predict.h5."""
+        """When ``--checkpoint-path`` is given, ``train.h5`` is copied to test/val/predict.h5 and
+        ``param_spec_name`` / ``preset_path`` are forwarded verbatim to ``eval_patches``."""
         train_path = tmp_path / "train.h5"
         train_path.write_bytes(b"train-content")
         ckpt_path = tmp_path / "model.ckpt"
@@ -536,11 +588,17 @@ class TestMaybeEvalCapturedPatches:
         called_with: dict = {}
 
         def fake_eval_patches(
-            num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
+            num_samples: int,
+            dataset_root_dir: Path,
+            checkpoint_path: Path,
+            param_spec_name: str,
+            preset_path: str,
         ) -> None:
             called_with["num_samples"] = num_samples
             called_with["dataset_root_dir"] = dataset_root_dir
             called_with["checkpoint_path"] = checkpoint_path
+            called_with["param_spec_name"] = param_spec_name
+            called_with["preset_path"] = preset_path
 
         monkeypatch.setattr(surge_xt_interactive, "eval_patches", fake_eval_patches)
 
@@ -549,6 +607,8 @@ class TestMaybeEvalCapturedPatches:
             output_dataset_dir_path=tmp_path,
             num_patches=3,
             checkpoint_path=ckpt_path,
+            param_spec_name=SURGE_SIMPLE,
+            preset_path="presets/surge-simple.vstpreset",
         )
 
         for sibling in ("test.h5", "val.h5", "predict.h5"):
@@ -557,6 +617,8 @@ class TestMaybeEvalCapturedPatches:
             "num_samples": 3,
             "dataset_root_dir": tmp_path,
             "checkpoint_path": ckpt_path,
+            "param_spec_name": SURGE_SIMPLE,
+            "preset_path": "presets/surge-simple.vstpreset",
         }
 
     def test_failed_copy_rolls_back_partial_siblings(
@@ -596,6 +658,8 @@ class TestMaybeEvalCapturedPatches:
                 output_dataset_dir_path=tmp_path,
                 num_patches=1,
                 checkpoint_path=ckpt_path,
+                param_spec_name=SURGE_SIMPLE,
+                preset_path="presets/surge-base.vstpreset",
             )
 
         # First sibling was copied, second failed; rollback removes the first.
@@ -610,14 +674,17 @@ def _write_wav(path: Path, *, silent: bool, sample_rate: int = 44100) -> None:
 
     ``silent=True`` writes zeros (peak == 0); otherwise a
     half-amplitude 440 Hz sine (peak ~0.5, well above ``SILENCE_PEAK_THRESHOLD``).
+
+    Samples are shaped ``(num_frames, num_channels)`` to match the convention used by
+    ``play_audio_recorded`` and ``predict_vst_audio.py`` (both pass ``output.T``).
     """
     duration_seconds = 0.05
     num_frames = int(sample_rate * duration_seconds)
     if silent:
-        samples = np.zeros((1, num_frames), dtype=np.float32)
+        samples = np.zeros((num_frames, 1), dtype=np.float32)
     else:
         t = np.linspace(0, duration_seconds, num_frames, endpoint=False)
-        samples = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)[None, :]
+        samples = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)[:, None]
     with AudioFile(str(path), "w", samplerate=sample_rate, num_channels=1) as f:
         f.write(samples)
 
@@ -633,6 +700,9 @@ def _populate_audio_dir(audio_dir: Path, num_samples: int, *, silent: bool = Fal
         _write_wav(sample_dir / "pred.wav", silent=silent)
         (sample_dir / "spec.png").write_bytes(b"\x89PNG\r\n\x1a\n")
         (sample_dir / "params.csv").write_text("name,value\n")
+
+
+_RENDER_DEFAULT_PRESET = "presets/surge-base.vstpreset"
 
 
 class TestRenderPredictedAudio:
@@ -660,7 +730,9 @@ class TestRenderPredictedAudio:
 
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
-        surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, num_samples)
+        surge_xt_interactive._render_predicted_audio(
+            predictions_dir, audio_dir, num_samples, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET
+        )
 
     def test_subprocess_failure_raises_calledprocesserror(
         self,
@@ -680,7 +752,9 @@ class TestRenderPredictedAudio:
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
         with pytest.raises(subprocess.CalledProcessError):
-            surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, 1)
+            surge_xt_interactive._render_predicted_audio(
+                predictions_dir, audio_dir, 1, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET
+            )
 
     def test_subprocess_timeout_re_raises_timeoutexpired(
         self,
@@ -700,7 +774,9 @@ class TestRenderPredictedAudio:
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
         with pytest.raises(subprocess.TimeoutExpired):
-            surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, 1)
+            surge_xt_interactive._render_predicted_audio(
+                predictions_dir, audio_dir, 1, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET
+            )
 
     def test_missing_per_sample_file_raises_filenotfounderror(
         self,
@@ -722,7 +798,9 @@ class TestRenderPredictedAudio:
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
         with pytest.raises(FileNotFoundError, match="spec.png"):
-            surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, num_samples)
+            surge_xt_interactive._render_predicted_audio(
+                predictions_dir, audio_dir, num_samples, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET
+            )
 
     def test_silent_audio_raises_valueerror(
         self,
@@ -744,7 +822,9 @@ class TestRenderPredictedAudio:
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
         with pytest.raises(ValueError, match=r"sample_0/(target|pred)\.wav is silent"):
-            surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, num_samples)
+            surge_xt_interactive._render_predicted_audio(
+                predictions_dir, audio_dir, num_samples, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET
+            )
 
     def test_unexpected_sample_dirs_raises_filenotfounderror(
         self,
@@ -765,7 +845,13 @@ class TestRenderPredictedAudio:
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
         with pytest.raises(FileNotFoundError, match="unexpected sample directories"):
-            surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, num_samples=2)
+            surge_xt_interactive._render_predicted_audio(
+                predictions_dir,
+                audio_dir,
+                num_samples=2,
+                param_spec_name=SURGE_SIMPLE,
+                preset_path=_RENDER_DEFAULT_PRESET,
+            )
 
     def test_linux_missing_wrapper_raises_filenotfounderror(
         self,
@@ -796,7 +882,9 @@ class TestRenderPredictedAudio:
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
         with pytest.raises(FileNotFoundError, match="VST headless wrapper not found"):
-            surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, 1)
+            surge_xt_interactive._render_predicted_audio(
+                predictions_dir, audio_dir, 1, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET
+            )
         assert run_called["n"] == 0
 
     def test_linux_prepends_wrapper_to_subprocess_args(
@@ -827,7 +915,9 @@ class TestRenderPredictedAudio:
 
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
-        surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, num_samples)
+        surge_xt_interactive._render_predicted_audio(
+            predictions_dir, audio_dir, num_samples, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET
+        )
 
         assert captured["args"][0] == str(wrapper_path)
 
@@ -860,8 +950,49 @@ class TestRenderPredictedAudio:
 
         monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
 
-        surge_xt_interactive._render_predicted_audio(predictions_dir, audio_dir, num_samples)
+        surge_xt_interactive._render_predicted_audio(
+            predictions_dir, audio_dir, num_samples, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET
+        )
 
         assert str(surge_xt_interactive._VST_HEADLESS_WRAPPER) not in captured["args"]
         # First arg should be the Python interpreter, not a wrapper.
         assert captured["args"][0] == surge_xt_interactive.sys.executable
+
+    def test_param_spec_and_preset_path_are_forwarded_to_subprocess(
+        self,
+        surge_xt_interactive,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``param_spec_name`` and ``preset_path`` are passed verbatim to ``predict_vst_audio.py``
+        (otherwise the script would default to ``surge_xt`` + ``presets/surge-base.vstpreset`` and
+        decode/render against a mismatched spec)."""
+        predictions_dir = tmp_path / "preds"
+        predictions_dir.mkdir()
+        audio_dir = tmp_path / "audio"
+        num_samples = 1
+        _populate_audio_dir(audio_dir, num_samples)
+
+        monkeypatch.setattr(surge_xt_interactive.sys, "platform", "darwin")
+
+        captured: dict = {}
+
+        def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            captured["args"] = list(args)
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        monkeypatch.setattr(surge_xt_interactive.subprocess, "run", fake_run)
+
+        surge_xt_interactive._render_predicted_audio(
+            predictions_dir,
+            audio_dir,
+            num_samples,
+            param_spec_name="custom-spec",
+            preset_path="presets/custom.vstpreset",
+        )
+
+        args = captured["args"]
+        assert "--param_spec" in args
+        assert args[args.index("--param_spec") + 1] == "custom-spec"
+        assert "--preset_path" in args
+        assert args[args.index("--preset_path") + 1] == "presets/custom.vstpreset"

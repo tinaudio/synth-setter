@@ -430,22 +430,26 @@ def _run_predict(
     dataset_root_dir: Path,
     predict_file: Path,
     predictions_output_dir: Path,
+    param_spec_name: str,
 ) -> None:
     """Run model prediction via ``src/eval.py`` with ``mode=predict``.
 
-    ``checkpoint_path``, ``dataset_root_dir``, and ``predict_file`` are validated by the caller
-    (``eval_patches``); paths are also resolved relative to the repo root so the script works from
-    any CWD.
+    Paths are passed as absolute (``.resolve()``) because ``src/eval.py`` runs under Hydra, which
+    chdirs into its own output dir before the job starts; relative paths would otherwise resolve
+    against the wrong cwd. ``model.net.d_out`` is overridden from ``len(param_specs[...])`` to
+    satisfy the mandatory-override sentinel in ``configs/experiment/surge/test.yaml``.
     """
+    encoded_width = len(param_specs[param_spec_name])
     subprocess.check_call(  # noqa: S603
         [
             sys.executable,
             str(_EVAL_SCRIPT),
             "experiment=surge/test",
-            "ckpt_path=" + str(checkpoint_path),
-            "data.predict_file=" + str(predict_file),
-            "data.dataset_root=" + str(dataset_root_dir),
-            "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir),
+            "ckpt_path=" + str(checkpoint_path.resolve()),
+            "data.predict_file=" + str(predict_file.resolve()),
+            "data.dataset_root=" + str(dataset_root_dir.resolve()),
+            "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir.resolve()),
+            f"model.net.d_out={encoded_width}",
             "mode=predict",
         ],
         timeout=_EVAL_SUBPROCESS_TIMEOUT_SECONDS,
@@ -480,10 +484,18 @@ def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> Non
 
 
 def _render_predicted_audio(
-    predictions_output_dir: Path, audio_dir: Path, num_samples: int
+    predictions_output_dir: Path,
+    audio_dir: Path,
+    num_samples: int,
+    param_spec_name: str,
+    preset_path: str,
 ) -> None:
     """Render audio for the predicted patches and validate per-sample outputs (file presence and
     non-silent WAVs).
+
+    ``param_spec_name`` and ``preset_path`` must match the values used to capture the patches —
+    otherwise ``predict_vst_audio.py`` would fall back to its own defaults (``surge_xt`` /
+    ``presets/surge-base.vstpreset``) and decode/render against a mismatched spec.
 
     :raises FileNotFoundError: if the headless wrapper is missing on Linux, if any sample directory
         is missing, or if a per-sample artifact (target.wav, pred.wav, spec.png, params.csv) is
@@ -503,6 +515,10 @@ def _render_predicted_audio(
         str(_PREDICT_VST_AUDIO_SCRIPT),
         str(predictions_output_dir),
         str(audio_dir),
+        "--param_spec",
+        param_spec_name,
+        "--preset_path",
+        preset_path,
         "-t",
     ]
     try:
@@ -571,7 +587,13 @@ def _compute_and_validate_metrics(audio_dir: Path, metrics_dir: Path, num_sample
         _validate_metrics_df(metrics_path, metrics_df, expected)
 
 
-def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path) -> None:
+def eval_patches(
+    num_samples: int,
+    dataset_root_dir: Path,
+    checkpoint_path: Path,
+    param_spec_name: str,
+    preset_path: str,
+) -> None:
     """Run model eval on captured patches end-to-end.
 
     Pipeline (each step gated on the previous one's success):
@@ -591,6 +613,11 @@ def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
     :param dataset_root_dir: Directory containing ``predict.h5``; receives ``prediction_outputs/``,
         ``audio/``, and ``metrics/`` subdirectories.
     :param checkpoint_path: Path to the ``.ckpt`` file to load weights from.
+    :param param_spec_name: Parameter spec name (key into ``param_specs``) used to set the model's
+        ``d_out`` and the decoder used to render predicted audio. Must match the spec used when
+        the patches were captured.
+    :param preset_path: Base preset to load when rendering predicted audio. Must match the preset
+        used when the patches were captured.
     :raises FileNotFoundError: if ``checkpoint_path`` is missing, ``dataset_root_dir`` is not a
         directory, ``predict.h5`` is missing, or any expected pipeline output is absent.
     :raises ValueError: if predictions contain NaN/Inf, a rendered WAV is silent, or a metrics CSV
@@ -614,9 +641,13 @@ def eval_patches(num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
         shutil.rmtree(output_dir, ignore_errors=True)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    _run_predict(checkpoint_path, dataset_root_dir, predict_file, predictions_output_dir)
+    _run_predict(
+        checkpoint_path, dataset_root_dir, predict_file, predictions_output_dir, param_spec_name
+    )
     _validate_predictions(predictions_output_dir, num_samples)
-    _render_predicted_audio(predictions_output_dir, audio_dir, num_samples)
+    _render_predicted_audio(
+        predictions_output_dir, audio_dir, num_samples, param_spec_name, preset_path
+    )
     _compute_and_validate_metrics(audio_dir, metrics_dir, num_samples)
 
 
@@ -830,6 +861,8 @@ def main(
         output_dataset_dir_path,
         len(synth_patches),
         checkpoint_path,
+        param_spec_name,
+        preset_path,
     )
 
 
@@ -838,12 +871,17 @@ def _maybe_eval_captured_patches(
     output_dataset_dir_path: Path,
     num_patches: int,
     checkpoint_path: Path | None,
+    param_spec_name: str,
+    preset_path: str,
 ) -> None:
     """Replicate captured patches into the four eval-pipeline splits and run eval_patches if a
     checkpoint is provided; no-op otherwise.
 
     The Click ``--checkpoint-path`` option already validates ``exists=True``, so when this is
     invoked from ``main`` ``checkpoint_path`` is guaranteed to refer to an existing file.
+    ``param_spec_name`` and ``preset_path`` are forwarded to ``eval_patches`` so the predict /
+    render / metrics steps decode and re-render against the same spec + preset that were used
+    when the patches were captured.
     """
     if checkpoint_path is None:
         logger.info("No --checkpoint-path provided; skipping patch evaluation.")
@@ -863,7 +901,9 @@ def _maybe_eval_captured_patches(
             except OSError:
                 logger.exception("failed to roll back partial sibling copy at %s", created)
         raise
-    eval_patches(num_patches, output_dataset_dir_path, checkpoint_path)
+    eval_patches(
+        num_patches, output_dataset_dir_path, checkpoint_path, param_spec_name, preset_path
+    )
 
 
 if __name__ == "__main__":
