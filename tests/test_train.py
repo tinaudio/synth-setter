@@ -17,6 +17,7 @@ from tests.conftest import (
     _VST_SUBPROCESS_TIMEOUT_SECONDS,
     NUM_FIXTURE_SAMPLES,
     VST_HEADLESS_WRAPPER,
+    _build_surge_xt_smoke_cfg,
 )
 from tests.helpers.run_if import RunIf
 
@@ -166,23 +167,22 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "param_spec_name",
-    ["surge_4", "surge_simple", "surge_xt"],
-    indirect=True,
-)
-def test_cfg_surge_xt_global_wires_param_spec(
-    cfg_surge_xt_global: DictConfig, param_spec_name: str
-) -> None:
-    """Templated ``cfg_surge_xt_global`` propagates the param spec to ``model.net.d_out`` and
+@pytest.mark.parametrize("param_spec_name", ["surge_4", "surge_simple", "surge_xt"])
+def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
+    """Templated ``_build_surge_xt_smoke_cfg`` propagates the param spec to ``model.net.d_out`` and
     ``callbacks.log_per_param_mse.param_spec`` for every supported spec — guards against the
     surge_4-only hardcodes the fixture used to carry.
 
-    :param cfg_surge_xt_global: Surge XT training config built for ``param_spec_name``.
-    :param param_spec_name: Indirectly-parametrized spec name driving the fixture.
+    Calls the builder directly (not the ``cfg_surge_xt_global`` fixture) and pins
+    ``accelerator="cpu"``: the cfg-shape contract is accelerator-independent and going
+    through the fixture would drag in the parametrized ``accelerator`` hardware gate that
+    hardfails on hosts without MPS/CUDA.
+
+    :param param_spec_name: Spec name driving the cfg builder.
     """
-    assert cfg_surge_xt_global.model.net.d_out == len(param_specs[param_spec_name])
-    assert cfg_surge_xt_global.callbacks.log_per_param_mse.param_spec == param_spec_name
+    cfg = _build_surge_xt_smoke_cfg(accelerator="cpu", param_spec_name=param_spec_name)
+    assert cfg.model.net.d_out == len(param_specs[param_spec_name])
+    assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
 
 
 @pytest.mark.requires_vst
