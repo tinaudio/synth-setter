@@ -107,7 +107,13 @@ docs:
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
-        covers: "End-to-end smoke matrixed over `skypilot-local` (PR default; `sky local up` kind cluster + unified launcher with `local-template.yaml`), `local` (legacy docker-only fallback, manual dispatch), RunPod, and OCI: generate → validate-spec → validate-shard, per-provider artifacts. Cred-bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT."
+        covers: "End-to-end smoke matrixed over `skypilot-local` (PR default; `sky local up` kind cluster + unified launcher with `local-template.yaml`), `local` (legacy docker-only fallback, manual dispatch), RunPod, and OCI: generate → validate-spec → validate-shard, per-provider artifacts. Cred-bootstrap is gated on SKYPILOT_API_SERVER_ENDPOINT — see #785."
+      - pattern: ".github/workflows/test-skypilot-debug.yml"
+        covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
+      - pattern: ".github/workflows/test-skypilot-local.yml"
+        covers: "kind/local-Kubernetes smoke for the launcher's env-forwarding contract. Triggers on workflow_dispatch and on pull_request events that touch the workflow file or the local-debug template (path-filtered). sky local up + sky launch on the kubernetes backend with no billable cloud capacity — verifies RCLONE_CONFIG_R2_* flow through task.update_envs into the worker pod."
+      - pattern: "configs/compute/local-debug-rclone-template.yaml"
+        covers: "SkyPilot Task YAML for the kubernetes backend (no `image_id`, defers to SkyPilot's stock kube image). Setup installs rclone; run uploads a sentinel file to R2 with the same flags the production worker uses. Used by test-skypilot-local.yml."
       - pattern: ".github/workflows/check-auth.yml"
         covers: "Standalone workflow that runs the cred-bootstrap end-to-end on real repo secrets (matrix over runpod / oci / local) and verifies file shapes (mode 600), the structural rclone-env emission (all five RCLONE_CONFIG_R2_* keys), R2 auth (`rclone lsd r2:`), and provider auth (`sky check`). Skips when SKYPILOT_API_SERVER_ENDPOINT is set — the remote API server holds creds. workflow_dispatch + weekly cron."
       - pattern: "requirements-app.txt"
@@ -277,7 +283,7 @@ docs:
     description: Interactive Surge XT prediction audition and patch-recording guide
     sources:
       - pattern: "scripts/surge_xt_interactive.py"
-        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch HDF5 output, append-vs-fresh dataset semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants"
+        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch HDF5 output, append-vs-fresh directory semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants, optional --checkpoint-path eval pipeline (eval_patches: src/eval.py mode=predict + predict_vst_audio.py + compute_audio_metrics.py), directory-of-splits output"
       - pattern: "src/data/vst/core.py"
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"

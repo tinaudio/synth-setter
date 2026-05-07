@@ -309,13 +309,19 @@ jobs:
         run: sky local down || true
 
       # ------------------------------------------------------------------
-      # `runpod` / `oci` rows: in-container launcher invocation. The launcher
-      # invokes scripts/skypilot_write_provider_creds.sh itself (provider auto-
-      # detected from task.resources), which writes ~/.runpod/, ~/.oci/,
-      # ~/.cloudflare/ creds (umask 077; mode 600) and emits rclone-prefixed
-      # R2 env vars on stdout that the launcher merges into the worker env.
-      # CI passes only the bare-named secrets; no manual rclone-prefix
-      # bridging needed here.
+      # `runpod` / `oci` rows: in-container launcher invocation.
+      #
+      # The launcher invokes scripts/skypilot_write_provider_creds.sh itself
+      # (provider auto-detected from task.resources), which writes ~/.runpod/,
+      # ~/.oci/, ~/.cloudflare/ creds (umask 077; mode 600) and emits rclone-
+      # prefixed R2 env vars on stdout that the launcher merges into the
+      # worker env. CI passes only the bare-named secrets; no manual rclone-
+      # prefix bridging needed here.
+      #
+      # When SKYPILOT_API_SERVER_ENDPOINT is set the cred bootstrap is skipped
+      # (both inside the launcher and at the bash-c layer below) — the remote
+      # API server (#785) holds provider creds and the local container only
+      # needs to talk to it.
       # ------------------------------------------------------------------
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         if: ${{ matrix.provider == 'runpod' || matrix.provider == 'oci' }}
@@ -371,6 +377,14 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
+              if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
+                bash scripts/skypilot_write_provider_creds.sh --provider "$PROVIDER"
+              else
+                echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
+              fi
+              if [[ "$PROVIDER" == "oci" ]]; then
+                sky check oci
+              fi
               python -m pipeline.entrypoints.skypilot_launch_smoke \
                 --config "$CONFIG_PATH" \
                 --template "$TEMPLATE" \

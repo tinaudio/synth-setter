@@ -105,7 +105,8 @@ make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 
-# devcontainer-tools — dev-base + gh, jq, Node.js, Claude Code, dev user
+# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code, dev user
+# (see the "devcontainer-tools" stage in docker/ubuntu22_04/Dockerfile)
 make docker-build-devcontainer-tools \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
@@ -113,7 +114,8 @@ make docker-build-devcontainer-tools \
 
 The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
 build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
-the synth-setter source. `devcontainer-tools` adds CLI tooling (`gh`, `jq`),
+the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
+(see the stage's `apt-get install` list and the GitHub CLI install block),
 Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
 `dev` user, and a `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash

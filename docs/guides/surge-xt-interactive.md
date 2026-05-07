@@ -1,11 +1,8 @@
 # Guide: Interactive Surge XT prediction & patch capture
 
 > **Status**: Stable
-> **Last Updated**: 2026-05-02
+> **Last Updated**: 2026-05-07
 > **Source**: [`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py)
-
-> Last refresh: `--session-recording-path` now renders a deterministic
-> 10-second middle-C clip (was: a tee of the live stream's first 20 s).
 
 ______________________________________________________________________
 
@@ -14,8 +11,9 @@ ______________________________________________________________________
 `scripts/surge_xt_interactive.py` opens the Surge XT VST3 editor with
 ML-predicted (or dataset-derived) parameters preloaded, streams real-time
 audio so you can audition and tweak the patch by ear, lets you snapshot
-patches by pressing `p`, and after the session renders those snapshots
-into a labeled HDF5 training dataset.
+patches by pressing `p`, and after the session writes a directory
+containing `train.h5` (plus optional `val.h5`/`test.h5`/`predict.h5`
+siblings when `--checkpoint-path` is set).
 
 It's a human-in-the-loop tool for producing high-quality (audio, params)
 training pairs that random sampling can't reach.
@@ -63,12 +61,12 @@ Audition a row from an existing HDF5 dataset:
 python scripts/surge_xt_interactive.py --dataset-ref outputs/test.h5:0
 ```
 
-Record patches and render them into a fresh dataset:
+Record patches and render them into a fresh dataset directory:
 
 ```bash
 python scripts/surge_xt_interactive.py \
     --pred outputs/pred-0.pt:0 \
-    --output-dataset-path outputs/curated-patches.h5
+    --output-dataset-dir-path outputs/curated-patches/
 ```
 
 Render a deterministic test clip of the loaded patch to a WAV — useful
@@ -90,22 +88,23 @@ depends only on the initially-loaded plugin state (preset + `--pred`
 same WAV. After the render completes, the editor still opens and you
 can still snapshot patches. No audio output device is required, but
 the editor still needs a display. Combines freely with `--pred`,
-`--dataset-ref`, and `--output-dataset-path`.
+`--dataset-ref`, and `--output-dataset-dir-path`.
 
 `--pred` and `--dataset-ref` are mutually exclusive — passing both
 raises `click.UsageError`.
 
 ## CLI reference
 
-| Flag                       | Type               | Default                        | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------------------------- | ------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--plugin-path` / `-p`     | path               | `plugins/Surge XT.vst3`        | Path to VST3 plugin.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--preset-path` / `-r`     | path               | `presets/surge-base.vstpreset` | Base preset to load before applying any `--pred` / `--dataset-ref` params.                                                                                                                                                                                                                                                                                                                                                                  |
-| `--pred`                   | `PATH:BATCH_IDX`   | unset                          | Prediction reference. When set, the predicted row is decoded and applied to the plugin before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                                                                                                             |
-| `--dataset-ref`            | `PATH:DATASET_IDX` | unset                          | Dataset reference. When set, the dataset row is decoded and applied to the plugin before the editor opens. Example: `outputs/test.h5:0`.                                                                                                                                                                                                                                                                                                    |
-| `--param-spec-name`        | str                | `surge_xt`                     | Parameter spec name (key into `param_specs`) used to decode prediction/dataset rows applied to the plugin and to enumerate which synth params are captured when recording patches.                                                                                                                                                                                                                                                          |
-| `--output-dataset-path`    | path               | unset                          | HDF5 file to write recorded patches to. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to this dataset via `src.data.vst.generate_vst_dataset.make_dataset`. Must not already exist — `make_dataset` writes fixed-size HDF5 datasets and cannot append.                                                                                  |
-| `--session-recording-path` | path               | unset                          | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set. |
+| Flag                        | Type               | Default                        | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------- | ------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--plugin-path` / `-p`      | path               | `plugins/Surge XT.vst3`        | Path to VST3 plugin.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--preset-path` / `-r`      | path               | `presets/surge-base.vstpreset` | Base preset to load before applying any `--pred` / `--dataset-ref` params.                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `--pred`                    | `PATH:BATCH_IDX`   | unset                          | Prediction reference. When set, the predicted row is decoded and applied to the plugin before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                                                                                                                                                                           |
+| `--dataset-ref`             | `PATH:DATASET_IDX` | unset                          | Dataset reference. When set, the dataset row is decoded and applied to the plugin before the editor opens. Example: `outputs/test.h5:0`.                                                                                                                                                                                                                                                                                                                                                                  |
+| `--param-spec-name`         | str                | `surge_xt`                     | Parameter spec name (key into `param_specs`) used to decode prediction/dataset rows applied to the plugin and to enumerate which synth params are captured when recording patches.                                                                                                                                                                                                                                                                                                                        |
+| `--output-dataset-dir-path` | path               | unset                          | Directory to create for the recorded patches. Must not already exist — `make_dataset` writes fixed-size HDF5 datasets without `maxshape` and cannot append to existing files. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to `train.h5` inside this directory via `src.data.vst.generate_vst_dataset.make_dataset` (plus `val.h5`/`test.h5`/`predict.h5` siblings when `--checkpoint-path` is set). |
+| `--checkpoint-path`         | path               | unset                          | Optional checkpoint path to run standalone eval on after rendering captured patches. When set, triggers the `eval_patches` pipeline (`src/eval.py mode=predict` → `predict_vst_audio.py` → `compute_audio_metrics.py`); see [`docs/design/eval-pipeline.md`](../design/eval-pipeline.md) for the full pipeline and `_METRIC_COLUMNS` in the script for the metric series produced.                                                                                                                        |
+| `--session-recording-path`  | path               | unset                          | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set.                                                               |
 
 Tip — the help strings above are quoted verbatim from the Click
 decorators in `scripts/surge_xt_interactive.py`. Run
@@ -145,10 +144,13 @@ the editor closes.
 
 ## Output dataset format
 
-When `--output-dataset-path` is set, the recorded patches are rendered
-through the plugin via
+When `--output-dataset-dir-path` is set, the recorded patches are
+rendered through the plugin via
 [`make_dataset`](../../src/data/vst/generate_vst_dataset.py) and
-written to an HDF5 file with these datasets:
+written to `train.h5` inside that directory. With `--checkpoint-path`
+also set, identical-content `val.h5`/`test.h5`/`predict.h5` siblings
+are created next to `train.h5` so the eval pipeline has a `predict.h5`
+to consume. Each file has these datasets:
 
 | Dataset       | Shape                                           | Dtype     | Notes                                                                          |
 | ------------- | ----------------------------------------------- | --------- | ------------------------------------------------------------------------------ |
@@ -164,13 +166,17 @@ The audio attached attrs on the `audio` dataset record the rendering
 config: `velocity`, `signal_duration_seconds`, `sample_rate`,
 `channels`, `min_loudness`.
 
-> **Use a fresh `--output-dataset-path` per session.** The current
-> implementation does not support appending to a finalized HDF5 file:
-> `make_dataset` creates fixed-size datasets (no `maxshape`), so
-> re-running with an existing file will either fail with a
-> `ValueError` from the fixed-params length check or fail on write
-> with an out-of-bounds index. If you need to combine multiple
-> sessions, write each one to its own file and concat downstream.
+When `--checkpoint-path` is set, the `val.h5`/`test.h5`/`predict.h5`
+siblings are byte-identical copies of `train.h5`; `predict.h5` is then
+fed into the `eval_patches` pipeline.
+
+> **Use a fresh `--output-dataset-dir-path` per session.** The script
+> refuses an existing **directory**: `make_dataset` creates fixed-size
+> datasets (no `maxshape`), so re-running into an existing directory
+> would either fail with a `ValueError` from the fixed-params length
+> check or fail on write with an out-of-bounds index. If you need to
+> combine multiple sessions, write each one to its own directory and
+> concat downstream.
 
 > **Note params are still randomized.** Only `fixed_synth_params_list`
 > is passed to `make_dataset`; MIDI note, velocity, and timing remain
@@ -180,27 +186,14 @@ config: `velocity`, `signal_duration_seconds`, `sample_rate`,
 
 ## End-to-end workflow
 
-```
-                             ┌─────────────────────────┐
-  src/eval.py  ──pred-*.pt──▶│                         │
-                             │  surge_xt_interactive   │ ──┐
-  *.h5 dataset ──row N─────▶ │  (audition + capture)   │   │
-                             └─────────────────────────┘   │
-                                       │                   │
-                              ▼ user presses 'p'           │
-                            synth_patches: list[dict]      │
-                                       │                   │
-                                       ▼                   │
-                            make_dataset(                  │
-                                fixed_synth_params_list=…) │
-                                       │                   │
-                                       ▼                   │
-                            outputs/curated-patches.h5 ◀───┘
-                            (audio, mel_spec, param_array)
-                                       │
-                                       ▼
-                              downstream training
-```
+A `pred-*.pt` (from `src/eval.py`) or an existing `*.h5` row supplies
+the starting parameters; the live editor session captures user-curated
+patches; on close, `make_dataset` writes them to `train.h5` inside
+`--output-dataset-dir-path` for downstream training. When
+`--checkpoint-path` is set, the `eval_patches` function in
+`scripts/surge_xt_interactive.py` then runs the eval pipeline against
+the captured patches — see its docstring for the predict → render →
+metrics steps and their per-step validation.
 
 Worked example:
 
@@ -214,10 +207,17 @@ python scripts/surge_xt_interactive.py --pred outputs/pred-0.pt:0
 # 3. When you find sounds you like, record them and produce a dataset.
 python scripts/surge_xt_interactive.py \
     --pred outputs/pred-0.pt:0 \
-    --output-dataset-path outputs/curated-patches.h5
+    --output-dataset-dir-path outputs/curated-patches/
 
-# 4. Confirm the file:
-python -c "import h5py; f = h5py.File('outputs/curated-patches.h5'); \
+# 4. (Optional) re-run with --checkpoint-path to also evaluate the
+#    captured patches end-to-end (predict → render → metrics).
+python scripts/surge_xt_interactive.py \
+    --pred outputs/pred-0.pt:0 \
+    --output-dataset-dir-path outputs/curated-patches/ \
+    --checkpoint-path outputs/checkpoints/last.ckpt
+
+# 5. Confirm the file:
+python -c "import h5py; f = h5py.File('outputs/curated-patches/train.h5'); \
     print({k: f[k].shape for k in f})"
 ```
 
@@ -265,8 +265,9 @@ your teammates so they aren't blindsided.
   internally, but the contract isn't documented upstream. In practice
   this hasn't caused audible glitching, but a long session under load
   could.
-- **No append support for `--output-dataset-path`** — see the warning
-  in *Output dataset format* above.
+- **No append support for `--output-dataset-dir-path`** — the script
+  refuses an existing directory; see the warning in *Output dataset
+  format* above.
 
 ## Troubleshooting
 
@@ -300,13 +301,14 @@ loudness; re-run the session and only press `p` while you can hear the
 patch. See *Known limitations*.
 
 **`ValueError: fixed_synth_params_list has length …`.** You re-ran
-with an existing `--output-dataset-path`. Use a fresh path; see the
-warning in *Output dataset format*.
+with an existing `--output-dataset-dir-path`. Use a fresh directory;
+see the warning in *Output dataset format*.
 
 ## Related
 
 - [`docs/design/eval-pipeline.md`](../design/eval-pipeline.md) —
-  where `pred-*.pt` files come from.
+  where `pred-*.pt` files come from (and the pipeline that
+  `--checkpoint-path` invokes: a thin wrapper over `src/eval.py mode=predict` + `predict_vst_audio.py` + `compute_audio_metrics.py`).
 - [`docs/glossary.md`](../glossary.md) — `param_spec`, VST, mel
   spectrogram.
 - [`docs/design/data-pipeline.md`](../design/data-pipeline.md) —
