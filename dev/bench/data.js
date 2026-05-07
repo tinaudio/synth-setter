@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778073003738,
+  "lastUpdate": 1778189388718,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -918,6 +918,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.0421527624130249,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f32d49d889d4a80a63521c486272667a630d9a1f",
+          "message": "feat(param-spec): SURGE_4 mini-example param spec and preset registry (#820)\n\n* internal-feat(vst): add SURGE_4_PARAM_SPEC mini-example and preset registry\n\nAdds a 4-parameter Surge XT spec (SURGE_4_PARAM_SPEC: amp envelope attack,\nfilter cutoff, LFO amplitude/rate) and a preset_paths registry mapping\nparam_spec names to their base preset files. The spec underlies the\nsmoke-test fixture and the predict_vst_audio end-to-end test.\n\n- param_specs[\"surge_4\"] registered alongside surge_xt/surge_simple.\n- preset_paths dict added so future code paths can look up the matching\n  preset by spec name (script wiring lands separately).\n- tests/conftest.py uses surge_4 + presets/surge-mini.vstpreset for the\n  surge fixture; cfg.model.net.d_out now derives from\n  len(param_specs[\"surge_4\"]) instead of being a literal 7 with a\n  comment that would drift when the spec changes.\n- presets/*.fxp gitignored — local-dev learned-model artifacts excluded\n  from version control by default; commit explicitly with git add -f when\n  one becomes a versioned base preset.\n- Docs cross-reference preset_paths from --param-spec-name and\n  --preset-path so users know the two flags should agree.\n\nRefs #811\n\n* test(surge): templatize cfg_surge_xt_global() over param_spec_name\n\nAdds a `param_spec_name` fixture (default \"surge_4\") that drives the surge\nfixtures: `cfg_surge_xt_global` propagates it to `model.net.d_out` and the\n`log_per_param_mse` callback; `surge_xt_smoke_datasets` derives the matching\n`--param_spec` and `--preset_path` from `preset_paths`. Tests can override\nvia indirect parametrization.\n\nAlso plumbs the spec through `predict_vst_audio.py` in the surge train+eval\ne2e test — the script previously defaulted to `--param_spec=surge_xt` while\nthe fixture trained on surge_4, so decode sliced past the end of the\npredicted tensor and crashed MPS CI with \"can only convert an array of size\n1 to a Python scalar\".\n\nAdds a fast cfg-composition test parametrized over surge_4, surge_simple,\nsurge_xt to lock the templating contract for every supported spec.\n\n* test(configs): add surge/test-mps experiment + cfg-equality guard\n\nAdds `configs/experiment/surge/test-mps.yaml`, a Hydra experiment that\nresolves to the same cfg `cfg_surge_xt_global(accelerator=\"mps\",\nparam_spec_name=\"surge_4\")` builds in `tests/conftest.py`. Inherits from\n`surge/base` and overrides `/trainer: mps`, `/callbacks: [default_surge,\neval_surge]` so the fixture's open_dict bake-ins (precision=32-true,\ndeterministic, max_steps=1, batch_size=1, lr_monitor null, etc.) are\nexpressed declaratively.\n\nTo pin the equality contract:\n\n- Extracts `_build_surge_xt_smoke_cfg(accelerator, param_spec_name)` from\n  the existing `cfg_surge_xt_global` fixture so the cfg can be built on\n  any host (the fixture's accelerator gate hardfails non-MPS runners\n  before composing). The fixture is now a thin wrapper.\n- Switches the lr_monitor cleanup from `del` to `= None`. `instantiate_callbacks`\n  skips entries without `_target_`, so runtime behavior is unchanged, and\n  the cfg now matches what `lr_monitor: null` produces on the YAML side.\n- Adds `test_test_mps_yaml_matches_cfg_surge_xt_global` in\n  `tests/test_configs.py`: composes both sides with `resolve=False`,\n  strips volatile top-level keys (`paths`, `hydra`, `task_name`), and\n  asserts deep equality with a human-readable diff on failure.\n\nFuture drift in either the fixture or test-mps.yaml fails fast.\n\n* internal-fix(vst): reformat param_specs/preset_paths dicts and annotate\n\nAddresses Copilot review comments #3192020841 and #3202813835 on PR #820:\n- Multi-line ``param_specs`` dict so ``ruff format`` (line-length 99)\n  stops complaining about the 119-char single-line literal.\n- Type-annotates both registries (``dict[str, ParamSpec]`` and\n  ``dict[str, str]``) so attribute access is type-checked at the call\n  sites and the ``preset_paths`` keys can't drift out of sync with\n  ``param_specs`` without lint surfacing it.\n\nThe third inline comment (#3192020859 — \"comment claims SURGE_4 is used\nby predict_vst_audio test, but the test uses defaults\") was already\nresolved by 2331be5, which plumbs ``--param_spec=surge_4\n--preset_path=presets/surge-mini.vstpreset`` through to the test's\n``predict_vst_audio.py`` invocation. No code change needed there.\n\n* test(surge): pin test_cfg_surge_xt_global_wires_param_spec to cpu\n\nConda CI runs ``pytest -m \"not slow\"`` which includes the (un-slow)\n``test_cfg_surge_xt_global_wires_param_spec`` test. The previous version\nwent through the ``cfg_surge_xt_global`` fixture, which depends on the\nparametrized ``accelerator`` fixture — and that fixture hardfails the\n``[mps-*]`` and ``[gpu-*]`` parametrizations on Linux runners with\n\"MPS not available\" / \"CUDA not available\", failing the conda job.\n\nThe cfg-shape contract this test asserts is accelerator-independent\n(``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``\nare set by ``_build_surge_xt_smoke_cfg`` regardless of the ``accelerator``\nargument). Call the builder directly with ``accelerator=\"cpu\"`` and drop\nthe indirect parametrization so only the three param_spec cases run on\nevery CI runner.\n\n* fix(test): loosen SILENCE_PEAK_THRESHOLD in surge train+eval e2e\n\nLowers the ``SILENCE_PEAK_THRESHOLD`` from 1e-4 (~-80 dBFS) to 1e-6\n(~-120 dBFS) in ``test_train_eval_surge_xt``. The previous threshold was\nchosen with the rationale that ``compute_rms`` underflows below 1e-4, but\nthat's not actually true: ``compute_rms``'s NaN risk is the cosine-similarity\ndenominator collapsing to 0, which only happens on bit-zero audio.\n\nSymptom: MPS CI on ``faf2be1`` (and ``5b168b8``) failed with\n``sample_0/pred.wav is silent (peak=3.05e-05)`` even though peak\n3.05e-5 → ~-90 dBFS would not actually underflow downstream metric math.\nThe 1-step-trained smoke model's predicted params, rendered through\nSurge XT, can land in a quiet (but non-silent) region of param space — and\nthe dataset generator runs without a fixed seed, so the trained model and\nits predictions vary run-to-run.\n\nLoosening to 1e-6 keeps the original guard against truly silent (bit-zero)\naudio while letting the legitimate \"trained for one step on a randomly-sampled\n5-clip fixture\" prediction through. The downstream\n``np.isfinite(numeric).all()`` assertion on the metrics CSV remains the\nreal correctness check; the silence threshold is just an early-warning\nfast-fail.",
+          "timestamp": "2026-05-07T21:19:07Z",
+          "tree_id": "7231f8ac0b6c4223343729093421e1d7bccfbb81",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f32d49d889d4a80a63521c486272667a630d9a1f"
+        },
+        "date": 1778189387792,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.292647123336792,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.057547753052786,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.018409153446555138,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.006813645362854004,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.1730427742004395,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 10.66544505516667,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.723017692565918,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.279242483135313,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02462758868932724,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.02509409189224243,
             "unit": "1-cos"
           },
           {
