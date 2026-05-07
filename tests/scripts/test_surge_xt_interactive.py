@@ -686,7 +686,7 @@ def _write_wav(path: Path, *, silent: bool, sample_rate: int = 44100) -> None:
         t = np.linspace(0, duration_seconds, num_frames, endpoint=False)
         samples = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)[:, None]
     with AudioFile(str(path), "w", samplerate=sample_rate, num_channels=1) as f:
-        f.write(samples)
+        f.write(samples.T)
 
 
 def _populate_audio_dir(audio_dir: Path, num_samples: int, *, silent: bool = False) -> None:
