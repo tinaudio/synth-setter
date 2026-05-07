@@ -75,6 +75,15 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
     "WORKER_GIT_REF",
 )
 
+# rclone needs `type` + `provider` to construct the `r2:` remote, but those
+# values are constants for Cloudflare R2 — not secrets — so default them
+# rather than burdening every workflow / .env with two extra lines. An
+# explicit override (env or .env) wins.
+_R2_RCLONE_CONSTANTS: dict[str, str] = {
+    "RCLONE_CONFIG_R2_TYPE": "s3",
+    "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+}
+
 _CRED_BOOTSTRAP_SCRIPT = (
     Path(__file__).resolve().parent.parent.parent / "scripts" / "skypilot_write_provider_creds.sh"
 )
@@ -124,6 +133,9 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
         elif key in os.environ:
             resolved[key] = os.environ[key]
 
+    for key, default in _R2_RCLONE_CONSTANTS.items():
+        resolved.setdefault(key, default)
+
     git_ref = resolved.get("WORKER_GIT_REF", "")
     if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
         raise click.ClickException(
@@ -151,6 +163,11 @@ def _detect_provider(template_path: Path) -> str:
     """
     with template_path.open(encoding="utf-8") as f:
         doc = yaml.safe_load(f)
+    if not isinstance(doc, dict):
+        raise click.ClickException(
+            f"Could not detect cloud from {template_path}; "
+            "expected a YAML mapping with a `resources` key, got empty/non-mapping content."
+        )
     resources = doc.get("resources") or {}
     cloud_value = resources.get("cloud")
     if cloud_value is None:
@@ -358,11 +375,14 @@ def main(
         )
 
     worker_env = resolve_worker_env(env_file_path)
-    if not worker_env:
+    # `_R2_RCLONE_CONSTANTS` defaults TYPE/PROVIDER, so an "empty" worker_env still has those.
+    # Check the actual secret keys to detect the unconfigured-creds case.
+    secret_keys = tuple(k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS)
+    if not any(k in worker_env for k in secret_keys):
         raise click.ClickException(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
             f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate {env_file_path}. "
-            f"Expected at least one of: {', '.join(_WORKER_ENV_KEYS)}."
+            f"Expected at least one of: {', '.join(secret_keys)}."
         )
 
     # `upload_spec_to_r2` shells out to rclone, which inherits os.environ. For

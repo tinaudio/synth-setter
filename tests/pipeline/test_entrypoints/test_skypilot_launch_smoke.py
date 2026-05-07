@@ -278,6 +278,35 @@ class TestResolveWorkerEnvGitRefValidation:
             resolve_worker_env(None)
 
 
+class TestResolveWorkerEnvR2RemoteConstants:
+    """`RCLONE_CONFIG_R2_TYPE=s3` and `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` are constants (not
+    secrets) that rclone needs to construct the `r2:` remote.
+
+    The launcher defaults
+    them so workflows and `.env` files don't have to repeat them, while still allowing
+    override for non-Cloudflare R2-compatible setups (e.g. self-hosted MinIO test rigs).
+    """
+
+    def test_type_and_provider_default_when_unset(self) -> None:
+        """Without TYPE/PROVIDER in env or .env, the launcher fills the rclone constants."""
+        resolved = resolve_worker_env(None)
+        assert resolved["RCLONE_CONFIG_R2_TYPE"] == "s3"
+        assert resolved["RCLONE_CONFIG_R2_PROVIDER"] == "Cloudflare"
+
+    def test_type_override_from_env_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An explicit override via process env is preserved (not clobbered by the default)."""
+        monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "s3-other")
+        resolved = resolve_worker_env(None)
+        assert resolved["RCLONE_CONFIG_R2_TYPE"] == "s3-other"
+
+    def test_provider_override_from_env_file_wins(self, tmp_path: Path) -> None:
+        """An explicit override via `.env` is preserved (not clobbered by the default)."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("RCLONE_CONFIG_R2_PROVIDER=Other\n")
+        resolved = resolve_worker_env(env_file)
+        assert resolved["RCLONE_CONFIG_R2_PROVIDER"] == "Other"
+
+
 # ---------------------------------------------------------------------------
 # main — CLI integration with mocked sky
 # ---------------------------------------------------------------------------
@@ -1243,6 +1272,14 @@ class TestDetectProvider:
         """A template with no detectable `cloud` field raises a launcher misuse error."""
         path = tmp_path / "no-cloud.yaml"
         path.write_text(yaml.dump({"resources": {"cpus": "2+"}}))
+        with pytest.raises(click.ClickException, match="(?i)could not detect cloud"):
+            _real_detect_provider(path)
+
+    def test_empty_yaml_raises_click_exception(self, tmp_path: Path) -> None:
+        """An empty template file makes `yaml.safe_load` return `None`; surface that as a clean
+        ClickException instead of bubbling AttributeError from `doc.get(...)`."""
+        path = tmp_path / "empty.yaml"
+        path.write_text("")
         with pytest.raises(click.ClickException, match="(?i)could not detect cloud"):
             _real_detect_provider(path)
 

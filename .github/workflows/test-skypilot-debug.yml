@@ -263,7 +263,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
-            bash scripts/skypilot_write_provider_creds.sh
+            bash scripts/skypilot_write_provider_creds.sh --provider "${PROVIDER}"
           else
             echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
           fi
@@ -285,9 +285,9 @@ jobs:
               {
                   "RCLONE_CONFIG_R2_TYPE": "s3",
                   "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-                  "RCLONE_CONFIG_R2_ACCESS_KEY_ID": os.environ["R2_ACCESS_KEY_ID"],
-                  "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": os.environ["R2_SECRET_ACCESS_KEY"],
-                  "RCLONE_CONFIG_R2_ENDPOINT": os.environ["R2_ENDPOINT"],
+                  "RCLONE_CONFIG_R2_ACCESS_KEY_ID": os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
+                  "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": os.environ["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
+                  "RCLONE_CONFIG_R2_ENDPOINT": os.environ["RCLONE_CONFIG_R2_ENDPOINT"],
                   "R2_BUCKET": os.environ["R2_BUCKET"],
                   "R2_DEBUG_PREFIX": f"data/skypilot-debug/{cluster}/",
               }
@@ -356,9 +356,9 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
       # Launcher invokes the cred-bootstrap script itself (capturing stdout
-      # via subprocess.run) and bridges RCLONE_CONFIG_R2_* into os.environ
-      # from the bare R2_* secrets via _apply_bare_r2_fallback. No manual
-      # rclone-prefix exports needed here.
+      # via subprocess.run) and bridges RCLONE_CONFIG_R2_* from worker_env
+      # into os.environ before invoking rclone. No manual rclone-prefix
+      # exports needed here.
       - name: Run launcher (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
         env:

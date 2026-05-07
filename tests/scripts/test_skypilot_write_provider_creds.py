@@ -187,6 +187,17 @@ class TestIdempotency:
         _run(tmp_path, {**R2_ENV, **RUNPOD_ENV}, "--provider", "runpod", "--force")
         assert "[r2]" in creds.read_text()
 
+    def test_skip_path_tightens_loose_permissions(self, tmp_path: Path) -> None:
+        """A pre-existing cred file with mode 0644 should be tightened to 0600 even when its
+        contents are preserved (no-leak posture: never leave creds world-readable)."""
+        creds = tmp_path / ".cloudflare" / "r2.credentials"
+        creds.parent.mkdir(parents=True)
+        creds.write_text("HAND_MANAGED\n")
+        creds.chmod(0o644)
+        _run(tmp_path, {**R2_ENV, **RUNPOD_ENV}, "--provider", "runpod")
+        assert creds.read_text() == "HAND_MANAGED\n"
+        assert _file_mode(creds) == 0o600
+
 
 # ---------------------------------------------------------------------------
 # Provider gating

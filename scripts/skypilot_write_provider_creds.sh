@@ -95,6 +95,15 @@ should_skip_existing() {
   [[ "${FORCE}" -eq 0 && -s "${path}" ]]
 }
 
+# Emit the standard skip-notice and tighten the existing file's mode to 0600.
+# Called from each skip branch so a hand-managed cred file with loose perms
+# (e.g. 0644) doesn't stay world-readable just because we kept its content.
+notice_skip_existing() {
+  local path="$1"
+  echo "::notice::skipping existing ${path} (pass --force to overwrite)" >&2
+  chmod 600 "${path}"
+}
+
 write_r2_creds() {
   local access_key secret_key endpoint account_id
   access_key="$(resolve_var RCLONE_CONFIG_R2_ACCESS_KEY_ID)"
@@ -105,7 +114,7 @@ write_r2_creds() {
 
   local creds="$HOME/.cloudflare/r2.credentials"
   if should_skip_existing "${creds}"; then
-    echo "::notice::skipping existing ${creds} (pass --force to overwrite)" >&2
+    notice_skip_existing "${creds}"
   else
     mkdir -p "$HOME/.cloudflare"
     printf '[r2]\naws_access_key_id = %s\naws_secret_access_key = %s\n' \
@@ -116,7 +125,7 @@ write_r2_creds() {
 
   local accountid="$HOME/.cloudflare/accountid"
   if should_skip_existing "${accountid}"; then
-    echo "::notice::skipping existing ${accountid} (pass --force to overwrite)" >&2
+    notice_skip_existing "${accountid}"
   else
     mkdir -p "$HOME/.cloudflare"
     printf '%s\n' "${account_id}" > "${accountid}"
@@ -129,7 +138,7 @@ write_runpod_creds() {
   api_key="$(resolve_var RUNPOD_API_KEY)"
   local config="$HOME/.runpod/config.toml"
   if should_skip_existing "${config}"; then
-    echo "::notice::skipping existing ${config} (pass --force to overwrite)" >&2
+    notice_skip_existing "${config}"
     return 0
   fi
   mkdir -p "$HOME/.runpod"
@@ -153,14 +162,14 @@ write_oci_creds() {
   mkdir -p "$HOME/.oci" "$HOME/.sky"
 
   if should_skip_existing "${oci_key}"; then
-    echo "::notice::skipping existing ${oci_key} (pass --force to overwrite)" >&2
+    notice_skip_existing "${oci_key}"
   else
     printf '%s\n' "${api_key_pem}" > "${oci_key}"
     chmod 600 "${oci_key}"
   fi
 
   if should_skip_existing "${oci_config}"; then
-    echo "::notice::skipping existing ${oci_config} (pass --force to overwrite)" >&2
+    notice_skip_existing "${oci_config}"
   else
     printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s/.oci/oci_api_key.pem\n' \
       "${user_ocid}" "${fingerprint}" "${tenancy_ocid}" "${region}" "$HOME" \
@@ -169,7 +178,7 @@ write_oci_creds() {
   fi
 
   if should_skip_existing "${sky_config}"; then
-    echo "::notice::skipping existing ${sky_config} (pass --force to overwrite)" >&2
+    notice_skip_existing "${sky_config}"
   else
     printf 'oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n' \
       "${compartment_ocid}" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}" \
