@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 import h5py
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from pedalboard.io import AudioFile
@@ -371,3 +372,233 @@ class TestPlayAudioRecorded:
         assert note_on_bytes[1] == surge_xt_interactive.SESSION_RECORDING_MIDI_NOTE
         assert note_off_bytes[1] == surge_xt_interactive.SESSION_RECORDING_MIDI_NOTE
         assert note_on_bytes[2] == surge_xt_interactive.SESSION_RECORDING_VELOCITY
+
+
+def _write_pred_files(
+    output_dir: Path,
+    num_samples: int,
+    *,
+    pred_tensor_factory=None,
+) -> None:
+    """Write the per-sample ``pred-{i}.pt`` / ``target-audio-{i}.pt`` / ``target-params-{i}.pt``
+    files ``PredictionWriter`` would emit, populated with finite tensors by default.
+
+    ``pred_tensor_factory`` lets a test override the ``pred-{i}.pt`` payload (e.g. to inject
+    NaN/Inf); the target tensors are always finite stubs.
+    """
+
+    def _default_factory(_idx: int) -> torch.Tensor:
+        return torch.zeros((1, 4), dtype=torch.float32)
+
+    factory = pred_tensor_factory if pred_tensor_factory is not None else _default_factory
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(num_samples):
+        torch.save(factory(i), output_dir / f"pred-{i}.pt")
+        torch.save(torch.zeros(1, dtype=torch.float32), output_dir / f"target-audio-{i}.pt")
+        torch.save(torch.zeros(1, dtype=torch.float32), output_dir / f"target-params-{i}.pt")
+
+
+class TestExpectedPredictionFilenames:
+    """``_expected_prediction_filenames`` enumerates ``PredictionWriter``'s output names."""
+
+    def test_returns_three_names_per_sample(self, surge_xt_interactive) -> None:
+        """For ``num_samples`` samples, three sorted filenames per sample are returned."""
+        names = surge_xt_interactive._expected_prediction_filenames(num_samples=2)
+
+        assert names == sorted(
+            [
+                "pred-0.pt",
+                "pred-1.pt",
+                "target-audio-0.pt",
+                "target-audio-1.pt",
+                "target-params-0.pt",
+                "target-params-1.pt",
+            ]
+        )
+
+    def test_zero_samples_returns_empty(self, surge_xt_interactive) -> None:
+        """Zero samples returns an empty list."""
+        assert surge_xt_interactive._expected_prediction_filenames(num_samples=0) == []
+
+
+class TestValidatePredictions:
+    """``_validate_predictions`` checks expected files exist and tensors are finite."""
+
+    def test_passes_on_complete_finite_outputs(self, surge_xt_interactive, tmp_path: Path) -> None:
+        """Happy path: complete file set with finite predictions does not raise."""
+        _write_pred_files(tmp_path, num_samples=2)
+
+        surge_xt_interactive._validate_predictions(tmp_path, num_samples=2)
+
+    def test_missing_file_raises_filenotfounderror(
+        self, surge_xt_interactive, tmp_path: Path
+    ) -> None:
+        """A missing per-sample file raises ``FileNotFoundError`` listing the missing entry."""
+        _write_pred_files(tmp_path, num_samples=2)
+        (tmp_path / "pred-1.pt").unlink()
+
+        with pytest.raises(FileNotFoundError, match="pred-1.pt"):
+            surge_xt_interactive._validate_predictions(tmp_path, num_samples=2)
+
+    def test_extra_file_raises_filenotfounderror(
+        self, surge_xt_interactive, tmp_path: Path
+    ) -> None:
+        """An unexpected file in the directory raises ``FileNotFoundError`` (set mismatch)."""
+        _write_pred_files(tmp_path, num_samples=1)
+        torch.save(torch.zeros(1), tmp_path / "stray-extra.pt")
+
+        with pytest.raises(FileNotFoundError, match="stray-extra.pt"):
+            surge_xt_interactive._validate_predictions(tmp_path, num_samples=1)
+
+    def test_nan_prediction_raises_valueerror(self, surge_xt_interactive, tmp_path: Path) -> None:
+        """A NaN value in any ``pred-{i}.pt`` raises ``ValueError`` naming the offending file."""
+
+        def factory(idx: int) -> torch.Tensor:
+            if idx == 0:
+                return torch.tensor([[float("nan")]], dtype=torch.float32)
+            return torch.zeros((1, 1), dtype=torch.float32)
+
+        _write_pred_files(tmp_path, num_samples=2, pred_tensor_factory=factory)
+
+        with pytest.raises(ValueError, match="pred-0.pt"):
+            surge_xt_interactive._validate_predictions(tmp_path, num_samples=2)
+
+
+class TestValidateMetricsDf:
+    """``_validate_metrics_df`` validates row count, expected columns, and finiteness."""
+
+    def test_passes_on_matching_shape_and_finite(self, surge_xt_interactive) -> None:
+        """Happy path: matching rows, expected columns, all-finite values does not raise."""
+        df = pd.DataFrame({"mss": [0.1, 0.2], "extra": [1.0, 2.0]})
+        spec = surge_xt_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
+
+        surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+
+    def test_wrong_rows_raises_valueerror(self, surge_xt_interactive) -> None:
+        """Row count mismatch raises ``ValueError`` mentioning expected and actual."""
+        df = pd.DataFrame({"mss": [0.1]})
+        spec = surge_xt_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
+
+        with pytest.raises(ValueError, match="expected 2 rows"):
+            surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+
+    def test_missing_column_raises_valueerror(self, surge_xt_interactive) -> None:
+        """A missing expected column raises ``ValueError`` listing the missing column."""
+        df = pd.DataFrame({"other": [0.1, 0.2]})
+        spec = surge_xt_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
+
+        with pytest.raises(ValueError, match="missing expected columns"):
+            surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+
+    def test_nan_in_expected_column_raises_valueerror(self, surge_xt_interactive) -> None:
+        """A NaN in any expected column raises ``ValueError`` (NaN/Inf message)."""
+        df = pd.DataFrame({"mss": [0.1, float("nan")]})
+        spec = surge_xt_interactive._MetricsFileSpec(rows=2, columns=frozenset({"mss"}))
+
+        with pytest.raises(ValueError, match="NaN/Inf"):
+            surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+
+
+class TestMaybeEvalCapturedPatches:
+    """``_maybe_eval_captured_patches`` wires up the train.h5 -> sibling replication."""
+
+    def test_no_checkpoint_skips_replication_and_eval(
+        self, surge_xt_interactive, tmp_path: Path
+    ) -> None:
+        """Without ``--checkpoint-path``, no sibling files are created and eval_patches is not
+        invoked."""
+        train_path = tmp_path / "train.h5"
+        train_path.write_bytes(b"stub")
+
+        surge_xt_interactive._maybe_eval_captured_patches(
+            patch_file_path=train_path,
+            output_dataset_dir_path=tmp_path,
+            num_patches=1,
+            checkpoint_path=None,
+        )
+
+        for sibling in ("test.h5", "val.h5", "predict.h5"):
+            assert not (tmp_path / sibling).exists()
+
+    def test_replicates_train_h5_to_three_siblings(
+        self,
+        surge_xt_interactive,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When ``--checkpoint-path`` is given, ``train.h5`` is copied to test/val/predict.h5."""
+        train_path = tmp_path / "train.h5"
+        train_path.write_bytes(b"train-content")
+        ckpt_path = tmp_path / "model.ckpt"
+        ckpt_path.write_bytes(b"ckpt")
+
+        called_with: dict = {}
+
+        def fake_eval_patches(
+            num_samples: int, dataset_root_dir: Path, checkpoint_path: Path
+        ) -> None:
+            called_with["num_samples"] = num_samples
+            called_with["dataset_root_dir"] = dataset_root_dir
+            called_with["checkpoint_path"] = checkpoint_path
+
+        monkeypatch.setattr(surge_xt_interactive, "eval_patches", fake_eval_patches)
+
+        surge_xt_interactive._maybe_eval_captured_patches(
+            patch_file_path=train_path,
+            output_dataset_dir_path=tmp_path,
+            num_patches=3,
+            checkpoint_path=ckpt_path,
+        )
+
+        for sibling in ("test.h5", "val.h5", "predict.h5"):
+            assert (tmp_path / sibling).read_bytes() == b"train-content"
+        assert called_with == {
+            "num_samples": 3,
+            "dataset_root_dir": tmp_path,
+            "checkpoint_path": ckpt_path,
+        }
+
+    def test_failed_copy_rolls_back_partial_siblings(
+        self,
+        surge_xt_interactive,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If a later ``shutil.copyfile`` fails, earlier siblings are removed and eval_patches is
+        not invoked."""
+        train_path = tmp_path / "train.h5"
+        train_path.write_bytes(b"train-content")
+        ckpt_path = tmp_path / "model.ckpt"
+        ckpt_path.write_bytes(b"ckpt")
+
+        original_copyfile = surge_xt_interactive.shutil.copyfile
+        call_count = {"n": 0}
+
+        def flaky_copyfile(src: Path, dst: Path) -> None:
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                raise OSError("disk full")
+            original_copyfile(src, dst)
+
+        monkeypatch.setattr(surge_xt_interactive.shutil, "copyfile", flaky_copyfile)
+
+        eval_called = {"n": 0}
+
+        def fake_eval_patches(*_args, **_kwargs) -> None:
+            eval_called["n"] += 1
+
+        monkeypatch.setattr(surge_xt_interactive, "eval_patches", fake_eval_patches)
+
+        with pytest.raises(OSError, match="disk full"):
+            surge_xt_interactive._maybe_eval_captured_patches(
+                patch_file_path=train_path,
+                output_dataset_dir_path=tmp_path,
+                num_patches=1,
+                checkpoint_path=ckpt_path,
+            )
+
+        # First sibling was copied, second failed; rollback removes the first.
+        assert not (tmp_path / "test.h5").exists()
+        assert not (tmp_path / "val.h5").exists()
+        assert not (tmp_path / "predict.h5").exists()
+        assert eval_called["n"] == 0
