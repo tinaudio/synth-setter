@@ -26,13 +26,6 @@ name: Check Auth
 
 on:
   workflow_dispatch:
-  # TEMP: pull_request trigger added to prove the workflow passes on PR #832.
-  # Drop this trigger once we have a green run; the steady-state cadence is
-  # workflow_dispatch + the weekly cron below.
-  pull_request:
-    paths:
-      - ".github/workflows/check-auth.yml"
-      - "scripts/skypilot_write_provider_creds.sh"
   schedule:
     # Mondays 06:00 UTC — early enough in the week to rotate before a Tuesday
     # smoke dispatch if a credential silently expired over the weekend.
