@@ -981,6 +981,31 @@ class TestValidateMetricsDf:
             surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
 
+class _RecordingEvalRunner:
+    """Test fake matching the ``EvalRunner`` shape from ``surge_xt_interactive``.
+
+    Records the positional args from each invocation and the call count so tests can assert
+    on real state instead of patching the module-level ``eval_patches`` symbol. Reused
+    across ``TestMaybeEvalCapturedPatches`` whenever a test needs to observe whether (and
+    with what arguments) eval was invoked.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, Path, Path, str, str]] = []
+
+    def __call__(
+        self,
+        num_samples: int,
+        dataset_root_dir: Path,
+        checkpoint_path: Path,
+        param_spec_name: str,
+        preset_path: str,
+    ) -> None:
+        self.calls.append(
+            (num_samples, dataset_root_dir, checkpoint_path, param_spec_name, preset_path)
+        )
+
+
 class TestMaybeEvalCapturedPatches:
     """``_maybe_eval_captured_patches`` wires up the train.h5 -> sibling replication."""
 
@@ -991,6 +1016,7 @@ class TestMaybeEvalCapturedPatches:
         invoked."""
         train_path = tmp_path / "train.h5"
         train_path.write_bytes(b"stub")
+        runner = _RecordingEvalRunner()
 
         surge_xt_interactive._maybe_eval_captured_patches(
             patch_file_path=train_path,
@@ -999,40 +1025,23 @@ class TestMaybeEvalCapturedPatches:
             checkpoint_path=None,
             param_spec_name=SURGE_SIMPLE,
             preset_path="presets/surge-base.vstpreset",
+            eval_runner=runner,
         )
 
         for sibling in ("test.h5", "val.h5", "predict.h5"):
             assert not (tmp_path / sibling).exists()
+        assert runner.calls == []
 
     def test_replicates_train_h5_to_three_siblings(
-        self,
-        surge_xt_interactive,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+        self, surge_xt_interactive, tmp_path: Path
     ) -> None:
         """When ``--checkpoint-path`` is given, ``train.h5`` is copied to test/val/predict.h5 and
-        ``param_spec_name`` / ``preset_path`` are forwarded verbatim to ``eval_patches``."""
+        ``param_spec_name`` / ``preset_path`` are forwarded verbatim to the eval runner."""
         train_path = tmp_path / "train.h5"
         train_path.write_bytes(b"train-content")
         ckpt_path = tmp_path / "model.ckpt"
         ckpt_path.write_bytes(b"ckpt")
-
-        called_with: dict = {}
-
-        def fake_eval_patches(
-            num_samples: int,
-            dataset_root_dir: Path,
-            checkpoint_path: Path,
-            param_spec_name: str,
-            preset_path: str,
-        ) -> None:
-            called_with["num_samples"] = num_samples
-            called_with["dataset_root_dir"] = dataset_root_dir
-            called_with["checkpoint_path"] = checkpoint_path
-            called_with["param_spec_name"] = param_spec_name
-            called_with["preset_path"] = preset_path
-
-        monkeypatch.setattr(surge_xt_interactive, "eval_patches", fake_eval_patches)
+        runner = _RecordingEvalRunner()
 
         surge_xt_interactive._maybe_eval_captured_patches(
             patch_file_path=train_path,
@@ -1041,50 +1050,37 @@ class TestMaybeEvalCapturedPatches:
             checkpoint_path=ckpt_path,
             param_spec_name=SURGE_SIMPLE,
             preset_path="presets/surge-simple.vstpreset",
+            eval_runner=runner,
         )
 
         for sibling in ("test.h5", "val.h5", "predict.h5"):
             assert (tmp_path / sibling).read_bytes() == b"train-content"
-        assert called_with == {
-            "num_samples": 3,
-            "dataset_root_dir": tmp_path,
-            "checkpoint_path": ckpt_path,
-            "param_spec_name": SURGE_SIMPLE,
-            "preset_path": "presets/surge-simple.vstpreset",
-        }
+        assert runner.calls == [
+            (3, tmp_path, ckpt_path, SURGE_SIMPLE, "presets/surge-simple.vstpreset")
+        ]
 
     def test_failed_copy_rolls_back_partial_siblings(
-        self,
-        surge_xt_interactive,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+        self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """If a later ``shutil.copyfile`` fails, earlier siblings are removed and eval_patches is
-        not invoked."""
+        """If a later ``shutil.copyfile`` raises ``OSError``, earlier siblings are removed and
+        eval_runner is not invoked.
+
+        Failure is triggered by a *real* OS error: ``val.h5`` is pre-created as a directory, so
+        the second copy fails. The exact subclass varies by platform (``IsADirectoryError`` on
+        POSIX, ``PermissionError`` on Windows); asserting on ``OSError`` matches the SUT's
+        ``except OSError:`` contract.
+        """
         train_path = tmp_path / "train.h5"
         train_path.write_bytes(b"train-content")
         ckpt_path = tmp_path / "model.ckpt"
         ckpt_path.write_bytes(b"ckpt")
+        # Block the second sibling write with a real directory at its path. Order matches
+        # ``_maybe_eval_captured_patches``: test.h5 → val.h5 → predict.h5.
+        (tmp_path / "val.h5").mkdir()
 
-        original_copyfile = surge_xt_interactive.shutil.copyfile
-        call_count = {"n": 0}
+        runner = _RecordingEvalRunner()
 
-        def flaky_copyfile(src: Path, dst: Path) -> None:
-            call_count["n"] += 1
-            if call_count["n"] == 2:
-                raise OSError("disk full")
-            original_copyfile(src, dst)
-
-        monkeypatch.setattr(surge_xt_interactive.shutil, "copyfile", flaky_copyfile)
-
-        eval_called = {"n": 0}
-
-        def fake_eval_patches(*_args, **_kwargs) -> None:
-            eval_called["n"] += 1
-
-        monkeypatch.setattr(surge_xt_interactive, "eval_patches", fake_eval_patches)
-
-        with pytest.raises(OSError, match="disk full"):
+        with pytest.raises(OSError):
             surge_xt_interactive._maybe_eval_captured_patches(
                 patch_file_path=train_path,
                 output_dataset_dir_path=tmp_path,
@@ -1092,13 +1088,15 @@ class TestMaybeEvalCapturedPatches:
                 checkpoint_path=ckpt_path,
                 param_spec_name=SURGE_SIMPLE,
                 preset_path="presets/surge-base.vstpreset",
+                eval_runner=runner,
             )
 
         # First sibling was copied, second failed; rollback removes the first.
-        assert not (tmp_path / "test.h5").exists()
-        assert not (tmp_path / "val.h5").exists()
+        assert not (tmp_path / "test.h5").exists(), "rollback should remove test.h5"
+        # val.h5 still exists as the pre-created directory, but no file landed there.
+        assert (tmp_path / "val.h5").is_dir()
         assert not (tmp_path / "predict.h5").exists()
-        assert eval_called["n"] == 0
+        assert runner.calls == []
 
 
 def _write_wav(path: Path, *, silent: bool, sample_rate: int = 44100) -> None:
