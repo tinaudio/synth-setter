@@ -770,6 +770,130 @@ class TestValidateNoDrift:
             surge_xt_interactive._validate_no_drift(plugin, spec, defaults)
 
 
+def _build_keyboard_loop_plugin(simple_spec: ParamSpec) -> tuple["_FakePlugin", dict[str, float]]:
+    """Build a ``_FakePlugin`` carrying every ``surge_simple`` synth param + two non-spec params,
+    plus the matching ``default_params`` dict that ``_validate_no_drift`` checks against.
+
+    Returns ``(plugin, default_params)``.
+    """
+    spec_defaults = {name: 0.25 for name in simple_spec.synth_param_names}
+    non_spec_defaults = {"fx_amount": 0.1, "global_volume": 0.7}
+    plugin = _FakePlugin({**spec_defaults, **non_spec_defaults})
+    return plugin, {**spec_defaults, **non_spec_defaults}
+
+
+class TestKeyboardLoop:
+    """``keyboard_loop`` reads keystrokes via the injectable ``keystroke_source`` and snapshots
+    plugin params on ``p`` until ``q``, ``stop_event``, or source exhaustion."""
+
+    def test_p_records_patch_q_quits(self, surge_xt_interactive, simple_spec: ParamSpec) -> None:
+        """``["p", "q"]`` records exactly one patch with every spec synth-param key, then quits."""
+        plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
+        stop_event = threading.Event()
+        keystrokes = iter(["p", "q"])
+
+        patches = surge_xt_interactive.keyboard_loop(
+            plugin,
+            stop_event,
+            SURGE_SIMPLE,
+            default_params,
+            keystroke_source=keystrokes.__next__,
+        )
+
+        assert len(patches) == 1
+        assert set(patches[0]) == set(simple_spec.synth_param_names)
+        for name, value in patches[0].items():
+            assert isinstance(value, float)
+            assert np.isfinite(value), f"{name} = {value} is not finite"
+        assert stop_event.is_set()
+
+    def test_unknown_keys_are_ignored(self, surge_xt_interactive, simple_spec: ParamSpec) -> None:
+        """Keystrokes outside ``{p, q}`` don't record patches, don't set ``stop_event``, and don't
+        raise — the loop simply waits for the next keystroke."""
+        plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
+        stop_event = threading.Event()
+        keystrokes = iter(["x", "p", "z", "q"])
+
+        patches = surge_xt_interactive.keyboard_loop(
+            plugin,
+            stop_event,
+            SURGE_SIMPLE,
+            default_params,
+            keystroke_source=keystrokes.__next__,
+        )
+
+        assert len(patches) == 1, "x and z should be ignored — only p records"
+        assert stop_event.is_set()
+
+    def test_stop_event_set_externally_exits_without_consuming_source(
+        self, surge_xt_interactive, simple_spec: ParamSpec
+    ) -> None:
+        """When ``stop_event`` is already set, the loop returns ``[]`` immediately — the keystroke
+        source is not even polled."""
+        plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
+        stop_event = threading.Event()
+        stop_event.set()
+
+        consumed: list[str] = []
+
+        def watching_source() -> str:
+            consumed.append("polled")
+            return "p"
+
+        patches = surge_xt_interactive.keyboard_loop(
+            plugin,
+            stop_event,
+            SURGE_SIMPLE,
+            default_params,
+            keystroke_source=watching_source,
+        )
+
+        assert patches == []
+        assert consumed == [], "loop must check stop_event before polling the source"
+
+    def test_source_exhaustion_quits_gracefully_and_sets_stop_event(
+        self, surge_xt_interactive, simple_spec: ParamSpec
+    ) -> None:
+        """A ``StopIteration`` from the source (no ``q`` pressed) cleanly returns recorded patches
+        and sets ``stop_event`` so downstream threads notice the exit."""
+        plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
+        stop_event = threading.Event()
+        keystrokes = iter(["p"])  # No q — source will raise StopIteration on the second poll.
+
+        patches = surge_xt_interactive.keyboard_loop(
+            plugin,
+            stop_event,
+            SURGE_SIMPLE,
+            default_params,
+            keystroke_source=keystrokes.__next__,
+        )
+
+        assert len(patches) == 1
+        assert stop_event.is_set()
+
+    def test_drift_during_record_raises_valueerror_and_sets_stop_event(
+        self, surge_xt_interactive, simple_spec: ParamSpec
+    ) -> None:
+        """If a non-spec param has drifted from its default, ``p`` triggers ``_validate_no_drift``
+        which raises ``ValueError``; the loop sets ``stop_event`` and re-raises (so the
+        orchestrator sees the failure instead of silently dropping it)."""
+        plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
+        # Drift the non-spec ``fx_amount`` from its default to trip _validate_no_drift.
+        plugin.parameters["fx_amount"].raw_value = 0.99
+        stop_event = threading.Event()
+        keystrokes = iter(["p"])
+
+        with pytest.raises(ValueError, match="drifted"):
+            surge_xt_interactive.keyboard_loop(
+                plugin,
+                stop_event,
+                SURGE_SIMPLE,
+                default_params,
+                keystroke_source=keystrokes.__next__,
+            )
+        assert stop_event.is_set()
+
+
 def _write_pred_files(
     output_dir: Path,
     num_samples: int,
@@ -1430,3 +1554,52 @@ class TestRenderPredictedAudioE2E:
                 assert peak > surge_xt_interactive.SILENCE_PEAK_THRESHOLD, (
                     f"{sample_dir.name}/{wav_name} is silent (peak={peak:.2e})"
                 )
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+class TestKeyboardLoopE2E:
+    """End-to-end: real Surge XT plugin records a patch via deterministic keystrokes."""
+
+    def test_p_q_against_real_plugin_records_one_patch(
+        self, surge_xt_interactive, simple_spec: ParamSpec
+    ) -> None:
+        """``["p", "q"]`` against the real Surge XT + ``surge-base.vstpreset`` records one
+        patch whose synth-param values are finite floats matching the post-preset-load state.
+        """
+        from src.data.vst.core import load_plugin, load_preset
+
+        plugin_path = "plugins/Surge XT.vst3"
+        preset_path = "presets/surge-base.vstpreset"
+        if not Path(plugin_path).exists():
+            pytest.skip(f"Surge XT plugin not found at {plugin_path}")
+        if not Path(preset_path).exists():
+            pytest.skip(f"Surge XT base preset not found at {preset_path}")
+
+        plugin = load_plugin(plugin_path)
+        load_preset(plugin, preset_path)
+
+        # Snapshot post-preset-load defaults so _validate_no_drift has a known baseline.
+        default_params = {
+            name: plugin.parameters[name].raw_value  # type: ignore[attr-defined]
+            for name in plugin.parameters.keys()  # type: ignore[attr-defined]
+        }
+
+        stop_event = threading.Event()
+        keystrokes = iter(["p", "q"])
+
+        patches = surge_xt_interactive.keyboard_loop(
+            plugin,
+            stop_event,
+            SURGE_SIMPLE,
+            default_params,
+            keystroke_source=keystrokes.__next__,
+        )
+
+        assert len(patches) == 1
+        patch = patches[0]
+        assert set(patch) == set(simple_spec.synth_param_names)
+        for name, value in patch.items():
+            assert isinstance(value, float)
+            assert np.isfinite(value), f"{name} = {value} is not finite"
+        assert stop_event.is_set()

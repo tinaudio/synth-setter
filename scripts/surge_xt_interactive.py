@@ -168,6 +168,11 @@ PortOpener = Callable[[str], AbstractContextManager[MidiPortProtocol]]
 # lazily so test factories never trigger a real-device probe.
 AudioStreamFactory = Callable[[], AbstractContextManager[AudioStreamProtocol]]
 
+# Zero-arg callable returning one character per invocation. Production binds ``click.getchar``
+# at call time (so monkeypatching stays available); tests pass ``iter([...]).__next__`` to
+# drive ``keyboard_loop`` deterministically without spawning a TTY.
+KeystrokeSource = Callable[[], str]
+
 
 def _default_audio_stream_factory() -> AbstractContextManager[AudioStreamProtocol]:
     """Build the production ``AudioStream`` used by ``play_audio``.
@@ -580,6 +585,8 @@ def keyboard_loop(
     stop_event: threading.Event,
     param_spec_name: str,
     default_params: dict[str, float],
+    *,
+    keystroke_source: KeystrokeSource | None = None,
 ) -> list[dict[str, float]]:
     """Read keystrokes and snapshot the live plugin params into a list of patches.
 
@@ -593,9 +600,15 @@ def keyboard_loop(
 
     Also exits when ``stop_event`` is set externally (e.g. when the plugin editor is
     closed). Returns the list of recorded patches.
+
+    :param keystroke_source: Zero-arg callable returning one character per invocation;
+        ``None`` defaults to ``click.getchar``. Tests pass ``iter([...]).__next__`` to
+        drive the loop deterministically. ``StopIteration`` raised by the source is
+        treated as quit (sets ``stop_event`` and returns).
     """
     spec = param_specs[param_spec_name]
     synth_patches: list[dict[str, float]] = []
+    read_char = keystroke_source if keystroke_source is not None else click.getchar
 
     def quit_action() -> bool:
         stop_event.set()
@@ -624,7 +637,11 @@ def keyboard_loop(
     # the typical editor-close-then-press-q flow; a sentinel-key approach would
     # be needed for fully event-driven shutdown.
     while not stop_event.is_set():
-        ch = click.getchar()
+        try:
+            ch = read_char()
+        except StopIteration:
+            stop_event.set()
+            return synth_patches
         action = actions.get(ch)
         if action is None:
             continue
