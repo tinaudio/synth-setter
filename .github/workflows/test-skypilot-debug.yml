@@ -254,6 +254,7 @@ jobs:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: intermediate-data
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
           DEADLINE: ${{ env.JOB_DEADLINE_SECONDS }}

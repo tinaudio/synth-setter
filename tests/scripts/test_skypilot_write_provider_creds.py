@@ -251,6 +251,14 @@ class TestProviderGating:
         result = _run(tmp_path, R2_ENV, expect_success=False)
         assert result.returncode != 0
 
+    def test_provider_flag_without_value_fails_cleanly(self, tmp_path: Path) -> None:
+        """`--provider` as the trailing arg (no value) fails with a clear error rather than a bash
+        `shift` failure under `set -e`."""
+        result = _run(tmp_path, R2_ENV, "--provider", expect_success=False)
+        assert result.returncode != 0
+        assert "--provider" in result.stderr
+        assert "value" in result.stderr.lower() or "required" in result.stderr.lower()
+
 
 # ---------------------------------------------------------------------------
 # Required-var validation

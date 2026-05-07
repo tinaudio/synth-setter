@@ -19,17 +19,20 @@
 #
 # Idempotency: if a target file already exists with non-empty content the
 # bootstrap leaves it alone — local-dev operators who hand-manage cred files
-# must not be silently clobbered. Pass --force to overwrite.
+# must not be silently clobbered. Pass --force to overwrite. (Mode is still
+# tightened to 0600 on the skip path so a hand-managed loose-perms file
+# doesn't stay world-readable.)
 #
-# R2 env-var resolution: each `R2_*` is read from env, falling back to its
-# rclone-prefixed equivalent (`RCLONE_CONFIG_R2_*`) so a `.env` carrying only
-# the rclone-prefixed names (per `.env.example`) still bootstraps cleanly.
-# `R2_ACCOUNT_ID` has no rclone-prefixed alias — it must be set by name.
+# R2 env-var resolution: callers must supply the rclone-prefixed names
+# (`RCLONE_CONFIG_R2_*`), matching `.env.example` and the GitHub Actions
+# secrets table. `R2_ACCOUNT_ID` has no rclone-prefixed alias — it must be
+# set by that name (it's written to ~/.cloudflare/accountid for SkyPilot's
+# R2 storage adaptor).
 #
-# Required env (fallbacks shown):
-#   R2_ACCESS_KEY_ID       (or RCLONE_CONFIG_R2_ACCESS_KEY_ID)
-#   R2_SECRET_ACCESS_KEY   (or RCLONE_CONFIG_R2_SECRET_ACCESS_KEY)
-#   R2_ENDPOINT            (or RCLONE_CONFIG_R2_ENDPOINT)
+# Required env:
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID
+#   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY
+#   RCLONE_CONFIG_R2_ENDPOINT
 #   R2_ACCOUNT_ID
 # Provider-specific required env: see write_runpod_creds / write_oci_creds.
 set -euo pipefail
@@ -52,7 +55,12 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --provider)
-        PROVIDER="${2:-}"
+        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+          echo "::error::--provider requires a value (runpod | oci | local)" >&2
+          usage
+          exit 1
+        fi
+        PROVIDER="$2"
         shift 2
         ;;
       --provider=*)

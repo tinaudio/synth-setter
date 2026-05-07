@@ -26,6 +26,7 @@ ______________________________________________________________________
 | `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
 | `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
 | `RCLONE_CONFIG_R2_ENDPOINT`          | Pipeline workers, rclone (runtime env var)        | GitHub Secrets, `.env`     |
+| `R2_ACCOUNT_ID`                      | SkyPilot launcher cred-bootstrap (runtime)        | GitHub Secrets, `.env`     |
 | `WANDB_API_KEY`                      | Training, evaluation, promotion (runtime env var) | GitHub Secrets, `.env`     |
 | `GITHUB_TOKEN`                       | CI workflows (automatic)                          | Automatic per workflow run |
 | `RUNPOD_API_KEY`                     | Pipeline orchestration                            | GitHub Secrets, `.env`     |
@@ -86,6 +87,44 @@ the account ID in git history.
 
 **Rotation:** Only changes if the Cloudflare account ID changes. Update the
 GitHub Secret and `.env` files if the account is migrated.
+
+______________________________________________________________________
+
+### Cloudflare Account ID (`R2_ACCOUNT_ID`)
+
+**What:** The Cloudflare account ID, written to `~/.cloudflare/accountid`
+by `scripts/skypilot_write_provider_creds.sh` so SkyPilot's R2 storage
+adaptor can address the account once #749 is unblocked. Required by every
+launcher invocation (`skypilot-local`, `runpod`, `oci`). Stored as a secret
+for the same reason as the R2 endpoint — to avoid embedding the account ID
+in git history.
+
+**Where stored:**
+
+- GitHub Secrets: `R2_ACCOUNT_ID`
+- Local `.env` files
+
+**Where to find it:**
+
+1. Log in to the [Cloudflare dashboard](https://dash.cloudflare.com/).
+2. Select the account that owns the `intermediate-data` R2 bucket.
+3. The Account ID is shown on the right rail of any page in the dashboard
+   (also embedded in the R2 S3 endpoint as the subdomain prefix of
+   `*.r2.cloudflarestorage.com`).
+
+**Rotation:** Only changes if the project moves to a different Cloudflare
+account (rare). Update the GitHub Secret and `.env` files if the account is
+migrated. No revocation needed — the account ID is an identifier, not a
+credential, but it is paired with R2 API tokens that DO need rotation.
+
+**Verification:**
+
+```bash
+# Confirm R2_ACCOUNT_ID matches the account that owns the R2 bucket.
+# The value should equal the subdomain prefix of RCLONE_CONFIG_R2_ENDPOINT.
+echo "$R2_ACCOUNT_ID"
+echo "$RCLONE_CONFIG_R2_ENDPOINT"
+```
 
 ______________________________________________________________________
 
@@ -254,6 +293,9 @@ audit):
 - [ ] **Cloudflare R2:** Create new API token, update `RCLONE_CONFIG_R2_ACCESS_KEY_ID`
   and `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` in GitHub Secrets and `.env`,
   revoke old token
+- [ ] **Cloudflare account ID:** Confirm `R2_ACCOUNT_ID` still matches the
+  account that owns the R2 bucket; update GitHub Secrets and `.env` only if
+  the project migrates to a different Cloudflare account
 - [ ] **W&B:** Regenerate API key, update `WANDB_API_KEY` in GitHub Secrets and
   `.env`
 - [ ] **RunPod:** Create new API key, update `RUNPOD_API_KEY` in GitHub Secrets
