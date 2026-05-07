@@ -203,6 +203,26 @@ def _detect_provider(template_path: Path) -> str:
     return provider
 
 
+_SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
+
+
+def _apply_dispatch_mode(api_server: str | None, local: bool) -> None:
+    """Apply the launcher's explicit dispatch-mode selection to ``os.environ``.
+
+    Mutually exclusive — Click validates that, but assert again so a programmatic caller
+    can't bypass. ``--api-server`` exports ``SKYPILOT_API_SERVER_ENDPOINT`` so all
+    subsequent ``sky.*`` calls dispatch to the remote server. ``--local`` clears that env
+    var so an inherited value can't accidentally route remote (the failure mode #841
+    captures). Neither flag passed → leave the env untouched (backward-compat).
+    """
+    if api_server is not None and local:
+        raise click.ClickException("--api-server and --local are mutually exclusive")
+    if api_server is not None:
+        os.environ[_SKYPILOT_API_SERVER_ENV] = api_server
+    elif local:
+        os.environ.pop(_SKYPILOT_API_SERVER_ENV, None)
+
+
 def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> None:
     """Invoke `scripts/skypilot_write_provider_creds.sh` for `provider`.
 
@@ -217,9 +237,9 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
     (when provided) so a local-dev `.env` carrying provider creds bootstraps
     cleanly without manual `export`.
     """
-    if os.environ.get("SKYPILOT_API_SERVER_ENDPOINT"):
+    if os.environ.get(_SKYPILOT_API_SERVER_ENV):
         click.echo(
-            "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider "
+            f"{_SKYPILOT_API_SERVER_ENV} is set; remote API server holds provider "
             "creds, skipping local cred bootstrap",
             err=True,
         )
@@ -369,6 +389,29 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
         "are still torn down in `--no-tail` so SkyPilot state doesn't accumulate orphans."
     ),
 )
+@click.option(
+    "--api-server",
+    "api_server",
+    type=str,
+    default=None,
+    help=(
+        "Dispatch to this remote SkyPilot API server URL. Sets SKYPILOT_API_SERVER_ENDPOINT in "
+        "the launcher's process env so all sky.* calls go to the remote server, and skips the "
+        "local cred bootstrap (the remote server holds provider creds). Mutually exclusive with "
+        "--local. When neither is passed the existing env var (if any) is honored."
+    ),
+)
+@click.option(
+    "--local",
+    "local",
+    is_flag=True,
+    default=False,
+    help=(
+        "Force local SDK dispatch. Clears SKYPILOT_API_SERVER_ENDPOINT from the launcher's "
+        "process env so an inherited value can't accidentally route remote (#841), and runs "
+        "the local cred bootstrap. Mutually exclusive with --api-server."
+    ),
+)
 def main(
     config_path: Path,
     template_path: Path,
@@ -378,8 +421,12 @@ def main(
     num_workers: int,
     worker_image_tag: str,
     tail: bool,
+    api_server: str | None,
+    local: bool,
 ) -> None:
     """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
+    _apply_dispatch_mode(api_server=api_server, local=local)
+
     if num_workers < 1:
         raise click.ClickException(f"--num-workers must be >= 1, got {num_workers}")
 

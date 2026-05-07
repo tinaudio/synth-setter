@@ -277,12 +277,16 @@ jobs:
       # workflow env to os.environ inside main() so upload_spec_to_r2's
       # rclone subprocess sees them.
       #
-      # `SKYPILOT_API_SERVER_ENDPOINT` is intentionally NOT exported here:
-      # the skypilot-local row is meant to exercise the SDK against the
-      # runner-local kind cluster (`sky local up` above), so dispatching to
-      # a remote API server would silently bypass the kind cluster and
-      # schedule pods on whatever Kubernetes context the remote server has
-      # — which won't have the dev-snapshot image kind-loaded into it.
+      # `--local` makes the launcher's local-vs-remote dispatch explicit
+      # (#841): it clears any inherited SKYPILOT_API_SERVER_ENDPOINT before
+      # any sky.* call so this row can't accidentally route remote and miss
+      # the runner-local kind cluster (`sky local up` above) — which is
+      # where the kind-loaded dev-snapshot image lives.
+      #
+      # `--num-workers 1` overrides the dataset config's value (3) just for
+      # this row — the single-node kind cluster can't fit 3 concurrent
+      # worker pods of cpus=2+, mem=4+. See #843 for the deeper design
+      # discussion (multi-node kind, retry-on-pod-free).
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ matrix.provider == 'skypilot-local' }}
         env:
@@ -296,17 +300,12 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          # `--num-workers 1` (vs. 3 on cloud rows): the kind cluster
-          # `sky local up` provisions has a single node — the GH runner —
-          # which can't fit 3 concurrent worker pods of cpus=2+, mem=4+. The
-          # cloud rows give each worker its own VM, so this row is the only
-          # shape with shared-cluster contention. See #843 for the deeper
-          # design discussion (multi-node kind, retry-on-pod-free).
           python -m pipeline.entrypoints.skypilot_launch_smoke \
             --config "$CONFIG_PATH" \
             --template configs/compute/local-template.yaml \
             --cluster-name "$CLUSTER_NAME" \
             --worker-image-tag "$IMAGE_TAG" \
+            --local \
             --num-workers 1 \
             --spec-out "/tmp/run-metadata-${{ matrix.provider }}/input_spec.json" \
             --tail \

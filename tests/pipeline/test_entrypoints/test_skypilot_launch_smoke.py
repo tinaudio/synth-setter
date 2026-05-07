@@ -1417,6 +1417,207 @@ class TestRunCredBootstrap:
 # ---------------------------------------------------------------------------
 
 
+class TestDispatchMode:
+    """`--api-server` / `--local` make the launcher's remote-vs-local dispatch explicit (#841).
+
+    Today's contract — "if SKYPILOT_API_SERVER_ENDPOINT is set in process env, dispatch remote;
+    else local SDK" — is preserved when neither flag is passed (backward-compat), but each call
+    site can now declare its intent via argv instead of via env-passthrough.
+    """
+
+    def test_local_flag_clears_inherited_api_server_endpoint(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`--local` clears an inherited SKYPILOT_API_SERVER_ENDPOINT so a stale env var can't
+        silently route this run to the remote server."""
+        monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://stale.example.com")
+
+        result = _invoke(
+            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--local"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "SKYPILOT_API_SERVER_ENDPOINT" not in os.environ
+
+    def test_api_server_flag_sets_endpoint_in_os_environ(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`--api-server <url>` exports the endpoint into os.environ before any sky.* call so the
+        SDK dispatches to the remote server."""
+        monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--api-server",
+            "https://api.example.com",
+        )
+
+        assert result.exit_code == 0, result.output
+        assert os.environ.get("SKYPILOT_API_SERVER_ENDPOINT") == "https://api.example.com"
+
+    def test_api_server_flag_skips_cred_bootstrap(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`--api-server <url>` causes `_run_cred_bootstrap` to short-circuit (remote server holds
+        creds) — no subprocess invocation."""
+        monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+
+        # Re-patch _run_cred_bootstrap to the real impl so the SKYPILOT_API_SERVER_ENDPOINT
+        # short-circuit is exercised end-to-end.
+        called: list[str] = []
+
+        def fake_run(args: list[str], **kwargs: Any) -> MagicMock:
+            called.append("invoked")
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            result.returncode = 0
+            return result
+
+        monkeypatch.setattr(
+            "pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap",
+            _real_run_cred_bootstrap,
+        )
+        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.subprocess.run", fake_run)
+
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--api-server",
+            "https://api.example.com",
+        )
+
+        assert result.exit_code == 0, result.output
+        assert called == [], "cred bootstrap should be skipped when --api-server is set"
+
+    def test_local_flag_runs_cred_bootstrap_even_with_inherited_endpoint(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """`--local` clears the inherited endpoint AND runs the cred bootstrap (the launcher host
+        needs creds on disk for local SDK dispatch)."""
+        monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://stale.example.com")
+        called: list[str] = []
+
+        def fake_run(args: list[str], **kwargs: Any) -> MagicMock:
+            called.append("invoked")
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            result.returncode = 0
+            return result
+
+        monkeypatch.setattr(
+            "pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap",
+            _real_run_cred_bootstrap,
+        )
+        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.subprocess.run", fake_run)
+
+        result = _invoke(
+            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--local"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert called == ["invoked"], "cred bootstrap must run under --local"
+
+    def test_both_flags_passed_is_rejected(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """`--api-server` and `--local` are mutually exclusive — a usage error before sky.* is
+        touched."""
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--api-server",
+            "https://api.example.com",
+            "--local",
+        )
+
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output
+        mock_sky.launch.assert_not_called()
+
+    def test_neither_flag_preserves_inherited_endpoint(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without --api-server / --local the launcher leaves SKYPILOT_API_SERVER_ENDPOINT alone —
+        backward-compat with workflows that already rely on env-var passthrough."""
+        monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://inherited.example.com")
+
+        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+
+        assert result.exit_code == 0, result.output
+        assert os.environ.get("SKYPILOT_API_SERVER_ENDPOINT") == "https://inherited.example.com"
+
+    def test_neither_flag_with_unset_endpoint_leaves_it_unset(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No flag and no inherited env var → still no env var (no surprise default)."""
+        monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+
+        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+
+        assert result.exit_code == 0, result.output
+        assert "SKYPILOT_API_SERVER_ENDPOINT" not in os.environ
+
+
 class TestWorkerEnvToOsEnvironBridge:
     """`main()` copies `RCLONE_CONFIG_R2_*` from the resolved worker_env into `os.environ` so
     `upload_spec_to_r2`'s `rclone copyto` subprocess inherits them.
