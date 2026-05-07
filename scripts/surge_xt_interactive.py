@@ -216,8 +216,9 @@ def _validate_metrics_df(
         )
     expected_cols = sorted(expected.columns)
     numeric = metrics_df[expected_cols].to_numpy()
-    if not np.isfinite(numeric).all():
-        bad_mask = ~np.isfinite(numeric).all(axis=1)
+    finite_mask = np.isfinite(numeric)
+    if not finite_mask.all():
+        bad_mask = ~finite_mask.all(axis=1)
         bad_rows = metrics_df.loc[bad_mask, expected_cols]
         raise ValueError(
             f"{metrics_path} contains NaN/Inf in {len(bad_rows)} of {len(metrics_df)} rows:\n"
