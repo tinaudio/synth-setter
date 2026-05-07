@@ -334,7 +334,7 @@ def _flush_plugin(plugin: VST3Plugin) -> None:
 def play_audio(
     plugin: VST3Plugin,
     stop_event: threading.Event,
-    midi_queue: "queue.Queue[tuple[bytes, float]] | None",
+    midi_queue: "queue.Queue[tuple[list[int], float]] | None",
 ) -> None:
     """Stream Surge XT output to the audio device, processing any pending MIDI messages.
 
@@ -355,7 +355,7 @@ def play_audio(
         buffer_size=BUFFER_SIZE,
     ) as stream:
         while not stop_event.is_set():
-            messages: list[tuple[bytes, float]] = []
+            messages: list[tuple[list[int], float]] = []
             if midi_queue is not None:
                 while True:
                     try:
@@ -381,15 +381,17 @@ def play_audio(
                 stream.write(synth_output, SAMPLE_RATE)
 
 
-def midi_listener(port_name: str, midi_queue: "queue.Queue[tuple[bytes, float]]") -> None:
+def midi_listener(port_name: str, midi_queue: "queue.Queue[tuple[list[int], float]]") -> None:
     """Listen on a MIDI input port and push (bytes, time) tuples onto ``midi_queue``.
 
     Filters to performance-relevant types (notes, CC, pitch wheel, aftertouch); other
     message types (e.g. ``polytouch``, ``sysex``, ``clock``) are dropped. Each forwarded
     message is converted to ``(msg.bytes(), 0.0)`` so ``plugin.process`` schedules it at the
     start of the next audio buffer — the format used elsewhere in the repo (see
-    :func:`src.data.vst.core.make_midi_events`). Designed to run on a daemon thread
-    alongside :func:`play_audio`.
+    :func:`src.data.vst.core.make_midi_events`). ``mido.Message.bytes()`` returns
+    ``list[int]``, matching the ``List[int]`` form accepted by pedalboard's
+    ``plugin.process(...)``. Designed to run on a daemon thread alongside
+    :func:`play_audio`.
     """
     logger.info("Listening on MIDI port: %s", port_name)
     try:
@@ -944,7 +946,7 @@ def main(
     if session_recording_path is not None:
         play_audio_recorded(plugin, session_recording_path)
 
-    midi_queue: queue.Queue[tuple[bytes, float]] | None = None
+    midi_queue: queue.Queue[tuple[list[int], float]] | None = None
     if midi_port is not None:
         resolved_port = _resolve_midi_port(
             midi_port,

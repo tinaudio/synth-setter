@@ -379,14 +379,17 @@ class TestPlayAudioRecorded:
 
 
 class _FakeMidiMessage:
-    """Minimal stand-in for a ``mido.Message`` — exposes ``type`` and ``bytes()``."""
+    """Minimal stand-in for a ``mido.Message`` — exposes ``type`` and ``bytes()``.
 
-    def __init__(self, msg_type: str, payload: bytes = b"\x90\x3c\x40") -> None:
+    ``bytes()`` returns ``list[int]`` to match real ``mido.Message.bytes()``.
+    """
+
+    def __init__(self, msg_type: str, payload: list[int] | None = None) -> None:
         self.type = msg_type
-        self._payload = payload
+        self._payload = payload if payload is not None else [0x90, 0x3C, 0x40]
 
-    def bytes(self) -> bytes:
-        return self._payload
+    def bytes(self) -> list[int]:
+        return list(self._payload)
 
     def __repr__(self) -> str:
         return f"_FakeMidiMessage({self.type!r})"
@@ -416,11 +419,11 @@ class TestMidiListener:
     ) -> None:
         """note_on/off, control_change, pitchwheel, aftertouch are queued; others are dropped."""
         forwarded = [
-            _FakeMidiMessage("note_on", b"\x90\x3c\x40"),
-            _FakeMidiMessage("note_off", b"\x80\x3c\x00"),
-            _FakeMidiMessage("control_change", b"\xb0\x07\x7f"),
-            _FakeMidiMessage("pitchwheel", b"\xe0\x00\x40"),
-            _FakeMidiMessage("aftertouch", b"\xd0\x40"),
+            _FakeMidiMessage("note_on", [0x90, 0x3C, 0x40]),
+            _FakeMidiMessage("note_off", [0x80, 0x3C, 0x00]),
+            _FakeMidiMessage("control_change", [0xB0, 0x07, 0x7F]),
+            _FakeMidiMessage("pitchwheel", [0xE0, 0x00, 0x40]),
+            _FakeMidiMessage("aftertouch", [0xD0, 0x40]),
         ]
         dropped = [
             _FakeMidiMessage("polytouch"),
@@ -443,10 +446,10 @@ class TestMidiListener:
             lambda port_name: _FakeMidiPortHandle(all_messages),
         )
 
-        midi_queue: queue.Queue[tuple[bytes, float]] = queue.Queue()
+        midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         surge_xt_interactive.midi_listener("fake-port", midi_queue)
 
-        drained: list[tuple[bytes, float]] = []
+        drained: list[tuple[list[int], float]] = []
         while not midi_queue.empty():
             drained.append(midi_queue.get_nowait())
 
@@ -462,7 +465,7 @@ class TestMidiListener:
 
         monkeypatch.setattr(surge_xt_interactive.mido, "open_input", _raise)
 
-        midi_queue: queue.Queue[tuple[bytes, float]] = queue.Queue()
+        midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         with caplog.at_level("ERROR"):
             surge_xt_interactive.midi_listener("fake-port", midi_queue)
 
@@ -494,11 +497,11 @@ class _RecordingPlugin:
     def __init__(self, channels: int, buffer_size: int) -> None:
         self._channels = channels
         self._buffer_size = buffer_size
-        self.messages_per_call: list[list[tuple[bytes, float]]] = []
+        self.messages_per_call: list[list[tuple[list[int], float]]] = []
 
     def process(
         self,
-        messages: list[tuple[bytes, float]],
+        messages: list[tuple[list[int], float]],
         _duration_seconds: float,
         _sample_rate: int,
         _channels: int,
@@ -529,9 +532,9 @@ class TestPlayAudioQueueDrain:
 
         monkeypatch.setattr(surge_xt_interactive, "AudioStream", _AudioStreamStub)
 
-        midi_queue: queue.Queue[tuple[bytes, float]] = queue.Queue()
-        midi_queue.put((b"\x90\x3c\x40", 0.0))
-        midi_queue.put((b"\x80\x3c\x00", 0.0))
+        midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
+        midi_queue.put(([0x90, 0x3C, 0x40], 0.0))
+        midi_queue.put(([0x80, 0x3C, 0x00], 0.0))
 
         stop_event = threading.Event()
 
@@ -546,7 +549,7 @@ class TestPlayAudioQueueDrain:
         monkeypatch.setattr(plugin, "process", _stop_after_first_buffer)
         surge_xt_interactive.play_audio(plugin, stop_event, midi_queue)
 
-        assert plugin.messages_per_call == [[(b"\x90\x3c\x40", 0.0), (b"\x80\x3c\x00", 0.0)]]
+        assert plugin.messages_per_call == [[([0x90, 0x3C, 0x40], 0.0), ([0x80, 0x3C, 0x00], 0.0)]]
 
     def test_none_queue_passes_empty_messages_list(
         self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
