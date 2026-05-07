@@ -271,10 +271,16 @@ jobs:
       # provider auth. RCLONE_CONFIG_R2_* env vars are bridged from the
       # workflow env to os.environ inside main() so upload_spec_to_r2's
       # rclone subprocess sees them.
+      #
+      # `SKYPILOT_API_SERVER_ENDPOINT` is intentionally NOT exported here:
+      # the skypilot-local row is meant to exercise the SDK against the
+      # runner-local kind cluster (`sky local up` above), so dispatching to
+      # a remote API server would silently bypass the kind cluster and
+      # schedule pods on whatever Kubernetes context the remote server has
+      # — which won't have the dev-snapshot image kind-loaded into it.
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ matrix.provider == 'skypilot-local' }}
         env:
-          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
