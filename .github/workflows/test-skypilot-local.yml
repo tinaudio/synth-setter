@@ -24,11 +24,6 @@ name: Test SkyPilot Local
 
 on:
   workflow_dispatch:
-    inputs:
-      kind_node_image:
-        description: "kind node image (pin a specific kindest/node tag if needed)"
-        required: false
-        default: ""
 
 permissions:
   contents: read

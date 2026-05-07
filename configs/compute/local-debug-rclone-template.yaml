@@ -30,7 +30,8 @@ envs:
 setup: |
   set -euo pipefail
   if ! command -v rclone >/dev/null 2>&1; then
-    curl -fsSL https://rclone.org/install.sh | sudo bash
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq rclone
   fi
   rclone --version
 
