@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -100,6 +101,17 @@ _KEEP_LOOPING = True
 _STOP_LOOPING = False
 
 _DRIFT_TOLERANCE = 1e-6
+
+# Cap how many queued MIDI events ``play_audio`` drains per buffer so a high-rate
+# CC stream can't extend the realtime audio callback enough to cause underruns.
+# Excess events stay queued and are processed on the next buffer (~12ms later at
+# 44.1k/512), which is well within the human-perceptible latency budget.
+_MAX_MIDI_EVENTS_PER_BUFFER = 64
+
+# Polling interval for ``midi_listener`` between non-blocking ``port.poll()`` calls.
+# Short enough to make the listener responsive to ``stop_event`` (~10ms worst case)
+# without busy-spinning on the GIL.
+_MIDI_POLL_INTERVAL_SECONDS = 0.01
 
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
@@ -357,18 +369,17 @@ def play_audio(
         while not stop_event.is_set():
             messages: list[tuple[list[int], float]] = []
             if midi_queue is not None:
-                while True:
+                # Cap per-buffer drain — see ``_MAX_MIDI_EVENTS_PER_BUFFER`` rationale.
+                for _ in range(_MAX_MIDI_EVENTS_PER_BUFFER):
                     try:
                         messages.append(midi_queue.get_nowait())
                     except queue.Empty:
                         break
+            # ``reset`` passed positionally for consistency with ``_flush_plugin`` /
+            # ``play_audio_recorded`` / ``src/data/vst/core.py`` and to avoid relying on
+            # pedalboard's C-extension keyword-arg support across unpinned versions.
             synth_output = plugin.process(
-                messages,
-                buffer_duration_seconds,
-                SAMPLE_RATE,
-                CHANNELS,
-                BUFFER_SIZE,
-                reset=False,
+                messages, buffer_duration_seconds, SAMPLE_RATE, CHANNELS, BUFFER_SIZE, False
             )
             if synth_output.shape != (CHANNELS, BUFFER_SIZE):
                 raise ValueError(
@@ -381,7 +392,11 @@ def play_audio(
                 stream.write(synth_output, SAMPLE_RATE)
 
 
-def midi_listener(port_name: str, midi_queue: "queue.Queue[tuple[list[int], float]]") -> None:
+def midi_listener(
+    port_name: str,
+    midi_queue: "queue.Queue[tuple[list[int], float]]",
+    stop_event: threading.Event,
+) -> None:
     """Listen on a MIDI input port and push (bytes, time) tuples onto ``midi_queue``.
 
     Filters to performance-relevant types (notes, CC, pitch wheel, aftertouch); other
@@ -390,13 +405,21 @@ def midi_listener(port_name: str, midi_queue: "queue.Queue[tuple[list[int], floa
     start of the next audio buffer — the format used elsewhere in the repo (see
     :func:`src.data.vst.core.make_midi_events`). ``mido.Message.bytes()`` returns
     ``list[int]``, matching the ``List[int]`` form accepted by pedalboard's
-    ``plugin.process(...)``. Designed to run on a daemon thread alongside
-    :func:`play_audio`.
+    ``plugin.process(...)``.
+
+    Polls ``port.poll()`` non-blockingly so the loop checks ``stop_event`` every
+    ``_MIDI_POLL_INTERVAL_SECONDS`` and exits cleanly when ``main`` signals shutdown
+    — otherwise the queue would keep growing after the audio thread stops (e.g. while
+    ``main`` waits at the post-editor "press any key" prompt).
     """
     logger.info("Listening on MIDI port: %s", port_name)
     try:
         with mido.open_input(port_name) as port_handle:  # pyright: ignore[reportAttributeAccessIssue]
-            for msg in port_handle:
+            while not stop_event.is_set():
+                msg = port_handle.poll()
+                if msg is None:
+                    time.sleep(_MIDI_POLL_INTERVAL_SECONDS)
+                    continue
                 if msg.type in MIDI_LISTEN_MESSAGE_TYPES:
                     midi_queue.put((msg.bytes(), 0.0))
     except Exception:
@@ -946,6 +969,11 @@ def main(
     if session_recording_path is not None:
         play_audio_recorded(plugin, session_recording_path)
 
+    # Created up front so ``midi_listener`` can observe shutdown the moment ``main``
+    # sets it (the same event also drives ``play_audio``, ``keyboard_loop``, and the
+    # plugin editor's blocking close signal).
+    stop_event = threading.Event()
+
     midi_queue: queue.Queue[tuple[list[int], float]] | None = None
     if midi_port is not None:
         resolved_port = _resolve_midi_port(
@@ -956,10 +984,11 @@ def main(
             logger.info("--midi-port='' — auto-selected first input: %s", resolved_port)
         midi_queue = queue.Queue()
         threading.Thread(
-            target=midi_listener, args=(resolved_port, midi_queue), daemon=True
+            target=midi_listener,
+            args=(resolved_port, midi_queue, stop_event),
+            daemon=True,
         ).start()
 
-    stop_event = threading.Event()
     pool = ThreadPoolExecutor()
     audio_timed_out = False
     try:

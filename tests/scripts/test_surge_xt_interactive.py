@@ -4,7 +4,6 @@ import importlib
 import queue
 import subprocess
 import threading
-from collections.abc import Iterator
 from pathlib import Path
 
 import click
@@ -396,10 +395,21 @@ class _FakeMidiMessage:
 
 
 class _FakeMidiPortHandle:
-    """Iterable mido-input replacement; used as a context manager that yields fake messages."""
+    """Mido-input replacement.
 
-    def __init__(self, messages: list[_FakeMidiMessage]) -> None:
-        self._messages = messages
+    ``poll()`` returns the next queued message or ``None`` when drained, mirroring
+    ``mido.ports.IOPort.poll``. When the queue is exhausted, sets ``drain_event``
+    (if provided) so the test can flip ``stop_event`` and let the listener exit
+    deterministically — no time.sleep / wall-clock polling on the test side.
+    """
+
+    def __init__(
+        self,
+        messages: list[_FakeMidiMessage],
+        drain_event: threading.Event | None = None,
+    ) -> None:
+        self._messages = list(messages)
+        self._drain_event = drain_event
 
     def __enter__(self) -> "_FakeMidiPortHandle":
         return self
@@ -407,8 +417,12 @@ class _FakeMidiPortHandle:
     def __exit__(self, *_exc: object) -> None:
         return None
 
-    def __iter__(self) -> Iterator[_FakeMidiMessage]:
-        return iter(self._messages)
+    def poll(self) -> _FakeMidiMessage | None:
+        if not self._messages:
+            if self._drain_event is not None:
+                self._drain_event.set()
+            return None
+        return self._messages.pop(0)
 
 
 class TestMidiListener:
@@ -440,20 +454,59 @@ class TestMidiListener:
             dropped[2],
         ]
 
+        drain_event = threading.Event()
         monkeypatch.setattr(
             surge_xt_interactive.mido,
             "open_input",
-            lambda port_name: _FakeMidiPortHandle(all_messages),
+            lambda port_name: _FakeMidiPortHandle(all_messages, drain_event=drain_event),
         )
 
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
-        surge_xt_interactive.midi_listener("fake-port", midi_queue)
+        stop_event = threading.Event()
+        listener_thread = threading.Thread(
+            target=surge_xt_interactive.midi_listener,
+            args=("fake-port", midi_queue, stop_event),
+        )
+        listener_thread.start()
+        # ``_FakeMidiPortHandle`` flips ``drain_event`` once the queued list is empty,
+        # so we know the listener has observed every message before we ask it to stop.
+        assert drain_event.wait(timeout=2.0), "listener did not drain fake messages"
+        stop_event.set()
+        listener_thread.join(timeout=2.0)
+        assert not listener_thread.is_alive(), "listener did not exit on stop_event"
 
         drained: list[tuple[list[int], float]] = []
         while not midi_queue.empty():
             drained.append(midi_queue.get_nowait())
 
         assert drained == [(m.bytes(), 0.0) for m in forwarded]
+
+    def test_stop_event_exits_listener_with_no_messages(self, surge_xt_interactive) -> None:
+        """``stop_event`` set before any message arrives drains the listener cleanly."""
+
+        class _IdlePort:
+            def __enter__(self) -> "_IdlePort":
+                return self
+
+            def __exit__(self, *_exc: object) -> None:
+                return None
+
+            def poll(self) -> None:
+                return None
+
+        midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
+        stop_event = threading.Event()
+        stop_event.set()
+        # Drop in the idle port via a class-attribute swap so we don't reach the real
+        # mido backend (which would still try to enumerate hardware on import).
+        original_open_input = surge_xt_interactive.mido.open_input
+        surge_xt_interactive.mido.open_input = lambda _port: _IdlePort()
+        try:
+            surge_xt_interactive.midi_listener("fake-port", midi_queue, stop_event)
+        finally:
+            surge_xt_interactive.mido.open_input = original_open_input
+
+        assert midi_queue.empty()
 
     def test_open_input_failure_logs_and_exits_thread(
         self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch, caplog
@@ -466,8 +519,9 @@ class TestMidiListener:
         monkeypatch.setattr(surge_xt_interactive.mido, "open_input", _raise)
 
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
+        stop_event = threading.Event()
         with caplog.at_level("ERROR"):
-            surge_xt_interactive.midi_listener("fake-port", midi_queue)
+            surge_xt_interactive.midi_listener("fake-port", midi_queue, stop_event)
 
         assert midi_queue.empty()
         assert any("MIDI listener thread aborted" in rec.message for rec in caplog.records)
@@ -506,7 +560,6 @@ class _RecordingPlugin:
         _sample_rate: int,
         _channels: int,
         _buffer_size: int,
-        *,
         reset: bool,
     ) -> np.ndarray:
         assert reset is False
@@ -580,6 +633,43 @@ class TestPlayAudioQueueDrain:
         surge_xt_interactive.play_audio(plugin, stop_event, None)
 
         assert plugin.messages_per_call == [[]]
+
+    def test_drain_is_capped_at_max_midi_events_per_buffer(
+        self, surge_xt_interactive, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A queue larger than ``_MAX_MIDI_EVENTS_PER_BUFFER`` drains in chunks across buffers,
+        preventing one realtime callback from stretching to process the full backlog."""
+        cap = surge_xt_interactive._MAX_MIDI_EVENTS_PER_BUFFER
+        plugin = _RecordingPlugin(surge_xt_interactive.CHANNELS, surge_xt_interactive.BUFFER_SIZE)
+        stream = _FakeStream()
+
+        class _AudioStreamStub:
+            default_output_device_name = "fake-device"
+
+            def __new__(cls, **_kwargs: object) -> "_FakeStream":  # type: ignore[misc]
+                return stream
+
+        monkeypatch.setattr(surge_xt_interactive, "AudioStream", _AudioStreamStub)
+
+        midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
+        # Enqueue cap + 5 events; first buffer should drain ``cap``, leaving 5 in the queue.
+        for _ in range(cap + 5):
+            midi_queue.put(([0x90, 0x3C, 0x40], 0.0))
+
+        stop_event = threading.Event()
+        # Stop after the first buffer so we can assert the per-buffer cap directly.
+        original_process = plugin.process
+
+        def _stop_after_first_buffer(*args: object, **kwargs: object) -> np.ndarray:
+            stop_event.set()
+            return original_process(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(plugin, "process", _stop_after_first_buffer)
+        surge_xt_interactive.play_audio(plugin, stop_event, midi_queue)
+
+        assert len(plugin.messages_per_call) == 1
+        assert len(plugin.messages_per_call[0]) == cap
+        assert midi_queue.qsize() == 5
 
 
 class TestResolveMidiPort:
