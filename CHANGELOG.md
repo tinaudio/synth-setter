@@ -1,6 +1,542 @@
 # CHANGELOG
 
 
+## v0.11.0 (2026-05-07)
+
+### Build System
+
+- **devcontainer**: Add tmux to devcontainer-tools image
+  ([#838](https://github.com/tinaudio/synth-setter/pull/838),
+  [`e7768b4`](https://github.com/tinaudio/synth-setter/commit/e7768b42ccd5c42316cc5f7bd2c5f304a1b835bc))
+
+* build(devcontainer): add tmux to devcontainer-tools image
+
+Adds tmux alongside curl/jq in the devcontainer-tools stage so multi-pane and detachable shells are
+  available out of the box for development sessions inside the container.
+
+Refs #837
+
+* docs(docker): rewrite devcontainer-tools tool list as drift-resistant pointers
+
+The build-recipe comment and prose enumeration in docker.md both listed the CLI tools baked into the
+  devcontainer-tools stage as closed lists ('gh, jq', '(`gh`, `jq`)'). These go stale every time a
+  tool is added to the stage — the prose was already silently missing `curl`, and adding `tmux`
+  would compound it.
+
+Replace both with non-exhaustive pointers to the Dockerfile stage so future package adds don't
+  require coordinated doc updates.
+
+### Chores
+
+- **scripts**: Avoid import-time logging side effects in surge_xt_interactive
+  ([#833](https://github.com/tinaudio/synth-setter/pull/833),
+  [`d3e879b`](https://github.com/tinaudio/synth-setter/commit/d3e879b655cf9e65103ba89ef0a182bc792e4452))
+
+`scripts.surge_xt_interactive` is imported from the test suite
+  (`tests/scripts/test_surge_xt_interactive.py`), so the module-level `logging.basicConfig(...)`
+  introduced in #822 reconfigured the root logger and constructed a `Console` / `RichHandler` during
+  test collection.
+
+Move the setup into a `_configure_logging()` helper invoked only under `if __name__ == "__main__":`.
+  CLI behavior is unchanged; importing the module no longer mutates the root logger.
+
+Refs #810
+
+- **scripts**: Module-level Rich logging for surge_xt_interactive
+  ([#822](https://github.com/tinaudio/synth-setter/pull/822),
+  [`12c0d69`](https://github.com/tinaudio/synth-setter/commit/12c0d6941af9292b32b3bbe83b66a58d14cc8c77))
+
+* chore(scripts): use Rich-formatted logging in surge_xt_interactive
+
+Replaces the plain ascii log format set up inside main() with a module-level RichHandler so log
+  output is colorized, has level icons, and renders tracebacks with source context. Removes the
+  duplicate basicConfig call previously inside main() — calling basicConfig a second time was a
+  no-op (the first call wins) but masked the intent that logging is configured once at import time.
+
+rich is already pinned in requirements-app.txt, so this adds no new dependency.
+
+Refs #811
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- **skypilot**: Unify launcher cred bootstrap
+  ([#832](https://github.com/tinaudio/synth-setter/pull/832),
+  [`e060404`](https://github.com/tinaudio/synth-setter/commit/e0604041f3f749b0667dfac318c54034e31ae3ca))
+
+* feat(skypilot): unify launcher cred bootstrap
+
+The launcher now invokes scripts/skypilot_write_provider_creds.sh itself before sky.launch, with
+  provider auto-detected from task.resources.cloud. The bootstrap writes
+  ~/.cloudflare/r2.credentials + ~/.cloudflare/accountid (for SkyPilot's R2 storage adaptor once
+  #749 unblocks file_mounts) plus the RunPod or OCI per-provider files, and emits
+  RCLONE_CONFIG_R2_*=... lines on stdout that the launcher merges into each rank's task.update_envs
+  payload.
+
+This collapses three previously disjoint cred formats (bare R2_*, rclone-prefixed
+  RCLONE_CONFIG_R2_*, SkyPilot's ~/.cloudflare/* files) into a single bootstrap step. CI workflows
+  drop their hand-rolled `export RCLONE_CONFIG_R2_*=$R2_*` bridging lines and the prelude `bash
+  scripts/skypilot_write_provider_creds.sh` step. The bootstrap is idempotent — pre-existing
+  non-empty files survive a re-run unless --force is passed, so local-dev operators who hand-manage
+  creds aren't clobbered.
+
+resolve_worker_env accepts both bare R2_* and RCLONE_CONFIG_R2_* during a one-PR migration window,
+  logging a deprecation warning when only the bare form is found. The fallback drops in a follow-up
+  PR.
+
+New required secret: R2_ACCOUNT_ID (Cloudflare account ID, distinct from the access key — get it
+  from the R2 dashboard sidebar).
+
+Closes #829
+
+* internal-fix(skypilot): emit bare-R2 deprecation warning via click.echo(err=True)
+
+Address the WARN from PR #832's /review pass: the launcher used `logging.getLogger(__name__)` +
+  `logger.warning(...)` for the bare-R2 deprecation notice while every other operator-facing message
+  in this file goes through `click.echo(..., err=True)`. The mismatch meant operators with default
+  log config wouldn't see the warning at all (no handler attached at the module level).
+
+Switch to `click.echo(..., err=True)` for consistency with neighboring diagnostics; update the two
+  `TestBareR2DeprecationFallback` tests to assert on stderr via `capsys` instead of
+  `caplog.records`.
+
+Refs #829
+
+* docs(skypilot): sync doc-drift findings against PR #832
+
+Two doc-drift findings against the cred-bootstrap unification PR:
+
+- docs/design/skypilot-compute-integration.md §4.2 "Why each key lives where it does" had a `docker
+  run -e ...` row claiming the host-to-container step renames bare `R2_*` to `RCLONE_CONFIG_R2_*`.
+  Since this PR moved that bridging out of CI into the launcher's cred-bootstrap, the row directly
+  contradicted the bullet two paragraphs above. Replace it with a row that describes what the
+  workflows now actually do (forward bare names; bootstrap produces the prefixed env vars +
+  `~/.cloudflare/*` files inside the container). - docs/reference/docker.md §4 "Required secrets"
+  listed R2_*, R2_ACCOUNT_ID, and WANDB_API_KEY as required for `docker-build-validation.yml` — but
+  that workflow only builds and pushes images, never invokes the launcher or any R2/W&B consumer.
+  The R2/WANDB rows pre-existed; this PR amplified the drift by adding R2_ACCOUNT_ID and a "bridged
+  by the launcher's cred-bootstrap" framing that doesn't apply to a build-only workflow. Drop the
+  four runtime-secret rows and point readers at github-actions.md for the workflows that actually
+  consume them.
+
+* ci(skypilot): add check-auth workflow for provider creds
+
+Adds .github/workflows/check-auth.yml — a workflow_dispatch + weekly cron that exercises the new
+  launcher cred-bootstrap end to end on real repo secrets. Per provider (runpod, oci) it runs
+  scripts/skypilot_write_provider_creds.sh, forwards the emitted RCLONE_CONFIG_R2_* env lines into
+  the job env, then runs three minimal probes:
+
+- File-shape check: ~/.cloudflare/r2.credentials, ~/.cloudflare/ accountid, and the per-provider
+  files exist non-empty with mode 600. - R2 auth: `rclone lsd r2:` lists buckets at the account
+  level — the lightest call that exercises access key + endpoint together. - Provider auth: `sky
+  check <provider>` exercises the SkyPilot cloud adapter against the freshly-written cred files.
+
+Catches credential expiries / mis-rotations before they take down test-dataset-generation. Required
+  secrets are the same set the launcher already needs (R2_*, RUNPOD_API_KEY, OCI_*).
+
+* ci(skypilot): TEMP wire check-auth on pull_request
+
+Add a temporary pull_request trigger (scoped to the workflow file + cred-bootstrap script paths) to
+  verify the workflow passes on PR #832 before relying on it. The steady-state cadence remains
+  workflow_dispatch + weekly cron — strip this block once the PR run goes green.
+
+* ci(skypilot): revert check-auth to schedule-only
+
+Drops the temporary pull_request trigger added in the previous commit. The check-auth run on PR #832
+  (run 25502459646) passed both legs (runpod, oci), so the workflow's steady-state cadence is back
+  to workflow_dispatch + the weekly cron.
+
+* test(skypilot): account for cred-bootstrap probe Task in no-tail teardown test
+
+`test_no_tail_partial_launch_failure_only_tears_down_failed_cluster` inlined its own
+  `Task.from_yaml.side_effect = list(tasks.values())` without leaving a slot for the probe Task that
+  `_detect_provider` consumes (added in the cred-bootstrap unification). The merge from main brought
+  the test in unchanged, so rank N's `Task.from_yaml` hit StopIteration, the launcher caught it as a
+  half-provisioned launch, and rank N got an unwanted teardown alongside the actually failed rank.
+
+Prefix a `probe_task` to the side_effect list — same pattern as `_setup_n_workers_mock` — so the
+  per-rank Task assignments line up with what the launcher loop expects.
+
+### Continuous Integration
+
+- **skypilot**: Skip provider cred-write when remote API server set; add local-kind debug smoke
+  ([#834](https://github.com/tinaudio/synth-setter/pull/834),
+  [`342e909`](https://github.com/tinaudio/synth-setter/commit/342e9095fcd20c9f6e353d564d69383cf19ac689))
+
+* ci(skypilot): skip provider cred-write when remote API server is set; add local-kind debug smoke
+
+- test-dataset-generation.yml: gate `bash scripts/skypilot_write_provider_creds.sh` on
+  SKYPILOT_API_SERVER_ENDPOINT being empty. When the remote SkyPilot API server (#785) is
+  configured, it holds RunPod/OCI creds — the local container only needs the endpoint URL, not
+  on-disk provider creds. - test-skypilot-debug.yml: replace each variant's hand-rolled `printf … >
+  ~/.runpod/config.toml` with a call to `scripts/skypilot_write_provider_creds.sh PROVIDER=runpod`,
+  gated by the same SKYPILOT_API_SERVER_ENDPOINT skip. Plumbs the endpoint env into all three modes
+  (inline-sky, launcher-runner, launcher-docker). - test-skypilot-local.yml +
+  configs/compute/local-debug-rclone-template.yaml: new debug workflow that spins up a kind cluster
+  via `sky local up`, registers it as the SkyPilot kubernetes cloud, and launches a CPU-only task
+  that uploads a sentinel file to R2 via rclone — exercising the RCLONE_CONFIG_R2_* env-var bridge
+  end-to-end without RunPod/OCI capacity. Provider cred bootstrap is a no-op for kind, so the writer
+  is not invoked.
+
+Refs #785 Refs #806
+
+* docs: capture SKYPILOT_API_SERVER_ENDPOINT gate + new local-kind workflow
+
+- docs/reference/github-actions.md: add a row for `test-skypilot-local`, add a
+  `SKYPILOT_API_SERVER_ENDPOINT` (optional) row to the secrets table, append `test-skypilot-local`
+  to the R2_* "Used by" cells, and amend the RUNPOD_API_KEY purpose to note the cred-write skip when
+  the remote API server endpoint is set. - docs/design/skypilot-compute-integration.md: §4.2
+  cred-storage table — amend the ~/.runpod/config.toml row to note the conditional skip when
+  SKYPILOT_API_SERVER_ENDPOINT is set. - docs/doc-map.yaml: add coverage entries for the two new
+  files (test-skypilot-local.yml + local-debug-rclone-template.yaml) and for the previously unmapped
+  test-skypilot-debug.yml under the SkyPilot compute integration design doc.
+
+* ci(skypilot): address PR #834 review nits
+
+- Remove unused workflow_dispatch input `kind_node_image` from test-skypilot-local.yml. The input
+  was defined but never threaded into `sky local up`, which has no node-image flag. - Replace
+  curl-pipe-bash rclone install in local-debug-rclone-template.yaml with apt-get, matching the
+  launcher-runner mode in test-skypilot-debug.yml. Removes an unpinned remote-script execution from
+  the smoke-test setup path.
+
+* ci(skypilot-local): trigger on PRs that touch the workflow or template
+
+- Add a path-filtered `pull_request` trigger for changes to this workflow or
+  `configs/compute/local-debug-rclone-template.yaml`. Tight scope so unrelated PRs don't pay the
+  ~5–10 min/dispatch runner cost. - Skip the job on fork PRs (they can't read R2 secrets) via a
+  job-level `if` matching `github.event.pull_request.head.repo.full_name == github.repository`.
+
+* docs(skypilot-local): refresh trigger model + reword cluster-name comment
+
+Address PR #834 round-2 review nits from Copilot:
+
+- docs/reference/github-actions.md: refresh the test-skypilot-local catalog row to reflect the
+  pull_request trigger added in 9df944f (was: workflow_dispatch-only). Mention the fork-PR skip via
+  job-level `if:`. (#3202110654) - docs/doc-map.yaml: same drift fix on the doc-map source-pattern
+  description so doc-drift tooling doesn't encode the stale trigger model. (#3202110733) -
+  .github/workflows/test-skypilot-local.yml: reword the `sky local up` comment block. The previous
+  wording implied `sky launch` looks for a cluster named "skypilot", but the launch below uses a
+  run-scoped CLUSTER_NAME. Clarify that "skypilot" is the kind cluster + kubectl context name, while
+  the SkyPilot job-cluster name is independent. (#3202110805)
+
+Refs #785
+
+* fix(skypilot-local): call sky.check.check() in-process before sky.launch
+
+A bare `sky check kubernetes` CLI step before the Python `sky.launch` heredoc isn't sufficient on a
+  fresh GH-actions runner — SkyPilot 0.12's API-server architecture caches enabled-clouds per
+  process, and the CLI's cache doesn't always reach the SDK reading from a fresh Python process. The
+  launch raises `NoCloudAccessError: Cloud access is not set up. Run: sky check` even though the
+  prior CLI `sky check kubernetes` step passed.
+
+Drop the standalone CLI step and call `sky.check.check(['kubernetes'])` inside the same Python
+  process as `sky.launch` so they share the in-process API-server state.
+
+* fix(skypilot-local): install socat — kubectl port-forward dependency
+
+SkyPilot's Kubernetes backend uses `kubectl port-forward` for the SSH control channel into pods,
+  which delegates to `socat`. The stock ubuntu-latest runner doesn't ship it; without it,
+  `sky.check.check` reports "Kubernetes: disabled" with the reason "socat is required to setup
+  Kubernetes cloud with portforward default networking mode" and the subsequent sky.launch raises
+  NoCloudAccessError.
+
+Add a `sudo apt-get install -y -qq socat` step right after kubectl is installed, before the SkyPilot
+  install + sky.check call.
+
+* fix(skypilot-debug): use `set -euo pipefail` so cred-bootstrap failures stop the step
+
+Three `run:` blocks in test-skypilot-debug.yml used `set -o pipefail` only. With just pipefail, a
+  non-zero exit from `scripts/skypilot_write_provider_creds.sh` would not halt the bash script — the
+  step would continue into `python -m pipeline.entrypoints.skypilot_launch_smoke` and the failure
+  would surface as a launcher-side `NoCloudAccessError` (or similar) instead of the writer's clear
+  "X is empty" error.
+
+Switch all three sites (inline-sky probe, launcher-runner, launcher-docker outer block) to `set -euo
+  pipefail` so any cred-bootstrap exit code stops the step at the writer with its diagnostic intact.
+  Also catches missing-secret regressions earlier and protects against future silent failures of
+  `docker pull` etc.
+
+* fix(skypilot-local): pin kind via helm/kind-action instead of curl|install
+
+Replace the manual `curl ... kind-linux-amd64 | install` step with `helm/kind-action@v1` set to
+  `install_only: true` and pinned to `v0.24.0`. The action validates the released kind binary's
+  checksum before installing, addressing the supply-chain risk of running an unverified binary
+  fetched over HTTPS in CI.
+
+### Features
+
+- **monitoring**: Live MIDI input for surge_xt_interactive
+  ([#821](https://github.com/tinaudio/synth-setter/pull/821),
+  [`4e87cc9`](https://github.com/tinaudio/synth-setter/commit/4e87cc92d40174f6dac02be1c0a7c1dc8ebb141e))
+
+* feat(scripts): add live MIDI input to surge_xt_interactive
+
+Adds a daemon listener thread that forwards note/CC/pitch-wheel/aftertouch messages from a chosen
+  input port to the running plugin via a thread-safe queue, so the editor responds to a connected
+  keyboard or controller in real time.
+
+- New --midi-port flag selects the input by name; '' auto-picks the first available; missing/invalid
+  names raise click.UsageError. - Thread-safe midi_queue constructed in main() and passed explicitly
+  to play_audio and midi_listener (no module-level globals). - play_audio now drains the queue each
+  iteration and dispatches via plugin.process(messages, ...) so MIDI events are scheduled with audio
+  frames; the original silence-only call is replaced. - midi_listener filters to performance message
+  types (MIDI_LISTEN_MESSAGE_TYPES); other types (sysex, clock, polytouch) are dropped to keep the
+  audio thread responsive. - keyboard_loop gains a default_params snapshot so record_patch can
+  detect drift on parameters outside the spec (e.g. a knob the user nudged inadvertently) and abort
+  recording with a clear ValueError. Action-loop except is narrowed to KeyError / ValueError so
+  unrelated exceptions (e.g. KeyboardInterrupt) propagate instead of being swallowed. - main()
+  snapshots default_params after preset load+flush, then threads the queue and the snapshot through
+  to the workers. - New unit test mocks mido.open_input and verifies that midi_listener forwards
+  only the allow-listed message types.
+
+Refs #811
+
+* refactor(scripts): extract _resolve_midi_port and _validate_no_drift helpers
+
+Split two pure helpers out of surge_xt_interactive so they can be tested without the plugin host:
+
+- ``_resolve_midi_port(requested, available)`` replaces the if/elif/else port-resolution block in
+  ``main`` — pure function, returns the resolved name or raises ``click.UsageError``. -
+  ``_validate_no_drift(plugin, spec, default_params)`` replaces the drift-detection loop in
+  ``record_patch`` — same semantics, separately testable with a duck-typed plugin.
+
+Also fix two issues uncovered while reviewing the diff:
+
+- Replace ``while not midi_queue.empty(): get_nowait()`` with the canonical ``try/except
+  queue.Empty: break`` drain. The old form races on multi-producer/single-consumer queues and would
+  surface a stray ``Empty`` exception on the audio thread. - Drop the unreachable
+  ``default_params.get(name, 0.0)`` fallback in drift detection — the dict is built from
+  ``plugin.parameters`` so the key is guaranteed present; ``[]`` makes a missing key a clear bug
+  instead of silently masking it.
+
+Tests: ten new behavior-oriented unit tests (no mocks) covering the new helpers —
+  empty/named/missing port resolution, drift on/off non-spec params, and within/above tolerance
+  boundaries.
+
+Refs #810
+
+* internal-fix(scripts): address review feedback on surge_xt_interactive MIDI input
+
+Round 1 review (Copilot + /review). Bundles the round into a single commit; each item below names
+  the comment and the fix.
+
+Fixes: - midi_listener now enqueues `(msg.bytes(), 0.0)` tuples to match the codebase convention
+  used by `make_midi_events` (Copilot #3192022737, #3204007775, #3204007855). Tests updated to
+  assert tuple shape. - `--midi-port` and `--session-recording-path` are now mutually exclusive: in
+  deterministic-clip mode `play_audio` doesn't run, so a listener would enqueue forever (Copilot
+  #3192022770). - Added `play_audio` queue-drain test covering both midi-queue-set and
+  midi-queue-None paths (Copilot #3192022790, #3204007904; tdd #3204006704). - `play_audio`'s
+  `midi_queue` is now `Optional`; main constructs it only when `--midi-port` is set (code-health
+  #3204006678). - `midi_listener` wraps its body in try/except and logs failures so the daemon
+  thread can't die silently (code-health #3204006618). - Extracted `_DRIFT_TOLERANCE = 1e-6`
+  constant (code-health #3204006649). - Trimmed docstring "Tolerance is abs_tol=1e-6" — bakes value
+  into comment (project #3204006655). - Trimmed multi-line essay comment in keyboard_loop's except
+  (project #3204006671). - `plugin.process(...)` uses `reset=False` kwarg (code-health #3204006606).
+  - `_resolve_midi_port` accepts `Sequence[str]` (python-style #3204006638). - `queue.Queue` types
+  parameterized (python-style #3204006598). - Test `import queue` moved to module top (python-style
+  #3204006692). - `_FakeMidiPortHandle.__iter__` now annotated `Iterator[_FakeMidiMessage]`
+  (python-style #3204006697).
+
+Justified as-is: - Drain-loop verbosity (#3204006610): the 4-line `try/except queue.Empty: break`
+  pattern is the canonical idiom; a helper is YAGNI. - Listener `for msg in port_handle:` doesn't
+  check `stop_event` (#3204006629, #3204006689): the thread is `daemon=True`, so process exit reaps
+  it. Cooperative shutdown is YAGNI for an interactive CLI. - Bare `default_params[name]`
+  (#3204006658): the dict is built from `plugin.parameters`, so a missing key would be a programmer
+  bug, not user error — the bare lookup makes that explicit. - `--midi-port=""` as auto-pick
+  sentinel (#3204006681): documented in the click help text and PR description; CLI contract for
+  this PR.
+
+* internal-fix(scripts): correct MIDI byte type annotations to list[int]
+
+mido.Message.bytes() returns list[int] (e.g. [144, 60, 64]), not a Python bytes object. The previous
+  annotation was wrong even though pedalboard accepts both forms at runtime — fixing it removes a
+  footgun for callers and keeps test fakes faithful to the real mido API.
+
+- play_audio/midi_listener: tuple[bytes, float] → tuple[list[int], float] - main(): same for the
+  local midi_queue annotation - _FakeMidiMessage.bytes() now returns list[int] and the test data
+  uses list[int] payloads to match - midi_listener docstring notes the list[int] return type and the
+  matching pedalboard List[int] form
+
+Refs #810 (Copilot #3204089013, #3204089096)
+
+* internal-fix(scripts): bound MIDI drain, propagate stop_event to listener, revert reset to
+  positional
+
+Round 3 review feedback (Copilot). Three correctness/realtime concerns:
+
+1. midi_listener now polls non-blockingly via ``port.poll()`` and exits when ``stop_event`` is set.
+  Previously the daemon thread kept enqueuing messages after ``play_audio`` had stopped (e.g. while
+  ``main`` waits at the post-editor "press any key" prompt), which let the unread queue grow for the
+  rest of the session. The signature gains a ``stop_event`` parameter; ``main`` constructs the event
+  up front so the listener and audio thread share it. (Copilot #3204132582)
+
+2. play_audio's per-buffer drain is now capped at ``_MAX_MIDI_EVENTS_PER_BUFFER`` (64). Pathological
+  CC streams could otherwise extend the realtime audio callback arbitrarily and cause underruns.
+  Excess events stay in the queue and are processed on the next buffer (~12ms later), well within
+  the human-perceptible latency budget. (Copilot #3204132604)
+
+3. ``plugin.process(..., reset=False)`` reverts to passing the flag positionally (matching
+  ``_flush_plugin``, ``play_audio_recorded``, and ``src/data/vst/core.py``). pedalboard isn't pinned
+  and its C-extension signature isn't guaranteed to accept the keyword form across versions. Added a
+  one-line comment so the positional ``False`` isn't read as a bare-boolean smell. (Copilot
+  #3204132540)
+
+Test coverage: - New ``test_stop_event_exits_listener_with_no_messages`` covers the no-message
+  shutdown path. - ``test_only_relevant_message_types_are_forwarded`` now drives the listener on a
+  real thread, waits on a drain event the fake port flips when its queued messages are exhausted,
+  then sets ``stop_event`` and joins — no time.sleep, no flaky timing assumptions. - New
+  ``test_drain_is_capped_at_max_midi_events_per_buffer`` exercises the new bound by enqueuing cap+5
+  events and asserting the first buffer drains exactly ``cap`` and leaves 5 in the queue.
+
+* docs(scripts): clarify midi_listener docstring queue tuple shape
+
+Replace the ambiguous "(bytes, time) tuples" wording with the actual ``(list[int], float)`` shape
+  ``midi_listener`` enqueues. The implementation and type annotation already reflect this; the
+  docstring was lagging.
+
+Refs #810 (Copilot #3204208826)
+
+### Monitoring
+
+- Enable model eval/prediction on captured patch audio
+  ([#835](https://github.com/tinaudio/synth-setter/pull/835),
+  [`146962a`](https://github.com/tinaudio/synth-setter/commit/146962a2c2ae33224e908efd48f508c44b191052))
+
+* monitoring: enable model eval/prediction on captured patch audio
+
+* fix(monitoring): address Copilot review feedback on surge_xt_interactive.py
+
+- eval_patches: re-raise after logging predict_vst_audio TimeoutExpired so the unbound `result` is
+  never referenced (review #3189766465). - --output-dataset-dir-path: tighten click.Path with
+  file_okay=False to reject regular file paths at parse time (review #3189766539). -
+  --output-dataset-dir-path help: describe the directory layout (train.h5 + optional
+  val/test/predict.h5 siblings) instead of the stale 'written to this file' wording (review
+  #3189766582). - pre-existence UsageError: rename flag in the message and say 'creates a new
+  directory' instead of 'writes a new file' (review #3189766614).
+
+Also updates the main() docstring at the same renamed-flag drift point.
+
+* chore(scripts): remove materialize_and_upload_spec.py from this PR
+
+Out of scope for the monitoring/eval changes. The script (R2 spec materialization helper for driving
+  worker containers directly) will be re-added under its own PR with the appropriate data-pipeline
+  taxonomy.
+
+* refactor(scripts): split eval_patches into focused helpers
+
+Reduces eval_patches() from ~130 lines to a 15-line orchestrator that delegates to four
+  single-purpose helpers (predict, validate predictions, render audio, compute metrics). Extracts
+  main()'s eval-dispatch tail into _maybe_eval_captured_patches so main() stops mixing dataset
+  creation with eval orchestration.
+
+Also:
+
+- Replaces silent-failure subprocess.run(check=False) + post-hoc returncode check in the
+  audio-render path with check=True so a failed predict_vst_audio.py surfaces as CalledProcessError
+  instead of letting the loop fall through to assertions on missing output files. - Hoists
+  SILENCE_PEAK_THRESHOLD to a module constant alongside the other rendering thresholds. - Drops dead
+  code: commented-out base_dir/checkpoint_path debug paths, commented-out
+  evaluate(cfg_surge_xt_eval), and the duplicate checkpoint/predict.h5 existence checks. - Trims the
+  inline comment that restated NUM_AUDIO_METRICS' contents (CLAUDE.md "Don't bake values into
+  comments"); the count is now derived from len(metric_columns).
+
+Refs #811
+
+* fix(monitoring): address review feedback on surge eval-on-patches flow
+
+- configs/experiment/surge/test.yaml: switch trainer override from `mps` to `cpu` so the same config
+  works on both Mac and Linux. The eval flow in scripts/surge_xt_interactive.py runs on both
+  platforms (Linux uses the headless VST wrapper), and the prior `mps` pin made the
+  --checkpoint-path path unusable on Linux. - scripts/surge_xt_interactive.py: pass
+  map_location="cpu" to torch.load in _validate_predictions so prediction tensors saved on a
+  different accelerator still load. - scripts/surge_xt_interactive.py: rename VST_HEADLESS_WRAPPER
+  to _VST_HEADLESS_WRAPPER (module-private — only used internally). -
+  scripts/surge_xt_interactive.py: rewrite the _validate_predictions docstring filename list so the
+  per-sample patterns aren't broken across a soft-wrap. - scripts/surge_xt_interactive.py: rename
+  the "No output dataset path" log message to "No --output-dataset-dir-path provided" to match the
+  current flag name. - scripts/surge_xt_interactive.py: extend the main() docstring Flow section to
+  cover the optional --checkpoint-path eval path (predict → render → metrics).
+
+Refs #810
+
+* fix(monitoring): make surge experiment d_out mandatory
+
+The smoke experiment hardcoded d_out=300, which only matches SURGE_XT_PARAM_SPEC's encoded width.
+  Callers using a different spec (e.g. surge_4 has width 7) silently ran with the wrong head shape
+  and either crashed at training time or produced predictions that don't decode back into the spec's
+  parameter range.
+
+Switch to Hydra's mandatory-override sentinel so every caller has to pick a value that matches their
+  spec; the surge fixture in tests/conftest.py will pass len(param_specs[<spec>]) on the CLI.
+
+* internal-fix(scripts): harden eval_patches helpers in surge_xt_interactive
+
+- Convert assert statements in _validate_predictions, _render_predicted_audio, and
+  _compute_and_validate_metrics to explicit exceptions (FileNotFoundError / ValueError) so
+  validations are not stripped under ``python -O`` and carry actionable messages (filename diffs,
+  paths, peaks). - Resolve _VST_HEADLESS_WRAPPER and the eval / predict / metrics script paths to
+  absolute paths via the rootutils-discovered repo root so the helpers work from any CWD. - Add a
+  precondition check for the Linux VST headless wrapper that surfaces a clear FileNotFoundError
+  instead of the cryptic ``subprocess.run`` failure. - Add subprocess timeouts to the eval and
+  metrics check_call invocations to match the existing predict_vst_audio timeout. - Drop the
+  misleading ``# noqa: S603 — args built from validated spec`` comment on subprocess invocations and
+  tighten Click ``--checkpoint-path`` to ``exists=True`` so the existence check happens at argument
+  parsing. - Remove the redundant existence checks in _maybe_eval_captured_patches now that
+  ``eval_patches`` validates the same path itself. - Wrap the train.h5 -> test/val/predict.h5
+  sibling copy in a try/except that removes partially-copied siblings on failure to avoid a
+  half-populated output directory. - Extract _expected_prediction_filenames and _validate_metrics_df
+  pure helpers and convert metrics_file_expectations into a frozen ``_MetricsFileSpec`` dataclass
+  keyed on a module-level ``_METRIC_COLUMNS`` constant. - Clear and recreate
+  ``prediction_outputs/``, ``audio/``, and ``metrics/`` output directories at the start of
+  ``eval_patches`` so stale files from a prior run cannot leak into validation. - Update the
+  ``--output-dataset-dir-path`` "skipping dataset creation" log message to reference the current
+  flag name; expand ``main`` and ``eval_patches`` docstrings to describe the actual end-to-end flow
+  with Args/Raises sections.
+
+* test(scripts): add unit tests for surge_xt_interactive eval helpers
+
+Cover the pure helpers extracted from ``eval_patches`` plus the ``_maybe_eval_captured_patches``
+  orchestrator:
+
+- ``_expected_prediction_filenames``: pin filename pattern for sample counts including zero. -
+  ``_validate_predictions``: happy path, missing file, extra file, NaN prediction tensor. -
+  ``_validate_metrics_df``: happy path, wrong row count, missing column, NaN in expected column. -
+  ``_maybe_eval_captured_patches``: skips work when no checkpoint, replicates ``train.h5`` to
+  ``test/val/predict.h5`` siblings, and rolls back partial copies on ``OSError`` so the output dir
+  is never half-populated.
+
+* test(scripts): add subprocess-mocked tests for _render_predicted_audio
+
+Closes the gap flagged in the PR #811 audit: the existing test suite covered _validate_predictions
+  and _validate_metrics_df but not the _render_predicted_audio subprocess wrapper. Adds happy /
+  non-zero / timeout / missing-file / silent-audio / Linux-wrapper coverage.
+
+* fix(monitoring): address Copilot review on surge eval-on-patches flow
+
+Threads ``param_spec_name`` and ``preset_path`` from ``main`` through
+  ``_maybe_eval_captured_patches`` → ``eval_patches`` so:
+
+- ``_run_predict`` now overrides ``model.net.d_out`` with ``len(param_specs[param_spec_name])`` (the
+  smoke config marks ``d_out`` as a mandatory ``???`` override) and resolves all subprocess paths to
+  absolute (Hydra chdirs into its job dir, so relative paths broke). - ``_render_predicted_audio``
+  forwards ``--param_spec`` and ``--preset_path`` to ``predict_vst_audio.py`` instead of letting it
+  fall back to ``surge_xt`` + ``presets/surge-base.vstpreset``.
+
+Also fixes a stale ``param_specs["surge_4"]`` reference in ``configs/experiment/surge/test.yaml``
+  (only ``surge_xt`` and ``surge_simple`` exist) and aligns the test ``_write_wav`` helper with the
+  ``(frames, channels)`` convention used by ``play_audio_recorded`` and ``predict_vst_audio.py``.
+
+* test(scripts): write _write_wav samples in (channels, frames) order
+
+Pedalboard's AudioFile.write expects (channels, frames); _write_wav was building (num_frames,
+  num_channels) and writing without transposing. Tests passed because pedalboard tolerates
+  num_channels=1 in either orientation, but the shape is wrong and would break for stereo. Fixes
+  review comment #3202175537.
+
+
 ## v0.10.0 (2026-05-07)
 
 ### Features
