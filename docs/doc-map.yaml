@@ -271,7 +271,7 @@ docs:
     description: Interactive Surge XT prediction audition and patch-recording guide
     sources:
       - pattern: "scripts/surge_xt_interactive.py"
-        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch HDF5 output, append-vs-fresh dataset semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants"
+        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch HDF5 output, append-vs-fresh directory semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants, optional --checkpoint-path eval pipeline (eval_patches: src/eval.py mode=predict + predict_vst_audio.py + compute_audio_metrics.py), directory-of-splits output"
       - pattern: "src/data/vst/core.py"
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"
