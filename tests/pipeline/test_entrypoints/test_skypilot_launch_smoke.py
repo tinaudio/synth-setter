@@ -7,6 +7,7 @@ write under tmp_path so tests don't write into the real /tmp.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,12 @@ from pipeline.entrypoints.skypilot_launch_smoke import (
     load_worker_env,
     main,
     resolve_worker_env,
+)
+from pipeline.entrypoints.skypilot_launch_smoke import (
+    _detect_provider as _real_detect_provider,
+)
+from pipeline.entrypoints.skypilot_launch_smoke import (
+    _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
 from pipeline.schemas.config import dataset_config_id_from_path
 from pipeline.schemas.spec import DatasetPipelineSpec
@@ -123,14 +130,18 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip the rclone-R2 / WANDB keys from the test process env.
+    """Strip the rclone-R2 / WANDB keys (and their bare aliases) from the test process env.
 
-    Without this, a developer who has `RCLONE_CONFIG_R2_*` exported in their shell
-    (or a CI runner that inherits them globally) would silently satisfy
-    `resolve_worker_env`, masking tests that rely on a specific resolution path.
+    Without this, a developer who has `RCLONE_CONFIG_R2_*` (or the bare `R2_*`
+    fallback names) exported in their shell would silently satisfy
+    `resolve_worker_env` — via the prefixed names directly or via the
+    `_apply_bare_r2_fallback` path — masking tests that rely on a specific
+    resolution path.
     """
     for key in _WORKER_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
+    for bare in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT"):
+        monkeypatch.delenv(bare, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -143,6 +154,23 @@ def mock_rclone_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "pipeline.entrypoints.skypilot_launch_smoke.subprocess.check_call",
         lambda args: None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def mock_cred_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No-op `_run_cred_bootstrap` and `_detect_provider` by default.
+
+    Tests that exercise the bootstrap behavior directly re-patch these to inject a specific
+    provider, exception, or call assertion.
+    """
+    monkeypatch.setattr(
+        "pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "pipeline.entrypoints.skypilot_launch_smoke._detect_provider",
+        lambda _task: "runpod",
     )
 
 
@@ -1169,3 +1197,217 @@ class TestOverrideImageId:
 
         oci_res.copy.assert_not_called()
         task.set_resources.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _detect_provider — Task YAML → cred-bootstrap --provider flag
+# ---------------------------------------------------------------------------
+
+
+class TestDetectProvider:
+    """`_detect_provider` reads `resources.cloud` from a Task YAML and maps it to the cred-
+    bootstrap `--provider` flag.
+
+    Reads the YAML directly (no
+    `sky.Task.from_yaml`) so each rank's task instantiation isn't burdened
+    with an extra detection load.
+    """
+
+    def test_runpod_cloud_detected_as_runpod(self, tmp_path: Path) -> None:
+        """Flat `resources.cloud: runpod` template maps to `--provider runpod`."""
+        path = tmp_path / "runpod.yaml"
+        path.write_text(yaml.dump({"resources": {"cloud": "runpod"}}))
+        assert _real_detect_provider(path) == "runpod"
+
+    def test_oci_any_of_detected_as_oci(self, tmp_path: Path) -> None:
+        """OCI templates use `resources.any_of: [{cloud: oci, ...}, ...]` for shape fan-out."""
+        path = tmp_path / "oci.yaml"
+        path.write_text(
+            yaml.dump({"resources": {"any_of": [{"cloud": "oci", "instance_type": "VM.X"}]}})
+        )
+
+        assert _real_detect_provider(path) == "oci"
+
+    def test_kubernetes_cloud_detected_as_local(self, tmp_path: Path) -> None:
+        """`sky local up`-provisioned kind clusters surface as `cloud: kubernetes`; the cred
+        bootstrap maps that to `--provider local` (R2-only — no compute provider auth)."""
+        path = tmp_path / "local.yaml"
+        path.write_text(yaml.dump({"resources": {"cloud": "kubernetes"}}))
+
+        assert _real_detect_provider(path) == "local"
+
+    def test_unknown_cloud_raises(self, tmp_path: Path) -> None:
+        """A cloud the bootstrap doesn't support (e.g. aws) fails loudly with a clear error."""
+        path = tmp_path / "weird.yaml"
+        path.write_text(yaml.dump({"resources": {"cloud": "aws"}}))
+        with pytest.raises(click.ClickException, match="(?i)unsupported cloud"):
+            _real_detect_provider(path)
+
+    def test_missing_cloud_raises(self, tmp_path: Path) -> None:
+        """A template with no detectable `cloud` field raises a launcher misuse error."""
+        path = tmp_path / "no-cloud.yaml"
+        path.write_text(yaml.dump({"resources": {"cpus": "2+"}}))
+        with pytest.raises(click.ClickException, match="(?i)could not detect cloud"):
+            _real_detect_provider(path)
+
+
+# ---------------------------------------------------------------------------
+# _run_cred_bootstrap — invokes the script; honors SKYPILOT_API_SERVER_ENDPOINT;
+# never streams stdout (script is silent by design but defensive capture too).
+# ---------------------------------------------------------------------------
+
+
+class TestRunCredBootstrap:
+    """Behavioral contracts for the launcher's wrapping of the cred-bootstrap script."""
+
+    def test_skips_when_api_server_endpoint_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When SKYPILOT_API_SERVER_ENDPOINT is set, the bootstrap script is NOT invoked — the
+        remote API server holds creds.
+
+        Returns silently (no exception, no script call).
+        """
+        monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://api:pw@server/")
+        called: list[str] = []
+        monkeypatch.setattr(
+            "pipeline.entrypoints.skypilot_launch_smoke.subprocess.run",
+            lambda *args, **kwargs: called.append("invoked"),  # type: ignore[misc]
+        )
+        # bypass the autouse no-op fixture
+
+        _real_run_cred_bootstrap(provider="runpod")
+        assert called == [], "bootstrap script should not be invoked in remote-server mode"
+
+    def test_passes_merged_env_to_subprocess(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """When --env-file is provided, its values are merged into the subprocess env so bare R2_*
+        / RUNPOD_API_KEY / OCI_* set only in the dotenv file are visible to the bootstrap script
+        (which runs `require_var` against them)."""
+        env_file = tmp_path / "creds.env"
+        env_file.write_text("RUNPOD_API_KEY=from-env-file\nR2_ACCESS_KEY_ID=from-env-file\n")
+        monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+        monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
+
+        captured: dict[str, Any] = {}
+
+        def fake_run(args: list[str], **kwargs: Any) -> MagicMock:
+            captured["env"] = kwargs.get("env", {})
+            captured["args"] = args
+            result = MagicMock()
+            result.stdout = ""
+            result.stderr = ""
+            result.returncode = 0
+            return result
+
+        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.subprocess.run", fake_run)
+
+        _real_run_cred_bootstrap(provider="runpod", env_file_path=env_file)
+
+        assert captured["env"]["RUNPOD_API_KEY"] == "from-env-file"
+        assert captured["env"]["R2_ACCESS_KEY_ID"] == "from-env-file"
+
+    def test_propagates_script_failure_as_click_exception(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-zero rc from the bootstrap script bubbles up as a ClickException — the launcher
+        fails fast rather than continuing with a half-written cred state."""
+        import subprocess as _subprocess
+
+        monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+
+        def fake_run(args: list[str], **kwargs: Any) -> Any:
+            raise _subprocess.CalledProcessError(
+                returncode=1, cmd=args, stderr="::error::missing var"
+            )
+
+        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.subprocess.run", fake_run)
+
+        with pytest.raises(click.ClickException, match="(?i)cred bootstrap failed"):
+            _real_run_cred_bootstrap(provider="runpod")
+
+    def test_capture_output_keeps_stdout_off_caller_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Even if the script ever started emitting stdout (it shouldn't), the launcher captures it
+        via `subprocess.run(capture_output=True)` so a tee'd workflow caller cannot leak it.
+
+        Pin the kwarg here so a future edit can't drop the capture.
+        """
+        captured: dict[str, Any] = {}
+
+        def fake_run(args: list[str], **kwargs: Any) -> MagicMock:
+            captured["kwargs"] = kwargs
+            result = MagicMock()
+            result.stdout = "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=should-never-leak"
+            result.stderr = ""
+            result.returncode = 0
+            return result
+
+        monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
+        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch_smoke.subprocess.run", fake_run)
+
+        # If the launcher were echoing stdout, click.testing.CliRunner would surface it.
+        # Here we just assert the call shape: capture_output=True, env supplied.
+        _real_run_cred_bootstrap(provider="runpod")
+        assert captured["kwargs"].get("capture_output") is True
+        assert "env" in captured["kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# main() bridges RCLONE_CONFIG_R2_* into os.environ before upload_spec_to_r2
+# ---------------------------------------------------------------------------
+
+
+class TestRcloneEnvBridging:
+    """`main()` copies `RCLONE_CONFIG_R2_*` from the resolved worker_env into `os.environ` so
+    `upload_spec_to_r2`'s `rclone copyto` subprocess inherits them.
+
+    Catches the regression class: bare-R2 only set in env / dotenv,
+    no rclone-prefixed export, but the launcher still needs to upload the spec.
+    """
+
+    def test_bare_r2_only_in_env_file_bridges_to_os_environ(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        tmp_path: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An .env carrying only bare `R2_*` triggers the bare→prefixed fallback; main() then
+        injects the prefixed names into os.environ so any inheriting subprocess (rclone) sees
+        them."""
+        env_file_with_bare = tmp_path / "bare.env"
+        env_file_with_bare.write_text(
+            "R2_ACCESS_KEY_ID=ak-from-env\n"
+            "R2_SECRET_ACCESS_KEY=sk-from-env\n"
+            "R2_ENDPOINT=https://e.r2\n"
+        )
+        # Capture os.environ at the point upload_spec_to_r2 is called.
+        captured: dict[str, str] = {}
+
+        def fake_rclone(args: list[str]) -> None:
+            captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] = os.environ.get(
+                "RCLONE_CONFIG_R2_ACCESS_KEY_ID", "<unset>"
+            )
+            captured["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] = os.environ.get(
+                "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "<unset>"
+            )
+            captured["RCLONE_CONFIG_R2_ENDPOINT"] = os.environ.get(
+                "RCLONE_CONFIG_R2_ENDPOINT", "<unset>"
+            )
+
+        monkeypatch.setattr(
+            "pipeline.entrypoints.skypilot_launch_smoke.subprocess.check_call", fake_rclone
+        )
+
+        result = _invoke(
+            config_yaml, template_yaml, env_file_with_bare, "--cluster-name", "smoke-job-1"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak-from-env"
+        assert captured["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] == "sk-from-env"  # noqa: S105 — fixture value, not a real secret
+        assert captured["RCLONE_CONFIG_R2_ENDPOINT"] == "https://e.r2"
