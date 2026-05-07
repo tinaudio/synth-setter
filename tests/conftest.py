@@ -15,7 +15,7 @@ from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
-from src.data.vst import param_specs
+from src.data.vst import param_specs, preset_paths
 from src.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
@@ -261,7 +261,26 @@ def accelerator(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="function")
-def cfg_surge_xt_global(accelerator: str) -> DictConfig:
+def param_spec_name(request: pytest.FixtureRequest) -> str:
+    """Param spec name driving the Surge XT smoke fixtures.
+
+    Defaults to ``"surge_4"`` (the 4-continuous + 2-note mini-example spec used by
+    the smoke-test fixture and the ``predict_vst_audio`` end-to-end test). Override
+    per-test via indirect parametrization to exercise other specs::
+
+        @pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+        def test_thing(cfg_surge_xt_global): ...
+
+    :param request: Pytest fixture request — when parametrized indirectly, ``request.param``
+        carries the spec name; otherwise the default ``"surge_4"`` is used.
+
+    :return: A key into :data:`src.data.vst.param_specs` and :data:`src.data.vst.preset_paths`.
+    """
+    return getattr(request, "param", "surge_4")
+
+
+@pytest.fixture(scope="function")
+def cfg_surge_xt_global(accelerator: str, param_spec_name: str) -> DictConfig:
     """A pytest fixture for a one-step Surge XT training config on the N-sample test fixture.
 
     Composes `train.yaml` with `experiment=surge/ffn_full` and bakes in the minimal overrides
@@ -270,6 +289,8 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
 
     :param accelerator: Parametrized accelerator (``"cpu"`` / ``"mps"`` / ``"gpu"``) — drives
         Lightning's ``trainer.accelerator`` and applies device-specific config tweaks.
+    :param param_spec_name: Name of the :mod:`src.data.vst` param spec the cfg is wired for —
+        drives ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``.
 
     :return: A DictConfig object configured for a one-step Surge XT smoke train.
     """
@@ -317,7 +338,8 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
             cfg.trainer.deterministic = True
 
             cfg.model.scheduler = None
-            cfg.model.net.d_out = len(param_specs["surge_4"])
+            cfg.model.net.d_out = len(param_specs[param_spec_name])
+            cfg.callbacks.log_per_param_mse.param_spec = param_spec_name
             cfg.logger = None
             cfg.test = False
             mc = cfg.callbacks.model_checkpoint
@@ -330,8 +352,14 @@ def cfg_surge_xt_global(accelerator: str) -> DictConfig:
 
 
 @pytest.fixture(scope="function")
-def surge_xt_smoke_datasets(tmp_path: Path) -> Path:
+def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     """Generate the N-sample Surge XT dataset used by the e2e smoke test.
+
+    :param tmp_path: Per-test temporary directory; the dataset is written under
+        ``tmp_path / "data" / "smoke"``.
+    :param param_spec_name: Param spec name (key into :data:`src.data.vst.param_specs`
+        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param_spec``
+        and ``--preset_path`` for ``generate_vst_dataset``.
 
     :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
         dataset.
@@ -349,8 +377,8 @@ def surge_xt_smoke_datasets(tmp_path: Path) -> Path:
         "src/data/vst/generate_vst_dataset.py",
         str(smoke_dataset_dir / "train.h5"),
         str(NUM_FIXTURE_SAMPLES),
-        "--preset_path=presets/surge-mini.vstpreset",
-        "--param_spec=surge_4",
+        f"--preset_path={preset_paths[param_spec_name]}",
+        f"--param_spec={param_spec_name}",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is

@@ -287,15 +287,22 @@ class TestLoadDatasetSynthParams:
         self,
         surge_xt_interactive,
         surge_xt_smoke_datasets: Path,
+        param_spec_name: str,
     ) -> None:
-        """Loads row 0 from the real ``surge_xt_smoke_datasets`` test.h5 via the surge_xt spec."""
+        """Loads row 0 from the real ``surge_xt_smoke_datasets`` test.h5.
+
+        The decode spec must match the spec the fixture generated the dataset with —
+        otherwise the decoder slices off the end of the row and ``.item()`` raises.
+        """
         ref = surge_xt_interactive.DatasetRef(
             path=surge_xt_smoke_datasets / "test.h5", batch_idx=0
         )
 
-        loaded = surge_xt_interactive.load_dataset_synth_params(ref, param_spec_name="surge_xt")
+        loaded = surge_xt_interactive.load_dataset_synth_params(
+            ref, param_spec_name=param_spec_name
+        )
 
-        expected_keys = {p.name for p in param_specs["surge_xt"].synth_params}
+        expected_keys = {p.name for p in param_specs[param_spec_name].synth_params}
         assert set(loaded.keys()) == expected_keys
         for name, value in loaded.items():
             assert isinstance(value, float), f"{name} is {type(value).__name__}, expected float"

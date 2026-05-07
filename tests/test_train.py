@@ -10,6 +10,7 @@ import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
+from src.data.vst import param_specs, preset_paths
 from src.eval import evaluate
 from src.train import train
 from tests.conftest import (
@@ -165,6 +166,25 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "param_spec_name",
+    ["surge_4", "surge_simple", "surge_xt"],
+    indirect=True,
+)
+def test_cfg_surge_xt_global_wires_param_spec(
+    cfg_surge_xt_global: DictConfig, param_spec_name: str
+) -> None:
+    """Templated ``cfg_surge_xt_global`` propagates the param spec to ``model.net.d_out`` and
+    ``callbacks.log_per_param_mse.param_spec`` for every supported spec — guards against the
+    surge_4-only hardcodes the fixture used to carry.
+
+    :param cfg_surge_xt_global: Surge XT training config built for ``param_spec_name``.
+    :param param_spec_name: Indirectly-parametrized spec name driving the fixture.
+    """
+    assert cfg_surge_xt_global.model.net.d_out == len(param_specs[param_spec_name])
+    assert cfg_surge_xt_global.callbacks.log_per_param_mse.param_spec == param_spec_name
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
@@ -195,7 +215,10 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_eval_surge_xt(
-    tmp_path: Path, cfg_surge_xt: DictConfig, cfg_surge_xt_eval: DictConfig
+    tmp_path: Path,
+    cfg_surge_xt: DictConfig,
+    cfg_surge_xt_eval: DictConfig,
+    param_spec_name: str,
 ) -> None:
     """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run
     standalone eval on the saved checkpoint.
@@ -203,6 +226,10 @@ def test_train_eval_surge_xt(
     :param tmp_path: The temporary logging path.
     :param cfg_surge_xt: Surge XT smoke-test training config.
     :param cfg_surge_xt_eval: Matching smoke-test eval config (ckpt_path set by this test).
+    :param param_spec_name: Param spec the fixtures (and therefore the trained model) are
+        wired for — passed to ``predict_vst_audio.py`` so the script's decode layout matches
+        the predicted tensor's encoding (mismatched specs go off-the-end and crash with
+        ``can only convert an array of size 1 to a Python scalar``).
     """
     from click.testing import CliRunner
     from pedalboard.io import AudioFile
@@ -263,6 +290,8 @@ def test_train_eval_surge_xt(
         "scripts/predict_vst_audio.py",
         str(predictions_dir),
         str(audio_dir),
+        f"--param_spec={param_spec_name}",
+        f"--preset_path={preset_paths[param_spec_name]}",
         "-t",
     ]
     try:
