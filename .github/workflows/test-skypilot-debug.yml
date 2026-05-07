@@ -260,7 +260,7 @@ jobs:
           VARIANT: ${{ matrix.variant }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
-          set -o pipefail
+          set -euo pipefail
           if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
             bash scripts/skypilot_write_provider_creds.sh
           else
@@ -371,7 +371,7 @@ jobs:
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
-          set -o pipefail
+          set -euo pipefail
           if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
             bash scripts/skypilot_write_provider_creds.sh
           else
@@ -400,7 +400,7 @@ jobs:
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
-          set -o pipefail
+          set -euo pipefail
           docker pull "$IMAGE"
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
