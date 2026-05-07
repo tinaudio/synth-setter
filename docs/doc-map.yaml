@@ -109,7 +109,7 @@ docs:
       - pattern: ".github/workflows/test-skypilot-debug.yml"
         covers: "Permanent diagnostic matrix for the SkyPilot+RunPod path (workflow_dispatch only). Same cred-bootstrap gate as test-dataset-generation: writer is invoked iff SKYPILOT_API_SERVER_ENDPOINT is unset."
       - pattern: ".github/workflows/test-skypilot-local.yml"
-        covers: "kind/local-Kubernetes smoke for the launcher's env-forwarding contract (workflow_dispatch only). sky local up + sky launch on the kubernetes backend with no billable cloud capacity — verifies RCLONE_CONFIG_R2_* flow through task.update_envs into the worker pod."
+        covers: "kind/local-Kubernetes smoke for the launcher's env-forwarding contract. Triggers on workflow_dispatch and on pull_request events that touch the workflow file or the local-debug template (path-filtered). sky local up + sky launch on the kubernetes backend with no billable cloud capacity — verifies RCLONE_CONFIG_R2_* flow through task.update_envs into the worker pod."
       - pattern: "configs/compute/local-debug-rclone-template.yaml"
         covers: "SkyPilot Task YAML for the kubernetes backend (no `image_id`, defers to SkyPilot's stock kube image). Setup installs rclone; run uploads a sentinel file to R2 with the same flags the production worker uses. Used by test-skypilot-local.yml."
       - pattern: "requirements-app.txt"

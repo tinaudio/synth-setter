@@ -80,8 +80,12 @@ jobs:
 
       # Provision the local kind cluster. `--no-gpus` keeps the cluster CPU-
       # only so the runner image's missing nvidia-container-toolkit doesn't
-      # gate the smoke. Default cluster name "skypilot" is what `sky check`
-      # and `sky launch` look for.
+      # gate the smoke. `sky local up` creates the kind cluster (default kind
+      # name "skypilot") and points kubectl at it; that context is what
+      # `sky check kubernetes` validates and what subsequent `sky launch`
+      # calls schedule onto. The SkyPilot cluster name passed to `sky.launch`
+      # below (`CLUSTER_NAME`, run-scoped) is independent — kind names the
+      # backing cluster, SkyPilot names the logical job cluster.
       - name: sky local up
         run: sky local up --no-gpus
 
