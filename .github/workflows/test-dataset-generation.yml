@@ -291,12 +291,18 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
+          # `--num-workers 1` (vs. 3 on cloud rows): the kind cluster
+          # `sky local up` provisions has a single node — the GH runner —
+          # which can't fit 3 concurrent worker pods of cpus=2+, mem=4+. The
+          # cloud rows give each worker its own VM, so this row is the only
+          # shape with shared-cluster contention. See #843 for the deeper
+          # design discussion (multi-node kind, retry-on-pod-free).
           python -m pipeline.entrypoints.skypilot_launch_smoke \
             --config "$CONFIG_PATH" \
             --template configs/compute/local-template.yaml \
             --cluster-name "$CLUSTER_NAME" \
             --worker-image-tag "$IMAGE_TAG" \
-            --num-workers 3 \
+            --num-workers 1 \
             --spec-out "/tmp/run-metadata-${{ matrix.provider }}/input_spec.json" \
             --tail \
             2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}/generate.log"
