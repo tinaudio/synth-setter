@@ -24,20 +24,29 @@ from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",
-    datefmt="[%X]",
-    handlers=[
-        RichHandler(
-            console=Console(width=200),
-            rich_tracebacks=True,
-            markup=False,
-            show_path=True,
-        )
-    ],
-)
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Install the Rich root-logger handler used when this script runs as a CLI.
+
+    Kept out of import-time side effects so importing the module (e.g. from the test suite) doesn't
+    reconfigure the root logger or construct a Console.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[
+            RichHandler(
+                console=Console(width=200),
+                rich_tracebacks=True,
+                markup=False,
+                show_path=True,
+            )
+        ],
+    )
+
 
 CHANNELS = 2
 SAMPLE_RATE = 44100
@@ -166,8 +175,7 @@ def decode_prediction_row(
     batch_idx: int,
     param_spec_name: str,
 ) -> dict[str, float]:
-    """Decode a single predicted row into raw VST synth params (functional core — pure
-    transform).
+    """Decode a single predicted row into raw VST synth params (functional core — pure transform).
 
     :param pred_tensor: Float tensor of shape ``(batch_size, num_params)`` with
         values in ``[-1, 1]`` (inverse of the ``(x + 1) / 2`` scale used by
@@ -574,4 +582,5 @@ def main(
 
 
 if __name__ == "__main__":
+    _configure_logging()
     main()  # type: ignore[call-arg]
