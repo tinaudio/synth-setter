@@ -173,6 +173,7 @@ The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (onl
     RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
     RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
     RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+    R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
     WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   run: |
     docker run --rm \
@@ -182,6 +183,7 @@ The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (onl
       -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
       -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
       -e RCLONE_CONFIG_R2_ENDPOINT \
+      -e R2_ACCOUNT_ID \
       -e WANDB_API_KEY \
       "$IMAGE" bash -c '... python -m pipeline.entrypoints.skypilot_launch_smoke ...'
 ```

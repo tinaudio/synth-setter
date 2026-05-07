@@ -84,8 +84,10 @@ parse_args() {
   done
 }
 
-# Resolve $1 from env. If empty, fail. Returns the resolved value on stdout
-# (single-line, no trailing newline) for capture by the caller.
+# Resolve $1 from env. If empty, fail. Returns the resolved value verbatim on
+# stdout (no trailing newline added) for capture by the caller. Most callers
+# pass single-line values, but `OCI_API_KEY_PEM` is multi-line — `printf '%s'`
+# preserves the original content either way.
 resolve_var() {
   local name="$1"
   local value="${!name:-}"

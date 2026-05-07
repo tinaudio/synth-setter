@@ -400,14 +400,16 @@ def main(
             f"Expected at least one of: {', '.join(secret_keys)}."
         )
 
-    # `upload_spec_to_r2` shells out to rclone, which inherits os.environ. For
-    # local dev a `--env-file` populates `worker_env` without exporting into
-    # the process env, so copy any RCLONE_CONFIG_R2_* values across before the
-    # subprocess runs. CI sets these in the workflow `env:` block directly, so
-    # `setdefault` is a no-op there.
+    # `upload_spec_to_r2` shells out to rclone, which inherits os.environ.
+    # `worker_env` already reflects the launcher's resolved precedence
+    # (env-file > process env, per `resolve_worker_env`), so write through to
+    # `os.environ` to make the rclone subprocess see the same effective
+    # values the launcher resolved — not whatever happened to be exported
+    # in the launcher process. CI sets these in the workflow `env:` block
+    # directly, so the assignment is a no-op there.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
-            os.environ.setdefault(key, value)
+            os.environ[key] = value
 
     config = load_dataset_config(config_path)
     config_id = dataset_config_id_from_path(config_path)
