@@ -71,8 +71,9 @@ AUDIO_THREAD_DRAIN_TIMEOUT_SECONDS = 2
 
 # Deterministic recording clip when ``--session-recording-path`` is set.
 # The point is reproducibility: same plugin + preset + params -> same WAV.
-# A held middle-C note is rendered from ``NOTE_START`` to ``NOTE_END``,
-# inside a fixed-length window so any release tail is captured.
+# A held middle-C note is rendered from ``SESSION_RECORDING_NOTE_START_SECONDS``
+# to ``SESSION_RECORDING_NOTE_END_SECONDS``, inside a fixed-length window so any
+# release tail is captured.
 SESSION_RECORDING_DURATION_SECONDS = 10.0
 SESSION_RECORDING_MIDI_NOTE = 60  # middle C (C4)
 SESSION_RECORDING_VELOCITY = 100

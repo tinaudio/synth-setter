@@ -80,8 +80,11 @@ python scripts/surge_xt_interactive.py \
 ```
 
 When `--session-recording-path` is set, the live audio stream is
-*replaced* by a fixed 10-second offline render: middle C held from
-2 s to 4 s, with the surrounding silence capturing any release tail.
+*replaced* by a fixed `SESSION_RECORDING_DURATION_SECONDS`-second offline
+render (currently 10): middle C held from
+`SESSION_RECORDING_NOTE_START_SECONDS` (2 s) to
+`SESSION_RECORDING_NOTE_END_SECONDS` (4 s), with the surrounding silence
+capturing any release tail.
 The render runs synchronously *before* the editor opens, so the WAV
 depends only on the initially-loaded plugin state (preset + `--pred`
 / `--dataset-ref` params) and the same inputs always produce the
@@ -104,12 +107,11 @@ raises `click.UsageError`.
 | `--param-spec-name`         | str                | `surge_xt`                     | Parameter spec name (key into `param_specs`) used to decode prediction/dataset rows applied to the plugin and to enumerate which synth params are captured when recording patches.                                                                                                                                                                                                                                                                                                                        |
 | `--output-dataset-dir-path` | path               | unset                          | Directory to create for the recorded patches. Must not already exist — `make_dataset` writes fixed-size HDF5 datasets without `maxshape` and cannot append to existing files. After the editor is closed, patches captured via the keyboard loop (press `p` to record, `q` to quit) are rendered through the plugin and written to `train.h5` inside this directory via `src.data.vst.generate_vst_dataset.make_dataset` (plus `val.h5`/`test.h5`/`predict.h5` siblings when `--checkpoint-path` is set). |
 | `--checkpoint-path`         | path               | unset                          | Optional checkpoint path to run standalone eval on after rendering captured patches. When set, triggers the `eval_patches` pipeline (`src/eval.py mode=predict` → `predict_vst_audio.py` → `compute_audio_metrics.py`); see [`docs/design/eval-pipeline.md`](../design/eval-pipeline.md) for the full pipeline and `_METRIC_COLUMNS` in the script for the metric series produced.                                                                                                                        |
-| `--session-recording-path`  | path               | unset                          | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set.                                                               |
+| `--session-recording-path`  | path               | unset                          | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `SESSION_RECORDING_NOTE_START_SECONDS` (2 s) to `SESSION_RECORDING_NOTE_END_SECONDS` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set.           |
 
-Tip — the help strings above are quoted verbatim from the Click
-decorators in `scripts/surge_xt_interactive.py`. Run
-`python scripts/surge_xt_interactive.py --help` to confirm the current
-text.
+Tip — help strings above paraphrase the Click decorators in
+`scripts/surge_xt_interactive.py`. Run
+`python scripts/surge_xt_interactive.py --help` for the canonical text.
 
 ## The interactive session
 
@@ -158,9 +160,9 @@ to consume. Each file has these datasets:
 | `mel_spec`    | `(N, 2, 128, 401)`                              | `float32` | Mel spectrogram per channel. Compressed with Blosc2.                           |
 | `param_array` | `(N, P)`                                        | `float32` | Encoded params (`ParamSpec.encode` output) in `[0, 1]`. `P = len(param_spec)`. |
 
-Where `N = len(synth_patches)`, `sample_rate = 44100`, and
-`signal_duration_seconds = 4.0` (constants at the top of
-`scripts/surge_xt_interactive.py`).
+Where `N = len(synth_patches)`, `sample_rate = SAMPLE_RATE` (44100),
+and `signal_duration_seconds = MAKE_DATASET_SIGNAL_DURATION_SECONDS`
+(4.0); both at the top of `scripts/surge_xt_interactive.py`.
 
 The audio attached attrs on the `audio` dataset record the rendering
 config: `velocity`, `signal_duration_seconds`, `sample_rate`,
