@@ -1230,6 +1230,14 @@ class TestDetectProvider:
         task = self._make_task(OCI())
         assert _detect_provider(task) == "oci"
 
+    def test_kubernetes_cloud_detected_as_local(self) -> None:
+        """`sky local up`-provisioned kind clusters surface as `cloud: kubernetes`; the cred
+        bootstrap maps that to `--provider local` (R2-only — no compute provider auth)."""
+        from sky.clouds import Kubernetes
+
+        task = self._make_task(Kubernetes())
+        assert _detect_provider(task) == "local"
+
     def test_unknown_cloud_raises(self) -> None:
         """A cloud that's neither RunPod nor OCI is a launcher misuse — fail loudly so the operator
         sees it before the bootstrap script swallows the unknown name."""

@@ -1,0 +1,48 @@
+# SkyPilot task template for the local Kubernetes (kind) backend.
+#
+# Loaded by pipeline/entrypoints/skypilot_launch_smoke.py via sky.Task.from_yaml(...)
+# when --template configs/compute/local-template.yaml is passed (the
+# `skypilot-local` row of test-dataset-generation's matrix). Provisioning
+# expects a `sky local up`-managed kind cluster ("skypilot" kubectl context)
+# already running.
+#
+# The cred bootstrap detects `cloud: kubernetes` and runs with `--provider local`,
+# which writes only the R2 cred files — kind needs no compute provider auth.
+# R2 still ships the materialized spec (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`).
+#
+# Image: `tinaudio/synth-setter:<worker-image-tag>` is loaded into the kind
+# cluster via `kind load docker-image` ahead of launch (CI does this; for
+# local dev `kind load docker-image tinaudio/synth-setter:dev-snapshot --name skypilot`
+# pulls from the local docker daemon). `image_id` is set per-launch by the
+# launcher from --worker-image-tag.
+
+resources:
+  cloud: kubernetes
+  cpus: 2+
+  memory: 4+
+  disk_size: 20
+
+# Placeholders. Real values are injected by the launcher via update_envs.
+# WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the
+# uploaded spec; the worker downloads from there via load_spec_from_uri.
+envs:
+  RCLONE_CONFIG_R2_TYPE: ""
+  RCLONE_CONFIG_R2_PROVIDER: ""
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
+  RCLONE_CONFIG_R2_ENDPOINT: ""
+  WORKER_SPEC_URI: ""
+  WORKER_GIT_REF: ""
+  SYNTH_SETTER_WORKER_RANK: ""
+  SYNTH_SETTER_NUM_WORKERS: ""
+
+setup: |
+  set -euo pipefail
+  echo "synth-setter worker ready (host: $(hostname))"
+
+run: |
+  set -euo pipefail
+  cd /home/build/synth-setter
+  echo "skypilot-run-cwd: $(pwd)"
+  bash scripts/sync_worker_checkout.sh
+  exec python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"

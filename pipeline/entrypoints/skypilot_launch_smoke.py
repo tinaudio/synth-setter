@@ -39,6 +39,7 @@ from pathlib import Path
 
 import click
 import sky
+import sky.check  # accessed conditionally for the kubernetes path; see _detect_provider == "local" branch in main
 from dotenv import dotenv_values
 
 from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
@@ -179,16 +180,18 @@ def _detect_provider(task: sky.Task) -> str:
     determines the provider — every entry in a task's alt-set is the same cloud
     in our templates.
     """
-    from sky.clouds import OCI, RunPod
+    from sky.clouds import OCI, Kubernetes, RunPod
 
     cloud = next(iter(task.resources)).cloud
     if isinstance(cloud, RunPod):
         return "runpod"
     if isinstance(cloud, OCI):
         return "oci"
+    if isinstance(cloud, Kubernetes):
+        return "local"
     raise click.ClickException(
         f"Unsupported cloud {type(cloud).__name__} in task.resources; cred bootstrap "
-        "supports runpod and oci only"
+        "supports runpod, oci, and local (kubernetes) only"
     )
 
 
@@ -422,6 +425,15 @@ def main(
     provider = _detect_provider(sky.Task.from_yaml(str(template_path)))
     bootstrap_stdout = _run_cred_bootstrap(provider=provider)
     worker_env = {**worker_env, **_parse_rclone_env_lines(bootstrap_stdout)}
+
+    # Kubernetes-specific: SkyPilot 0.12 caches enabled-clouds in-process; a
+    # CLI `sky check` doesn't always populate the cache the SDK reads, and
+    # `sky.launch` raises NoCloudAccessError on a fresh runner. Calling
+    # `sky.check.check` in-process before launch is the documented workaround
+    # (see #834 / test-skypilot-local.yml). RunPod/OCI don't need it — those
+    # backends source creds from disk on every launch.
+    if provider == "local":
+        sky.check.check(clouds=["kubernetes"], quiet=False)
 
     rcs = _run_workers(
         worker_env_base=worker_env,

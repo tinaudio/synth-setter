@@ -250,6 +250,25 @@ class TestProviderGating:
         assert (tmp_path / ".oci" / "oci_api_key.pem").is_file()
         assert (tmp_path / ".sky" / "config.yaml").is_file()
 
+    def test_oci_provider_sky_config_yaml_is_mode_600(self, tmp_path: Path) -> None:
+        """Explicit chmod 600 on ~/.sky/config.yaml — independent of caller umask."""
+        # Run a child process that relaxes its umask to 022 before invoking the script,
+        # so the file's mode is determined by an explicit chmod, not the inherited umask.
+        wrapper = tmp_path / "wrap.sh"
+        wrapper.write_text(f'#!/usr/bin/env bash\numask 022\nexec bash {SCRIPT} "$@"\n')
+        wrapper.chmod(0o755)
+        env_for_run = {**R2_ENV, **OCI_ENV, "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        env_for_run["HOME"] = str(tmp_path)
+        result = subprocess.run(  # noqa: S603 — controlled args, hermetic env
+            [str(wrapper), "--provider", "oci"],  # noqa: S607 — wrapper script
+            env=env_for_run,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.returncode == 0
+        assert _file_mode(tmp_path / ".sky" / "config.yaml") == 0o600
+
     def test_oci_provider_does_not_write_runpod_config(self, tmp_path: Path) -> None:
         _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
         assert not (tmp_path / ".runpod" / "config.toml").exists()
@@ -262,6 +281,41 @@ class TestProviderGating:
     def test_missing_provider_fails(self, tmp_path: Path) -> None:
         result = _run(tmp_path, R2_ENV, expect_success=False)
         assert result.returncode != 0
+
+
+class TestLocalProvider:
+    """``--provider local`` writes only the R2 cred files (no compute provider auth needed)."""
+
+    def test_local_provider_writes_r2_creds(self, tmp_path: Path) -> None:
+        _run(tmp_path, R2_ENV, "--provider", "local")
+        assert (tmp_path / ".cloudflare" / "r2.credentials").is_file()
+        assert (tmp_path / ".cloudflare" / "accountid").is_file()
+
+    def test_local_provider_emits_rclone_env_lines(self, tmp_path: Path) -> None:
+        result = _run(tmp_path, R2_ENV, "--provider", "local")
+        assert "RCLONE_CONFIG_R2_TYPE=s3" in result.stdout
+        assert f"RCLONE_CONFIG_R2_ACCESS_KEY_ID={R2_ENV['R2_ACCESS_KEY_ID']}" in result.stdout
+
+    def test_local_provider_does_not_write_runpod_config(self, tmp_path: Path) -> None:
+        _run(tmp_path, R2_ENV, "--provider", "local")
+        assert not (tmp_path / ".runpod" / "config.toml").exists()
+
+    def test_local_provider_does_not_write_oci_files(self, tmp_path: Path) -> None:
+        _run(tmp_path, R2_ENV, "--provider", "local")
+        assert not (tmp_path / ".oci").exists()
+        assert not (tmp_path / ".sky").exists()
+
+    def test_local_provider_does_not_require_runpod_or_oci_env(self, tmp_path: Path) -> None:
+        """Local mode must succeed with R2 vars alone — no RUNPOD_API_KEY, no OCI_*."""
+        result = _run(tmp_path, R2_ENV, "--provider", "local")
+        assert result.returncode == 0
+
+    def test_local_provider_still_requires_r2_vars(self, tmp_path: Path) -> None:
+        env = dict(R2_ENV)
+        del env["R2_ACCOUNT_ID"]
+        result = _run(tmp_path, env, "--provider", "local", expect_success=False)
+        assert result.returncode != 0
+        assert "R2_ACCOUNT_ID" in result.stderr
 
 
 class TestRequiredVarValidation:

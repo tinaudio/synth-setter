@@ -105,20 +105,27 @@ compute_config: null
 
 ### 4.1 SkyPilot YAML configs (`configs/compute/`)
 
-The smoke pipeline ships two real templates:
+The smoke pipeline ships three real templates:
 
 ```
 configs/compute/
 ├── runpod-template.yaml      # RunPod GPU (primary smoke target)
-└── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
+├── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
+└── local-template.yaml       # local Kubernetes (kind) — PR-default smoke
 ```
 
-Both share the launcher (`pipeline/entrypoints/skypilot_launch_smoke.py`),
+All share the launcher (`pipeline/entrypoints/skypilot_launch_smoke.py`),
 the `dev-snapshot` Docker image, the R2-uploaded spec contract, and the
 unified click-CLI dispatch (`scripts/docker_entrypoint.py generate_dataset`,
 which carries the `os._exit(0)` defensive workaround for #735 inline).
 They differ only in the `resources:` block (provider, accelerators vs.
 CPU/memory floor, region) and the provider-specific credential setup in CI.
+The `local` template targets `cloud: kubernetes`; CI provisions the kind
+cluster ahead of launch via `sky local up --no-gpus` and loads the
+dev-snapshot image into kind via `kind load docker-image`. Cred-bootstrap
+detects `cloud: kubernetes` from the template and runs with `--provider local` (R2 only — kind needs no compute provider auth). The launcher also
+calls `sky.check.check(['kubernetes'])` in-process before `sky.launch` to
+populate SkyPilot 0.12's enabled-clouds cache (see #834).
 Future targets follow the same pattern.
 
 The launcher (`pipeline.entrypoints.skypilot_launch_smoke`) does not override the `run:` block — it instantiates the Task from YAML and only calls `task.update_envs(...)` to inject the per-launch credential set + the spec URI. The `run:` block in each template handles the worker invocation; per-rank shard scoping is forwarded via `SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS` envs.

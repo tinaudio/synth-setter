@@ -10,9 +10,12 @@
 #     R2 upload (rclone copyto) sees rclone-style creds without the caller
 #     needing to bridge bare R2_* → RCLONE_CONFIG_R2_* by hand.
 #
-# Per-provider (gated on --provider runpod | oci):
+# Per-provider (gated on --provider runpod | oci | local):
 #   - runpod: ~/.runpod/config.toml
 #   - oci:    ~/.oci/config + ~/.oci/oci_api_key.pem + ~/.sky/config.yaml
+#   - local:  no per-provider files — `sky local up` (kind cluster) needs no
+#             compute provider auth. R2 creds are still required for spec
+#             upload + worker rclone access.
 #
 # Idempotency: if a target file already exists with non-empty content the
 # bootstrap leaves it alone — local-dev operators who hand-manage cred files
@@ -29,7 +32,7 @@ FORCE=0
 
 usage() {
   cat >&2 <<'EOF'
-Usage: skypilot_write_provider_creds.sh --provider <runpod|oci> [--force]
+Usage: skypilot_write_provider_creds.sh --provider <runpod|oci|local> [--force]
 
 Writes R2 file_mounts creds + per-provider compute creds. Prints rclone-
 prefixed env-var lines to stdout for the caller to source/forward.
@@ -170,6 +173,7 @@ write_oci_creds() {
     printf 'oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n' \
       "$OCI_COMPARTMENT_OCID" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}" \
       > "${sky_config}"
+    chmod 600 "${sky_config}"
     grep -Eq "compartment_ocid: .+" "${sky_config}" \
       || { echo "::error::OCI_COMPARTMENT_OCID secret is empty" >&2; exit 1; }
   else
@@ -181,7 +185,7 @@ main() {
   parse_args "$@"
 
   if [[ -z "${PROVIDER}" ]]; then
-    echo "::error::--provider is required (runpod | oci)" >&2
+    echo "::error::--provider is required (runpod | oci | local)" >&2
     usage
     exit 1
   fi
@@ -191,8 +195,9 @@ main() {
   case "${PROVIDER}" in
     runpod) write_runpod_creds ;;
     oci)    write_oci_creds ;;
+    local)  : ;; # kind cluster needs no compute provider auth; R2 already written above
     *)
-      echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci)" >&2
+      echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci | local)" >&2
       exit 1
       ;;
   esac
