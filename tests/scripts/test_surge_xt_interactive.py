@@ -467,7 +467,7 @@ class TestMidiListener:
         midi_queue: queue.Queue[tuple[list[int], float]] = queue.Queue()
         stop_event = threading.Event()
         # ``daemon=True`` so a hung listener can't block pytest shutdown if the
-        # fixture-side ``drain_event`` assertion below fails before we set ``stop_event``.
+        # ``drain_event`` assertion below fails before we set ``stop_event``.
         listener_thread = threading.Thread(
             target=surge_xt_interactive.midi_listener,
             args=("fake-port", midi_queue, stop_event),
