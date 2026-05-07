@@ -713,7 +713,8 @@ def _build_predict_vst_audio_argv(
     """Build the argv list for ``scripts/predict_vst_audio.py`` rendering.
 
     On Linux the VST headless wrapper is prepended so the subprocess inherits a Xvfb display.
-    Pure function — does not touch ``audio_dir`` or invoke ``predict_vst_audio.py``.
+    No subprocess execution and no writes; the only side effects are reading ``sys.platform``
+    and an existence check on ``_VST_HEADLESS_WRAPPER`` when running on Linux.
 
     :raises FileNotFoundError: on Linux when ``_VST_HEADLESS_WRAPPER`` is absent.
     """
@@ -744,7 +745,7 @@ def _validate_rendered_audio_dir(audio_dir: Path, num_samples: int) -> None:
 
     Each ``sample_{i}`` directory must contain the four expected artifacts (``target.wav``,
     ``pred.wav``, ``spec.png``, ``params.csv``) and the rendered WAVs must not be silent.
-    Pure function — only reads from ``audio_dir``.
+    Read-only with respect to ``audio_dir`` — no writes and no subprocess execution.
 
     :raises FileNotFoundError: if a sample directory is missing or any artifact is absent.
     :raises ValueError: if a rendered WAV's peak amplitude is below ``SILENCE_PEAK_THRESHOLD``.
@@ -785,8 +786,8 @@ def _render_predicted_audio(
     """Render audio for the predicted patches and validate per-sample outputs.
 
     Thin orchestrator over :func:`_build_predict_vst_audio_argv` (argv construction) and
-    :func:`_validate_rendered_audio_dir` (post-render checks); both are pure functions
-    independently testable without a ``subprocess_runner``.
+    :func:`_validate_rendered_audio_dir` (post-render checks); neither helper invokes a
+    subprocess, so both are independently testable without a ``subprocess_runner``.
 
     ``param_spec_name`` and ``preset_path`` must match the values used to capture the patches —
     otherwise ``predict_vst_audio.py`` would fall back to its own defaults (``surge_xt`` /
