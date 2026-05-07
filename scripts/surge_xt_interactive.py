@@ -749,15 +749,18 @@ def _validate_rendered_audio_dir(audio_dir: Path, num_samples: int) -> None:
     :raises FileNotFoundError: if a sample directory is missing or any artifact is absent.
     :raises ValueError: if a rendered WAV's peak amplitude is below ``SILENCE_PEAK_THRESHOLD``.
     """
-    sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
-    actual_sample_names = [d.name for d in sample_dirs]
-    expected_sample_names = [f"sample_{i}" for i in range(num_samples)]
+    # Compare as sets so num_samples >= 10 doesn't trip on lexical ordering
+    # (``sample_10`` sorts before ``sample_2`` in a plain ``sorted()``).
+    expected_sample_names = {f"sample_{i}" for i in range(num_samples)}
+    actual_sample_names = {d.name for d in audio_dir.iterdir() if d.is_dir()}
     if actual_sample_names != expected_sample_names:
+        missing = sorted(expected_sample_names - actual_sample_names)
+        extra = sorted(actual_sample_names - expected_sample_names)
         raise FileNotFoundError(
-            f"unexpected sample directories in {audio_dir}: "
-            f"got {actual_sample_names}, expected {expected_sample_names}"
+            f"unexpected sample directories in {audio_dir}: missing={missing}, extra={extra}"
         )
-    for sample_dir in sample_dirs:
+    for i in range(num_samples):
+        sample_dir = audio_dir / f"sample_{i}"
         for fname in ("target.wav", "pred.wav", "spec.png", "params.csv"):
             artifact_path = sample_dir / fname
             if not artifact_path.is_file():
