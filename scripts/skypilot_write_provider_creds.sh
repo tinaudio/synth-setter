@@ -76,22 +76,13 @@ parse_args() {
   done
 }
 
-# Resolve $1 from env. If empty, fall back to $2 (if provided). If still
-# empty, fail. Returns the resolved value on stdout (single-line, no
-# trailing newline) for capture by the caller.
+# Resolve $1 from env. If empty, fail. Returns the resolved value on stdout
+# (single-line, no trailing newline) for capture by the caller.
 resolve_var() {
   local name="$1"
-  local fallback="${2:-}"
   local value="${!name:-}"
-  if [[ -z "${value}" && -n "${fallback}" ]]; then
-    value="${!fallback:-}"
-  fi
   if [[ -z "${value}" ]]; then
-    if [[ -n "${fallback}" ]]; then
-      echo "::error::${name} (or ${fallback}) is empty" >&2
-    else
-      echo "::error::${name} is empty" >&2
-    fi
+    echo "::error::${name} is empty" >&2
     exit 1
   fi
   printf '%s' "${value}"
@@ -106,9 +97,9 @@ should_skip_existing() {
 
 write_r2_creds() {
   local access_key secret_key endpoint account_id
-  access_key="$(resolve_var R2_ACCESS_KEY_ID RCLONE_CONFIG_R2_ACCESS_KEY_ID)"
-  secret_key="$(resolve_var R2_SECRET_ACCESS_KEY RCLONE_CONFIG_R2_SECRET_ACCESS_KEY)"
-  endpoint="$(resolve_var R2_ENDPOINT RCLONE_CONFIG_R2_ENDPOINT)"
+  access_key="$(resolve_var RCLONE_CONFIG_R2_ACCESS_KEY_ID)"
+  secret_key="$(resolve_var RCLONE_CONFIG_R2_SECRET_ACCESS_KEY)"
+  endpoint="$(resolve_var RCLONE_CONFIG_R2_ENDPOINT)"
   account_id="$(resolve_var R2_ACCOUNT_ID)"
   : "${endpoint?}" # endpoint isn't written to disk by this script — adaptor reads RCLONE_CONFIG_R2_ENDPOINT — but we validate it's set.
 

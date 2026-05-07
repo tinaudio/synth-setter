@@ -130,18 +130,14 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip the rclone-R2 / WANDB keys (and their bare aliases) from the test process env.
+    """Strip the worker env keys from the test process env.
 
-    Without this, a developer who has `RCLONE_CONFIG_R2_*` (or the bare `R2_*`
-    fallback names) exported in their shell would silently satisfy
-    `resolve_worker_env` — via the prefixed names directly or via the
-    `_apply_bare_r2_fallback` path — masking tests that rely on a specific
-    resolution path.
+    Without this, a developer with `RCLONE_CONFIG_R2_*` exported in their shell
+    would silently satisfy `resolve_worker_env`, masking tests that rely on a
+    specific resolution path.
     """
     for key in _WORKER_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
-    for bare in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT"):
-        monkeypatch.delenv(bare, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -1280,11 +1276,13 @@ class TestRunCredBootstrap:
     def test_passes_merged_env_to_subprocess(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When --env-file is provided, its values are merged into the subprocess env so bare R2_*
-        / RUNPOD_API_KEY / OCI_* set only in the dotenv file are visible to the bootstrap script
-        (which runs `require_var` against them)."""
+        """When --env-file is provided, its values are merged into the subprocess env so
+        RCLONE_CONFIG_R2_* / RUNPOD_API_KEY / OCI_* set only in the dotenv file are visible to the
+        bootstrap script (which runs `resolve_var` against them)."""
         env_file = tmp_path / "creds.env"
-        env_file.write_text("RUNPOD_API_KEY=from-env-file\nR2_ACCESS_KEY_ID=from-env-file\n")
+        env_file.write_text(
+            "RUNPOD_API_KEY=from-env-file\nRCLONE_CONFIG_R2_ACCESS_KEY_ID=from-env-file\n"
+        )
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
         monkeypatch.delenv("RUNPOD_API_KEY", raising=False)
 
@@ -1304,7 +1302,7 @@ class TestRunCredBootstrap:
         _real_run_cred_bootstrap(provider="runpod", env_file_path=env_file)
 
         assert captured["env"]["RUNPOD_API_KEY"] == "from-env-file"
-        assert captured["env"]["R2_ACCESS_KEY_ID"] == "from-env-file"
+        assert captured["env"]["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "from-env-file"
 
     def test_propagates_script_failure_as_click_exception(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1358,15 +1356,15 @@ class TestRunCredBootstrap:
 # ---------------------------------------------------------------------------
 
 
-class TestRcloneEnvBridging:
+class TestWorkerEnvToOsEnvironBridge:
     """`main()` copies `RCLONE_CONFIG_R2_*` from the resolved worker_env into `os.environ` so
     `upload_spec_to_r2`'s `rclone copyto` subprocess inherits them.
 
-    Catches the regression class: bare-R2 only set in env / dotenv,
-    no rclone-prefixed export, but the launcher still needs to upload the spec.
+    Local-dev `--env-file` paths populate worker_env without exporting; without this bridge rclone
+    would see no creds.
     """
 
-    def test_bare_r2_only_in_env_file_bridges_to_os_environ(
+    def test_env_file_prefixed_keys_bridge_to_os_environ(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -1376,36 +1374,29 @@ class TestRcloneEnvBridging:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """An .env carrying only bare `R2_*` triggers the bare→prefixed fallback; main() then
-        injects the prefixed names into os.environ so any inheriting subprocess (rclone) sees
-        them."""
-        env_file_with_bare = tmp_path / "bare.env"
-        env_file_with_bare.write_text(
-            "R2_ACCESS_KEY_ID=ak-from-env\n"
-            "R2_SECRET_ACCESS_KEY=sk-from-env\n"
-            "R2_ENDPOINT=https://e.r2\n"
+        """Prefixed names from a `.env` (loaded via `--env-file`, not exported) get copied into
+        os.environ before the rclone subprocess runs."""
+        env_file = tmp_path / "prefixed.env"
+        env_file.write_text(
+            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=ak-from-env\n"
+            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=sk-from-env\n"
+            "RCLONE_CONFIG_R2_ENDPOINT=https://e.r2\n"
         )
-        # Capture os.environ at the point upload_spec_to_r2 is called.
         captured: dict[str, str] = {}
 
         def fake_rclone(args: list[str]) -> None:
-            captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] = os.environ.get(
-                "RCLONE_CONFIG_R2_ACCESS_KEY_ID", "<unset>"
-            )
-            captured["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] = os.environ.get(
-                "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "<unset>"
-            )
-            captured["RCLONE_CONFIG_R2_ENDPOINT"] = os.environ.get(
-                "RCLONE_CONFIG_R2_ENDPOINT", "<unset>"
-            )
+            for key in (
+                "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
+                "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
+                "RCLONE_CONFIG_R2_ENDPOINT",
+            ):
+                captured[key] = os.environ.get(key, "<unset>")
 
         monkeypatch.setattr(
             "pipeline.entrypoints.skypilot_launch_smoke.subprocess.check_call", fake_rclone
         )
 
-        result = _invoke(
-            config_yaml, template_yaml, env_file_with_bare, "--cluster-name", "smoke-job-1"
-        )
+        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
 
         assert result.exit_code == 0, result.output
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak-from-env"

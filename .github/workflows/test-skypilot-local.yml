@@ -20,7 +20,8 @@ name: Test SkyPilot Local
 # they can't read the R2 secrets.
 #
 # Required secrets:
-#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2.
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT                          — Cloudflare R2.
 #
 # No provider creds: kind doesn't need RunPod / OCI keys. The
 # `skypilot_write_provider_creds.sh` cred bootstrap is therefore not invoked
@@ -113,9 +114,9 @@ jobs:
       # robust workaround.
       - name: sky launch (local-debug rclone task)
         env:
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
         run: |
           set -o pipefail
           python - <<'PY' 2>&1 | tee "$LOG_PATH"
@@ -137,9 +138,9 @@ jobs:
               {
                   "RCLONE_CONFIG_R2_TYPE": "s3",
                   "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
-                  "RCLONE_CONFIG_R2_ACCESS_KEY_ID": os.environ["R2_ACCESS_KEY_ID"],
-                  "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": os.environ["R2_SECRET_ACCESS_KEY"],
-                  "RCLONE_CONFIG_R2_ENDPOINT": os.environ["R2_ENDPOINT"],
+                  "RCLONE_CONFIG_R2_ACCESS_KEY_ID": os.environ["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
+                  "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": os.environ["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
+                  "RCLONE_CONFIG_R2_ENDPOINT": os.environ["RCLONE_CONFIG_R2_ENDPOINT"],
                   "R2_BUCKET": os.environ["R2_BUCKET"],
                   "R2_DEBUG_PREFIX": f"data/skypilot-local-debug/{cluster}/",
               }

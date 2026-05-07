@@ -75,15 +75,6 @@ _WORKER_ENV_KEYS: tuple[str, ...] = (
     "WORKER_GIT_REF",
 )
 
-# Bare-name aliases for R2_* — CI carries bare-named secrets; resolve_worker_env
-# accepts either form and synthesizes the rclone-prefixed version when only the
-# bare form is set (with a deprecation warning).
-_BARE_TO_RCLONE_R2: dict[str, str] = {
-    "R2_ACCESS_KEY_ID": "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
-    "R2_SECRET_ACCESS_KEY": "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
-    "R2_ENDPOINT": "RCLONE_CONFIG_R2_ENDPOINT",
-}
-
 _CRED_BOOTSTRAP_SCRIPT = (
     Path(__file__).resolve().parent.parent.parent / "scripts" / "skypilot_write_provider_creds.sh"
 )
@@ -133,39 +124,12 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
         elif key in os.environ:
             resolved[key] = os.environ[key]
 
-    # CI passes bare R2_* secrets; fill in the rclone-prefixed form from those
-    # aliases when the prefixed name isn't already resolved.
-    bare_used = _apply_bare_r2_fallback(resolved, file_env)
-    if bare_used:
-        click.echo(
-            f"WARN: resolved R2 credentials from bare names {sorted(bare_used)}; "
-            "rename to RCLONE_CONFIG_R2_* in the local .env to silence this.",
-            err=True,
-        )
-
     git_ref = resolved.get("WORKER_GIT_REF", "")
     if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
         raise click.ClickException(
             f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
         )
     return resolved
-
-
-def _apply_bare_r2_fallback(resolved: dict[str, str], file_env: dict[str, str]) -> list[str]:
-    """Fill missing rclone-prefixed R2 keys in `resolved` from bare aliases.
-
-    Mutates `resolved` in place; returns the list of bare keys that were used
-    so the caller can log a deprecation warning.
-    """
-    used: list[str] = []
-    for bare, prefixed in _BARE_TO_RCLONE_R2.items():
-        if prefixed in resolved:
-            continue
-        bare_value = file_env.get(bare) or os.environ.get(bare)
-        if bare_value:
-            resolved[prefixed] = bare_value
-            used.append(bare)
-    return used
 
 
 _CLOUD_TO_PROVIDER: dict[str, str] = {
@@ -401,10 +365,11 @@ def main(
             f"Expected at least one of: {', '.join(_WORKER_ENV_KEYS)}."
         )
 
-    # `upload_spec_to_r2` shells out to rclone, which inherits os.environ. When
-    # CI carries only bare `R2_*` (or local dev only has `--env-file` without
-    # `export`), the rclone-prefixed names are in `worker_env` but not yet in
-    # `os.environ`. Bridge them so the rclone subprocess sees rclone-style creds.
+    # `upload_spec_to_r2` shells out to rclone, which inherits os.environ. For
+    # local dev a `--env-file` populates `worker_env` without exporting into
+    # the process env, so copy any RCLONE_CONFIG_R2_* values across before the
+    # subprocess runs. CI sets these in the workflow `env:` block directly, so
+    # `setdefault` is a no-op there.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ.setdefault(key, value)

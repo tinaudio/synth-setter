@@ -229,8 +229,8 @@ know which credentials are needed without exposing real values.
 
 **Files to create:**
 
-- `.env.example` — template with placeholder values for `R2_ACCESS_KEY_ID`,
-  `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `WANDB_API_KEY`, `RUNPOD_API_KEY`
+- `.env.example` — template with placeholder values for `RCLONE_CONFIG_R2_ACCESS_KEY_ID`,
+  `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`, `RCLONE_CONFIG_R2_ENDPOINT`, `WANDB_API_KEY`, `RUNPOD_API_KEY`
 
 **Verification:** File exists, `.env` is in `.gitignore`, no real credentials committed.
 

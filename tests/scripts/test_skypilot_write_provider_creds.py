@@ -29,9 +29,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "skypilot_write_provider_creds.sh"
 
 R2_ENV: dict[str, str] = {
-    "R2_ACCESS_KEY_ID": "AK_TEST",
-    "R2_SECRET_ACCESS_KEY": "SK_TEST",
-    "R2_ENDPOINT": "https://acct-test.r2.cloudflarestorage.com",
+    "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "AK_TEST",
+    "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "SK_TEST",
+    "RCLONE_CONFIG_R2_ENDPOINT": "https://acct-test.r2.cloudflarestorage.com",
     "R2_ACCOUNT_ID": "acct-test-id",
 }
 
@@ -114,8 +114,8 @@ class TestNoStdoutLeak:
         """Stderr is for status/notice messages only — never for cred values."""
         result = _run(tmp_path, {**R2_ENV, **RUNPOD_ENV}, "--provider", "runpod")
         for value in (
-            R2_ENV["R2_ACCESS_KEY_ID"],
-            R2_ENV["R2_SECRET_ACCESS_KEY"],
+            R2_ENV["RCLONE_CONFIG_R2_ACCESS_KEY_ID"],
+            R2_ENV["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"],
             RUNPOD_ENV["RUNPOD_API_KEY"],
         ):
             assert value not in result.stderr, (
@@ -139,8 +139,8 @@ class TestR2CredentialsFile:
         assert creds.is_file()
         content = creds.read_text()
         assert "[r2]" in content
-        assert f"aws_access_key_id = {R2_ENV['R2_ACCESS_KEY_ID']}" in content
-        assert f"aws_secret_access_key = {R2_ENV['R2_SECRET_ACCESS_KEY']}" in content
+        assert f"aws_access_key_id = {R2_ENV['RCLONE_CONFIG_R2_ACCESS_KEY_ID']}" in content
+        assert f"aws_secret_access_key = {R2_ENV['RCLONE_CONFIG_R2_SECRET_ACCESS_KEY']}" in content
 
     def test_credentials_file_is_mode_600(self, tmp_path: Path) -> None:
         """R2 credentials file is mode 600 (explicit chmod, not umask-dependent)."""
@@ -161,54 +161,6 @@ class TestR2CredentialsFile:
         _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
         assert (tmp_path / ".cloudflare" / "r2.credentials").is_file()
         assert (tmp_path / ".cloudflare" / "accountid").is_file()
-
-
-# ---------------------------------------------------------------------------
-# Prefixed-name fallback — bare R2_* names fall back to RCLONE_CONFIG_R2_*
-# so a `.env` carrying only the rclone-prefixed names still bootstraps.
-# ---------------------------------------------------------------------------
-
-
-class TestPrefixedNameFallback:
-    """Bare R2_* names fall back to RCLONE_CONFIG_R2_* so a prefixed-only `.env` works."""
-
-    def test_prefixed_names_resolved_when_bare_unset(self, tmp_path: Path) -> None:
-        """Only rclone-prefixed names set; R2 cred file should still be written."""
-        env = {
-            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "prefixed-ak",
-            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "prefixed-sk",
-            "RCLONE_CONFIG_R2_ENDPOINT": "https://prefixed.r2",
-            "R2_ACCOUNT_ID": "acct",  # no prefixed alias
-        }
-        _run(tmp_path, env, "--provider", "local")
-        content = (tmp_path / ".cloudflare" / "r2.credentials").read_text()
-        assert "aws_access_key_id = prefixed-ak" in content
-        assert "aws_secret_access_key = prefixed-sk" in content
-
-    def test_bare_takes_precedence_when_both_set(self, tmp_path: Path) -> None:
-        """When both bare R2_* and rclone-prefixed names are set, bare wins (CI-secret naming)."""
-        env = {
-            "R2_ACCESS_KEY_ID": "bare-ak",
-            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "prefixed-ak",
-            "R2_SECRET_ACCESS_KEY": "bare-sk",
-            "R2_ENDPOINT": "https://bare.r2",
-            "R2_ACCOUNT_ID": "acct",
-        }
-        _run(tmp_path, env, "--provider", "local")
-        content = (tmp_path / ".cloudflare" / "r2.credentials").read_text()
-        assert "aws_access_key_id = bare-ak" in content
-        assert "prefixed-ak" not in content
-
-    def test_missing_account_id_fails(self, tmp_path: Path) -> None:
-        """R2_ACCOUNT_ID has no prefixed alias — must be set by name."""
-        env = {
-            "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "ak",
-            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "sk",
-            "RCLONE_CONFIG_R2_ENDPOINT": "https://e.r2",
-        }
-        result = _run(tmp_path, env, "--provider", "local", expect_success=False)
-        assert result.returncode != 0
-        assert "R2_ACCOUNT_ID" in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +265,13 @@ class TestRequiredVarValidation:
 
 
 @pytest.mark.parametrize(
-    "missing_key", ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT", "R2_ACCOUNT_ID"]
+    "missing_key",
+    [
+        "RCLONE_CONFIG_R2_ACCESS_KEY_ID",
+        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY",
+        "RCLONE_CONFIG_R2_ENDPOINT",
+        "R2_ACCOUNT_ID",
+    ],
 )
 def test_missing_r2_var_fails(tmp_path: Path, missing_key: str) -> None:
     """Each R2 var is required (no graceful degradation — R2 is always needed)."""

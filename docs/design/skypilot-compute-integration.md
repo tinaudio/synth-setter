@@ -170,19 +170,19 @@ The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (onl
 - name: Launch SkyPilot job
   env:
     RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-    R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-    R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-    R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+    RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+    RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+    RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
     WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   run: |
     docker run --rm \
       -e RUNPOD_API_KEY \
-      -e RCLONE_CONFIG_R2_TYPE=s3                                    \
-      -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare                        \
-      -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"        \
-      -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
-      -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}"                  \
-      -e WANDB_API_KEY="${WANDB_API_KEY}"                            \
+      -e RCLONE_CONFIG_R2_TYPE=s3 \
+      -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+      -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+      -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+      -e RCLONE_CONFIG_R2_ENDPOINT \
+      -e WANDB_API_KEY \
       "$IMAGE" bash -c '... python -m pipeline.entrypoints.skypilot_launch_smoke ...'
 ```
 

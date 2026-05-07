@@ -380,14 +380,14 @@ gh workflow run docker-build-validation.yml --ref main
 
 ### Required secrets
 
-| Secret                 | Purpose                                              |
-| ---------------------- | ---------------------------------------------------- |
-| `DOCKERHUB_USERNAME`   | Docker Hub login (push-only; pulls are anonymous)    |
-| `DOCKERHUB_TOKEN`      | Docker Hub access token (push-only)                  |
-| `R2_ACCESS_KEY_ID`     | R2 credentials (runtime; passed via `docker run -e`) |
-| `R2_SECRET_ACCESS_KEY` | R2 credentials                                       |
-| `R2_ENDPOINT`          | R2 endpoint (runtime)                                |
-| `WANDB_API_KEY`        | W&B auth (runtime)                                   |
+| Secret                               | Purpose                                              |
+| ------------------------------------ | ---------------------------------------------------- |
+| `DOCKERHUB_USERNAME`                 | Docker Hub login (push-only; pulls are anonymous)    |
+| `DOCKERHUB_TOKEN`                    | Docker Hub access token (push-only)                  |
+| `RCLONE_CONFIG_R2_ACCESS_KEY_ID`     | R2 credentials (runtime; passed via `docker run -e`) |
+| `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY` | R2 credentials                                       |
+| `RCLONE_CONFIG_R2_ENDPOINT`          | R2 endpoint (runtime)                                |
+| `WANDB_API_KEY`                      | W&B auth (runtime)                                   |
 
 ______________________________________________________________________
 
