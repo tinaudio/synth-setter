@@ -3,9 +3,17 @@
 Provider-neutral entrypoint: the same binary launches against either
 `configs/compute/runpod-template.yaml` or `configs/compute/oci-cpu-template.yaml`.
 Materializes a spec, ships it via R2 (file_mounts blocked by #749), forwards
-worker env via `task.update_envs`, and `sky.launch`-es an unmanaged task with
-live `sky.tail_logs(follow=True)`. Cluster-level launch (not jobs.launch) —
-neither RunPod nor OCI has a managed-jobs controller backend wired up here.
+worker env via `task.update_envs`, and `sky.launch`-es an unmanaged task. By
+default the launcher waits for `sky.launch` + `sky.stream_and_get` to return a
+`job_id` for each rank (provisioning completes), prints the `sky logs` /
+`sky down` commands the operator can run, then exits — without tailing logs and
+without tearing successfully-provisioned clusters down. Half-provisioned
+clusters (whose `sky.launch`/`sky.stream_and_get` raised or yielded no
+`job_id`) are still torn down so SkyPilot state doesn't accumulate orphans.
+Pass `--tail` to opt into live `sky.tail_logs(follow=True)` and unconditional
+`finally`-block teardown of every cluster.
+Cluster-level launch (not jobs.launch) — neither RunPod nor OCI has a
+managed-jobs controller backend wired up here.
 
 Per-backend image handling (driven by `--worker-image-tag`):
 - RunPod: `docker:<image>` is set on each Resources entry's `image_id`, so SkyPilot
@@ -25,6 +33,7 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -44,6 +53,10 @@ _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
 
 # OCI distribution tag grammar: leading alnum/_, then up to 127 of [A-Za-z0-9_.-].
 _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+
+# Validates WORKER_GIT_REF when set — must be a 7-40 char hex git SHA. Worker
+# templates pass this verbatim into `git fetch + checkout` inside the container.
+_WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 # Forwarded via task.update_envs; each resolved from .env then process env.
 # Keep in sync with the envs: block in configs/compute/runpod-template.yaml.
@@ -103,6 +116,11 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
             resolved[key] = file_env[key]
         elif key in os.environ:
             resolved[key] = os.environ[key]
+    git_ref = resolved.get("WORKER_GIT_REF", "")
+    if git_ref and not _WORKER_GIT_REF_RE.match(git_ref):
+        raise click.ClickException(
+            f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
+        )
     return resolved
 
 
@@ -214,6 +232,22 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
         "image_id is left untouched."
     ),
 )
+@click.option(
+    "--tail/--no-tail",
+    "tail",
+    default=False,
+    show_default=True,
+    help=(
+        "Tail worker logs and unconditionally tear down every cluster in `finally`. Default "
+        "`--no-tail` waits for `sky.launch` + `sky.stream_and_get` to return a `job_id` per "
+        "rank (i.e. through provisioning), prints the `sky logs` / `sky down` commands the "
+        "operator can run, and exits without tailing logs and without tearing down "
+        "successfully-provisioned clusters — `idle_minutes_to_autostop=5, down=True` on "
+        "`sky.launch` is the safety net for those left-running clusters. Half-provisioned "
+        "clusters (whose `sky.launch`/`sky.stream_and_get` raised or yielded no `job_id`) "
+        "are still torn down in `--no-tail` so SkyPilot state doesn't accumulate orphans."
+    ),
+)
 def main(
     config_path: Path,
     template_path: Path,
@@ -222,6 +256,7 @@ def main(
     spec_out: Path | None,
     num_workers: int,
     worker_image_tag: str,
+    tail: bool,
 ) -> None:
     """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
     if num_workers < 1:
@@ -277,6 +312,7 @@ def main(
         template_path=template_path,
         cluster_names=cluster_names,
         worker_image_tag=worker_image_tag,
+        tail=tail,
     )
 
     failed = [
@@ -316,27 +352,35 @@ def _run_workers(
     template_path: Path,
     cluster_names: list[str],
     worker_image_tag: str,
+    tail: bool,
 ) -> list[int]:
-    """Launch len(cluster_names) single-node clusters in parallel; return tail_logs rc per rank.
+    """Launch len(cluster_names) single-node clusters in parallel; return per-rank result code.
 
-    Each rank's task gets SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected.
-    All clusters tear down in the finally block regardless of which ranks succeeded.
-    A rank's slot in the result is ``-1`` if launch/stream raised before tail_logs returned.
+    Each rank's task gets SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected. A rank's
+    slot in the result is ``-1`` if launch/stream raised before the rank's per-mode work
+    finished.
+
+    With ``tail=True``, every cluster is torn down in the ``finally`` block regardless of
+    rank outcome and the rc reflects ``sky.tail_logs``. With ``tail=False`` the launcher
+    detaches after `sky.launch` + `sky.stream_and_get` return a `job_id`, prints the
+    `sky logs` / `sky down` commands the operator can run, and only tears down
+    half-provisioned clusters — those whose `sky.launch`/`sky.stream_and_get` raised or
+    yielded no `job_id`.
 
     Args:
         worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
         template_path: SkyPilot Task YAML to instantiate per rank.
         cluster_names: One name per rank; ``len()`` defines the world size.
         worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
+        tail: If True, tail logs and tear down all clusters. If False, detach after launch.
 
     Returns:
-        Per-rank tail_logs return code (``0`` = SUCCEEDED, anything else = failed).
+        Per-rank result code (``0`` = success, anything else = failure).
     """
     num_workers = len(cluster_names)
-    rcs: list[int] = [-1] * num_workers
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
 
-    def _launch_and_tail(rank: int) -> int:
+    def _launch_get_job_id(rank: int) -> int:
         cluster = cluster_names[rank]
         env_for_rank = {
             **worker_env_base,
@@ -345,11 +389,6 @@ def _run_workers(
             _WORKER_IMAGE_ENV: worker_image,
         }
         task = sky.Task.from_yaml(str(template_path))
-        # Sync the launcher's checkout to the cluster so the synced sky_workdir
-        # contains scripts/skypilot_worker_bootstrap.sh — needed while
-        # dev-snapshot lags behind #783 and the OCI template's run: bind-mounts
-        # the workdir into the worker container.
-        task.workdir = str(REPO_ROOT)
         _override_image_id(task, worker_image)
         task.update_envs(env_for_rank)
         click.echo(f"[{cluster}] provisioning rank={rank}/{num_workers}")
@@ -362,7 +401,23 @@ def _run_workers(
         launch_result = sky.stream_and_get(launch_request_id)
         if launch_result is None or launch_result[0] is None:
             raise click.ClickException(f"[{cluster}] launch yielded no job_id")
-        job_id = launch_result[0]
+        return launch_result[0]
+
+    if tail:
+        return _run_workers_tail(cluster_names, _launch_get_job_id)
+    return _run_workers_detached(cluster_names, _launch_get_job_id)
+
+
+def _run_workers_tail(
+    cluster_names: list[str], launch_get_job_id: Callable[[int], int]
+) -> list[int]:
+    """Tail-mode runner: tail logs per rank and tear down every cluster in the finally block."""
+    num_workers = len(cluster_names)
+    rcs: list[int] = [-1] * num_workers
+
+    def _launch_and_tail(rank: int) -> int:
+        cluster = cluster_names[rank]
+        job_id = launch_get_job_id(rank)
         click.echo(f"[{cluster}] streaming logs for job {job_id}")
         rc = sky.tail_logs(cluster_name=cluster, job_id=job_id, follow=True)
         click.echo(f"[{cluster}] tail_logs rc={rc}")
@@ -371,21 +426,64 @@ def _run_workers(
     try:
         # Iterate via as_completed so a fast-failing rank surfaces immediately
         # instead of being blocked behind a slower-but-eventually-successful one.
-        # noqa: BLE001 — must catch any rank-thread exception to keep teardown loop reachable.
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             future_to_rank = {executor.submit(_launch_and_tail, i): i for i in range(num_workers)}
             for fut in as_completed(future_to_rank):
                 rank = future_to_rank[fut]
                 try:
                     rcs[rank] = fut.result()
-                except Exception as exc:  # noqa: BLE001
-                    click.echo(f"[{cluster_names[rank]}] launch raised: {exc}")
+                except Exception as exc:  # noqa: BLE001 — keep teardown reachable for every rank.
+                    click.echo(f"[{cluster_names[rank]}] launch or tail raised: {exc}")
                     rcs[rank] = -1
     finally:
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             for cluster in cluster_names:
                 executor.submit(_teardown_cluster, cluster)
     return rcs
+
+
+def _run_workers_detached(
+    cluster_names: list[str], launch_get_job_id: Callable[[int], int]
+) -> list[int]:
+    """Detach-mode runner.
+
+    Successful clusters are intentionally left running — `idle_minutes_to_autostop=5,
+    down=True` on `sky.launch` is the safety net so a clean exit doesn't kill in-flight work.
+    Half-provisioned clusters — those whose `sky.launch`/`sky.stream_and_get` raised or
+    yielded no `job_id` (the latter surfaces as a `ClickException` from
+    ``launch_get_job_id``) — still get torn down here so SkyPilot state doesn't accumulate
+    orphans.
+    """
+    num_workers = len(cluster_names)
+    rcs: list[int] = [-1] * num_workers
+    failed_clusters: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        future_to_rank = {executor.submit(launch_get_job_id, i): i for i in range(num_workers)}
+        for fut in as_completed(future_to_rank):
+            rank = future_to_rank[fut]
+            cluster = cluster_names[rank]
+            try:
+                job_id = fut.result()
+            except Exception as exc:  # noqa: BLE001 — half-provisioned cluster still needs cleanup.
+                click.echo(f"[{cluster}] launch raised: {exc}")
+                failed_clusters.append(cluster)
+                continue
+            _print_detached_block(cluster, job_id)
+            rcs[rank] = 0
+
+    if failed_clusters:
+        with ThreadPoolExecutor(max_workers=len(failed_clusters)) as executor:
+            for cluster in failed_clusters:
+                executor.submit(_teardown_cluster, cluster)
+    return rcs
+
+
+def _print_detached_block(cluster: str, job_id: int) -> None:
+    """Print the per-cluster detached-launch block: identifiers + copy-paste ops commands."""
+    click.echo(f"[{cluster}] launched job {job_id} (detached)")
+    click.echo(f"  sky logs {cluster} {job_id}")
+    click.echo(f"  sky down {cluster}")
 
 
 def _teardown_cluster(cluster: str) -> None:

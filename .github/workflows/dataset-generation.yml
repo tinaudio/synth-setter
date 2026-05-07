@@ -62,8 +62,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              bash scripts/ensure_plugin_symlinks.sh
               # materialize_spec imports pedalboard (via param_specs) which
               # needs a live X display.
               scripts/run-linux-vst-headless.sh \

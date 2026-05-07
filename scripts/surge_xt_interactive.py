@@ -2,15 +2,20 @@
 
 import logging
 import math
+import os
 import queue
+import shutil
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
 import rootutils
 
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+_REPO_ROOT = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 import click  # noqa: E402
 import h5py  # noqa: E402
@@ -20,6 +25,8 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from pedalboard import VST3Plugin  # noqa: E402
 from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
+from rich.console import Console  # noqa: E402
+from rich.logging import RichHandler  # noqa: E402
 
 from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
@@ -29,6 +36,28 @@ from src.data.vst.param_spec import ParamSpec  # noqa: E402
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Install the Rich root-logger handler used when this script runs as a CLI.
+
+    Kept out of import-time side effects so importing the module (e.g. from the test suite) doesn't
+    reconfigure the root logger or construct a Console.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[
+            RichHandler(
+                console=Console(width=200),
+                rich_tracebacks=True,
+                markup=False,
+                show_path=True,
+            )
+        ],
+    )
+
 
 CHANNELS = 2
 SAMPLE_RATE = 44100
@@ -68,6 +97,57 @@ _PLUGIN_FLUSH_BUFFER_SIZE = 2048
 # quit" from "action completed, keep listening".
 _KEEP_LOOPING = True
 _STOP_LOOPING = False
+
+_VST_SUBPROCESS_TIMEOUT_SECONDS = 300
+_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
+_METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
+_VST_HEADLESS_WRAPPER = _REPO_ROOT / "scripts" / "run-linux-vst-headless.sh"
+_EVAL_SCRIPT = _REPO_ROOT / "src" / "eval.py"
+_PREDICT_VST_AUDIO_SCRIPT = _REPO_ROOT / "scripts" / "predict_vst_audio.py"
+_COMPUTE_AUDIO_METRICS_SCRIPT = _REPO_ROOT / "scripts" / "compute_audio_metrics.py"
+
+# Below this peak, librosa RMS norms underflow and ``compute_rms`` produces
+# 0/0 → NaN (see ``compute_rms`` in ``scripts/compute_audio_metrics.py``).
+SILENCE_PEAK_THRESHOLD = 1e-4
+
+_METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
+
+
+@dataclass(frozen=True)
+class _MetricsFileSpec:
+    """Expected shape of a metrics CSV produced by ``compute_audio_metrics.py``."""
+
+    rows: int
+    columns: frozenset[str]
+
+
+def _expected_prediction_filenames(num_samples: int) -> list[str]:
+    """Return the sorted list of filenames ``PredictionWriter`` writes per sample."""
+    return sorted(
+        f"{prefix}-{i}.pt"
+        for prefix in ("pred", "target-audio", "target-params")
+        for i in range(num_samples)
+    )
+
+
+def _validate_metrics_df(
+    metrics_path: Path,
+    metrics_df: pd.DataFrame,
+    expected: _MetricsFileSpec,
+) -> None:
+    """Verify ``metrics_df`` has the expected row count and a superset of expected columns, and
+    that the expected columns are entirely finite."""
+    if len(metrics_df) != expected.rows:
+        raise ValueError(f"{metrics_path}: expected {expected.rows} rows, got {len(metrics_df)}")
+    missing_columns = expected.columns - set(metrics_df.columns)
+    if missing_columns:
+        raise ValueError(
+            f"{metrics_path}: missing expected columns {sorted(missing_columns)}; "
+            f"got {sorted(metrics_df.columns)}"
+        )
+    numeric = metrics_df[sorted(expected.columns)].to_numpy()
+    if not np.isfinite(numeric).all():
+        raise ValueError(f"{metrics_path} contains NaN/Inf:\n{metrics_df}")
 
 
 @dataclass(frozen=True)
@@ -450,6 +530,232 @@ def keyboard_loop(
     return synth_patches
 
 
+def _run_predict(
+    checkpoint_path: Path,
+    dataset_root_dir: Path,
+    predict_file: Path,
+    predictions_output_dir: Path,
+    param_spec_name: str,
+) -> None:
+    """Run model prediction via ``src/eval.py`` with ``mode=predict``.
+
+    Paths are passed as absolute (``.resolve()``) because ``src/eval.py`` runs under Hydra, which
+    chdirs into its own output dir before the job starts; relative paths would otherwise resolve
+    against the wrong cwd. ``model.net.d_out`` is overridden from ``len(param_specs[...])`` to
+    satisfy the mandatory-override sentinel in ``configs/experiment/surge/test.yaml``.
+    """
+    encoded_width = len(param_specs[param_spec_name])
+    subprocess.check_call(  # noqa: S603
+        [
+            sys.executable,
+            str(_EVAL_SCRIPT),
+            "experiment=surge/test",
+            "ckpt_path=" + str(checkpoint_path.resolve()),
+            "data.predict_file=" + str(predict_file.resolve()),
+            "data.dataset_root=" + str(dataset_root_dir.resolve()),
+            "callbacks.prediction_writer.output_dir=" + str(predictions_output_dir.resolve()),
+            f"model.net.d_out={encoded_width}",
+            "mode=predict",
+        ],
+        timeout=_EVAL_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+
+def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> None:
+    """Verify ``PredictionWriter`` (``src/utils/callbacks.py``) wrote the expected per-sample
+    ``pred-{i}.pt``, ``target-audio-{i}.pt``, and ``target-params-{i}.pt`` files, and that
+    prediction tensors are finite.
+
+    Tensors are loaded onto CPU regardless of the device they were saved from so this works across
+    mps/cuda/cpu predict runs.
+
+    :raises FileNotFoundError: if the expected files are missing or extras are present.
+    :raises ValueError: if any ``pred-{i}.pt`` tensor contains NaN/Inf.
+    """
+    expected_names = _expected_prediction_filenames(num_samples)
+    actual_names = sorted(p.name for p in predictions_output_dir.iterdir())
+    if actual_names != expected_names:
+        missing = sorted(set(expected_names) - set(actual_names))
+        unexpected = sorted(set(actual_names) - set(expected_names))
+        raise FileNotFoundError(
+            f"unexpected prediction outputs in {predictions_output_dir}: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    for i in range(num_samples):
+        pred_path = predictions_output_dir / f"pred-{i}.pt"
+        pred = torch.load(pred_path, map_location="cpu", weights_only=True)
+        if not torch.isfinite(pred).all():
+            raise ValueError(f"{pred_path} contains NaN/Inf")
+
+
+def _render_predicted_audio(
+    predictions_output_dir: Path,
+    audio_dir: Path,
+    num_samples: int,
+    param_spec_name: str,
+    preset_path: str,
+) -> None:
+    """Render audio for the predicted patches and validate per-sample outputs (file presence and
+    non-silent WAVs).
+
+    ``param_spec_name`` and ``preset_path`` must match the values used to capture the patches —
+    otherwise ``predict_vst_audio.py`` would fall back to its own defaults (``surge_xt`` /
+    ``presets/surge-base.vstpreset``) and decode/render against a mismatched spec.
+
+    :raises FileNotFoundError: if the headless wrapper is missing on Linux, if any sample directory
+        is missing, or if a per-sample artifact (target.wav, pred.wav, spec.png, params.csv) is
+        absent.
+    :raises ValueError: if a rendered WAV's peak amplitude is below ``SILENCE_PEAK_THRESHOLD``.
+    """
+    args: list[str] = []
+    if sys.platform == "linux":
+        if not _VST_HEADLESS_WRAPPER.is_file():
+            raise FileNotFoundError(
+                f"VST headless wrapper not found at {_VST_HEADLESS_WRAPPER}; "
+                f"this script needs it on Linux to run predict_vst_audio.py headlessly."
+            )
+        args.append(str(_VST_HEADLESS_WRAPPER))
+    args += [
+        sys.executable,
+        str(_PREDICT_VST_AUDIO_SCRIPT),
+        str(predictions_output_dir),
+        str(audio_dir),
+        "--param_spec",
+        param_spec_name,
+        "--preset_path",
+        preset_path,
+        "-t",
+    ]
+    try:
+        subprocess.run(  # noqa: S603
+            args,
+            check=True,
+            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error(
+            "predict_vst_audio timed out after %ss; command: %s",
+            _VST_SUBPROCESS_TIMEOUT_SECONDS,
+            args,
+        )
+        raise
+
+    sample_dirs = sorted(d for d in audio_dir.iterdir() if d.is_dir())
+    actual_sample_names = [d.name for d in sample_dirs]
+    expected_sample_names = [f"sample_{i}" for i in range(num_samples)]
+    if actual_sample_names != expected_sample_names:
+        raise FileNotFoundError(
+            f"unexpected sample directories in {audio_dir}: "
+            f"got {actual_sample_names}, expected {expected_sample_names}"
+        )
+    for sample_dir in sample_dirs:
+        for fname in ("target.wav", "pred.wav", "spec.png", "params.csv"):
+            artifact_path = sample_dir / fname
+            if not artifact_path.is_file():
+                raise FileNotFoundError(f"{artifact_path} not found")
+        for wav_name in ("target.wav", "pred.wav"):
+            with AudioFile(str(sample_dir / wav_name)) as f:
+                audio = f.read(f.frames)
+            peak = float(np.abs(audio).max())
+            if peak <= SILENCE_PEAK_THRESHOLD:
+                raise ValueError(f"{sample_dir.name}/{wav_name} is silent (peak={peak:.2e})")
+
+
+def _compute_and_validate_metrics(audio_dir: Path, metrics_dir: Path, num_samples: int) -> None:
+    """Compute MSS / wMFCC / SOT / RMS metrics on the rendered pairs and verify the CSV outputs.
+
+    :raises FileNotFoundError: if either metrics CSV is missing.
+    :raises ValueError: if a metrics CSV has unexpected shape or columns, or contains NaN/Inf.
+    """
+    metrics_file_expectations: dict[str, _MetricsFileSpec] = {
+        "aggregated_metrics.csv": _MetricsFileSpec(
+            rows=len(_METRIC_COLUMNS), columns=frozenset({"mean", "std"})
+        ),
+        "metrics.csv": _MetricsFileSpec(rows=num_samples, columns=_METRIC_COLUMNS),
+    }
+    subprocess.check_call(  # noqa: S603
+        [
+            sys.executable,
+            str(_COMPUTE_AUDIO_METRICS_SCRIPT),
+            str(audio_dir),
+            str(metrics_dir),
+            "-w",
+            "1",
+        ],
+        timeout=_METRICS_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+    for metrics_file, expected in metrics_file_expectations.items():
+        metrics_path = metrics_dir / metrics_file
+        if not metrics_path.is_file():
+            raise FileNotFoundError(f"{metrics_file} not found in {metrics_dir}")
+        metrics_df = pd.read_csv(metrics_path)
+        _validate_metrics_df(metrics_path, metrics_df, expected)
+
+
+def eval_patches(
+    num_samples: int,
+    dataset_root_dir: Path,
+    checkpoint_path: Path,
+    param_spec_name: str,
+    preset_path: str,
+) -> None:
+    """Run model eval on captured patches end-to-end.
+
+    Pipeline (each step gated on the previous one's success):
+
+    1. Predict params via ``src/eval.py mode=predict`` (``_run_predict``).
+    2. Verify the per-sample ``pred-{i}.pt`` / ``target-audio-{i}.pt`` / ``target-params-{i}.pt``
+       files were written and that prediction tensors are finite (``_validate_predictions``).
+    3. Render predicted vs. target audio via ``scripts/predict_vst_audio.py`` and verify the
+       per-sample artifacts (``_render_predicted_audio``).
+    4. Compute MSS / wMFCC / SOT / RMS metrics via ``scripts/compute_audio_metrics.py`` and verify
+       the resulting CSVs (``_compute_and_validate_metrics``).
+
+    Re-runs against the same ``dataset_root_dir`` clear the previous prediction/audio/metrics
+    output directories so stale files don't leak into validation.
+
+    :param num_samples: Number of patches predicted/rendered (matches ``predict.h5``'s row count).
+    :param dataset_root_dir: Directory containing ``predict.h5``; receives ``prediction_outputs/``,
+        ``audio/``, and ``metrics/`` subdirectories.
+    :param checkpoint_path: Path to the ``.ckpt`` file to load weights from.
+    :param param_spec_name: Parameter spec name (key into ``param_specs``) used to set the model's
+        ``d_out`` and the decoder used to render predicted audio. Must match the spec used when
+        the patches were captured.
+    :param preset_path: Base preset to load when rendering predicted audio. Must match the preset
+        used when the patches were captured.
+    :raises FileNotFoundError: if ``checkpoint_path`` is missing, ``dataset_root_dir`` is not a
+        directory, ``predict.h5`` is missing, or any expected pipeline output is absent.
+    :raises ValueError: if predictions contain NaN/Inf, a rendered WAV is silent, or a metrics CSV
+        has the wrong shape/columns or contains NaN/Inf.
+    """
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
+    if not dataset_root_dir.is_dir():
+        raise NotADirectoryError(f"dataset root directory not found: {dataset_root_dir}")
+    predict_file = dataset_root_dir / "predict.h5"
+    if not predict_file.is_file():
+        raise FileNotFoundError(f"predict.h5 not found: {predict_file}")
+
+    predictions_output_dir = dataset_root_dir / "prediction_outputs"
+    audio_dir = dataset_root_dir / "audio"
+    metrics_dir = dataset_root_dir / "metrics"
+
+    # Stale outputs from a prior run would leak into validation (e.g. extra ``pred-N.pt`` files
+    # from a larger previous run). Clear and recreate per-run output dirs up front.
+    for output_dir in (predictions_output_dir, audio_dir, metrics_dir):
+        shutil.rmtree(output_dir, ignore_errors=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    _run_predict(
+        checkpoint_path, dataset_root_dir, predict_file, predictions_output_dir, param_spec_name
+    )
+    _validate_predictions(predictions_output_dir, num_samples)
+    _render_predicted_audio(
+        predictions_output_dir, audio_dir, num_samples, param_spec_name, preset_path
+    )
+    _compute_and_validate_metrics(audio_dir, metrics_dir, num_samples)
+
+
 @click.command()
 @click.option("--plugin-path", "-p", default="plugins/Surge XT.vst3", help="Path to VST3 plugin.")
 @click.option(
@@ -490,15 +796,17 @@ def keyboard_loop(
     ),
 )
 @click.option(
-    "--output-dataset-path",
-    type=click.Path(dir_okay=False, path_type=Path),
+    "--output-dataset-dir-path",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
     default=None,
     help=(
-        "HDF5 file to be created with the recorded patches. Must not already exist — "
+        "Directory to create for the recorded patches. Must not already exist — "
         "``make_dataset`` writes fixed-size HDF5 datasets without ``maxshape`` and cannot "
         "append to existing files. After the editor is closed, patches captured via the "
         "keyboard loop (press 'p' to record, 'q' to quit) are rendered through the plugin "
-        "and written to this file via ``src.data.vst.generate_vst_dataset.make_dataset``."
+        "and written to ``train.h5`` inside this directory via "
+        "``src.data.vst.generate_vst_dataset.make_dataset`` (plus ``val.h5``/``test.h5``/"
+        "``predict.h5`` siblings when ``--checkpoint-path`` is set)."
     ),
 )
 @click.option(
@@ -512,6 +820,12 @@ def keyboard_loop(
         "first available input. When unset, no MIDI input is opened. List ports with "
         '``python -c "import mido; print(mido.get_input_names())"``.'
     ),
+)
+@click.option(
+    "--checkpoint-path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=("Optional checkpoint path to run standalone eval on after rendering captured patches. "),
 )
 @click.option(
     "--session-recording-path",
@@ -532,8 +846,9 @@ def main(
     dataset_ref: DatasetRef | None,
     preset_path: str,
     param_spec_name: str,
-    output_dataset_path: Path | None,
+    output_dataset_dir_path: Path | None,
     midi_port: str | None,
+    checkpoint_path: Path | None,
     session_recording_path: Path | None,
 ) -> None:
     """Open Surge XT GUI with real-time audio streaming and record patches to an HDF5 dataset.
@@ -546,11 +861,15 @@ def main(
     3. Open the plugin's GUI editor; in parallel, stream audio to the default output device
        and run a keyboard loop (press ``p`` to snapshot the current synth params as a patch,
        ``q`` to quit).
-    4. After the editor is closed, render every recorded patch through the plugin and append
-       the resulting samples to ``--output-dataset-path`` via ``make_dataset``.
+    4. After the editor is closed, render every recorded patch through the plugin and write
+       the resulting samples to ``train.h5`` inside ``--output-dataset-dir-path`` via
+       ``make_dataset``.
+    5. If ``--checkpoint-path`` is also set, copy ``train.h5`` to ``val.h5``/``test.h5``/
+       ``predict.h5`` siblings (rolled back if any copy fails) and call ``eval_patches`` to
+       run ``src/eval.py mode=predict`` followed by audio rendering
+       (``predict_vst_audio.py``) and metric computation (``compute_audio_metrics.py``) on
+       the captured patches.
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
     if dataset_ref is not None and pred is not None:
         raise click.UsageError(
             "--pred and --dataset-ref are mutually exclusive; pass at most one."
@@ -560,10 +879,10 @@ def main(
     # ``maxshape`` and cannot append, so a pre-existing path would either
     # silently overwrite (when re-creating datasets) or fail mid-render after
     # patches have been captured. Better to reject up front.
-    if output_dataset_path is not None and output_dataset_path.exists():
+    if output_dataset_dir_path is not None and output_dataset_dir_path.exists():
         raise click.UsageError(
-            f"--output-dataset-path {output_dataset_path} already exists; "
-            f"this script writes a new file (fixed-size HDF5 datasets cannot be "
+            f"--output-dataset-dir-path {output_dataset_dir_path} already exists; "
+            f"this script creates a new directory (fixed-size HDF5 datasets cannot be "
             f"appended to). Choose a path that does not exist yet."
         )
 
@@ -653,13 +972,15 @@ def main(
         # wait for any remaining work to drain normally.
         pool.shutdown(wait=not audio_timed_out, cancel_futures=audio_timed_out)
 
-    if output_dataset_path is None:
-        logger.info("No output dataset path provided, skipping dataset creation.")
+    if output_dataset_dir_path is None:
+        logger.info("No --output-dataset-dir-path provided; skipping dataset creation.")
         return
     if not synth_patches:
         logger.info("No patches recorded, skipping dataset creation.")
         return
-    with h5py.File(output_dataset_path, "w") as f:
+    output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
+    patch_file_path = output_dataset_dir_path / "train.h5"
+    with h5py.File(patch_file_path, "w") as f:
         make_dataset(
             hdf5_file=f,
             num_samples=len(synth_patches),
@@ -674,7 +995,56 @@ def main(
             sample_batch_size=MAKE_DATASET_SAMPLE_BATCH_SIZE,
             fixed_synth_params_list=synth_patches,
         )
+    _maybe_eval_captured_patches(
+        patch_file_path,
+        output_dataset_dir_path,
+        len(synth_patches),
+        checkpoint_path,
+        param_spec_name,
+        preset_path,
+    )
+
+
+def _maybe_eval_captured_patches(
+    patch_file_path: Path,
+    output_dataset_dir_path: Path,
+    num_patches: int,
+    checkpoint_path: Path | None,
+    param_spec_name: str,
+    preset_path: str,
+) -> None:
+    """Replicate captured patches into the four eval-pipeline splits and run eval_patches if a
+    checkpoint is provided; no-op otherwise.
+
+    The Click ``--checkpoint-path`` option already validates ``exists=True``, so when this is
+    invoked from ``main`` ``checkpoint_path`` is guaranteed to refer to an existing file.
+    ``param_spec_name`` and ``preset_path`` are forwarded to ``eval_patches`` so the predict /
+    render / metrics steps decode and re-render against the same spec + preset that were used
+    when the patches were captured.
+    """
+    if checkpoint_path is None:
+        logger.info("No --checkpoint-path provided; skipping patch evaluation.")
+        return
+    sibling_paths = [
+        output_dataset_dir_path / name for name in ("test.h5", "val.h5", "predict.h5")
+    ]
+    copied: list[Path] = []
+    try:
+        for sibling_path in sibling_paths:
+            shutil.copyfile(patch_file_path, sibling_path)
+            copied.append(sibling_path)
+    except OSError:
+        for created in copied:
+            try:
+                os.remove(created)
+            except OSError:
+                logger.exception("failed to roll back partial sibling copy at %s", created)
+        raise
+    eval_patches(
+        num_patches, output_dataset_dir_path, checkpoint_path, param_spec_name, preset_path
+    )
 
 
 if __name__ == "__main__":
+    _configure_logging()
     main()  # type: ignore[call-arg]

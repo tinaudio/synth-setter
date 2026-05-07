@@ -38,15 +38,14 @@ envs:
 setup: |
   echo "synth-setter debug-pedalboard worker ready (host: $(hostname))"
 
+# SSH cwd is ~/sky_workdir (synced from the GH-actions checkout via
+# task.workdir in the matrix YAML); the wrapper ships with the run block
+# and no docker rebuild is needed to iterate on it. The Surge XT VST3 still
+# has to come from the image — ensure_plugin_symlinks.sh restores the symlink
+# the synced workdir hides.
 run: |
   set -euo pipefail
-  # SSH cwd is ~/sky_workdir (synced from the GH-actions checkout via
-  # task.workdir in the matrix YAML); the wrapper ships with the run
-  # block and no docker rebuild is needed to iterate on it. The Surge XT
-  # VST3 still has to come from the image — symlink it into a plugins/
-  # dir under the synced workdir so the wrapper-loaded python finds it.
-  mkdir -p plugins
-  ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+  bash scripts/ensure_plugin_symlinks.sh
   bash scripts/run-linux-vst-headless.sh python -c '
   from pedalboard import VST3Plugin
   plugin = VST3Plugin("plugins/Surge XT.vst3")

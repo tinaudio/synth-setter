@@ -58,8 +58,8 @@ on:
       - "pipeline/entrypoints/**"
       - "scripts/docker_entrypoint.py"
       - "scripts/run-linux-vst-headless.sh"
-      - "scripts/skypilot_worker_run.sh"
-      - "scripts/skypilot_worker_bootstrap.sh"
+      - "scripts/ensure_plugin_symlinks.sh"
+      - "scripts/sync_worker_checkout.sh"
       - "scripts/skypilot_write_provider_creds.sh"
       - "pipeline/entrypoints/skypilot_launch_smoke.py"
       - ".github/workflows/test-dataset-generation.yml"
@@ -193,8 +193,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
+              bash scripts/ensure_plugin_symlinks.sh
               python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
               python scripts/docker_entrypoint.py generate_dataset \
                 --spec /run-metadata/input_spec.json
@@ -205,11 +204,16 @@ jobs:
       # Launcher submits via sky.launch + stream_and_get; job-level
       # timeout-minutes: 60 is the safety bound. Cred-write is delegated to
       # scripts/skypilot_write_provider_creds.sh (umask 077; mode 600 on
-      # every cred file). R2/W&B secrets land in container env via -e flags
-      # (no .env on disk).
+      # every cred file) — but skipped when SKYPILOT_API_SERVER_ENDPOINT is
+      # set, since the remote API server (see #785) holds provider creds and
+      # the local container only needs to talk to it. R2/W&B secrets land in
+      # container env via -e flags (no .env on disk) — those are forwarded to
+      # the worker via task.update_envs regardless of where SkyPilot is
+      # running.
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         if: ${{ matrix.provider != 'local' }}
         env:
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           PROVIDER: ${{ matrix.provider }}
           TEMPLATE: configs/compute/${{ matrix.provider == 'oci' && 'oci-cpu' || matrix.provider }}-template.yaml
           CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -232,6 +236,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v "/tmp/run-metadata-${PROVIDER}:/run-metadata" \
+            -e SKYPILOT_API_SERVER_ENDPOINT \
             -e PROVIDER \
             -e TEMPLATE \
             -e CLUSTER_NAME \
@@ -258,9 +263,12 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              mkdir -p plugins
-              ln -sf "/usr/lib/vst3/Surge XT.vst3" "plugins/Surge XT.vst3"
-              bash scripts/skypilot_write_provider_creds.sh
+              bash scripts/ensure_plugin_symlinks.sh
+              if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
+                bash scripts/skypilot_write_provider_creds.sh
+              else
+                echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
+              fi
               if [[ "$PROVIDER" == "oci" ]]; then
                 sky check oci
               fi
@@ -270,7 +278,8 @@ jobs:
                 --cluster-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \
                 --num-workers 3 \
-                --spec-out /tmp/input_spec.json
+                --spec-out /tmp/input_spec.json \
+                --tail
               cp /tmp/input_spec.json /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \

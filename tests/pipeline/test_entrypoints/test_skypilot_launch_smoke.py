@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+import click
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -22,6 +23,7 @@ from pipeline.entrypoints.skypilot_launch_smoke import (
     _override_image_id,
     load_worker_env,
     main,
+    resolve_worker_env,
 )
 from pipeline.schemas.config import dataset_config_id_from_path
 from pipeline.schemas.spec import DatasetPipelineSpec
@@ -206,6 +208,50 @@ class TestLoadWorkerEnv:
         path = tmp_path / ".env"
         path.write_text("FOO=bar\nBARE\n")
         assert load_worker_env(path) == {"FOO": "bar"}
+
+
+class TestResolveWorkerEnvGitRefValidation:
+    """`WORKER_GIT_REF`, when set, must be a 7-40 char hex git SHA.
+
+    The validation lives at the env-resolution seam (host-side) instead of in the worker template's
+    bash because the SHA is rendered into a `git fetch + checkout` invocation; rejecting a
+    malformed value at the launcher gives a clear error before the cluster is ever provisioned.
+    """
+
+    def test_unset_git_ref_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty/unset WORKER_GIT_REF is the common case (no PR-CI bake-lag bypass)."""
+        monkeypatch.delenv("WORKER_GIT_REF", raising=False)
+        resolved = resolve_worker_env(None)
+        assert "WORKER_GIT_REF" not in resolved
+
+    @pytest.mark.parametrize(
+        "good_sha",
+        ["abc1234", "abc1234deadbeef", "0" * 40, "f" * 40],
+    )
+    def test_valid_hex_sha_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, good_sha: str
+    ) -> None:
+        """7-40 char lowercase hex strings pass — both short and long form."""
+        monkeypatch.setenv("WORKER_GIT_REF", good_sha)
+        resolved = resolve_worker_env(None)
+        assert resolved["WORKER_GIT_REF"] == good_sha
+
+    @pytest.mark.parametrize(
+        "bad_sha",
+        [
+            "main",  # branch name, not SHA
+            "ABC1234",  # uppercase rejected
+            "abc",  # too short
+            "g" * 7,  # non-hex char
+            "abc1234; rm -rf /",  # injection attempt
+            "abc 1234",  # whitespace
+        ],
+    )
+    def test_invalid_git_ref_raises(self, monkeypatch: pytest.MonkeyPatch, bad_sha: str) -> None:
+        """Non-SHA values fail with ClickException before the launcher provisions anything."""
+        monkeypatch.setenv("WORKER_GIT_REF", bad_sha)
+        with pytest.raises(click.ClickException, match="WORKER_GIT_REF"):
+            resolve_worker_env(None)
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +449,7 @@ class TestMainCli:
         assert kwargs["idle_minutes_to_autostop"] >= 2
         assert kwargs["down"] is True
 
-    def test_tail_logs_invoked_with_follow_true(
+    def test_tail_logs_invoked_with_follow_true_under_tail(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -412,15 +458,16 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`sky.tail_logs` is called with follow=True — the launcher streams logs in real time
-        instead of polling job_status and dumping a buffered tail."""
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        """`--tail` streams logs with follow=True — real-time logs instead of a buffered tail."""
+        result = _invoke(
+            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--tail"
+        )
         assert result.exit_code == 0, result.output
         mock_sky.tail_logs.assert_called_once_with(
             cluster_name="smoke-job-1", job_id=1, follow=True
         )
 
-    def test_teardown_runs_on_success(
+    def test_teardown_runs_on_success_under_tail(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -429,8 +476,10 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`sky.down` is called once on the success path."""
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        """Under `--tail`, `sky.down` is called once on the success path."""
+        result = _invoke(
+            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--tail"
+        )
         assert result.exit_code == 0, result.output
         mock_sky.down.assert_called_once_with("smoke-job-1")
 
@@ -472,7 +521,7 @@ class TestMainCli:
         assert result.exit_code == 0, result.output
         assert explicit.is_file()
 
-    def test_worker_failed_rc_fails_launcher(
+    def test_worker_failed_rc_fails_launcher_under_tail(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -481,11 +530,12 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """A non-zero `tail_logs` rc means the worker job ended in a non-SUCCEEDED terminal status;
-        the launcher must surface that as a non-zero exit and still tear down the cluster."""
+        """Under `--tail`, a non-zero `tail_logs` rc means the worker job ended in a non-SUCCEEDED
+        terminal status; the launcher surfaces that as a non-zero exit and still tears down the
+        cluster."""
         mock_sky.tail_logs.return_value = 100
 
-        result = _invoke(config_yaml, template_yaml, env_file)
+        result = _invoke(config_yaml, template_yaml, env_file, "--tail")
         assert result.exit_code != 0
         # Aggregate fan-out failure message names every failed rank with its rc.
         assert "rc=100" in result.output
@@ -516,7 +566,7 @@ class TestMainCli:
         assert "no job_id" in result.output.lower()
         mock_sky.tail_logs.assert_not_called()
 
-    def test_teardown_runs_when_tail_logs_raises(
+    def test_teardown_runs_when_tail_logs_raises_under_tail(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -525,11 +575,11 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """A `sky.tail_logs` transport error must not skip cluster teardown — the cluster always
-        comes down even if the log-stream side raised."""
+        """Under `--tail`, a `sky.tail_logs` transport error must not skip cluster teardown — the
+        cluster always comes down even if the log-stream side raised."""
         mock_sky.tail_logs.side_effect = RuntimeError("boom")
 
-        result = _invoke(config_yaml, template_yaml, env_file)
+        result = _invoke(config_yaml, template_yaml, env_file, "--tail")
         assert result.exit_code != 0
         mock_sky.down.assert_called_once()
 
@@ -559,6 +609,160 @@ class TestMainCli:
         assert spec_files[0].read_text(), (
             "local spec file should still be on disk for artifact upload"
         )
+
+
+class TestNoTailMode:
+    """Default `--no-tail` mode: launch each rank, print job_id + the `sky logs` / `sky down`
+    commands the operator can run, then exit 0 without tailing or tearing down.
+
+    The autostop window (`idle_minutes_to_autostop=5, down=True` on `sky.launch`) is the safety
+    net for clusters left running. The launcher only tears down a cluster in this mode if its
+    own `sky.launch` raised or yielded no job_id (half-provisioned).
+    """
+
+    def test_no_tail_is_default_and_skips_tail_logs(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Without an explicit flag the launcher detaches: `sky.tail_logs` is never invoked."""
+        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        assert result.exit_code == 0, result.output
+        mock_sky.tail_logs.assert_not_called()
+
+    def test_no_tail_does_not_tear_down_cluster_on_success(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A successful detach leaves the cluster up — autostop is the safety net, not the
+        launcher's `finally` teardown."""
+        result = _invoke(
+            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--no-tail"
+        )
+        assert result.exit_code == 0, result.output
+        mock_sky.down.assert_not_called()
+
+    def test_no_tail_prints_sky_logs_and_sky_down_commands_per_cluster(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """For each launched cluster the operator gets the exact `sky logs <cluster> <job_id>` and
+        `sky down <cluster>` commands they can copy-paste."""
+        result = _invoke(
+            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--no-tail"
+        )
+        assert result.exit_code == 0, result.output
+        assert "sky logs smoke-job-1 1" in result.output
+        assert "sky down smoke-job-1" in result.output
+
+    def test_no_tail_multi_worker_prints_per_cluster_block_for_each_rank(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Multi-worker detach prints one block per rank — each cluster gets its own `sky logs` and
+        `sky down` commands."""
+        TestNumWorkersFanOut._setup_n_workers_mock(mock_sky, n=3)
+
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--num-workers",
+            "3",
+            "--no-tail",
+        )
+        assert result.exit_code == 0, result.output
+        for i in range(3):
+            assert f"sky logs smoke-job-1-r{i} {i + 1}" in result.output
+            assert f"sky down smoke-job-1-r{i}" in result.output
+        mock_sky.tail_logs.assert_not_called()
+        mock_sky.down.assert_not_called()
+
+    def test_no_tail_partial_launch_failure_only_tears_down_failed_cluster(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Multi-worker detach: if rank 1's launch yields no job_id (half-provisioned) but the
+        other ranks succeed, only the failed cluster is torn down. Successful clusters stay up."""
+        cluster_names = [f"smoke-job-1-r{i}" for i in range(3)]
+        tasks = {name: MagicMock(name=f"task-{name}") for name in cluster_names}
+        mock_sky.Task.from_yaml.side_effect = list(tasks.values())
+
+        launch_reqs = {name: f"launch-{name}" for name in cluster_names}
+        down_reqs = {name: f"down-{name}" for name in cluster_names}
+        mock_sky.launch.side_effect = lambda task, **kw: launch_reqs[kw["cluster_name"]]
+        mock_sky.down.side_effect = lambda name: down_reqs[name]
+
+        # rank 1's launch yields a None job_id so the launcher treats it as half-provisioned.
+        stream_responses: dict[str, object] = {
+            launch_reqs["smoke-job-1-r0"]: (1, MagicMock()),
+            launch_reqs["smoke-job-1-r1"]: (None, MagicMock()),
+            launch_reqs["smoke-job-1-r2"]: (3, MagicMock()),
+        }
+        stream_responses.update({req: None for req in down_reqs.values()})
+        mock_sky.stream_and_get.side_effect = lambda req: stream_responses[req]
+
+        result = _invoke(
+            config_yaml,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--num-workers",
+            "3",
+            "--no-tail",
+        )
+
+        assert result.exit_code != 0
+        teardown_targets = [call.args[0] for call in mock_sky.down.call_args_list]
+        assert teardown_targets == ["smoke-job-1-r1"]
+        for surviving_cluster in ("smoke-job-1-r0", "smoke-job-1-r2"):
+            assert f"sky down {surviving_cluster}" in result.output
+
+    def test_no_tail_single_worker_launch_failure_tears_down_that_cluster(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Single-worker detach: if launch raises, the half-provisioned cluster is still torn
+        down (best-effort) and the launcher exits non-zero."""
+        mock_sky.launch.side_effect = RuntimeError("boom")
+
+        result = _invoke(
+            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--no-tail"
+        )
+        assert result.exit_code != 0
+        mock_sky.down.assert_called_once_with("smoke-job-1")
 
 
 class TestNumWorkersFanOut:
@@ -610,7 +814,7 @@ class TestNumWorkersFanOut:
         mock_sky.tail_logs.side_effect = lambda **kw: rcs.get(kw["cluster_name"], 0)
         return tasks
 
-    def test_three_workers_launches_three_clusters(
+    def test_three_workers_launches_three_clusters_under_tail(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -619,7 +823,8 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`--num-workers 3` provisions exactly 3 clusters."""
+        """Under `--tail`, `--num-workers 3` provisions exactly 3 clusters and tails+tears down
+        each one."""
         self._setup_n_workers_mock(mock_sky, n=3)
 
         result = _invoke(
@@ -630,6 +835,7 @@ class TestNumWorkersFanOut:
             "smoke-job-1",
             "--num-workers",
             "3",
+            "--tail",
         )
 
         assert result.exit_code == 0, result.output
@@ -762,7 +968,7 @@ class TestNumWorkersFanOut:
             "r2:intermediate-data/skypilot-launcher-specs/smoke-job-1.json"
         )
 
-    def test_one_worker_failure_among_three_fails_launcher_after_full_teardown(
+    def test_one_worker_failure_among_three_fails_launcher_after_full_teardown_under_tail(
         self,
         config_yaml: Path,
         template_yaml: Path,
@@ -771,8 +977,9 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """If any rank's tail_logs returns non-zero, the launcher exits non-zero, but every cluster
-        (success or fail) gets torn down — partial-failure cleanup must be uniform."""
+        """Under `--tail`, if any rank's tail_logs returns non-zero, the launcher exits non-zero
+        but every cluster (success or fail) gets torn down — partial-failure cleanup must be
+        uniform."""
         self._setup_n_workers_mock(mock_sky, n=3, tail_rcs_by_cluster={"smoke-job-1-r1": 100})
 
         result = _invoke(
@@ -783,6 +990,7 @@ class TestNumWorkersFanOut:
             "smoke-job-1",
             "--num-workers",
             "3",
+            "--tail",
         )
 
         assert result.exit_code != 0

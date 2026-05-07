@@ -288,7 +288,11 @@ class TestGenerateDataset:
         def fake_run(spec: DatasetPipelineSpec) -> None:
             captured.append(spec)
 
-        with patch.object(entrypoint, "run", fake_run):
+        exit_calls: list[int] = []
+        with (
+            patch.object(entrypoint, "run", fake_run),
+            patch.object(entrypoint.os, "_exit", lambda code: exit_calls.append(code)),
+        ):
             result = runner.invoke(entrypoint.cli, ["generate_dataset", "--spec", str(spec_path)])
 
         assert result.exit_code == 0, result.output
@@ -298,6 +302,40 @@ class TestGenerateDataset:
         assert parsed.r2_bucket == payload["r2_bucket"]
         assert parsed.shard_size == payload["shard_size"]
         assert parsed.shards[0].filename == "shard-000000.h5"
+
+    def test_happy_path_calls_os_exit_zero_after_run(
+        self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
+    ) -> None:
+        """generate_dataset must call ``os._exit(0)`` after run() returns (#735)."""
+        spec_path = _write_spec_file(tmp_path)
+
+        exit_calls: list[int] = []
+        with (
+            patch.object(entrypoint, "run", lambda _spec: None),
+            patch.object(entrypoint.os, "_exit", lambda code: exit_calls.append(code)),
+        ):
+            result = runner.invoke(entrypoint.cli, ["generate_dataset", "--spec", str(spec_path)])
+
+        assert result.exit_code == 0, result.output
+        assert exit_calls == [0], (
+            f"expected os._exit(0) after run() returns (#735 workaround), got {exit_calls}"
+        )
+
+    @pytest.mark.usefixtures("_detach_pytest_live_logging_handler")
+    def test_failed_spec_load_does_not_call_os_exit(
+        self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
+    ) -> None:
+        """os._exit(0) must not fire if spec loading fails — run() never executed."""
+        missing = tmp_path / "does-not-exist.json"
+
+        exit_calls: list[int] = []
+        with patch.object(entrypoint.os, "_exit", lambda code: exit_calls.append(code)):
+            result = runner.invoke(entrypoint.cli, ["generate_dataset", "--spec", str(missing)])
+
+        assert result.exit_code != 0
+        assert exit_calls == [], (
+            f"os._exit must not fire when run() didn't execute, got {exit_calls}"
+        )
 
     def test_missing_spec_flag_exits_two(self, runner: CliRunner, entrypoint: ModuleType) -> None:
         """generate_dataset without --spec exits with click's usage-error code (2)."""
