@@ -836,14 +836,32 @@ class TestExpectedPredictionFilenames:
         assert surge_xt_interactive._expected_prediction_filenames(num_samples=0) == []
 
 
+class _RecordingSubprocessRunner:
+    """Test fake matching the ``SubprocessRunner`` shape from ``surge_xt_interactive``.
+
+    Records every invocation's positional argv and keyword arguments so tests assert on
+    real state instead of a ``MagicMock`` argv-spy. Used by every test that exercises a
+    ``*_runner=`` seam introduced in the de-mock refactor (see issue #844).
+
+    Returns ``0`` from ``__call__`` (a valid ``subprocess.check_call`` return; production
+    callers ignore the value or read ``returncode`` from a ``CompletedProcess``-like object,
+    which we don't simulate here — YAGNI).
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+        self.kwargs_per_call: list[dict[str, object]] = []
+
+    def __call__(self, args: list[str], **kwargs: object) -> int:
+        self.calls.append(list(args))
+        self.kwargs_per_call.append(dict(kwargs))
+        return 0
+
+
 class TestRunPredict:
     """``_run_predict`` builds the ``src/eval.py`` invocation with the right Hydra overrides."""
 
-    def test_passes_d_out_override_and_absolute_paths(
-        self,
-        surge_xt_interactive,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    def test_passes_d_out_override_and_absolute_paths(self, surge_xt_interactive) -> None:
         """``_run_predict`` overrides ``model.net.d_out`` with the encoded width of
         ``param_spec_name`` (otherwise the ``???`` sentinel in ``surge/test.yaml`` would error),
         and resolves all paths to absolute (otherwise Hydra's ``chdir`` would break relative
@@ -854,19 +872,19 @@ class TestRunPredict:
         predict_file = Path("relative/dataset/predict.h5")
         predictions_dir = Path("relative/preds")
 
-        captured: dict = {}
-
-        def fake_check_call(args: list[str], **_kwargs: object) -> int:
-            captured["args"] = list(args)
-            return 0
-
-        monkeypatch.setattr(surge_xt_interactive.subprocess, "check_call", fake_check_call)
+        runner = _RecordingSubprocessRunner()
 
         surge_xt_interactive._run_predict(
-            ckpt, dataset_root, predict_file, predictions_dir, SURGE_SIMPLE
+            ckpt,
+            dataset_root,
+            predict_file,
+            predictions_dir,
+            SURGE_SIMPLE,
+            subprocess_runner=runner,
         )
 
-        args = captured["args"]
+        assert len(runner.calls) == 1, f"expected one invocation, got {runner.calls!r}"
+        args = runner.calls[0]
         assert "experiment=surge/test" in args
         assert "mode=predict" in args
         # d_out must equal len(param_specs[SURGE_SIMPLE]) = synth+note width.
