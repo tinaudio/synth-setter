@@ -733,7 +733,10 @@ class TestNoTailMode:
         other ranks succeed, only the failed cluster is torn down. Successful clusters stay up."""
         cluster_names = [f"smoke-job-1-r{i}" for i in range(3)]
         tasks = {name: MagicMock(name=f"task-{name}") for name in cluster_names}
-        mock_sky.Task.from_yaml.side_effect = list(tasks.values())
+        # First Task.from_yaml call is the probe used by _detect_provider; remaining calls
+        # are the per-rank tasks (matches _setup_n_workers_mock).
+        probe_task = MagicMock(name="probe-task")
+        mock_sky.Task.from_yaml.side_effect = [probe_task, *tasks.values()]
 
         launch_reqs = {name: f"launch-{name}" for name in cluster_names}
         down_reqs = {name: f"down-{name}" for name in cluster_names}
