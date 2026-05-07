@@ -65,12 +65,13 @@ jobs:
 
       # `sky local up` shells out to kind + kubectl. The runner image has
       # docker preinstalled but neither kind nor kubectl, so install both.
+      # `helm/kind-action` with `install_only: true` pins the kind release
+      # and validates its checksum, vs. curl-piping the binary unverified.
       - name: Install kind
-        run: |
-          set -euo pipefail
-          curl -fsSL -o /tmp/kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
-          sudo install -o root -g root -m 0755 /tmp/kind /usr/local/bin/kind
-          kind --version
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+          version: v0.24.0
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
