@@ -1,35 +1,27 @@
 name: Test Dataset Generation
 
-# Smoke test for the data-pipeline. Three execution modes share the same
+# Smoke test for the data-pipeline. Two execution modes share the same
 # matrix shape and the same `validate-spec` / `validate-shard` downstream:
 #
 #   * `local`  — runs `pipeline.ci.materialize_spec` + `docker_entrypoint.py
 #     generate_dataset` directly inside the dev-snapshot container on the
-#     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). Manual
-#     fallback for ad-hoc dispatch — fast and free, but skips the launcher
-#     code path. Superseded by `skypilot-local` for PR coverage.
-#   * `skypilot-local` — provisions a local kind cluster via `sky local up`,
-#     loads the dev-snapshot image into kind, and invokes the unified launcher
-#     against `configs/compute/local-template.yaml` (cloud: kubernetes). PR
-#     default — exercises the same launcher / cred-bootstrap path as the cloud
-#     providers, closing the #806 unification gap. No billable capacity.
+#     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). PR
+#     default — fast and free, but skips the launcher code path. Should be
+#     graduated to SkyPilot's `local` cloud (new local-template.yaml) so
+#     all three providers go through the same launcher — tracked in #806.
 #   * `runpod` / `oci` — invoke `pipeline.entrypoints.skypilot_launch_smoke`
 #     against the matching `configs/compute/*-template.yaml`. Manual dispatch
 #     only. See docs/design/skypilot-compute-integration.md.
 #
 # Provider matrix policy (computed in the `setup` job):
-#   * pull_request (same repo) → skypilot-local only
+#   * pull_request (same repo) → local only
 #   * pull_request (fork)      → empty (forks can't read secrets)
 #   * workflow_dispatch        → respect `inputs.provider`
-#                                (all = skypilot-local + runpod + oci;
-#                                 or local / skypilot-local / runpod / oci)
+#                                (all = runpod + oci; or local/runpod/oci)
 #
 # Required secrets:
-#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT, R2_ACCOUNT_ID —
-#     Cloudflare R2 (used by every provider; `local` uses only the access
-#     key/secret/endpoint trio, the launcher's cred-bootstrap also needs
-#     R2_ACCOUNT_ID to write ~/.cloudflare/accountid for SkyPilot's R2
-#     storage adaptor).
+#   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT — Cloudflare R2
+#     (used by every provider; `local` uses *only* these).
 #   RUNPOD_API_KEY — written to ~/.runpod/config.toml so SkyPilot's RunPod
 #     backend can `sky check runpod` (env var alone is insufficient).
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
@@ -48,14 +40,13 @@ on:
         required: false
         default: "dev-snapshot"
       provider:
-        description: "Provider(s) to launch on (manual runs only; PR runs use skypilot-local)"
+        description: "Provider(s) to launch on (manual runs only; PR runs are local-only)"
         required: false
         type: choice
         default: all
         options:
           - all
           - local
-          - skypilot-local
           - runpod
           - oci
   pull_request:
@@ -90,12 +81,12 @@ jobs:
   # publish is the JSON array.
   #
   # Policy:
-  #   * pull_request (same repo) → skypilot-local only (free, exercises
-  #     the unified launcher path on a local kind cluster)
+  #   * pull_request (same repo) → local only (no cloud capacity per push)
   #   * pull_request (fork)      → empty (forks can't read secrets)
   #   * workflow_dispatch        → respect `inputs.provider`
-  #     - `all` expands to skypilot-local + runpod + oci. The legacy `local`
-  #       (docker-only) row is opt-in via the dropdown for ad-hoc fallback.
+  #     - `all` expands to runpod + oci (the cloud providers); `local` is
+  #       opt-in via the dropdown so manual runs that want full coverage
+  #       don't waste a runner-side render.
   #
   # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
   setup:
@@ -113,14 +104,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${EVENT_NAME}" == "pull_request" && "${PR_HEAD_REPO}" == "${REPO}" ]]; then
-            providers='["skypilot-local"]'
+            providers='["local"]'
           elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${PROVIDER_INPUT}" in
-              local)          providers='["local"]' ;;
-              skypilot-local) providers='["skypilot-local"]' ;;
-              runpod)         providers='["runpod"]' ;;
-              oci)            providers='["oci"]' ;;
-              *)              providers='["skypilot-local","runpod","oci"]' ;;
+              local)  providers='["local"]' ;;
+              runpod) providers='["runpod"]' ;;
+              oci)    providers='["oci"]' ;;
+              *)      providers='["runpod","oci"]' ;;
             esac
           else
             providers='[]'
@@ -211,120 +201,17 @@ jobs:
             ' \
             2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}/generate.log"
 
-      # ------------------------------------------------------------------
-      # `skypilot-local` row: provision a local kind cluster on the runner
-      # and invoke the launcher against configs/compute/local-template.yaml.
-      # The launcher (`pipeline.entrypoints.skypilot_launch_smoke`) detects
-      # `cloud: kubernetes` → runs the cred-bootstrap with `--provider local`
-      # (R2 only) and calls `sky.check.check(['kubernetes'])` in-process before
-      # `sky.launch` to populate the SDK's enabled-clouds cache (#834).
-      # ------------------------------------------------------------------
-      - name: Install kind (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        uses: helm/kind-action@v1
-        with:
-          install_only: true
-          version: v0.24.0
-
-      - name: Install kubectl (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        uses: azure/setup-kubectl@v4
-
-      - name: Install socat (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq socat
-
-      - name: Set up Python (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10"
-          cache: pip
-
-      - name: Install launcher deps (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        run: |
-          pip install "skypilot[kubernetes]==0.12.0"
-          pip install -r requirements-app.txt
-          sudo apt-get install -y -qq rclone
-
-      - name: sky local up (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        run: sky local up --no-gpus
-
-      - name: Load dev-snapshot image into kind (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        run: kind load docker-image "${IMAGE}" --name skypilot
-
-      # Cred bootstrap on the runner (R2 only — kind needs no compute creds).
-      # When SKYPILOT_API_SERVER_ENDPOINT is set, the remote API server holds
-      # creds and the local cred-bootstrap is skipped — mirrors the gating
-      # used by the runpod/oci row below.
-      - name: Bootstrap creds (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        env:
-          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
-            rclone_env_file="$(mktemp)"
-            bash scripts/skypilot_write_provider_creds.sh --provider local \
-              > "${rclone_env_file}"
-            grep -E '^RCLONE_CONFIG_R2_[A-Z_]+=' "${rclone_env_file}" >> "${GITHUB_ENV}"
-          else
-            echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
-          fi
-
-      - name: Run launcher against local-template (skypilot-local row)
-        if: ${{ matrix.provider == 'skypilot-local' }}
-        env:
-          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
-          CLUSTER_NAME: synth-setter-smoke-skypilot-local-${{ github.run_id }}-${{ github.run_attempt }}
-          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-          PYTHONPATH: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          python -m pipeline.entrypoints.skypilot_launch_smoke \
-            --config "$CONFIG_PATH" \
-            --template configs/compute/local-template.yaml \
-            --cluster-name "$CLUSTER_NAME" \
-            --worker-image-tag "$IMAGE_TAG" \
-            --num-workers 3 \
-            --spec-out "/tmp/run-metadata-${{ matrix.provider }}/input_spec.json" \
-            --tail \
-            2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}/generate.log"
-          chmod 0644 "/tmp/run-metadata-${{ matrix.provider }}/input_spec.json"
-
-      - name: sky local down (skypilot-local row)
-        if: ${{ always() && matrix.provider == 'skypilot-local' }}
-        run: sky local down || true
-
-      # ------------------------------------------------------------------
-      # `runpod` / `oci` rows: in-container launcher invocation.
-      #
-      # The launcher invokes scripts/skypilot_write_provider_creds.sh itself
-      # (provider auto-detected from task.resources), which writes ~/.runpod/,
-      # ~/.oci/, ~/.cloudflare/ creds (umask 077; mode 600) and emits rclone-
-      # prefixed R2 env vars on stdout that the launcher merges into the
-      # worker env. CI passes only the bare-named secrets; no manual rclone-
-      # prefix bridging needed here.
-      #
-      # When SKYPILOT_API_SERVER_ENDPOINT is set the cred bootstrap is skipped
-      # (both inside the launcher and at the bash-c layer below) — the remote
-      # API server (#785) holds provider creds and the local container only
-      # needs to talk to it.
-      # ------------------------------------------------------------------
+      # Launcher submits via sky.launch + stream_and_get; job-level
+      # timeout-minutes: 60 is the safety bound. Cred-write is delegated to
+      # scripts/skypilot_write_provider_creds.sh (umask 077; mode 600 on
+      # every cred file) — but skipped when SKYPILOT_API_SERVER_ENDPOINT is
+      # set, since the remote API server (see #785) holds provider creds and
+      # the local container only needs to talk to it. R2/W&B secrets land in
+      # container env via -e flags (no .env on disk) — those are forwarded to
+      # the worker via task.update_envs regardless of where SkyPilot is
+      # running.
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
-        if: ${{ matrix.provider == 'runpod' || matrix.provider == 'oci' }}
+        if: ${{ matrix.provider != 'local' }}
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           PROVIDER: ${{ matrix.provider }}
@@ -341,7 +228,6 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           CONFIG_PATH: ${{ env.DATASET_CONFIG }}
           WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -365,11 +251,12 @@ jobs:
             -e OCI_API_KEY_PEM \
             -e CONFIG_PATH \
             -e WORKER_GIT_REF \
-            -e R2_ACCESS_KEY_ID \
-            -e R2_SECRET_ACCESS_KEY \
-            -e R2_ENDPOINT \
-            -e R2_ACCOUNT_ID \
-            -e WANDB_API_KEY \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}" \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+            -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}" \
+            -e WANDB_API_KEY="${WANDB_API_KEY}" \
             -e PYTHONPATH=/home/build/synth-setter \
             "${IMAGE}" \
             bash -c '
@@ -378,7 +265,7 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
               if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
-                bash scripts/skypilot_write_provider_creds.sh --provider "$PROVIDER"
+                bash scripts/skypilot_write_provider_creds.sh
               else
                 echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
               fi

@@ -18,10 +18,8 @@ import yaml
 from click.testing import CliRunner
 
 from pipeline.entrypoints.skypilot_launch_smoke import (
-    _BARE_R2_KEYS,
     _WORKER_ENV_KEYS,
     _WORKER_SPEC_URI_ENV,
-    _detect_provider,
     _override_image_id,
     load_worker_env,
     main,
@@ -125,14 +123,13 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip the rclone-R2 / WANDB / bare-R2 keys from the test process env.
+    """Strip the rclone-R2 / WANDB keys from the test process env.
 
-    Without this, a developer who has `RCLONE_CONFIG_R2_*` (or the bare-form
-    migration aliases) exported in their shell — or a CI runner that inherits
-    them globally — would silently satisfy `resolve_worker_env`, masking tests
-    that rely on a specific resolution path.
+    Without this, a developer who has `RCLONE_CONFIG_R2_*` exported in their shell
+    (or a CI runner that inherits them globally) would silently satisfy
+    `resolve_worker_env`, masking tests that rely on a specific resolution path.
     """
-    for key in (*_WORKER_ENV_KEYS, *_BARE_R2_KEYS):
+    for key in _WORKER_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
 
 
@@ -146,23 +143,6 @@ def mock_rclone_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "pipeline.entrypoints.skypilot_launch_smoke.subprocess.check_call",
         lambda args: None,
-    )
-
-
-@pytest.fixture(autouse=True)
-def mock_bootstrap_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No-op the cred-bootstrap subprocess + provider auto-detect by default.
-
-    Tests that exercise the bootstrap behavior directly re-patch these to inject a specific
-    provider, stdout, or error.
-    """
-    monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap",
-        lambda **_kwargs: "",
-    )
-    monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch_smoke._detect_provider",
-        lambda _task: "runpod",
     )
 
 
@@ -402,8 +382,7 @@ class TestMainCli:
         assert result.exit_code == 0, result.output
 
         task = mock_sky.Task.from_yaml.return_value
-        for call in mock_sky.Task.from_yaml.call_args_list:
-            assert call.args == (str(template_yaml),)
+        mock_sky.Task.from_yaml.assert_called_once_with(str(template_yaml))
         task.update_envs.assert_called_once()
         forwarded = task.update_envs.call_args.args[0]
         assert forwarded["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
@@ -733,10 +712,7 @@ class TestNoTailMode:
         other ranks succeed, only the failed cluster is torn down. Successful clusters stay up."""
         cluster_names = [f"smoke-job-1-r{i}" for i in range(3)]
         tasks = {name: MagicMock(name=f"task-{name}") for name in cluster_names}
-        # First Task.from_yaml call is the probe used by _detect_provider; remaining calls
-        # are the per-rank tasks (matches _setup_n_workers_mock).
-        probe_task = MagicMock(name="probe-task")
-        mock_sky.Task.from_yaml.side_effect = [probe_task, *tasks.values()]
+        mock_sky.Task.from_yaml.side_effect = list(tasks.values())
 
         launch_reqs = {name: f"launch-{name}" for name in cluster_names}
         down_reqs = {name: f"down-{name}" for name in cluster_names}
@@ -821,10 +797,7 @@ class TestNumWorkersFanOut:
         # launcher creates exactly one Task per rank inside _launch_and_tail and immediately
         # update_envs's it with the cluster name in the message — assertions key off the
         # cluster_name in the env, not the Task identity, so call order doesn't matter here.
-        # The first Task.from_yaml call is the probe used by _detect_provider; remaining
-        # calls are the per-rank tasks.
-        probe_task = MagicMock(name="probe-task")
-        mock_sky.Task.from_yaml.side_effect = [probe_task, *tasks.values()]
+        mock_sky.Task.from_yaml.side_effect = list(tasks.values())
 
         # Route launch + down + stream_and_get + tail_logs by cluster_name kwarg, not order.
         launch_reqs = {name: f"launch-{name}" for name in cluster_names}
@@ -1196,245 +1169,3 @@ class TestOverrideImageId:
 
         oci_res.copy.assert_not_called()
         task.set_resources.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Cred bootstrap — auto-detect provider, invoke script, parse rclone env
-# ---------------------------------------------------------------------------
-
-
-class TestDetectProvider:
-    """`_detect_provider` reads the cloud from the first Resources entry on a Task.
-
-    The launcher uses this to decide which `--provider` to pass to the cred-bootstrap script —
-    RunPod creds vs OCI creds. R2 is shared across both.
-    """
-
-    @staticmethod
-    def _make_task(cloud: object) -> MagicMock:
-        res = MagicMock(spec=["cloud"])
-        res.cloud = cloud
-        task = MagicMock(spec=["resources"])
-        task.resources = [res]
-        return task
-
-    def test_runpod_cloud_detected_as_runpod(self) -> None:
-        from sky.clouds import RunPod
-
-        task = self._make_task(RunPod())
-        assert _detect_provider(task) == "runpod"
-
-    def test_oci_cloud_detected_as_oci(self) -> None:
-        from sky.clouds import OCI
-
-        task = self._make_task(OCI())
-        assert _detect_provider(task) == "oci"
-
-    def test_kubernetes_cloud_detected_as_local(self) -> None:
-        """`sky local up`-provisioned kind clusters surface as `cloud: kubernetes`; the cred
-        bootstrap maps that to `--provider local` (R2-only — no compute provider auth)."""
-        from sky.clouds import Kubernetes
-
-        task = self._make_task(Kubernetes())
-        assert _detect_provider(task) == "local"
-
-    def test_unknown_cloud_raises(self) -> None:
-        """A cloud that's neither RunPod nor OCI is a launcher misuse — fail loudly so the operator
-        sees it before the bootstrap script swallows the unknown name."""
-        unknown_cloud = MagicMock(name="UnknownCloud")
-        task = self._make_task(unknown_cloud)
-        with pytest.raises(click.ClickException, match="(?i)unsupported cloud|provider"):
-            _detect_provider(task)
-
-
-class TestCredBootstrapInvocation:
-    """The launcher invokes ``scripts/skypilot_write_provider_creds.sh`` before ``sky.launch``.
-
-    The bootstrap writes ``~/.cloudflare/r2.credentials`` (for SkyPilot's R2 file_mounts
-    once #749 is unblocked) and prints rclone-prefixed env-var lines to stdout, which the
-    launcher parses and merges into each rank's ``task.update_envs`` payload so the
-    spec-upload rclone subprocess sees rclone-style creds without manual bridging.
-    """
-
-    def test_bootstrap_called_before_sky_launch(
-        self,
-        config_yaml: Path,
-        template_yaml: Path,
-        env_file: Path,
-        patch_materialize_io: None,
-        local_spec_dir: Path,
-        mock_sky: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Bootstrap subprocess fires before sky.launch — sequencing matters because the rclone env
-        vars it emits feed the launcher's own spec-upload rclone call."""
-        call_order: list[str] = []
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap",
-            lambda **_kwargs: call_order.append("bootstrap") or "",
-        )
-        original_launch = mock_sky.launch.side_effect
-
-        def _record_launch(*args: Any, **kwargs: Any) -> Any:
-            call_order.append("launch")
-            return original_launch(*args, **kwargs) if original_launch else "launch-req"
-
-        mock_sky.launch.side_effect = _record_launch
-
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
-        assert result.exit_code == 0, result.output
-        assert call_order[0] == "bootstrap"
-        assert "launch" in call_order
-
-    def test_bootstrap_called_with_detected_provider(
-        self,
-        config_yaml: Path,
-        template_yaml: Path,
-        env_file: Path,
-        patch_materialize_io: None,
-        local_spec_dir: Path,
-        mock_sky: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Provider arg is auto-detected from the task's resources.cloud, not from a `$PROVIDER`
-        env var the caller has to set."""
-        captured: dict[str, Any] = {}
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap",
-            lambda **kwargs: captured.update(kwargs) or "",
-        )
-
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
-        assert result.exit_code == 0, result.output
-        # Default template is RunPod, so detected provider must be runpod.
-        assert captured["provider"] == "runpod"
-
-    def test_bootstrap_stdout_rclone_env_merged_into_worker_env(
-        self,
-        config_yaml: Path,
-        template_yaml: Path,
-        env_file: Path,
-        patch_materialize_io: None,
-        local_spec_dir: Path,
-        mock_sky: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Lines like ``RCLONE_CONFIG_R2_TYPE=s3`` printed by the bootstrap end up in the per-rank
-        ``task.update_envs`` payload."""
-        bootstrap_stdout = (
-            "RCLONE_CONFIG_R2_TYPE=s3\n"
-            "RCLONE_CONFIG_R2_PROVIDER=Cloudflare\n"
-            "RCLONE_CONFIG_R2_ACCESS_KEY_ID=bootstrap-ak\n"
-            "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=bootstrap-sk\n"
-            "RCLONE_CONFIG_R2_ENDPOINT=https://bootstrap.r2.cloudflarestorage.com\n"
-        )
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap",
-            lambda **_kwargs: bootstrap_stdout,
-        )
-
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
-        assert result.exit_code == 0, result.output
-
-        task = mock_sky.Task.from_yaml.return_value
-        forwarded = task.update_envs.call_args.args[0]
-        assert forwarded["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "bootstrap-ak"
-        assert forwarded["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] == "bootstrap-sk"  # noqa: S105 — fake test value
-
-    def test_bootstrap_failure_aborts_launcher(
-        self,
-        config_yaml: Path,
-        template_yaml: Path,
-        env_file: Path,
-        patch_materialize_io: None,
-        local_spec_dir: Path,
-        mock_sky: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A bootstrap subprocess failure (missing R2_ACCOUNT_ID, write permission denied, etc.)
-        aborts before sky.launch is ever reached."""
-
-        def _raise(**_kwargs: Any) -> str:
-            raise click.ClickException("bootstrap failed: R2_ACCOUNT_ID is empty")
-
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch_smoke._run_cred_bootstrap", _raise
-        )
-
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
-        assert result.exit_code != 0
-        assert "bootstrap failed" in result.output
-        mock_sky.launch.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Migration window — accept bare R2_* with deprecation warning
-# ---------------------------------------------------------------------------
-
-
-class TestBareR2DeprecationFallback:
-    """`resolve_worker_env` accepts bare ``R2_*`` for one PR cycle while CI/docs migrate.
-
-    When only the bare form is available the launcher logs a deprecation warning and
-    treats them as their rclone-prefixed equivalents so downstream code (which always
-    forwards ``RCLONE_CONFIG_R2_*``) keeps working.
-    """
-
-    def test_bare_r2_alone_resolves_to_rclone_prefixed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Without any `RCLONE_CONFIG_R2_*` set, the bare form is mapped 1:1 to the prefixed form
-        so the rest of the launcher pipeline doesn't need to know about both."""
-        monkeypatch.setenv("R2_ACCESS_KEY_ID", "bare-ak")
-        monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "bare-sk")
-        monkeypatch.setenv("R2_ENDPOINT", "https://bare.r2.cloudflarestorage.com")
-
-        resolved = resolve_worker_env(None)
-
-        assert resolved["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "bare-ak"
-        assert resolved["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] == "bare-sk"  # noqa: S105 — fake test value
-        assert resolved["RCLONE_CONFIG_R2_ENDPOINT"] == "https://bare.r2.cloudflarestorage.com"
-
-    def test_bare_r2_alone_emits_deprecation_warning(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Operators relying on the bare form are warned to migrate before the next PR drops the
-        fallback."""
-        monkeypatch.setenv("R2_ACCESS_KEY_ID", "bare-ak")
-        monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "bare-sk")
-        monkeypatch.setenv("R2_ENDPOINT", "https://bare.r2.cloudflarestorage.com")
-
-        resolve_worker_env(None)
-
-        stderr = capsys.readouterr().err
-        assert "deprecat" in stderr.lower(), (
-            f"expected a deprecation warning on stderr, got: {stderr!r}"
-        )
-
-    def test_rclone_prefixed_form_does_not_emit_deprecation_warning(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """The current/prefixed form is the long-term contract and must not warn."""
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "rclone-ak")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_SECRET_ACCESS_KEY", "rclone-sk")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ENDPOINT", "https://rclone.r2.cloudflarestorage.com")
-
-        resolve_worker_env(None)
-
-        stderr = capsys.readouterr().err
-        assert "deprecat" not in stderr.lower()
-
-    def test_rclone_prefixed_overrides_bare_when_both_set(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """If an operator has set both forms (mid-migration), the canonical prefixed form wins."""
-        monkeypatch.setenv("R2_ACCESS_KEY_ID", "bare-ak")
-        monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "rclone-ak")
-
-        resolved = resolve_worker_env(None)
-
-        assert resolved["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "rclone-ak"

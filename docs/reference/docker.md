@@ -380,12 +380,14 @@ gh workflow run docker-build-validation.yml --ref main
 
 ### Required secrets
 
-| Secret               | Purpose                                           |
-| -------------------- | ------------------------------------------------- |
-| `DOCKERHUB_USERNAME` | Docker Hub login (push-only; pulls are anonymous) |
-| `DOCKERHUB_TOKEN`    | Docker Hub access token (push-only)               |
-
-The R2 / W&B secrets the published image *consumes at runtime* are documented in `docs/reference/github-actions.md` — they belong to the workflows that actually invoke the image (e.g. `dataset-generation.yml`, `test-dataset-generation.yml`), not to `docker-build-validation.yml`, which only builds and pushes.
+| Secret                 | Purpose                                              |
+| ---------------------- | ---------------------------------------------------- |
+| `DOCKERHUB_USERNAME`   | Docker Hub login (push-only; pulls are anonymous)    |
+| `DOCKERHUB_TOKEN`      | Docker Hub access token (push-only)                  |
+| `R2_ACCESS_KEY_ID`     | R2 credentials (runtime; passed via `docker run -e`) |
+| `R2_SECRET_ACCESS_KEY` | R2 credentials                                       |
+| `R2_ENDPOINT`          | R2 endpoint (runtime)                                |
+| `WANDB_API_KEY`        | W&B auth (runtime)                                   |
 
 ______________________________________________________________________
 

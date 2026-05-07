@@ -105,27 +105,20 @@ compute_config: null
 
 ### 4.1 SkyPilot YAML configs (`configs/compute/`)
 
-The smoke pipeline ships three real templates:
+The smoke pipeline ships two real templates:
 
 ```
 configs/compute/
 ├── runpod-template.yaml      # RunPod GPU (primary smoke target)
-├── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
-└── local-template.yaml       # local Kubernetes (kind) — PR-default smoke
+└── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
 ```
 
-All share the launcher (`pipeline/entrypoints/skypilot_launch_smoke.py`),
+Both share the launcher (`pipeline/entrypoints/skypilot_launch_smoke.py`),
 the `dev-snapshot` Docker image, the R2-uploaded spec contract, and the
 unified click-CLI dispatch (`scripts/docker_entrypoint.py generate_dataset`,
 which carries the `os._exit(0)` defensive workaround for #735 inline).
 They differ only in the `resources:` block (provider, accelerators vs.
 CPU/memory floor, region) and the provider-specific credential setup in CI.
-The `local` template targets `cloud: kubernetes`; CI provisions the kind
-cluster ahead of launch via `sky local up --no-gpus` and loads the
-dev-snapshot image into kind via `kind load docker-image`. Cred-bootstrap
-detects `cloud: kubernetes` from the template and runs with `--provider local` (R2 only — kind needs no compute provider auth). The launcher also
-calls `sky.check.check(['kubernetes'])` in-process before `sky.launch` to
-populate SkyPilot 0.12's enabled-clouds cache (see #834).
 Future targets follow the same pattern.
 
 The launcher (`pipeline.entrypoints.skypilot_launch_smoke`) does not override the `run:` block — it instantiates the Task from YAML and only calls `task.update_envs(...)` to inject the per-launch credential set + the spec URI. The `run:` block in each template handles the worker invocation; per-rank shard scoping is forwarded via `SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS` envs.
@@ -180,34 +173,33 @@ The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (onl
     R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
     R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-    R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
     WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
   run: |
     docker run --rm \
       -e RUNPOD_API_KEY \
-      -e R2_ACCESS_KEY_ID \
-      -e R2_SECRET_ACCESS_KEY \
-      -e R2_ENDPOINT \
-      -e R2_ACCOUNT_ID \
-      -e WANDB_API_KEY \
+      -e RCLONE_CONFIG_R2_TYPE=s3                                    \
+      -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare                        \
+      -e RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"        \
+      -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}" \
+      -e RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}"                  \
+      -e WANDB_API_KEY="${WANDB_API_KEY}"                            \
       "$IMAGE" bash -c '... python -m pipeline.entrypoints.skypilot_launch_smoke ...'
 ```
 
 Notes:
 
-- The launcher invokes `scripts/skypilot_write_provider_creds.sh` itself before `sky.launch` (provider auto-detected from `task.resources.cloud`). The bootstrap writes `~/.runpod/config.toml` (or OCI's `~/.oci/config` + `~/.sky/config.yaml`), `~/.cloudflare/r2.credentials`, `~/.cloudflare/accountid`, and emits `RCLONE_CONFIG_R2_*=...` lines on stdout that the launcher merges into the per-rank worker env. CI no longer needs to bridge bare→prefixed by hand.
-- `RCLONE_CONFIG_R2_TYPE=s3` and `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` are constants emitted by the bootstrap (not secrets).
-- `RUNPOD_API_KEY` is intentionally **not** in `_WORKER_ENV_KEYS` — it's the launcher's own credential for SkyPilot's RunPod-API call, not the worker's. The bootstrap writes it to `~/.runpod/config.toml` inside the container so SkyPilot can read it (env var alone isn't enough for `sky check runpod`); it never gets forwarded to the worker.
+- `RCLONE_CONFIG_R2_TYPE=s3` and `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` are hardcoded literals (constants for Cloudflare R2), not secrets.
+- `RUNPOD_API_KEY` is intentionally **not** in `_WORKER_ENV_KEYS` — it's the launcher's own credential for SkyPilot's RunPod-API call, not the worker's. The launch step writes it to `~/.runpod/config.toml` inside the container so SkyPilot can read it (env var alone isn't enough for `sky check runpod`); it never gets forwarded to the worker.
 
 #### Why each key lives where it does
 
-| Where                                  | What                                                                                | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Workflow YAML `env:` block             | `secrets.R2_*`, `secrets.WANDB_API_KEY`                                             | GitHub-side secret materialization. Visible only to same-repo PRs (gated by the `if:` on the `generate` job).                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `docker run -e ...` flags              | Forwards bare `R2_*` (+ `R2_ACCOUNT_ID`) into the container as-is                   | The launcher's cred-bootstrap inside the container produces the `RCLONE_CONFIG_R2_*` names alongside `~/.cloudflare/r2.credentials` and `~/.cloudflare/accountid` — see the bullets above. Container env is still the natural place for the bare secrets to land; no file persists on the runner.                                                                                                                                                                                                                                                                                       |
-| Launcher's `_WORKER_ENV_KEYS`          | rclone-R2, WANDB, worker-spec/git-ref (the keys resolved from `.env` / process env) | Defines the forwarding contract for keys that come *from the operator's environment*. Partition rank/world (`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) are NOT in this tuple — they're synthesized per-rank inside `_run_workers` and injected via `task.update_envs(...)` directly.                                                                                                                                                                                                                                                                                      |
-| `runpod-template.yaml` `envs:` block   | Same keys with empty defaults                                                       | Template-side schema declaration. Empty defaults make the Task YAML valid even before the launcher fills them. The interpreter-shutdown defensive workaround for [#735](https://github.com/tinaudio/synth-setter/issues/735) lives in the click `generate_dataset` subcommand of `scripts/docker_entrypoint.py` (force-`os._exit(0)` after `run()`) — applies to every invocation that goes through the click CLI, including the `local` matrix cell of `test-dataset-generation.yml`. The previous "SkyPilot-only consumer" framing predates the entrypoint unification (see PR #828). |
-| `~/.runpod/config.toml` (in-container) | `RUNPOD_API_KEY`                                                                    | SkyPilot's RunPod backend reads from this file specifically; env var alone is insufficient for `sky check runpod`. Written with `umask 077` so the API key is 600. Skipped entirely when `SKYPILOT_API_SERVER_ENDPOINT` is set — the remote API server holds provider creds and the local SkyPilot client only needs the endpoint URL ([#785](https://github.com/tinaudio/synth-setter/issues/785)).                                                                                                                                                                                    |
+| Where                                  | What                                                                                                                            | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workflow YAML `env:` block             | `secrets.R2_*`, `secrets.WANDB_API_KEY`                                                                                         | GitHub-side secret materialization. Visible only to same-repo PRs (gated by the `if:` on the `generate` job).                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `docker run -e ...` flags              | Maps host `R2_*` → container `RCLONE_CONFIG_R2_*` (renamed at the boundary because rclone wants the `RCLONE_CONFIG_R2_` prefix) | Container env is the natural place for runtime secrets. No file persists on the runner.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Launcher's `_WORKER_ENV_KEYS`          | rclone-R2, WANDB, worker-spec/git-ref (the keys resolved from `.env` / process env)                                             | Defines the forwarding contract for keys that come *from the operator's environment*. Partition rank/world (`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) are NOT in this tuple — they're synthesized per-rank inside `_run_workers` and injected via `task.update_envs(...)` directly.                                                                                                                                                                                                                                                                                      |
+| `runpod-template.yaml` `envs:` block   | Same keys with empty defaults                                                                                                   | Template-side schema declaration. Empty defaults make the Task YAML valid even before the launcher fills them. The interpreter-shutdown defensive workaround for [#735](https://github.com/tinaudio/synth-setter/issues/735) lives in the click `generate_dataset` subcommand of `scripts/docker_entrypoint.py` (force-`os._exit(0)` after `run()`) — applies to every invocation that goes through the click CLI, including the `local` matrix cell of `test-dataset-generation.yml`. The previous "SkyPilot-only consumer" framing predates the entrypoint unification (see PR #828). |
+| `~/.runpod/config.toml` (in-container) | `RUNPOD_API_KEY`                                                                                                                | SkyPilot's RunPod backend reads from this file specifically; env var alone is insufficient for `sky check runpod`. Written with `umask 077` so the API key is 600. Skipped entirely when `SKYPILOT_API_SERVER_ENDPOINT` is set — the remote API server holds provider creds and the local SkyPilot client only needs the endpoint URL ([#785](https://github.com/tinaudio/synth-setter/issues/785)).                                                                                                                                                                                    |
 
 #### Failure modes
 
