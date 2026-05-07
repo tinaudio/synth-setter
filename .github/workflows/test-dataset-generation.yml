@@ -209,6 +209,7 @@ jobs:
       - name: Launch SkyPilot job (inside container; streams logs + blocks until done)
         if: ${{ matrix.provider != 'local' }}
         env:
+          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           PROVIDER: ${{ matrix.provider }}
           TEMPLATE: configs/compute/${{ matrix.provider == 'oci' && 'oci-cpu' || matrix.provider }}-template.yaml
           CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -231,6 +232,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v "/tmp/run-metadata-${PROVIDER}:/run-metadata" \
+            -e SKYPILOT_API_SERVER_ENDPOINT \
             -e PROVIDER \
             -e TEMPLATE \
             -e CLUSTER_NAME \

@@ -1,317 +1,327 @@
-# SkyPilot API Server on OCI Always-Free + Cloudflare Tunnel
+# SkyPilot API Server on OCI Always-Free with k3s and Cloudflare Tunnel
 
-A step-by-step playbook for standing up a personal SkyPilot client-server deployment with zero monthly cost, using:
+A deployment playbook for a single-user SkyPilot API server with no recurring infrastructure cost.
 
-- **OCI Always-Free Ampere A1** (Ubuntu 24.04) as the host for the SkyPilot API server
-- **Cloudflare Tunnel** for HTTPS exposure with no open inbound ports
-- **Cloudflare Access** for SSO authentication
-- **uv** for Python and SkyPilot installation
-- **RunPod** as the compute backend for actual GPU jobs (optional — substitute or add any cloud SkyPilot supports)
+## Stack
 
-End result: a private `https://sky.yourdomain.com` endpoint that you authenticate to with email-based SSO, hosting a SkyPilot API server you can drive from any laptop.
+- **OCI Always-Free Ampere A1 VM** (Ubuntu 24.04 ARM64) — host
+- **k3s** — single-node Kubernetes cluster
+- **SkyPilot Helm chart** — API server with HTTP basic authentication via ingress-nginx
+- **Cloudflare Tunnel** — outbound-only HTTPS exposure
+- **HTTP basic authentication** — single-credential auth suitable for headless clients
+
+The result is `https://sky.yourdomain.com`, accessible from any client capable of HTTP basic auth, including browsers, the SkyPilot CLI, the Python SDK, and CI runners.
+
+This playbook does not cover Cloudflare Access, SSO/OAuth, or the bare-Docker SkyPilot deployment. These are documented elsewhere.
 
 ______________________________________________________________________
 
 ## Table of contents
 
 01. [Prerequisites](#prerequisites)
-02. [Architecture overview](#architecture-overview)
-03. [Part 1: Provision the OCI VM](#part-1-provision-the-oci-vm)
-04. [Part 2: Install SkyPilot with uv](#part-2-install-skypilot-with-uv)
-05. [Part 3: Configure cloud credentials on the server](#part-3-configure-cloud-credentials-on-the-server)
-06. [Part 4: Start the SkyPilot API server](#part-4-start-the-skypilot-api-server)
-07. [Part 5: Cloudflare Tunnel](#part-5-cloudflare-tunnel)
-08. [Part 6: Cloudflare Access (SSO)](#part-6-cloudflare-access-sso)
-09. [Part 7: Connect your laptop](#part-7-connect-your-laptop)
-10. [Part 8: First job](#part-8-first-job)
-11. [Operational notes](#operational-notes)
-12. [Troubleshooting](#troubleshooting)
+02. [Architecture](#architecture)
+03. [Part 1 — Provision the OCI VM](#part-1--provision-the-oci-vm)
+04. [Part 2 — Install k3s and Helm](#part-2--install-k3s-and-helm)
+05. [Part 3 — Deploy SkyPilot via Helm](#part-3--deploy-skypilot-via-helm)
+06. [Part 4 — Configure Cloudflare Tunnel](#part-4--configure-cloudflare-tunnel)
+07. [Part 5 — Add cloud credentials](#part-5--add-cloud-credentials)
+08. [Part 6 — Connect from a client machine](#part-6--connect-from-a-client-machine)
+09. [Part 7 — Headless and CI usage](#part-7--headless-and-ci-usage)
+10. [Operational notes](#operational-notes)
+11. [Troubleshooting](#troubleshooting)
+12. [Appendix — Full command checklist](#appendix--full-command-checklist)
 
 ______________________________________________________________________
 
 ## Prerequisites
 
-You need:
+The following are required before beginning:
 
-- **An OCI tenancy** with the Always-Free tier active. Sign up at [oracle.com/cloud/free](https://www.oracle.com/cloud/free/). Credit card required for verification but never charged on free tier.
-- **A domain on Cloudflare.** Either transfer one or just point your domain's nameservers at Cloudflare. Free.
-- **A Cloudflare Zero Trust account.** Free for up to 50 users. Activate at [one.dash.cloudflare.com](https://one.dash.cloudflare.com).
-- **A laptop** (Mac, Linux, or WSL on Windows) for the SkyPilot client.
-- **Cloud account(s) where you want to actually launch jobs** — RunPod, AWS, GCP, etc. The OCI VM is just the SkyPilot brain; jobs run elsewhere.
+- An OCI tenancy with the Always-Free tier active. Sign up at [oracle.com/cloud/free](https://www.oracle.com/cloud/free/). A credit card is required for verification but is not charged for Always-Free resources.
+- A domain managed through Cloudflare on the free plan. Domains can be registered through Cloudflare Registrar or transferred by updating nameservers at the existing registrar.
+- A client machine running macOS, Linux, or WSL.
+- API credentials for at least one cloud provider (RunPod, AWS, GCP, OCI, Lambda, etc.) where SkyPilot will launch jobs.
 
-Throughout this playbook, replace these placeholders with your own values:
+Throughout this document, the following placeholders should be replaced with actual values:
 
-- `yourdomain.com` → your actual domain (e.g., `tinaudioskypilot.com`)
-- `sky.yourdomain.com` → your chosen subdomain
-- `<vm-public-ip>` → your OCI VM's public IP
+- `yourdomain.com` — the registered domain
+- `sky.yourdomain.com` — the chosen subdomain for the API server
+- `<vm-public-ip>` — the OCI VM's public IP address
 
 ______________________________________________________________________
 
-## Architecture overview
+## Architecture
 
 ```
-┌─────────────┐         ┌──────────────────┐         ┌─────────────────────┐
-│  Your       │  HTTPS  │  Cloudflare      │ Tunnel  │  OCI A1 VM          │
-│  Laptop     │────────▶│  Edge + Access   │────────▶│  (Ubuntu 24.04)     │
-│  sky CLI    │  (SSO)  │  (auth gate)     │ outbound│  - cloudflared      │
-└─────────────┘         └──────────────────┘         │  - sky api server   │
-                                                     │    (127.0.0.1:46580)│
-                                                     └──────────┬──────────┘
-                                                                │
-                                                       sky launches jobs on:
-                                                                │
-                                                     ┌──────────▼──────────┐
-                                                     │  RunPod / AWS /     │
-                                                     │  GCP / Kubernetes   │
-                                                     └─────────────────────┘
+┌──────────────┐  HTTPS  ┌──────────────┐ Tunnel  ┌────────────────────────────┐
+│  Client      │────────▶│  Cloudflare  │────────▶│  OCI A1 VM (Ubuntu 24.04)  │
+│  (CLI/SDK)   │ +basic  │     edge     │outbound │  ┌──────────────────────┐  │
+└──────────────┘  auth   └──────────────┘         │  │  cloudflared         │  │
+                                                  │  ↓                      │  │
+                                                  │  ┌──────────────────────┐  │
+                                                  │  │  k3s                 │  │
+                                                  │  │   • ingress-nginx    │  │
+                                                  │  │     (basic auth)     │  │
+                                                  │  │   • SkyPilot API     │  │
+                                                  │  │     server pod       │  │
+                                                  │  └──────────────────────┘  │
+                                                  └────────────┬───────────────┘
+                                                               │
+                                                       launches jobs on
+                                                               │
+                                                  ┌────────────▼───────────┐
+                                                  │  RunPod / AWS / GCP /  │
+                                                  │  OCI / Lambda / etc.   │
+                                                  └────────────────────────┘
 ```
 
 Key properties:
 
-- **No inbound ports open on the VM.** `cloudflared` connects outbound to Cloudflare's edge; all traffic returns through that tunnel. The OCI VM's security list only needs SSH for your IP.
-- **TLS handled by Cloudflare.** No certificates to manage on your VM.
-- **Auth handled by Cloudflare.** SkyPilot itself runs without auth (`--host 127.0.0.1`), trusting the upstream gate.
-- **Free.** OCI A1 is always-free for 4 OCPU / 24 GiB across instances. Cloudflare Tunnel and Access are free for personal use.
+- No inbound ports are exposed on the VM. Cloudflare Tunnel initiates outbound connections to the Cloudflare edge. The OCI security list permits only SSH (port 22) for administration.
+- TLS termination is handled at the Cloudflare edge using a Cloudflare-managed certificate.
+- Authentication is enforced by ingress-nginx before requests reach the SkyPilot pod.
+- Authentication uses HTTP basic auth, which is supported by all standard HTTP clients without additional tooling.
 
 ______________________________________________________________________
 
-## Part 1: Provision the OCI VM
+## References
+
+SkyPilot:
+
+- [SkyPilot documentation home](https://docs.skypilot.co/)
+- [Deploying the API server (Helm)](https://docs.skypilot.co/en/latest/reference/api-server/api-server-admin-deploy.html)
+- [Helm chart values reference](https://docs.skypilot.co/en/latest/reference/api-server/helm-values-spec.html)
+- [Authentication and RBAC](https://docs.skypilot.co/en/latest/reference/auth.html)
+- [Connecting to an API server](https://docs.skypilot.co/en/latest/reference/api-server/api-server.html)
+- [API server troubleshooting](https://docs.skypilot.co/en/latest/reference/api-server/api-server-troubleshooting.html)
+- [Python SDK reference](https://docs.skypilot.co/en/latest/reference/api.html)
+- [CLI reference](https://docs.skypilot.co/en/latest/reference/cli.html)
+- [SkyPilot YAML reference](https://docs.skypilot.co/en/latest/reference/yaml-spec.html)
+- [Installation and cloud setup](https://docs.skypilot.co/en/latest/getting-started/installation.html)
+
+Cloudflare:
+
+- [Cloudflare Tunnel overview](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+- [Create a remotely-managed tunnel (dashboard)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-remote-tunnel/)
+- [Migrate a locally-managed tunnel to remote management](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/configure-tunnels/remote-management/)
+- [cloudflared download and installation](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+- [Public hostnames](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/routing-to-tunnel/dns/)
+
+Infrastructure components:
+
+- [Oracle Cloud Always-Free resources](https://www.oracle.com/cloud/free/)
+- [k3s lightweight Kubernetes](https://docs.k3s.io/)
+- [Helm package manager](https://helm.sh/docs/)
+- [ingress-nginx Helm chart values](https://artifacthub.io/packages/helm/ingress-nginx/ingress-nginx)
+- [Oracle API key setup](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/apisigningkey.htm)
+- [RunPod API keys](https://docs.runpod.io/get-started/api-keys)
+- [uv Python toolchain](https://docs.astral.sh/uv/)
+
+______________________________________________________________________
+
+## Part 1 — Provision the OCI VM
 
 ### 1.1 Create the instance
 
 In the OCI console:
 
 1. Navigate to **Compute → Instances → Create instance**.
-2. **Name:** `skypilot-server` (or whatever you like).
-3. **Image:** Click "Change image" → **Ubuntu** → **Canonical Ubuntu 24.04** (Minimal is fine).
-4. **Shape:** Click "Change shape" → **Ampere** → **VM.Standard.A1.Flex**.
-   - **OCPUs:** 2 (Always-Free includes 4 across instances; 2 leaves headroom for another VM later.)
-   - **Memory (GB):** 12
-5. **Networking:** Use defaults — a public subnet with auto-assigned public IP. SSH-only ingress is fine.
-6. **SSH keys:** Either upload your public key or let OCI generate a key pair (download it immediately — you can't retrieve it later).
-7. **Boot volume:** Default 50 GB is fine.
+
+2. **Name:** `skypilot-server`.
+
+3. **Image:** select **Canonical Ubuntu 24.04** (ARM64).
+
+4. **Shape:** select **Ampere → VM.Standard.A1.Flex** with the following configuration:
+
+   - **OCPUs:** `4`
+   - **Memory (GB):** `24`
+
+   These values are the maximum for the Always-Free tier. The SkyPilot pod will not schedule on configurations smaller than 2 OCPUs / 4 GiB after accounting for k3s system overhead.
+
+5. **Networking:** retain defaults (public subnet, auto-assigned public IP).
+
+6. **SSH keys:** upload a public key, or download a generated key pair.
+
+7. **Boot volume:** 100 GB.
+
 8. Click **Create**.
 
-### 1.2 Capacity errors
+### 1.2 Handling capacity errors
 
-Always-Free A1 capacity is regularly exhausted in popular regions (Ashburn, Phoenix, Frankfurt). If you get "Out of host capacity":
+Always-Free A1 capacity is frequently exhausted in popular regions. If the request returns "Out of host capacity", consider the following:
 
-- Try a different availability domain in the same region (the AD dropdown).
-- Try a less popular region (e.g., Tokyo, Mumbai, Saudi Arabia).
-- Retry every few minutes — capacity frees up sporadically.
-- A common trick is to script the create-instance API call and retry on the capacity error.
+- Try a different availability domain within the same region.
+- Try a less-utilized region (Tokyo, Mumbai, São Paulo).
+- Retry periodically; capacity becomes available sporadically.
+- Use the OCI API with retry logic to automate this.
 
-### 1.3 Lock down the security list
-
-Once the VM is up, find its VCN's default security list and confirm it only allows:
-
-- **Ingress:** TCP 22 from `0.0.0.0/0` (or better, your IP only).
-- **Egress:** all (default).
-
-**Do not open port 46580 or any other inbound port.** Cloudflare Tunnel does not require it.
-
-### 1.4 SSH in
+### 1.3 Connect via SSH
 
 ```bash
-ssh -i /path/to/your/private-key ubuntu@<vm-public-ip>
+ssh ubuntu@<vm-public-ip>
 ```
 
-You should land at `ubuntu@skypilot-server:~$`.
-
-### 1.5 Update the system
+### 1.4 Update the system
 
 ```bash
 sudo apt update && sudo apt upgrade -y
 sudo reboot
 ```
 
-Wait 30 seconds, SSH back in.
+Reconnect after approximately 30 seconds.
+
+### 1.5 Configure iptables for k3s networking
+
+The default Ubuntu image on OCI ships with restrictive iptables rules. The following rules are required for k3s pod networking:
+
+```bash
+sudo iptables -I INPUT 1 -i lo -j ACCEPT
+sudo iptables -I FORWARD 1 -i cni0 -j ACCEPT
+sudo iptables -I FORWARD 1 -o cni0 -j ACCEPT
+sudo netfilter-persistent save
+```
+
+The OCI Security List does not require modification. Cloudflare Tunnel uses outbound connections only.
 
 ______________________________________________________________________
 
-## Part 2: Install SkyPilot with uv
+## Part 2 — Install k3s and Helm
 
-### 2.1 Install uv
+### 2.1 Install k3s
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -sfL https://get.k3s.io | sh -
+```
+
+This installs the Kubernetes API server, kubelet, and containerd as a single binary managed by systemd.
+
+### 2.2 Make the kubeconfig readable
+
+```bash
+sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+```
+
+### 2.3 Persist environment variables
+
+```bash
+cat >> ~/.bashrc <<'EOF'
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+export NAMESPACE=skypilot
+export RELEASE_NAME=skypilot
+EOF
 source ~/.bashrc
-uv --version
-```
-
-You should see a version string.
-
-### 2.2 Install SkyPilot as a uv tool
-
-`uv tool install` puts SkyPilot in an isolated environment with its own Python interpreter, and exposes the `sky` command on your `PATH`. No venv activation needed.
-
-Pick the cloud extras you actually want. For RunPod + OCI + Kubernetes:
-
-```bash
-uv tool install --python 3.11 --with pip "skypilot-nightly[runpod,oci,kubernetes]"
-```
-
-If you want everything:
-
-```bash
-uv tool install --python 3.11 --with pip "skypilot-nightly[all]"
 ```
 
 Verify:
 
 ```bash
-sky --version
-which sky
+kubectl get nodes
 ```
 
-`sky` should resolve to something like `~/.local/bin/sky`.
+The node should report a status of `Ready`.
 
-> **Why `--with pip`?** SkyPilot internally shells out to `pip` for some installation steps. Including `pip` in the tool environment avoids "pip not found" errors later.
+### 2.4 Install Helm
 
-> **Why `skypilot-nightly` instead of `skypilot`?** Nightly tracks the latest features and bug fixes. Stable releases (`skypilot`) are sometimes months behind, especially for client-server features that are still evolving. If you prefer stability, swap to `skypilot` — everything else in this playbook works the same.
+```bash
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+helm version
+```
+
+### 2.5 Add the SkyPilot Helm repository
+
+```bash
+helm repo add skypilot https://helm.skypilot.co
+helm repo update
+```
+
+### 2.6 Install htpasswd
+
+```bash
+sudo apt install -y apache2-utils
+```
+
+This is required for generating basic auth credentials in Part 3.
 
 ______________________________________________________________________
 
-## Part 3: Configure cloud credentials on the server
+## Part 3 — Deploy SkyPilot via Helm
 
-The API server uses **its own** credentials to launch jobs, not your laptop's. Set up creds for whichever clouds you'll target.
-
-### 3.1 RunPod
-
-1. In the [RunPod console](https://runpod.io), go to **Settings → API Keys → Create API Key**. Copy it.
-2. On the VM:
+### 3.1 Generate basic auth credentials
 
 ```bash
-mkdir -p ~/.runpod
-cat > ~/.runpod/config.toml <<'EOF'
-api_key = "your-runpod-api-key-here"
-EOF
-chmod 600 ~/.runpod/config.toml
+WEB_USERNAME=skypilot
+WEB_PASSWORD=$(openssl rand -hex 16)
+echo "USERNAME: $WEB_USERNAME"
+echo "PASSWORD: $WEB_PASSWORD"
+
+AUTH_STRING=$(htpasswd -nb $WEB_USERNAME $WEB_PASSWORD)
 ```
 
-### 3.2 OCI (optional — only if you want to launch jobs *on* OCI)
+The password should be stored in a password manager or equivalent. It cannot be recovered, only reset.
 
-The Always-Free A1 quota is consumed by the API server VM itself, so you typically won't launch additional OCI jobs. Skip unless you have paid OCI capacity.
+Note: `openssl rand -hex` produces only hexadecimal characters, which avoids URL-encoding requirements when embedding the password in `https://user:pass@host` connection strings. Passwords containing `+`, `/`, `=`, `@`, `:`, or other reserved URL characters require percent-encoding.
 
-If you do want it:
+### 3.2 Install the chart
 
 ```bash
-sudo apt install -y python3-oci-cli
-oci setup config
+helm upgrade --install $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE \
+  --create-namespace \
+  --set ingress.authCredentials="$AUTH_STRING" \
+  --set ingress-nginx.controller.service.type=NodePort \
+  --set ingress-nginx.controller.service.nodePorts.http=30080 \
+  --set apiService.resources.requests.cpu=2 \
+  --set apiService.resources.requests.memory=4Gi \
+  --set apiService.resources.limits.cpu=3 \
+  --set apiService.resources.limits.memory=8Gi
 ```
 
-Walk through the prompts. You'll need your tenancy OCID, user OCID, and region (find them in the OCI console under Profile → Tenancy / User Settings). Generate a new API key when prompted, then upload the resulting public key under your OCI user → API Keys.
+Flag descriptions:
 
-### 3.3 AWS (optional)
+- `ingress.authCredentials` — htpasswd-formatted credentials used by ingress-nginx for basic auth enforcement.
+- `ingress-nginx.controller.service.type=NodePort` — exposes ingress-nginx on a host port. The default `LoadBalancer` type requires cloud LoadBalancer integration not available on a single-node k3s cluster.
+- `nodePorts.http=30080` — pins the NodePort to a stable value for cloudflared configuration.
+- `apiService.resources.*` — overrides the chart's default resource requests (4 CPU / 8 Gi), which exceed the available capacity on a 4-OCPU node after k3s system overhead.
+
+The double quotes around `"$AUTH_STRING"` are required because htpasswd output contains `$` characters that would otherwise be interpreted by the shell.
+
+### 3.3 Wait for pods to start
 
 ```bash
-sudo apt install -y awscli
-aws configure
+kubectl get pods -n $NAMESPACE -w
 ```
 
-Enter your access key, secret, default region.
+Two pods will be created: `skypilot-api-server-...` and `skypilot-ingress-nginx-controller-...`. The API server pod requires 2-5 minutes on first deployment due to image pull and initialization. The deployment is complete when the API server pod reports `2/2 Running` (the second container is a logrotate sidecar).
 
-### 3.4 GCP (optional)
+### 3.4 Verify locally
 
 ```bash
-curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-arm.tar.gz
-tar -xf google-cloud-cli-linux-arm.tar.gz
-./google-cloud-sdk/install.sh
-exec -l "$SHELL"
-gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID
+# Expected: HTTP 401 with WWW-Authenticate: Basic header
+curl -i http://localhost:30080/api/health
+
+# Expected: HTTP 200 with health JSON
+curl -i -u "${WEB_USERNAME}:${WEB_PASSWORD}" http://localhost:30080/api/health
 ```
 
-### 3.5 Kubernetes (optional)
-
-Drop a kubeconfig at `~/.kube/config` with credentials for whatever cluster you want SkyPilot to use.
-
-### 3.6 Verify
+If the unauthenticated request returns 200, the auth credentials were not applied. Inspect the deployed values:
 
 ```bash
-sky check
+helm get values skypilot -n $NAMESPACE
 ```
 
-You should see at least one cloud showing **enabled**. If everything fails, fix credentials before continuing.
+If `ingress.authCredentials` is missing, re-run the install command with `--reuse-values --set ingress.authCredentials="$AUTH_STRING"` after confirming `$AUTH_STRING` is non-empty.
 
 ______________________________________________________________________
 
-## Part 4: Start the SkyPilot API server
+## Part 4 — Configure Cloudflare Tunnel
 
-### 4.1 Start it
+### 4.1 Verify domain is on Cloudflare
 
-```bash
-sky api start --deploy --host 127.0.0.1
-```
+In the Cloudflare dashboard, the domain should display status **Active**. If not, update nameservers at the registrar to the two values shown in the Cloudflare dashboard and wait for propagation (typically under one hour).
 
-`--deploy` makes it long-running. `--host 127.0.0.1` binds to localhost only — Cloudflare Tunnel reaches it over loopback, and nothing external can hit it directly.
+### 4.2 Install cloudflared on the VM
 
-> **Display quirk:** the startup message may show `http://0.0.0.0:46580` even though it's actually bound to `127.0.0.1`. Verify with:
->
-> ```bash
-> sudo ss -tlnp | grep 46580
-> ```
->
-> The first column should show `127.0.0.1:46580`, not `0.0.0.0:46580`.
-
-### 4.2 Health check
-
-```bash
-curl http://127.0.0.1:46580/api/health
-```
-
-Should return JSON like:
-
-```json
-{"status":"healthy","api_version":"49","version":"0.12.2rc1",...}
-```
-
-If you see `"external_proxy_auth_enabled":true` in there, that's correct — SkyPilot trusts the upstream gate (Cloudflare) for auth.
-
-### 4.3 Auto-start on reboot (recommended)
-
-`sky api start --deploy` doesn't survive a reboot by default. Create a systemd unit so it does:
-
-```bash
-sudo tee /etc/systemd/system/skypilot-api.service > /dev/null <<EOF
-[Unit]
-Description=SkyPilot API Server
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=ubuntu
-Environment="PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/home/ubuntu/.local/bin/sky api start --deploy --host 127.0.0.1 --foreground
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable skypilot-api
-sudo systemctl start skypilot-api
-sudo systemctl status skypilot-api
-```
-
-> **Note:** if `sky api start` doesn't accept `--foreground` in your version, drop that flag. The service will still work; systemd just tracks it slightly less precisely.
-
-If you went the systemd route, stop the manual `sky api start` you ran earlier — you only want one running.
-
-______________________________________________________________________
-
-## Part 5: Cloudflare Tunnel
-
-### 5.1 Make sure your domain is on Cloudflare
-
-In the Cloudflare dashboard, your domain should appear with status "Active". If you registered it through Cloudflare Registrar, this is automatic. Otherwise update your nameservers at the original registrar to Cloudflare's two assigned NS records, then wait for propagation (usually \<1 hour).
-
-### 5.2 Install cloudflared on the VM
-
-OCI A1 is ARM64:
+For ARM64 (OCI A1):
 
 ```bash
 curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb
@@ -319,271 +329,407 @@ sudo dpkg -i cloudflared.deb
 cloudflared --version
 ```
 
-For x86 VMs, swap `arm64` → `amd64`.
+### 4.3 Create a tunnel via the Cloudflare dashboard
 
-### 5.3 Authenticate cloudflared
+Tunnels created via the dashboard are remotely managed, allowing route configuration through the UI. Tunnels created via the `cloudflared tunnel create` CLI command are locally managed and require config file edits on the VM.
 
-```bash
-cloudflared tunnel login
-```
+In the Zero Trust dashboard at [one.dash.cloudflare.com](https://one.dash.cloudflare.com):
 
-This prints a URL. Open it in your laptop's browser, log into Cloudflare, and pick the domain you'll use. A certificate is written to `~/.cloudflared/cert.pem`.
+1. Navigate to **Networks → Tunnels → Create a tunnel**.
+2. **Connector type:** Cloudflared.
+3. **Tunnel name:** `skypilot`.
+4. Save the tunnel.
+5. On the installation screen, copy the install token (the value following `--token` in the displayed command).
 
-### 5.4 Create the tunnel
+### 4.4 Install the tunnel as a system service
 
-```bash
-cloudflared tunnel create skypilot
-```
-
-Output includes a tunnel UUID and the path to a credentials JSON. Note both. Example:
-
-```
-Tunnel credentials written to /home/ubuntu/.cloudflared/abc123-...-def.json
-Created tunnel skypilot with id abc123-...-def
-```
-
-### 5.5 Route DNS
+On the VM:
 
 ```bash
-cloudflared tunnel route dns skypilot sky.yourdomain.com
-```
-
-This automatically creates a CNAME in Cloudflare DNS pointing `sky.yourdomain.com` at the tunnel.
-
-### 5.6 Write the tunnel config
-
-```bash
-nano ~/.cloudflared/config.yml
-```
-
-Paste, replacing `<UUID>` with your tunnel UUID:
-
-```yaml
-tunnel: <UUID>
-credentials-file: /home/ubuntu/.cloudflared/<UUID>.json
-
-ingress:
-  - hostname: sky.yourdomain.com
-    service: http://127.0.0.1:46580
-  - service: http_status:404
-```
-
-The trailing `http_status:404` is required — it's the catch-all for any other hostname hitting this tunnel.
-
-### 5.7 Install as a system service
-
-`cloudflared service install` runs as root, which means it looks for config at `/etc/cloudflared/`, not `~/.cloudflared/`. Copy the files over and fix the credentials path:
-
-```bash
-sudo mkdir -p /etc/cloudflared
-sudo cp ~/.cloudflared/config.yml /etc/cloudflared/config.yml
-sudo cp ~/.cloudflared/<UUID>.json /etc/cloudflared/
-sudo sed -i 's|/home/ubuntu/.cloudflared/|/etc/cloudflared/|' /etc/cloudflared/config.yml
-```
-
-Now install and start:
-
-```bash
-sudo cloudflared service install
-sudo systemctl start cloudflared
+sudo cloudflared service install <YOUR_TOKEN>
 sudo systemctl status cloudflared
 ```
 
-You should see `active (running)`. If not, check `sudo journalctl -u cloudflared -f` — usually a typo in `config.yml` or a wrong UUID path.
+The service should report `active (running)`. The tunnel in the dashboard should report status **HEALTHY** with one connector.
 
-### 5.8 Verify the tunnel from your laptop
+### 4.5 Configure the public hostname
 
-```bash
-curl https://sky.yourdomain.com/api/health
-```
+In the dashboard, on the tunnel's configuration page:
 
-You should see the same JSON health response that `curl http://127.0.0.1:46580/api/health` returned on the VM. **At this point the endpoint is publicly reachable** — anyone on the internet who guesses the URL can hit it. Lock it down before doing anything else.
+1. Open the **Public Hostname** tab.
+2. Click **Add a public hostname**.
+3. Configure as follows:
+   - **Subdomain:** `sky`
+   - **Domain:** select from dropdown
+   - **Path:** leave empty
+   - **Service Type:** `HTTP`
+   - **URL:** `localhost:30080`
+4. Save.
 
-______________________________________________________________________
+Cloudflare automatically creates a CNAME DNS record pointing `sky.yourdomain.com` to the tunnel.
 
-## Part 6: Cloudflare Access (SSO)
+### 4.6 Verify external access
 
-### 6.1 Add the application
-
-In the Cloudflare Zero Trust dashboard ([one.dash.cloudflare.com](https://one.dash.cloudflare.com)):
-
-1. **Access → Applications → Add an application**.
-2. Pick **Self-hosted**.
-3. **Application Configuration:**
-   - **Application name:** `SkyPilot`
-   - **Session Duration:** `1 month` for a personal lab, or `24 hours` if you want daily re-auth.
-   - **Public hostnames:**
-     - **Subdomain:** `sky`
-     - **Domain:** `yourdomain.com`
-     - **Path:** *leave empty* — protects the entire subdomain
-4. **Authenticate with Cloudflare One Client:** leave **off** (only relevant if you're rolling out WARP).
-5. Click **Next**.
-
-### 6.2 Identity providers
-
-Enable **One-time PIN** at minimum. This emails a 6-digit code to whatever email is typed at login — Cloudflare won't actually grant access unless that email matches your Allow rule (next step), so this is safe.
-
-You can additionally enable Google, GitHub, etc. for one-click SSO. Skip for now if you want; you can add it later.
-
-Click **Next**.
-
-### 6.3 Add a policy
-
-- **Policy name:** `Me`
-- **Action:** `Allow`
-- **Configure rules → Include:**
-  - Selector: `Emails`
-  - Value: your email address (you can list multiple — personal, work, etc.)
-
-Click **Next** then **Add application**.
-
-### 6.4 Verify Access is in front of the server
-
-From your laptop:
+From a client machine:
 
 ```bash
+# Expected: HTTP 401 with WWW-Authenticate: Basic header
 curl -i https://sky.yourdomain.com/api/health
+
+# Expected: HTTP 200 with health JSON
+curl -i -u "skypilot:YOUR_PASSWORD" https://sky.yourdomain.com/api/health
 ```
 
-You should now get a `HTTP/2 302` redirect to `https://<your-team>.cloudflareaccess.com/cdn-cgi/access/login/...` — **not** the JSON response you got before. That's Access intercepting unauthenticated requests.
+The full request path is: client → Cloudflare edge → tunnel → cloudflared → ingress-nginx (auth check) → SkyPilot API server.
 
-### 6.5 Sanity-check the policy
-
-In a browser, visit `https://sky.yourdomain.com`. You'll get a Cloudflare login page asking for an email.
-
-- Type your real email → you should receive a PIN → entering it grants access.
-- Type a random email like `nobody@example.com` → either the request is blocked outright or a PIN is emailed but rejected.
-
-The second case (PIN emailed but rejected) is normal behavior for One-time PIN — Cloudflare sends the code regardless, but only validates it for emails matching your Allow rule.
+The dashboard at `https://sky.yourdomain.com` will prompt for basic auth in a browser.
 
 ______________________________________________________________________
 
-## Part 7: Connect your laptop
+## Part 5 — Add cloud credentials
 
-### 7.1 Install cloudflared
+The API server has no cloud credentials configured by default. Add credentials for each cloud provider that will be used.
 
-**macOS:**
+### 5.1 RunPod
 
-```bash
-brew install cloudflared
-```
-
-**Linux:**
+Generate an API key in the [RunPod console](https://www.runpod.io/console/user/settings) under Settings → API Keys, with Read & Write permissions.
 
 ```bash
-curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-sudo dpkg -i cloudflared.deb
+kubectl create secret generic runpod-credentials \
+  --namespace $NAMESPACE \
+  --from-literal=api_key=YOUR_RUNPOD_API_KEY
+
+helm upgrade --install $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE \
+  --reuse-values \
+  --set runpodCredentials.enabled=true
 ```
 
-### 7.2 Cache an Access cookie
+Wait for the pod to redeploy:
 
 ```bash
-cloudflared access login https://sky.yourdomain.com
+kubectl get pods -n $NAMESPACE -w
 ```
-
-Browser opens, enter your email, paste the PIN, done. The cookie is cached at `~/.cloudflared/`.
 
 Verify:
 
 ```bash
-cloudflared access curl https://sky.yourdomain.com/api/health
+POD=$(kubectl get pods -n $NAMESPACE -l app=${RELEASE_NAME}-api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n $NAMESPACE $POD -c skypilot-api -- sky check runpod
 ```
 
-You should see the JSON health response. This confirms the auth handshake works end-to-end.
+Expected output: `RunPod: enabled`.
 
-### 7.3 Install SkyPilot on your laptop
+### 5.2 OCI
+
+The Helm chart does not provide a built-in flag for OCI. Credentials must be mounted via a Kubernetes secret and extra volume mounts.
+
+**Step 1 — Configure OCI credentials on the client machine.**
+
+If `~/.oci/` is not already configured on the client, follow [Oracle's API key setup guide](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/apisigningkey.htm). The result will be:
+
+- `~/.oci/config`
+- `~/.oci/oci_api_key.pem`
+
+**Step 2 — Edit `~/.oci/config` to use a relative key path.**
+
+The `key_file` value must be set to a relative path that resolves correctly inside the SkyPilot pod, which runs as the root user. Open `~/.oci/config` on the client and modify the `key_file` line as follows:
+
+Original:
+
+```
+key_file=/Users/username/.oci/oci_api_key.pem
+```
+
+Modified:
+
+```
+key_file=~/.oci/oci_api_key.pem
+```
+
+The `~/` prefix resolves to `/root/.oci/oci_api_key.pem` inside the pod, where the key will be mounted.
+
+**Step 3 — Copy credentials to the VM.**
+
+From the client machine:
+
+```bash
+scp -r ~/.oci ubuntu@<vm-public-ip>:~/
+```
+
+**Step 4 — Create the Kubernetes secret on the VM.**
+
+```bash
+kubectl create secret generic oci-credentials \
+  --namespace $NAMESPACE \
+  --from-file=config=$HOME/.oci/config \
+  --from-file=oci_api_key.pem=$HOME/.oci/oci_api_key.pem
+```
+
+**Step 5 — Mount the secret into the pod via Helm values.**
+
+```bash
+helm upgrade --install $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE \
+  --reuse-values \
+  --set 'apiService.extraVolumes[0].name=oci-creds' \
+  --set 'apiService.extraVolumes[0].secret.secretName=oci-credentials' \
+  --set 'apiService.extraVolumes[0].secret.defaultMode=384' \
+  --set 'apiService.extraVolumeMounts[0].name=oci-creds' \
+  --set 'apiService.extraVolumeMounts[0].mountPath=/root/.oci' \
+  --set 'apiService.extraVolumeMounts[0].readOnly=true'
+```
+
+Note: `defaultMode=384` corresponds to file mode `0600` in decimal. The OCI SDK rejects private keys with broader permissions.
+
+**Step 6 — Verify.**
+
+```bash
+kubectl get pods -n $NAMESPACE -w   # wait for 2/2 Running
+
+POD=$(kubectl get pods -n $NAMESPACE -l app=${RELEASE_NAME}-api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n $NAMESPACE $POD -c skypilot-api -- ls -la /root/.oci/
+kubectl exec -n $NAMESPACE $POD -c skypilot-api -- sky check oci
+```
+
+Expected output: `OCI: enabled`.
+
+If the verification fails with the error "key_file's value '/home/ubuntu/...' must be a valid file path", the relative path edit in step 2 was missed. Correct the file locally, then:
+
+```bash
+kubectl delete secret oci-credentials -n $NAMESPACE
+kubectl create secret generic oci-credentials \
+  --namespace $NAMESPACE \
+  --from-file=config=$HOME/.oci/config \
+  --from-file=oci_api_key.pem=$HOME/.oci/oci_api_key.pem
+kubectl rollout restart deployment/skypilot-api-server -n $NAMESPACE
+```
+
+### 5.3 AWS
+
+```bash
+kubectl create secret generic aws-credentials \
+  --namespace $NAMESPACE \
+  --from-literal=aws_access_key_id=YOUR_ACCESS_KEY_ID \
+  --from-literal=aws_secret_access_key=YOUR_SECRET_ACCESS_KEY
+
+helm upgrade --install $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE \
+  --reuse-values \
+  --set awsCredentials.enabled=true
+```
+
+### 5.4 GCP
+
+```bash
+kubectl create secret generic gcp-credentials \
+  --namespace $NAMESPACE \
+  --from-file=gcp-cred.json=PATH_TO_YOUR_SERVICE_ACCOUNT_JSON
+
+helm upgrade --install $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE \
+  --reuse-values \
+  --set gcpCredentials.enabled=true \
+  --set gcpCredentials.projectId=YOUR_GCP_PROJECT_ID
+```
+
+### 5.5 Lambda
+
+```bash
+kubectl create secret generic lambda-credentials \
+  --namespace $NAMESPACE \
+  --from-literal=api_key=YOUR_LAMBDA_API_KEY
+
+helm upgrade --install $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE \
+  --reuse-values \
+  --set lambdaCredentials.enabled=true
+```
+
+### 5.6 Verify all configured clouds
+
+```bash
+POD=$(kubectl get pods -n $NAMESPACE -l app=${RELEASE_NAME}-api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n $NAMESPACE $POD -c skypilot-api -- sky check
+```
+
+All configured clouds should report `enabled`.
+
+______________________________________________________________________
+
+## Part 6 — Connect from a client machine
+
+### 6.1 Install the SkyPilot client
+
+The client only communicates with the API server, so cloud-specific extras are not required on client machines.
+
+Using `uv`:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.zshrc   # or ~/.bashrc on Linux
-uv tool install --python 3.11 "skypilot-nightly"
+uv tool install --python 3.11 --with pip "skypilot-nightly"
 sky --version
 ```
 
-You don't need cloud extras on the laptop — the laptop just talks to the API server, which has the cloud creds.
-
-### 7.4 Point sky at your server
+Or using pip:
 
 ```bash
-sky api login -e https://sky.yourdomain.com
+pip install "skypilot-nightly"
+```
+
+### 6.2 Authenticate
+
+```bash
+sky api login -e "https://${WEB_USERNAME}:${WEB_PASSWORD}@sky.yourdomain.com"
 sky api info
 ```
 
-If `sky api info` returns server details (version, status, your user), you're fully wired up.
+`sky api info` should print server version and status.
 
-### 7.5 Fallback: service tokens
+### 6.3 Persist for SDK and CLI use
 
-If `sky api login` hangs or returns 403, SkyPilot's HTTP client probably isn't picking up the cloudflared SSO cookie. Use a service token instead.
-
-In Zero Trust dashboard:
-
-1. **Access → Service Auth → Service Tokens → Create Service Token**
-2. Name it `skypilot-cli`, duration `Non-expiring` or `1 year`.
-3. Copy the **Client ID** and **Client Secret** (the secret is shown only once).
-
-Edit your Access policy and add a second include rule:
-
-- **Include → Service Auth → select `skypilot-cli`**
-
-Save.
-
-On your laptop, set environment variables:
+Add the following to the shell rc file (`~/.zshrc`, `~/.bashrc`):
 
 ```bash
-export CF_ACCESS_CLIENT_ID="your-id.access"
-export CF_ACCESS_CLIENT_SECRET="your-secret"
+export SKYPILOT_API_SERVER_ENDPOINT="https://skypilot:YOUR_PASSWORD@sky.yourdomain.com"
 ```
 
-Add those to your shell rc file so they persist. Then retry:
+When this environment variable is set, `sky` CLI invocations and Python SDK calls automatically target the remote server. The variable takes precedence over any endpoint configured via `sky api login`, which makes it the recommended approach for any environment running automated jobs.
+
+After setting the variable, reload the shell:
 
 ```bash
-sky api login -e https://sky.yourdomain.com
+source ~/.zshrc   # or source ~/.bashrc
+```
+
+#### CLI usage
+
+All `sky` commands automatically use the remote API server:
+
+```bash
+sky api info             # confirm connection
+sky check                # list enabled clouds on the server
+sky status               # list current clusters
+sky launch task.yaml     # submit a job
+sky logs <cluster>       # tail logs
+sky down <cluster>       # tear down
+```
+
+No login step or token management is required. The CLI authenticates transparently via the credentials embedded in the URL.
+
+#### Python SDK usage
+
+The SDK reads the same environment variable. No additional configuration is required in code:
+
+```python
+import sky
+
+# Confirm connection to the remote server
+print(sky.api_info())
+
+# Define and launch a task
+task = sky.Task(
+    name="example",
+    setup="pip install numpy",
+    run="python -c 'import numpy; print(numpy.__version__)'",
+)
+task.set_resources(sky.Resources(infra="runpod", accelerators="T4:1"))
+
+request_id = sky.launch(task, cluster_name="example")
+sky.stream_and_get(request_id)
+
+# Tear down when finished
+sky.down("example")
+```
+
+For programmatic use cases where the environment variable cannot be set (for example, multiple SkyPilot clients in the same Python process targeting different servers), the endpoint can be configured per-process:
+
+```python
+import os
+os.environ["SKYPILOT_API_SERVER_ENDPOINT"] = "https://skypilot:YOUR_PASSWORD@sky.yourdomain.com"
+
+import sky   # import after setting the env var
+```
+
+The environment variable must be set before `sky` is imported; SkyPilot reads it at module load time.
+
+#### Verifying the active endpoint
+
+At any time, the currently active endpoint can be confirmed:
+
+```bash
 sky api info
 ```
 
-> **Why service tokens for CLI?** SSO cookies have session expiry; in the middle of a long-running launch, your auth could lapse and break the connection. Service tokens don't expire on a session timer. SSO is great for browser/dashboard use; service tokens are right for scripted/CLI use.
+The output includes the endpoint URL, server version, and authentication status.
 
-______________________________________________________________________
-
-## Part 8: First job
-
-From your laptop:
+### 6.4 Run a job
 
 ```bash
 sky check
+sky launch --infra runpod --gpus T4:1 -- nvidia-smi
+sky down -y sky-cmd
 ```
 
-This queries your remote API server, which queries the clouds it has credentials for. RunPod (or whatever you set up) should show **enabled**.
+Python SDK equivalent:
 
-Run a trivial job:
+```python
+import sky
 
-```bash
-sky launch --infra runpod --gpus A100:1 -- nvidia-smi
+task = sky.Task(run="echo hello && nvidia-smi")
+task.set_resources(sky.Resources(infra="runpod", accelerators="T4:1"))
+
+request_id = sky.launch(task, cluster_name="smoke")
+sky.stream_and_get(request_id)
+
+sky.down("smoke")
 ```
 
-If RunPod has capacity at the price point, SkyPilot will provision the pod, run `nvidia-smi`, and tear it down (or leave it up depending on your config). Watch logs streaming to your terminal.
+______________________________________________________________________
 
-Tear it down explicitly when done:
+## Part 7 — Headless and CI usage
 
-```bash
-sky down <cluster-name>
-```
+HTTP basic auth is supported natively by all standard HTTP clients. No additional tooling is required for headless or CI environments beyond setting the endpoint environment variable.
 
-For real workloads, write a `task.yaml`:
+### 7.1 GitHub Actions
 
 ```yaml
-resources:
-  cloud: runpod
-  accelerators: A100:1
-
-setup: |
-  pip install torch transformers
-
-run: |
-  python train.py
+- name: Run SkyPilot job
+  env:
+    SKYPILOT_API_SERVER_ENDPOINT: https://skypilot:${{ secrets.SKYPILOT_PASSWORD }}@sky.yourdomain.com
+  run: |
+    pip install skypilot-nightly
+    sky check
+    sky launch -y task.yaml
 ```
 
-Then `sky launch task.yaml`.
+The password should be stored in repository secrets. The username `skypilot` may be included in the URL.
+
+### 7.2 Cron and shell scripts
+
+```bash
+#!/bin/bash
+export SKYPILOT_API_SERVER_ENDPOINT="https://skypilot:${SKY_PASS}@sky.yourdomain.com"
+sky launch -y nightly-job.yaml
+```
+
+The `SKY_PASS` value should be sourced from a secrets manager, environment file (excluded from version control), or equivalent.
+
+### 7.3 URL encoding for special characters
+
+Passwords containing reserved URL characters (`@`, `:`, `/`, `#`, `?`, `+`, `=`) must be percent-encoded when embedded in connection strings. The recommended approach is to generate passwords using `openssl rand -hex` to avoid this requirement.
+
+To rotate to a URL-safe password:
+
+```bash
+NEW_PASSWORD=$(openssl rand -hex 16)
+NEW_AUTH=$(htpasswd -nb skypilot $NEW_PASSWORD)
+helm upgrade $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE --reuse-values \
+  --set ingress.authCredentials="$NEW_AUTH"
+echo "New password: $NEW_PASSWORD"
+```
 
 ______________________________________________________________________
 
@@ -594,17 +740,18 @@ ______________________________________________________________________
 On the VM:
 
 ```bash
-uv tool upgrade skypilot-nightly
-sudo systemctl restart skypilot-api   # or: sky api stop && sky api start --deploy --host 127.0.0.1
+helm repo update
+helm upgrade $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE --reuse-values
 ```
 
-On your laptop:
+On client machines:
 
 ```bash
 uv tool upgrade skypilot-nightly
 ```
 
-Keep client and server within a minor version of each other — SkyPilot guarantees compatibility between adjacent minor versions.
+Client and server should be kept within one minor version of each other.
 
 ### Updating cloudflared
 
@@ -613,137 +760,310 @@ sudo cloudflared update
 sudo systemctl restart cloudflared
 ```
 
-### Costs to watch
+### Rotating the basic auth password
 
-The OCI VM and Cloudflare components are free at the scale described here. Real costs come from:
+```bash
+NEW_PASSWORD=$(openssl rand -hex 16)
+NEW_AUTH=$(htpasswd -nb skypilot $NEW_PASSWORD)
+helm upgrade $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE --reuse-values \
+  --set ingress.authCredentials="$NEW_AUTH"
+```
 
-- **Jobs you launch on RunPod / AWS / GCP** — track via those providers' dashboards.
-- **Cloud storage** if you use `sky storage` for artifacts.
-- **Egress** is free up to 10 TB/month on OCI; rarely an issue.
+After rotation, update `SKYPILOT_API_SERVER_ENDPOINT` in all locations where it is configured (client shell rc files, CI secrets, scheduled job environments).
 
-Set billing alerts on your job-running clouds. SkyPilot can't prevent you from spinning up an H100 cluster overnight.
+### Cost considerations
+
+The infrastructure described in this playbook incurs no recurring cost. Costs are generated only by:
+
+- Jobs launched on RunPod, AWS, GCP, or other cloud providers (tracked via those providers' billing dashboards).
+- Cloud storage usage when `sky storage` is configured.
+
+Billing alerts should be configured on each cloud provider account. SkyPilot does not enforce spending limits.
 
 ### Backups
 
-The API server keeps state in `~/.sky/` on the VM (cluster registry, request logs, etc.). If the VM dies, you lose this. For a personal setup it's not catastrophic — your jobs run on other clouds and persist there — but you can `tar czf sky-backup.tgz ~/.sky/ ~/.cloudflared/ ~/.runpod/` periodically and stash it in object storage.
+The API server stores state in a PersistentVolumeClaim within k3s. To create a backup:
 
-### Adding more users
+```bash
+POD=$(kubectl get pods -n $NAMESPACE -l app=${RELEASE_NAME}-api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n $NAMESPACE $POD -c skypilot-api -- tar czf - /root/.sky | cat > sky-backup.tgz
+```
 
-Cloudflare Access free tier is up to 50 users. To add a teammate:
-
-1. Edit the Access policy → add their email to the Include list.
-2. They install cloudflared + SkyPilot on their laptop, run `cloudflared access login`, then `sky api login -e https://sky.yourdomain.com`.
-
-For more granular per-user permissions inside SkyPilot itself (workspaces, RBAC), see SkyPilot's own auth docs. The Helm-based deployment has more multi-user features than this VM-based setup.
+Store the resulting archive in object storage or another durable location.
 
 ### Logs
 
-- **SkyPilot API server logs:** `~/.sky/api_server/server.log` on the VM, or `journalctl -u skypilot-api -f` if you used systemd.
-- **cloudflared logs:** `journalctl -u cloudflared -f`.
-- **Cloudflare Access audit logs:** Zero Trust dashboard → Logs → Access.
+| Component        | Command                                                                 |
+| ---------------- | ----------------------------------------------------------------------- |
+| SkyPilot API pod | `kubectl logs -n $NAMESPACE $POD -c skypilot-api -f`                    |
+| ingress-nginx    | `kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=ingress-nginx -f` |
+| cloudflared      | `sudo journalctl -u cloudflared -f`                                     |
+| k3s              | `sudo journalctl -u k3s -f`                                             |
+
+### OCI idle reclaim policy
+
+OCI may reclaim Always-Free instances that remain idle for seven consecutive days (95th-percentile CPU below 20%). The combined activity of k3s and cloudflared is generally sufficient to remain above this threshold. If a reclaim notice is received, a periodic keepalive can be added:
+
+```bash
+echo '*/30 * * * * root timeout 30 yes > /dev/null' | sudo tee /etc/cron.d/keepalive
+```
+
+### Multi-user access
+
+This deployment uses a single shared credential. Multi-user access with per-user permissions requires enabling the chart's OAuth/SSO configuration via `auth.oauth.*` Helm values, which is out of scope for this playbook.
 
 ______________________________________________________________________
 
 ## Troubleshooting
 
-### `sky check` fails with credential errors on the VM
+### Pod stuck in Pending status with "Insufficient cpu/memory"
 
-The shell session running the API server doesn't see the credentials. Most common cause: you ran `aws configure` in one session but `sky api start` is running in another (or as a systemd service that doesn't have the same env). Fix:
-
-- For systemd, ensure the service runs as `User=ubuntu` and that `~/.aws/credentials`, `~/.config/gcloud/`, etc., exist for that user.
-- Avoid putting credentials only in env vars unless you also export them in the systemd unit.
-
-### `cloudflared` service won't start
+The pod's resource requests exceed available capacity. Verify with:
 
 ```bash
-sudo journalctl -u cloudflared -n 50
+kubectl describe pod -n $NAMESPACE <pod-name>
 ```
 
-Common issues:
+The Events section will report the specific resource constraint. Reduce requests:
 
-- `Cannot determine default configuration path` → config wasn't copied to `/etc/cloudflared/`. Re-run the `sudo cp` step in 5.7.
-- `failed to parse credentials` → the `credentials-file` path in `/etc/cloudflared/config.yml` still points to `/home/ubuntu/`. The `sed` step in 5.7 fixes this.
-- `tunnel not found` → wrong UUID in `config.yml`.
+```bash
+helm upgrade $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE --reuse-values \
+  --set apiService.resources.requests.cpu=1 \
+  --set apiService.resources.requests.memory=2Gi
+```
 
-### `curl https://sky.yourdomain.com/api/health` returns Cloudflare 502 or 521
+If reduced requests still fail to schedule, verify the node's actual capacity:
 
-The tunnel is up but cloudflared can't reach the SkyPilot server on `127.0.0.1:46580`.
+```bash
+kubectl describe node | grep -A 5 Allocatable
+```
 
-- Check `sudo systemctl status skypilot-api` (or run `curl http://127.0.0.1:46580/api/health` on the VM).
-- If the API server isn't running, restart it.
+The output should show `cpu: 4` and `memory: ~23Gi` for a correctly-sized A1 instance. If smaller values are reported, the VM was provisioned with insufficient resources. Resize via the OCI console: stop the instance, edit shape configuration to 4 OCPU / 24 GB, and start the instance.
 
-### `sky api login` hangs forever
+### Pod in CrashLoopBackOff with "exec format error"
 
-Almost always an auth problem. The cloudflared SSO cookie isn't being passed in the HTTP request. Solution: set up service tokens (Part 7.5).
+The image lacks ARM64 layers. Verify with:
 
-### `sky launch` works but logs don't stream
+```bash
+docker manifest inspect berkeleyskypilot/skypilot-nightly:latest 2>/dev/null | grep arch
+```
 
-Cloudflare Tunnel sometimes has issues with very long-lived streaming connections on older `cloudflared` versions. Update with `sudo cloudflared update` and restart. If still broken, you can usually tail logs directly with `sky logs <cluster> --no-follow` and re-run.
+The output should list `arm64`. If only `amd64` is present, building from source is required. Current SkyPilot nightly images include ARM64 builds.
 
-### A1 capacity disappeared and OCI killed my VM
+### External requests return HTTP 502 or 503
 
-OCI sometimes reclaims always-free A1 instances if they appear idle for too long. Mitigations:
+The tunnel reaches Cloudflare but cloudflared cannot connect to ingress-nginx. Verify on the VM:
 
-- Keep the VM mildly busy (the SkyPilot server itself usually does this).
-- Convert the always-free instance to paid (pennies per month).
-- Keep your `~/.cloudflared/` and `~/.sky/` configs backed up so you can rebuild quickly.
+```bash
+curl -i http://localhost:30080/api/health      # should return 401
+kubectl get svc -n $NAMESPACE                  # confirm NodePort is 30080
+sudo systemctl status cloudflared              # confirm running
+```
+
+### External requests return HTTP 302 redirect to a Cloudflare login page
+
+A Cloudflare Access application is protecting the hostname. To remove it:
+
+1. Open the Zero Trust dashboard.
+2. Navigate to **Access → Applications**.
+3. Locate the application protecting `sky.yourdomain.com`.
+4. Open the action menu and select **Delete**.
+
+### `helm upgrade` returns "Kubernetes cluster unreachable"
+
+The `KUBECONFIG` environment variable is not set in the current shell:
+
+```bash
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+```
+
+If this resolves the error but the variable is lost in subsequent sessions, the `~/.bashrc` modification from Part 2.3 was not applied.
+
+### `kubectl get pods` returns "connection refused"
+
+The command is being executed on the client machine rather than the VM. The k3s cluster is hosted on the VM. Either SSH into the VM, or configure remote kubectl access (out of scope).
+
+### Authentication not enforced (HTTP 200 without credentials)
+
+Inspect the deployed Helm values:
+
+```bash
+helm get values skypilot -n $NAMESPACE
+```
+
+If `ingress.authCredentials` is absent or null, the `$AUTH_STRING` variable was empty during install. Re-run with `--reuse-values --set ingress.authCredentials="$AUTH_STRING"` after confirming the variable is populated:
+
+```bash
+echo "$AUTH_STRING"
+```
+
+### Cloudflare tunnel reports "locally managed"
+
+The tunnel was created via the `cloudflared tunnel create` CLI command rather than the dashboard. Routes are configured in `/etc/cloudflared/config.yml` rather than the UI.
+
+To migrate the tunnel to remote management so routes can be edited in the dashboard:
+
+```bash
+# Ensure cloudflared is recent (2024.x or newer)
+sudo cloudflared update
+sudo systemctl restart cloudflared
+cloudflared --version
+
+# Stop the tunnel
+sudo systemctl stop cloudflared
+
+# Run the migration
+sudo cloudflared tunnel migrate --config /etc/cloudflared/config.yml
+
+# Restart
+sudo systemctl start cloudflared
+sudo systemctl status cloudflared
+```
+
+After migration, the dashboard's Public Hostname tab becomes editable and the "locally managed" notice is removed.
+
+If `cloudflared tunnel migrate` fails or is unavailable, perform a manual migration:
+
+1. Record the current routes from `/etc/cloudflared/config.yml` (the `hostname` and `service` pairs).
+2. In the Cloudflare Zero Trust dashboard, delete the existing tunnel.
+3. Create a new tunnel via the dashboard (Networks → Tunnels → Create a tunnel) and copy the new install token.
+4. On the VM:
+   ```bash
+   sudo cloudflared service uninstall
+   sudo rm /etc/cloudflared/config.yml
+   sudo cloudflared service install <NEW_TOKEN>
+   ```
+5. In the dashboard, recreate the public hostname routes recorded in step 1.
+
+Manual migration causes brief downtime during the swap, typically under one minute.
+
+The dashboard-based flow described in Part 4 avoids this scenario for new deployments.
+
+### Old SkyPilot process still running
+
+If `sky api start` was previously executed directly on the VM (e.g., via uv), the process may still be listening on port 46580. Identify with:
+
+```bash
+sudo ss -tlnp | grep 46580
+```
+
+If a non-root process appears, terminate it:
+
+```bash
+ps aux | grep "sky.server.server --host=127.0.0.1" | grep -v grep | awk '{print $2}' | xargs -r kill
+```
+
+The root-owned process inside the k3s pod must not be terminated.
+
+### `sky check oci` reports invalid key file path
+
+The relative key path edit in Part 5.2 step 2 was not applied. Correct `~/.oci/config` to use `key_file=~/.oci/oci_api_key.pem`, then:
+
+```bash
+kubectl delete secret oci-credentials -n $NAMESPACE
+kubectl create secret generic oci-credentials \
+  --namespace $NAMESPACE \
+  --from-file=config=$HOME/.oci/config \
+  --from-file=oci_api_key.pem=$HOME/.oci/oci_api_key.pem
+kubectl rollout restart deployment/skypilot-api-server -n $NAMESPACE
+```
 
 ______________________________________________________________________
 
-## Appendix: full command checklist
+## Appendix — Full command checklist
 
-For a fresh build, in order:
+Replace `<vm-public-ip>` and `yourdomain.com` placeholders with actual values.
+
+### On the OCI VM
 
 ```bash
-# === On OCI VM (Ubuntu 24.04, ARM64) ===
+# Part 1: System preparation
+sudo apt update && sudo apt upgrade -y
+sudo reboot
+# Reconnect via SSH
 
-# System
-sudo apt update && sudo apt upgrade -y && sudo reboot
-# (SSH back in)
+sudo iptables -I INPUT 1 -i lo -j ACCEPT
+sudo iptables -I FORWARD 1 -i cni0 -j ACCEPT
+sudo iptables -I FORWARD 1 -o cni0 -j ACCEPT
+sudo netfilter-persistent save
 
-# uv + SkyPilot
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.bashrc
-uv tool install --python 3.11 --with pip "skypilot-nightly[runpod,kubernetes]"
+# Part 2: k3s and Helm
+curl -sfL https://get.k3s.io | sh -
+sudo chmod 644 /etc/rancher/k3s/k3s.yaml
 
-# RunPod creds
-mkdir -p ~/.runpod
-cat > ~/.runpod/config.toml <<'EOF'
-api_key = "YOUR_RUNPOD_KEY"
+cat >> ~/.bashrc <<'EOF'
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+export NAMESPACE=skypilot
+export RELEASE_NAME=skypilot
 EOF
-chmod 600 ~/.runpod/config.toml
-sky check
+source ~/.bashrc
 
-# SkyPilot API server (one-shot; for systemd, see Part 4.3)
-sky api start --deploy --host 127.0.0.1
-curl http://127.0.0.1:46580/api/health
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+helm repo add skypilot https://helm.skypilot.co
+helm repo update
+sudo apt install -y apache2-utils
 
-# cloudflared
+# Part 3: SkyPilot deployment
+WEB_USERNAME=skypilot
+WEB_PASSWORD=$(openssl rand -hex 16)
+echo "Password: $WEB_PASSWORD"
+AUTH_STRING=$(htpasswd -nb $WEB_USERNAME $WEB_PASSWORD)
+
+helm upgrade --install $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE \
+  --create-namespace \
+  --set ingress.authCredentials="$AUTH_STRING" \
+  --set ingress-nginx.controller.service.type=NodePort \
+  --set ingress-nginx.controller.service.nodePorts.http=30080 \
+  --set apiService.resources.requests.cpu=2 \
+  --set apiService.resources.requests.memory=4Gi \
+  --set apiService.resources.limits.cpu=3 \
+  --set apiService.resources.limits.memory=8Gi
+
+kubectl get pods -n $NAMESPACE -w   # Wait for 2/2 Running
+
+curl -i -u "${WEB_USERNAME}:${WEB_PASSWORD}" http://localhost:30080/api/health
+
+# Part 4: Cloudflare Tunnel
 curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb
 sudo dpkg -i cloudflared.deb
-cloudflared tunnel login
-cloudflared tunnel create skypilot
-cloudflared tunnel route dns skypilot sky.yourdomain.com
 
-# Tunnel config (edit ~/.cloudflared/config.yml — see Part 5.6)
-sudo mkdir -p /etc/cloudflared
-sudo cp ~/.cloudflared/config.yml /etc/cloudflared/config.yml
-sudo cp ~/.cloudflared/<UUID>.json /etc/cloudflared/
-sudo sed -i 's|/home/ubuntu/.cloudflared/|/etc/cloudflared/|' /etc/cloudflared/config.yml
-sudo cloudflared service install
-sudo systemctl start cloudflared
+# Create tunnel via Cloudflare Zero Trust dashboard, copy install token
+sudo cloudflared service install <YOUR_TOKEN>
 
-# === In Cloudflare Zero Trust dashboard ===
-# Add Self-hosted application for sky.yourdomain.com
-# Enable One-time PIN, add Allow policy with your email
+# In dashboard: configure public hostname sky.yourdomain.com → http://localhost:30080
 
-# === On laptop ===
-brew install cloudflared           # or apt equivalent
-cloudflared access login https://sky.yourdomain.com
+# Part 5: Cloud credentials (RunPod example)
+kubectl create secret generic runpod-credentials \
+  --namespace $NAMESPACE \
+  --from-literal=api_key=YOUR_RUNPOD_KEY
+
+helm upgrade --install $RELEASE_NAME skypilot/skypilot-nightly --devel \
+  --namespace $NAMESPACE \
+  --reuse-values \
+  --set runpodCredentials.enabled=true
+
+POD=$(kubectl get pods -n $NAMESPACE -l app=${RELEASE_NAME}-api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n $NAMESPACE $POD -c skypilot-api -- sky check
+```
+
+### On the client machine
+
+```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-uv tool install --python 3.11 "skypilot-nightly"
-sky api login -e https://sky.yourdomain.com
+source ~/.zshrc
+uv tool install --python 3.11 --with pip "skypilot-nightly"
+
+curl -i -u "skypilot:YOUR_PASSWORD" https://sky.yourdomain.com/api/health
+
+echo 'export SKYPILOT_API_SERVER_ENDPOINT="https://skypilot:YOUR_PASSWORD@sky.yourdomain.com"' >> ~/.zshrc
+source ~/.zshrc
+
 sky api info
 sky check
-sky launch --infra runpod --gpus A100:1 -- nvidia-smi
+
+sky launch --infra runpod --gpus T4:1 -- nvidia-smi
+sky down -y sky-cmd
 ```
