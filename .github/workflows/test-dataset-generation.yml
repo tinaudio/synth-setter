@@ -170,6 +170,9 @@ jobs:
           echo "providers_local: ${providers_local}"
           echo "providers_launcher: ${providers_launcher}"
 
+      - name: Install PyYAML for image-config parsing
+        run: pip install pyyaml
+
       - id: bucket
         run: |
           set -euo pipefail
