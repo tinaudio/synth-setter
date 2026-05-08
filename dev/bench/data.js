@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778200306012,
+  "lastUpdate": 1778200307947,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2037,6 +2037,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.434988717600003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "81077272c042792a4441e6c11945529cf5f51878",
+          "message": "refactor(workflows): split test-dataset-generation; rename launcher (#858)\n\n* refactor(workflows): extract generate-dataset-shards.yaml; rename skypilot_launch_smoke\n\nSplits test-dataset-generation.yml into a thin wrapper plus two reusable\nworkflows:\n\n* `generate-dataset-shards.yaml` — workflow_call only. Owns one provider's\n  launcher invocation (skypilot-local kind setup or runpod/oci in-container\n  launcher). Inputs: provider, dataset_config, image_tag, cluster_name,\n  num_workers, tail, api_server, local, artifact_name. Becomes the official\n  launcher entry point that follow-up PRs (R2-as-coordination, expanded\n  dispatch surface) build on.\n* `validate-dataset-shards.yaml` — workflow_call only. Owns validate-spec\n  + validate-shard jobs.\n* `test-dataset-generation.yml` keeps PR/dispatch triggers (3 inputs\n  unchanged) and computes the provider matrix; calls the two reusables\n  per provider. The docker-only `local` row stays inline (no launcher).\n\nAlso renames `pipeline/entrypoints/skypilot_launch_smoke.py` →\n`skypilot_launch.py` (and the matching test) since the launcher is no\nlonger smoke-specific. Updated all callers: test-skypilot-debug.yml,\ntest-dataset-generation.yml's paths filter, the compute templates'\nheader comments, scripts/sync_worker_checkout.sh, and the doc set.\n\nDeletes obsolete `dataset-generation.yml` (no callers, superseded by the\nunified launcher).\n\nBehavior-preserving — every flag the test wrapper passes to the reusable\nmatches the value today's inline blocks hardcoded (num_workers=1 +\nlocal=true for skypilot-local; defaults elsewhere).\n\nRefs #856\n\n* docs: fix stale dataset-generation.yml references after workflow split\n\nThe doc-drift agent surfaced doc references to the deleted `dataset-generation.yml`\nworkflow that the rename pass missed. Updated four files:\n\n* docs/doc-map.yaml — replace the deleted-workflow pattern with the two new\n  reusables (generate-dataset-shards.yaml + validate-dataset-shards.yaml).\n* docs/reference/github-actions.md — replace the `dataset-generation` row in\n  the Pipeline catalog with rows for both new reusables; refresh the\n  dependency map; replace `dataset-generation` in the Used-by columns of the\n  R2 + W&B secrets table; update the runtime-secrets and\n  mount-as-volume sections.\n* docs/design/storage-provenance-spec.md — update the workflow table row to\n  describe `generate-dataset-shards.yaml` (with its actual input set) and\n  add a sibling row for `validate-dataset-shards.yaml`.\n* .github/workflows/test-vst-slow.yml — update the comment that cites\n  `dataset-generation.yml` as the headless-X11 proof point to point at\n  `generate-dataset-shards.yaml`.\n\nRefs #856",
+          "timestamp": "2026-05-08T00:19:24Z",
+          "tree_id": "933671bdc7d3ac1f51cc8243a5873a3a13c94db7",
+          "url": "https://github.com/tinaudio/synth-setter/commit/81077272c042792a4441e6c11945529cf5f51878"
+        },
+        "date": 1778200307716,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.966935873031616,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.965617674589157,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.011576796881854534,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.022953331470489502,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.196953058242798,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.920366085599994,
             "unit": "seconds"
           }
         ]
