@@ -78,7 +78,7 @@ docs:
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (deterministic from `cluster_name` + the materialized spec's `r2_bucket`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
-        covers: "Reusable spec + shard validation downstream of generate-dataset-shards; consumes the `spec_uri` (r2://) workflow output it emits"
+        covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: "pipeline/ci/**"
         covers: "CI validation scripts, spec materialization, shard validation"
       - pattern: "pipeline/r2_io.py"

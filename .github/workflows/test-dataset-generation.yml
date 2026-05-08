@@ -170,13 +170,26 @@ jobs:
           echo "providers_local: ${providers_local}"
           echo "providers_launcher: ${providers_launcher}"
 
-      - name: Install PyYAML for image-config parsing
+      - name: Install PyYAML for dataset-config parsing
         run: pip install pyyaml
 
+      # Bucket comes from the dataset config (the source of truth the launcher
+      # uses for `spec.r2_bucket` and therefore for its R2 upload destination).
+      # Reading from configs/image/dev-snapshot.yaml would be wrong: that's the
+      # CI image's bucket, not the dataset's. They happen to match for
+      # runpod-smoke-shard.yaml, but configs like 10-1k-shards.yaml use
+      # `experiments` instead.
       - id: bucket
+        env:
+          DATASET_CONFIG: >-
+            ${{
+              github.event_name == 'pull_request'
+                && 'configs/dataset/runpod-smoke-shard.yaml'
+                || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+            }}
         run: |
           set -euo pipefail
-          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
+          R2_BUCKET=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['r2_bucket'])" "$DATASET_CONFIG")
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket: ${R2_BUCKET}"
 
