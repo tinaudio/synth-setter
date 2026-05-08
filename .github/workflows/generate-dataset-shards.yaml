@@ -53,10 +53,10 @@ on:
         type: string
         default: ""
       tail:
-        description: "Pass --tail to launcher (stream logs, unconditional teardown)."
+        description: "Pass --tail to launcher (stream logs, unconditional teardown). Default false = detached: launcher dispatches and returns immediately. Callers that consume the spec_uri output for downstream validation should pass `tail: true` so the runner blocks until workers finish."
         required: false
         type: boolean
-        default: true
+        default: false
       local:
         description: "Pass --local to launcher (force local SDK dispatch, clearing any inherited SKYPILOT_API_SERVER_ENDPOINT). Default false = launcher inherits the SKYPILOT_API_SERVER_ENDPOINT secret if set, else falls through to local SDK."
         required: false
@@ -103,10 +103,10 @@ on:
         type: string
         default: ""
       tail:
-        description: "Pass --tail to launcher (stream logs, unconditional teardown)."
+        description: "Pass --tail to launcher (stream logs, unconditional teardown). Default false = detached: launcher dispatches and returns immediately so the runner doesn't sit idle for hours streaming logs from a cloud job."
         required: false
         type: boolean
-        default: true
+        default: false
       local:
         description: "Force local SDK dispatch (clears any inherited SKYPILOT_API_SERVER_ENDPOINT). Default false = use the SKYPILOT_API_SERVER_ENDPOINT secret if set, else local SDK."
         required: false
