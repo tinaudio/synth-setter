@@ -74,6 +74,26 @@ on:
           - skypilot-local
           - runpod
           - oci
+      num_workers:
+        description: "Override --num-workers (empty = use the dataset config's value; 1 forced for skypilot-local)."
+        required: false
+        type: string
+        default: ""
+      tail:
+        description: "Pass --tail to the launcher (stream logs + unconditional cluster teardown)."
+        required: false
+        type: boolean
+        default: true
+      local_dispatch:
+        description: "Pass --local to the launcher (force local SDK dispatch; mutually exclusive with api_server). Implicit for skypilot-local."
+        required: false
+        type: boolean
+        default: false
+      api_server:
+        description: "Remote SkyPilot API server URL. Empty = inherit env. Mutually exclusive with local_dispatch."
+        required: false
+        type: string
+        default: ""
   pull_request:
     paths:
       - "src/data/vst/**"
@@ -302,9 +322,16 @@ jobs:
 
   # `skypilot-local` / `runpod` / `oci` rows: route through the official
   # launcher reusable. Cluster name includes `github.run_attempt` so re-running
-  # a failed job doesn't collide on the launcher's R2 spec key. The
-  # `--num-workers 1` override for skypilot-local mirrors today's hardcoded
-  # behavior — the single-node kind cluster can't host parallel workers (#843).
+  # a failed job doesn't collide on the launcher's R2 spec key.
+  #
+  # Knob precedence per row:
+  #   * num_workers — `skypilot-local` always passes `1` (#843; single-node
+  #     kind can't host parallel workers). Other providers pass the dispatch
+  #     input through (empty = use the dataset config's `num_workers`).
+  #   * local       — `skypilot-local` always passes `true` (#841; clears
+  #     inherited SKYPILOT_API_SERVER_ENDPOINT so this row can't accidentally
+  #     route remote). Other providers honor the dispatch input.
+  #   * tail / api_server — dispatch inputs flow through unchanged.
   generate-launcher:
     name: Run generate_dataset (${{ matrix.provider }})
     needs: setup
@@ -324,10 +351,10 @@ jobs:
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
-      num_workers: ${{ matrix.provider == 'skypilot-local' && '1' || '' }}
-      tail: true
-      local: ${{ matrix.provider == 'skypilot-local' }}
-      api_server: ""
+      num_workers: ${{ matrix.provider == 'skypilot-local' && '1' || (github.event_name == 'pull_request' && '' || (inputs.num_workers || '')) }}
+      tail: ${{ github.event_name == 'pull_request' && true || inputs.tail }}
+      local: ${{ matrix.provider == 'skypilot-local' || (github.event_name == 'workflow_dispatch' && inputs.local_dispatch) }}
+      api_server: ${{ github.event_name == 'pull_request' && '' || (inputs.api_server || '') }}
       artifact_name: test-run-metadata-${{ matrix.provider }}
     secrets: inherit
 
