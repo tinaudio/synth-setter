@@ -1423,9 +1423,13 @@ pipeline/
     generate_dataset.py # Sequential multi-shard dataset generation (MVP); deprecated when generate-shards lands (#411)
 
   ci/                   # CI validation scripts (implemented)
-    validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count)
+    materialize_spec.py # Materialize a DatasetPipelineSpec from a config YAML
+    validate_spec.py    # Spec structural validation (required fields, code_version SHA, etc.)
+    validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
 
   constants.py          # Well-known filenames and paths (R2_BUCKET, etc.)
+  r2_io.py              # rclone wrappers used by ci/, entrypoints/, and CI workflows
+                        # (is_r2_uri, download_to_path, upload_to_uri, downloaded_to_tempfile)
 
   # --- Planned (not yet implemented) ---
   # cli.py              # Click entry point: generate, status, finalize
