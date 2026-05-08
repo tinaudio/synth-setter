@@ -4,13 +4,13 @@ Project terminology for synth-setter. Grouped by domain.
 
 ## Core Concepts
 
-| Term                | Definition                                                                                                                                                                                                |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Synth inversion** | Predicting synthesizer parameters from an audio recording. Also called **parameter estimation**. The core ML task this project addresses.                                                                 |
-| **Sound matching**  | Finding synthesizer settings that reproduce a target sound. Synth inversion is the neural approach to this problem.                                                                                       |
-| **Preset**          | A saved configuration of synthesizer parameters that produces a specific sound. The project generates random presets for training data.                                                                   |
-| **Parameter space** | The set of all controllable parameters of a synthesizer. For Surge XT, this ranges from 92 parameters (`surge_simple`) to 189 (`surge_xt`) depending on the param spec.                                   |
-| **param_spec**      | Configuration selecting which synthesizer parameters to vary during data generation. Determines the dimensionality of the prediction task. Examples: `surge_simple` (92 params), `surge_xt` (189 params). |
+| Term                | Definition                                                                                                                                                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Synth inversion** | Predicting synthesizer parameters from an audio recording. Also called **parameter estimation**. The core ML task this project addresses.                                                                                                                                |
+| **Sound matching**  | Finding synthesizer settings that reproduce a target sound. Synth inversion is the neural approach to this problem.                                                                                                                                                      |
+| **Preset**          | A saved configuration of synthesizer parameters that produces a specific sound. The project generates random presets for training data.                                                                                                                                  |
+| **Parameter space** | The set of all controllable parameters of a synthesizer. For Surge XT, the dimensionality depends on the selected param spec — see `param_specs` in [`src/data/vst/__init__.py`](../src/data/vst/__init__.py).                                                           |
+| **param_spec**      | Configuration selecting which synthesizer parameters to vary during data generation. Determines the dimensionality of the prediction task. Registered specs and their parameter sets live in `param_specs` in [`src/data/vst/__init__.py`](../src/data/vst/__init__.py). |
 
 ## Model Architecture
 
