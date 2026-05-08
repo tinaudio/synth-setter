@@ -27,6 +27,17 @@ on:
         description: "r2:// URI of the materialized spec to validate (output of generate-dataset-shards.yaml)."
         required: true
         type: string
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag for validate_shard container."
+        required: false
+        type: string
+        default: "dev-snapshot"
+      spec_uri:
+        description: "r2:// URI of the materialized spec to validate (e.g. r2://intermediate-data/skypilot-launcher-specs/<cluster_name>.json)."
+        required: true
+        type: string
 
 permissions:
   contents: read
