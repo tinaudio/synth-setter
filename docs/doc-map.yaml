@@ -247,7 +247,7 @@ docs:
     description: Test layout, fixtures, markers, and the cpu/mps/gpu CI lane split
     sources:
       - pattern: "tests/conftest.py"
-        covers: "Hydra cfg_train/cfg_eval/cfg_surge_xt fixtures, accelerator parametrize, inline cfg_surge_xt_global(accelerator) construction, surge_xt_smoke_datasets, _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
+        covers: "Hydra cfg_train/cfg_eval/cfg_surge_xt fixtures, accelerator parametrize, param_spec_name parametrize, _build_surge_xt_smoke_cfg, surge_xt_smoke_datasets, _validate_surge_dataset, shared constants (NUM_FIXTURE_SAMPLES, VST_HEADLESS_WRAPPER, _VST_SUBPROCESS_TIMEOUT_SECONDS)"
       - pattern: "tests/test_train.py"
         covers: "E2E Hydra train / resume / Surge XT smoke + train→eval round-trip"
       - pattern: "tests/test_eval.py"
