@@ -343,7 +343,6 @@ jobs:
       num_workers: ${{ matrix.provider == 'skypilot-local' && '1' || '' }}
       tail: true
       local: ${{ matrix.provider == 'skypilot-local' }}
-      api_server: ""
       artifact_name: test-run-metadata-${{ matrix.provider }}
     secrets: inherit
 
