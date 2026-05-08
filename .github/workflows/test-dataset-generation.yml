@@ -8,7 +8,9 @@ name: Test Dataset Generation
 #     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). Manual
 #     dispatch fallback for ad-hoc smoke; superseded by `skypilot-local` for
 #     PR coverage. Stays inline here — it doesn't go through the
-#     `generate-dataset-shards.yaml` reusable.
+#     `generate-dataset-shards.yaml` reusable. It DOES upload the spec to R2
+#     under the same `skypilot-launcher-specs/` prefix the launcher uses, so
+#     the validate downstream is provider-agnostic.
 #   * `skypilot-local` — invokes `generate-dataset-shards.yaml` with
 #     `local: true, num_workers: '1'` to provision a kind cluster on the
 #     runner, load dev-snapshot into kind, and launch against
@@ -23,6 +25,11 @@ name: Test Dataset Generation
 # (`pipeline.entrypoints.skypilot_launch._run_cred_bootstrap`); the launcher
 # captures the script's stdout via `subprocess.run(capture_output=True)` so a
 # `tee`'d caller workflow can't leak secrets.
+#
+# Stage handoff is via R2: each generate job uploads the spec to
+# `r2://<bucket>/skypilot-launcher-specs/<cluster_name>.json`, and the
+# validate job pulls from the same path. The run-metadata artifact upload
+# remains for debugging, but it's no longer load-bearing.
 #
 # Provider matrix policy (computed in the `setup` job):
 #   * pull_request (same repo) → skypilot-local only
@@ -74,6 +81,8 @@ on:
       - "configs/dataset/**"
       - "configs/compute/**"
       - "pipeline/entrypoints/**"
+      - "pipeline/ci/**"
+      - "pipeline/r2_io.py"
       - "scripts/docker_entrypoint.py"
       - "scripts/run-linux-vst-headless.sh"
       - "scripts/ensure_plugin_symlinks.sh"
@@ -95,14 +104,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Compute the provider list at runtime. Three outputs:
+  # Compute the provider list at runtime, plus the R2 bucket the validate
+  # job will pull specs and shards from. Outputs:
   #   * `providers`           — full union (drives the validate matrix).
   #   * `providers_local`     — subset routed through the inline `generate-local`
   #                             job (no launcher).
   #   * `providers_launcher`  — subset routed through the
   #                             `generate-dataset-shards.yaml` reusable.
+  #   * `r2_bucket`           — Cloudflare R2 bucket name (from
+  #                             configs/image/dev-snapshot.yaml). Used to
+  #                             construct the spec_uri the validate job pulls.
+  #
   # Reusable workflows can't be invoked conditionally inside a single matrix
-  # job (each `uses:` job is fixed), so the split happens here.
+  # job (each `uses:` job is fixed), so the local-vs-launcher split happens here.
   #
   # Policy:
   #   * pull_request (same repo) → skypilot-local only (free; exercises the
@@ -114,14 +128,18 @@ jobs:
   #
   # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
   setup:
-    name: Compute provider list
+    name: Compute provider list + R2 bucket
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       providers: ${{ steps.matrix.outputs.providers }}
       providers_local: ${{ steps.matrix.outputs.providers_local }}
       providers_launcher: ${{ steps.matrix.outputs.providers_launcher }}
+      r2_bucket: ${{ steps.bucket.outputs.r2_bucket }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - id: matrix
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -152,12 +170,19 @@ jobs:
           echo "providers_local: ${providers_local}"
           echo "providers_launcher: ${providers_launcher}"
 
+      - id: bucket
+        run: |
+          set -euo pipefail
+          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/image/dev-snapshot.yaml'))['r2_bucket'])")
+          echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
+          echo "r2_bucket: ${R2_BUCKET}"
+
   # `local` provider: inline docker run, no SkyPilot. Materializes the spec
   # inside dev-snapshot, then `docker_entrypoint.py generate_dataset`
-  # against rank=0/world=1. Output spec lands in /run-metadata/input_spec.json,
-  # matching the shape produced by the launcher branch so validate-spec /
-  # validate-shard are provider-agnostic. Should be replaced by a SkyPilot
-  # local-cloud template (#806).
+  # against rank=0/world=1. Output spec lands in /run-metadata/input_spec.json.
+  # After generation, an explicit step uploads the spec to R2 under the same
+  # `skypilot-launcher-specs/<cluster_name>.json` key the launcher uses for
+  # the other providers, so validate-dataset-shards.yaml is provider-agnostic.
   generate-local:
     name: Run generate_dataset (${{ matrix.provider }})
     needs: setup
@@ -177,6 +202,8 @@ jobs:
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
+      R2_BUCKET: ${{ needs.setup.outputs.r2_bucket }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -219,6 +246,39 @@ jobs:
               chmod 0644 /run-metadata/input_spec.json
             ' \
             2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}/generate.log"
+
+      # Upload the spec to R2 at the same path-shape the launcher uses, so
+      # validate-dataset-shards.yaml can read it without knowing whether the
+      # generate path was launcher- or local-provider. Uses the in-image
+      # rclone helper through pipeline.r2_io to keep all rclone invocations
+      # in one place.
+      - name: Upload spec to R2 for validate handoff
+        env:
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -v "/tmp/run-metadata-${{ matrix.provider }}:/run-metadata:ro" \
+            -e RCLONE_CONFIG_R2_TYPE=s3 \
+            -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
+            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
+            -e RCLONE_CONFIG_R2_ENDPOINT \
+            -e R2_BUCKET \
+            -e CLUSTER_NAME \
+            -e PYTHONPATH=/home/build/synth-setter \
+            "${IMAGE}" \
+            python3 -c "
+          import os
+          from pathlib import Path
+          from pipeline.r2_io import upload_to_uri
+          uri = f\"r2://{os.environ['R2_BUCKET']}/skypilot-launcher-specs/{os.environ['CLUSTER_NAME']}.json\"
+          upload_to_uri(Path('/run-metadata/input_spec.json'), uri)
+          print(f'spec uploaded to {uri}')
+          "
 
       - name: Validate spec exists
         run: |
@@ -271,8 +331,10 @@ jobs:
       artifact_name: test-run-metadata-${{ matrix.provider }}
     secrets: inherit
 
-  # validate-spec + validate-shard are provider-neutral; per-cell variation
-  # is the artifact name. `if: !cancelled()` decouples each provider's
+  # validate-spec + validate-shard pull the spec from R2 directly. The URI is
+  # constructed deterministically from the per-provider cluster_name pattern
+  # (matching what generate-launcher's launcher and generate-local's explicit
+  # upload step both write to). `if: !cancelled()` decouples each provider's
   # validate cell from the OTHER provider's generate outcome — RunPod
   # transients won't skip OCI validation.
   validate:
@@ -286,5 +348,5 @@ jobs:
     uses: ./.github/workflows/validate-dataset-shards.yaml
     with:
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      artifact_name: test-run-metadata-${{ matrix.provider }}
+      spec_uri: r2://${{ needs.setup.outputs.r2_bucket }}/skypilot-launcher-specs/synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}.json
     secrets: inherit

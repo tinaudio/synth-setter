@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Validate an HDF5 shard against a DatasetPipelineSpec.
+"""Validate HDF5 shards against a DatasetPipelineSpec.
 
-Checks that the shard file is a valid HDF5 file, contains the expected
+Checks that each shard file is a valid HDF5 file, contains the expected
 datasets (audio, mel_spec, param_array), and that each dataset's row count
 matches the spec's shard_size.
 
 CLI usage:
-    python3 -m pipeline.ci.validate_shard <spec_json_path> <shard_h5_path>
+    python3 -m pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
+
+Iterates `spec.shards` and downloads each shard from R2 (under
+`r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}`) before validating.
 """
 
 from __future__ import annotations
@@ -17,13 +20,14 @@ from typing import cast
 
 import h5py
 
+from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from pipeline.schemas.spec import DatasetPipelineSpec
 
 _EXPECTED_DATASETS = ("audio", "mel_spec", "param_array")
 
 
 def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
-    """Validate an HDF5 shard against a DatasetPipelineSpec.
+    """Validate one HDF5 shard against a DatasetPipelineSpec.
 
     Checks:
     1. File opens as HDF5
@@ -54,24 +58,56 @@ def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
     return errors
 
 
+def _load_spec(spec_arg: str) -> DatasetPipelineSpec:
+    """Load a spec from a local path or `r2://bucket/key` URI."""
+    if is_r2_uri(spec_arg):
+        with downloaded_to_tempfile(spec_arg) as local_path:
+            return DatasetPipelineSpec.model_validate_json(local_path.read_text())
+    return DatasetPipelineSpec.model_validate_json(Path(spec_arg).read_text())
+
+
+def _shard_uri(spec: DatasetPipelineSpec, shard_filename: str) -> str:
+    """Build the R2 URI where the spec says shard `shard_filename` lives."""
+    return f"r2://{spec.r2_bucket}/{spec.r2_prefix}{shard_filename}"
+
+
+def validate_all_shards_from_r2(spec: DatasetPipelineSpec) -> list[str]:
+    """Validate every shard in `spec.shards` by downloading from R2.
+
+    Returns aggregated error strings across all shards (empty = all valid). Each error is prefixed
+    with the shard filename so the source is obvious.
+    """
+    errors: list[str] = []
+    for shard in spec.shards:
+        shard_uri = _shard_uri(spec, shard.filename)
+        with downloaded_to_tempfile(shard_uri) as local_shard:
+            shard_errors = validate_shard(local_shard, spec)
+        for err in shard_errors:
+            errors.append(f"{shard.filename}: {err}")
+    return errors
+
+
 def main() -> None:
-    """CLI entry point: validate a shard HDF5 against a spec JSON."""
-    if len(sys.argv) != 3:
-        sys.stderr.write(f"Usage: {sys.argv[0]} <spec_json_path> <shard_h5_path>\n")
+    """CLI entry point: validate every shard referenced by a spec.
+
+    The single argument is a spec JSON path or `r2://bucket/key.json` URI.
+    Each shard listed in `spec.shards` is fetched from R2 and validated.
+    """
+    if len(sys.argv) != 2:
+        sys.stderr.write(f"Usage: {sys.argv[0]} <spec.json|r2://bucket/spec.json>\n")
         sys.exit(1)
 
-    spec_json_path = Path(sys.argv[1])
-    shard_path = Path(sys.argv[2])
+    spec_arg = sys.argv[1]
+    spec = _load_spec(spec_arg)
 
-    spec = DatasetPipelineSpec.model_validate_json(spec_json_path.read_text())
-    errors = validate_shard(shard_path, spec)
+    errors = validate_all_shards_from_r2(spec)
 
     if errors:
         for error in errors:
             sys.stderr.write(f"FAIL: {error}\n")
         sys.exit(1)
 
-    sys.stdout.write(f"OK: {shard_path.name} is valid\n")
+    sys.stdout.write(f"OK: all {len(spec.shards)} shards valid\n")
     sys.exit(0)
 
 

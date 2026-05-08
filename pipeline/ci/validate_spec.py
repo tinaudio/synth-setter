@@ -11,6 +11,8 @@ import json
 import sys
 from pathlib import Path
 
+from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
+
 _REQUIRED_FIELDS = [
     "base_seed",
     "channels",
@@ -99,16 +101,26 @@ def validate_test_values(spec: dict) -> list[str]:
     return errors
 
 
+def _read_spec_text(spec_arg: str) -> str:
+    """Read spec JSON text from a local path or `r2://bucket/key` URI."""
+    if is_r2_uri(spec_arg):
+        with downloaded_to_tempfile(spec_arg) as local_path:
+            return local_path.read_text()
+    return Path(spec_arg).read_text()
+
+
 def main() -> None:
-    """CLI entry point: validate a spec JSON file."""
+    """CLI entry point: validate a spec JSON file (local path or r2:// URI)."""
     if len(sys.argv) < 2:
-        sys.stderr.write(f"Usage: {sys.argv[0]} <spec.json> [--test-values]\n")
+        sys.stderr.write(
+            f"Usage: {sys.argv[0]} <spec.json|r2://bucket/key.json> [--test-values]\n"
+        )
         sys.exit(1)
 
-    spec_path = Path(sys.argv[1])
+    spec_arg = sys.argv[1]
     run_test_values = "--test-values" in sys.argv
 
-    spec = json.loads(spec_path.read_text())
+    spec = json.loads(_read_spec_text(spec_arg))
 
     errors = validate_structure(spec)
     if not errors:

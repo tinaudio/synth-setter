@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from pipeline.ci.validate_spec import validate_structure, validate_test_values
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+from pipeline.ci.validate_spec import _read_spec_text, validate_structure, validate_test_values
 
 
 def _make_valid_spec(**overrides: object) -> dict:
@@ -100,3 +104,23 @@ class TestValidateTestValues:
         )
         errors = validate_test_values(spec)
         assert any("seed" in e for e in errors)
+
+
+class TestReadSpecText:
+    """Tests for _read_spec_text — local path or r2:// URI dispatch."""
+
+    def test_local_path_reads_file_directly(self, tmp_path: Path) -> None:
+        """A non-URI argument is read directly as a filesystem path."""
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text(json.dumps({"hello": "world"}))
+        assert json.loads(_read_spec_text(str(spec_path))) == {"hello": "world"}
+
+    def test_r2_uri_downloads_via_r2_io(self) -> None:
+        """R2:// URI dispatches through pipeline.r2_io.downloaded_to_tempfile."""
+
+        def fake_check_call(args: list[str]) -> None:
+            Path(args[-1]).write_text(json.dumps({"hello": "from-r2"}))
+
+        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+            text = _read_spec_text("r2://bucket/spec.json")
+        assert json.loads(text) == {"hello": "from-r2"}

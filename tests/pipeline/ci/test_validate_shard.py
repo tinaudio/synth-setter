@@ -5,12 +5,17 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import h5py
 import numpy as np
 import pytest
 
-from pipeline.ci.validate_shard import validate_shard
+from pipeline.ci.validate_shard import (
+    _shard_uri,
+    validate_all_shards_from_r2,
+    validate_shard,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -173,43 +178,108 @@ class TestValidateShard:
 # ---------------------------------------------------------------------------
 
 
-class TestMain:
-    """Tests for the CLI entry point main()."""
+class TestShardUri:
+    """Tests for _shard_uri helper."""
 
-    def test_cli_exits_zero_on_valid_shard(
+    def test_builds_r2_uri_from_spec_and_filename(self, real_spec: object) -> None:
+        """The constructed URI embeds bucket, prefix, and filename."""
+        spec = real_spec  # type: ignore[assignment]
+        uri = _shard_uri(spec, "shard-000007.h5")  # type: ignore[arg-type]
+        assert uri.startswith("r2://")
+        assert "shard-000007.h5" in uri
+        assert spec.r2_bucket in uri  # type: ignore[union-attr]
+        assert spec.r2_prefix in uri  # type: ignore[union-attr]
+
+
+class TestValidateAllShardsFromR2:
+    """Tests for validate_all_shards_from_r2 — iterates spec.shards via R2."""
+
+    def test_all_valid_returns_no_errors(self, real_spec: object, tmp_path: Path) -> None:
+        """When every shard downloads valid HDF5, returns []."""
+        spec = real_spec  # type: ignore[assignment]
+
+        def fake_check_call(args: list[str]) -> None:
+            # Simulate rclone copyto: write a valid shard to dest path
+            _create_shard(Path(args[-1]), shard_size=spec.shard_size)  # type: ignore[union-attr]
+
+        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+            errors = validate_all_shards_from_r2(spec)  # type: ignore[arg-type]
+
+        assert errors == []
+
+    def test_invalid_shard_error_carries_shard_filename(
+        self, real_spec: object, tmp_path: Path
+    ) -> None:
+        """Validation errors are prefixed with the shard filename."""
+        spec = real_spec  # type: ignore[assignment]
+
+        def fake_check_call(args: list[str]) -> None:
+            # Write garbage so shard fails HDF5 open
+            Path(args[-1]).write_bytes(b"garbage")
+
+        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+            errors = validate_all_shards_from_r2(spec)  # type: ignore[arg-type]
+
+        assert errors  # at least one error
+        # First spec.shards filename appears in the error string
+        assert any(spec.shards[0].filename in e for e in errors)  # type: ignore[union-attr]
+
+
+class TestMain:
+    """Tests for the CLI entry point main() with the new single-arg shape."""
+
+    def test_cli_rejects_two_args(
         self, real_spec: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Valid shard and valid spec JSON produce exit code 0."""
+        """The legacy 2-arg shape (spec + shard) is rejected."""
         from pipeline.ci.validate_shard import main
-
-        shard_path = tmp_path / "shard-000000.h5"
-        _create_shard(shard_path, shard_size=real_spec.shard_size)  # type: ignore[union-attr]
 
         spec_json_path = tmp_path / "spec.json"
         spec_json_path.write_text(real_spec.model_dump_json())  # type: ignore[union-attr]
 
-        monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path), str(shard_path)])
+        monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path), "ignored.h5"])
 
         with pytest.raises(SystemExit) as exc_info:
             main()
+
+        assert exc_info.value.code == 1
+
+    def test_cli_exits_zero_when_all_shards_valid(
+        self, real_spec: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Valid spec + R2-served valid shards → exit 0."""
+        from pipeline.ci.validate_shard import main
+
+        spec = real_spec  # type: ignore[assignment]
+        spec_json_path = tmp_path / "spec.json"
+        spec_json_path.write_text(spec.model_dump_json())  # type: ignore[union-attr]
+
+        def fake_check_call(args: list[str]) -> None:
+            _create_shard(Path(args[-1]), shard_size=spec.shard_size)  # type: ignore[union-attr]
+
+        monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
+        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
 
         assert exc_info.value.code == 0
 
-    def test_cli_exits_one_on_invalid_shard(
+    def test_cli_exits_one_when_a_shard_is_invalid(
         self, real_spec: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Invalid shard (not HDF5) produces exit code 1."""
+        """If any shard in spec.shards fails validation, exit 1."""
         from pipeline.ci.validate_shard import main
 
-        shard_path = tmp_path / "bad.h5"
-        shard_path.write_bytes(b"garbage")
-
+        spec = real_spec  # type: ignore[assignment]
         spec_json_path = tmp_path / "spec.json"
-        spec_json_path.write_text(real_spec.model_dump_json())  # type: ignore[union-attr]
+        spec_json_path.write_text(spec.model_dump_json())  # type: ignore[union-attr]
 
-        monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path), str(shard_path)])
+        def fake_check_call(args: list[str]) -> None:
+            Path(args[-1]).write_bytes(b"garbage")
 
-        with pytest.raises(SystemExit) as exc_info:
-            main()
+        monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
+        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
 
         assert exc_info.value.code == 1
