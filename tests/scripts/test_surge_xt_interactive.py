@@ -1458,12 +1458,12 @@ class TestPlayAudioRecordedE2E:
     def test_play_audio_recorded_produces_non_silent_wav(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """``play_audio_recorded`` against the real Surge XT VST + ``surge-base.vstpreset`` writes
-        a WAV with the expected frame count and audible peak amplitude."""
+        """``play_audio_recorded`` against the real Surge XT VST + ``surge-simple.vstpreset``
+        writes a WAV with the expected frame count and audible peak amplitude."""
         from src.data.vst.core import load_plugin, load_preset
 
         plugin_path = "plugins/Surge XT.vst3"
-        preset_path = "presets/surge-base.vstpreset"
+        preset_path = "presets/surge-simple.vstpreset"
         if not Path(plugin_path).exists():
             pytest.skip(f"Surge XT plugin not found at {plugin_path}")
         if not Path(preset_path).exists():
@@ -1471,6 +1471,8 @@ class TestPlayAudioRecordedE2E:
 
         plugin = load_plugin(plugin_path)
         load_preset(plugin, preset_path)
+        # Production parity: post-load flush commits preset state — see render_params and main.
+        surge_xt_interactive._flush_plugin(plugin)
 
         output_path = tmp_path / "session.wav"
         surge_xt_interactive.play_audio_recorded(plugin, output_path)
@@ -1500,13 +1502,21 @@ def _write_synthetic_prediction_files(
     """
     pred_dir.mkdir(parents=True, exist_ok=True)
     total_length = simple_spec.synth_param_length + simple_spec.note_param_length
+    # ``predict_vst_audio.py`` loads ``target-audio-{i}.pt`` unconditionally and indexes
+    # ``target_audio[j]`` for spectrogram generation even under ``-t``/``--rerender_target``,
+    # so the saved tensor must be (batch, channels, frames) matching that script's CLI
+    # defaults. Contents can be silent — only the post-render pred/target WAVs are checked
+    # for non-silence.
+    predict_default_channels = 2
+    predict_default_frames = int(4.0 * 44100)
+    synthetic_target_audio = torch.zeros(
+        (1, predict_default_channels, predict_default_frames), dtype=torch.float32
+    )
     for i in range(num_samples):
         pred_row = torch.zeros((1, total_length), dtype=torch.float32)
         torch.save(pred_row, pred_dir / f"pred-{i}.pt")
         torch.save(pred_row, pred_dir / f"target-params-{i}.pt")
-        # target-audio-{i}.pt is loaded but only used when --rerender_target is on; the
-        # contents don't affect the produced WAVs in the rerender path.
-        torch.save(torch.zeros(1, dtype=torch.float32), pred_dir / f"target-audio-{i}.pt")
+        torch.save(synthetic_target_audio, pred_dir / f"target-audio-{i}.pt")
 
 
 @pytest.mark.requires_vst
@@ -1524,7 +1534,7 @@ class TestRenderPredictedAudioE2E:
         ``subprocess_runner`` override) and validates each ``sample_{i}`` directory against non-
         silent rendered WAVs."""
         plugin_path = "plugins/Surge XT.vst3"
-        preset_path = "presets/surge-base.vstpreset"
+        preset_path = "presets/surge-simple.vstpreset"
         if not Path(plugin_path).exists():
             pytest.skip(f"Surge XT plugin not found at {plugin_path}")
         if not Path(preset_path).exists():
@@ -1564,13 +1574,13 @@ class TestKeyboardLoopE2E:
     def test_p_q_against_real_plugin_records_one_patch(
         self, surge_xt_interactive, simple_spec: ParamSpec
     ) -> None:
-        """``["p", "q"]`` against the real Surge XT + ``surge-base.vstpreset`` records one
+        """``["p", "q"]`` against the real Surge XT + ``surge-simple.vstpreset`` records one
         patch whose synth-param values are finite floats matching the post-preset-load state.
         """
         from src.data.vst.core import load_plugin, load_preset
 
         plugin_path = "plugins/Surge XT.vst3"
-        preset_path = "presets/surge-base.vstpreset"
+        preset_path = "presets/surge-simple.vstpreset"
         if not Path(plugin_path).exists():
             pytest.skip(f"Surge XT plugin not found at {plugin_path}")
         if not Path(preset_path).exists():
@@ -1578,8 +1588,13 @@ class TestKeyboardLoopE2E:
 
         plugin = load_plugin(plugin_path)
         load_preset(plugin, preset_path)
+        # Match production: post-load flush commits the preset state so all spec params are
+        # actually exposed (Surge XT hides oscillator-shape params until the active osc type
+        # is committed). Same flush pattern used by ``render_params`` and ``main`` in the
+        # production script.
+        surge_xt_interactive._flush_plugin(plugin)
 
-        # Snapshot post-preset-load defaults so _validate_no_drift has a known baseline.
+        # Snapshot post-flush defaults so _validate_no_drift has a known baseline.
         default_params = {
             name: plugin.parameters[name].raw_value  # type: ignore[attr-defined]
             for name in plugin.parameters.keys()  # type: ignore[attr-defined]
