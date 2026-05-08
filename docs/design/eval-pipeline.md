@@ -211,6 +211,10 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
 | Docker         | R2             | Xvfb (baked) | Baked in image      | CUDA | `make docker-eval` |
 | GitHub Actions | Repo fixture   | Xvfb         | Headless stub or CI | None | PR trigger         |
 
+### Consumers
+
+Interactive captured-patch evaluation: `scripts/surge_xt_interactive.py --checkpoint-path …` invokes the predict → render → metrics chain end-to-end via `eval_patches` (see [`docs/guides/surge-xt-interactive.md`](../guides/surge-xt-interactive.md)).
+
 ## 5. Stage Definitions
 
 ### 5.1 Predict

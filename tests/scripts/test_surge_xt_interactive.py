@@ -1085,6 +1085,27 @@ class TestValidateMetricsDf:
         with pytest.raises(ValueError, match="NaN/Inf"):
             surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
+    def test_nan_error_reports_offending_row_count_not_full_df(self, surge_xt_interactive) -> None:
+        """Error message reports only the offending row count and rows, not the full DataFrame —
+        otherwise a 1000-row metrics.csv with one bad row dumps a thousand lines into the
+        traceback."""
+        df = pd.DataFrame(
+            {
+                "mss": [0.1, float("nan"), 0.3, 0.4, 0.5],
+                "wmfcc": [0.2, 0.3, 0.4, 0.5, 0.6],
+            }
+        )
+        spec = surge_xt_interactive._MetricsFileSpec(rows=5, columns=frozenset({"mss", "wmfcc"}))
+
+        with pytest.raises(ValueError) as exc_info:
+            surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+
+        msg = str(exc_info.value)
+        assert "1 of 5 rows" in msg
+        # Finite rows must NOT appear in the message (i.e., the helper isn't dumping the full df).
+        assert "0.5" not in msg
+        assert "0.6" not in msg
+
 
 class _RecordingEvalRunner:
     """Test fake matching the ``EvalRunner`` shape from ``surge_xt_interactive``.
