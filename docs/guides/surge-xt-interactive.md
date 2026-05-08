@@ -1,7 +1,7 @@
 # Guide: Interactive Surge XT prediction & patch capture
 
 > **Status**: Stable
-> **Last Updated**: 2026-05-07
+> **Last Updated**: 2026-05-08
 > **Source**: [`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py)
 
 ______________________________________________________________________
@@ -302,8 +302,8 @@ the top of the script.
 **`KeyError` from `record_patch`.** A param name in the spec isn't in
 `plugin.parameters`. Likely causes: wrong `--param-spec-name` for the
 loaded plugin, or the preset put the plugin into a state where some
-params are hidden. Try `--param-spec-name surge_xt` (the registry maps
-this to `presets/surge-base.vstpreset`) to rule out config issues.
+params are hidden. Try `--param-spec-name surge_xt`; that key resolves
+to a base preset via `preset_paths` in `src/data/vst/__init__.py`.
 
 **Prediction tensor shape mismatch.** `--pred` requires the second
 dim of the loaded tensor to match `param_specs[--param-spec-name]` row
