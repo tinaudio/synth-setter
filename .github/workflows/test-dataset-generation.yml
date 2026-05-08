@@ -364,10 +364,20 @@ jobs:
   # upload step both write to). `if: !cancelled()` decouples each provider's
   # validate cell from the OTHER provider's generate outcome — RunPod
   # transients won't skip OCI validation.
+  #
+  # Skip on workflow_dispatch with `tail: false` — without --tail the launcher
+  # exits after provisioning, so workers haven't actually rendered/uploaded
+  # shards yet when validate would run. PR-trigger always uses --tail and is
+  # always validated.
   validate:
     name: Validate ${{ matrix.provider }} dataset
     needs: [setup, generate-local, generate-launcher]
-    if: ${{ !cancelled() && needs.setup.outputs.providers != '[]' }}
+    if: >-
+      ${{
+        !cancelled()
+        && needs.setup.outputs.providers != '[]'
+        && (github.event_name != 'workflow_dispatch' || inputs.tail)
+      }}
     strategy:
       fail-fast: false
       matrix:
