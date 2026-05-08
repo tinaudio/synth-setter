@@ -32,7 +32,7 @@ from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.logging import RichHandler  # noqa: E402
 
-from src.data.vst import load_plugin, load_preset, param_specs  # noqa: E402
+from src.data.vst import load_plugin, load_preset, param_specs, preset_paths  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
 from src.data.vst.param_spec import ParamSpec  # noqa: E402
@@ -999,20 +999,14 @@ def eval_patches(
     ),
 )
 @click.option(
-    "--preset-path",
-    "-r",
-    type=str,
-    default="presets/surge-base.vstpreset",
-    help="Base preset to load before applying any --pred / --dataset-ref params.",
-)
-@click.option(
     "--param-spec-name",
-    type=str,
-    default="surge_xt",
+    type=click.Choice(sorted(param_specs.keys())),
+    required=True,
     help=(
-        "Parameter spec name (key into ``param_specs``) used to decode prediction/dataset "
-        "rows applied to the plugin and to enumerate which synth params are captured when "
-        "recording patches."
+        "Parameter spec name used to decode prediction/dataset rows applied to the plugin, "
+        "to enumerate which synth params are captured when recording patches, and to select "
+        "the matching base preset via ``preset_paths``. Required — pass one of the registered "
+        "spec names; the matching base preset is loaded automatically."
     ),
 )
 @click.option(
@@ -1064,7 +1058,6 @@ def main(
     plugin_path: str,
     pred: PredictionRef | None,
     dataset_ref: DatasetRef | None,
-    preset_path: str,
     param_spec_name: str,
     output_dataset_dir_path: Path | None,
     midi_port: str | None,
@@ -1073,9 +1066,12 @@ def main(
 ) -> None:
     """Open Surge XT GUI with real-time audio streaming and record patches to an HDF5 dataset.
 
+    The base preset is selected by ``preset_paths[param_spec_name]`` so a spec/preset
+    mismatch is unrepresentable.
+
     Flow:
 
-    1. Load the plugin and base preset.
+    1. Resolve the base preset from ``preset_paths[param_spec_name]`` and load it.
     2. If ``--pred`` or ``--dataset-ref`` is provided, decode the referenced row and apply
        it to the plugin before the editor opens.
     3. Open the plugin's GUI editor; in parallel, stream audio to the default output device
@@ -1090,6 +1086,7 @@ def main(
        (``predict_vst_audio.py``) and metric computation (``compute_audio_metrics.py``) on
        the captured patches.
     """
+    preset_path = preset_paths[param_spec_name]
     if dataset_ref is not None and pred is not None:
         raise click.UsageError(
             "--pred and --dataset-ref are mutually exclusive; pass at most one."
