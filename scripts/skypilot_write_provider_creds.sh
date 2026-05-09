@@ -13,11 +13,17 @@
 #
 # Per-provider (gated on --provider runpod | oci | local):
 #   - runpod: ~/.runpod/config.toml
-#   - oci:    ~/.oci/config + ~/.oci/oci_api_key.pem + ~/.sky/config.yaml
-#   - local:  ~/.sky/config.yaml shrinking the managed-jobs controller's
-#             default resource request so it fits on the kind cluster
-#             (`sky local up`). No compute provider auth is needed; R2 creds
-#             are still required.
+#   - oci:    ~/.oci/config + ~/.oci/oci_api_key.pem + upserts the `oci:`
+#             top-level key into ~/.sky/config.yaml.
+#   - local:  upserts the `jobs:` top-level key (managed-jobs controller
+#             resources, shrunken so the controller pod schedules on the kind
+#             cluster `sky local up` provisions) into ~/.sky/config.yaml. No
+#             compute provider auth is needed; R2 creds are still required.
+#
+# ~/.sky/config.yaml is shared between OCI and local: writes are per-key
+# upserts (replace the top-level key we manage, preserve everything else),
+# so a multi-provider local-dev flow (e.g. running --provider oci then
+# --provider local) ends with both keys present in the file.
 #
 # Idempotency: if a target file already exists with non-empty content the
 # bootstrap leaves it alone — local-dev operators who hand-manage cred files
@@ -189,14 +195,42 @@ write_oci_creds() {
     chmod 600 "${oci_config}"
   fi
 
-  if should_skip_existing "${sky_config}"; then
-    notice_skip_existing "${sky_config}"
-  else
-    printf 'oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n' \
-      "${compartment_ocid}" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}" \
-      > "${sky_config}"
-    chmod 600 "${sky_config}"
-  fi
+  upsert_sky_config_key oci "$(printf 'oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n' \
+    "${compartment_ocid}" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}")"
+}
+
+# Per-key upsert into ~/.sky/config.yaml. The file is shared by multiple providers
+# (OCI writes `oci:`; local writes `jobs:` for the managed-jobs controller resource
+# floor), and an earlier "skip if file exists" guard meant running the script for
+# one provider after another would silently leave the second provider without its
+# section. Upsert by top-level key instead: replace exactly the key we manage,
+# preserve any other keys the user (or another provider's run) already populated.
+upsert_sky_config_key() {
+  local key="$1"
+  local fragment="$2"
+  local sky_config="$HOME/.sky/config.yaml"
+
+  mkdir -p "$HOME/.sky"
+
+  python3 - "${key}" "${fragment}" "${sky_config}" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+import yaml
+
+key, fragment, path_str = sys.argv[1], sys.argv[2], sys.argv[3]
+path = Path(path_str)
+existing = {}
+if path.is_file() and path.stat().st_size > 0:
+    existing = yaml.safe_load(path.read_text()) or {}
+fragment_doc = yaml.safe_load(fragment) or {}
+if key not in fragment_doc:
+    sys.exit(f"upsert_sky_config_key: fragment missing top-level {key!r}")
+existing[key] = fragment_doc[key]
+path.write_text(yaml.safe_dump(existing, sort_keys=False))
+os.chmod(path, 0o600)
+PY
 }
 
 write_local_sky_config() {
@@ -204,25 +238,16 @@ write_local_sky_config() {
   # Those defaults don't fit on the kind cluster `sky local up` provisions in CI
   # (no node satisfies the CPU/memory floor; k8s rejects disk_size altogether).
   # Shrink the controller request so the controller pod schedules on kind and
-  # the worker job can run. omit disk_size — k8s "doesn't support" it; the
+  # the worker job can run. Omit disk_size — k8s "doesn't support" it; the
   # controller uses the pod's ephemeral storage / a PVC instead.
-  local sky_config="$HOME/.sky/config.yaml"
-
-  mkdir -p "$HOME/.sky"
-
-  if should_skip_existing "${sky_config}"; then
-    notice_skip_existing "${sky_config}"
-    return
-  fi
-
-  cat > "${sky_config}" <<'YAML'
+  upsert_sky_config_key jobs "$(cat <<'YAML'
 jobs:
   controller:
     resources:
       cpus: 1+
       memory: 1+
 YAML
-  chmod 600 "${sky_config}"
+)"
 }
 
 main() {

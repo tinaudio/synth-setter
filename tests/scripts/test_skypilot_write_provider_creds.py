@@ -7,8 +7,13 @@ The script writes per-provider SkyPilot credentials before `sky check` /
   + ``~/.cloudflare/accountid`` for SkyPilot's R2 storage adaptor.
 - RunPod (when --provider runpod): ``~/.runpod/config.toml``.
 - OCI (when --provider oci): ``~/.oci/config`` + ``~/.oci/oci_api_key.pem`` +
-  ``~/.sky/config.yaml``.
-- Local (when --provider local): R2 only — kind cluster needs no compute auth.
+  upserts the ``oci:`` block into ``~/.sky/config.yaml``.
+- Local (when --provider local): upserts the ``jobs:`` (controller resources)
+  block into ``~/.sky/config.yaml`` so the managed-jobs controller pod fits
+  on the kind cluster ``sky local up`` provisions in CI.
+
+``~/.sky/config.yaml`` is shared by both OCI and local: writes are per-key
+upserts so running for one provider after another preserves the other's keys.
 
 Tests run the script in a tmp ``HOME`` so they exercise the real bash without
 touching the developer's actual cred files. **Critical no-leak invariant**:
@@ -244,7 +249,7 @@ class TestProviderGating:
 
         sky_config = tmp_path / ".sky" / "config.yaml"
         assert sky_config.is_file()
-        assert oct(sky_config.stat().st_mode)[-3:] == "600"
+        assert _file_mode(sky_config) == 0o600
         config_text = sky_config.read_text()
         assert "jobs:" in config_text
         assert "controller:" in config_text
@@ -258,6 +263,38 @@ class TestProviderGating:
         """Local provider succeeds with R2 vars alone — no RUNPOD_API_KEY, no OCI_*."""
         result = _run(tmp_path, R2_ENV, "--provider", "local")
         assert result.returncode == 0
+
+    def test_oci_then_local_preserves_both_keys_in_sky_config(self, tmp_path: Path) -> None:
+        """`~/.sky/config.yaml` is shared by OCI (`oci:` block) and local (`jobs:` block).
+
+        Running `--provider oci` then `--provider local` must end with both top-level keys
+        present — neither write may clobber the other. Defends the multi-provider local-dev
+        flow from regressing back to "first writer wins, second is silently skipped".
+        """
+        import yaml as _yaml
+
+        _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
+        _run(tmp_path, R2_ENV, "--provider", "local")
+
+        sky_config = tmp_path / ".sky" / "config.yaml"
+        assert sky_config.is_file()
+        assert _file_mode(sky_config) == 0o600
+        doc = _yaml.safe_load(sky_config.read_text())
+        assert "oci" in doc, f"OCI key clobbered by local write: {doc!r}"
+        assert "jobs" in doc, f"local key missing after OCI write: {doc!r}"
+        assert doc["oci"]["default"]["compartment_ocid"] == OCI_ENV["OCI_COMPARTMENT_OCID"]
+        assert doc["jobs"]["controller"]["resources"]["cpus"] == "1+"
+
+    def test_local_then_oci_preserves_both_keys_in_sky_config(self, tmp_path: Path) -> None:
+        """Symmetric to test_oci_then_local: order doesn't matter — both keys must coexist."""
+        import yaml as _yaml
+
+        _run(tmp_path, R2_ENV, "--provider", "local")
+        _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
+
+        sky_config = tmp_path / ".sky" / "config.yaml"
+        doc = _yaml.safe_load(sky_config.read_text())
+        assert "oci" in doc and "jobs" in doc, f"local→oci write order dropped a key: {doc!r}"
 
     def test_unknown_provider_fails(self, tmp_path: Path) -> None:
         """An unknown --provider value (e.g. aws) is rejected with a clear error."""
