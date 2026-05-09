@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
+from pipeline.schemas.spec import _OUTPUT_FORMAT_TO_EXTENSION
 
 _REQUIRED_FIELDS = [
     "base_seed",
@@ -82,7 +83,7 @@ def validate_test_values(spec: dict) -> list[str]:
         errors.append(f"expected seeds [42, 43, 44], got {seeds}")
 
     filenames = [s["filename"] for s in shards]
-    ext = ".h5" if spec.get("output_format") == "hdf5" else ".tar"
+    ext = _OUTPUT_FORMAT_TO_EXTENSION[spec.get("output_format", "hdf5")]
     expected_filenames = [f"shard-{i:06d}{ext}" for i in range(3)]
     if filenames != expected_filenames:
         errors.append(f"expected filenames {expected_filenames}, got {filenames}")

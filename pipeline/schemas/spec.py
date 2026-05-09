@@ -4,7 +4,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import (
@@ -34,6 +34,13 @@ __all__ = [
 # pipeline.entrypoints.generate_dataset.run) before rendering. Bump together
 # with SURGE_GIT_REF.
 SURGE_XT_RENDERER_VERSION = "1.3.4"
+
+# Single source of truth for the spec.output_format ↔ shard.filename suffix
+# mapping. The model_validator on DatasetPipelineSpec uses this to verify every
+# shard.filename ends with the suffix the format implies. Adding a new format
+# requires extending this mapping; missing entries surface as KeyError at spec
+# build time rather than producing a silently-wrong filename.
+_OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5", "wds": ".tar"}
 
 
 class ShardSpec(BaseModel):
@@ -108,6 +115,20 @@ class DatasetPipelineSpec(BaseModel):
             raise ValueError("shards must not be empty")
         return value
 
+    @model_validator(mode="after")
+    def _shard_filenames_match_output_format(self) -> DatasetPipelineSpec:
+        # Catches hand-edited specs where output_format and shard.filename's suffix
+        # disagree — the worker's generate_vst_dataset CLI dispatches on the suffix
+        # only, so a mismatch would silently produce shards in the wrong format.
+        expected_ext = _OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        for shard in self.shards:
+            if not shard.filename.endswith(expected_ext):
+                raise ValueError(
+                    f"shard {shard.shard_id} filename {shard.filename!r} does not match "
+                    f"output_format {self.output_format!r} (expected suffix {expected_ext!r})"
+                )
+        return self
+
 
 def _get_git_sha() -> str:
     """Get the current git commit SHA."""
@@ -161,7 +182,7 @@ def _build_pipeline_spec(
     """
     run_id = make_dataset_wandb_run_id(config_id, timestamp=created_at)
 
-    ext = ".h5" if config.output_format == "hdf5" else ".tar"
+    ext = _OUTPUT_FORMAT_TO_EXTENSION[config.output_format]
     shards = tuple(
         ShardSpec(
             shard_id=i,

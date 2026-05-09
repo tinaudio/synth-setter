@@ -214,6 +214,87 @@ class TestDatasetPipelineSpec:
         with pytest.raises(ValidationError):
             DatasetPipelineSpec(**kwargs)
 
+    def test_pipeline_spec_round_tripped_from_materialize_passes_filename_validator(
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict[str, Any],
+    ) -> None:
+        """A spec built by materialize_spec satisfies the suffix model_validator."""
+        valid_config_dict["plugin_path"] = str(patch_materialize_io)
+        valid_config_dict["num_shards"] = 2
+        valid_config_dict["splits"] = {"train": 2, "val": 0, "test": 0}
+        config = DatasetConfig(**valid_config_dict)
+        config_id = DatasetConfigId("ci-smoke-test")
+
+        spec = materialize_spec(config, config_id)
+        # Round-trip through JSON to surface any encoding-side inconsistency.
+        round_tripped = DatasetPipelineSpec.model_validate_json(spec.model_dump_json())
+        assert round_tripped == spec
+
+    def test_pipeline_spec_rejects_shard_filename_mismatching_output_format_h5_with_tar(
+        self,
+        patch_materialize_io: Path,
+    ) -> None:
+        """A spec whose output_format is hdf5 but whose shards have ``.tar`` filenames raises."""
+        kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
+            "created_at": FIXED_NOW,
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "hdf5",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "base_seed": 42,
+            "num_params": 92,
+            "r2_bucket": "intermediate-data",
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "plugin_path": str(patch_materialize_io),
+            "preset_path": "presets/test.vstpreset",
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "shards": (ShardSpec(shard_id=0, filename="shard-000000.tar", seed=42),),
+        }
+        with pytest.raises(ValidationError, match="does not match output_format"):
+            DatasetPipelineSpec(**kwargs)
+
+    def test_pipeline_spec_rejects_shard_filename_mismatching_output_format_wds_with_h5(
+        self,
+        patch_materialize_io: Path,
+    ) -> None:
+        """A spec whose output_format is wds but whose shards have ``.h5`` filenames raises."""
+        kwargs: dict[str, Any] = {
+            "run_id": "test-run",
+            "r2_prefix": "data/test/test-run/",
+            "created_at": FIXED_NOW,
+            "code_version": "abc123",
+            "is_repo_dirty": False,
+            "param_spec": "surge_simple",
+            "renderer_version": "1.0.0",
+            "output_format": "wds",
+            "sample_rate": 16000,
+            "shard_size": 100,
+            "base_seed": 42,
+            "num_params": 92,
+            "r2_bucket": "intermediate-data",
+            "splits": SplitsConfig(train=1, val=0, test=0),
+            "plugin_path": str(patch_materialize_io),
+            "preset_path": "presets/test.vstpreset",
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
+        }
+        with pytest.raises(ValidationError, match="does not match output_format"):
+            DatasetPipelineSpec(**kwargs)
+
     def test_pipeline_spec_empty_shards_raises_validation_error(
         self,
         patch_materialize_io: Path,
