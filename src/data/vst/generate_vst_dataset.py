@@ -178,8 +178,8 @@ def save_samples(
             {
                 "__key__": f"{start_idx:08d}",
                 "audio.npy": audio_dataset[start_idx:end],
-                "mel.npy": mel_dataset[start_idx:end],
-                "params.npy": param_dataset[start_idx:end],
+                "mel_spec.npy": mel_dataset[start_idx:end],
+                "param_array.npy": param_dataset[start_idx:end],
             }
         )
 
@@ -357,7 +357,7 @@ def make_dataset(
             if wds_sink is not None:
                 wds_sink.write(
                     {
-                        "__key__": "info",
+                        "__key__": "metadata",
                         "json": {
                             "velocity": velocity,
                             "signal_duration_seconds": signal_duration_seconds,

@@ -41,19 +41,19 @@ def _create_tar_shard(
     arrays: dict[str, tuple] | None = None,
     *,
     omit_fields: tuple[str, ...] = (),
-    omit_info: bool = False,
+    omit_metadata: bool = False,
     metadata: dict | None = None,
 ) -> None:
-    """Create a wds tar shard with per-batch keyed members and a trailing info.json.
+    """Create a wds tar shard with per-batch keyed members and a trailing metadata.json.
 
     The single batch holds ``shard_size`` rows so the validator's summed-row check passes.
     ``arrays`` overrides per-field shapes; ``omit_fields`` drops named fields entirely;
-    ``omit_info`` skips the trailing info sample.
+    ``omit_metadata`` skips the trailing metadata sample.
     """
     defaults = {
         "audio": (shard_size, 2, 64000),
-        "mel": (shard_size, 2, 128, 401),
-        "params": (shard_size, 92),
+        "mel_spec": (shard_size, 2, 128, 401),
+        "param_array": (shard_size, 92),
     }
     chosen = arrays or defaults
     meta = metadata if metadata is not None else {"sample_rate": 16000}
@@ -66,8 +66,8 @@ def _create_tar_shard(
 
     with wds.TarWriter(str(path)) as writer:  # pyright: ignore[reportAttributeAccessIssue]
         writer.write(sample)
-        if not omit_info:
-            writer.write({"__key__": "info", "json": meta})
+        if not omit_metadata:
+            writer.write({"__key__": "metadata", "json": meta})
 
 
 @pytest.fixture()
@@ -339,31 +339,33 @@ class TestValidateTarShard:
         assert errors == []
 
     def test_missing_mel_member_returns_error(self, real_spec: object, tmp_path: Path) -> None:
-        """Tar missing all mel members returns a missing-member error."""
+        """Tar missing all mel_spec members returns a missing-member error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
             shard_size=real_spec.shard_size,  # type: ignore[union-attr]
-            omit_fields=("mel",),
+            omit_fields=("mel_spec",),
         )
 
         errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
 
         assert len(errors) == 1
-        assert "mel" in errors[0]
+        assert "mel_spec" in errors[0]
 
-    def test_missing_info_member_returns_error(self, real_spec: object, tmp_path: Path) -> None:
-        """Tar missing info.json returns a missing-member error."""
+    def test_missing_metadata_member_returns_error(
+        self, real_spec: object, tmp_path: Path
+    ) -> None:
+        """Tar missing metadata.json returns a missing-member error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
             shard_size=real_spec.shard_size,  # type: ignore[union-attr]
-            omit_info=True,
+            omit_metadata=True,
         )
 
         errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
 
-        assert any("info.json" in e for e in errors)
+        assert any("metadata.json" in e for e in errors)
 
     def test_wrong_row_count_returns_error(self, real_spec: object, tmp_path: Path) -> None:
         """Tar with summed audio rows != shard_size returns an error mentioning the field."""
@@ -374,8 +376,8 @@ class TestValidateTarShard:
             shard_size=real_spec.shard_size,  # type: ignore[union-attr]
             arrays={
                 "audio": (wrong_size, 2, 64000),
-                "mel": (real_spec.shard_size, 2, 128, 401),  # type: ignore[union-attr]
-                "params": (real_spec.shard_size, 92),  # type: ignore[union-attr]
+                "mel_spec": (real_spec.shard_size, 2, 128, 401),  # type: ignore[union-attr]
+                "param_array": (real_spec.shard_size, 92),  # type: ignore[union-attr]
             },
         )
 

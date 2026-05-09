@@ -1347,7 +1347,7 @@ def _load_wds_batched(
             assert extracted is not None
             payload = extracted.read()
             stem, _, ext = name.rpartition(".")
-            if stem == "info" and ext == "json":
+            if stem == "metadata" and ext == "json":
                 meta = json.loads(payload)
                 continue
             key, _, field = stem.rpartition(".")
@@ -1356,9 +1356,9 @@ def _load_wds_batched(
             arr = np.load(io.BytesIO(payload))
             if field == "audio":
                 audio_chunks[key] = arr
-            elif field == "mel":
+            elif field == "mel_spec":
                 mel_chunks[key] = arr
-            elif field == "params":
+            elif field == "param_array":
                 param_chunks[key] = arr
 
     def _concat(chunks: dict[str, np.ndarray]) -> np.ndarray:
@@ -1377,9 +1377,6 @@ def test_h5_and_wds_outputs_are_equivalent(tmp_path: Path) -> None:
     wds_path = tmp_path / "out.tar"
     n = 4
 
-    # ``wds_file=`` is the new kwarg that drives both writers in one render pass;
-    # this test pins the contract that the wds tar is a byte-equal mirror of
-    # the HDF5 shard for #874.
     make_dataset(
         hdf5_file=h5_path,
         wds_file=wds_path,
@@ -1401,10 +1398,14 @@ def test_h5_and_wds_outputs_are_equivalent(tmp_path: Path) -> None:
     wds_audio, wds_mel, wds_params, wds_meta, members = _load_wds_batched(wds_path)
 
     sample_batch_size = 2
-    expected_members = {"info.json"}
+    expected_members = {"metadata.json"}
     for start in range(0, n, sample_batch_size):
         prefix = f"{start:08d}"
-        expected_members |= {f"{prefix}.audio.npy", f"{prefix}.mel.npy", f"{prefix}.params.npy"}
+        expected_members |= {
+            f"{prefix}.audio.npy",
+            f"{prefix}.mel_spec.npy",
+            f"{prefix}.param_array.npy",
+        }
     assert members == expected_members
 
     np.testing.assert_array_equal(wds_audio, h5_audio)

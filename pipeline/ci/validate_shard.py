@@ -27,8 +27,8 @@ from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from pipeline.schemas.spec import DatasetPipelineSpec
 
 _EXPECTED_H5_DATASETS = ("audio", "mel_spec", "param_array")
-_TAR_INFO_MEMBER = "info.json"
-_TAR_ARRAY_FIELDS = ("audio", "mel", "params")
+_TAR_METADATA_MEMBER = "metadata.json"
+_TAR_ARRAY_FIELDS = ("audio", "mel_spec", "param_array")
 
 
 def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
@@ -80,8 +80,8 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
     with tar:
         members = {m.name for m in tar.getmembers()}
 
-        if _TAR_INFO_MEMBER not in members:
-            errors.append(f"missing tar member: {_TAR_INFO_MEMBER!r}")
+        if _TAR_METADATA_MEMBER not in members:
+            errors.append(f"missing tar member: {_TAR_METADATA_MEMBER!r}")
 
         rows_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
         seen_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
