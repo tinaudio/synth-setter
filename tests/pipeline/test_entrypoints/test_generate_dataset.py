@@ -133,6 +133,15 @@ class TestRun:
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
+    @pytest.fixture(autouse=True)
+    def _default_shard_absent_in_r2(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default object_size → None so every shard is treated as absent (full render path).
+
+        Tests that exercise the skip-existing path override this with their own
+        ``monkeypatch.setattr`` on ``pipeline.r2_io.object_size``.
+        """
+        monkeypatch.setattr("pipeline.r2_io.object_size", lambda *_a, **_k: None)
+
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
     def test_uploads_spec_to_r2_at_expected_path(
@@ -551,6 +560,164 @@ class TestRun:
             call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
         ]
         assert len(spec_uploads) == 1
+
+    # Skip-existing-shards — see #750.
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_skips_render_when_shard_already_in_r2(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Object present (size > 0) → renderer is not invoked, shard upload is not attempted."""
+        monkeypatch.setattr("pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
+
+        run(spec)
+
+        mock_check_call.assert_not_called()
+        # Spec is still uploaded; no per-shard upload happens because the shard is already there.
+        assert mock_rclone.call_count == 1
+        assert mock_rclone.call_args_list[0][0][0].endswith(INPUT_SPEC_FILENAME)
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_renders_when_object_absent(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        spec: DatasetSpec,
+    ) -> None:
+        """Object absent (None) → render proceeds as before.
+
+        Relies on the autouse ``_default_shard_absent_in_r2`` fixture's default of None.
+        """
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        mock_check_call.assert_called_once()
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_renders_when_object_zero_size(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Zero-byte object is treated as absent — defensive against half-uploaded objects."""
+        monkeypatch.setattr("pipeline.r2_io.object_size", lambda *_a, **_k: 0)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        mock_check_call.assert_called_once()
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_skip_path_probes_full_object_uri_per_shard(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Probe is called once per assigned shard with the full object URI under r2_prefix."""
+        spec = _multi_shard_spec(tmp_path, n=3)
+        probed_uris: list[str] = []
+
+        def _probe(uri: str) -> None:
+            probed_uris.append(uri)
+            return None
+
+        monkeypatch.setattr("pipeline.r2_io.object_size", _probe)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        assert probed_uris == [
+            f"r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}" for shard in spec.shards
+        ]
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_renders_only_absent_shards_in_mixed_run(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Mid-run resumption: shard 0 already in R2, shards 1 and 2 absent → render only 1 and 2."""
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        def _present_only_for_shard_0(uri: str) -> int | None:
+            return 9999 if uri.endswith("shard-000000.h5") else None
+
+        monkeypatch.setattr("pipeline.r2_io.object_size", _present_only_for_shard_0)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        rendered_filenames = []
+        for call in mock_check_call.call_args_list:
+            args = call[0][0]
+            output_file = args[_find_script_index(args) + 1]
+            rendered_filenames.append(Path(output_file).name)
+        assert rendered_filenames == ["shard-000001.h5", "shard-000002.h5"]
+
+    @patch("pipeline.entrypoints.generate_dataset.logger")
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_logs_summary_with_rendered_and_skipped_counts(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        mock_logger: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """End-of-run summary reports rendered/skipped counts over the assigned range."""
+        spec = _multi_shard_spec(tmp_path, n=3)
+
+        def _present_only_for_shard_0(uri: str) -> int | None:
+            return 9999 if uri.endswith("shard-000000.h5") else None
+
+        monkeypatch.setattr("pipeline.r2_io.object_size", _present_only_for_shard_0)
+        mock_check_call.side_effect = _materialize_shard
+
+        run(spec)
+
+        info_messages = [str(c.args[0]) for c in mock_logger.info.call_args_list]
+        summary_lines = [m for m in info_messages if "rendered=" in m and "skipped=" in m]
+        assert len(summary_lines) == 1, f"expected exactly one summary line, got: {info_messages}"
+        assert "rendered=2" in summary_lines[0]
+        assert "skipped=1" in summary_lines[0]
+
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_run_probe_failure_propagates(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        spec: DatasetSpec,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-zero rclone exit during the probe propagates as CalledProcessError."""
+
+        def _raise(*_a: object, **_k: object) -> None:
+            raise subprocess.CalledProcessError(1, ["rclone", "lsf"])
+
+        monkeypatch.setattr("pipeline.r2_io.object_size", _raise)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            run(spec)
+
+        mock_check_call.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

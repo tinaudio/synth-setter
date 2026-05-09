@@ -22,6 +22,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from pipeline import r2_io
 from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.partitioning import get_my_shards, read_rank_world_from_env
 from pipeline.schemas.spec import DatasetSpec, ShardSpec
@@ -142,6 +143,11 @@ def run(spec: DatasetSpec) -> None:
     to one shard at a time. Subprocess failures propagate immediately
     (fail-fast); later shards are not attempted.
 
+    Before each render, R2 is probed for the shard's destination object: if it already exists with
+    non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
+    ``check=True``, so a non-zero rclone exit (auth, network) propagates as a hard failure rather
+    than degrading silently into a re-render.
+
     HDF5-only for now: ``spec.output_format`` is restricted to ``"hdf5"``.
 
     Raises:
@@ -191,8 +197,24 @@ def run(spec: DatasetSpec) -> None:
         _rclone_copy(str(spec_path), r2_dest_prefix)
         logger.info(f"spec uploaded -> {r2_dest_prefix}")
 
+        rendered = 0
+        skipped = 0
         for shard_id in my_range:
-            _render_and_upload_shard(spec, spec.shards[shard_id], work_dir, r2_dest_prefix)
+            shard = spec.shards[shard_id]
+            shard_object_uri = r2_io.shard_uri(spec.r2_bucket, spec.r2_prefix, shard.filename)
+            existing_size = r2_io.object_size(shard_object_uri)
+            if existing_size is not None and existing_size > 0:
+                logger.info(
+                    f"skipping shard {shard.shard_id} — already in R2 "
+                    f"({existing_size} bytes): {shard.filename}"
+                )
+                skipped += 1
+                continue
+            _render_and_upload_shard(spec, shard, work_dir, r2_dest_prefix)
+            rendered += 1
+        logger.info(
+            f"shard summary: rendered={rendered} skipped={skipped} of {len(my_range)} assigned"
+        )
 
 
 def _render_and_upload_shard(

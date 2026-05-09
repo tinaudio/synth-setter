@@ -12,7 +12,6 @@ import numpy as np
 import pytest
 
 from pipeline.ci.validate_shard import (
-    _shard_uri,
     validate_all_shards_from_r2,
     validate_shard,
 )
@@ -174,19 +173,6 @@ class TestValidateShard:
 # ---------------------------------------------------------------------------
 # Tests for main() CLI entry point
 # ---------------------------------------------------------------------------
-
-
-class TestShardUri:
-    """Tests for _shard_uri helper."""
-
-    def test_builds_r2_uri_from_spec_and_filename(self, real_spec: DatasetSpec) -> None:
-        """The constructed URI embeds bucket, prefix, and filename."""
-        spec = real_spec
-        uri = _shard_uri(spec, "shard-000007.h5")
-        assert uri.startswith("r2://")
-        assert "shard-000007.h5" in uri
-        assert spec.r2_bucket in uri
-        assert spec.r2_prefix in uri
 
 
 class TestValidateAllShardsFromR2:

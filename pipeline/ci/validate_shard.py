@@ -20,7 +20,7 @@ from typing import cast
 
 import h5py
 
-from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
+from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri, shard_uri
 from pipeline.schemas.spec import DatasetSpec
 
 _EXPECTED_DATASETS = ("audio", "mel_spec", "param_array")
@@ -69,11 +69,6 @@ def _load_spec(spec_arg: str) -> DatasetSpec:
     return DatasetSpec.model_validate_json(Path(spec_arg).read_text())
 
 
-def _shard_uri(spec: DatasetSpec, shard_filename: str) -> str:
-    """Build the R2 URI where the spec says shard `shard_filename` lives."""
-    return f"r2://{spec.r2_bucket}/{spec.r2_prefix}{shard_filename}"
-
-
 def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
     """Validate every shard in `spec.shards` by downloading from R2.
 
@@ -82,8 +77,8 @@ def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
     """
     errors: list[str] = []
     for shard in spec.shards:
-        shard_uri = _shard_uri(spec, shard.filename)
-        with downloaded_to_tempfile(shard_uri) as local_shard:
+        shard_object_uri = shard_uri(spec.r2_bucket, spec.r2_prefix, shard.filename)
+        with downloaded_to_tempfile(shard_object_uri) as local_shard:
             shard_errors = validate_shard(local_shard, spec)
         for err in shard_errors:
             errors.append(f"{shard.filename}: {err}")
