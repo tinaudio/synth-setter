@@ -19,7 +19,7 @@ import pytest
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from src.data.vst import param_specs
 from src.data.vst.core import render_params
-from src.data.vst.generate_vst_dataset import make_dataset
+from src.data.vst.generate_vst_dataset import load_fixed_params_from_h5, make_dataset
 from src.data.vst.param_spec import ParamSpec
 
 log = logging.getLogger(__name__)
@@ -1207,6 +1207,87 @@ def test_make_dataset_uses_fixed_params_lists_when_provided(
         assert np.allclose(params[i], expected, atol=_ABSOLUTE_TOLERANCE), (
             f"row {i} did not match fixed params"
         )
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@skip_no_vst
+def test_load_fixed_params_from_h5_round_trips_via_make_dataset(
+    tmp_path: Path,
+) -> None:
+    """``load_fixed_params_from_h5`` returns lists that re-render the same h5 via ``make_dataset``.
+
+    Two-stage e2e:
+
+    1. Generate a "candidates" dataset with the natural random source.
+    2. Recover the per-row params via ``load_fixed_params_from_h5`` and feed them into
+       a second ``make_dataset`` run through ``fixed_synth_params_list`` /
+       ``fixed_note_params_list`` (no ``param_spec.sample`` patching).
+
+    The second h5 must reproduce the first within the same phase-robust tolerances
+    the other replay tests use. Pins the disk → lists → re-render path on real
+    artifacts rather than mocks.
+    """
+    spec = param_specs[_SPEC_NAME]
+
+    expected_dataset = tmp_path / "candidates.h5"
+    with h5py.File(expected_dataset, "a") as expected_file:
+        make_dataset(
+            hdf5_file=expected_file,
+            num_samples=_NUM_SAMPLES,
+            plugin_path=_PLUGIN_PATH,
+            preset_path=_PRESET_PATH,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            velocity=_VELOCITY,
+            signal_duration_seconds=_DURATION,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            sample_batch_size=_NUM_SAMPLES,
+        )
+
+    expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
+        expected_dataset, spec, _NUM_SAMPLES
+    )
+
+    synth_patches, note_patches = load_fixed_params_from_h5(str(expected_dataset), spec)
+    assert len(synth_patches) == _NUM_SAMPLES
+    assert len(note_patches) == _NUM_SAMPLES
+
+    got_dataset = tmp_path / "rerendered.h5"
+    with h5py.File(got_dataset, "a") as f:
+        make_dataset(
+            hdf5_file=f,
+            num_samples=_NUM_SAMPLES,
+            plugin_path=_PLUGIN_PATH,
+            preset_path=_PRESET_PATH,
+            sample_rate=_SAMPLE_RATE,
+            channels=_CHANNELS,
+            velocity=_VELOCITY,
+            signal_duration_seconds=_DURATION,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            sample_batch_size=_NUM_SAMPLES,
+            fixed_synth_params_list=synth_patches,
+            fixed_note_params_list=note_patches,
+        )
+
+    actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
+        got_dataset, spec, _NUM_SAMPLES
+    )
+
+    _assert_round_trip_matches(
+        actual_audio=actual_audio,
+        actual_mel=actual_mel,
+        actual_params=actual_params,
+        expected_audio=expected_audio,
+        expected_mel=expected_mel,
+        expected_params=expected_params,
+        expected_synth_patches=synth_patches,
+        expected_note_patches=note_patches,
+        spec=spec,
+        num_samples=_NUM_SAMPLES,
+    )
 
 
 # Unit tests for ``_emit_audio_similarity_benchmark_metrics`` — pure JSON

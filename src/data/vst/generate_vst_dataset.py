@@ -239,6 +239,41 @@ def create_datasets_and_get_start_idx(
     )
 
 
+def load_fixed_params_from_h5(
+    h5_path: str,
+    param_spec: ParamSpec,
+) -> Tuple[
+    list[dict[str, float]],
+    list[dict[str, int | tuple[float, float]]],
+]:
+    """Decode an h5 shard's ``param_array`` back into the inputs ``make_dataset`` expects.
+
+    Each row of ``param_array`` is the output of ``param_spec.encode(synth, note)``,
+    so ``param_spec.decode(row)`` round-trips it back to the (synth_params, note_params)
+    dicts that ``make_dataset`` accepts via ``fixed_synth_params_list`` and
+    ``fixed_note_params_list``. ``param_spec`` must be the same spec the shard was
+    rendered with — it isn't stored in the h5 file. Raises ``ValueError`` if the
+    h5's ``param_array`` width disagrees with the spec's encoded length.
+    """
+    with h5py.File(h5_path, "r") as f:
+        param_array = f["param_array"][:]
+
+    if param_array.shape[1] != len(param_spec):
+        raise ValueError(
+            f"param_spec width {len(param_spec)} does not match h5 param_array "
+            f"width {param_array.shape[1]} — wrong --param_spec for this shard?"
+        )
+
+    fixed_synth_params_list = []
+    fixed_note_params_list = []
+    for row in param_array:
+        synth_params, note_params = param_spec.decode(row)
+        fixed_synth_params_list.append(synth_params)
+        fixed_note_params_list.append(note_params)
+
+    return fixed_synth_params_list, fixed_note_params_list
+
+
 def make_dataset(
     hdf5_file: h5py.File,
     num_samples: int,
