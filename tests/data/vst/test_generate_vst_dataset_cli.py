@@ -1,22 +1,24 @@
 """CLI plumbing smoke tests for src/data/vst/generate_vst_dataset.py.
 
-These tests exercise the click surface only — `make_dataset` is mocked so the
-tests don't need a real VST plugin or rendering. Behavioral coverage of the
-write path itself lives in `test_generate_vst_dataset.py::test_h5_and_wds_outputs_are_equivalent`.
+These tests exercise the click surface only — the underlying make_*_dataset
+functions are mocked so the tests don't need a real VST plugin or rendering.
+Behavioral coverage of the write paths themselves lives in
+``test_generate_vst_dataset.py``.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
-import pytest
 from click.testing import CliRunner
 
 from src.data.vst.generate_vst_dataset import main
 
 
 def _shared_options() -> list[str]:
+    """Click options shared by every CLI smoke test below."""
     return [
         "--plugin_path",
         "plugins/Surge XT.vst3",
@@ -39,12 +41,15 @@ def _shared_options() -> list[str]:
     ]
 
 
-def test_h5_extension_calls_make_dataset_with_h5_path_and_no_wds(tmp_path: Path) -> None:
-    """A ``.h5`` data_file routes only to ``hdf5_file``."""
+def test_h5_extension_routes_positional_to_make_hdf5_dataset(tmp_path: Path) -> None:
+    """A ``.h5`` data_file dispatches to ``make_hdf5_dataset`` only."""
     h5_path = tmp_path / "out.h5"
     runner = CliRunner()
 
-    with patch("src.data.vst.generate_vst_dataset.make_dataset") as mock_make:
+    with (
+        patch("src.data.vst.generate_vst_dataset.make_hdf5_dataset") as mock_h5,
+        patch("src.data.vst.generate_vst_dataset.make_wds_dataset") as mock_wds,
+    ):
         result = runner.invoke(
             main,
             [str(h5_path), "1", *_shared_options()],
@@ -52,18 +57,20 @@ def test_h5_extension_calls_make_dataset_with_h5_path_and_no_wds(tmp_path: Path)
         )
 
     assert result.exit_code == 0, result.output
-    mock_make.assert_called_once()
-    kwargs = mock_make.call_args.kwargs
-    assert kwargs["hdf5_file"] == str(h5_path)
-    assert kwargs["wds_file"] is None
+    mock_h5.assert_called_once()
+    mock_wds.assert_not_called()
+    assert mock_h5.call_args.kwargs["hdf5_file"] == str(h5_path)
 
 
-def test_tar_extension_routes_positional_to_wds_file(tmp_path: Path) -> None:
-    """A ``.tar`` data_file routes to ``wds_file`` and stages h5 in a tmp path."""
+def test_tar_extension_routes_positional_to_make_wds_dataset(tmp_path: Path) -> None:
+    """A ``.tar`` data_file dispatches to ``make_wds_dataset`` only."""
     tar_path = tmp_path / "out.tar"
     runner = CliRunner()
 
-    with patch("src.data.vst.generate_vst_dataset.make_dataset") as mock_make:
+    with (
+        patch("src.data.vst.generate_vst_dataset.make_hdf5_dataset") as mock_h5,
+        patch("src.data.vst.generate_vst_dataset.make_wds_dataset") as mock_wds,
+    ):
         result = runner.invoke(
             main,
             [str(tar_path), "1", *_shared_options()],
@@ -71,15 +78,13 @@ def test_tar_extension_routes_positional_to_wds_file(tmp_path: Path) -> None:
         )
 
     assert result.exit_code == 0, result.output
-    mock_make.assert_called_once()
-    kwargs = mock_make.call_args.kwargs
-    assert kwargs["wds_file"] == tar_path
-    assert kwargs["hdf5_file"] is not None
-    assert kwargs["hdf5_file"] != str(tar_path)
+    mock_wds.assert_called_once()
+    mock_h5.assert_not_called()
+    assert mock_wds.call_args.kwargs["wds_file"] == str(tar_path)
 
 
-def test_unknown_extension_is_rejected(tmp_path: Path) -> None:
-    """A data_file with an unsupported extension exits non-zero with a clear error."""
+def test_unknown_extension_is_rejected_with_supported_suffixes_listed(tmp_path: Path) -> None:
+    """A data_file with an unsupported extension exits non-zero, naming both supported suffixes."""
     runner = CliRunner()
 
     result = runner.invoke(
@@ -88,32 +93,39 @@ def test_unknown_extension_is_rejected(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert ".parquet" in result.output or "data_file" in result.output
+    assert "data_file must end in" in result.output
+    assert ".h5" in result.output
+    assert ".tar" in result.output
 
 
-@pytest.mark.parametrize("ext", [".h5", ".tar"])
-def test_tmp_h5_is_cleaned_up_when_wds(tmp_path: Path, ext: str) -> None:
-    """For the wds path, the CLI's internal h5 staging file is unlinked after make_dataset."""
-    out = tmp_path / f"out{ext}"
+def test_neither_writer_called_for_unknown_extension(tmp_path: Path) -> None:
+    """Suffix validation fires before either writer is dispatched."""
     runner = CliRunner()
 
-    captured: dict[str, object] = {}
-
-    def fake_make_dataset(**kwargs: object) -> None:
-        captured["hdf5_file"] = kwargs["hdf5_file"]
-        if ext == ".tar":
-            Path(str(kwargs["hdf5_file"])).touch()
-
-    with patch(
-        "src.data.vst.generate_vst_dataset.make_dataset", side_effect=fake_make_dataset
+    with (
+        patch("src.data.vst.generate_vst_dataset.make_hdf5_dataset") as mock_h5,
+        patch("src.data.vst.generate_vst_dataset.make_wds_dataset") as mock_wds,
     ):
-        result = runner.invoke(
+        runner.invoke(
             main,
-            [str(out), "1", *_shared_options()],
-            catch_exceptions=False,
+            [str(tmp_path / "out.parquet"), "1", *_shared_options()],
         )
 
-    assert result.exit_code == 0, result.output
-    if ext == ".tar":
-        h5_tmp = Path(str(captured["hdf5_file"]))
-        assert not h5_tmp.exists(), f"wds path leaked tmp h5 file: {h5_tmp}"
+    mock_h5.assert_not_called()
+    mock_wds.assert_not_called()
+
+
+def test_h5_writer_receives_param_spec_object_not_name(tmp_path: Path) -> None:
+    """The CLI resolves ``--param_spec`` to a ``ParamSpec`` object before dispatch."""
+    h5_path = tmp_path / "out.h5"
+    runner = CliRunner()
+
+    captured: dict[str, Any] = {}
+
+    def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with patch("src.data.vst.generate_vst_dataset.make_hdf5_dataset", side_effect=_capture):
+        runner.invoke(main, [str(h5_path), "1", *_shared_options()], catch_exceptions=False)
+
+    assert captured["param_spec"].__class__.__name__ == "ParamSpec"

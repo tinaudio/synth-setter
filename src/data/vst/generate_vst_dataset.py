@@ -156,15 +156,15 @@ def save_sample(
     logger.info(f"Sample {idx} written!")
 
 
-def save_samples(
+def save_hdf5_samples(
     samples: List[VSTDataSample],
     audio_dataset: h5py.Dataset,
     mel_dataset: h5py.Dataset,
     param_dataset: h5py.Dataset,
     start_idx: int,
-    wds_sink: Optional[wds.TarWriter] = None,  # pyright: ignore[reportAttributeAccessIssue]
 ) -> None:
-    logger.info(f"Saving {len(samples)} samples...")
+    """Append a batch of rendered samples to the three HDF5 datasets in place."""
+    logger.info(f"Saving {len(samples)} samples to hdf5...")
     audios = np.stack([s.audio.T for s in samples], axis=0)
     mel_specs = np.stack([s.mel_spec for s in samples], axis=0)
     param_arrays = np.stack([s.param_array for s in samples], axis=0)
@@ -174,18 +174,35 @@ def save_samples(
     mel_dataset[start_idx:end, :, :] = mel_specs
     param_dataset[start_idx:end, :] = param_arrays
 
-    if wds_sink is not None:
-        # Read back from h5 to capture float16 round-trip in the audio dataset.
-        wds_sink.write(
-            {
-                "__key__": f"{start_idx:08d}",
-                "audio.npy": audio_dataset[start_idx:end],
-                "mel_spec.npy": mel_dataset[start_idx:end],
-                "param_array.npy": param_dataset[start_idx:end],
-            }
-        )
+    logger.info(f"{len(samples)} hdf5 samples written!")
 
-    logger.info(f"{len(samples)} samples written!")
+
+def save_wds_samples(
+    samples: List[VSTDataSample],
+    sink: wds.TarWriter,  # pyright: ignore[reportAttributeAccessIssue]
+    start_idx: int,
+) -> None:
+    """Write a batch of rendered samples as a per-batch-keyed tar entry.
+
+    Audio is cast to ``float16`` to match the h5 path's storage precision so
+    consumers see the same dtype regardless of which writer produced the shard;
+    mel_spec and param_array stay ``float32``.
+    """
+    logger.info(f"Saving {len(samples)} samples to wds...")
+    audios = np.stack([s.audio.T for s in samples], axis=0).astype(np.float16)
+    mel_specs = np.stack([s.mel_spec for s in samples], axis=0)
+    param_arrays = np.stack([s.param_array for s in samples], axis=0)
+
+    sink.write(
+        {
+            "__key__": f"{start_idx:08d}",
+            "audio.npy": audios,
+            "mel_spec.npy": mel_specs,
+            "param_array.npy": param_arrays,
+        }
+    )
+
+    logger.info(f"{len(samples)} wds samples written!")
 
 
 def get_first_unwritten_idx(dataset: h5py.Dataset) -> int:
@@ -256,7 +273,63 @@ def create_datasets_and_get_start_idx(
     )
 
 
-def make_dataset(
+def _validate_fixed_params_lengths(
+    *,
+    num_samples: int,
+    start_idx: int,
+    fixed_synth_params_list: list[dict[str, float]] | None,
+    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
+) -> None:
+    """Raise ``ValueError`` if a fixed-params list is shorter than the remaining renders."""
+    expected_fixed_len = num_samples - start_idx
+    for name, lst in [
+        ("fixed_synth_params_list", fixed_synth_params_list),
+        ("fixed_note_params_list", fixed_note_params_list),
+    ]:
+        if lst is not None and len(lst) < expected_fixed_len:
+            raise ValueError(
+                f"{name} has length {len(lst)}, expected at least "
+                f"num_samples - start_idx = {expected_fixed_len} "
+                f"(num_samples={num_samples}, start_idx={start_idx})"
+            )
+
+
+def _generate_sample_for_index(
+    i: int,
+    start_idx: int,
+    *,
+    plugin_path: str,
+    preset_path: Optional[str],
+    velocity: int,
+    signal_duration_seconds: float,
+    sample_rate: float,
+    channels: int,
+    min_loudness: float,
+    param_spec: ParamSpec,
+    fixed_synth_params_list: list[dict[str, float]] | None,
+    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
+) -> VSTDataSample:
+    """Render the ``i``-th sample, picking up the ``(i - start_idx)``-th fixed-params entry."""
+    fixed_idx = i - start_idx
+    return generate_sample(
+        plugin_path,
+        velocity=velocity,
+        signal_duration_seconds=signal_duration_seconds,
+        sample_rate=sample_rate,
+        channels=channels,
+        min_loudness=min_loudness,
+        param_spec=param_spec,
+        preset_path=preset_path,
+        fixed_synth_params=(
+            fixed_synth_params_list[fixed_idx] if fixed_synth_params_list is not None else None
+        ),
+        fixed_note_params=(
+            fixed_note_params_list[fixed_idx] if fixed_note_params_list is not None else None
+        ),
+    )
+
+
+def make_hdf5_dataset(
     hdf5_file: Path | str,
     num_samples: int,
     plugin_path: str,
@@ -270,8 +343,24 @@ def make_dataset(
     sample_batch_size: int,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
-    wds_file: Path | str | None = None,
 ) -> None:
+    """Render ``num_samples`` and append them to an HDF5 file at ``hdf5_file``.
+
+    Resumable: a partially-written file picks up at the first all-zero row, so a
+    crashed worker can re-run with the same args and only the missing tail is
+    rendered. Audio is stored as ``float16`` (Blosc2-compressed); mel_spec and
+    param_array are ``float32``. The five sidecar attrs (velocity, signal duration,
+    sample rate, channels, min_loudness) are written to ``audio.attrs`` from a
+    single ``ShardMetadata`` instance — the same instance the wds writer uses for
+    its ``metadata.json`` member, so both formats expose identical metadata.
+    """
+    meta = ShardMetadata(
+        velocity=velocity,
+        signal_duration_seconds=signal_duration_seconds,
+        sample_rate=sample_rate,
+        channels=channels,
+        min_loudness=min_loudness,
+    )
     with h5py.File(hdf5_file, "a") as h5:
         audio_dataset, mel_dataset, param_dataset, start_idx = (
             create_datasets_and_get_start_idx(
@@ -284,90 +373,115 @@ def make_dataset(
             )
         )
 
-        expected_fixed_len = num_samples - start_idx
-        for name, lst in [
-            ("fixed_synth_params_list", fixed_synth_params_list),
-            ("fixed_note_params_list", fixed_note_params_list),
-        ]:
-            if lst is not None and len(lst) < expected_fixed_len:
-                raise ValueError(
-                    f"{name} has length {len(lst)}, expected at least "
-                    f"num_samples - start_idx = {expected_fixed_len} "
-                    f"(num_samples={num_samples}, start_idx={start_idx})"
-                )
-
-        audio_dataset.attrs["velocity"] = velocity
-        audio_dataset.attrs["signal_duration_seconds"] = signal_duration_seconds
-        audio_dataset.attrs["sample_rate"] = sample_rate
-        audio_dataset.attrs["channels"] = channels
-        audio_dataset.attrs["min_loudness"] = min_loudness
-
-        wds_sink: Optional[wds.TarWriter] = (  # pyright: ignore[reportAttributeAccessIssue]
-            wds.TarWriter(str(wds_file)) if wds_file is not None else None  # pyright: ignore[reportAttributeAccessIssue]
+        _validate_fixed_params_lengths(
+            num_samples=num_samples,
+            start_idx=start_idx,
+            fixed_synth_params_list=fixed_synth_params_list,
+            fixed_note_params_list=fixed_note_params_list,
         )
-        try:
-            sample_batch = []
-            sample_batch_start = start_idx
 
-            for i in trange(start_idx, num_samples):
-                logger.info(f"Making sample {i}")
-                fixed_idx = i - start_idx
-                sample = generate_sample(
-                    plugin_path,
+        for k, v in meta.model_dump().items():
+            audio_dataset.attrs[k] = v
+
+        sample_batch: list[VSTDataSample] = []
+        sample_batch_start = start_idx
+        for i in trange(start_idx, num_samples):
+            logger.info(f"Making sample {i}")
+            sample_batch.append(
+                _generate_sample_for_index(
+                    i,
+                    start_idx,
+                    plugin_path=plugin_path,
+                    preset_path=preset_path,
                     velocity=velocity,
                     signal_duration_seconds=signal_duration_seconds,
                     sample_rate=sample_rate,
                     channels=channels,
                     min_loudness=min_loudness,
                     param_spec=param_spec,
+                    fixed_synth_params_list=fixed_synth_params_list,
+                    fixed_note_params_list=fixed_note_params_list,
+                )
+            )
+            if len(sample_batch) == sample_batch_size:
+                save_hdf5_samples(
+                    sample_batch, audio_dataset, mel_dataset, param_dataset, sample_batch_start
+                )
+                sample_batch = []
+                sample_batch_start += sample_batch_size
+
+        if sample_batch:
+            save_hdf5_samples(
+                sample_batch, audio_dataset, mel_dataset, param_dataset, sample_batch_start
+            )
+
+
+def make_wds_dataset(
+    wds_file: Path | str,
+    num_samples: int,
+    plugin_path: str,
+    preset_path: Optional[str],
+    sample_rate: float,
+    channels: int,
+    velocity: int,
+    signal_duration_seconds: float,
+    min_loudness: float,
+    param_spec: ParamSpec,
+    sample_batch_size: int,
+    fixed_synth_params_list: list[dict[str, float]] | None = None,
+    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
+) -> None:
+    """Render ``num_samples`` and write a webdataset tar shard to ``wds_file``.
+
+    Not resumable — if ``wds_file`` exists it is overwritten on open. Audio is cast
+    to ``float16`` to match the h5 path's storage precision; consumers can upcast
+    on read if higher precision is required. The shard's ``metadata.json`` member
+    is built from the same ``ShardMetadata`` instance the h5 path uses for its
+    ``audio.attrs``, so both formats expose identical metadata.
+    """
+    meta = ShardMetadata(
+        velocity=velocity,
+        signal_duration_seconds=signal_duration_seconds,
+        sample_rate=sample_rate,
+        channels=channels,
+        min_loudness=min_loudness,
+    )
+    _validate_fixed_params_lengths(
+        num_samples=num_samples,
+        start_idx=0,
+        fixed_synth_params_list=fixed_synth_params_list,
+        fixed_note_params_list=fixed_note_params_list,
+    )
+    with wds.TarWriter(str(wds_file)) as sink:  # pyright: ignore[reportAttributeAccessIssue]
+        sample_batch: list[VSTDataSample] = []
+        sample_batch_start = 0
+        for i in trange(num_samples):
+            logger.info(f"Making sample {i}")
+            sample_batch.append(
+                _generate_sample_for_index(
+                    i,
+                    0,
+                    plugin_path=plugin_path,
                     preset_path=preset_path,
-                    fixed_synth_params=(
-                        fixed_synth_params_list[fixed_idx]
-                        if fixed_synth_params_list is not None
-                        else None
-                    ),
-                    fixed_note_params=(
-                        fixed_note_params_list[fixed_idx]
-                        if fixed_note_params_list is not None
-                        else None
-                    ),
-                )
-
-                sample_batch.append(sample)
-                if len(sample_batch) == sample_batch_size:
-                    save_samples(
-                        sample_batch,
-                        audio_dataset,
-                        mel_dataset,
-                        param_dataset,
-                        sample_batch_start,
-                        wds_sink=wds_sink,
-                    )
-                    sample_batch = []
-                    sample_batch_start += sample_batch_size
-
-            if len(sample_batch) > 0:
-                save_samples(
-                    sample_batch,
-                    audio_dataset,
-                    mel_dataset,
-                    param_dataset,
-                    sample_batch_start,
-                    wds_sink=wds_sink,
-                )
-
-            if wds_sink is not None:
-                meta = ShardMetadata(
                     velocity=velocity,
                     signal_duration_seconds=signal_duration_seconds,
                     sample_rate=sample_rate,
                     channels=channels,
                     min_loudness=min_loudness,
+                    param_spec=param_spec,
+                    fixed_synth_params_list=fixed_synth_params_list,
+                    fixed_note_params_list=fixed_note_params_list,
                 )
-                wds_sink.write({"__key__": "metadata", "json": meta.model_dump()})
-        finally:
-            if wds_sink is not None:
-                wds_sink.close()
+            )
+            if len(sample_batch) == sample_batch_size:
+                save_wds_samples(sample_batch, sink, sample_batch_start)
+                sample_batch = []
+                sample_batch_start += sample_batch_size
+
+        if sample_batch:
+            save_wds_samples(sample_batch, sink, sample_batch_start)
+
+        sink.write({"__key__": "metadata", "json": meta.model_dump()})
 
 
 _HDF5_SUFFIX = ".h5"
@@ -400,11 +514,6 @@ def main(
     sample_batch_size: int = 32,
 ):
     suffix = Path(data_file).suffix
-    if suffix not in (_HDF5_SUFFIX, _WDS_SUFFIX):
-        raise click.BadParameter(
-            f"data_file must end in {_HDF5_SUFFIX} (hdf5) or {_WDS_SUFFIX} (wds), got {suffix!r}",
-            param_hint="data_file",
-        )
     common_kwargs: dict[str, Any] = {
         "num_samples": num_samples,
         "plugin_path": plugin_path,
@@ -418,17 +527,15 @@ def main(
         "sample_batch_size": sample_batch_size,
     }
     if suffix == _HDF5_SUFFIX:
-        make_dataset(hdf5_file=data_file, wds_file=None, **common_kwargs)
+        make_hdf5_dataset(hdf5_file=data_file, **common_kwargs)
         return
-
-    # wds path: make_dataset still writes through h5 to capture float16 round-trip in
-    # the audio dataset, but the h5 is purely staging — only the tar is the artifact.
-    with tempfile.NamedTemporaryFile(suffix=_HDF5_SUFFIX, delete=False) as tmp:
-        h5_staging = Path(tmp.name)
-    try:
-        make_dataset(hdf5_file=str(h5_staging), wds_file=Path(data_file), **common_kwargs)
-    finally:
-        h5_staging.unlink(missing_ok=True)
+    if suffix == _WDS_SUFFIX:
+        make_wds_dataset(wds_file=data_file, **common_kwargs)
+        return
+    raise click.BadParameter(
+        f"data_file must end in {_HDF5_SUFFIX} (hdf5) or {_WDS_SUFFIX} (wds), got {suffix!r}",
+        param_hint="data_file",
+    )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import h5py
@@ -18,10 +19,11 @@ _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
 
+from pipeline.schemas.shard_metadata import ShardMetadata
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from src.data.vst import param_specs
 from src.data.vst.core import render_params
-from src.data.vst.generate_vst_dataset import make_dataset
+from src.data.vst.generate_vst_dataset import make_hdf5_dataset, make_wds_dataset
 from src.data.vst.param_spec import ParamSpec
 
 log = logging.getLogger(__name__)
@@ -704,9 +706,9 @@ def _assert_round_trip_matches(
 def test_datasets_from_hardcoded_params_are_identical(
     tmp_path: Path,
 ) -> None:
-    """make_dataset round-trips a single hardcoded param set when ``param_spec.sample`` is patched.
+    """make_hdf5_dataset round-trips a hardcoded param set when ``param_spec.sample`` is patched.
 
-    Both stages of ``make_dataset`` patch ``param_spec.sample`` to return the same
+    Both stages of ``make_hdf5_dataset`` patch ``param_spec.sample`` to return the same
     hardcoded ``(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)`` tuple, so every
     one of the ``2 × num_samples`` renders uses identical inputs. This pins
     reproducibility on a fixed, version-controlled patch — no random sampling, no
@@ -727,7 +729,7 @@ def test_datasets_from_hardcoded_params_are_identical(
     expected_dataset = tmp_path / "expected.h5"
     t0 = time.perf_counter()
     with _patched_sample(spec, replay):
-        make_dataset(
+        make_hdf5_dataset(
             hdf5_file=expected_dataset,
             num_samples=num_samples,
             plugin_path=_PLUGIN_PATH,
@@ -749,7 +751,7 @@ def test_datasets_from_hardcoded_params_are_identical(
     got_dataset = tmp_path / "replayed.h5"
     t0 = time.perf_counter()
     with _patched_sample(spec, replay):
-        make_dataset(
+        make_hdf5_dataset(
             hdf5_file=got_dataset,
             num_samples=num_samples,
             plugin_path=_PLUGIN_PATH,
@@ -807,11 +809,11 @@ def test_datasets_from_hardcoded_params_are_identical(
 @pytest.mark.requires_vst
 @skip_no_vst
 def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
-    """make_dataset reproduces a previous dataset row-for-row when params are replayed.
+    """make_hdf5_dataset reproduces a previous dataset row-for-row when params are replayed.
 
     Two-stage e2e test:
 
-    1. Build a "candidates" dataset by calling ``make_dataset`` with the natural
+    1. Build a "candidates" dataset by calling ``make_hdf5_dataset`` with the natural
        random source. ``generate_sample`` samples params via ``param_spec.sample()``
        and rejects renders below ``_MIN_LOUDNESS`` in a ``while True`` loop, so each
        surviving row is guaranteed to be loud enough to pass the loudness gate.
@@ -838,7 +840,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     # Stage 1: random-sampled "candidates" dataset (loudness-filtered).
     expected_dataset = tmp_path / "candidates.h5"
     t0 = time.perf_counter()
-    make_dataset(
+    make_hdf5_dataset(
         hdf5_file=expected_dataset,
         num_samples=_NUM_SAMPLES,
         plugin_path=_PLUGIN_PATH,
@@ -865,7 +867,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     )
 
     # Decode the candidate rows back into synth/note params dicts. These are the
-    # inputs for the second ``make_dataset`` run — guaranteed past the loudness
+    # inputs for the second ``make_hdf5_dataset`` run — guaranteed past the loudness
     # gate by construction (the candidate render survived stage 1).
     synth_patches: list[dict[str, float]] = []
     note_patches: list[dict[str, int | tuple[float, float]]] = []
@@ -884,7 +886,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     replay = list(zip(synth_patches, note_patches, strict=True))
     t0 = time.perf_counter()
     with _patched_sample(spec, replay):
-        make_dataset(
+        make_hdf5_dataset(
             hdf5_file=got_dataset,
             num_samples=_NUM_SAMPLES,
             plugin_path=_PLUGIN_PATH,
@@ -931,12 +933,12 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_make_dataset(tmp_path: Path) -> None:
-    """make_dataset with the natural random source writes a valid h5."""
+def test_make_hdf5_dataset(tmp_path: Path) -> None:
+    """make_hdf5_dataset with the natural random source writes a valid h5."""
     out = tmp_path / "random.h5"
     spec = param_specs[_SPEC_NAME]
 
-    make_dataset(
+    make_hdf5_dataset(
         hdf5_file=out,
         num_samples=_NUM_SAMPLES,
         plugin_path=_PLUGIN_PATH,
@@ -1016,14 +1018,14 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
             )
 
 
-def test_make_dataset_raises_when_fixed_params_list_is_too_short(
+def test_make_hdf5_dataset_raises_when_fixed_params_list_is_too_short(
     tmp_path: Path,
 ) -> None:
-    """make_dataset rejects fixed_*_params_list shorter than num_samples - start_idx."""
+    """make_hdf5_dataset rejects fixed_*_params_list shorter than num_samples - start_idx."""
     spec = param_specs[_SPEC_NAME]
     out = tmp_path / "should_not_write.h5"
     with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
-        make_dataset(
+        make_hdf5_dataset(
             hdf5_file=out,
             num_samples=3,
             plugin_path=_PLUGIN_PATH,
@@ -1164,14 +1166,15 @@ def test_generate_sample_retries_when_only_fixed_note_params(
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_make_dataset_uses_fixed_params_lists_when_provided(
+def test_make_hdf5_dataset_uses_fixed_params_lists_when_provided(
     tmp_path: Path,
 ) -> None:
-    """make_dataset writes the supplied fixed params verbatim, bypassing param_spec.sample()."""
+    """make_hdf5_dataset writes the supplied fixed params verbatim, bypassing
+    param_spec.sample()."""
     spec = param_specs[_SPEC_NAME]
     out = tmp_path / "fixed.h5"
     num_samples = 3
-    make_dataset(
+    make_hdf5_dataset(
         hdf5_file=out,
         num_samples=num_samples,
         plugin_path=_PLUGIN_PATH,
@@ -1370,15 +1373,138 @@ def _load_wds_batched(
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_h5_and_wds_outputs_are_equivalent(tmp_path: Path) -> None:
-    """One render pass written to both formats yields identical arrays and matching metadata."""
+def test_make_hdf5_and_make_wds_call_render_params_with_identical_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both writers, given identical fixed inputs, drive ``render_params`` with the.
+
+    same arg sequence, in the same order. The on-disk artifacts then have matching
+    shape/dtype/finiteness and equal metadata even though pedalboard's two render
+    passes are not guaranteed to produce bit-identical audio across calls (see
+    #489 — VST3Plugin internal state diverges across reloads).
+
+    This is the load-bearing equivalence assertion for the wds output mode: the
+    point of the split is to keep the two writers feeding the renderer the same
+    way, so a divergence in the call sequence (a missed batch, a swapped param,
+    a drift in fixed-params indexing) is what the test must catch — not the
+    audio sample bits, which are downstream of the renderer.
+    """
+    from src.data.vst import generate_vst_dataset
+
     spec = param_specs[_SPEC_NAME]
     h5_path = tmp_path / "out.h5"
     wds_path = tmp_path / "out.tar"
     n = 4
+    sample_batch_size = 2
 
-    make_dataset(
-        hdf5_file=h5_path,
+    real_render_params = generate_vst_dataset.render_params
+    captured: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def spy(*args: Any, **kwargs: Any) -> np.ndarray:
+        """Record the render call, then delegate to the real renderer."""
+        captured.append((args, kwargs))
+        return real_render_params(*args, **kwargs)
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", spy)
+
+    common = dict(
+        num_samples=n,
+        plugin_path=_PLUGIN_PATH,
+        preset_path=_PRESET_PATH,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        velocity=_VELOCITY,
+        signal_duration_seconds=_DURATION,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        sample_batch_size=sample_batch_size,
+        fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * n,
+        fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * n,
+    )
+
+    make_hdf5_dataset(hdf5_file=h5_path, **common)  # type: ignore[arg-type]
+    h5_calls = list(captured)
+    captured.clear()
+    make_wds_dataset(wds_file=wds_path, **common)  # type: ignore[arg-type]
+    wds_calls = list(captured)
+
+    assert h5_calls == wds_calls
+    assert len(h5_calls) == n  # one render per requested sample, both writers
+
+    h5_audio, h5_mel, h5_params = _assert_h5_structure_is_valid(h5_path, spec, num_samples=n)
+    wds_audio, wds_mel, wds_params, wds_meta, members = _load_wds_batched(wds_path)
+
+    expected_members = {
+        "metadata.json",
+        "00000000.audio.npy",
+        "00000000.mel_spec.npy",
+        "00000000.param_array.npy",
+        "00000002.audio.npy",
+        "00000002.mel_spec.npy",
+        "00000002.param_array.npy",
+    }
+    assert members == expected_members
+
+    with h5py.File(h5_path, "r") as f:
+        on_disk_audio = f["audio"]
+        assert isinstance(on_disk_audio, h5py.Dataset)
+        assert on_disk_audio.dtype == np.float16
+    assert wds_audio.dtype == np.float16
+    assert h5_audio.shape == wds_audio.shape
+    assert wds_mel.shape == h5_mel.shape
+    assert wds_params.shape == h5_params.shape
+    assert np.isfinite(h5_audio).all()
+    assert np.isfinite(wds_audio).all()
+
+    expected_meta = ShardMetadata(
+        velocity=_VELOCITY,
+        signal_duration_seconds=_DURATION,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=_MIN_LOUDNESS,
+    )
+    assert wds_meta == expected_meta.model_dump()
+
+    with h5py.File(h5_path, "r") as f:
+        h5_attrs = dict(f["audio"].attrs)
+    for k, v in h5_attrs.items():
+        assert k in wds_meta, f"wds metadata.json missing attr {k!r}"
+        assert wds_meta[k] == pytest.approx(v), f"attr {k!r} mismatch: wds={wds_meta[k]} h5={v}"
+
+
+def test_make_wds_dataset_overwrites_existing_tar_not_resumes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """make_wds_dataset opens the tar in write mode, overwriting any prior shard.
+
+    Pre-create a non-empty tar at the destination, render through ``make_wds_dataset``
+    with a stubbed ``render_params``, and verify the resulting tar contains only the
+    new render's batch members plus ``metadata.json`` — no leftover member from the
+    pre-existing tar. This pins the wds non-resumability invariant the new split
+    contract exposes (HDF5 path resumes; wds path overwrites).
+    """
+    from src.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    wds_path = tmp_path / "out.tar"
+
+    pre_existing_payload = b"old-shard-bytes"
+    with tarfile.open(wds_path, "w") as pre_tar:
+        info = tarfile.TarInfo(name="leftover-from-prior-shard.txt")
+        info.size = len(pre_existing_payload)
+        pre_tar.addfile(info, io.BytesIO(pre_existing_payload))
+
+    n = 2
+    audio_shape = (_CHANNELS, int(_SAMPLE_RATE * _DURATION))
+    monkeypatch.setattr(
+        generate_vst_dataset,
+        "render_params",
+        lambda *a, **kw: 0.5 * np.ones(audio_shape, dtype=np.float32),
+    )
+
+    make_wds_dataset(
         wds_file=wds_path,
         num_samples=n,
         plugin_path=_PLUGIN_PATH,
@@ -1389,31 +1515,18 @@ def test_h5_and_wds_outputs_are_equivalent(tmp_path: Path) -> None:
         signal_duration_seconds=_DURATION,
         min_loudness=_MIN_LOUDNESS,
         param_spec=spec,
-        sample_batch_size=2,
+        sample_batch_size=n,
         fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * n,
         fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * n,
     )
 
-    h5_audio, h5_mel, h5_params = _assert_h5_structure_is_valid(h5_path, spec, num_samples=n)
-    wds_audio, wds_mel, wds_params, wds_meta, members = _load_wds_batched(wds_path)
+    with tarfile.open(wds_path) as tar:
+        names = {m.name for m in tar.getmembers()}
 
-    sample_batch_size = 2
-    expected_members = {"metadata.json"}
-    for start in range(0, n, sample_batch_size):
-        prefix = f"{start:08d}"
-        expected_members |= {
-            f"{prefix}.audio.npy",
-            f"{prefix}.mel_spec.npy",
-            f"{prefix}.param_array.npy",
-        }
-    assert members == expected_members
-
-    np.testing.assert_array_equal(wds_audio, h5_audio)
-    np.testing.assert_array_equal(wds_mel, h5_mel)
-    np.testing.assert_array_equal(wds_params, h5_params)
-
-    with h5py.File(h5_path, "r") as f:
-        h5_attrs = dict(f["audio"].attrs)
-    for k, v in h5_attrs.items():
-        assert k in wds_meta, f"wds metadata.json missing attr {k!r}"
-        assert wds_meta[k] == pytest.approx(v), f"attr {k!r} mismatch: wds={wds_meta[k]} h5={v}"
+    assert "leftover-from-prior-shard.txt" not in names
+    assert names == {
+        "00000000.audio.npy",
+        "00000000.mel_spec.npy",
+        "00000000.param_array.npy",
+        "metadata.json",
+    }

@@ -34,7 +34,7 @@ from rich.logging import RichHandler  # noqa: E402
 
 from src.data.vst import load_plugin, load_preset, param_specs, preset_paths  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
-from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
+from src.data.vst.generate_vst_dataset import make_hdf5_dataset  # noqa: E402
 from src.data.vst.param_spec import ParamSpec  # noqa: E402
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
@@ -1015,11 +1015,11 @@ def eval_patches(
     default=None,
     help=(
         "Directory to create for the recorded patches. Must not already exist — "
-        "``make_dataset`` writes fixed-size HDF5 datasets without ``maxshape`` and cannot "
+        "``make_hdf5_dataset`` writes fixed-size HDF5 datasets without ``maxshape`` and cannot "
         "append to existing files. After the editor is closed, patches captured via the "
         "keyboard loop (press 'p' to record, 'q' to quit) are rendered through the plugin "
         "and written to ``train.h5`` inside this directory via "
-        "``src.data.vst.generate_vst_dataset.make_dataset`` (plus ``val.h5``/``test.h5``/"
+        "``src.data.vst.generate_vst_dataset.make_hdf5_dataset`` (plus ``val.h5``/``test.h5``/"
         "``predict.h5`` siblings when ``--checkpoint-path`` is set)."
     ),
 )
@@ -1079,7 +1079,7 @@ def main(
        ``q`` to quit).
     4. After the editor is closed, render every recorded patch through the plugin and write
        the resulting samples to ``train.h5`` inside ``--output-dataset-dir-path`` via
-       ``make_dataset``.
+       ``make_hdf5_dataset``.
     5. If ``--checkpoint-path`` is also set, copy ``train.h5`` to ``val.h5``/``test.h5``/
        ``predict.h5`` siblings (rolled back if any copy fails) and call ``eval_patches`` to
        run ``src/eval.py mode=predict`` followed by audio rendering
@@ -1100,7 +1100,7 @@ def main(
             "the live audio thread doesn't run during deterministic clip rendering."
         )
 
-    # Fail fast — ``make_dataset`` writes fixed-size HDF5 datasets without
+    # Fail fast — ``make_hdf5_dataset`` writes fixed-size HDF5 datasets without
     # ``maxshape`` and cannot append, so a pre-existing path would either
     # silently overwrite (when re-creating datasets) or fail mid-render after
     # patches have been captured. Better to reject up front.
@@ -1212,7 +1212,7 @@ def main(
         return
     output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
     patch_file_path = output_dataset_dir_path / "train.h5"
-    make_dataset(
+    make_hdf5_dataset(
         hdf5_file=patch_file_path,
         num_samples=len(synth_patches),
         plugin_path=plugin_path,
