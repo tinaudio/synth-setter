@@ -265,13 +265,42 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-    def test_wds_output_format_raises(self, tmp_path: Path) -> None:
-        """output_format 'wds' raises ValueError — generate_vst_dataset only supports hdf5."""
-        kwargs = _base_spec_kwargs(tmp_path, output_format="wds")
+    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
+    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    def test_wds_output_format_uploads_tar_shard(
+        self,
+        mock_rclone: MagicMock,
+        mock_check_call: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """output_format 'wds' renders a .tar shard and uploads only the tar (not the temp h5)."""
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+        kwargs = _base_spec_kwargs(
+            tmp_path,
+            output_format="wds",
+            shards=(ShardSpec(shard_id=0, filename="shard-000000.tar", seed=42),),
+        )
         spec = DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
 
-        with pytest.raises(ValueError, match="only supports hdf5"):
-            run(spec)
+        def _materialize_both(args: list[str]) -> int:
+            script_idx = _find_script_index(args)
+            h5_file = Path(args[script_idx + 1])
+            h5_file.parent.mkdir(parents=True, exist_ok=True)
+            h5_file.write_bytes(b"")
+            wds_idx = args.index("--wds-out")
+            tar_file = Path(args[wds_idx + 1])
+            tar_file.write_bytes(b"")
+            return 0
+
+        mock_check_call.side_effect = _materialize_both
+
+        run(spec)
+
+        uploaded = [call[0][0] for call in mock_rclone.call_args_list]
+        assert any(p.endswith("shard-000000.tar") for p in uploaded)
+        assert not any(p.endswith("shard-000000.h5") for p in uploaded)
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
@@ -623,6 +652,23 @@ class TestBuildGenerateArgs:
         args = build_generate_args(spec, shard, Path("out"))
 
         assert args[1] == "src/data/vst/generate_vst_dataset.py"
+
+    def test_wds_output_format_passes_wds_out_with_tar_path(self, tmp_path: Path) -> None:
+        """For wds specs, the data_file is a sibling .h5 and --wds-out targets the tar."""
+        kwargs = _base_spec_kwargs(
+            tmp_path,
+            output_format="wds",
+            shards=(ShardSpec(shard_id=0, filename="shard-000000.tar", seed=42),),
+        )
+        spec = DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
+        shard = spec.shards[0]
+
+        args = build_generate_args(spec, shard, tmp_path)
+
+        assert args[2] == str(tmp_path / "shard-000000.h5")
+        assert "--wds-out" in args
+        wds_idx = args.index("--wds-out")
+        assert args[wds_idx + 1] == str(tmp_path / "shard-000000.tar")
 
 
 # ---------------------------------------------------------------------------

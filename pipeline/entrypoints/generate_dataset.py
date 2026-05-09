@@ -104,15 +104,27 @@ def build_generate_args(
 ) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
+    For ``output_format='wds'`` the HDF5 ``data_file`` argument is a sibling tmp
+    path inside ``output_dir``; the wds tar shard (the artifact that gets
+    uploaded to R2) is written to ``output_dir / shard.filename`` via
+    ``--wds-out``.
+
     Args:
         spec: Materialized pipeline spec (dataset-level parameters).
         shard: The specific shard to generate (owns filename).
-        output_dir: Directory for the output HDF5 file.
+        output_dir: Directory for the output shard file.
 
     Returns:
         List of CLI arguments for generate_vst_dataset.py.
     """
-    output_file = output_dir / shard.filename
+    if spec.output_format == "wds":
+        h5_path = output_dir / f"{Path(shard.filename).stem}.h5"
+        wds_path = output_dir / shard.filename
+        data_file = h5_path
+        extra: list[str] = ["--wds-out", str(wds_path)]
+    else:
+        data_file = output_dir / shard.filename
+        extra = []
 
     options = {
         "plugin_path": spec.plugin_path,
@@ -129,11 +141,12 @@ def build_generate_args(
     args = [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
-        str(output_file),
+        str(data_file),
         str(spec.shard_size),
     ]
     for key, value in options.items():
         args.extend([f"--{key}", str(value)])
+    args += extra
 
     return args
 
@@ -143,26 +156,20 @@ def run(spec: DatasetPipelineSpec) -> None:
 
     Spec serialization, spec upload, and the renderer-version constraint check
     happen once per run (pre-loop). Each shard is then rendered, uploaded, and
-    its local HDF5 file unlinked before moving on — so local disk usage is
-    bounded to one shard's worth at a time. Subprocess failures propagate
-    immediately (fail-fast); later shards are not attempted.
+    its local file unlinked before moving on — so local disk usage is bounded
+    to one shard at a time. Subprocess failures propagate immediately
+    (fail-fast); later shards are not attempted.
 
-    HDF5-only. Other output formats (e.g. WebDataset) are not yet wired into
-    the downstream generator.
+    Honors ``spec.output_format`` (``"hdf5"`` or ``"wds"``); the wds path
+    writes a tar shard mirror of the HDF5 dataset and uploads only the tar.
 
     Args:
         spec: Pre-materialized DatasetPipelineSpec.
 
     Raises:
-        ValueError: If ``spec.output_format != "hdf5"``.
         RuntimeError: If the worker's plugin version disagrees with
             ``spec.renderer_version``.
     """
-    if spec.output_format != "hdf5":
-        raise ValueError(
-            f"generate_vst_dataset.py only supports hdf5 output, got: {spec.output_format}"
-        )
-
     # Constraint check: the plugin actually present on this worker must match the
     # renderer_version pinned into the spec at materialize time. The launcher trusts
     # SURGE_XT_RENDERER_VERSION blindly so its code path stays interpreter-only;
@@ -214,8 +221,9 @@ def _render_and_upload_shard(
 ) -> None:
     """Render a single shard, upload it to R2, then unlink the local file.
 
-    Unlinking after upload bounds local disk to one shard's HDF5 at a time — necessary for multi-
-    shard runs on disk-constrained workers.
+    Unlinking after upload bounds local disk to one shard at a time — necessary for multi-shard
+    runs on disk-constrained workers. For wds, the temporary HDF5 sibling produced alongside the
+    tar is also removed so it doesn't accumulate.
     """
     args = [VST_HEADLESS_WRAPPER] if sys.platform == "linux" else []
     args += build_generate_args(spec, shard, work_dir)
@@ -233,6 +241,11 @@ def _render_and_upload_shard(
     logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
     shard_path.unlink()
     logger.info(f"shard removed locally: {shard_path}")
+    if spec.output_format == "wds":
+        sibling_h5 = work_dir / f"{Path(shard.filename).stem}.h5"
+        if sibling_h5.is_file():
+            sibling_h5.unlink()
+            logger.info(f"sibling hdf5 removed locally: {sibling_h5}")
 
 
 if __name__ == "__main__":
