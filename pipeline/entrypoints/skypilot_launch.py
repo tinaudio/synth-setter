@@ -1,20 +1,30 @@
-"""Launch a `generate_dataset` run on RunPod, OCI, or local kind via SkyPilot.
+"""Launch a `generate_dataset` run on RunPod, OCI, or local kind via SkyPilot managed jobs.
 
 Provider-neutral entrypoint: the same binary launches against
 `configs/compute/runpod-template.yaml`, `configs/compute/oci-cpu-template.yaml`,
 or `configs/compute/local-template.yaml` (kubernetes-via-`sky local up`).
 Materializes a spec, ships it via R2 (file_mounts blocked by #749), forwards
-worker env via `task.update_envs`, and `sky.launch`-es an unmanaged task. By
-default the launcher waits for `sky.launch` + `sky.stream_and_get` to return a
-`job_id` for each rank (provisioning completes), prints the `sky logs` /
-`sky down` commands the operator can run, then exits — without tailing logs and
-without tearing successfully-provisioned clusters down. Half-provisioned
-clusters (whose `sky.launch`/`sky.stream_and_get` raised or yielded no
-`job_id`) are still torn down so SkyPilot state doesn't accumulate orphans.
-Pass `--tail` to opt into live `sky.tail_logs(follow=True)` and unconditional
-`finally`-block teardown of every cluster.
-Cluster-level launch (not jobs.launch) — neither RunPod nor OCI has a
-managed-jobs controller backend wired up here.
+worker env via `task.update_envs`, and submits each rank's task to the SkyPilot
+managed-jobs controller via `sky.jobs.launch` (see
+https://docs.skypilot.co/en/stable/reference/api.html#sky.jobs.launch).
+
+By default the launcher waits for `sky.jobs.launch` + `sky.stream_and_get` to
+return a managed-job id per rank (the controller has accepted the job), prints
+the `sky jobs logs` / `sky jobs cancel` commands the operator can run, then
+exits — without tailing logs and without cancelling successfully-submitted
+jobs. Half-submitted jobs (whose `sky.jobs.launch`/`sky.stream_and_get` raised
+or yielded no job_id) are still cancelled so the controller doesn't accumulate
+orphan state. Pass `--tail` to opt into live `sky.jobs.tail_logs(follow=True)`
+and unconditional `finally`-block cancellation of every rank.
+
+Managed jobs differ from cluster-level launches:
+- The controller manages provisioning, retries, and teardown automatically.
+  There's no per-job autostop window or explicit `down=True` to set — terminal
+  status (success / failure / cancel) releases the underlying compute.
+- The user-facing identifier is the managed-job *name* (passed to `sky.jobs.*`
+  via `name=`), not a cluster name. The launcher's `--cluster-name` flag is the
+  job name in this mode; the same value still keys the per-launch R2 spec
+  upload.
 
 Per-backend image handling (driven by `--worker-image-tag`):
 - RunPod: `docker:<image>` is set on each Resources entry's `image_id`, so SkyPilot
@@ -23,7 +33,7 @@ Per-backend image handling (driven by `--worker-image-tag`):
   YAML's `run:` block performs a sub-docker invocation that consumes
   `WORKER_IMAGE` from env. The launcher always injects `WORKER_IMAGE`.
 
-`--num-workers N>1` fans out N single-node clusters in parallel (neither backend
+`--num-workers N>1` fans out N independent managed jobs in parallel (neither backend
 supports num_nodes>1 for this workload). Each rank gets SYNTH_SETTER_WORKER_RANK /
 SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
 """
@@ -41,6 +51,7 @@ from pathlib import Path
 import click
 import sky
 import sky.check  # accessed conditionally on the kubernetes path; see provider == "local" branch in main()
+import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
 
@@ -88,7 +99,7 @@ _CRED_BOOTSTRAP_SCRIPT = (
     Path(__file__).resolve().parent.parent.parent / "scripts" / "skypilot_write_provider_creds.sh"
 )
 
-# sky.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
+# sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -342,7 +353,12 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
     "--cluster-name",
     type=str,
     default=None,
-    help="SkyPilot cluster name (default: synth-setter-smoke-<config_id[:8]>).",
+    help=(
+        "Managed-job name (default: synth-setter-smoke-<config_id[:8]>). The flag is named "
+        "`--cluster-name` for backward compatibility with workflow callers; under managed jobs "
+        "the value is passed to `sky.jobs.launch(name=...)`. Multi-worker fan-out appends "
+        "`-r{i}` per rank."
+    ),
 )
 @click.option(
     "--spec-out",
@@ -385,14 +401,14 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
     default=False,
     show_default=True,
     help=(
-        "Tail worker logs and unconditionally tear down every cluster in `finally`. Default "
-        "`--no-tail` waits for `sky.launch` + `sky.stream_and_get` to return a `job_id` per "
-        "rank (i.e. through provisioning), prints the `sky logs` / `sky down` commands the "
-        "operator can run, and exits without tailing logs and without tearing down "
-        "successfully-provisioned clusters — `idle_minutes_to_autostop=5, down=True` on "
-        "`sky.launch` is the safety net for those left-running clusters. Half-provisioned "
-        "clusters (whose `sky.launch`/`sky.stream_and_get` raised or yielded no `job_id`) "
-        "are still torn down in `--no-tail` so SkyPilot state doesn't accumulate orphans."
+        "Tail managed-job logs and unconditionally cancel every job in `finally`. Default "
+        "`--no-tail` waits for `sky.jobs.launch` + `sky.stream_and_get` to return a job_id per "
+        "rank (the controller has accepted the job), prints the `sky jobs logs` / "
+        "`sky jobs cancel` commands the operator can run, and exits without tailing logs and "
+        "without cancelling successfully-submitted jobs — the controller's terminal-status "
+        "lifecycle is the safety net. Half-submitted jobs (whose `sky.jobs.launch`/"
+        "`sky.stream_and_get` raised or yielded no job_id) are still cancelled in `--no-tail` "
+        "so the controller doesn't accumulate orphan state."
     ),
 )
 @click.option(
@@ -506,9 +522,9 @@ def main(
 
     # Kubernetes-specific: SkyPilot 0.12 caches enabled-clouds in-process; a
     # CLI `sky check` doesn't always populate the cache the SDK reads, and
-    # `sky.launch` raises NoCloudAccessError on a fresh runner. Calling
-    # `sky.check.check` in-process before launch is the documented workaround
-    # (test-skypilot-local.yml). RunPod/OCI source creds from disk on every launch.
+    # `sky.jobs.launch` (like `sky.launch`) raises NoCloudAccessError on a fresh
+    # runner. Calling `sky.check.check` in-process before launch is the documented
+    # workaround (test-skypilot-local.yml). RunPod/OCI source creds from disk on every launch.
     if provider == "local":
         sky.check.check(clouds=["kubernetes"], quiet=False)
 
@@ -569,25 +585,25 @@ def _run_workers(
     worker_image_tag: str,
     tail: bool,
 ) -> list[int]:
-    """Launch len(cluster_names) single-node clusters in parallel; return per-rank result code.
+    """Launch len(cluster_names) managed jobs in parallel; return per-rank result code.
 
     Each rank's task gets SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected. A rank's
     slot in the result is ``-1`` if launch/stream raised before the rank's per-mode work
     finished.
 
-    With ``tail=True``, every cluster is torn down in the ``finally`` block regardless of
-    rank outcome and the rc reflects ``sky.tail_logs``. With ``tail=False`` the launcher
-    detaches after `sky.launch` + `sky.stream_and_get` return a `job_id`, prints the
-    `sky logs` / `sky down` commands the operator can run, and only tears down
-    half-provisioned clusters — those whose `sky.launch`/`sky.stream_and_get` raised or
-    yielded no `job_id`.
+    With ``tail=True``, every job is cancelled in the ``finally`` block regardless of
+    rank outcome and the rc reflects ``sky.jobs.tail_logs``. With ``tail=False`` the launcher
+    detaches after `sky.jobs.launch` + `sky.stream_and_get` return a job_id, prints the
+    `sky jobs logs` / `sky jobs cancel` commands the operator can run, and only cancels
+    half-submitted jobs — those whose `sky.jobs.launch`/`sky.stream_and_get` raised or
+    yielded no job_id.
 
     Args:
         worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
         template_path: SkyPilot Task YAML to instantiate per rank.
-        cluster_names: One name per rank; ``len()`` defines the world size.
+        cluster_names: One managed-job name per rank; ``len()`` defines the world size.
         worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
-        tail: If True, tail logs and tear down all clusters. If False, detach after launch.
+        tail: If True, tail logs and cancel all jobs. If False, detach after launch.
 
     Returns:
         Per-rank result code (``0`` = success, anything else = failure).
@@ -596,7 +612,7 @@ def _run_workers(
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
 
     def _launch_get_job_id(rank: int) -> int:
-        cluster = cluster_names[rank]
+        job_name = cluster_names[rank]
         env_for_rank = {
             **worker_env_base,
             WORKER_RANK_ENV_VAR: str(rank),
@@ -606,17 +622,17 @@ def _run_workers(
         task = sky.Task.from_yaml(str(template_path))
         _override_image_id(task, worker_image)
         task.update_envs(env_for_rank)
-        click.echo(f"[{cluster}] provisioning rank={rank}/{num_workers}")
-        launch_request_id = sky.launch(
-            task,
-            cluster_name=cluster,
-            idle_minutes_to_autostop=5,
-            down=True,
-        )
+        click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
+        launch_request_id = sky.jobs.launch(task, name=job_name)
         launch_result = sky.stream_and_get(launch_request_id)
-        if launch_result is None or launch_result[0] is None:
-            raise click.ClickException(f"[{cluster}] launch yielded no job_id")
-        return launch_result[0]
+        # sky.jobs.launch returns (job_ids: Optional[List[int]], handle); a single-Task launch
+        # yields a list of length 1. Empty / None means the controller didn't accept the job.
+        if launch_result is None:
+            raise click.ClickException(f"[{job_name}] launch yielded no job_id")
+        job_ids = launch_result[0]
+        if not job_ids or job_ids[0] is None:
+            raise click.ClickException(f"[{job_name}] launch yielded no job_id")
+        return job_ids[0]
 
     if tail:
         return _run_workers_tail(cluster_names, _launch_get_job_id)
@@ -626,17 +642,19 @@ def _run_workers(
 def _run_workers_tail(
     cluster_names: list[str], launch_get_job_id: Callable[[int], int]
 ) -> list[int]:
-    """Tail-mode runner: tail logs per rank and tear down every cluster in the finally block."""
+    """Tail-mode runner: tail managed-job logs per rank and cancel every job in the finally block."""
     num_workers = len(cluster_names)
     rcs: list[int] = [-1] * num_workers
 
     def _launch_and_tail(rank: int) -> int:
-        cluster = cluster_names[rank]
+        job_name = cluster_names[rank]
         job_id = launch_get_job_id(rank)
-        click.echo(f"[{cluster}] streaming logs for job {job_id}")
-        rc = sky.tail_logs(cluster_name=cluster, job_id=job_id, follow=True)
-        click.echo(f"[{cluster}] tail_logs rc={rc}")
-        return rc
+        click.echo(f"[{job_name}] streaming logs for job {job_id}")
+        # sky.jobs.tail_logs returns the rc int directly (None when follow=False) — no
+        # request_id wrapping. 0 = SUCCEEDED; non-zero = non-SUCCEEDED terminal.
+        rc = sky.jobs.tail_logs(name=job_name, job_id=job_id, follow=True)
+        click.echo(f"[{job_name}] tail_logs rc={rc}")
+        return rc if rc is not None else _TAIL_LOGS_RC_SUCCESS
 
     try:
         # Iterate via as_completed so a fast-failing rank surfaces immediately
@@ -647,13 +665,13 @@ def _run_workers_tail(
                 rank = future_to_rank[fut]
                 try:
                     rcs[rank] = fut.result()
-                except Exception as exc:  # noqa: BLE001 — keep teardown reachable for every rank.
+                except Exception as exc:  # noqa: BLE001 — keep cancel reachable for every rank.
                     click.echo(f"[{cluster_names[rank]}] launch or tail raised: {exc}")
                     rcs[rank] = -1
     finally:
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            for cluster in cluster_names:
-                executor.submit(_teardown_cluster, cluster)
+            for job_name in cluster_names:
+                executor.submit(_cancel_job, job_name)
     return rcs
 
 
@@ -662,53 +680,54 @@ def _run_workers_detached(
 ) -> list[int]:
     """Detach-mode runner.
 
-    Successful clusters are intentionally left running — `idle_minutes_to_autostop=5,
-    down=True` on `sky.launch` is the safety net so a clean exit doesn't kill in-flight work.
-    Half-provisioned clusters — those whose `sky.launch`/`sky.stream_and_get` raised or
-    yielded no `job_id` (the latter surfaces as a `ClickException` from
-    ``launch_get_job_id``) — still get torn down here so SkyPilot state doesn't accumulate
-    orphans.
+    Successful managed jobs are intentionally left running — the controller's terminal-status
+    lifecycle releases compute on success/fail, so a clean launcher exit doesn't kill
+    in-flight work.  Half-submitted jobs — those whose `sky.jobs.launch`/`sky.stream_and_get`
+    raised or yielded no job_id (the latter surfaces as a `ClickException` from
+    ``launch_get_job_id``) — still get cancelled here so the controller doesn't accumulate
+    orphan state.
     """
     num_workers = len(cluster_names)
     rcs: list[int] = [-1] * num_workers
-    failed_clusters: list[str] = []
+    failed_jobs: list[str] = []
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_rank = {executor.submit(launch_get_job_id, i): i for i in range(num_workers)}
         for fut in as_completed(future_to_rank):
             rank = future_to_rank[fut]
-            cluster = cluster_names[rank]
+            job_name = cluster_names[rank]
             try:
                 job_id = fut.result()
-            except Exception as exc:  # noqa: BLE001 — half-provisioned cluster still needs cleanup.
-                click.echo(f"[{cluster}] launch raised: {exc}")
-                failed_clusters.append(cluster)
+            except Exception as exc:  # noqa: BLE001 — half-submitted job still needs cleanup.
+                click.echo(f"[{job_name}] launch raised: {exc}")
+                failed_jobs.append(job_name)
                 continue
-            _print_detached_block(cluster, job_id)
+            _print_detached_block(job_name, job_id)
             rcs[rank] = 0
 
-    if failed_clusters:
-        with ThreadPoolExecutor(max_workers=len(failed_clusters)) as executor:
-            for cluster in failed_clusters:
-                executor.submit(_teardown_cluster, cluster)
+    if failed_jobs:
+        with ThreadPoolExecutor(max_workers=len(failed_jobs)) as executor:
+            for job_name in failed_jobs:
+                executor.submit(_cancel_job, job_name)
     return rcs
 
 
-def _print_detached_block(cluster: str, job_id: int) -> None:
-    """Print the per-cluster detached-launch block: identifiers + copy-paste ops commands."""
-    click.echo(f"[{cluster}] launched job {job_id} (detached)")
-    click.echo(f"  sky logs {cluster} {job_id}")
-    click.echo(f"  sky down {cluster}")
+def _print_detached_block(job_name: str, job_id: int) -> None:
+    """Print the per-rank detached-launch block: identifiers + copy-paste ops commands."""
+    click.echo(f"[{job_name}] launched job {job_id} (detached)")
+    click.echo(f"  sky jobs logs --name {job_name}")
+    click.echo(f"  sky jobs cancel --name {job_name}")
 
 
-def _teardown_cluster(cluster: str) -> None:
-    """Tear down a single cluster, swallowing exceptions so other teardowns aren't skipped."""
+def _cancel_job(job_name: str) -> None:
+    """Cancel a single managed job by name, swallowing exceptions so other cancels aren't
+    skipped."""
     try:
-        click.echo(f"[{cluster}] tearing down")
-        down_request_id = sky.down(cluster)
-        sky.stream_and_get(down_request_id)
-    except Exception as exc:  # noqa: BLE001 — best-effort, every cluster gets its turn
-        click.echo(f"[{cluster}] teardown failed: {exc}")
+        click.echo(f"[{job_name}] cancelling")
+        cancel_request_id = sky.jobs.cancel(name=job_name)
+        sky.stream_and_get(cancel_request_id)
+    except Exception as exc:  # noqa: BLE001 — best-effort, every job gets its turn
+        click.echo(f"[{job_name}] cancel failed: {exc}")
 
 
 if __name__ == "__main__":
