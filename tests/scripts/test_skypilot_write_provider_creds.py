@@ -296,6 +296,21 @@ class TestProviderGating:
         doc = _yaml.safe_load(sky_config.read_text())
         assert "oci" in doc and "jobs" in doc, f"local→oci write order dropped a key: {doc!r}"
 
+    def test_malformed_sky_config_fails_with_clear_error(self, tmp_path: Path) -> None:
+        """A pre-existing ``~/.sky/config.yaml`` whose top level is not a mapping (e.g. a list,
+        left over from a hand-edit gone wrong) must fail the upsert with a clear, named error — not
+        a bare ``TypeError`` traceback from ``existing[key] = ...``."""
+        sky_dir = tmp_path / ".sky"
+        sky_dir.mkdir()
+        sky_config = sky_dir / "config.yaml"
+        sky_config.write_text("- accidentally\n- a list\n")
+
+        result = _run(tmp_path, R2_ENV, "--provider", "local", expect_success=False)
+        assert result.returncode != 0
+        assert "not a YAML mapping" in result.stderr
+        assert str(sky_config) in result.stderr
+        assert "Traceback" not in result.stderr
+
     def test_unknown_provider_fails(self, tmp_path: Path) -> None:
         """An unknown --provider value (e.g. aws) is rejected with a clear error."""
         result = _run(tmp_path, R2_ENV, "--provider", "aws", expect_success=False)

@@ -29,7 +29,10 @@
 # bootstrap leaves it alone — local-dev operators who hand-manage cred files
 # must not be silently clobbered. Pass --force to overwrite. (Mode is still
 # tightened to 0600 on the skip path so a hand-managed loose-perms file
-# doesn't stay world-readable.)
+# doesn't stay world-readable.) Exception: ~/.sky/config.yaml is always
+# upserted at the top-level-key granularity (see upsert_sky_config_key) — the
+# skip-existing / --force semantics don't apply, since the operation only
+# touches the keys this script owns and preserves everything else.
 #
 # R2 env-var resolution: callers must supply the rclone-prefixed names
 # (`RCLONE_CONFIG_R2_*`), matching `.env.example` and the GitHub Actions
@@ -224,7 +227,17 @@ path = Path(path_str)
 existing = {}
 if path.is_file() and path.stat().st_size > 0:
     existing = yaml.safe_load(path.read_text()) or {}
+if not isinstance(existing, dict):
+    sys.exit(
+        f"upsert_sky_config_key: {path} is not a YAML mapping at the top level "
+        f"(got {type(existing).__name__}); refusing to upsert. Fix or remove the file."
+    )
 fragment_doc = yaml.safe_load(fragment) or {}
+if not isinstance(fragment_doc, dict):
+    sys.exit(
+        f"upsert_sky_config_key: fragment is not a YAML mapping "
+        f"(got {type(fragment_doc).__name__})"
+    )
 if key not in fragment_doc:
     sys.exit(f"upsert_sky_config_key: fragment missing top-level {key!r}")
 existing[key] = fragment_doc[key]
