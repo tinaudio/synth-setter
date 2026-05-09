@@ -1,5 +1,6 @@
 import hashlib
 import random
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
@@ -369,6 +370,10 @@ def make_dataset(
                 wds_sink.close()
 
 
+_HDF5_SUFFIX = ".h5"
+_WDS_SUFFIX = ".tar"
+
+
 @click.command()
 @click.argument("data_file", type=str, required=True)
 @click.argument("num_samples", type=int, required=True)
@@ -381,12 +386,6 @@ def make_dataset(
 @click.option("--min_loudness", "-l", type=float, default=-55.0)
 @click.option("--param_spec", "-t", type=str, default="surge_xt")
 @click.option("--sample_batch_size", "-b", type=int, default=32)
-@click.option(
-    "--wds-out",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=None,
-    help="Optional path for a wds tar shard mirror of the HDF5 output.",
-)
 def main(
     data_file: str,
     num_samples: int,
@@ -399,23 +398,52 @@ def main(
     min_loudness: float = -50.0,
     param_spec: str = "surge_xt",
     sample_batch_size: int = 32,
-    wds_out: Optional[Path] = None,
 ):
-    param_spec = param_specs[param_spec]
-    make_dataset(
-        hdf5_file=data_file,
-        num_samples=num_samples,
-        plugin_path=plugin_path,
-        preset_path=preset_path,
-        sample_rate=sample_rate,
-        channels=channels,
-        velocity=velocity,
-        signal_duration_seconds=signal_duration_seconds,
-        min_loudness=min_loudness,
-        param_spec=param_spec,
-        sample_batch_size=sample_batch_size,
-        wds_file=wds_out,
-    )
+    suffix = Path(data_file).suffix
+    if suffix not in (_HDF5_SUFFIX, _WDS_SUFFIX):
+        raise click.BadParameter(
+            f"data_file must end in {_HDF5_SUFFIX} (hdf5) or {_WDS_SUFFIX} (wds), got {suffix!r}",
+            param_hint="data_file",
+        )
+    spec = param_specs[param_spec]
+    if suffix == _HDF5_SUFFIX:
+        make_dataset(
+            hdf5_file=data_file,
+            wds_file=None,
+            num_samples=num_samples,
+            plugin_path=plugin_path,
+            preset_path=preset_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            velocity=velocity,
+            signal_duration_seconds=signal_duration_seconds,
+            min_loudness=min_loudness,
+            param_spec=spec,
+            sample_batch_size=sample_batch_size,
+        )
+        return
+
+    # wds path: make_dataset still writes through h5 to capture float16 round-trip in
+    # the audio dataset, but the h5 is purely staging — only the tar is the artifact.
+    with tempfile.NamedTemporaryFile(suffix=_HDF5_SUFFIX, delete=False) as tmp:
+        h5_staging = Path(tmp.name)
+    try:
+        make_dataset(
+            hdf5_file=str(h5_staging),
+            wds_file=Path(data_file),
+            num_samples=num_samples,
+            plugin_path=plugin_path,
+            preset_path=preset_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            velocity=velocity,
+            signal_duration_seconds=signal_duration_seconds,
+            min_loudness=min_loudness,
+            param_spec=spec,
+            sample_batch_size=sample_batch_size,
+        )
+    finally:
+        h5_staging.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
