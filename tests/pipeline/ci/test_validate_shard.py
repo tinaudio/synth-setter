@@ -7,6 +7,7 @@ import sys
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import h5py
@@ -19,6 +20,7 @@ from pipeline.ci.validate_shard import (
     validate_all_shards_from_r2,
     validate_shard,
 )
+from pipeline.schemas.spec import DatasetPipelineSpec
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -37,14 +39,20 @@ def _create_shard(path: Path, shard_size: int, datasets: dict[str, tuple] | None
             f.create_dataset(name, shape=shape, dtype=np.float32)
 
 
+_AUDIO_CHANNELS = 2
+_AUDIO_SAMPLES_PER_ROW = 64000
+_MEL_SHAPE_PER_ROW = (2, 128, 401)
+_PARAM_LENGTH = 92
+
+
 def _create_tar_shard(
     path: Path,
     shard_size: int,
-    arrays: dict[str, tuple] | None = None,
+    arrays: dict[str, tuple[int, ...]] | None = None,
     *,
     omit_fields: tuple[str, ...] = (),
     omit_metadata: bool = False,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Create a wds tar shard with per-batch keyed members and a trailing metadata.json.
 
@@ -52,10 +60,10 @@ def _create_tar_shard(
     ``arrays`` overrides per-field shapes; ``omit_fields`` drops named fields entirely;
     ``omit_metadata`` skips the trailing metadata sample.
     """
-    defaults = {
-        "audio": (shard_size, 2, 64000),
-        "mel_spec": (shard_size, 2, 128, 401),
-        "param_array": (shard_size, 92),
+    defaults: dict[str, tuple[int, ...]] = {
+        "audio": (shard_size, _AUDIO_CHANNELS, _AUDIO_SAMPLES_PER_ROW),
+        "mel_spec": (shard_size, *_MEL_SHAPE_PER_ROW),
+        "param_array": (shard_size, _PARAM_LENGTH),
     }
     chosen = arrays or defaults
     meta = (
@@ -83,7 +91,7 @@ def _create_tar_shard(
 
 
 @pytest.fixture()
-def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[return]
+def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetPipelineSpec:
     """Create a real DatasetPipelineSpec with mocked I/O."""
     from pipeline.schemas.config import DatasetConfig, SplitsConfig
     from pipeline.schemas.prefix import DatasetConfigId
@@ -136,75 +144,83 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[
 class TestValidateShard:
     """Tests for validate_shard() function."""
 
-    def test_valid_shard_returns_no_errors(self, real_spec: object, tmp_path: Path) -> None:
+    def test_valid_shard_returns_no_errors(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """Correct HDF5 with all expected datasets and correct row counts returns []."""
         shard_path = tmp_path / "shard-000000.h5"
-        _create_shard(shard_path, shard_size=real_spec.shard_size)  # type: ignore[union-attr]
+        _create_shard(shard_path, shard_size=real_spec.shard_size)
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert errors == []
 
-    def test_missing_dataset_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+    def test_missing_dataset_returns_error(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """HDF5 missing one of the expected datasets returns an error."""
         shard_path = tmp_path / "shard-000000.h5"
         _create_shard(
             shard_path,
-            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
+            shard_size=real_spec.shard_size,
             datasets={
-                "audio": (real_spec.shard_size, 2, 64000),  # type: ignore[union-attr]
-                "mel_spec": (real_spec.shard_size, 2, 128, 401),  # type: ignore[union-attr]
+                "audio": (real_spec.shard_size, 2, 64000),
+                "mel_spec": (real_spec.shard_size, 2, 128, 401),
                 # param_array intentionally omitted
             },
         )
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert len(errors) == 1
         assert "param_array" in errors[0]
 
-    def test_wrong_row_count_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+    def test_wrong_row_count_returns_error(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """Dataset with wrong shape[0] returns an error mentioning that dataset."""
         shard_path = tmp_path / "shard-000000.h5"
-        wrong_size = real_spec.shard_size + 5  # type: ignore[union-attr]
+        wrong_size = real_spec.shard_size + 5
         _create_shard(
             shard_path,
             shard_size=wrong_size,
             datasets={
                 "audio": (wrong_size, 2, 64000),
-                "mel_spec": (real_spec.shard_size, 2, 128, 401),  # type: ignore[union-attr]
-                "param_array": (real_spec.shard_size, 92),  # type: ignore[union-attr]
+                "mel_spec": (real_spec.shard_size, 2, 128, 401),
+                "param_array": (real_spec.shard_size, 92),
             },
         )
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert len(errors) == 1
         assert "audio" in errors[0]
 
-    def test_not_hdf5_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+    def test_not_hdf5_returns_error(self, real_spec: DatasetPipelineSpec, tmp_path: Path) -> None:
         """File that is not valid HDF5 returns an error."""
         shard_path = tmp_path / "not-an-hdf5.h5"
         shard_path.write_bytes(b"this is not an hdf5 file\n")
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert len(errors) == 1
         assert "HDF5" in errors[0] or "hdf5" in errors[0].lower()
 
-    def test_file_not_found_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+    def test_file_not_found_returns_error(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """Path that does not exist returns an error."""
         shard_path = tmp_path / "nonexistent.h5"
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert len(errors) == 1
         assert "not found" in errors[0].lower() or "does not exist" in errors[0].lower()
 
-    def test_extra_datasets_ignored(self, real_spec: object, tmp_path: Path) -> None:
+    def test_extra_datasets_ignored(self, real_spec: DatasetPipelineSpec, tmp_path: Path) -> None:
         """Extra datasets in HDF5 beyond the required three do not cause errors."""
         shard_path = tmp_path / "shard-000000.h5"
-        shard_size = real_spec.shard_size  # type: ignore[union-attr]
+        shard_size = real_spec.shard_size
         _create_shard(
             shard_path,
             shard_size=shard_size,
@@ -216,7 +232,7 @@ class TestValidateShard:
             },
         )
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert errors == []
 
@@ -229,34 +245,36 @@ class TestValidateShard:
 class TestShardUri:
     """Tests for _shard_uri helper."""
 
-    def test_builds_r2_uri_from_spec_and_filename(self, real_spec: object) -> None:
+    def test_builds_r2_uri_from_spec_and_filename(self, real_spec: DatasetPipelineSpec) -> None:
         """The constructed URI embeds bucket, prefix, and filename."""
         spec = real_spec  # type: ignore[assignment]
-        uri = _shard_uri(spec, "shard-000007.h5")  # type: ignore[arg-type]
+        uri = _shard_uri(spec, "shard-000007.h5")
         assert uri.startswith("r2://")
         assert "shard-000007.h5" in uri
-        assert spec.r2_bucket in uri  # type: ignore[union-attr]
-        assert spec.r2_prefix in uri  # type: ignore[union-attr]
+        assert spec.r2_bucket in uri
+        assert spec.r2_prefix in uri
 
 
 class TestValidateAllShardsFromR2:
     """Tests for validate_all_shards_from_r2 — iterates spec.shards via R2."""
 
-    def test_all_valid_returns_no_errors(self, real_spec: object, tmp_path: Path) -> None:
+    def test_all_valid_returns_no_errors(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """When every shard downloads valid HDF5, returns []."""
         spec = real_spec  # type: ignore[assignment]
 
         def fake_check_call(args: list[str]) -> None:
             # Simulate rclone copyto: write a valid shard to dest path
-            _create_shard(Path(args[-1]), shard_size=spec.shard_size)  # type: ignore[union-attr]
+            _create_shard(Path(args[-1]), shard_size=spec.shard_size)
 
         with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
-            errors = validate_all_shards_from_r2(spec)  # type: ignore[arg-type]
+            errors = validate_all_shards_from_r2(spec)
 
         assert errors == []
 
     def test_invalid_shard_error_carries_shard_filename(
-        self, real_spec: object, tmp_path: Path
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
     ) -> None:
         """Validation errors are prefixed with the shard filename."""
         spec = real_spec  # type: ignore[assignment]
@@ -266,24 +284,24 @@ class TestValidateAllShardsFromR2:
             Path(args[-1]).write_bytes(b"garbage")
 
         with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
-            errors = validate_all_shards_from_r2(spec)  # type: ignore[arg-type]
+            errors = validate_all_shards_from_r2(spec)
 
         assert errors  # at least one error
         # First spec.shards filename appears in the error string
-        assert any(spec.shards[0].filename in e for e in errors)  # type: ignore[union-attr]
+        assert any(spec.shards[0].filename in e for e in errors)
 
 
 class TestMain:
     """Tests for the CLI entry point main() with the new single-arg shape."""
 
     def test_cli_rejects_two_args(
-        self, real_spec: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The legacy 2-arg shape (spec + shard) is rejected."""
         from pipeline.ci.validate_shard import main
 
         spec_json_path = tmp_path / "spec.json"
-        spec_json_path.write_text(real_spec.model_dump_json())  # type: ignore[union-attr]
+        spec_json_path.write_text(real_spec.model_dump_json())
 
         monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path), "ignored.h5"])
 
@@ -293,17 +311,17 @@ class TestMain:
         assert exc_info.value.code == 1
 
     def test_cli_exits_zero_when_all_shards_valid(
-        self, real_spec: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Valid spec + R2-served valid shards → exit 0."""
         from pipeline.ci.validate_shard import main
 
         spec = real_spec  # type: ignore[assignment]
         spec_json_path = tmp_path / "spec.json"
-        spec_json_path.write_text(spec.model_dump_json())  # type: ignore[union-attr]
+        spec_json_path.write_text(spec.model_dump_json())
 
         def fake_check_call(args: list[str]) -> None:
-            _create_shard(Path(args[-1]), shard_size=spec.shard_size)  # type: ignore[union-attr]
+            _create_shard(Path(args[-1]), shard_size=spec.shard_size)
 
         monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
         with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
@@ -313,14 +331,14 @@ class TestMain:
         assert exc_info.value.code == 0
 
     def test_cli_exits_one_when_a_shard_is_invalid(
-        self, real_spec: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """If any shard in spec.shards fails validation, exit 1."""
         from pipeline.ci.validate_shard import main
 
         spec = real_spec  # type: ignore[assignment]
         spec_json_path = tmp_path / "spec.json"
-        spec_json_path.write_text(spec.model_dump_json())  # type: ignore[union-attr]
+        spec_json_path.write_text(spec.model_dump_json())
 
         def fake_check_call(args: list[str]) -> None:
             Path(args[-1]).write_bytes(b"garbage")
@@ -341,94 +359,102 @@ class TestMain:
 class TestValidateTarShard:
     """Tests for validate_shard() on .tar shards."""
 
-    def test_valid_tar_shard_returns_no_errors(self, real_spec: object, tmp_path: Path) -> None:
+    def test_valid_tar_shard_returns_no_errors(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """Tar with all expected members and correct row counts returns []."""
         shard_path = tmp_path / "shard-000000.tar"
-        _create_tar_shard(shard_path, shard_size=real_spec.shard_size)  # type: ignore[union-attr]
+        _create_tar_shard(shard_path, shard_size=real_spec.shard_size)
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert errors == []
 
-    def test_missing_mel_member_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+    def test_missing_mel_member_returns_error(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """Tar missing all mel_spec members returns a missing-member error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
+            shard_size=real_spec.shard_size,
             omit_fields=("mel_spec",),
         )
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert len(errors) == 1
         assert "mel_spec" in errors[0]
 
     def test_missing_metadata_member_returns_error(
-        self, real_spec: object, tmp_path: Path
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
     ) -> None:
         """Tar missing metadata.json returns a missing-member error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
+            shard_size=real_spec.shard_size,
             omit_metadata=True,
         )
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert any("metadata.json" in e for e in errors)
 
-    def test_wrong_row_count_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+    def test_wrong_row_count_returns_error(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """Tar with summed audio rows != shard_size returns an error mentioning the field."""
         shard_path = tmp_path / "shard-000000.tar"
-        wrong_size = real_spec.shard_size + 5  # type: ignore[union-attr]
+        wrong_size = real_spec.shard_size + 5
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
+            shard_size=real_spec.shard_size,
             arrays={
                 "audio": (wrong_size, 2, 64000),
-                "mel_spec": (real_spec.shard_size, 2, 128, 401),  # type: ignore[union-attr]
-                "param_array": (real_spec.shard_size, 92),  # type: ignore[union-attr]
+                "mel_spec": (real_spec.shard_size, 2, 128, 401),
+                "param_array": (real_spec.shard_size, 92),
             },
         )
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert len(errors) == 1
         assert "audio" in errors[0]
 
-    def test_not_a_tar_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+    def test_not_a_tar_returns_error(self, real_spec: DatasetPipelineSpec, tmp_path: Path) -> None:
         """File that is not a valid tar returns an error."""
         shard_path = tmp_path / "shard-000000.tar"
         shard_path.write_bytes(b"definitely not a tar file")
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert len(errors) == 1
         assert "tar" in errors[0].lower()
 
     def test_metadata_missing_required_field_returns_error(
-        self, real_spec: object, tmp_path: Path
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
     ) -> None:
         """Tar with metadata.json that fails ShardMetadata validation returns an error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
+            shard_size=real_spec.shard_size,
             metadata={"sample_rate": 16000.0},  # missing velocity, channels, ...
         )
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert any("metadata.json" in e for e in errors)
 
-    def test_metadata_wrong_type_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+    def test_metadata_wrong_type_returns_error(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
         """Tar metadata.json with a strict-typed field violation returns an error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
+            shard_size=real_spec.shard_size,
             metadata={
                 "velocity": "100",  # strict=True rejects str-for-int
                 "signal_duration_seconds": 4.0,
@@ -438,12 +464,12 @@ class TestValidateTarShard:
             },
         )
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert any("metadata.json" in e for e in errors)
 
     def test_malformed_npy_payload_returns_error_does_not_raise(
-        self, real_spec: object, tmp_path: Path
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
     ) -> None:
         """Garbage bytes inside an ``audio.npy`` member surface as an error string, not an
         exception.
@@ -456,9 +482,9 @@ class TestValidateTarShard:
         with tarfile.open(shard_path, "w") as tar:
             for field in ("mel_spec", "param_array"):
                 shape = (
-                    (real_spec.shard_size, 2, 64000)  # type: ignore[union-attr]
+                    (real_spec.shard_size, 2, 64000)
                     if field == "audio"
-                    else (real_spec.shard_size, 92)  # type: ignore[union-attr]
+                    else (real_spec.shard_size, 92)
                 )
                 buf = io.BytesIO()
                 np.save(buf, np.zeros(shape, dtype=np.float32))
@@ -481,6 +507,6 @@ class TestValidateTarShard:
             meta_info.size = len(meta_payload)
             tar.addfile(meta_info, io.BytesIO(meta_payload))
 
-        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+        errors = validate_shard(shard_path, real_spec)
 
         assert any("malformed npy payload" in e and "audio" in e for e in errors)

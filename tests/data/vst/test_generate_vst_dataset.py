@@ -1334,7 +1334,7 @@ def test_emit_benchmark_appends_to_existing_file(
 
 def _load_wds_batched(
     path: Path,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict, set[str]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any], set[str]]:
     """Load a per-batch-keyed WDS tar shard.
 
     Returns (audio, mel, params, meta, members) with arrays concatenated across batches.
@@ -1342,7 +1342,7 @@ def _load_wds_batched(
     audio_chunks: dict[str, np.ndarray] = {}
     mel_chunks: dict[str, np.ndarray] = {}
     param_chunks: dict[str, np.ndarray] = {}
-    meta: dict = {}
+    meta: dict[str, Any] = {}
     with tarfile.open(path) as tar:
         members = {m.name for m in tar.getmembers()}
         for name in members:
