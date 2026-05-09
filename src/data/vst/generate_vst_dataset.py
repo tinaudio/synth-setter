@@ -242,6 +242,7 @@ def create_datasets_and_get_start_idx(
 def load_fixed_params_from_h5(
     h5_path: str,
     param_spec: ParamSpec,
+    max_rows: int | None = None,
 ) -> Tuple[
     list[dict[str, float]],
     list[dict[str, int | tuple[float, float]]],
@@ -253,16 +254,24 @@ def load_fixed_params_from_h5(
     dicts that ``make_dataset`` accepts via ``fixed_synth_params_list`` and
     ``fixed_note_params_list``. ``param_spec`` must be the same spec the shard was
     rendered with — it isn't stored in the h5 file. Raises ``ValueError`` if the
-    h5's ``param_array`` width disagrees with the spec's encoded length.
+    h5's ``param_array`` width disagrees with the spec's encoded length, or if
+    ``max_rows`` exceeds the dataset's row count. When ``max_rows`` is ``None``,
+    decodes every row.
     """
     with h5py.File(h5_path, "r") as f:
-        param_array = f["param_array"][:]
-
-    if param_array.shape[1] != len(param_spec):
-        raise ValueError(
-            f"param_spec width {len(param_spec)} does not match h5 param_array "
-            f"width {param_array.shape[1]} — wrong --param_spec for this shard?"
-        )
+        ds = f["param_array"]
+        h5_row_count, h5_param_width = ds.shape
+        if h5_param_width != len(param_spec):
+            raise ValueError(
+                f"param_spec width {len(param_spec)} does not match h5 param_array "
+                f"width {h5_param_width} — wrong --param_spec for this shard?"
+            )
+        if max_rows is not None and max_rows > h5_row_count:
+            raise ValueError(
+                f"max_rows={max_rows} exceeds h5 param_array row count={h5_row_count}"
+            )
+        rows_to_decode = h5_row_count if max_rows is None else max_rows
+        param_array = ds[:rows_to_decode]
 
     fixed_synth_params_list = []
     fixed_note_params_list = []

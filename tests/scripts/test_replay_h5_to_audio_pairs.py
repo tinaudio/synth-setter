@@ -177,6 +177,28 @@ def test_replay_raises_when_num_samples_exceeds_h5_rows(tmp_path: Path) -> None:
         )
 
 
+def test_load_fixed_params_from_h5_max_rows_decodes_only_first_n(tmp_path: Path) -> None:
+    """``max_rows=N`` decodes exactly N rows, even when the h5 has more."""
+    spec = param_specs[_SPEC_NAME]
+    h5_path = tmp_path / "shard.h5"
+    _write_synthetic_h5(h5_path, num_rows=5, spec=spec)
+
+    synth_list, note_list = load_fixed_params_from_h5(str(h5_path), spec, max_rows=2)
+
+    assert len(synth_list) == 2
+    assert len(note_list) == 2
+
+
+def test_load_fixed_params_from_h5_raises_when_max_rows_exceeds_h5_rows(tmp_path: Path) -> None:
+    """``max_rows`` larger than the h5's row count raises before any decode runs."""
+    spec = param_specs[_SPEC_NAME]
+    h5_path = tmp_path / "shard.h5"
+    _write_synthetic_h5(h5_path, num_rows=3, spec=spec)
+
+    with pytest.raises(ValueError, match="exceeds h5 param_array row count"):
+        load_fixed_params_from_h5(str(h5_path), spec, max_rows=5)
+
+
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst

@@ -11,6 +11,7 @@ The output directory contains:
   ``scripts/compute_audio_metrics.py`` for MSS / wMFCC / SOT / RMS metrics.
 """
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -31,6 +32,7 @@ from src.data.vst.generate_vst_dataset import (  # noqa: E402
 )
 from src.data.vst.param_spec import ParamSpec  # noqa: E402
 
+_SAMPLE_DIR_GLOB = "sample_*"
 _SAMPLE_DIR_FORMAT = "sample_{idx:06d}"
 _REPLAYED_H5_FILENAME = "replayed.h5"
 
@@ -90,8 +92,6 @@ def replay_h5_to_audio_pairs(
     if num_samples is not None and num_samples <= 0:
         raise ValueError(f"num_samples must be positive, got {num_samples}")
 
-    fixed_synth_list, fixed_note_list = load_fixed_params_from_h5(str(h5_path), param_spec)
-
     with h5py.File(h5_path, "r") as f:
         audio_dataset = cast(h5py.Dataset, f["audio"])
         sample_rate = _read_audio_attr(audio_dataset, "sample_rate", float)
@@ -103,9 +103,15 @@ def replay_h5_to_audio_pairs(
         if num_samples is not None and num_samples > h5_row_count:
             raise ValueError(f"num_samples={num_samples} exceeds h5 row count={h5_row_count}")
         rows_to_render = h5_row_count if num_samples is None else num_samples
-        target_audio = audio_dataset[:rows_to_render].astype(np.float32)
+
+    fixed_synth_list, fixed_note_list = load_fixed_params_from_h5(
+        str(h5_path), param_spec, max_rows=rows_to_render
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    for stale in output_dir.glob(_SAMPLE_DIR_GLOB):
+        if stale.is_dir():
+            shutil.rmtree(stale)
     replayed_h5_path = output_dir / _REPLAYED_H5_FILENAME
     logger.info(f"Replaying {rows_to_render} rows from {h5_path} into {replayed_h5_path}")
 
@@ -122,17 +128,21 @@ def replay_h5_to_audio_pairs(
             min_loudness=min_loudness,
             param_spec=param_spec,
             sample_batch_size=rows_to_render,
-            fixed_synth_params_list=fixed_synth_list[:rows_to_render],
-            fixed_note_params_list=fixed_note_list[:rows_to_render],
+            fixed_synth_params_list=fixed_synth_list,
+            fixed_note_params_list=fixed_note_list,
         )
 
-    with h5py.File(replayed_h5_path, "r") as f:
-        replayed_audio_dataset = cast(h5py.Dataset, f["audio"])
-        pred_audio = replayed_audio_dataset[...].astype(np.float32)
-
     logger.info(f"Writing {rows_to_render} WAV pairs into {output_dir}")
-    for i in range(rows_to_render):
-        _write_pair(output_dir, i, target_audio[i], pred_audio[i], sample_rate, channels)
+    with (
+        h5py.File(h5_path, "r") as input_h5,
+        h5py.File(replayed_h5_path, "r") as replayed_h5,
+    ):
+        input_audio_dataset = cast(h5py.Dataset, input_h5["audio"])
+        replayed_audio_dataset = cast(h5py.Dataset, replayed_h5["audio"])
+        for i in range(rows_to_render):
+            target_row = input_audio_dataset[i].astype(np.float32)
+            pred_row = replayed_audio_dataset[i].astype(np.float32)
+            _write_pair(output_dir, i, target_row, pred_row, sample_rate, channels)
 
     logger.info(f"Wrote {rows_to_render} pairs to {output_dir}")
     return rows_to_render
