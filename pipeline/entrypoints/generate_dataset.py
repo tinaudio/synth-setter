@@ -28,8 +28,6 @@ from pipeline.partitioning import get_my_shards, read_rank_world_from_env
 from pipeline.schemas.spec import DatasetSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
 
-_R2_URI_SCHEME = "r2://"
-
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
     """Load a DatasetSpec from a local path or `r2://bucket/key` URI.
@@ -43,18 +41,8 @@ def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
     error (see #749), so the launcher ships the spec via R2 instead of
     file_mounts.
     """
-    if spec_uri.startswith(_R2_URI_SCHEME):
-        rclone_path = "r2:" + spec_uri[len(_R2_URI_SCHEME) :]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            args = [  # noqa: S607 — rclone resolved by image's PATH
-                "rclone",
-                "copy",
-                "--checksum",
-                rclone_path,
-                tmpdir,
-            ]
-            subprocess.check_call(args)  # noqa: S603 — args from validated spec URI
-            local_path = Path(tmpdir) / Path(spec_uri).name
+    if r2_io.is_r2_uri(spec_uri):
+        with r2_io.downloaded_to_tempfile(spec_uri) as local_path:
             spec_text = local_path.read_text()
     else:
         spec_text = Path(spec_uri).read_text()
