@@ -493,7 +493,7 @@ def make_wds_dataset(
 @click.option("--velocity", "-v", type=int, default=100)
 @click.option("--signal_duration_seconds", "-d", type=float, default=4.0)
 @click.option("--min_loudness", "-l", type=float, default=-55.0)
-@click.option("--param_spec", "-t", type=str, default="surge_xt")
+@click.option("--param_spec", "-t", "param_spec_name", type=str, default="surge_xt")
 @click.option("--sample_batch_size", "-b", type=int, default=32)
 def main(
     data_file: str,
@@ -505,11 +505,11 @@ def main(
     velocity: int,
     signal_duration_seconds: float,
     min_loudness: float,
-    param_spec: str,
+    param_spec_name: str,
     sample_batch_size: int,
 ) -> None:
     """Render ``num_samples`` and write to ``data_file`` (suffix selects writer)."""
-    spec = param_specs[param_spec]
+    spec = param_specs[param_spec_name]
     suffix = Path(data_file).suffix
     if suffix == ".h5":
         make_hdf5_dataset(
