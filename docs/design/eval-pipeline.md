@@ -282,6 +282,10 @@ Four metrics are computed for each (predicted, target) audio pair:
 - MSS uses three windows: 10ms, 25ms, 100ms (hops: 5ms, 10ms, 50ms)
 - Output CSV: per-sample metrics indexed by directory name, aggregated means/stds
 
+### 5.4 Replay-Only Path
+
+When the goal is to compare a re-render of an existing h5 shard against itself — for VST-noise-floor measurements, regression checks after a rendering change, or audio-metric oracle floor — `scripts/replay_h5_to_audio_pairs.py` produces a `sample_NNNNNN/{target,pred}.wav` directory directly from the shard's `param_array`, skipping the predict and render stages entirely (no checkpoint, no model). The resulting directory feeds `compute_audio_metrics.py` exactly as in §5.3. Run `python scripts/replay_h5_to_audio_pairs.py --help` for the CLI surface.
+
 ## 6. R2 Integration
 
 ### 6.1 Dataset Download
@@ -1188,13 +1192,14 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 
 ### Eval Scripts
 
-| File                               | Lines    | Purpose                                     | Cluster coupling                                                          |
-| ---------------------------------- | -------- | ------------------------------------------- | ------------------------------------------------------------------------- |
-| `src/eval.py`                      | 121      | Hydra entry point for predict/test/validate | Data configs require explicit `dataset_root`/`predict_file` (no defaults) |
-| `scripts/predict_vst_audio.py`     | 232      | VST rendering from predicted parameters     | Plugin path defaults                                                      |
-| `renderscript.sh`                  | 59       | Xvfb wrapper for headless rendering         | Assumes Linux, no macOS support                                           |
-| `scripts/compute_audio_metrics.py` | 323      | Parallel metric computation                 | None (already portable)                                                   |
-| `jobs/predict/*.sh`                | 19 files | SGE job scripts, one per model (deprecated) | SGE directives, hardcoded paths, `module load`                            |
+| File                                  | Lines    | Purpose                                                                                                                   | Cluster coupling                                                          |
+| ------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `src/eval.py`                         | 121      | Hydra entry point for predict/test/validate                                                                               | Data configs require explicit `dataset_root`/`predict_file` (no defaults) |
+| `scripts/predict_vst_audio.py`        | 232      | VST rendering from predicted parameters                                                                                   | Plugin path defaults                                                      |
+| `renderscript.sh`                     | 59       | Xvfb wrapper for headless rendering                                                                                       | Assumes Linux, no macOS support                                           |
+| `scripts/compute_audio_metrics.py`    | 323      | Parallel metric computation                                                                                               | None (already portable)                                                   |
+| `scripts/replay_h5_to_audio_pairs.py` | —        | Replay an h5 shard into a `compute_audio_metrics`-compatible pair dir (`sample_NNNNNN/{target,pred}.wav` + `replayed.h5`) | Plugin path defaults                                                      |
+| `jobs/predict/*.sh`                   | 19 files | SGE job scripts, one per model (deprecated)                                                                               | SGE directives, hardcoded paths, `module load`                            |
 
 ### Data Configs
 
