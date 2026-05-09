@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Validate HDF5 shards against a DatasetPipelineSpec.
+"""Validate dataset shards against a DatasetPipelineSpec.
 
-Checks that each shard file is a valid HDF5 file, contains the expected
-datasets (audio, mel_spec, param_array), and that each dataset's row count
-matches the spec's shard_size.
+Checks that each shard file is a valid HDF5 (.h5) or tar (.tar) shard, contains
+the expected datasets (audio, mel_spec/mel, param_array), and that each
+dataset's row count matches the spec's shard_size.
 
 CLI usage:
     python3 -m pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
@@ -14,31 +14,41 @@ Iterates `spec.shards` and downloads each shard from R2 (under
 
 from __future__ import annotations
 
+import io
 import sys
+import tarfile
 from pathlib import Path
 from typing import cast
 
 import h5py
+import numpy as np
 
 from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from pipeline.schemas.spec import DatasetPipelineSpec
 
-_EXPECTED_DATASETS = ("audio", "mel_spec", "param_array")
+_EXPECTED_H5_DATASETS = ("audio", "mel_spec", "param_array")
+_EXPECTED_TAR_MEMBERS = ("audio.npy", "mel.npy", "param_array.npy", "metadata.json")
 
 
 def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
-    """Validate one HDF5 shard against a DatasetPipelineSpec.
+    """Validate one shard against a DatasetPipelineSpec.
 
-    Checks:
-    1. File opens as HDF5
-    2. Contains expected datasets: audio, mel_spec, param_array
-    3. Each dataset's row count (shape[0]) matches spec.shard_size
+    Dispatches on suffix: ``.h5`` -> HDF5 path, ``.tar`` -> tar path. Both paths
+    check that the expected per-row arrays exist and that each row count
+    matches ``spec.shard_size``.
 
     Returns list of error strings (empty = valid).
     """
     if not shard_path.exists():
         return [f"shard file not found: {shard_path}"]
 
+    if shard_path.suffix == ".tar":
+        return _validate_tar_shard(shard_path, spec)
+    return _validate_h5_shard(shard_path, spec)
+
+
+def _validate_h5_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
+    """Validate an HDF5 shard's datasets and row counts."""
     try:
         f = h5py.File(shard_path, "r")
     except OSError:
@@ -46,7 +56,7 @@ def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
 
     errors: list[str] = []
     with f:
-        for name in _EXPECTED_DATASETS:
+        for name in _EXPECTED_H5_DATASETS:
             if name not in f:
                 errors.append(f"missing dataset: {name!r}")
                 continue
@@ -54,6 +64,40 @@ def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
             row_count = cast(h5py.Dataset, f[name]).shape[0]
             if row_count != spec.shard_size:
                 errors.append(f"dataset {name!r} has {row_count} rows, expected {spec.shard_size}")
+
+    return errors
+
+
+def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
+    """Validate a tar shard's members and array row counts."""
+    try:
+        tar = tarfile.open(shard_path)
+    except tarfile.TarError:
+        return [f"file is not a valid tar archive: {shard_path}"]
+
+    errors: list[str] = []
+    with tar:
+        members = {m.name for m in tar.getmembers()}
+        missing = [name for name in _EXPECTED_TAR_MEMBERS if name not in members]
+        if missing:
+            for name in missing:
+                errors.append(f"missing tar member: {name!r}")
+            return errors
+
+        for member_name, label in (
+            ("audio.npy", "audio"),
+            ("mel.npy", "mel_spec"),
+            ("param_array.npy", "param_array"),
+        ):
+            extracted = tar.extractfile(member_name)
+            if extracted is None:
+                errors.append(f"unable to extract tar member: {member_name!r}")
+                continue
+            arr = np.load(io.BytesIO(extracted.read()))
+            if arr.shape[0] != spec.shard_size:
+                errors.append(
+                    f"dataset {label!r} has {arr.shape[0]} rows, expected {spec.shard_size}"
+                )
 
     return errors
 
