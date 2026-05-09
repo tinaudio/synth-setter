@@ -6,11 +6,14 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from pipeline.ci.validate_spec import _read_spec_text, validate_structure, validate_test_values
 
 
-def _make_valid_spec(**overrides: object) -> dict:
+def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dict:
     """Build a minimal valid spec dict for testing."""
+    ext = ".h5" if output_format == "hdf5" else ".tar"
     spec: dict = {
         "run_id": "test-20260328T120000Z",
         "created_at": "2026-03-28T12:00:00+00:00",
@@ -18,7 +21,7 @@ def _make_valid_spec(**overrides: object) -> dict:
         "is_repo_dirty": False,
         "param_spec": "surge_simple",
         "renderer_version": "1.3.4",
-        "output_format": "hdf5",
+        "output_format": output_format,
         "sample_rate": 16000,
         "shard_size": 32,
         "base_seed": 42,
@@ -33,9 +36,7 @@ def _make_valid_spec(**overrides: object) -> dict:
         "min_loudness": -55.0,
         "sample_batch_size": 32,
         "shards": [
-            {"shard_id": 0, "filename": "shard-000000.h5", "seed": 42},
-            {"shard_id": 1, "filename": "shard-000001.h5", "seed": 43},
-            {"shard_id": 2, "filename": "shard-000002.h5", "seed": 44},
+            {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)
         ],
     }
     spec.update(overrides)
@@ -77,10 +78,15 @@ class TestValidateStructure:
 class TestValidateTestValues:
     """Tests for validate_test_values."""
 
-    def test_valid_test_spec_returns_no_errors(self) -> None:
-        """Spec matching ci-materialize-test.yaml expectations passes."""
-        spec = _make_valid_spec()
+    @pytest.mark.parametrize(
+        ("output_format", "ext"),
+        [("hdf5", ".h5"), ("wds", ".tar")],
+    )
+    def test_valid_test_spec_returns_no_errors(self, output_format: str, ext: str) -> None:
+        """Spec matching ci-materialize-test.yaml expectations passes for both formats."""
+        spec = _make_valid_spec(output_format=output_format)
         assert validate_test_values(spec) == []
+        assert all(s["filename"].endswith(ext) for s in spec["shards"])
 
     def test_wrong_shard_count_returns_error(self) -> None:
         """Spec with 2 shards instead of 3 returns a shard count error."""
@@ -104,6 +110,17 @@ class TestValidateTestValues:
         )
         errors = validate_test_values(spec)
         assert any("seed" in e for e in errors)
+
+    def test_wds_spec_with_h5_filenames_returns_error(self) -> None:
+        """A wds spec with hdf5-style filenames fails the extension check."""
+        spec = _make_valid_spec(
+            output_format="wds",
+            shards=[
+                {"shard_id": i, "filename": f"shard-{i:06d}.h5", "seed": 42 + i} for i in range(3)
+            ],
+        )
+        errors = validate_test_values(spec)
+        assert any("filenames" in e for e in errors)
 
 
 class TestReadSpecText:

@@ -82,7 +82,8 @@ def validate_test_values(spec: dict) -> list[str]:
         errors.append(f"expected seeds [42, 43, 44], got {seeds}")
 
     filenames = [s["filename"] for s in shards]
-    expected_filenames = ["shard-000000.h5", "shard-000001.h5", "shard-000002.h5"]
+    ext = ".h5" if spec.get("output_format") == "hdf5" else ".tar"
+    expected_filenames = [f"shard-{i:06d}{ext}" for i in range(3)]
     if filenames != expected_filenames:
         errors.append(f"expected filenames {expected_filenames}, got {filenames}")
 
