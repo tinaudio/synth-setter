@@ -284,17 +284,14 @@ class TestRun:
         )
         spec = DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
 
-        def _materialize_both(args: list[str]) -> int:
+        def _materialize_tar(args: list[str]) -> int:
             script_idx = _find_script_index(args)
-            h5_file = Path(args[script_idx + 1])
-            h5_file.parent.mkdir(parents=True, exist_ok=True)
-            h5_file.write_bytes(b"")
-            wds_idx = args.index("--wds-out")
-            tar_file = Path(args[wds_idx + 1])
+            tar_file = Path(args[script_idx + 1])
+            tar_file.parent.mkdir(parents=True, exist_ok=True)
             tar_file.write_bytes(b"")
             return 0
 
-        mock_check_call.side_effect = _materialize_both
+        mock_check_call.side_effect = _materialize_tar
 
         run(spec)
 
@@ -653,8 +650,10 @@ class TestBuildGenerateArgs:
 
         assert args[1] == "src/data/vst/generate_vst_dataset.py"
 
-    def test_wds_output_format_passes_wds_out_with_tar_path(self, tmp_path: Path) -> None:
-        """For wds specs, the data_file is a sibling .h5 and --wds-out targets the tar."""
+    def test_wds_output_format_passes_tar_positional_and_no_format_flag(
+        self, tmp_path: Path
+    ) -> None:
+        """For wds specs, positional is the tar path; format is implicit in the extension."""
         kwargs = _base_spec_kwargs(
             tmp_path,
             output_format="wds",
@@ -665,10 +664,9 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(spec, shard, tmp_path)
 
-        assert args[2] == str(tmp_path / "shard-000000.h5")
-        assert "--wds-out" in args
-        wds_idx = args.index("--wds-out")
-        assert args[wds_idx + 1] == str(tmp_path / "shard-000000.tar")
+        assert args[2] == str(tmp_path / "shard-000000.tar")
+        assert "--format" not in args
+        assert "--wds-out" not in args
 
 
 # ---------------------------------------------------------------------------

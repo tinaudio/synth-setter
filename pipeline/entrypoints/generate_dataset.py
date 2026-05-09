@@ -104,10 +104,10 @@ def build_generate_args(
 ) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
-    For ``output_format='wds'`` the HDF5 ``data_file`` argument is a sibling tmp
-    path inside ``output_dir``; the wds tar shard (the artifact that gets
-    uploaded to R2) is written to ``output_dir / shard.filename`` via
-    ``--wds-out``.
+    Format is implicit in ``shard.filename``'s extension (``.h5`` for hdf5,
+    ``.tar`` for wds), itself derived from ``spec.output_format``. The CLI
+    dispatches on that extension, so the launcher just hands the path
+    through — no format flag needed.
 
     Args:
         spec: Materialized pipeline spec (dataset-level parameters).
@@ -117,15 +117,7 @@ def build_generate_args(
     Returns:
         List of CLI arguments for generate_vst_dataset.py.
     """
-    if spec.output_format == "wds":
-        h5_path = output_dir / f"{Path(shard.filename).stem}.h5"
-        wds_path = output_dir / shard.filename
-        data_file = h5_path
-        extra: list[str] = ["--wds-out", str(wds_path)]
-    else:
-        data_file = output_dir / shard.filename
-        extra = []
-
+    output_path = output_dir / shard.filename
     options = {
         "plugin_path": spec.plugin_path,
         "preset_path": spec.preset_path,
@@ -141,12 +133,11 @@ def build_generate_args(
     args = [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
-        str(data_file),
+        str(output_path),
         str(spec.shard_size),
     ]
     for key, value in options.items():
         args.extend([f"--{key}", str(value)])
-    args += extra
 
     return args
 
@@ -222,8 +213,7 @@ def _render_and_upload_shard(
     """Render a single shard, upload it to R2, then unlink the local file.
 
     Unlinking after upload bounds local disk to one shard at a time — necessary for multi-shard
-    runs on disk-constrained workers. For wds, the temporary HDF5 sibling produced alongside the
-    tar is also removed so it doesn't accumulate.
+    runs on disk-constrained workers.
     """
     args = [VST_HEADLESS_WRAPPER] if sys.platform == "linux" else []
     args += build_generate_args(spec, shard, work_dir)
@@ -241,11 +231,6 @@ def _render_and_upload_shard(
     logger.info(f"shard uploaded: {shard.filename} -> {r2_dest_prefix}")
     shard_path.unlink()
     logger.info(f"shard removed locally: {shard_path}")
-    if spec.output_format == "wds":
-        sibling_h5 = work_dir / f"{Path(shard.filename).stem}.h5"
-        if sibling_h5.is_file():
-            sibling_h5.unlink()
-            logger.info(f"sibling hdf5 removed locally: {sibling_h5}")
 
 
 if __name__ == "__main__":
