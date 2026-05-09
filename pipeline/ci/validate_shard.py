@@ -22,9 +22,10 @@ from typing import cast
 
 import h5py
 import numpy as np
+from pydantic import ValidationError
 
 from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
-from pipeline.schemas.spec import DatasetPipelineSpec
+from pipeline.schemas.spec import DatasetPipelineSpec, ShardMetadata
 
 _EXPECTED_H5_DATASETS = ("audio", "mel_spec", "param_array")
 _TAR_METADATA_MEMBER = "metadata.json"
@@ -69,6 +70,19 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]
     return errors
 
 
+def _validate_tar_metadata(tar: tarfile.TarFile, member_name: str) -> list[str]:
+    """Validate the tar's ``metadata.json`` parses as a strict ``ShardMetadata``."""
+    extracted = tar.extractfile(member_name)
+    if extracted is None:
+        return [f"unable to extract tar member: {member_name!r}"]
+    payload = extracted.read()
+    try:
+        ShardMetadata.model_validate_json(payload)
+    except ValidationError as exc:
+        return [f"{member_name}: invalid ShardMetadata: {exc}"]
+    return []
+
+
 def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
     """Validate a per-batch-keyed wds tar shard's members and summed row counts."""
     try:
@@ -82,6 +96,8 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
 
         if _TAR_METADATA_MEMBER not in members:
             errors.append(f"missing tar member: {_TAR_METADATA_MEMBER!r}")
+        else:
+            errors.extend(_validate_tar_metadata(tar, _TAR_METADATA_MEMBER))
 
         rows_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
         seen_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}

@@ -56,7 +56,17 @@ def _create_tar_shard(
         "param_array": (shard_size, 92),
     }
     chosen = arrays or defaults
-    meta = metadata if metadata is not None else {"sample_rate": 16000}
+    meta = (
+        metadata
+        if metadata is not None
+        else {
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "sample_rate": 16000.0,
+            "channels": 2,
+            "min_loudness": -55.0,
+        }
+    )
 
     sample: dict[str, object] = {"__key__": "00000000"}
     for field, shape in chosen.items():
@@ -395,3 +405,37 @@ class TestValidateTarShard:
 
         assert len(errors) == 1
         assert "tar" in errors[0].lower()
+
+    def test_metadata_missing_required_field_returns_error(
+        self, real_spec: object, tmp_path: Path
+    ) -> None:
+        """Tar with metadata.json that fails ShardMetadata validation returns an error."""
+        shard_path = tmp_path / "shard-000000.tar"
+        _create_tar_shard(
+            shard_path,
+            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
+            metadata={"sample_rate": 16000.0},  # missing velocity, channels, ...
+        )
+
+        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+
+        assert any("metadata.json" in e for e in errors)
+
+    def test_metadata_wrong_type_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+        """Tar metadata.json with a strict-typed field violation returns an error."""
+        shard_path = tmp_path / "shard-000000.tar"
+        _create_tar_shard(
+            shard_path,
+            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
+            metadata={
+                "velocity": "100",  # strict=True rejects str-for-int
+                "signal_duration_seconds": 4.0,
+                "sample_rate": 16000.0,
+                "channels": 2,
+                "min_loudness": -55.0,
+            },
+        )
+
+        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+
+        assert any("metadata.json" in e for e in errors)
