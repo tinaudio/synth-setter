@@ -405,22 +405,20 @@ def main(
             f"data_file must end in {_HDF5_SUFFIX} (hdf5) or {_WDS_SUFFIX} (wds), got {suffix!r}",
             param_hint="data_file",
         )
-    spec = param_specs[param_spec]
+    common_kwargs: dict[str, Any] = {
+        "num_samples": num_samples,
+        "plugin_path": plugin_path,
+        "preset_path": preset_path,
+        "sample_rate": sample_rate,
+        "channels": channels,
+        "velocity": velocity,
+        "signal_duration_seconds": signal_duration_seconds,
+        "min_loudness": min_loudness,
+        "param_spec": param_specs[param_spec],
+        "sample_batch_size": sample_batch_size,
+    }
     if suffix == _HDF5_SUFFIX:
-        make_dataset(
-            hdf5_file=data_file,
-            wds_file=None,
-            num_samples=num_samples,
-            plugin_path=plugin_path,
-            preset_path=preset_path,
-            sample_rate=sample_rate,
-            channels=channels,
-            velocity=velocity,
-            signal_duration_seconds=signal_duration_seconds,
-            min_loudness=min_loudness,
-            param_spec=spec,
-            sample_batch_size=sample_batch_size,
-        )
+        make_dataset(hdf5_file=data_file, wds_file=None, **common_kwargs)
         return
 
     # wds path: make_dataset still writes through h5 to capture float16 round-trip in
@@ -428,20 +426,7 @@ def main(
     with tempfile.NamedTemporaryFile(suffix=_HDF5_SUFFIX, delete=False) as tmp:
         h5_staging = Path(tmp.name)
     try:
-        make_dataset(
-            hdf5_file=str(h5_staging),
-            wds_file=Path(data_file),
-            num_samples=num_samples,
-            plugin_path=plugin_path,
-            preset_path=preset_path,
-            sample_rate=sample_rate,
-            channels=channels,
-            velocity=velocity,
-            signal_duration_seconds=signal_duration_seconds,
-            min_loudness=min_loudness,
-            param_spec=spec,
-            sample_batch_size=sample_batch_size,
-        )
+        make_dataset(hdf5_file=str(h5_staging), wds_file=Path(data_file), **common_kwargs)
     finally:
         h5_staging.unlink(missing_ok=True)
 
