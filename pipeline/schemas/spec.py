@@ -33,7 +33,7 @@ class ShardSpec(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     shard_id: int
-    filename: str  # "shard-000000.h5"
+    filename: str  # "shard-000000.h5" (hdf5) or "shard-000000.tar" (wds)
     seed: int  # base_seed + shard_id
 
 
@@ -150,15 +150,13 @@ def _build_pipeline_spec(
 
     This is the pure functional core — no I/O, no side effects.
     """
-    if config.output_format != "hdf5":
-        raise NotImplementedError(f"Output format {config.output_format!r} not yet supported")
-
     run_id = make_dataset_wandb_run_id(config_id, timestamp=created_at)
 
+    ext = ".h5" if config.output_format == "hdf5" else ".tar"
     shards = tuple(
         ShardSpec(
             shard_id=i,
-            filename=f"shard-{i:06d}.h5",
+            filename=f"shard-{i:06d}{ext}",
             seed=config.base_seed + i,
         )
         for i in range(config.num_shards)

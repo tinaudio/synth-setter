@@ -485,18 +485,27 @@ class TestMaterializeSpec:
         with pytest.raises(KeyError):
             materialize_spec(config, config_id)
 
-    def test_wds_output_format_raises_not_implemented(
-        self, patch_materialize_io: Path, valid_config_dict: dict
+    @pytest.mark.parametrize(
+        ("output_format", "ext"),
+        [("hdf5", ".h5"), ("wds", ".tar")],
+    )
+    def test_shard_filename_extension_matches_output_format(
+        self,
+        patch_materialize_io: Path,
+        valid_config_dict: dict,
+        output_format: str,
+        ext: str,
     ) -> None:
-        """WDS output format is not yet supported."""
+        """Shard filenames use the extension that matches output_format."""
         valid_config_dict["plugin_path"] = str(patch_materialize_io)
-        valid_config_dict["output_format"] = "wds"
-        valid_config_dict["num_shards"] = 1
-        valid_config_dict["splits"] = {"train": 1, "val": 0, "test": 0}
+        valid_config_dict["output_format"] = output_format
+        valid_config_dict["num_shards"] = 2
+        valid_config_dict["splits"] = {"train": 1, "val": 1, "test": 0}
         config = DatasetConfig(**valid_config_dict)
         config_id = DatasetConfigId("ci-smoke-test")
-        with pytest.raises(NotImplementedError, match="wds"):
-            materialize_spec(config, config_id)
+        spec = materialize_spec(config, config_id)
+
+        assert all(s.filename.endswith(ext) for s in spec.shards)
 
     def test_multi_shard_seeds_are_base_plus_shard_id(
         self,
