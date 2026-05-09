@@ -21,7 +21,11 @@ resources:
   cloud: kubernetes
   cpus: 2+
   memory: 4+
-  disk_size: 20
+  # NB: `disk_size` deliberately omitted — Kubernetes rejects it ("Disk size is
+  # not supported by Kubernetes. To add additional disk, use volumes."), and
+  # under managed jobs the controller doesn't transparently skip the field the
+  # way cluster-launch did. Specifying it here used to be a silent no-op; with
+  # `sky.jobs.launch` it kept the worker pod Pending until the GHA timeout.
 
 # Placeholders. Real values are injected by the launcher via update_envs.
 # WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the
