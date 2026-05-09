@@ -1332,21 +1332,39 @@ def test_emit_benchmark_appends_to_existing_file(
 def _load_wds_batched(
     path: Path,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict, set[str]]:
-    """Load a batched-array WDS tar shard.
+    """Load a per-batch-keyed WDS tar shard.
 
-    Returns (audio, mel, params, meta, members).
+    Returns (audio, mel, params, meta, members) with arrays concatenated across batches.
     """
+    audio_chunks: dict[str, np.ndarray] = {}
+    mel_chunks: dict[str, np.ndarray] = {}
+    param_chunks: dict[str, np.ndarray] = {}
+    meta: dict = {}
     with tarfile.open(path) as tar:
         members = {m.name for m in tar.getmembers()}
+        for name in members:
+            extracted = tar.extractfile(name)
+            assert extracted is not None
+            payload = extracted.read()
+            stem, _, ext = name.rpartition(".")
+            if stem == "info" and ext == "json":
+                meta = json.loads(payload)
+                continue
+            key, _, field = stem.rpartition(".")
+            if ext != "npy":
+                continue
+            arr = np.load(io.BytesIO(payload))
+            if field == "audio":
+                audio_chunks[key] = arr
+            elif field == "mel":
+                mel_chunks[key] = arr
+            elif field == "params":
+                param_chunks[key] = arr
 
-        def _np(name: str) -> np.ndarray:
-            return np.load(io.BytesIO(tar.extractfile(name).read()))  # pyright: ignore[reportOptionalMemberAccess]
+    def _concat(chunks: dict[str, np.ndarray]) -> np.ndarray:
+        return np.concatenate([chunks[k] for k in sorted(chunks)], axis=0)
 
-        audio = _np("audio.npy")
-        mel = _np("mel.npy")
-        params = _np("param_array.npy")
-        meta = json.loads(tar.extractfile("metadata.json").read())  # pyright: ignore[reportOptionalMemberAccess]
-    return audio, mel, params, meta, members
+    return _concat(audio_chunks), _concat(mel_chunks), _concat(param_chunks), meta, members
 
 
 @pytest.mark.slow
@@ -1382,7 +1400,12 @@ def test_h5_and_wds_outputs_are_equivalent(tmp_path: Path) -> None:
     h5_audio, h5_mel, h5_params = _assert_h5_structure_is_valid(h5_path, spec, num_samples=n)
     wds_audio, wds_mel, wds_params, wds_meta, members = _load_wds_batched(wds_path)
 
-    assert members == {"audio.npy", "mel.npy", "param_array.npy", "metadata.json"}
+    sample_batch_size = 2
+    expected_members = {"info.json"}
+    for start in range(0, n, sample_batch_size):
+        prefix = f"{start:08d}"
+        expected_members |= {f"{prefix}.audio.npy", f"{prefix}.mel.npy", f"{prefix}.params.npy"}
+    assert members == expected_members
 
     np.testing.assert_array_equal(wds_audio, h5_audio)
     np.testing.assert_array_equal(wds_mel, h5_mel)

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import io
-import json
 import sys
-import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +10,7 @@ from unittest.mock import patch
 import h5py
 import numpy as np
 import pytest
+import webdataset as wds
 
 from pipeline.ci.validate_shard import (
     _shard_uri,
@@ -42,33 +40,34 @@ def _create_tar_shard(
     shard_size: int,
     arrays: dict[str, tuple] | None = None,
     *,
-    omit_members: tuple[str, ...] = (),
+    omit_fields: tuple[str, ...] = (),
+    omit_info: bool = False,
     metadata: dict | None = None,
 ) -> None:
-    """Create a minimal tar shard with the four-member layout (audio/mel/param/metadata)."""
+    """Create a wds tar shard with per-batch keyed members and a trailing info.json.
+
+    The single batch holds ``shard_size`` rows so the validator's summed-row check passes.
+    ``arrays`` overrides per-field shapes; ``omit_fields`` drops named fields entirely;
+    ``omit_info`` skips the trailing info sample.
+    """
     defaults = {
-        "audio.npy": (shard_size, 2, 64000),
-        "mel.npy": (shard_size, 2, 128, 401),
-        "param_array.npy": (shard_size, 92),
+        "audio": (shard_size, 2, 64000),
+        "mel": (shard_size, 2, 128, 401),
+        "params": (shard_size, 92),
     }
     chosen = arrays or defaults
     meta = metadata if metadata is not None else {"sample_rate": 16000}
 
-    with tarfile.open(path, "w") as tar:
-        for name, shape in chosen.items():
-            if name in omit_members:
-                continue
-            buf = io.BytesIO()
-            np.save(buf, np.zeros(shape, dtype=np.float32))
-            payload = buf.getvalue()
-            info = tarfile.TarInfo(name=name)
-            info.size = len(payload)
-            tar.addfile(info, io.BytesIO(payload))
-        if "metadata.json" not in omit_members:
-            payload = json.dumps(meta).encode("utf-8")
-            info = tarfile.TarInfo(name="metadata.json")
-            info.size = len(payload)
-            tar.addfile(info, io.BytesIO(payload))
+    sample: dict[str, object] = {"__key__": "00000000"}
+    for field, shape in chosen.items():
+        if field in omit_fields:
+            continue
+        sample[f"{field}.npy"] = np.zeros(shape, dtype=np.float32)
+
+    with wds.TarWriter(str(path)) as writer:  # pyright: ignore[reportAttributeAccessIssue]
+        writer.write(sample)
+        if not omit_info:
+            writer.write({"__key__": "info", "json": meta})
 
 
 @pytest.fixture()
@@ -340,45 +339,43 @@ class TestValidateTarShard:
         assert errors == []
 
     def test_missing_mel_member_returns_error(self, real_spec: object, tmp_path: Path) -> None:
-        """Tar missing mel.npy returns a missing-member error."""
+        """Tar missing all mel members returns a missing-member error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
             shard_size=real_spec.shard_size,  # type: ignore[union-attr]
-            omit_members=("mel.npy",),
+            omit_fields=("mel",),
         )
 
         errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
 
         assert len(errors) == 1
-        assert "mel.npy" in errors[0]
+        assert "mel" in errors[0]
 
-    def test_missing_metadata_member_returns_error(
-        self, real_spec: object, tmp_path: Path
-    ) -> None:
-        """Tar missing metadata.json returns a missing-member error."""
+    def test_missing_info_member_returns_error(self, real_spec: object, tmp_path: Path) -> None:
+        """Tar missing info.json returns a missing-member error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
             shard_size=real_spec.shard_size,  # type: ignore[union-attr]
-            omit_members=("metadata.json",),
+            omit_info=True,
         )
 
         errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
 
-        assert any("metadata.json" in e for e in errors)
+        assert any("info.json" in e for e in errors)
 
     def test_wrong_row_count_returns_error(self, real_spec: object, tmp_path: Path) -> None:
-        """Tar member with wrong shape[0] returns an error mentioning that dataset."""
+        """Tar with summed audio rows != shard_size returns an error mentioning the field."""
         shard_path = tmp_path / "shard-000000.tar"
         wrong_size = real_spec.shard_size + 5  # type: ignore[union-attr]
         _create_tar_shard(
             shard_path,
-            shard_size=wrong_size,
+            shard_size=real_spec.shard_size,  # type: ignore[union-attr]
             arrays={
-                "audio.npy": (wrong_size, 2, 64000),
-                "mel.npy": (real_spec.shard_size, 2, 128, 401),  # type: ignore[union-attr]
-                "param_array.npy": (real_spec.shard_size, 92),  # type: ignore[union-attr]
+                "audio": (wrong_size, 2, 64000),
+                "mel": (real_spec.shard_size, 2, 128, 401),  # type: ignore[union-attr]
+                "params": (real_spec.shard_size, 92),  # type: ignore[union-attr]
             },
         )
 

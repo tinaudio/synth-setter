@@ -27,7 +27,8 @@ from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from pipeline.schemas.spec import DatasetPipelineSpec
 
 _EXPECTED_H5_DATASETS = ("audio", "mel_spec", "param_array")
-_EXPECTED_TAR_MEMBERS = ("audio.npy", "mel.npy", "param_array.npy", "metadata.json")
+_TAR_INFO_MEMBER = "info.json"
+_TAR_ARRAY_FIELDS = ("audio", "mel", "params")
 
 
 def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
@@ -69,7 +70,7 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]
 
 
 def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
-    """Validate a tar shard's members and array row counts."""
+    """Validate a per-batch-keyed wds tar shard's members and summed row counts."""
     try:
         tar = tarfile.open(shard_path)
     except tarfile.TarError:
@@ -78,25 +79,35 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
     errors: list[str] = []
     with tar:
         members = {m.name for m in tar.getmembers()}
-        missing = [name for name in _EXPECTED_TAR_MEMBERS if name not in members]
-        if missing:
-            for name in missing:
-                errors.append(f"missing tar member: {name!r}")
-            return errors
 
-        for member_name, label in (
-            ("audio.npy", "audio"),
-            ("mel.npy", "mel_spec"),
-            ("param_array.npy", "param_array"),
-        ):
-            extracted = tar.extractfile(member_name)
+        if _TAR_INFO_MEMBER not in members:
+            errors.append(f"missing tar member: {_TAR_INFO_MEMBER!r}")
+
+        rows_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
+        seen_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
+        for name in members:
+            stem, _, ext = name.rpartition(".")
+            if ext != "npy":
+                continue
+            _, _, field = stem.rpartition(".")
+            if field not in rows_by_field:
+                continue
+            extracted = tar.extractfile(name)
             if extracted is None:
-                errors.append(f"unable to extract tar member: {member_name!r}")
+                errors.append(f"unable to extract tar member: {name!r}")
                 continue
             arr = np.load(io.BytesIO(extracted.read()))
-            if arr.shape[0] != spec.shard_size:
+            rows_by_field[field] += arr.shape[0]
+            seen_by_field[field] += 1
+
+        for field in _TAR_ARRAY_FIELDS:
+            if seen_by_field[field] == 0:
+                errors.append(f"missing tar member: '*.{field}.npy'")
+                continue
+            if rows_by_field[field] != spec.shard_size:
                 errors.append(
-                    f"dataset {label!r} has {arr.shape[0]} rows, expected {spec.shard_size}"
+                    f"dataset {field!r} has {rows_by_field[field]} rows, "
+                    f"expected {spec.shard_size}"
                 )
 
     return errors
