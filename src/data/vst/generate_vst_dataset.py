@@ -3,7 +3,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Any, List, Optional, Protocol, Tuple
+from typing import Any, Protocol
 
 import click
 import h5py
@@ -93,7 +93,7 @@ def generate_sample(
     channels: int,
     min_loudness: float,
     param_spec: ParamSpec,
-    preset_path: Optional[str],
+    preset_path: str | None,
     fixed_synth_params: dict[str, float] | None = None,
     fixed_note_params: dict[str, int | tuple[float, float]] | None = None,
 ) -> VSTDataSample:
@@ -180,7 +180,7 @@ def save_sample(
 
 
 def save_hdf5_samples(
-    samples: List[VSTDataSample],
+    samples: list[VSTDataSample],
     audio_dataset: h5py.Dataset,
     mel_dataset: h5py.Dataset,
     param_dataset: h5py.Dataset,
@@ -201,7 +201,7 @@ def save_hdf5_samples(
 
 
 def save_wds_samples(
-    samples: List[VSTDataSample],
+    samples: list[VSTDataSample],
     sink: _WdsTarSink,
     start_idx: int,
 ) -> None:
@@ -242,10 +242,10 @@ def get_first_unwritten_idx(dataset: h5py.Dataset) -> int:
 def create_dataset_and_get_first_unwritten_idx(
     h5py_file: h5py.File,
     name: str,
-    shape: Tuple[int, ...],
+    shape: tuple[int, ...],
     dtype: np.dtype,
     compression: Any,
-) -> Tuple[h5py.Dataset, int]:
+) -> tuple[h5py.Dataset, int]:
     logger.info(f"Looking for dataset {name}...")
     if name in h5py_file:
         logger.info(f"Found dataset {name}, looking for first unwritten row.")
@@ -322,7 +322,7 @@ def _generate_sample_for_index(
     start_idx: int,
     *,
     plugin_path: str,
-    preset_path: Optional[str],
+    preset_path: str | None,
     velocity: int,
     signal_duration_seconds: float,
     sample_rate: float,
@@ -356,7 +356,7 @@ def make_hdf5_dataset(
     hdf5_file: Path | str,
     num_samples: int,
     plugin_path: str,
-    preset_path: Optional[str],
+    preset_path: str | None,
     sample_rate: float,
     channels: int,
     velocity: int,
@@ -443,7 +443,7 @@ def make_wds_dataset(
     wds_file: Path | str,
     num_samples: int,
     plugin_path: str,
-    preset_path: Optional[str],
+    preset_path: str | None,
     sample_rate: float,
     channels: int,
     velocity: int,

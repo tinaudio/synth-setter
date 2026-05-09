@@ -9,7 +9,7 @@ to the `gh-pages` chart at
 
 The slow VST tests in
 [`tests/data/vst/test_generate_vst_dataset.py`](../../tests/data/vst/test_generate_vst_dataset.py)
-exercise `make_dataset` round-trips and assert that two independent renders
+exercise `make_hdf5_dataset` round-trips and assert that two independent renders
 of the same parameters land within phase-robust tolerances. Per-run
 metric values typically come in well below the assertion thresholds, so
 the assertions only catch _gross_ regressions (silence, wrong patch).
@@ -58,7 +58,7 @@ different question.
 ### `VST noise floor (1 preset N renders)`
 
 Sourced from `test_datasets_from_hardcoded_params_are_identical`. Both
-stages of `make_dataset` run with the same hardcoded
+stages of `make_hdf5_dataset` run with the same hardcoded
 `_HARDCODED_*_PARAMS` patch via `_patched_sample`, so all
 `2 × num_samples` renders use _identical_ inputs. The per-pair metrics
 plus an all-pairs cross-comparison expose every-other-render variance —

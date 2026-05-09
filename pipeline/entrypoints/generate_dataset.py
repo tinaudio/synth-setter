@@ -104,18 +104,9 @@ def build_generate_args(
 ) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
-    Format is implicit in ``shard.filename``'s extension (``.h5`` for hdf5,
-    ``.tar`` for wds), itself derived from ``spec.output_format``. The CLI
-    dispatches on that extension, so the launcher just hands the path
-    through — no format flag needed.
-
-    Args:
-        spec: Materialized pipeline spec (dataset-level parameters).
-        shard: The specific shard to generate (owns filename).
-        output_dir: Directory for the output shard file.
-
-    Returns:
-        List of CLI arguments for generate_vst_dataset.py.
+    The output format is encoded in ``shard.filename``'s suffix (validated on
+    ``DatasetPipelineSpec`` against ``spec.output_format``); the CLI dispatches
+    on that suffix, so the launcher just hands the path through.
     """
     output_path = output_dir / shard.filename
     options = {
@@ -151,11 +142,8 @@ def run(spec: DatasetPipelineSpec) -> None:
     to one shard at a time. Subprocess failures propagate immediately
     (fail-fast); later shards are not attempted.
 
-    Honors ``spec.output_format`` (``"hdf5"`` or ``"wds"``); the wds path
-    writes a tar shard mirror of the HDF5 dataset and uploads only the tar.
-
-    Args:
-        spec: Pre-materialized DatasetPipelineSpec.
+    The output format follows ``spec.output_format``; the renderer's CLI
+    dispatches on each shard's filename suffix.
 
     Raises:
         RuntimeError: If the worker's plugin version disagrees with

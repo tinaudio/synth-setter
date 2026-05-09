@@ -49,7 +49,7 @@ class ShardSpec(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     shard_id: int
-    filename: str  # "shard-000000.h5" (hdf5) or "shard-000000.tar" (wds)
+    filename: str  # extension matches the spec's output_format (validated on the parent model)
     seed: int  # base_seed + shard_id
 
 
@@ -89,8 +89,7 @@ class DatasetPipelineSpec(BaseModel):
     @field_validator("r2_prefix")
     @classmethod
     def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
-        # Upload paths concat r2_prefix with filenames (e.g. f"{prefix}{INPUT_SPEC_FILENAME}");
-        # missing trailing slash silently produces a wrong key like ".../prefixinput_spec.json".
+        """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
         if not value.endswith("/"):
             raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
         return value
@@ -98,9 +97,7 @@ class DatasetPipelineSpec(BaseModel):
     @field_validator("r2_bucket")
     @classmethod
     def _r2_bucket_must_not_be_blank(cls, value: str) -> str:
-        # DatasetConfig.r2_bucket has the same validator; this mirror enforces the
-        # invariant when specs come from a non-config path (hand-edited, externally
-        # materialized) so rclone never receives a malformed `r2:/...` destination.
+        """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
         if not value.strip():
             raise ValueError("r2_bucket must not be blank")
         return value
@@ -108,18 +105,14 @@ class DatasetPipelineSpec(BaseModel):
     @field_validator("shards")
     @classmethod
     def _shards_must_not_be_empty(cls, value: tuple[ShardSpec, ...]) -> tuple[ShardSpec, ...]:
-        # DatasetConfig enforces num_shards > 0 at materialize time; this mirror catches
-        # specs loaded from external/hand-edited JSON where shards=[] would otherwise let
-        # generate_dataset.run() succeed as a silent no-op (uploads only the spec).
+        """Reject empty shards so generate_dataset.run() can't succeed as a silent no-op."""
         if not value:
             raise ValueError("shards must not be empty")
         return value
 
     @model_validator(mode="after")
     def _shard_filenames_match_output_format(self) -> DatasetPipelineSpec:
-        # Catches hand-edited specs where output_format and shard.filename's suffix
-        # disagree — the worker's generate_vst_dataset CLI dispatches on the suffix
-        # only, so a mismatch would silently produce shards in the wrong format.
+        """Catch hand-edited specs where shard.filename's suffix disagrees with output_format."""
         expected_ext = _OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
         for shard in self.shards:
             if not shard.filename.endswith(expected_ext):
