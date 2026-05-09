@@ -14,7 +14,16 @@ from pipeline.schemas.prefix import (
     make_dataset_wandb_run_id,
     make_r2_prefix,
 )
+from pipeline.schemas.shard_metadata import ShardMetadata as ShardMetadata
 from src.data.vst import param_specs
+
+__all__ = [
+    "SURGE_XT_RENDERER_VERSION",
+    "DatasetPipelineSpec",
+    "ShardMetadata",
+    "ShardSpec",
+    "materialize_spec",
+]
 
 # Pinned Surge XT renderer version baked into tinaudio/synth-setter:dev-snapshot
 # (built from SURGE_GIT_REF=f7b97c68 — release-xt/1.3.4). materialize_spec sets
@@ -35,23 +44,6 @@ class ShardSpec(BaseModel):
     shard_id: int
     filename: str  # "shard-000000.h5" (hdf5) or "shard-000000.tar" (wds)
     seed: int  # base_seed + shard_id
-
-
-class ShardMetadata(BaseModel):
-    """Sidecar JSON written into wds tar shards (member ``metadata.json``).
-
-    Mirrors the ``audio`` HDF5 dataset attrs the wds layout doesn't have a
-    natural home for. Validated on read by ``validate_shard`` so a malformed
-    sidecar fails loudly instead of silently shipping a half-described shard.
-    """
-
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
-
-    velocity: int
-    signal_duration_seconds: float
-    sample_rate: float
-    channels: int
-    min_loudness: float
 
 
 class DatasetPipelineSpec(BaseModel):

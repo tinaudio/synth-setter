@@ -10,10 +10,10 @@ from pydantic import ValidationError
 
 from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import DatasetConfigId
+from pipeline.schemas.shard_metadata import ShardMetadata
 from pipeline.schemas.spec import (
     SURGE_XT_RENDERER_VERSION,
     DatasetPipelineSpec,
-    ShardMetadata,
     ShardSpec,
     materialize_spec,
 )
