@@ -596,6 +596,29 @@ class TestMainCli:
         assert "rc=100" in result.output
         mock_sky.jobs.cancel.assert_called_once()
 
+    def test_tail_logs_returning_none_with_follow_true_is_treated_as_failure(
+        self,
+        config_yaml: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """`sky.jobs.tail_logs(follow=True)` is contractually `Optional[int]` but only returns None
+        when `follow=False`.
+
+        A None back from the SDK while we're passing `follow=True` is a contract violation — the
+        launcher must surface that as a failure rather than mask it as success, otherwise it would
+        exit 0 on a job whose terminal status the launcher never confirmed.
+        """
+        mock_sky.jobs.tail_logs.return_value = None
+
+        result = _invoke(config_yaml, template_yaml, env_file, "--tail")
+        assert result.exit_code != 0
+        assert "tail_logs returned None with follow=True" in result.output
+        mock_sky.jobs.cancel.assert_called_once()
+
     # --- Edge cases ----------------------------------------------------------
 
     def test_launch_returning_none_job_id_aborts(

@@ -651,11 +651,19 @@ def _run_workers_tail(
         job_name = cluster_names[rank]
         job_id = launch_get_job_id(rank)
         click.echo(f"[{job_name}] streaming logs for job {job_id}")
-        # sky.jobs.tail_logs returns the rc int directly (None when follow=False) — no
+        # sky.jobs.tail_logs returns the rc int directly (None only when follow=False) — no
         # request_id wrapping. 0 = SUCCEEDED; non-zero = non-SUCCEEDED terminal.
         rc = sky.jobs.tail_logs(name=job_name, job_id=job_id, follow=True)
         click.echo(f"[{job_name}] tail_logs rc={rc}")
-        return rc if rc is not None else _TAIL_LOGS_RC_SUCCESS
+        if rc is None:
+            # SDK contract violation: follow=True must yield an int rc. Treat None as a
+            # job whose status the launcher couldn't confirm rather than masking it as
+            # success — the executor's except-Exception block converts this into rc=-1
+            # for the rank, which the aggregate-failure check surfaces as a non-zero exit.
+            raise click.ClickException(
+                f"[{job_name}] tail_logs returned None with follow=True; job status unknown"
+            )
+        return rc
 
     try:
         # Iterate via as_completed so a fast-failing rank surfaces immediately
