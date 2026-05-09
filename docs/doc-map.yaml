@@ -93,7 +93,7 @@ docs:
     description: SkyPilot launcher for the data pipeline (RunPod + OCI smoke)
     sources:
       - pattern: "pipeline/entrypoints/skypilot_launch.py"
-        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → launch flow, sky.launch (unmanaged) + down=True, --tail/--no-tail mode split (default --no-tail: _run_workers_detached waits for job_id per rank then prints sky logs/sky down commands and exits; --tail: _run_workers_tail invokes sky.tail_logs(follow=True) and tears down clusters in finally) with idle_minutes_to_autostop=5, down=True as the detached-mode safety net, per-cluster R2 spec key (skypilot-launcher-specs/<cluster>.json) — file_mounts deliberately avoided, see #749"
+        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → sky.jobs.launch (managed-jobs SDK) flow, --tail/--no-tail mode split (default --no-tail: _run_workers_detached waits for the controller to return a job_id per rank then prints `sky jobs logs --name` / `sky jobs cancel --name` commands and exits, leaving the controller's terminal-status lifecycle as the safety net; --tail: _run_workers_tail invokes sky.jobs.tail_logs(follow=True) and cancels every job in finally), per-launch R2 spec key (skypilot-launcher-specs/<job_name>.json) — file_mounts deliberately avoided, see #749"
       - pattern: "configs/compute/runpod-template.yaml"
         covers: "SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`--worker-image-tag`, default `dev-snapshot`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "configs/compute/oci-cpu-template.yaml"

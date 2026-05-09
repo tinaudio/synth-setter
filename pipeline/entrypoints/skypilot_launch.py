@@ -375,12 +375,13 @@ def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
     type=int,
     default=None,
     help=(
-        "Number of single-node SkyPilot clusters to fan out in parallel. Overrides the dataset "
-        "config's `num_workers` field; if neither is set, the schema default applies. RunPod's "
-        "backend does not support num_nodes>1, so we synthesize multi-worker partitioning by "
-        "launching N independent clusters and injecting SYNTH_SETTER_WORKER_RANK / "
-        "SYNTH_SETTER_NUM_WORKERS per rank. Each cluster downloads the same materialized spec "
-        "and uses pipeline.partitioning.get_my_shards to slice its share."
+        "Number of independent managed jobs to fan out in parallel. Overrides the dataset "
+        "config's `num_workers` field; if neither is set, the schema default applies. RunPod "
+        "and OCI don't support num_nodes>1 for this workload, so we synthesize multi-worker "
+        "partitioning by launching N independent managed jobs and injecting "
+        "SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS per rank. Each rank downloads "
+        "the same materialized spec and uses pipeline.partitioning.get_my_shards to slice "
+        "its share."
     ),
 )
 @click.option(
