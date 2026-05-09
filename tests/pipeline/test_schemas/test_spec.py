@@ -13,6 +13,7 @@ from pipeline.schemas.prefix import DatasetConfigId
 from pipeline.schemas.spec import (
     SURGE_XT_RENDERER_VERSION,
     DatasetPipelineSpec,
+    ShardMetadata,
     ShardSpec,
     materialize_spec,
 )
@@ -44,6 +45,47 @@ def patch_materialize_io(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     contents.mkdir(parents=True)
     (contents / "moduleinfo.json").write_text('{"Version": "1.3.4"}')
     return tmp_path / "FakePlugin.vst3"
+
+
+class TestShardMetadata:
+    """Behavioral contracts for the ShardMetadata model that pins shard sidecar JSON."""
+
+    def _valid_kwargs(self) -> dict[str, Any]:
+        return {
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "sample_rate": 16000.0,
+            "channels": 2,
+            "min_loudness": -55.0,
+        }
+
+    def test_valid_kwargs_construct(self) -> None:
+        meta = ShardMetadata(**self._valid_kwargs())
+        assert meta.velocity == 100
+        assert meta.channels == 2
+
+    def test_strict_rejects_string_for_int_velocity(self) -> None:
+        kwargs = self._valid_kwargs()
+        kwargs["velocity"] = "100"
+        with pytest.raises(ValidationError):
+            ShardMetadata(**kwargs)
+
+    def test_missing_required_field_raises(self) -> None:
+        kwargs = self._valid_kwargs()
+        del kwargs["channels"]
+        with pytest.raises(ValidationError):
+            ShardMetadata(**kwargs)
+
+    def test_extra_fields_rejected(self) -> None:
+        kwargs = self._valid_kwargs()
+        kwargs["bonus"] = "field"
+        with pytest.raises(ValidationError):
+            ShardMetadata(**kwargs)
+
+    def test_json_round_trip(self) -> None:
+        original = ShardMetadata(**self._valid_kwargs())
+        restored = ShardMetadata.model_validate_json(original.model_dump_json())
+        assert restored == original
 
 
 class TestShardSpec:
