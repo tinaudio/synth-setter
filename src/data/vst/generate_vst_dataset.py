@@ -1,6 +1,5 @@
 import hashlib
 import random
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
@@ -484,10 +483,6 @@ def make_wds_dataset(
         sink.write({"__key__": "metadata", "json": meta.model_dump()})
 
 
-_HDF5_SUFFIX = ".h5"
-_WDS_SUFFIX = ".tar"
-
-
 @click.command()
 @click.argument("data_file", type=str, required=True)
 @click.argument("num_samples", type=int, required=True)
@@ -503,37 +498,51 @@ _WDS_SUFFIX = ".tar"
 def main(
     data_file: str,
     num_samples: int,
-    plugin_path: str = "plugins/Surge XT.vst3",
-    preset_path: str = "presets/surge-base.vstpreset",
-    sample_rate: float = 44100.0,
-    channels: int = 2,
-    velocity: int = 100,
-    signal_duration_seconds: float = 4.0,
-    min_loudness: float = -50.0,
-    param_spec: str = "surge_xt",
-    sample_batch_size: int = 32,
-):
+    plugin_path: str,
+    preset_path: str,
+    sample_rate: float,
+    channels: int,
+    velocity: int,
+    signal_duration_seconds: float,
+    min_loudness: float,
+    param_spec: str,
+    sample_batch_size: int,
+) -> None:
+    """Render ``num_samples`` and write to ``data_file`` (suffix selects writer)."""
+    spec = param_specs[param_spec]
     suffix = Path(data_file).suffix
-    common_kwargs: dict[str, Any] = {
-        "num_samples": num_samples,
-        "plugin_path": plugin_path,
-        "preset_path": preset_path,
-        "sample_rate": sample_rate,
-        "channels": channels,
-        "velocity": velocity,
-        "signal_duration_seconds": signal_duration_seconds,
-        "min_loudness": min_loudness,
-        "param_spec": param_specs[param_spec],
-        "sample_batch_size": sample_batch_size,
-    }
-    if suffix == _HDF5_SUFFIX:
-        make_hdf5_dataset(hdf5_file=data_file, **common_kwargs)
+    if suffix == ".h5":
+        make_hdf5_dataset(
+            hdf5_file=data_file,
+            num_samples=num_samples,
+            plugin_path=plugin_path,
+            preset_path=preset_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            velocity=velocity,
+            signal_duration_seconds=signal_duration_seconds,
+            min_loudness=min_loudness,
+            param_spec=spec,
+            sample_batch_size=sample_batch_size,
+        )
         return
-    if suffix == _WDS_SUFFIX:
-        make_wds_dataset(wds_file=data_file, **common_kwargs)
+    if suffix == ".tar":
+        make_wds_dataset(
+            wds_file=data_file,
+            num_samples=num_samples,
+            plugin_path=plugin_path,
+            preset_path=preset_path,
+            sample_rate=sample_rate,
+            channels=channels,
+            velocity=velocity,
+            signal_duration_seconds=signal_duration_seconds,
+            min_loudness=min_loudness,
+            param_spec=spec,
+            sample_batch_size=sample_batch_size,
+        )
         return
     raise click.BadParameter(
-        f"data_file must end in {_HDF5_SUFFIX} (hdf5) or {_WDS_SUFFIX} (wds), got {suffix!r}",
+        f"data_file must end in .h5 (hdf5) or .tar (wds), got {suffix!r}",
         param_hint="data_file",
     )
 
