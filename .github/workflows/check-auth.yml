@@ -122,7 +122,10 @@ jobs:
               check_mode_600 "${HOME}/.sky/config.yaml"
               ;;
             local)
-              # kind needs no compute provider auth; only the R2 files above.
+              # kind needs no compute provider auth, but the bootstrap does write a
+              # ~/.sky/config.yaml that shrinks the managed-jobs controller's resource
+              # request so the controller pod schedules on kind (defaults are too big).
+              check_mode_600 "${HOME}/.sky/config.yaml"
               test ! -e "${HOME}/.runpod/config.toml" \
                 || { echo "::error::~/.runpod/config.toml unexpectedly written for --provider local"; exit 1; }
               test ! -d "${HOME}/.oci" \
