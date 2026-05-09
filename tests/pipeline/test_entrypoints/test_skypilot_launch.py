@@ -516,12 +516,18 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`--tail` streams logs with follow=True — real-time logs instead of a buffered tail."""
+        """`--tail` streams logs with follow=True via `sky.jobs.tail_logs(job_id=...,
+        follow=True)`.
+
+        The SDK rejects passing both `name=` and `job_id=` ("Cannot specify both name and job_id"),
+        so the launcher passes only `job_id=` — the deterministic int the managed-jobs controller
+        returned at submit time.
+        """
         result = _invoke(
             config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--tail"
         )
         assert result.exit_code == 0, result.output
-        mock_sky.jobs.tail_logs.assert_called_once_with(name="smoke-job-1", job_id=1, follow=True)
+        mock_sky.jobs.tail_logs.assert_called_once_with(job_id=1, follow=True)
 
     def test_cancel_runs_on_success_under_tail(
         self,
@@ -876,19 +882,25 @@ class TestNumWorkersFanOut:
         # the Task identity, so call order doesn't matter here.
         mock_sky.Task.from_yaml.side_effect = list(tasks.values())
 
-        # Route jobs.launch + jobs.cancel + stream_and_get + jobs.tail_logs by name kwarg.
+        # Route jobs.launch + jobs.cancel + stream_and_get by `name` kwarg; route
+        # jobs.tail_logs by `job_id` since the launcher passes only job_id (the SDK rejects
+        # `name + job_id` together with "Cannot specify both name and job_id").
         launch_reqs = {name: f"launch-{name}" for name in job_names}
         cancel_reqs = {name: f"cancel-{name}" for name in job_names}
         mock_sky.jobs.launch.side_effect = lambda task, **kw: launch_reqs[kw["name"]]
         mock_sky.jobs.cancel.side_effect = lambda **kw: cancel_reqs[kw["name"]]
 
+        # rank i → job_id = i + 1 (the controller's id sequence in the stream_and_get response).
+        job_id_for_name = {name: i + 1 for i, name in enumerate(job_names)}
+        rcs_by_job_id = {job_id_for_name[name]: rc for name, rc in rcs.items()}
+
         stream_responses: dict[str, object] = {
-            launch_reqs[name]: ([i + 1], MagicMock()) for i, name in enumerate(job_names)
+            launch_reqs[name]: ([job_id_for_name[name]], MagicMock()) for name in job_names
         }
         stream_responses.update({req: None for req in cancel_reqs.values()})
         mock_sky.stream_and_get.side_effect = lambda req: stream_responses[req]
 
-        mock_sky.jobs.tail_logs.side_effect = lambda **kw: rcs.get(kw["name"], 0)
+        mock_sky.jobs.tail_logs.side_effect = lambda **kw: rcs_by_job_id.get(kw["job_id"], 0)
         return tasks
 
     def test_three_workers_launches_three_jobs_under_tail(

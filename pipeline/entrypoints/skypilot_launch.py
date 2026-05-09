@@ -653,7 +653,10 @@ def _run_workers_tail(
         click.echo(f"[{job_name}] streaming logs for job {job_id}")
         # sky.jobs.tail_logs returns the rc int directly (None only when follow=False) — no
         # request_id wrapping. 0 = SUCCEEDED; non-zero = non-SUCCEEDED terminal.
-        rc = sky.jobs.tail_logs(name=job_name, job_id=job_id, follow=True)
+        # The SDK rejects passing both `name` and `job_id` ("Cannot specify both name and
+        # job_id"); pass only `job_id` since the controller's int return value is the most
+        # precise reference for the job we just submitted.
+        rc = sky.jobs.tail_logs(job_id=job_id, follow=True)
         click.echo(f"[{job_name}] tail_logs rc={rc}")
         if rc is None:
             # SDK contract violation: follow=True must yield an int rc. Treat None as a
