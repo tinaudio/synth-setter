@@ -52,9 +52,11 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 
 > **Implementation status:** Single-machine sequential multi-shard generation is
 > implemented today (`pipeline/entrypoints/generate_dataset.py` loops over
-> `spec.shards`). The distributed/parallel pipeline described below — CLI,
-> backends, reconciliation, and finalize stages — is the design target and not
-> yet built.
+> `spec.shards`, skipping shards already present in R2 — worker-side
+> resumability MVP per #750; the launcher-side reconciliation engine described
+> in §7.4 / §7.7 is not yet built). The distributed/parallel pipeline described
+> below — CLI, backends, reconciliation, and finalize stages — is the design
+> target and not yet built.
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
@@ -1428,8 +1430,7 @@ pipeline/
     validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
 
   constants.py          # Well-known filenames and paths (R2_BUCKET, etc.)
-  r2_io.py              # rclone wrappers used by ci/, entrypoints/, and CI workflows
-                        # (is_r2_uri, download_to_path, upload_to_uri, downloaded_to_tempfile)
+  r2_io.py              # rclone-backed R2 helpers (URI handling, download, upload, size probe)
 
   # --- Planned (not yet implemented) ---
   # cli.py              # Click entry point: generate, status, finalize
