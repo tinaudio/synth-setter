@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import sys
+import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -439,3 +441,46 @@ class TestValidateTarShard:
         errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
 
         assert any("metadata.json" in e for e in errors)
+
+    def test_malformed_npy_payload_returns_error_does_not_raise(
+        self, real_spec: object, tmp_path: Path
+    ) -> None:
+        """Garbage bytes inside an ``audio.npy`` member surface as an error string, not an
+        exception.
+
+        np.load on malformed bytes can raise ``ValueError`` / ``EOFError``;
+        the validator must trap and convert to an error so a corrupt shard
+        from a worker doesn't crash the validate job before reporting.
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        with tarfile.open(shard_path, "w") as tar:
+            for field in ("mel_spec", "param_array"):
+                shape = (
+                    (real_spec.shard_size, 2, 64000)  # type: ignore[union-attr]
+                    if field == "audio"
+                    else (real_spec.shard_size, 92)  # type: ignore[union-attr]
+                )
+                buf = io.BytesIO()
+                np.save(buf, np.zeros(shape, dtype=np.float32))
+                buf.seek(0)
+                payload = buf.read()
+                info = tarfile.TarInfo(name=f"00000000.{field}.npy")
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+
+            audio_garbage = b"definitely not a valid npy header"
+            audio_info = tarfile.TarInfo(name="00000000.audio.npy")
+            audio_info.size = len(audio_garbage)
+            tar.addfile(audio_info, io.BytesIO(audio_garbage))
+
+            meta_payload = (
+                b'{"velocity":100,"signal_duration_seconds":4.0,"sample_rate":16000.0,'
+                b'"channels":2,"min_loudness":-55.0}'
+            )
+            meta_info = tarfile.TarInfo(name="metadata.json")
+            meta_info.size = len(meta_payload)
+            tar.addfile(meta_info, io.BytesIO(meta_payload))
+
+        errors = validate_shard(shard_path, real_spec)  # type: ignore[arg-type]
+
+        assert any("malformed npy payload" in e and "audio" in e for e in errors)

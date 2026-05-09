@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Validate dataset shards against a DatasetPipelineSpec.
 
-Checks that each shard file is a valid HDF5 (.h5) or tar (.tar) shard, contains
-the expected datasets (audio, mel_spec/mel, param_array), and that each
-dataset's row count matches the spec's shard_size.
+Performs full per-shard validation: each shard file is a valid HDF5 (.h5) or
+tar (.tar) shard, contains every expected per-row array, and each row count
+matches ``spec.shard_size``. The expected array names are listed in
+``_EXPECTED_H5_DATASETS`` / ``_TAR_ARRAY_FIELDS``.
 
 CLI usage:
     python3 -m pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
 
-Iterates `spec.shards` and downloads each shard from R2 (under
-`r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}`) before validating.
+Iterates ``spec.shards`` and downloads each shard from R2 (under
+``r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}``) before validating.
 """
 
 from __future__ import annotations
@@ -85,7 +86,13 @@ def _validate_tar_metadata(tar: tarfile.TarFile, member_name: str) -> list[str]:
 
 
 def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
-    """Validate a per-batch-keyed wds tar shard's members and summed row counts."""
+    """Full-tier validation of a wds tar shard.
+
+    Tar member layout: per-batch-keyed ``<batch_key>.<field>.npy`` plus a single
+    ``metadata.json``. The summed row count across all batches per field must
+    equal ``spec.shard_size``; ``metadata.json`` must parse as a strict
+    ``ShardMetadata``.
+    """
     try:
         tar = tarfile.open(shard_path)
     except tarfile.TarError:
@@ -93,7 +100,7 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
 
     errors: list[str] = []
     with tar:
-        members = {m.name for m in tar.getmembers()}
+        members = sorted(m.name for m in tar.getmembers())
 
         if _TAR_METADATA_MEMBER not in members:
             errors.append(f"missing tar member: {_TAR_METADATA_MEMBER!r}")
@@ -103,9 +110,9 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
         rows_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
         seen_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
         for name in members:
-            stem, _, ext = name.rpartition(".")
-            if ext != "npy":
+            if not name.endswith(".npy"):
                 continue
+            stem, _, _ = name.rpartition(".")
             _, _, field = stem.rpartition(".")
             if field not in rows_by_field:
                 continue
@@ -113,7 +120,11 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
             if extracted is None:
                 errors.append(f"unable to extract tar member: {name!r}")
                 continue
-            arr = np.load(io.BytesIO(extracted.read()))
+            try:
+                arr = np.load(io.BytesIO(extracted.read()))
+            except (ValueError, EOFError, OSError) as exc:
+                errors.append(f"{name}: malformed npy payload: {exc}")
+                continue
             rows_by_field[field] += arr.shape[0]
             seen_by_field[field] += 1
 
@@ -123,8 +134,8 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
                 continue
             if rows_by_field[field] != spec.shard_size:
                 errors.append(
-                    f"dataset {field!r} has {rows_by_field[field]} rows, "
-                    f"expected {spec.shard_size}"
+                    f"field {field!r} summed {rows_by_field[field]} rows across "
+                    f"{seen_by_field[field]} batch(es), expected {spec.shard_size}"
                 )
 
     return errors
