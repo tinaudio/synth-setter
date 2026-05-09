@@ -16,6 +16,7 @@ from pyloudnorm import Meter
 from tqdm import trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+from pipeline.schemas.spec import ShardMetadata  # noqa
 from src.data.vst import param_specs, render_params  # noqa
 from src.data.vst.param_spec import ParamSpec  # noqa
 
@@ -160,7 +161,7 @@ def save_samples(
     mel_dataset: h5py.Dataset,
     param_dataset: h5py.Dataset,
     start_idx: int,
-    wds_sink: Optional[wds.TarWriter] = None,
+    wds_sink: Optional[wds.TarWriter] = None,  # pyright: ignore[reportAttributeAccessIssue]
 ) -> None:
     logger.info(f"Saving {len(samples)} samples...")
     audios = np.stack([s.audio.T for s in samples], axis=0)
@@ -300,8 +301,8 @@ def make_dataset(
         audio_dataset.attrs["channels"] = channels
         audio_dataset.attrs["min_loudness"] = min_loudness
 
-        wds_sink: Optional[wds.TarWriter] = (
-            wds.TarWriter(str(wds_file)) if wds_file is not None else None
+        wds_sink: Optional[wds.TarWriter] = (  # pyright: ignore[reportAttributeAccessIssue]
+            wds.TarWriter(str(wds_file)) if wds_file is not None else None  # pyright: ignore[reportAttributeAccessIssue]
         )
         try:
             sample_batch = []
@@ -355,18 +356,14 @@ def make_dataset(
                 )
 
             if wds_sink is not None:
-                wds_sink.write(
-                    {
-                        "__key__": "metadata",
-                        "json": {
-                            "velocity": velocity,
-                            "signal_duration_seconds": signal_duration_seconds,
-                            "sample_rate": sample_rate,
-                            "channels": channels,
-                            "min_loudness": min_loudness,
-                        },
-                    }
+                meta = ShardMetadata(
+                    velocity=velocity,
+                    signal_duration_seconds=signal_duration_seconds,
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    min_loudness=min_loudness,
                 )
+                wds_sink.write({"__key__": "metadata", "json": meta.model_dump()})
         finally:
             if wds_sink is not None:
                 wds_sink.close()
