@@ -2,7 +2,8 @@ import hashlib
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from types import TracebackType
+from typing import Any, List, Optional, Protocol, Tuple
 
 import click
 import h5py
@@ -19,6 +20,29 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pipeline.schemas.shard_metadata import ShardMetadata  # noqa
 from src.data.vst import param_specs, render_params  # noqa
 from src.data.vst.param_spec import ParamSpec  # noqa
+
+
+class _WdsTarSink(Protocol):
+    """Minimal surface from ``wds.TarWriter`` used by the wds writer path.
+
+    The webdataset library lacks PEP 561 type stubs, so direct ``wds.TarWriter``
+    references trigger ``reportAttributeAccessIssue`` under pyright. Typing the
+    helper signatures against this Protocol keeps the call surface narrow and
+    confines the type-ignore to the single ``wds.TarWriter(...)`` instantiation.
+    """
+
+    def write(self, sample: dict[str, Any]) -> None: ...
+
+    def close(self) -> None: ...
+
+    def __enter__(self) -> "_WdsTarSink": ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
 
 
 @dataclass
@@ -178,7 +202,7 @@ def save_hdf5_samples(
 
 def save_wds_samples(
     samples: List[VSTDataSample],
-    sink: wds.TarWriter,  # pyright: ignore[reportAttributeAccessIssue]
+    sink: _WdsTarSink,
     start_idx: int,
 ) -> None:
     """Write a batch of rendered samples as a per-batch-keyed tar entry.
@@ -451,7 +475,8 @@ def make_wds_dataset(
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,
     )
-    with wds.TarWriter(str(wds_file)) as sink:  # pyright: ignore[reportAttributeAccessIssue]
+    sink: _WdsTarSink = wds.TarWriter(str(wds_file))  # pyright: ignore[reportAttributeAccessIssue]
+    with sink:
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = 0
         for i in trange(num_samples):
