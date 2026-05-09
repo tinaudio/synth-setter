@@ -1,20 +1,34 @@
 """CLI plumbing smoke tests for src/data/vst/generate_vst_dataset.py.
 
-These tests exercise the click surface only — the underlying make_*_dataset
-functions are mocked so the tests don't need a real VST plugin or rendering.
-Behavioral coverage of the write paths themselves lives in
-``test_generate_vst_dataset.py``.
+Each test invokes the click ``main`` entry with a real path and a small
+``num_samples``, with ``render_params`` monkeypatched to return a fast
+silent buffer so the tests don't need a real VST plugin. Assertions look
+at the produced on-disk artifact (h5 datasets / tar members) rather than
+mocking ``make_hdf5_dataset`` / ``make_wds_dataset`` directly. This keeps
+the tests resilient to internal refactors of the writer modules.
 """
 
 from __future__ import annotations
 
+import io
+import json
+import tarfile
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
 
+import h5py
+import numpy as np
+import pytest
 from click.testing import CliRunner
 
+from src.data.vst import generate_vst_dataset
 from src.data.vst.generate_vst_dataset import main
+
+_SAMPLE_RATE = 16000
+_CHANNELS = 2
+# 4.0s matches the hardcoded mel-spec frame count (401) baked into the writer's
+# create_datasets_and_get_start_idx; stubbing the duration shorter would broadcast-fail.
+_DURATION = 4.0
+_NUM_SAMPLES = "2"
 
 
 def _shared_options() -> list[str]:
@@ -25,15 +39,15 @@ def _shared_options() -> list[str]:
         "--preset_path",
         "presets/surge-base.vstpreset",
         "--sample_rate",
-        "16000",
+        str(_SAMPLE_RATE),
         "--channels",
-        "2",
+        str(_CHANNELS),
         "--velocity",
         "100",
         "--signal_duration_seconds",
-        "1.0",
+        str(_DURATION),
         "--min_loudness",
-        "-55.0",
+        "-99.0",
         "--param_spec",
         "surge_simple",
         "--sample_batch_size",
@@ -41,91 +55,126 @@ def _shared_options() -> list[str]:
     ]
 
 
-def test_h5_extension_routes_positional_to_make_hdf5_dataset(tmp_path: Path) -> None:
-    """A ``.h5`` data_file dispatches to ``make_hdf5_dataset`` only."""
+@pytest.fixture()
+def stub_render_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace ``render_params`` with a fast silent stereo render."""
+    audio_shape = (_CHANNELS, int(_SAMPLE_RATE * _DURATION))
+    monkeypatch.setattr(
+        generate_vst_dataset,
+        "render_params",
+        lambda *_args, **_kwargs: 0.5 * np.ones(audio_shape, dtype=np.float32),
+    )
+
+
+def test_h5_extension_writes_h5_with_expected_datasets(
+    tmp_path: Path, stub_render_params: None
+) -> None:
+    """A ``.h5`` data_file produces an HDF5 file with the three expected datasets."""
     h5_path = tmp_path / "out.h5"
     runner = CliRunner()
 
-    with (
-        patch("src.data.vst.generate_vst_dataset.make_hdf5_dataset") as mock_h5,
-        patch("src.data.vst.generate_vst_dataset.make_wds_dataset") as mock_wds,
-    ):
-        result = runner.invoke(
-            main,
-            [str(h5_path), "1", *_shared_options()],
-            catch_exceptions=False,
-        )
+    result = runner.invoke(
+        main,
+        [str(h5_path), _NUM_SAMPLES, *_shared_options()],
+        catch_exceptions=False,
+    )
 
     assert result.exit_code == 0, result.output
-    mock_h5.assert_called_once()
-    mock_wds.assert_not_called()
-    assert mock_h5.call_args.kwargs["hdf5_file"] == str(h5_path)
+    assert h5_path.exists()
+    with h5py.File(h5_path, "r") as f:
+        assert set(f.keys()) >= {"audio", "mel_spec", "param_array"}
+        audio = f["audio"]
+        assert isinstance(audio, h5py.Dataset)
+        assert audio.shape[0] == int(_NUM_SAMPLES)
+        assert audio.dtype == np.float16
 
 
-def test_tar_extension_routes_positional_to_make_wds_dataset(tmp_path: Path) -> None:
-    """A ``.tar`` data_file dispatches to ``make_wds_dataset`` only."""
+def test_tar_extension_writes_tar_with_expected_members(
+    tmp_path: Path, stub_render_params: None
+) -> None:
+    """A ``.tar`` data_file produces a tar with per-batch members and metadata.json."""
     tar_path = tmp_path / "out.tar"
     runner = CliRunner()
 
-    with (
-        patch("src.data.vst.generate_vst_dataset.make_hdf5_dataset") as mock_h5,
-        patch("src.data.vst.generate_vst_dataset.make_wds_dataset") as mock_wds,
-    ):
-        result = runner.invoke(
-            main,
-            [str(tar_path), "1", *_shared_options()],
-            catch_exceptions=False,
-        )
+    result = runner.invoke(
+        main,
+        [str(tar_path), _NUM_SAMPLES, *_shared_options()],
+        catch_exceptions=False,
+    )
 
     assert result.exit_code == 0, result.output
-    mock_wds.assert_called_once()
-    mock_h5.assert_not_called()
-    assert mock_wds.call_args.kwargs["wds_file"] == str(tar_path)
+    assert tar_path.exists()
+    with tarfile.open(tar_path) as tar:
+        names = {m.name for m in tar.getmembers()}
+    assert names == {
+        "00000000.audio.npy",
+        "00000000.mel_spec.npy",
+        "00000000.param_array.npy",
+        "00000001.audio.npy",
+        "00000001.mel_spec.npy",
+        "00000001.param_array.npy",
+        "metadata.json",
+    }
 
 
-def test_unknown_extension_is_rejected_with_supported_suffixes_listed(tmp_path: Path) -> None:
+def test_tar_metadata_member_parses_as_shard_metadata(
+    tmp_path: Path, stub_render_params: None
+) -> None:
+    """The tar's metadata.json carries the five ShardMetadata fields with the CLI's values."""
+    tar_path = tmp_path / "out.tar"
+    runner = CliRunner()
+
+    runner.invoke(
+        main,
+        [str(tar_path), _NUM_SAMPLES, *_shared_options()],
+        catch_exceptions=False,
+    )
+
+    with tarfile.open(tar_path) as tar:
+        extracted = tar.extractfile("metadata.json")
+        assert extracted is not None
+        meta = json.loads(extracted.read())
+
+    assert meta["velocity"] == 100
+    assert meta["sample_rate"] == _SAMPLE_RATE
+    assert meta["channels"] == _CHANNELS
+    assert meta["signal_duration_seconds"] == _DURATION
+    assert meta["min_loudness"] == -99.0
+
+
+def test_tar_audio_member_dtype_is_float16(
+    tmp_path: Path, stub_render_params: None
+) -> None:
+    """The tar's audio.npy member is stored as float16 to match h5 storage precision."""
+    tar_path = tmp_path / "out.tar"
+    runner = CliRunner()
+
+    runner.invoke(
+        main,
+        [str(tar_path), _NUM_SAMPLES, *_shared_options()],
+        catch_exceptions=False,
+    )
+
+    with tarfile.open(tar_path) as tar:
+        extracted = tar.extractfile("00000000.audio.npy")
+        assert extracted is not None
+        audio = np.load(io.BytesIO(extracted.read()))
+
+    assert audio.dtype == np.float16
+
+
+def test_unknown_extension_is_rejected_with_supported_suffixes_listed(
+    tmp_path: Path, stub_render_params: None
+) -> None:
     """A data_file with an unsupported extension exits non-zero, naming both supported suffixes."""
     runner = CliRunner()
 
     result = runner.invoke(
         main,
-        [str(tmp_path / "out.parquet"), "1", *_shared_options()],
+        [str(tmp_path / "out.parquet"), _NUM_SAMPLES, *_shared_options()],
     )
 
     assert result.exit_code != 0
     assert "data_file must end in" in result.output
     assert ".h5" in result.output
     assert ".tar" in result.output
-
-
-def test_neither_writer_called_for_unknown_extension(tmp_path: Path) -> None:
-    """Suffix validation fires before either writer is dispatched."""
-    runner = CliRunner()
-
-    with (
-        patch("src.data.vst.generate_vst_dataset.make_hdf5_dataset") as mock_h5,
-        patch("src.data.vst.generate_vst_dataset.make_wds_dataset") as mock_wds,
-    ):
-        runner.invoke(
-            main,
-            [str(tmp_path / "out.parquet"), "1", *_shared_options()],
-        )
-
-    mock_h5.assert_not_called()
-    mock_wds.assert_not_called()
-
-
-def test_h5_writer_receives_param_spec_object_not_name(tmp_path: Path) -> None:
-    """The CLI resolves ``--param_spec`` to a ``ParamSpec`` object before dispatch."""
-    h5_path = tmp_path / "out.h5"
-    runner = CliRunner()
-
-    captured: dict[str, Any] = {}
-
-    def _capture(**kwargs: Any) -> None:
-        captured.update(kwargs)
-
-    with patch("src.data.vst.generate_vst_dataset.make_hdf5_dataset", side_effect=_capture):
-        runner.invoke(main, [str(h5_path), "1", *_shared_options()], catch_exceptions=False)
-
-    assert captured["param_spec"].__class__.__name__ == "ParamSpec"
