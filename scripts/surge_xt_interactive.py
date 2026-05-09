@@ -1212,21 +1212,20 @@ def main(
         return
     output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
     patch_file_path = output_dataset_dir_path / "train.h5"
-    with h5py.File(patch_file_path, "w") as f:
-        make_dataset(
-            hdf5_file=f,
-            num_samples=len(synth_patches),
-            plugin_path=plugin_path,
-            preset_path=preset_path,
-            sample_rate=SAMPLE_RATE,
-            channels=CHANNELS,
-            velocity=MAKE_DATASET_VELOCITY,
-            signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
-            min_loudness=MAKE_DATASET_MIN_LOUDNESS,
-            param_spec=param_specs[param_spec_name],
-            sample_batch_size=MAKE_DATASET_SAMPLE_BATCH_SIZE,
-            fixed_synth_params_list=synth_patches,
-        )
+    make_dataset(
+        hdf5_file=patch_file_path,
+        num_samples=len(synth_patches),
+        plugin_path=plugin_path,
+        preset_path=preset_path,
+        sample_rate=SAMPLE_RATE,
+        channels=CHANNELS,
+        velocity=MAKE_DATASET_VELOCITY,
+        signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
+        min_loudness=MAKE_DATASET_MIN_LOUDNESS,
+        param_spec=param_specs[param_spec_name],
+        sample_batch_size=MAKE_DATASET_SAMPLE_BATCH_SIZE,
+        fixed_synth_params_list=synth_patches,
+    )
     _maybe_eval_captured_patches(
         patch_file_path,
         output_dataset_dir_path,
