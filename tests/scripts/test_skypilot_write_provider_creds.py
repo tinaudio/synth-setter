@@ -226,14 +226,33 @@ class TestProviderGating:
         assert _file_mode(tmp_path / ".oci" / "oci_api_key.pem") == 0o600
         assert _file_mode(tmp_path / ".sky" / "config.yaml") == 0o600
 
-    def test_local_writes_only_r2_files(self, tmp_path: Path) -> None:
-        """Local provider writes only the R2 cred files; no ~/.runpod, ~/.oci, or ~/.sky."""
+    def test_local_writes_r2_files_and_shrunken_sky_jobs_controller_config(
+        self, tmp_path: Path
+    ) -> None:
+        """Local provider writes the R2 cred files plus a `~/.sky/config.yaml` that shrinks the
+        managed-jobs controller's default resource request so the controller pod schedules on the
+        kind cluster `sky local up` provisions in CI.
+
+        The default `cpus=4+, mem=4x, disk_size=50` does not fit on kind (k8s rejects
+        `disk_size`; CPU/memory floor exceeds the runner's pod-level capacity).
+        """
         _run(tmp_path, R2_ENV, "--provider", "local")
         assert (tmp_path / ".cloudflare" / "r2.credentials").is_file()
         assert (tmp_path / ".cloudflare" / "accountid").is_file()
         assert not (tmp_path / ".runpod").exists()
         assert not (tmp_path / ".oci").exists()
-        assert not (tmp_path / ".sky").exists()
+
+        sky_config = tmp_path / ".sky" / "config.yaml"
+        assert sky_config.is_file()
+        assert oct(sky_config.stat().st_mode)[-3:] == "600"
+        config_text = sky_config.read_text()
+        assert "jobs:" in config_text
+        assert "controller:" in config_text
+        # Resource floor must be lower than the kind cluster's per-pod ceiling — the values
+        # don't matter precisely, but `4+` (the SkyPilot default) must NOT appear, and
+        # `disk_size` must not be set (k8s rejects it).
+        assert "4+" not in config_text
+        assert "disk_size" not in config_text
 
     def test_local_does_not_require_compute_provider_env(self, tmp_path: Path) -> None:
         """Local provider succeeds with R2 vars alone — no RUNPOD_API_KEY, no OCI_*."""

@@ -14,8 +14,10 @@
 # Per-provider (gated on --provider runpod | oci | local):
 #   - runpod: ~/.runpod/config.toml
 #   - oci:    ~/.oci/config + ~/.oci/oci_api_key.pem + ~/.sky/config.yaml
-#   - local:  no per-provider files — `sky local up` (kind cluster) needs
-#             no compute provider auth. R2 creds are still required.
+#   - local:  ~/.sky/config.yaml shrinking the managed-jobs controller's
+#             default resource request so it fits on the kind cluster
+#             (`sky local up`). No compute provider auth is needed; R2 creds
+#             are still required.
 #
 # Idempotency: if a target file already exists with non-empty content the
 # bootstrap leaves it alone — local-dev operators who hand-manage cred files
@@ -197,6 +199,32 @@ write_oci_creds() {
   fi
 }
 
+write_local_sky_config() {
+  # SkyPilot's managed-jobs controller defaults to cpus=4+, mem=4x, disk_size=50.
+  # Those defaults don't fit on the kind cluster `sky local up` provisions in CI
+  # (no node satisfies the CPU/memory floor; k8s rejects disk_size altogether).
+  # Shrink the controller request so the controller pod schedules on kind and
+  # the worker job can run. omit disk_size — k8s "doesn't support" it; the
+  # controller uses the pod's ephemeral storage / a PVC instead.
+  local sky_config="$HOME/.sky/config.yaml"
+
+  mkdir -p "$HOME/.sky"
+
+  if should_skip_existing "${sky_config}"; then
+    notice_skip_existing "${sky_config}"
+    return
+  fi
+
+  cat > "${sky_config}" <<'YAML'
+jobs:
+  controller:
+    resources:
+      cpus: 1+
+      memory: 1+
+YAML
+  chmod 600 "${sky_config}"
+}
+
 main() {
   parse_args "$@"
 
@@ -211,7 +239,7 @@ main() {
   case "${PROVIDER}" in
     runpod) write_runpod_creds ;;
     oci)    write_oci_creds ;;
-    local)  : ;; # kind cluster needs no compute provider auth
+    local)  write_local_sky_config ;;
     *)
       echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci | local)" >&2
       exit 1
