@@ -68,6 +68,86 @@ class TestLoadDatasetConfig:
             load_dataset_config(bad_yaml)
 
 
+class TestLoadDatasetConfigExtends:
+    """``_extends:`` lets a sibling config inherit from a base and override only.
+
+    what diverges, instead of duplicating every field. The two CI configs that differ only in
+    output_format use this.
+    """
+
+    def _write_base(self, tmp_path: Path) -> Path:
+        """Write a complete base config to ``tmp_path/base.yaml`` and return its path."""
+        base = tmp_path / "base.yaml"
+        base.write_text(
+            "param_spec: surge_simple\n"
+            "plugin_path: plugins/Surge XT.vst3\n"
+            "output_format: hdf5\n"
+            "sample_rate: 16000\n"
+            "shard_size: 4\n"
+            "num_shards: 3\n"
+            "num_workers: 3\n"
+            "base_seed: 42\n"
+            "r2_bucket: intermediate-data\n"
+            "splits:\n"
+            "  train: 3\n"
+            "  val: 0\n"
+            "  test: 0\n"
+            "preset_path: presets/surge-simple.vstpreset\n"
+            "channels: 2\n"
+            "velocity: 100\n"
+            "signal_duration_seconds: 4.0\n"
+            "min_loudness: -50.0\n"
+            "sample_batch_size: 4\n"
+        )
+        return base
+
+    def test_extends_merges_base_into_override(self, tmp_path: Path) -> None:
+        """A child config with ``_extends:`` picks up base fields and overrides only the named
+        keys."""
+        self._write_base(tmp_path)
+
+        child = tmp_path / "child.yaml"
+        child.write_text("_extends: base\noutput_format: wds\n")
+
+        cfg = load_dataset_config(child)
+
+        assert cfg.output_format == "wds"
+        assert cfg.sample_rate == 16000
+        assert cfg.param_spec == "surge_simple"
+        assert cfg.splits.train == 3
+
+    def test_extends_override_wins_over_base(self, tmp_path: Path) -> None:
+        """Keys present in the child override the same keys in the base, including nested ones."""
+        self._write_base(tmp_path)
+
+        child = tmp_path / "child.yaml"
+        child.write_text(
+            "_extends: base\nshard_size: 99\nsplits:\n  train: 2\n  val: 1\n  test: 0\n"
+        )
+
+        cfg = load_dataset_config(child)
+
+        assert cfg.shard_size == 99
+        assert cfg.splits.train == 2
+        assert cfg.splits.val == 1
+
+    def test_extends_missing_base_raises_file_not_found(self, tmp_path: Path) -> None:
+        """A child whose _extends names a missing file raises FileNotFoundError."""
+        child = tmp_path / "child.yaml"
+        child.write_text("_extends: nonexistent\noutput_format: wds\n")
+
+        with pytest.raises(FileNotFoundError, match="_extends target not found"):
+            load_dataset_config(child)
+
+    def test_extends_non_string_raises_type_error(self, tmp_path: Path) -> None:
+        """``_extends`` value must be a string naming a sibling YAML stem."""
+        child = tmp_path / "child.yaml"
+        child.write_text("_extends:\n  - not_a_string\noutput_format: wds\n")
+
+        with pytest.raises(TypeError, match="_extends must name a base config"):
+            load_dataset_config(child)
+
+
 class TestDatasetConfigValidation:
     """Tests for DatasetConfig field validation."""
 

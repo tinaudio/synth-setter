@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
+from omegaconf import OmegaConf
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from pipeline.schemas.prefix import DatasetConfigId
+
+# Key in a sibling dataset config that names a base config (without the ``.yaml``
+# suffix); the loader merges the base under the override before constructing
+# DatasetConfig. Lets two configs that differ only in output_format share a
+# parent without duplicating every field.
+_EXTENDS_KEY = "_extends"
 
 
 class SplitsConfig(BaseModel):
@@ -84,15 +91,51 @@ class DatasetConfig(BaseModel):
         return self
 
 
+def _resolve_extends(config_path: Path, raw: dict[str, Any]) -> dict[str, Any]:
+    """Merge a base config into ``raw`` if ``raw[_EXTENDS_KEY]`` names one.
+
+    The base is resolved relative to ``config_path``'s directory; the override
+    wins on every overlapping key. Nesting one level deep is supported (a base
+    can itself extend another); to keep the surface tight, we recurse and let
+    OmegaConf's merge handle the rest.
+    """
+    if _EXTENDS_KEY not in raw:
+        return raw
+    base_name = raw[_EXTENDS_KEY]
+    if not isinstance(base_name, str):
+        raise TypeError(
+            f"{_EXTENDS_KEY} must name a base config (string), got {type(base_name).__name__}"
+        )
+    base_path = config_path.parent / f"{base_name}.yaml"
+    if not base_path.is_file():
+        raise FileNotFoundError(
+            f"_extends target not found: {base_path} (referenced from {config_path})"
+        )
+    with open(base_path) as f:
+        base_raw = yaml.safe_load(f)
+    if not isinstance(base_raw, dict):
+        raise TypeError(f"Expected a YAML mapping in {base_path}, got {type(base_raw).__name__}")
+    base_resolved = _resolve_extends(base_path, base_raw)
+    override = {k: v for k, v in raw.items() if k != _EXTENDS_KEY}
+    merged = OmegaConf.merge(OmegaConf.create(base_resolved), OmegaConf.create(override))
+    return OmegaConf.to_container(merged, resolve=True)  # type: ignore[return-value]
+
+
 def load_dataset_config(config_path: Path) -> DatasetConfig:
-    """Load and validate a dataset generation config from a YAML file."""
+    """Load and validate a dataset generation config from a YAML file.
+
+    If the file declares ``_extends: <name>``, the loader merges the named base
+    config (resolved relative to ``config_path``'s directory) under the file's
+    own keys before validation.
+    """
     if not config_path.is_file():
         raise FileNotFoundError(f"Config file not found: {config_path}")
     with open(config_path) as f:
         raw = yaml.safe_load(f)
     if not isinstance(raw, dict):
         raise TypeError(f"Expected a YAML mapping in {config_path}, got {type(raw).__name__}")
-    return DatasetConfig(**raw)
+    merged = _resolve_extends(config_path, raw)
+    return DatasetConfig(**merged)
 
 
 def dataset_config_id_from_path(config_path: Path) -> DatasetConfigId:
