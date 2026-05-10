@@ -21,10 +21,30 @@ import pytest
 
 from pipeline.schemas.shard_metadata import ShardMetadata
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
+from pipeline.schemas.spec import RenderConfig
 from src.data.vst import param_specs
 from src.data.vst.core import render_params
 from src.data.vst.generate_vst_dataset import make_hdf5_dataset, make_wds_dataset
 from src.data.vst.param_spec import ParamSpec
+
+
+def _render_cfg(num_samples: int, **overrides: object) -> RenderConfig:
+    """Build a RenderConfig matching the test-suite defaults; ``num_samples`` → batch_per_shard."""
+    base: dict[str, object] = {
+        "plugin_path": _PLUGIN_PATH,
+        "preset_path": _PRESET_PATH,
+        "param_spec_name": _SPEC_NAME,
+        "renderer_version": "test",
+        "sample_rate": int(_SAMPLE_RATE),
+        "channels": _CHANNELS,
+        "velocity": _VELOCITY,
+        "signal_duration_seconds": _DURATION,
+        "min_loudness": _MIN_LOUDNESS,
+        "sample_batch_size": num_samples,
+        "batch_per_shard": num_samples,
+    }
+    base.update(overrides)
+    return RenderConfig(**base)  # type: ignore[arg-type]
 
 log = logging.getLogger(__name__)
 
@@ -731,16 +751,7 @@ def test_datasets_from_hardcoded_params_are_identical(
     with _patched_sample(spec, replay):
         make_hdf5_dataset(
             hdf5_file=expected_dataset,
-            num_samples=num_samples,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=num_samples,
+            render_cfg=_render_cfg(num_samples),
         )
     stage1_seconds = time.perf_counter() - t0
 
@@ -753,16 +764,7 @@ def test_datasets_from_hardcoded_params_are_identical(
     with _patched_sample(spec, replay):
         make_hdf5_dataset(
             hdf5_file=got_dataset,
-            num_samples=num_samples,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=num_samples,
+            render_cfg=_render_cfg(num_samples),
         )
     stage2_seconds = time.perf_counter() - t0
 
@@ -841,18 +843,9 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     expected_dataset = tmp_path / "candidates.h5"
     t0 = time.perf_counter()
     make_hdf5_dataset(
-        hdf5_file=expected_dataset,
-        num_samples=_NUM_SAMPLES,
-        plugin_path=_PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
-        velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        min_loudness=_MIN_LOUDNESS,
-        param_spec=spec,
-        sample_batch_size=_NUM_SAMPLES,
-    )
+            hdf5_file=expected_dataset,
+            render_cfg=_render_cfg(_NUM_SAMPLES),
+        )
     stage1_seconds = time.perf_counter() - t0
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
@@ -888,16 +881,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     with _patched_sample(spec, replay):
         make_hdf5_dataset(
             hdf5_file=got_dataset,
-            num_samples=_NUM_SAMPLES,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=_NUM_SAMPLES,
+            render_cfg=_render_cfg(_NUM_SAMPLES),
         )
     stage2_seconds = time.perf_counter() - t0
 
@@ -939,18 +923,9 @@ def test_make_hdf5_dataset(tmp_path: Path) -> None:
     spec = param_specs[_SPEC_NAME]
 
     make_hdf5_dataset(
-        hdf5_file=out,
-        num_samples=_NUM_SAMPLES,
-        plugin_path=_PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
-        velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        min_loudness=_MIN_LOUDNESS,
-        param_spec=spec,
-        sample_batch_size=_NUM_SAMPLES,
-    )
+            hdf5_file=out,
+            render_cfg=_render_cfg(_NUM_SAMPLES),
+        )
 
     _, _, params = _assert_h5_structure_is_valid(out, spec, _NUM_SAMPLES)
 
@@ -1027,17 +1002,8 @@ def test_make_hdf5_dataset_raises_when_fixed_params_list_is_too_short(
     with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
         make_hdf5_dataset(
             hdf5_file=out,
-            num_samples=3,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=3,
-            fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS],
+            render_cfg=_render_cfg(3),
+            fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS]
         )
 
 
@@ -1175,20 +1141,11 @@ def test_make_hdf5_dataset_uses_fixed_params_lists_when_provided(
     out = tmp_path / "fixed.h5"
     num_samples = 3
     make_hdf5_dataset(
-        hdf5_file=out,
-        num_samples=num_samples,
-        plugin_path=_PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
-        velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        min_loudness=_MIN_LOUDNESS,
-        param_spec=spec,
-        sample_batch_size=num_samples,
-        fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
-        fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
-    )
+            hdf5_file=out,
+            render_cfg=_render_cfg(num_samples),
+            fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
+            fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples
+        )
 
     _, _, params = _assert_h5_structure_is_valid(out, spec, num_samples)
     # ParamSpec.encode is annotated dict[str, float] on main but accepts the runtime
@@ -1408,25 +1365,17 @@ def test_make_hdf5_and_make_wds_call_render_params_with_identical_inputs(
 
     monkeypatch.setattr(generate_vst_dataset, "render_params", spy)
 
-    common = dict(
-        num_samples=n,
-        plugin_path=_PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
-        velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        min_loudness=_MIN_LOUDNESS,
-        param_spec=spec,
-        sample_batch_size=sample_batch_size,
-        fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * n,
-        fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * n,
-    )
+    render_cfg = _render_cfg(n, sample_batch_size=sample_batch_size)
+    common: dict[str, Any] = {
+        "render_cfg": render_cfg,
+        "fixed_synth_params_list": [_HARDCODED_SYNTH_PARAMS] * n,
+        "fixed_note_params_list": [_HARDCODED_NOTE_PARAMS] * n,
+    }
 
-    make_hdf5_dataset(hdf5_file=h5_path, **common)  # type: ignore[arg-type]
+    make_hdf5_dataset(hdf5_file=h5_path, **common)
     h5_calls = list(captured)
     captured.clear()
-    make_wds_dataset(wds_file=wds_path, **common)  # type: ignore[arg-type]
+    make_wds_dataset(wds_file=wds_path, **common)
     wds_calls = list(captured)
 
     assert h5_calls == wds_calls
@@ -1505,20 +1454,11 @@ def test_make_wds_dataset_overwrites_existing_tar_not_resumes(
     )
 
     make_wds_dataset(
-        wds_file=wds_path,
-        num_samples=n,
-        plugin_path=_PLUGIN_PATH,
-        preset_path=_PRESET_PATH,
-        sample_rate=_SAMPLE_RATE,
-        channels=_CHANNELS,
-        velocity=_VELOCITY,
-        signal_duration_seconds=_DURATION,
-        min_loudness=_MIN_LOUDNESS,
-        param_spec=spec,
-        sample_batch_size=n,
-        fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * n,
-        fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * n,
-    )
+            wds_file=wds_path,
+            render_cfg=_render_cfg(n),
+            fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * n,
+            fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * n
+        )
 
     with tarfile.open(wds_path) as tar:
         names = {m.name for m in tar.getmembers()}

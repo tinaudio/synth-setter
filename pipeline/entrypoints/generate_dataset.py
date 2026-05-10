@@ -145,34 +145,18 @@ def _rclone_copy(src: str, dest: str) -> None:
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
-    The output format is encoded in ``shard.filename``'s suffix (validated on
-    ``DatasetSpec`` against ``spec.output_format``); the CLI dispatches
-    on that suffix, so the launcher just hands the path through.
+    The renderer takes a single ``--render-cfg-json`` arg holding the JSON-
+    serialized ``RenderConfig`` sub-model; ``shard.filename``'s suffix is
+    what selects the writer (``.h5`` → hdf5, ``.tar`` → wds).
     """
     output_path = output_dir / shard.filename
-    render = spec.render
-    options = {
-        "plugin_path": render.plugin_path,
-        "preset_path": render.preset_path,
-        "sample_rate": render.sample_rate,
-        "channels": render.channels,
-        "velocity": render.velocity,
-        "signal_duration_seconds": render.signal_duration_seconds,
-        "min_loudness": render.min_loudness,
-        "param_spec": render.param_spec_name,
-        "sample_batch_size": render.sample_batch_size,
-    }
-
-    args = [
+    return [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
         str(output_path),
-        str(render.batch_per_shard),
+        "--render-cfg-json",
+        spec.render.model_dump_json(),
     ]
-    for key, value in options.items():
-        args.extend([f"--{key}", str(value)])
-
-    return args
 
 
 def run(spec: DatasetSpec) -> None:

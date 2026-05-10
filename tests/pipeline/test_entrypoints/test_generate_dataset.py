@@ -187,9 +187,12 @@ class TestRun:
 
         mock_check_call.assert_called_once()
         args = mock_check_call.call_args[0][0]
-        # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
+        # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py,
+        #         <output-path>, --render-cfg-json, <json>]
         assert any("generate_vst_dataset.py" in a for a in args)
-        assert str(spec.render.batch_per_shard) in args
+        render_cfg_idx = args.index("--render-cfg-json")
+        rendered_json = args[render_cfg_idx + 1]
+        assert str(spec.render.batch_per_shard) in rendered_json
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
@@ -599,41 +602,20 @@ class TestBuildGenerateArgs:
 
         assert args[2] == str(tmp_path / "shard-000000.h5")
 
-    def test_num_samples_is_shard_size(self, spec: DatasetSpec) -> None:
-        """num_samples arg comes from spec.render.batch_per_shard."""
+    def test_render_cfg_json_arg_carries_full_render_config(self, spec: DatasetSpec) -> None:
+        """The single ``--render-cfg-json`` arg holds a serialized RenderConfig — every render
+        field round-trips."""
         shard = spec.shards[0]
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        assert args[3] == str(spec.render.batch_per_shard)
+        render_cfg_idx = args.index("--render-cfg-json")
+        rendered_json = args[render_cfg_idx + 1]
+        # Deserialization must produce a RenderConfig equal to spec.render.
+        from pipeline.schemas.spec import RenderConfig
 
-    def test_all_spec_fields_passed_as_options(self, spec: DatasetSpec) -> None:
-        """All generation parameters from spec are passed as --key value options."""
-        shard = spec.shards[0]
-
-        args = build_generate_args(spec, shard, Path("out"))
-
-        option_keys: set[str] = set()
-        i = 4
-        while i < len(args):
-            if args[i].startswith("--"):
-                option_keys.add(args[i].lstrip("-"))
-                i += 2
-            else:
-                i += 1
-
-        expected_keys = {
-            "plugin_path",
-            "preset_path",
-            "sample_rate",
-            "channels",
-            "velocity",
-            "signal_duration_seconds",
-            "min_loudness",
-            "param_spec",
-            "sample_batch_size",
-        }
-        assert expected_keys <= option_keys
+        restored = RenderConfig.model_validate_json(rendered_json)
+        assert restored == spec.render
 
     def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:
         """First arg is the Python executable, second is the generation script."""

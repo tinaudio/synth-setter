@@ -1,11 +1,11 @@
 """CLI plumbing smoke tests for src/data/vst/generate_vst_dataset.py.
 
-Each test invokes the click ``main`` entry with a real path and a small
-``num_samples``, with ``render_params`` monkeypatched to return a fast
-silent buffer so the tests don't need a real VST plugin. Assertions look
-at the produced on-disk artifact (h5 datasets / tar members) rather than
-mocking ``make_hdf5_dataset`` / ``make_wds_dataset`` directly. This keeps
-the tests resilient to internal refactors of the writer modules.
+Each test invokes the click ``main`` entry with a ``--render-cfg-json``
+arg holding a serialized ``RenderConfig``, with ``render_params``
+monkeypatched to return a fast silent buffer so the tests don't need a
+real VST plugin. Assertions look at the produced on-disk artifact (h5
+datasets / tar members) rather than mocking ``make_hdf5_dataset`` /
+``make_wds_dataset`` directly.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
+from pipeline.schemas.spec import RenderConfig
 from src.data.vst import generate_vst_dataset
 from src.data.vst.generate_vst_dataset import main
 
@@ -28,31 +29,24 @@ _CHANNELS = 2
 # 4.0s matches the hardcoded mel-spec frame count (401) baked into the writer's
 # create_datasets_and_get_start_idx; stubbing the duration shorter would broadcast-fail.
 _DURATION = 4.0
-_NUM_SAMPLES = "2"
+_NUM_SAMPLES = 2
 
 
-def _shared_options() -> list[str]:
-    """Click options shared by every CLI smoke test below."""
-    return [
-        "--plugin_path",
-        "plugins/Surge XT.vst3",
-        "--preset_path",
-        "presets/surge-base.vstpreset",
-        "--sample_rate",
-        str(_SAMPLE_RATE),
-        "--channels",
-        str(_CHANNELS),
-        "--velocity",
-        "100",
-        "--signal_duration_seconds",
-        str(_DURATION),
-        "--min_loudness",
-        "-99.0",
-        "--param_spec",
-        "surge_simple",
-        "--sample_batch_size",
-        "1",
-    ]
+def _render_cfg_json(num_samples: int = _NUM_SAMPLES) -> str:
+    """Build a JSON-serialized RenderConfig for the CLI ``--render-cfg-json`` arg."""
+    return RenderConfig(
+        plugin_path="plugins/Surge XT.vst3",
+        preset_path="presets/surge-base.vstpreset",
+        param_spec_name="surge_simple",
+        renderer_version="test",
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        velocity=100,
+        signal_duration_seconds=_DURATION,
+        min_loudness=-99.0,
+        sample_batch_size=1,
+        batch_per_shard=num_samples,
+    ).model_dump_json()
 
 
 @pytest.fixture()
@@ -75,7 +69,7 @@ def test_h5_extension_writes_h5_with_expected_datasets(
 
     result = runner.invoke(
         main,
-        [str(h5_path), _NUM_SAMPLES, *_shared_options()],
+        [str(h5_path), "--render-cfg-json", _render_cfg_json()],
         catch_exceptions=False,
     )
 
@@ -85,7 +79,7 @@ def test_h5_extension_writes_h5_with_expected_datasets(
         assert set(f.keys()) >= {"audio", "mel_spec", "param_array"}
         audio = f["audio"]
         assert isinstance(audio, h5py.Dataset)
-        assert audio.shape[0] == int(_NUM_SAMPLES)
+        assert audio.shape[0] == _NUM_SAMPLES
         assert audio.dtype == np.float16
 
 
@@ -98,7 +92,7 @@ def test_tar_extension_writes_tar_with_expected_members(
 
     result = runner.invoke(
         main,
-        [str(tar_path), _NUM_SAMPLES, *_shared_options()],
+        [str(tar_path), "--render-cfg-json", _render_cfg_json()],
         catch_exceptions=False,
     )
 
@@ -126,7 +120,7 @@ def test_tar_metadata_member_parses_as_shard_metadata(
 
     runner.invoke(
         main,
-        [str(tar_path), _NUM_SAMPLES, *_shared_options()],
+        [str(tar_path), "--render-cfg-json", _render_cfg_json()],
         catch_exceptions=False,
     )
 
@@ -151,7 +145,7 @@ def test_tar_audio_member_dtype_is_float16(
 
     runner.invoke(
         main,
-        [str(tar_path), _NUM_SAMPLES, *_shared_options()],
+        [str(tar_path), "--render-cfg-json", _render_cfg_json()],
         catch_exceptions=False,
     )
 
@@ -171,7 +165,7 @@ def test_unknown_extension_is_rejected_with_supported_suffixes_listed(
 
     result = runner.invoke(
         main,
-        [str(tmp_path / "out.parquet"), _NUM_SAMPLES, *_shared_options()],
+        [str(tmp_path / "out.parquet"), "--render-cfg-json", _render_cfg_json()],
     )
 
     assert result.exit_code != 0

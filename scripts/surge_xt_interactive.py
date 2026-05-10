@@ -32,6 +32,7 @@ from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.logging import RichHandler  # noqa: E402
 
+from pipeline.schemas.spec import RenderConfig  # noqa: E402
 from src.data.vst import load_plugin, load_preset, param_specs, preset_paths  # noqa: E402
 from src.data.vst.core import make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_hdf5_dataset  # noqa: E402
@@ -1212,18 +1213,24 @@ def main(
         return
     output_dataset_dir_path.mkdir(parents=True, exist_ok=False)
     patch_file_path = output_dataset_dir_path / "train.h5"
-    make_hdf5_dataset(
-        hdf5_file=patch_file_path,
-        num_samples=len(synth_patches),
+    render_cfg = RenderConfig(
         plugin_path=plugin_path,
         preset_path=preset_path,
+        param_spec_name=param_spec_name,
+        # Tied to the running-image's plugin; the worker-side version check
+        # is bypassed here (this path runs interactively, not under the launcher).
+        renderer_version="interactive",
         sample_rate=SAMPLE_RATE,
         channels=CHANNELS,
         velocity=MAKE_DATASET_VELOCITY,
         signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
         min_loudness=MAKE_DATASET_MIN_LOUDNESS,
-        param_spec=param_specs[param_spec_name],
         sample_batch_size=MAKE_DATASET_SAMPLE_BATCH_SIZE,
+        batch_per_shard=len(synth_patches),
+    )
+    make_hdf5_dataset(
+        hdf5_file=patch_file_path,
+        render_cfg=render_cfg,
         fixed_synth_params_list=synth_patches,
     )
     _maybe_eval_captured_patches(

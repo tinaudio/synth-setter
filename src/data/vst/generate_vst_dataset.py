@@ -18,6 +18,7 @@ from tqdm import trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pipeline.schemas.shard_metadata import ShardMetadata  # noqa
+from pipeline.schemas.spec import RenderConfig  # noqa
 from src.data.vst import param_specs, render_params  # noqa
 from src.data.vst.param_spec import ParamSpec  # noqa
 
@@ -354,20 +355,12 @@ def _generate_sample_for_index(
 
 def make_hdf5_dataset(
     hdf5_file: Path | str,
-    num_samples: int,
-    plugin_path: str,
-    preset_path: str | None,
-    sample_rate: float,
-    channels: int,
-    velocity: int,
-    signal_duration_seconds: float,
-    min_loudness: float,
-    param_spec: ParamSpec,
-    sample_batch_size: int,
+    render_cfg: RenderConfig,
+    *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
 ) -> None:
-    """Render ``num_samples`` and append them to an HDF5 file at ``hdf5_file``.
+    """Render ``render_cfg.batch_per_shard`` samples to an HDF5 file at ``hdf5_file``.
 
     Resumable: a partially-written file picks up at the first all-zero row, so a
     crashed worker can re-run with the same args and only the missing tail is
@@ -377,21 +370,17 @@ def make_hdf5_dataset(
     single ``ShardMetadata`` instance — the same instance the wds writer uses for
     its ``metadata.json`` member, so both formats expose identical metadata.
     """
-    meta = ShardMetadata(
-        velocity=velocity,
-        signal_duration_seconds=signal_duration_seconds,
-        sample_rate=sample_rate,
-        channels=channels,
-        min_loudness=min_loudness,
-    )
+    param_spec = param_specs[render_cfg.param_spec_name]
+    num_samples = render_cfg.batch_per_shard
+    meta = _shard_metadata_from_render(render_cfg)
     with h5py.File(hdf5_file, "a") as h5:
         audio_dataset, mel_dataset, param_dataset, start_idx = (
             create_datasets_and_get_start_idx(
                 hdf5_file=h5,
                 num_samples=num_samples,
-                channels=channels,
-                sample_rate=sample_rate,
-                signal_duration_seconds=signal_duration_seconds,
+                channels=render_cfg.channels,
+                sample_rate=render_cfg.sample_rate,
+                signal_duration_seconds=render_cfg.signal_duration_seconds,
                 num_params=len(param_spec),
             )
         )
@@ -414,24 +403,24 @@ def make_hdf5_dataset(
                 _generate_sample_for_index(
                     i,
                     start_idx,
-                    plugin_path=plugin_path,
-                    preset_path=preset_path,
-                    velocity=velocity,
-                    signal_duration_seconds=signal_duration_seconds,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    min_loudness=min_loudness,
+                    plugin_path=render_cfg.plugin_path,
+                    preset_path=render_cfg.preset_path,
+                    velocity=render_cfg.velocity,
+                    signal_duration_seconds=render_cfg.signal_duration_seconds,
+                    sample_rate=render_cfg.sample_rate,
+                    channels=render_cfg.channels,
+                    min_loudness=render_cfg.min_loudness,
                     param_spec=param_spec,
                     fixed_synth_params_list=fixed_synth_params_list,
                     fixed_note_params_list=fixed_note_params_list,
                 )
             )
-            if len(sample_batch) == sample_batch_size:
+            if len(sample_batch) == render_cfg.sample_batch_size:
                 save_hdf5_samples(
                     sample_batch, audio_dataset, mel_dataset, param_dataset, sample_batch_start
                 )
                 sample_batch = []
-                sample_batch_start += sample_batch_size
+                sample_batch_start += render_cfg.sample_batch_size
 
         if sample_batch:
             save_hdf5_samples(
@@ -441,20 +430,12 @@ def make_hdf5_dataset(
 
 def make_wds_dataset(
     wds_file: Path | str,
-    num_samples: int,
-    plugin_path: str,
-    preset_path: str | None,
-    sample_rate: float,
-    channels: int,
-    velocity: int,
-    signal_duration_seconds: float,
-    min_loudness: float,
-    param_spec: ParamSpec,
-    sample_batch_size: int,
+    render_cfg: RenderConfig,
+    *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
 ) -> None:
-    """Render ``num_samples`` and write a webdataset tar shard to ``wds_file``.
+    """Render ``render_cfg.batch_per_shard`` samples to a webdataset tar at ``wds_file``.
 
     Not resumable — if ``wds_file`` exists it is overwritten on open. Audio is cast
     to ``float16`` to match the h5 path's storage precision; consumers can upcast
@@ -462,13 +443,9 @@ def make_wds_dataset(
     is built from the same ``ShardMetadata`` instance the h5 path uses for its
     ``audio.attrs``, so both formats expose identical metadata.
     """
-    meta = ShardMetadata(
-        velocity=velocity,
-        signal_duration_seconds=signal_duration_seconds,
-        sample_rate=sample_rate,
-        channels=channels,
-        min_loudness=min_loudness,
-    )
+    param_spec = param_specs[render_cfg.param_spec_name]
+    num_samples = render_cfg.batch_per_shard
+    meta = _shard_metadata_from_render(render_cfg)
     _validate_fixed_params_lengths(
         num_samples=num_samples,
         start_idx=0,
@@ -487,22 +464,22 @@ def make_wds_dataset(
                 _generate_sample_for_index(
                     i,
                     0,
-                    plugin_path=plugin_path,
-                    preset_path=preset_path,
-                    velocity=velocity,
-                    signal_duration_seconds=signal_duration_seconds,
-                    sample_rate=sample_rate,
-                    channels=channels,
-                    min_loudness=min_loudness,
+                    plugin_path=render_cfg.plugin_path,
+                    preset_path=render_cfg.preset_path,
+                    velocity=render_cfg.velocity,
+                    signal_duration_seconds=render_cfg.signal_duration_seconds,
+                    sample_rate=render_cfg.sample_rate,
+                    channels=render_cfg.channels,
+                    min_loudness=render_cfg.min_loudness,
                     param_spec=param_spec,
                     fixed_synth_params_list=fixed_synth_params_list,
                     fixed_note_params_list=fixed_note_params_list,
                 )
             )
-            if len(sample_batch) == sample_batch_size:
+            if len(sample_batch) == render_cfg.sample_batch_size:
                 save_wds_samples(sample_batch, sink, sample_batch_start)
                 sample_batch = []
-                sample_batch_start += sample_batch_size
+                sample_batch_start += render_cfg.sample_batch_size
 
         if sample_batch:
             save_wds_samples(sample_batch, sink, sample_batch_start)
@@ -510,63 +487,35 @@ def make_wds_dataset(
         sink.write({"__key__": "metadata", "json": meta.model_dump()})
 
 
+def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
+    """Project a ``RenderConfig`` onto the per-shard sidecar metadata fields."""
+    return ShardMetadata(
+        velocity=render_cfg.velocity,
+        signal_duration_seconds=render_cfg.signal_duration_seconds,
+        sample_rate=render_cfg.sample_rate,
+        channels=render_cfg.channels,
+        min_loudness=render_cfg.min_loudness,
+    )
+
+
 @click.command()
 @click.argument("data_file", type=str, required=True)
-@click.argument("num_samples", type=int, required=True)
-@click.option("--plugin_path", "-p", type=str, default="plugins/Surge XT.vst3")
-@click.option("--preset_path", "-r", type=str, default="presets/surge-base.vstpreset")
-@click.option("--sample_rate", "-s", type=float, default=44100.0)
-@click.option("--channels", "-c", type=int, default=2)
-@click.option("--velocity", "-v", type=int, default=100)
-@click.option("--signal_duration_seconds", "-d", type=float, default=4.0)
-@click.option("--min_loudness", "-l", type=float, default=-55.0)
-@click.option("--param_spec", "-t", "param_spec_name", type=str, default="surge_xt")
-@click.option("--sample_batch_size", "-b", type=int, default=32)
-def main(
-    data_file: str,
-    num_samples: int,
-    plugin_path: str,
-    preset_path: str,
-    sample_rate: float,
-    channels: int,
-    velocity: int,
-    signal_duration_seconds: float,
-    min_loudness: float,
-    param_spec_name: str,
-    sample_batch_size: int,
-) -> None:
-    """Render ``num_samples`` and write to ``data_file`` (suffix selects writer)."""
-    spec = param_specs[param_spec_name]
+@click.option(
+    "--render-cfg-json",
+    "render_cfg_json",
+    type=str,
+    required=True,
+    help="JSON-serialized RenderConfig (model_dump_json() output).",
+)
+def main(data_file: str, render_cfg_json: str) -> None:
+    """Render a single shard at ``data_file`` (suffix selects writer)."""
+    render_cfg = RenderConfig.model_validate_json(render_cfg_json)
     suffix = Path(data_file).suffix
     if suffix == ".h5":
-        make_hdf5_dataset(
-            hdf5_file=data_file,
-            num_samples=num_samples,
-            plugin_path=plugin_path,
-            preset_path=preset_path,
-            sample_rate=sample_rate,
-            channels=channels,
-            velocity=velocity,
-            signal_duration_seconds=signal_duration_seconds,
-            min_loudness=min_loudness,
-            param_spec=spec,
-            sample_batch_size=sample_batch_size,
-        )
+        make_hdf5_dataset(hdf5_file=data_file, render_cfg=render_cfg)
         return
     if suffix == ".tar":
-        make_wds_dataset(
-            wds_file=data_file,
-            num_samples=num_samples,
-            plugin_path=plugin_path,
-            preset_path=preset_path,
-            sample_rate=sample_rate,
-            channels=channels,
-            velocity=velocity,
-            signal_duration_seconds=signal_duration_seconds,
-            min_loudness=min_loudness,
-            param_spec=spec,
-            sample_batch_size=sample_batch_size,
-        )
+        make_wds_dataset(wds_file=data_file, render_cfg=render_cfg)
         return
     raise click.BadParameter(
         f"data_file must end in .h5 (hdf5) or .tar (wds), got {suffix!r}",
