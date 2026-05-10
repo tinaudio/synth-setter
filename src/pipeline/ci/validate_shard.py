@@ -47,12 +47,16 @@ def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
     Keys match ``DATASET_FIELD_NAMES``; values come from the writer's own
     shape helpers in ``src.data.vst.generate_vst_dataset``.
     """
-    r = spec.render
-    n = r.batch_per_shard
+    render = spec.render
+    num_samples = render.batch_per_shard
     return {
-        "audio": audio_dataset_shape(n, r.channels, r.sample_rate, r.signal_duration_seconds),
-        "mel_spec": mel_dataset_shape(n, r.channels, r.sample_rate, r.signal_duration_seconds),
-        "param_array": param_array_dataset_shape(n, spec.num_params),
+        "audio": audio_dataset_shape(
+            num_samples, render.channels, render.sample_rate, render.signal_duration_seconds
+        ),
+        "mel_spec": mel_dataset_shape(
+            num_samples, render.channels, render.sample_rate, render.signal_duration_seconds
+        ),
+        "param_array": param_array_dataset_shape(num_samples, spec.num_params),
     }
 
 

@@ -1,3 +1,14 @@
+"""Per-shard VST dataset writer.
+
+Renders a single shard to disk via a writer dispatched on the output file
+extension (``EXTENSION_TO_OUTPUT_FORMAT``: ``.h5`` -> HDF5, ``.tar`` -> wds).
+Render parameters (sample rate, duration, batch size, ...) are passed via a
+``RenderConfig`` dataclass; the CLI ``main`` exposes one ``--<field>`` flag per
+``RenderConfig.model_fields`` entry and reconstructs the config before
+dispatching. Migration to pydantic-settings (auto-generated flags) tracked in
+#885.
+"""
+
 import hashlib
 import random
 from dataclasses import dataclass, field
@@ -498,10 +509,7 @@ def make_wds_dataset(
     param_spec = param_specs[render_cfg.param_spec_name]
     num_samples = render_cfg.batch_per_shard
     meta = _shard_metadata_from_render(render_cfg)
-    # Single named source of truth: if the wds writer ever becomes resumable
-    # (TODO above), thread the resume offset through this local so the
-    # fixed-params length check, batch start, and sample index all stay in
-    # sync. Splitting them again risks silently skipping rows.
+    # Pinned to 0: writer is not resumable today — see f71905f for invariant.
     start_idx = 0
     _validate_fixed_params_lengths(
         num_samples=num_samples,
@@ -555,9 +563,8 @@ def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
     )
 
 
-# The 11 click options below mirror RenderConfig.model_fields by hand. See #885
-# for the planned migration to pydantic-settings so flags auto-generate from the
-# model — the parallel update is drift-prone and isn't enforced today.
+# Click options below mirror RenderConfig.model_fields by hand — drift-prone.
+# Planned migration to pydantic-settings (auto-generated flags) tracked in #885.
 @click.command()
 @click.argument("data_file", type=str, required=True)
 @click.option("--plugin-path", type=str, required=True, help="Path to the VST3 bundle.")
