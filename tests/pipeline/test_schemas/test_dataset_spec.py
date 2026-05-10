@@ -315,24 +315,19 @@ class TestDatasetSpecRoundTrip:
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
         assert restored.render.plugin_path == "/nonexistent/path.vst3"
 
-    def test_json_round_trip_rebuilds_with_no_runtime_drift(self, patch_runtime_io: None) -> None:
+    def test_json_round_trip_rebuilds_with_no_runtime_drift(
+        self, patch_runtime_io: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Worker reconstructing a spec from R2 sees the same git_sha/run_id the launcher used."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         # Simulate worker on a different commit; default_factory must not run for JSON-loaded.
         json_str = spec.model_dump_json()
 
-        def _drift_sha() -> str:
-            return "f" * 40
+        # Re-patch _get_git_sha to return a drift value so a re-invocation of the
+        # default_factory during model_validate_json would surface as a mismatch.
+        monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "f" * 40)
 
-        # Patch the factory; if pass-through works the factory shouldn't be called.
-        import src.pipeline.schemas.spec as spec_mod
-
-        original = spec_mod._get_git_sha
-        spec_mod._get_git_sha = _drift_sha
-        try:
-            restored = DatasetSpec.model_validate_json(json_str)
-        finally:
-            spec_mod._get_git_sha = original
+        restored = DatasetSpec.model_validate_json(json_str)
 
         assert restored.git_sha == "abc123def456"
 
