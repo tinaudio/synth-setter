@@ -26,8 +26,6 @@ from src.data.vst.generate_vst_dataset import main
 
 _SAMPLE_RATE = 16000
 _CHANNELS = 2
-# 4.0s matches the hardcoded mel-spec frame count (401) baked into the writer's
-# create_datasets_and_get_start_idx; stubbing the duration shorter would broadcast-fail.
 _DURATION = 4.0
 _NUM_SAMPLES = 2
 

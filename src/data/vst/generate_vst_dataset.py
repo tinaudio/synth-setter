@@ -64,9 +64,8 @@ class VSTDataSample:
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
-# STFT params for the mel writer. Roughly the audio-spectrogram-transformer
-# defaults: 100 frames/sec, 128 mels, ~25ms window, hamming window. Centralised
-# here so ``_mel_shape`` and ``make_spectrogram`` agree on the time-axis size.
+# AST-style mel front-end. Centralised so ``_mel_dataset_shape`` and
+# ``make_spectrogram`` agree on the time-axis size.
 _MEL_FRAMES_PER_SECOND = 100
 _MEL_N_MELS = 128
 _MEL_N_FFT_FRACTION_OF_SAMPLE_RATE = 0.025
