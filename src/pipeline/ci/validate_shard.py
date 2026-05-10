@@ -7,7 +7,7 @@ matches ``spec.render.batch_per_shard``. The expected array names are listed in
 ``_EXPECTED_H5_DATASETS`` / ``_TAR_ARRAY_FIELDS``.
 
 CLI usage:
-    python3 -m pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
+    python3 -m src.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
 
 Iterates ``spec.shards`` and downloads each shard from R2 (under
 ``r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}``) before validating.

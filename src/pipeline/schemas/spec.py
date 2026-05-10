@@ -203,9 +203,12 @@ class DatasetSpec(BaseModel):
         """Strip ``shards`` / ``num_shards`` / ``num_params`` from input.
 
         ``model_dump_json`` emits computed fields, so a JSON round-trip would
-        otherwise trip ``extra="forbid"`` on the recomputed values.
+        otherwise trip ``extra="forbid"`` on the recomputed values. Copy the
+        input first so callers passing a reused mapping (Hydra/OmegaConf
+        containers, test fixtures) don't see their dict mutated.
         """
         if isinstance(data, dict):
+            data = dict(data)
             for computed_key in ("shards", "num_shards", "num_params"):
                 data.pop(computed_key, None)
         return data

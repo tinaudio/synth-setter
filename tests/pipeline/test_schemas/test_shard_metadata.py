@@ -25,9 +25,9 @@ def _valid_kwargs() -> dict[str, Any]:
 class TestShardMetadata:
     """Behavioral contracts for the ShardMetadata model that pins shard sidecar JSON.
 
-    The class lives in ``pipeline.schemas.shard_metadata`` (a leaf module with no
+    The class lives in ``src.pipeline.schemas.shard_metadata`` (a leaf module with no
     project imports) so the renderer in ``src/data/vst/generate_vst_dataset.py`` can
-    import it without forming a cycle with ``pipeline.schemas.spec`` (which imports
+    import it without forming a cycle with ``src.pipeline.schemas.spec`` (which imports
     ``src.data.vst.param_specs``).
     """
 

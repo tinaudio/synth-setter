@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate a materialized DatasetSpec JSON.
 
-Provides structural validation (required fields, code_version format, etc.) and optional test-value
+Provides structural validation (required fields, git_sha format, etc.) and optional test-value
 validation for ci-materialize-test.yaml expectations.
 """
 
