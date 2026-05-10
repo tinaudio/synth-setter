@@ -120,14 +120,17 @@ See the project documentation for a full walkthrough.
 ## Project Structure
 
 ```
-src/           ML code (models, data modules, training, evaluation)
-pipeline/      Distributed data pipeline
-  schemas/     Pydantic models (config, spec, prefix, image_config)
-  entrypoints/ Pipeline entry points
-  ci/          CI validation scripts
-configs/       Hydra YAML configs and pipeline configs
+src/           ML code (models, data modules, training, evaluation, and entrypoints)
+  generate_dataset.py  Dataset-generation entrypoint (Hydra)
+  train.py             Training entrypoint (Hydra)
+  eval.py              Evaluation entrypoint (Hydra)
+  pipeline/            Distributed data pipeline
+    schemas/             Pydantic models (DatasetSpec, RenderConfig, prefix, image_config, shard_metadata)
+    ci/                  CI validation scripts (validate_shard, validate_spec)
+    skypilot_launch.py   SkyPilot launcher CLI
+configs/       Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
 scripts/       Standalone scripts
-tests/         Test suite (mirrors src/ and pipeline/ structure)
+tests/         Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)
 docs/design/   Design documents
 ```
 

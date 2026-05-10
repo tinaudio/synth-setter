@@ -323,6 +323,6 @@ class TestDatasetConfigIdFromPath:
     def test_extracts_stem(self) -> None:
         """Extracts stem."""
         assert (
-            dataset_config_id_from_path(Path("configs/dataset/surge-simple-480k-10k.yaml"))
+            dataset_config_id_from_path(Path("configs/experiment/surge-simple-480k-10k.yaml"))
             == "surge-simple-480k-10k"
         )

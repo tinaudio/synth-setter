@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a materialized DatasetPipelineSpec JSON.
+"""Validate a materialized DatasetSpec JSON.
 
 Provides structural validation (required fields, code_version format, etc.) and optional test-value
 validation for ci-materialize-test.yaml expectations.

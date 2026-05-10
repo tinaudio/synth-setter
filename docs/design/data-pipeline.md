@@ -51,10 +51,9 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 ### Distributed Pipeline
 
 > **Implementation status:** Single-machine sequential multi-shard generation is
-> implemented today (`pipeline/entrypoints/generate_dataset.py` loops over
-> `spec.shards`). The distributed/parallel pipeline described below — CLI,
-> backends, reconciliation, and finalize stages — is the design target and not
-> yet built.
+> implemented today (`src/generate_dataset.py` loops over `spec.shards`). The
+> distributed/parallel pipeline described below — CLI, backends, reconciliation,
+> and finalize stages — is the design target and not yet built.
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
@@ -81,7 +80,7 @@ cat configs/dataset/surge-simple-480k-10k.yaml
 # 2. Launch generation — creates spec, launches workers, exits
 # **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)
 # is not yet implemented. Currently only single-shard generation is available via:
-DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml python -m pipeline.entrypoints.generate_dataset
+python -m src.generate_dataset experiment=surge-simple-480k-10k
 # → Sequential multi-shard MVP. Loops over spec.shards on a single worker; distributed parallelism still tracked under #411.
 # `generate_dataset` is the current MVP. It will be deprecated when
 # `generate-shards` lands on main (#411).
@@ -784,11 +783,11 @@ def _render_shard(shard_spec, shard_path):
     The import happens here, in the child, so the VST plugin loads cleanly.
     """
     import numpy as np
-    from pipeline.vst import make_dataset
+    from src.data.vst.generate_vst_dataset import make_hdf5_dataset
     # P3 (post-launch): seed both RNGs for reproducibility — see #100
     # random.seed(shard_spec.seed)
     # np.random.seed(shard_spec.seed)
-    make_dataset(shard_path, shard_spec)
+    make_hdf5_dataset(shard_path, render_cfg)
 
 # In the parent worker:
 p = _spawn_ctx.Process(
@@ -1408,28 +1407,27 @@ Config filenames live in `configs/dataset/`. Production training configs follow 
 ### 14.7 CLI & Directory Structure
 
 ```
-pipeline/
-  __init__.py
+src/
+  generate_dataset.py   # Sequential multi-shard dataset-generation entrypoint (Hydra; MVP). Deprecated when generate-shards lands (#411).
 
-  schemas/              # Pydantic models (implemented)
+  pipeline/             # Distributed-pipeline package
     __init__.py
-    config.py           # DatasetConfig, SplitsConfig, load/ID helpers
-    spec.py             # DatasetPipelineSpec, ShardSpec, materialize_spec
-    prefix.py           # DatasetConfigId, DatasetRunId, R2Prefix helpers
-    image_config.py     # Docker image configuration
 
-  entrypoints/          # Pipeline entry points (implemented)
-    __init__.py
-    generate_dataset.py # Sequential multi-shard dataset generation (MVP); deprecated when generate-shards lands (#411)
+    schemas/            # Pydantic models (implemented)
+      __init__.py
+      spec.py           # DatasetSpec, RenderConfig, ShardSpec
+      shard_metadata.py # ShardMetadata (wds sidecar)
+      prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix helpers
+      image_config.py   # Docker image configuration
 
-  ci/                   # CI validation scripts (implemented)
-    materialize_spec.py # Materialize a DatasetPipelineSpec from a config YAML
-    validate_spec.py    # Spec structural validation (required fields, code_version SHA, etc.)
-    validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
+    ci/                 # CI validation scripts (implemented)
+      validate_spec.py  # Spec structural validation (required fields, code_version SHA, etc.)
+      validate_shard.py # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
 
-  constants.py          # Well-known filenames and paths (R2_BUCKET, etc.)
-  r2_io.py              # rclone wrappers used by ci/, entrypoints/, and CI workflows
+    constants.py        # Well-known filenames and paths (R2_BUCKET, etc.)
+    r2_io.py            # rclone wrappers used by ci/, the entrypoint, and CI workflows
                         # (is_r2_uri, download_to_path, upload_to_uri, downloaded_to_tempfile)
+    skypilot_launch.py  # SkyPilot launcher CLI
 
   # --- Planned (not yet implemented) ---
   # cli.py              # Click entry point: generate, status, finalize

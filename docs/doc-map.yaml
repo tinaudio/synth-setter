@@ -67,12 +67,14 @@ docs:
   - doc: docs/design/data-pipeline.md
     description: Distributed data pipeline design (RunPod + R2)
     sources:
-      - pattern: "src/pipeline/schemas/config.py"
-        covers: "Pipeline config schema, dataset config fields, validation rules"
       - pattern: "src/pipeline/schemas/prefix.py"
         covers: "Run ID prefix generation, shard ID scheme, deterministic naming"
-      - pattern: "configs/dataset/**"
-        covers: "Dataset generation configs, shard counts, sample counts, synth params"
+      - pattern: "configs/dataset.yaml"
+        covers: "Top-level Hydra @hydra.main config for src/generate_dataset.py (mirrors train.yaml/eval.yaml); composes data, render, and experiment groups into a DatasetSpec"
+      - pattern: "configs/experiment/**"
+        covers: "Hydra experiment overrides — both training experiments (configs/experiment/<task>/<name>.yaml) and datagen experiments (configs/experiment/<name>.yaml; e.g. surge-simple-480k-10k, runpod-smoke-shard, ci-materialize-test)"
+      - pattern: "configs/render/**"
+        covers: "RenderConfig sub-model values (plugin_path, preset_path, param_spec_name, renderer_version, sample_rate, etc.)"
       - pattern: "src/generate_dataset.py"
         covers: "Dataset generation entrypoint, sequential multi-shard MVP, CLI interface"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
@@ -80,13 +82,13 @@ docs:
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: "src/pipeline/ci/**"
-        covers: "CI validation scripts, spec materialization, shard validation"
+        covers: "CI validation scripts (validate_spec for structural spec validation, validate_shard for per-shard HDF5/wds validation, load_image_config for Docker image config validation)"
       - pattern: "src/pipeline/r2_io.py"
         covers: "rclone-backed I/O helpers (download_to_path, upload_to_uri, downloaded_to_tempfile, is_r2_uri); single rclone call site shared by ci validators and the generate-local workflow upload step"
       - pattern: "src/pipeline/constants.py"
         covers: "R2 bucket name constant, input spec filename"
       - pattern: "src/pipeline/schemas/spec.py"
-        covers: "DatasetPipelineSpec, ShardSpec, materialize_spec() flow"
+        covers: "DatasetSpec, RenderConfig, ShardSpec; spec construction from Hydra composition at @hydra.main"
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
@@ -99,7 +101,7 @@ docs:
       - pattern: "configs/compute/oci-cpu-template.yaml"
         covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`, so `_override_image_id` skips OCI Resources and the worker image is fed via the `WORKER_IMAGE` env), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), delegates WORKER_GIT_REF checkout + uv install to `scripts/sync_worker_checkout.sh`, then `python /usr/local/bin/entrypoint.py generate_dataset`."
       - pattern: "scripts/docker_entrypoint.py"
-        covers: "Container entrypoint click CLI invoked by RunPod and OCI run: blocks (`python /usr/local/bin/entrypoint.py generate_dataset --spec $WORKER_SPEC_URI`). The generate_dataset subcommand parses --spec into DatasetPipelineSpec, calls run(), then forces interpreter exit (#735 defensive workaround) to bypass any lingering atexit hangs."
+        covers: "Container entrypoint click CLI invoked by RunPod and OCI run: blocks (`python /usr/local/bin/entrypoint.py generate_dataset --spec $WORKER_SPEC_URI`). The generate_dataset subcommand parses --spec into DatasetSpec, calls run(), then forces interpreter exit (#735 defensive workaround) to bypass any lingering atexit hangs."
       - pattern: "scripts/ensure_plugin_symlinks.sh"
         covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
       - pattern: "scripts/sync_worker_checkout.sh"
@@ -225,18 +227,18 @@ docs:
   - doc: docs/reference/configuration-reference.md
     description: Configuration architecture layers, cloud provider comparison, boundary rules, known gaps
     sources:
-      - pattern: "configs/dataset/**"
-        covers: "Pipeline input configs, Pydantic-validated YAML"
+      - pattern: "configs/dataset.yaml"
+        covers: "Top-level dataset-generation Hydra config; composes data/render/experiment groups into a DatasetSpec"
       - pattern: "configs/experiment/**"
-        covers: "Hydra experiment composition, defaults list"
+        covers: "Hydra experiment composition (training and datagen overrides), defaults list"
+      - pattern: "configs/render/**"
+        covers: "Renderer-config group (RenderConfig sub-model)"
       - pattern: "configs/train.yaml"
         covers: "Training entry point, Hydra defaults"
       - pattern: "configs/eval.yaml"
         covers: "Eval entry point, Hydra defaults"
-      - pattern: "src/pipeline/schemas/config.py"
-        covers: "DatasetConfig Pydantic model, validation rules"
       - pattern: "src/pipeline/schemas/spec.py"
-        covers: "DatasetPipelineSpec, materialize_spec() flow"
+        covers: "DatasetSpec, RenderConfig (sub-model); spec construction from Hydra composition at @hydra.main"
       - pattern: "src/train.py"
         covers: "Training entry point, Hydra composition, instantiation flow"
       - pattern: "configs/logger/wandb.yaml"
