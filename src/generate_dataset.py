@@ -31,14 +31,14 @@ from hydra.core.global_hydra import GlobalHydra
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.partitioning import get_my_shards, read_rank_world_from_env
-from pipeline.schemas.spec import DatasetSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
+from src.pipeline.constants import INPUT_SPEC_FILENAME
+from src.pipeline.partitioning import get_my_shards, read_rank_world_from_env
+from src.pipeline.schemas.spec import DatasetSpec, ShardSpec
 
 _R2_URI_SCHEME = "r2://"
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIGS_DIR = _REPO_ROOT / "configs"
 
 
@@ -252,13 +252,13 @@ def _render_and_upload_shard(
     logger.info(f"shard removed locally: {shard_path}")
 
 
-@hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
+@hydra.main(version_base="1.3", config_path="../configs", config_name="dataset")
 def main(cfg: DictConfig) -> None:
     """Hydra-driven entrypoint: compose ``configs/dataset.yaml``, materialize, run.
 
     Constructs a ``DatasetSpec`` from the composed config on line 1 of the body
     and proceeds to ``run(spec)``. Operators invoke this via
-    ``python -m pipeline.entrypoints.generate_dataset experiment=<name> [+overrides...]``;
+    ``python -m src.generate_dataset experiment=<name> [+overrides...]``;
     workers in containerized clusters bypass this path and consume an
     already-materialized spec via ``scripts/docker_entrypoint.py generate_dataset --spec <uri>``.
     """

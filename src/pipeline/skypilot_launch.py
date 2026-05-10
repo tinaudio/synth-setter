@@ -44,9 +44,9 @@ import sky.check  # accessed conditionally on the kubernetes path; see provider 
 import yaml
 from dotenv import dotenv_values
 
-from pipeline.entrypoints.generate_dataset import compose_dataset_spec
-from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from pipeline.schemas.spec import DatasetSpec
+from src.generate_dataset import compose_dataset_spec
+from src.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from src.pipeline.schemas.spec import DatasetSpec
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"

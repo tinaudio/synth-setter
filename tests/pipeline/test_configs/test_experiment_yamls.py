@@ -16,7 +16,7 @@ import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-from pipeline.schemas.spec import DatasetSpec
+from src.pipeline.schemas.spec import DatasetSpec
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
 

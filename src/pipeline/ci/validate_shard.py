@@ -25,9 +25,9 @@ import h5py
 import numpy as np
 from pydantic import ValidationError
 
-from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
-from pipeline.schemas.shard_metadata import ShardMetadata
-from pipeline.schemas.spec import DatasetSpec
+from src.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
+from src.pipeline.schemas.shard_metadata import ShardMetadata
+from src.pipeline.schemas.spec import DatasetSpec
 
 _EXPECTED_H5_DATASETS = ("audio", "mel_spec", "param_array")
 _TAR_METADATA_MEMBER = "metadata.json"

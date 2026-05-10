@@ -25,7 +25,7 @@ def extract_renderer_version(plugin_path: Path) -> str:
     launcher) must avoid it — they pin `renderer_version` from
     `configs/render/<spec>.yaml` and let the worker compare against this
     function's output before rendering (see
-    `pipeline.entrypoints.generate_dataset.run`).
+    `src.generate_dataset.run`).
 
     Raises:
         FileNotFoundError: plugin_path does not exist.

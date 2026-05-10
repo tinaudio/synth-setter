@@ -19,9 +19,9 @@ _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
 
-from pipeline.schemas.shard_metadata import ShardMetadata
+from src.pipeline.schemas.shard_metadata import ShardMetadata
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
-from pipeline.schemas.spec import RenderConfig
+from src.pipeline.schemas.spec import RenderConfig
 from src.data.vst import param_specs
 from src.data.vst.core import render_params
 from src.data.vst.generate_vst_dataset import make_hdf5_dataset, make_wds_dataset

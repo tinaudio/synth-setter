@@ -280,7 +280,7 @@ class TestGenerateDataset:
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
         """Valid --spec JSON is parsed into DatasetSpec and passed to run()."""
-        from pipeline.schemas.spec import DatasetSpec
+        from src.pipeline.schemas.spec import DatasetSpec
 
         payload = _valid_spec_payload()
         spec_path = _write_spec_file(tmp_path, payload)

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pipeline.ci.validate_spec import _read_spec_text, validate_structure, validate_test_values
+from src.pipeline.ci.validate_spec import _read_spec_text, validate_structure, validate_test_values
 
 
 def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dict:
@@ -147,6 +147,6 @@ class TestReadSpecText:
         def fake_check_call(args: list[str]) -> None:
             Path(args[-1]).write_text(json.dumps({"hello": "from-r2"}))
 
-        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+        with patch("src.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
             text = _read_spec_text("r2://bucket/spec.json")
         assert json.loads(text) == {"hello": "from-r2"}

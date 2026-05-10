@@ -18,7 +18,8 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from pipeline.entrypoints.skypilot_launch import (
+from src.pipeline.schemas.spec import DatasetSpec
+from src.pipeline.skypilot_launch import (
     _WORKER_ENV_KEYS,
     _WORKER_SPEC_URI_ENV,
     _override_image_id,
@@ -26,13 +27,12 @@ from pipeline.entrypoints.skypilot_launch import (
     main,
     resolve_worker_env,
 )
-from pipeline.entrypoints.skypilot_launch import (
+from src.pipeline.skypilot_launch import (
     _detect_provider as _real_detect_provider,
 )
-from pipeline.entrypoints.skypilot_launch import (
+from src.pipeline.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
-from pipeline.schemas.spec import DatasetSpec
 
 FIXED_NOW = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -70,9 +70,9 @@ def fake_plugin(tmp_path: Path) -> Path:
 @pytest.fixture()
 def patch_materialize_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub out git/timestamp I/O so DatasetSpec construction is deterministic."""
-    monkeypatch.setattr("pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
-    monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: False)
-    monkeypatch.setattr("pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
+    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
+    monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
 
 
 @pytest.fixture()
@@ -87,7 +87,7 @@ def config_yaml(fake_plugin: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     # the experiment + render groups. Tests need the path to point at the
     # fake VST3 bundle they constructed; we monkeypatch ``compose_dataset_spec``
     # so it injects the override transparently.
-    from pipeline.entrypoints import generate_dataset as gd_mod
+    from src import generate_dataset as gd_mod
 
     original = gd_mod.compose_dataset_spec
 
@@ -96,9 +96,7 @@ def config_yaml(fake_plugin: Path, monkeypatch: pytest.MonkeyPatch) -> str:
         merged.append(f"render.plugin_path={fake_plugin}")
         return original(experiment, overrides=merged)
 
-    monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch.compose_dataset_spec", _compose_with_plugin
-    )
+    monkeypatch.setattr("src.pipeline.skypilot_launch.compose_dataset_spec", _compose_with_plugin)
     return "ci-materialize-test"
 
 
@@ -132,7 +130,7 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect the launcher's default spec-write directory under tmp_path."""
     spec_dir = tmp_path / "spec-out"
     spec_dir.mkdir()
-    monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.LOCAL_SPEC_DIR", spec_dir)
+    monkeypatch.setattr("src.pipeline.skypilot_launch.LOCAL_SPEC_DIR", spec_dir)
     return spec_dir
 
 
@@ -156,7 +154,7 @@ def mock_rclone_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     by setting their own side_effect on `subprocess.check_call`.
     """
     monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch.subprocess.check_call",
+        "src.pipeline.skypilot_launch.subprocess.check_call",
         lambda args: None,
     )
 
@@ -169,11 +167,11 @@ def mock_cred_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     provider, exception, or call assertion.
     """
     monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch._run_cred_bootstrap",
+        "src.pipeline.skypilot_launch._run_cred_bootstrap",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch._detect_provider",
+        "src.pipeline.skypilot_launch._detect_provider",
         lambda _task: "runpod",
     )
 
@@ -205,7 +203,7 @@ def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     `mock_sky.tail_logs.side_effect = ...` for a transport raise).
     """
     fake = MagicMock()
-    monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.sky", fake)
+    monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake)
     _succeeded_run(fake)
     return fake
 
@@ -476,7 +474,7 @@ class TestMainCli:
         """
         rclone_invocations: list[list[str]] = []
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.check_call",
+            "src.pipeline.skypilot_launch.subprocess.check_call",
             lambda args: rclone_invocations.append(args),
         )
 
@@ -664,7 +662,7 @@ class TestMainCli:
         """If sky.launch raises after the launcher materialized + R2-uploaded the spec, the local
         spec file under LOCAL_SPEC_DIR is still around for downstream artifact upload."""
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.check_call",
+            "src.pipeline.skypilot_launch.subprocess.check_call",
             lambda args: None,
         )
         mock_sky.launch.side_effect = RuntimeError("boom")
@@ -1016,7 +1014,7 @@ class TestNumWorkersFanOut:
         self._setup_n_workers_mock(mock_sky, n=3)
         rclone_invocations: list[list[str]] = []
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.check_call",
+            "src.pipeline.skypilot_launch.subprocess.check_call",
             lambda args: rclone_invocations.append(args),
         )
 
@@ -1341,7 +1339,7 @@ class TestRunCredBootstrap:
         monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://api:pw@server/")
         called: list[str] = []
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.run",
+            "src.pipeline.skypilot_launch.subprocess.run",
             lambda *args, **kwargs: called.append("invoked"),  # type: ignore[misc]
         )
         # bypass the autouse no-op fixture
@@ -1373,7 +1371,7 @@ class TestRunCredBootstrap:
             result.returncode = 0
             return result
 
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         _real_run_cred_bootstrap(provider="runpod", env_file_path=env_file)
 
@@ -1394,7 +1392,7 @@ class TestRunCredBootstrap:
                 returncode=1, cmd=args, stderr="::error::missing var"
             )
 
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         with pytest.raises(click.ClickException, match="(?i)cred bootstrap failed"):
             _real_run_cred_bootstrap(provider="runpod")
@@ -1418,7 +1416,7 @@ class TestRunCredBootstrap:
             return result
 
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         # If the launcher were echoing stdout, click.testing.CliRunner would surface it.
         # Here we just assert the call shape: capture_output=True, env supplied.
@@ -1618,10 +1616,10 @@ class TestDispatchMode:
             return result
 
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch._run_cred_bootstrap",
+            "src.pipeline.skypilot_launch._run_cred_bootstrap",
             _real_run_cred_bootstrap,
         )
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         result = _invoke(
             config_yaml,
@@ -1660,10 +1658,10 @@ class TestDispatchMode:
             return result
 
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch._run_cred_bootstrap",
+            "src.pipeline.skypilot_launch._run_cred_bootstrap",
             _real_run_cred_bootstrap,
         )
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         result = _invoke(
             config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--local"
@@ -1772,9 +1770,7 @@ class TestWorkerEnvToOsEnvironBridge:
             ):
                 captured[key] = os.environ.get(key, "<unset>")
 
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.check_call", fake_rclone
-        )
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.check_call", fake_rclone)
 
         result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
 

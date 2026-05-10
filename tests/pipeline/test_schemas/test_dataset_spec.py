@@ -9,13 +9,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from pipeline.schemas.spec import (
+from src.data.vst import param_specs
+from src.pipeline.schemas.spec import (
     DatasetSpec,
     RenderConfig,
     ShardSpec,
     dataset_config_id_from_path,
 )
-from src.data.vst import param_specs
 
 FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -54,9 +54,9 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
 @pytest.fixture()
 def patch_runtime_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub git/timestamp factories so DatasetSpec construction is deterministic."""
-    monkeypatch.setattr("pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
-    monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: False)
-    monkeypatch.setattr("pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
+    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
+    monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +300,7 @@ class TestDatasetSpecRoundTrip:
             return "f" * 40
 
         # Patch the factory; if pass-through works the factory shouldn't be called.
-        import pipeline.schemas.spec as spec_mod
+        import src.pipeline.schemas.spec as spec_mod
 
         original = spec_mod._get_git_sha
         spec_mod._get_git_sha = _drift_sha

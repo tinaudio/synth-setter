@@ -27,14 +27,14 @@ from pydantic import (
     model_validator,
 )
 
-from pipeline.schemas.prefix import (
+from src.data.vst import param_specs
+from src.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
     make_dataset_wandb_run_id,
     make_r2_prefix,
 )
-from pipeline.schemas.shard_metadata import ShardMetadata as ShardMetadata
-from src.data.vst import param_specs
+from src.pipeline.schemas.shard_metadata import ShardMetadata as ShardMetadata
 
 __all__ = [
     "DatasetSpec",

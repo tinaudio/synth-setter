@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from pipeline.schemas.spec import RenderConfig
+from src.pipeline.schemas.spec import RenderConfig
 from src.data.vst import generate_vst_dataset
 from src.data.vst.generate_vst_dataset import main
 

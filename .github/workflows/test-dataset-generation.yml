@@ -3,7 +3,7 @@ name: Test Dataset Generation
 # Smoke test for the data-pipeline. Three execution modes share the same
 # `validate-dataset-shards.yaml` downstream:
 #
-#   * `local`  — runs `pipeline.ci.materialize_spec` + `docker_entrypoint.py
+#   * `local`  — runs `src.pipeline.ci.materialize_spec` + `docker_entrypoint.py
 #     generate_dataset` directly inside the dev-snapshot container on the
 #     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). Manual
 #     dispatch fallback for ad-hoc smoke; superseded by `skypilot-local` for
@@ -22,7 +22,7 @@ name: Test Dataset Generation
 #     docs/design/skypilot-compute-integration.md.
 #
 # All non-`local` rows let the launcher invoke the cred-bootstrap script
-# (`pipeline.entrypoints.skypilot_launch._run_cred_bootstrap`); the launcher
+# (`src.pipeline.skypilot_launch._run_cred_bootstrap`); the launcher
 # captures the script's stdout via `subprocess.run(capture_output=True)` so a
 # `tee`'d caller workflow can't leak secrets.
 #
@@ -77,22 +77,22 @@ on:
   pull_request:
     paths:
       - "src/data/vst/**"
-      - "pipeline/schemas/**"
+      - "src/pipeline/schemas/**"
       - "configs/dataset.yaml"
       - "configs/experiment/**"
       - "configs/render/**"
       - "configs/r2/**"
       - "configs/data/**"
       - "configs/compute/**"
-      - "pipeline/entrypoints/**"
-      - "pipeline/ci/**"
-      - "pipeline/r2_io.py"
+      - "src/pipeline/**"
+      - "src/pipeline/ci/**"
+      - "src/pipeline/r2_io.py"
       - "scripts/docker_entrypoint.py"
       - "scripts/run-linux-vst-headless.sh"
       - "scripts/ensure_plugin_symlinks.sh"
       - "scripts/sync_worker_checkout.sh"
       - "scripts/skypilot_write_provider_creds.sh"
-      - "pipeline/entrypoints/skypilot_launch.py"
+      - "src/pipeline/skypilot_launch.py"
       - ".github/workflows/test-dataset-generation.yml"
       - ".github/workflows/generate-dataset-shards.yaml"
       - ".github/workflows/validate-dataset-shards.yaml"
@@ -265,7 +265,7 @@ jobs:
               bash scripts/ensure_plugin_symlinks.sh
               python -c "
               import sys
-              from pipeline.entrypoints.generate_dataset import compose_dataset_spec
+              from src.generate_dataset import compose_dataset_spec
               spec = compose_dataset_spec(\"$EXPERIMENT\")
               with open(\"/run-metadata/input_spec.json\", \"w\") as f:
                   f.write(spec.model_dump_json(indent=2))
@@ -280,7 +280,7 @@ jobs:
       # Upload the spec to R2 at the same path-shape the launcher uses, so
       # validate-dataset-shards.yaml can read it without knowing whether the
       # generate path was launcher- or local-provider. Uses the in-image
-      # rclone helper through pipeline.r2_io to keep all rclone invocations
+      # rclone helper through src.pipeline.r2_io to keep all rclone invocations
       # in one place.
       - name: Upload spec to R2 for validate handoff
         env:
@@ -304,7 +304,7 @@ jobs:
             python3 -c "
           import os
           from pathlib import Path
-          from pipeline.r2_io import upload_to_uri
+          from src.pipeline.r2_io import upload_to_uri
           uri = f\"r2://{os.environ['R2_BUCKET']}/skypilot-launcher-specs/{os.environ['CLUSTER_NAME']}.json\"
           upload_to_uri(Path('/run-metadata/input_spec.json'), uri)
           print(f'spec uploaded to {uri}')

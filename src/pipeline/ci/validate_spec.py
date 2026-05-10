@@ -11,8 +11,8 @@ import json
 import sys
 from pathlib import Path
 
-from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
-from pipeline.schemas.spec import _OUTPUT_FORMAT_TO_EXTENSION
+from src.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
+from src.pipeline.schemas.spec import _OUTPUT_FORMAT_TO_EXTENSION
 
 _REQUIRED_TOP_LEVEL_FIELDS = [
     "base_seed",

@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-import pipeline.schemas.shard_metadata as shard_metadata_module
-from pipeline.schemas.shard_metadata import ShardMetadata
+import src.pipeline.schemas.shard_metadata as shard_metadata_module
+from src.pipeline.schemas.shard_metadata import ShardMetadata
 
 
 def _valid_kwargs() -> dict[str, Any]:
@@ -110,7 +110,7 @@ class TestShardMetadataLeafModuleInvariant:
         module_path = Path(module_file)
         tree = ast.parse(module_path.read_text())
 
-        project_prefixes = ("pipeline.", "src.", "scripts.")
+        project_prefixes = ("src.pipeline.", "src.", "scripts.")
         offenders: list[str] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
@@ -125,7 +125,7 @@ class TestShardMetadataLeafModuleInvariant:
 
     def test_spec_re_exports_shard_metadata(self) -> None:
         """``pipeline.schemas.spec.ShardMetadata`` is the same class as the leaf import."""
-        import pipeline.schemas.spec as spec_module
-        from pipeline.schemas.shard_metadata import ShardMetadata as Leaf
+        import src.pipeline.schemas.spec as spec_module
+        from src.pipeline.schemas.shard_metadata import ShardMetadata as Leaf
 
         assert spec_module.ShardMetadata is Leaf

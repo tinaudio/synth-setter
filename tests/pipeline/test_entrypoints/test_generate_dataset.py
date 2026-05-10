@@ -21,13 +21,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.entrypoints.generate_dataset import (
+from src.generate_dataset import (
     VST_HEADLESS_WRAPPER,
     build_generate_args,
     run,
 )
-from pipeline.schemas.spec import DatasetSpec
+from src.pipeline.constants import INPUT_SPEC_FILENAME
+from src.pipeline.schemas.spec import DatasetSpec
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version
@@ -133,8 +133,8 @@ class TestRun:
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_uploads_spec_to_r2_at_expected_path(
         self,
         mock_rclone: MagicMock,
@@ -154,8 +154,8 @@ class TestRun:
         assert spec_src.endswith(INPUT_SPEC_FILENAME)
         assert spec_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_spec_upload_precedes_shard_generation(
         self,
         mock_rclone: MagicMock,
@@ -173,8 +173,8 @@ class TestRun:
         call_names = [c[0] for c in manager.mock_calls]
         assert call_names.index("rclone") < call_names.index("check_call")
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_invokes_generate_vst_dataset_with_spec_derived_args(
         self,
         mock_rclone: MagicMock,
@@ -194,8 +194,8 @@ class TestRun:
         rendered_json = args[render_cfg_idx + 1]
         assert str(spec.render.batch_per_shard) in rendered_json
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_shard_generation_runs_under_headless_vst_wrapper(
         self,
         mock_rclone: MagicMock,
@@ -220,8 +220,8 @@ class TestRun:
             assert VST_HEADLESS_WRAPPER not in args
             assert args[1] == "src/data/vst/generate_vst_dataset.py"
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_uploads_shard_to_r2_after_generation(
         self,
         mock_rclone: MagicMock,
@@ -238,8 +238,8 @@ class TestRun:
         assert "shard-000000.h5" in shard_src
         assert shard_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_subprocess_failure_propagates(
         self,
         mock_rclone: MagicMock,
@@ -252,8 +252,8 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_rclone_failure_propagates(
         self,
         mock_rclone: MagicMock,
@@ -266,8 +266,8 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_wds_output_format_uploads_tar_shard(
         self,
         mock_rclone: MagicMock,
@@ -296,8 +296,8 @@ class TestRun:
         assert any(p.endswith("shard-000000.tar") for p in uploaded)
         assert not any(p.endswith("shard-000000.h5") for p in uploaded)
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_run_with_three_shards_renders_each_shard(
         self,
         mock_rclone: MagicMock,
@@ -318,8 +318,8 @@ class TestRun:
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [s.filename for s in spec.shards]
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_spec_uploaded_exactly_once_for_multi_shard_run(
         self,
         mock_rclone: MagicMock,
@@ -338,8 +338,8 @@ class TestRun:
         ]
         assert len(spec_uploads) == 1
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_each_shard_uploaded_after_its_render(
         self,
         mock_rclone: MagicMock,
@@ -367,8 +367,8 @@ class TestRun:
             "rclone",  # upload shard 2
         ]
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_local_shard_file_removed_after_upload(
         self,
         mock_rclone: MagicMock,
@@ -393,8 +393,8 @@ class TestRun:
         for shard_path in shard_uploads:
             assert not shard_path.exists(), f"shard file still on disk after run: {shard_path}"
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_subprocess_failure_in_second_shard_propagates_immediately(
         self,
         mock_rclone: MagicMock,
@@ -421,8 +421,8 @@ class TestRun:
 
         assert mock_check_call.call_count == 2
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_subprocess_exits_zero_without_writing_shard_raises(
         self,
         mock_rclone: MagicMock,
@@ -443,8 +443,8 @@ class TestRun:
         # Spec was uploaded (1 rclone call), but no shard upload was attempted.
         assert mock_rclone.call_count == 1
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_renderer_version_mismatch_raises_before_uploads(
         self,
         mock_rclone: MagicMock,
@@ -463,8 +463,8 @@ class TestRun:
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_run_raises_when_skypilot_env_missing(
         self,
         mock_rclone: MagicMock,
@@ -489,8 +489,8 @@ class TestRun:
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_rank_0_of_2_renders_only_first_half_of_shards(
         self,
         mock_rclone: MagicMock,
@@ -513,8 +513,8 @@ class TestRun:
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_rank_1_of_2_renders_only_remaining_shard(
         self,
         mock_rclone: MagicMock,
@@ -537,8 +537,8 @@ class TestRun:
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [spec.shards[2].filename]
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_spec_uploaded_exactly_once_independent_of_partition(
         self,
         mock_rclone: MagicMock,
@@ -559,8 +559,8 @@ class TestRun:
         ]
         assert len(spec_uploads) == 1
 
-    @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
-    @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
+    @patch("src.generate_dataset.subprocess.check_call")
+    @patch("src.generate_dataset._rclone_copy")
     def test_excess_worker_renders_no_shards_but_still_uploads_spec(
         self,
         mock_rclone: MagicMock,
@@ -612,7 +612,7 @@ class TestBuildGenerateArgs:
         render_cfg_idx = args.index("--render-cfg-json")
         rendered_json = args[render_cfg_idx + 1]
         # Deserialization must produce a RenderConfig equal to spec.render.
-        from pipeline.schemas.spec import RenderConfig
+        from src.pipeline.schemas.spec import RenderConfig
 
         restored = RenderConfig.model_validate_json(rendered_json)
         assert restored == spec.render
@@ -650,7 +650,7 @@ class TestComposeDatasetSpec:
 
     def test_composes_known_experiment(self) -> None:
         """``ci-materialize-test`` composes to a 3-shard hdf5 spec."""
-        from pipeline.entrypoints.generate_dataset import compose_dataset_spec
+        from src.generate_dataset import compose_dataset_spec
 
         spec = compose_dataset_spec("ci-materialize-test")
         assert spec.task_name == "ci-materialize-test"
@@ -659,7 +659,7 @@ class TestComposeDatasetSpec:
 
     def test_overrides_apply(self) -> None:
         """Hydra-style overrides modify nested fields on the composed spec."""
-        from pipeline.entrypoints.generate_dataset import compose_dataset_spec
+        from src.generate_dataset import compose_dataset_spec
 
         spec = compose_dataset_spec("ci-materialize-test", overrides=["render.sample_rate=22050"])
         assert spec.render.sample_rate == 22050
