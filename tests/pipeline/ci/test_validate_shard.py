@@ -200,6 +200,21 @@ class TestValidateShard:
         assert len(errors) == 1
         assert "not found" in errors[0].lower() or "does not exist" in errors[0].lower()
 
+    def test_unsupported_suffix_returns_error(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A path whose suffix is neither ``.h5`` nor ``.tar`` is rejected with the accepted
+        set."""
+        shard_path = tmp_path / "shard-000000.parquet"
+        shard_path.write_bytes(b"")
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert len(errors) == 1
+        assert "unsupported shard suffix" in errors[0]
+        assert ".h5" in errors[0]
+        assert ".tar" in errors[0]
+
     def test_extra_datasets_ignored(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Extra datasets in HDF5 beyond the required three do not cause errors."""
         shard_path = tmp_path / "shard-000000.h5"

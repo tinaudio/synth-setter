@@ -37,18 +37,23 @@ _TAR_ARRAY_FIELDS = ("audio", "mel_spec", "param_array")
 def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     """Validate one shard against a DatasetSpec.
 
-    Dispatches on suffix: ``.h5`` -> HDF5 path, ``.tar`` -> tar path. Both paths
-    check that the expected per-row arrays exist and that each row count
-    matches ``spec.render.batch_per_shard``.
+    Dispatches explicitly on suffix: ``.h5`` -> HDF5 path, ``.tar`` -> tar path.
+    Any other suffix is rejected with an error naming the accepted set so a
+    typo / wrong-format file does not surface as a misleading "not valid HDF5".
+    Both paths check that the expected per-row arrays exist and that each row
+    count matches ``spec.render.batch_per_shard``.
 
     Returns list of error strings (empty = valid).
     """
     if not shard_path.exists():
         return [f"shard file not found: {shard_path}"]
 
-    if shard_path.suffix == ".tar":
+    suffix = shard_path.suffix
+    if suffix == ".h5":
+        return _validate_h5_shard(shard_path, spec)
+    if suffix == ".tar":
         return _validate_tar_shard(shard_path, spec)
-    return _validate_h5_shard(shard_path, spec)
+    return [f"unsupported shard suffix {suffix!r} (expected one of: '.h5', '.tar')"]
 
 
 def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:

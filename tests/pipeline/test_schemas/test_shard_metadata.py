@@ -110,7 +110,7 @@ class TestShardMetadataLeafModuleInvariant:
         module_path = Path(module_file)
         tree = ast.parse(module_path.read_text())
 
-        project_prefixes = ("src.pipeline.", "src.", "scripts.")
+        project_prefixes = ("pipeline.", "src.", "scripts.")
         offenders: list[str] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
@@ -124,7 +124,7 @@ class TestShardMetadataLeafModuleInvariant:
         assert offenders == [], f"leaf module imports project modules: {offenders}"
 
     def test_spec_re_exports_shard_metadata(self) -> None:
-        """``pipeline.schemas.spec.ShardMetadata`` is the same class as the leaf import."""
+        """``src.pipeline.schemas.spec.ShardMetadata`` is the same class as the leaf import."""
         import src.pipeline.schemas.spec as spec_module
         from src.pipeline.schemas.shard_metadata import ShardMetadata as Leaf
 

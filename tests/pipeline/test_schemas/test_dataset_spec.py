@@ -209,6 +209,27 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
 
+    def test_naive_created_at_raises(self, patch_runtime_io: None) -> None:
+        """A naive datetime on ``created_at`` is rejected so run_id stays UTC-derived."""
+        naive = datetime(2026, 3, 28, 12, 0, 0)
+        with pytest.raises(ValidationError, match="created_at must be timezone-aware UTC"):
+            DatasetSpec(**_valid_spec_kwargs(created_at=naive))
+
+    def test_non_utc_created_at_raises(self, patch_runtime_io: None) -> None:
+        """A non-UTC tz-aware datetime is rejected so run_id stays UTC-derived."""
+        from datetime import timedelta
+
+        offset_tz = timezone(timedelta(hours=5))
+        with pytest.raises(ValidationError, match="created_at must be timezone-aware UTC"):
+            DatasetSpec(
+                **_valid_spec_kwargs(created_at=datetime(2026, 3, 28, 12, 0, 0, tzinfo=offset_tz))
+            )
+
+    def test_naive_iso_string_created_at_raises(self, patch_runtime_io: None) -> None:
+        """A JSON-style naive ISO string on ``created_at`` is rejected after parsing."""
+        with pytest.raises(ValidationError, match="created_at must be timezone-aware UTC"):
+            DatasetSpec(**_valid_spec_kwargs(created_at="2026-03-28T12:00:00"))
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — computed fields

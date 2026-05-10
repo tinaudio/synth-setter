@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from pathlib import Path
 from types import MappingProxyType
@@ -250,6 +250,20 @@ class DatasetSpec(BaseModel):
             if value.endswith("Z"):
                 value = value[:-1] + "+00:00"
             return datetime.fromisoformat(value)
+        return value
+
+    @field_validator("created_at")
+    @classmethod
+    def _created_at_must_be_utc(cls, value: datetime) -> datetime:
+        """Reject naive or non-UTC ``created_at`` so the run_id/prefix invariants hold.
+
+        ``run_id`` and ``r2_prefix`` are derived from ``created_at`` and the project treats
+        them as UTC by construction (see ``_utc_now``). A JSON spec providing a naive
+        datetime *and* a pre-computed ``run_id`` would otherwise pass through with a
+        wall-clock timestamp, breaking that invariant silently.
+        """
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError(f"created_at must be timezone-aware UTC, got {value!r}")
         return value
 
     @field_validator("r2_prefix")
