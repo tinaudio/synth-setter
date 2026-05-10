@@ -73,10 +73,13 @@ def _dataset_spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     aren't fields on the spec, so they get filtered out. Adding a new Hydra
     group does not silently break this path.
     """
-    raw: Any = OmegaConf.to_container(cfg, resolve=True)
+    raw: object = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed Hydra config is not a mapping: {type(raw).__name__}")
-    return DatasetSpec(**{k: v for k, v in raw.items() if k in DatasetSpec.model_fields})
+    spec_kwargs: dict[str, Any] = {
+        k: v for k, v in raw.items() if isinstance(k, str) and k in DatasetSpec.model_fields
+    }
+    return DatasetSpec(**spec_kwargs)
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
