@@ -27,22 +27,24 @@ from pipeline.schemas.spec import DatasetPipelineSpec
 # ---------------------------------------------------------------------------
 
 
-def _create_shard(path: Path, shard_size: int, datasets: dict[str, tuple] | None = None) -> None:
-    """Create a minimal HDF5 shard with given datasets and shapes."""
-    defaults = {
-        "audio": (shard_size, 2, 64000),
-        "mel_spec": (shard_size, 2, 128, 401),
-        "param_array": (shard_size, 92),
-    }
-    with h5py.File(path, "w") as f:
-        for name, shape in (datasets or defaults).items():
-            f.create_dataset(name, shape=shape, dtype=np.float32)
-
-
 _AUDIO_CHANNELS = 2
 _AUDIO_SAMPLES_PER_ROW = 64000
 _MEL_SHAPE_PER_ROW = (2, 128, 401)
 _PARAM_LENGTH = 92
+
+
+def _create_shard(
+    path: Path, shard_size: int, datasets: dict[str, tuple[int, ...]] | None = None
+) -> None:
+    """Create a minimal HDF5 shard with given datasets and shapes."""
+    defaults: dict[str, tuple[int, ...]] = {
+        "audio": (shard_size, _AUDIO_CHANNELS, _AUDIO_SAMPLES_PER_ROW),
+        "mel_spec": (shard_size, *_MEL_SHAPE_PER_ROW),
+        "param_array": (shard_size, _PARAM_LENGTH),
+    }
+    with h5py.File(path, "w") as f:
+        for name, shape in (datasets or defaults).items():
+            f.create_dataset(name, shape=shape, dtype=np.float32)
 
 
 def _create_tar_shard(
@@ -426,6 +428,28 @@ class TestValidateTarShard:
         """File that is not a valid tar returns an error."""
         shard_path = tmp_path / "shard-000000.tar"
         shard_path.write_bytes(b"definitely not a tar file")
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert len(errors) == 1
+        assert "tar" in errors[0].lower()
+
+    def test_gzipped_tar_returns_error(
+        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+    ) -> None:
+        """A .tar.gz file masquerading as .tar fails validation rather than being silently
+        accepted.
+
+        The wds writer only emits uncompressed tars; pinning ``mode="r:"`` keeps the validator
+        from auto-detecting and accepting a recompressed shard whose layout would still pass
+        downstream checks but disagree with the writer-side contract.
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        with tarfile.open(shard_path, mode="w:gz") as gz:
+            payload = io.BytesIO(b"junk")
+            info = tarfile.TarInfo(name="00000000.audio.npy")
+            info.size = len(payload.getvalue())
+            gz.addfile(info, payload)
 
         errors = validate_shard(shard_path, real_spec)
 

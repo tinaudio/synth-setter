@@ -94,9 +94,9 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
     ``ShardMetadata``.
     """
     try:
-        tar = tarfile.open(shard_path)
+        tar = tarfile.open(shard_path, mode="r:")
     except tarfile.TarError:
-        return [f"file is not a valid tar archive: {shard_path}"]
+        return [f"file is not a valid uncompressed tar archive: {shard_path}"]
 
     errors: list[str] = []
     with tar:

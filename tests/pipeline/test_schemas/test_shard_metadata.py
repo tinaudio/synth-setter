@@ -64,6 +64,38 @@ class TestShardMetadata:
         restored = ShardMetadata.model_validate_json(original.model_dump_json())
         assert restored == original
 
+    @pytest.mark.parametrize("velocity", [-1, 128, 200])
+    def test_velocity_outside_midi_range_rejected(self, velocity: int) -> None:
+        """A metadata.json carrying a velocity outside [0, 127] fails on read."""
+        kwargs = _valid_kwargs()
+        kwargs["velocity"] = velocity
+        with pytest.raises(ValidationError, match="velocity"):
+            ShardMetadata(**kwargs)
+
+    @pytest.mark.parametrize("duration", [0.0, -1.0, -100.0])
+    def test_non_positive_signal_duration_rejected(self, duration: float) -> None:
+        """A non-positive signal_duration_seconds fails on read."""
+        kwargs = _valid_kwargs()
+        kwargs["signal_duration_seconds"] = duration
+        with pytest.raises(ValidationError, match="signal_duration_seconds"):
+            ShardMetadata(**kwargs)
+
+    @pytest.mark.parametrize("sample_rate", [0.0, -1.0, -16000.0])
+    def test_non_positive_sample_rate_rejected(self, sample_rate: float) -> None:
+        """A non-positive sample_rate fails on read."""
+        kwargs = _valid_kwargs()
+        kwargs["sample_rate"] = sample_rate
+        with pytest.raises(ValidationError, match="sample_rate"):
+            ShardMetadata(**kwargs)
+
+    @pytest.mark.parametrize("channels", [0, -1, -2])
+    def test_channels_below_one_rejected(self, channels: int) -> None:
+        """A channels value below 1 fails on read."""
+        kwargs = _valid_kwargs()
+        kwargs["channels"] = channels
+        with pytest.raises(ValidationError, match="channels"):
+            ShardMetadata(**kwargs)
+
 
 class TestShardMetadataLeafModuleInvariant:
     """The leaf module must stay leaf — no project imports allowed — so the renderer in

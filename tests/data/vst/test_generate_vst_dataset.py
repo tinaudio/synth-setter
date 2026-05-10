@@ -1377,12 +1377,12 @@ def test_make_hdf5_and_make_wds_call_render_params_with_identical_inputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Both writers, given identical fixed inputs, drive ``render_params`` with the.
+    """Both writers drive ``render_params`` with the same arg sequence in the same order.
 
-    same arg sequence, in the same order. The on-disk artifacts then have matching
-    shape/dtype/finiteness and equal metadata even though pedalboard's two render
-    passes are not guaranteed to produce bit-identical audio across calls (see
-    #489 — VST3Plugin internal state diverges across reloads).
+    Given identical fixed inputs, the on-disk artifacts have matching shape, dtype,
+    finiteness, and equal metadata — even though pedalboard's two render passes are
+    not guaranteed to produce bit-identical audio across calls (see #489 — VST3Plugin
+    internal state diverges across reloads).
 
     This is the load-bearing equivalence assertion for the wds output mode: the
     point of the split is to keep the two writers feeding the renderer the same

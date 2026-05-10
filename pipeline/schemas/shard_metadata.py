@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class ShardMetadata(BaseModel):
@@ -22,3 +22,23 @@ class ShardMetadata(BaseModel):
     sample_rate: float
     channels: int
     min_loudness: float
+
+    @model_validator(mode="after")
+    def _ranges_must_be_sane(self) -> ShardMetadata:
+        """Reject metadata.json sidecars whose values are strict-typed but semantically broken.
+
+        DatasetConfig validates these on the upstream side; mirroring the same checks here closes
+        the trust boundary on read so an externally-produced metadata.json can't ship with negative
+        sample_rate or out-of-range velocity.
+        """
+        if not (0 <= self.velocity <= 127):
+            raise ValueError(f"velocity must be in [0, 127], got {self.velocity}")
+        if self.signal_duration_seconds <= 0:
+            raise ValueError(
+                f"signal_duration_seconds must be positive, got {self.signal_duration_seconds}"
+            )
+        if self.sample_rate <= 0:
+            raise ValueError(f"sample_rate must be positive, got {self.sample_rate}")
+        if self.channels < 1:
+            raise ValueError(f"channels must be >= 1, got {self.channels}")
+        return self

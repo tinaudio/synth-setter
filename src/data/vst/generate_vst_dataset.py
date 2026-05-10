@@ -3,7 +3,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import click
 import h5py
@@ -475,8 +475,10 @@ def make_wds_dataset(
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,
     )
-    sink: _WdsTarSink = wds.TarWriter(str(wds_file))  # pyright: ignore[reportAttributeAccessIssue]
-    with sink:
+    with cast(
+        _WdsTarSink,
+        wds.TarWriter(str(wds_file)),  # pyright: ignore[reportAttributeAccessIssue]
+    ) as sink:
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = 0
         for i in trange(num_samples):
