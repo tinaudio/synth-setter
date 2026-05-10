@@ -65,23 +65,28 @@ class VSTDataSample:
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
-# AST-style mel front-end. Centralised so ``_mel_dataset_shape`` and
+# Per-row arrays the writer emits and the validator checks. Single source of
+# truth for both ``save_*_samples`` writers below and the shard validator
+# at ``src/pipeline/ci/validate_shard.py``.
+DATASET_FIELD_NAMES: tuple[str, ...] = ("audio", "mel_spec", "param_array")
+
+# AST-style mel front-end. Centralised so ``mel_dataset_shape`` and
 # ``make_spectrogram`` agree on the time-axis size.
-_MEL_FRAMES_PER_SECOND = 100
-_MEL_N_MELS = 128
-_MEL_N_FFT_FRACTION_OF_SAMPLE_RATE = 0.025
-_MEL_WINDOW = "hamming"
+MEL_FRAMES_PER_SECOND = 100
+MEL_N_MELS = 128
+MEL_N_FFT_FRACTION_OF_SAMPLE_RATE = 0.025
+MEL_WINDOW = "hamming"
 
 
-def _mel_hop_length(sample_rate: float) -> int:
-    return int(sample_rate / _MEL_FRAMES_PER_SECOND)
+def mel_hop_length(sample_rate: float) -> int:
+    return int(sample_rate / MEL_FRAMES_PER_SECOND)
 
 
-def _mel_n_fft(sample_rate: float) -> int:
-    return int(_MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate)
+def mel_n_fft(sample_rate: float) -> int:
+    return int(MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate)
 
 
-def _mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
+def mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
     """Compute the number of mel-time frames librosa produces for the given audio length.
 
     Mirrors librosa.feature.melspectrogram's frame count when ``center=True`` (its default):
@@ -90,19 +95,31 @@ def _mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
     data without this helper — see ml-pipeline:block #3 in PR #883.
     """
     audio_length = int(sample_rate * signal_duration_seconds)
-    return 1 + audio_length // _mel_hop_length(sample_rate)
+    return 1 + audio_length // mel_hop_length(sample_rate)
 
 
-def _mel_dataset_shape(
+def audio_dataset_shape(
+    num_samples: int, channels: int, sample_rate: float, signal_duration_seconds: float
+) -> tuple[int, int, int]:
+    """Audio dataset shape ``(N, C, time_samples)`` for the writer."""
+    return (num_samples, channels, int(sample_rate * signal_duration_seconds))
+
+
+def mel_dataset_shape(
     num_samples: int, channels: int, sample_rate: float, signal_duration_seconds: float
 ) -> tuple[int, int, int, int]:
     """Mel-spectrogram dataset shape ``(N, C, n_mels, n_frames)`` for the writer."""
     return (
         num_samples,
         channels,
-        _MEL_N_MELS,
-        _mel_n_frames(sample_rate, signal_duration_seconds),
+        MEL_N_MELS,
+        mel_n_frames(sample_rate, signal_duration_seconds),
     )
+
+
+def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, int]:
+    """Param-array dataset shape ``(N, num_params)`` for the writer."""
+    return (num_samples, num_params)
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
@@ -110,10 +127,10 @@ def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
     spec = librosa.feature.melspectrogram(
         y=audio,
         sr=sample_rate,
-        n_mels=_MEL_N_MELS,
-        n_fft=_mel_n_fft(sample_rate),
-        hop_length=_mel_hop_length(sample_rate),
-        window=_MEL_WINDOW,
+        n_mels=MEL_N_MELS,
+        n_fft=mel_n_fft(sample_rate),
+        hop_length=mel_hop_length(sample_rate),
+        window=MEL_WINDOW,
     )
     spec_db = librosa.power_to_db(spec, ref=np.max)
     return spec_db
@@ -250,12 +267,13 @@ def save_wds_samples(
     mel_specs = np.stack([s.mel_spec for s in samples], axis=0)
     param_arrays = np.stack([s.param_array for s in samples], axis=0)
 
+    audio_name, mel_name, param_name = DATASET_FIELD_NAMES
     sink.write(
         {
             "__key__": f"{start_idx:08d}",
-            "audio.npy": audios,
-            "mel_spec.npy": mel_specs,
-            "param_array.npy": param_arrays,
+            f"{audio_name}.npy": audios,
+            f"{mel_name}.npy": mel_specs,
+            f"{param_name}.npy": param_arrays,
         }
     )
 
@@ -300,24 +318,25 @@ def create_datasets_and_get_start_idx(
     signal_duration_seconds: float,
     num_params: int,
 ) -> tuple[h5py.Dataset, h5py.Dataset, h5py.Dataset, int]:
+    audio_name, mel_name, param_name = DATASET_FIELD_NAMES
     audio_dataset, audio_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "audio",
-        (num_samples, channels, sample_rate * signal_duration_seconds),
+        audio_name,
+        audio_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float16,
         compression=hdf5plugin.Blosc2(),
     )
     mel_dataset, mel_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "mel_spec",
-        _mel_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
+        mel_name,
+        mel_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),
     )
     param_dataset, param_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "param_array",
-        (num_samples, num_params),  # +1 for MIDI note
+        param_name,
+        param_array_dataset_shape(num_samples, num_params),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),
     )
