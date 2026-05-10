@@ -209,10 +209,11 @@ class DatasetSpec(BaseModel):
     # Sub-model
     render: RenderConfig
 
-    # Auto-filled runtime fields. The ``default_factory`` runs only when the
-    # field is missing on input — JSON-loaded specs preserve the
-    # materialization-time values that workers must reuse for consistency.
-    # Lambdas wrap the module-level helpers so test monkeypatches take effect.
+    # Auto-filled runtime fields. The factory runs only when the field is
+    # missing on input — JSON-loaded specs preserve the materialization-time
+    # values workers must reuse. The lambdas around ``_get_git_sha`` etc.
+    # defer the lookup to call time so tests that ``monkeypatch.setattr`` on
+    # the module attribute reach this resolution path.
     git_sha: str = Field(default_factory=lambda: _get_git_sha())
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
@@ -231,7 +232,7 @@ class DatasetSpec(BaseModel):
         """
         if isinstance(data, dict):
             data = dict(data)
-            for computed_key in ("shards", "num_shards", "num_params"):
+            for computed_key in cls.model_computed_fields:
                 data.pop(computed_key, None)
         return data
 
@@ -257,6 +258,14 @@ class DatasetSpec(BaseModel):
         """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
         if not value.endswith("/"):
             raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
+        return value
+
+    @field_validator("r2_prefix_root")
+    @classmethod
+    def _r2_prefix_root_must_not_be_blank(cls, value: str) -> str:
+        """Reject blank prefix roots so derived ``r2_prefix`` doesn't start with a stray ``/``."""
+        if not value.strip():
+            raise ValueError("r2_prefix_root must not be blank")
         return value
 
     @field_validator("r2_bucket")
