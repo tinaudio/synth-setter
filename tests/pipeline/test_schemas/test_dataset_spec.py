@@ -20,6 +20,8 @@ from src.pipeline.schemas.spec import (
 )
 
 FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
+_VALID_GIT_SHA = "a" * 40
+_DRIFT_GIT_SHA = "f" * 40
 
 
 def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, Any]:
@@ -55,7 +57,7 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
 @pytest.fixture()
 def patch_runtime_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub git/timestamp factories so DatasetSpec construction is deterministic."""
-    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
+    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: _VALID_GIT_SHA)
     monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
     monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
 
@@ -134,7 +136,7 @@ class TestDatasetSpecConstruction:
         """git_sha, created_at, run_id, and r2_prefix are derived from stubbed factories."""
         spec = DatasetSpec(**_valid_spec_kwargs())
 
-        assert spec.git_sha == "abc123def456"
+        assert spec.git_sha == _VALID_GIT_SHA
         assert spec.is_repo_dirty is False
         assert spec.created_at == FIXED_NOW
         assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
@@ -230,6 +232,28 @@ class TestDatasetSpecValidators:
         """A JSON-style naive ISO string on ``created_at`` is rejected after parsing."""
         with pytest.raises(ValidationError, match="created_at must be timezone-aware UTC"):
             DatasetSpec(**_valid_spec_kwargs(created_at="2026-03-28T12:00:00"))
+
+    def test_git_sha_must_be_40_char_hex(self, patch_runtime_io: None) -> None:
+        """A git_sha that isn't 40-char lowercase hex is rejected at construction.
+
+        Closes the gap with ``src.pipeline.ci.validate_spec``: a spec used to be
+        constructable with the ``"git-unavailable"`` sentinel (or any free-form
+        string) and only fail downstream CI structural validation.
+        """
+        for invalid in ("git-unavailable", "abc123def456", "z" * 40, "A" * 40):
+            with pytest.raises(ValidationError, match="git_sha must be a 40-char lowercase hex"):
+                DatasetSpec(**_valid_spec_kwargs(git_sha=invalid))
+
+    def test_git_sha_unavailable_sentinel_rejected_via_default_factory(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If ``_get_git_sha`` returns the sentinel, default_factory triggers a clean
+        ValidationError instead of letting the sentinel slip through to the JSON spec."""
+        monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "git-unavailable")
+        monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+        monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
+        with pytest.raises(ValidationError, match="git_sha must be a 40-char lowercase hex"):
+            DatasetSpec(**_valid_spec_kwargs())
 
     def test_train_val_test_seeds_default_is_empty(self, patch_runtime_io: None) -> None:
         """Default ``train_val_test_seeds`` is empty — per-sample seeding lands later (see
@@ -339,11 +363,11 @@ class TestDatasetSpecRoundTrip:
 
         # Re-patch _get_git_sha to return a drift value so a re-invocation of the
         # default_factory during model_validate_json would surface as a mismatch.
-        monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "f" * 40)
+        monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: _DRIFT_GIT_SHA)
 
         restored = DatasetSpec.model_validate_json(json_str)
 
-        assert restored.git_sha == "abc123def456"
+        assert restored.git_sha == _VALID_GIT_SHA
 
 
 # ---------------------------------------------------------------------------

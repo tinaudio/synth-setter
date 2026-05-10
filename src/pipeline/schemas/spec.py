@@ -69,11 +69,17 @@ _REPO_ROOT: Path = Path(__file__).resolve().parents[3]
 # Sentinel returned by ``_get_git_sha`` when called outside a git working
 # tree (worker host without ``.git/``, fresh extract from a tarball, etc).
 # Workers normally receive ``git_sha`` populated in the JSON spec from R2,
-# so the default_factory only fires when something has gone off-script —
-# returning a sentinel rather than raising lets the failure surface as a
-# clear "spec serialized with git_sha=git-unavailable" rather than a
-# CalledProcessError deep in pydantic's default_factory.
+# so the default_factory only fires when something has gone off-script.
+# Returning a sentinel (vs. raising a CalledProcessError) lets the
+# ``_git_sha_must_be_hex`` field validator surface the failure as a clean
+# Pydantic ValidationError listing the offending value, rather than an
+# opaque subprocess traceback deep in default_factory.
 _GIT_UNAVAILABLE_SENTINEL = "git-unavailable"
+
+# Length of a full git SHA-1 hex digest. Mirrored in
+# ``src.pipeline.ci.validate_spec`` so the upstream Pydantic validator and
+# the downstream CI structural validator agree on what counts as valid.
+_GIT_SHA_HEX_LEN = 40
 
 
 def _get_git_sha() -> str:
@@ -243,7 +249,10 @@ class DatasetSpec(BaseModel):
     # values workers must reuse. The lambdas around ``_get_git_sha`` etc.
     # defer the lookup to call time so tests that ``monkeypatch.setattr`` on
     # the module attribute reach this resolution path.
-    git_sha: str = Field(default_factory=lambda: _get_git_sha())
+    # ``validate_default=True`` so the ``_git_sha_must_be_hex`` field validator
+    # also fires when default_factory returns the ``_GIT_UNAVAILABLE_SENTINEL``,
+    # rather than letting the sentinel slip into the serialized JSON.
+    git_sha: str = Field(default_factory=lambda: _get_git_sha(), validate_default=True)
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
     run_id: str = Field(default_factory=_default_run_id)
@@ -317,6 +326,24 @@ class DatasetSpec(BaseModel):
         """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
         if not value.strip():
             raise ValueError("r2_bucket must not be blank")
+        return value
+
+    @field_validator("git_sha")
+    @classmethod
+    def _git_sha_must_be_hex(cls, value: str) -> str:
+        """Reject git_sha that is not a 40-char lowercase hex SHA.
+
+        Mirrors the regex ``src.pipeline.ci.validate_spec`` enforces on the JSON
+        spec, so a spec can't be constructed and uploaded with the
+        ``_GIT_UNAVAILABLE_SENTINEL`` (or any free-form string) only to fail
+        downstream structural validation.
+        """
+        if len(value) != _GIT_SHA_HEX_LEN or not all(c in "0123456789abcdef" for c in value):
+            raise ValueError(
+                f"git_sha must be a 40-char lowercase hex SHA, got {value!r} "
+                "(hint: ensure git is available at the repo root, or pass an "
+                "explicit git_sha when constructing the spec)"
+            )
         return value
 
     @field_validator("task_name")

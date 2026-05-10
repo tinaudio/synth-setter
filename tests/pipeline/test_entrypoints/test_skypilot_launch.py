@@ -71,7 +71,7 @@ def fake_plugin(tmp_path: Path) -> Path:
 @pytest.fixture()
 def patch_materialize_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub out git/timestamp I/O so DatasetSpec construction is deterministic."""
-    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
+    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
     monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
     monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
 
@@ -429,7 +429,7 @@ class TestMainCli:
         spec_files = list(local_spec_dir.glob("*.json"))
         assert len(spec_files) == 1
         spec = DatasetSpec.model_validate_json(spec_files[0].read_text())
-        assert spec.git_sha == "abc123def456"
+        assert spec.git_sha == "a" * 40
         assert spec.is_repo_dirty is False
         # The ``ci-materialize-test`` experiment composes to 3 shards
         # (96 total samples ÷ 32 per shard).

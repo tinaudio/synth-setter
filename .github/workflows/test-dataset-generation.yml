@@ -103,16 +103,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Compute the provider list at runtime, plus the R2 bucket the validate
-  # job will pull specs and shards from. Outputs:
+  # Compute the provider list at runtime, plus the per-cell spec_uri map the
+  # generate-local upload step and the validate job consume. Outputs:
   #   * `providers`           — full union (drives the validate matrix).
   #   * `providers_local`     — subset routed through the inline `generate-local`
   #                             job (no launcher).
   #   * `providers_launcher`  — subset routed through the
   #                             `generate-dataset-shards.yaml` reusable.
-  #   * `r2_bucket`           — Cloudflare R2 bucket name (from
-  #                             configs/image/dev-snapshot.yaml). Used to
-  #                             construct the spec_uri the validate job pulls.
+  #   * `spec_uris`           — JSON object keyed by `<provider>-<output_format>`,
+  #                             whose value is the full `r2://<bucket>/skypilot-
+  #                             launcher-specs/<cluster_name>.json` URI for that
+  #                             matrix cell. The bucket is read from the
+  #                             experiment YAML (so overrides like
+  #                             `datagen/10-1k-shards` → `experiments` thread
+  #                             through), falling back to the default in
+  #                             `configs/dataset.yaml`. The validate job looks
+  #                             up its cell here instead of constructing the URI
+  #                             from a hardcoded default bucket.
   #
   # Reusable workflows can't be invoked conditionally inside a single matrix
   # job (each `uses:` job is fixed), so the local-vs-launcher split happens here.
@@ -127,7 +134,7 @@ jobs:
   #
   # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
   setup:
-    name: Compute provider list + R2 bucket
+    name: Compute provider list + per-cell spec_uri map
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -135,7 +142,7 @@ jobs:
       providers_local: ${{ steps.matrix.outputs.providers_local }}
       providers_launcher: ${{ steps.matrix.outputs.providers_launcher }}
       output_formats: ${{ steps.matrix.outputs.output_formats }}
-      r2_bucket: ${{ steps.bucket.outputs.r2_bucket }}
+      spec_uris: ${{ steps.spec_uris.outputs.spec_uris }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -180,16 +187,25 @@ jobs:
       - name: Install PyYAML for dataset.yaml parsing
         run: pip install pyyaml
 
-      # Bucket comes from configs/dataset.yaml's `r2_bucket` field — the
-      # default that experiments inherit (configs/experiment/datagen/<x>.yaml
-      # may override, but validate-dataset-shards.yaml only consults this
-      # default for the spec-key URI it pulls).
-      - id: bucket
+      # Compute one spec_uri per matrix cell. Bucket is per-experiment: the
+      # experiment YAML's `r2_bucket` wins if present, else the default from
+      # `configs/dataset.yaml`. Without this, experiments that override
+      # `r2_bucket` (e.g. `datagen/10-1k-shards` → `experiments`) would have
+      # their specs uploaded to bucket A but the validate job would look in
+      # default bucket B and fail.
+      - id: spec_uris
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_EXPERIMENT: ${{ inputs.experiment || 'datagen/runpod-smoke-shard' }}
+          PROVIDERS: ${{ steps.matrix.outputs.providers }}
+          OUTPUT_FORMATS: ${{ steps.matrix.outputs.output_formats }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/dataset.yaml'))['r2_bucket'])")
-          echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
-          echo "r2_bucket: ${R2_BUCKET}"
+          python3 .github/workflows/_compute_test_dataset_spec_uris.py >> "${GITHUB_OUTPUT}"
+          echo "--- spec_uris (debug) ---"
+          tail -n1 "${GITHUB_OUTPUT}"
 
   # `local` provider: inline docker run, no SkyPilot. Materializes the spec
   # inside dev-snapshot, then `docker_entrypoint.py generate_dataset`
@@ -220,7 +236,7 @@ jobs:
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
       CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}
-      R2_BUCKET: ${{ needs.setup.outputs.r2_bucket }}
+      SPEC_URI: ${{ fromJSON(needs.setup.outputs.spec_uris)[format('{0}-{1}', matrix.provider, matrix.output_format)] }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -274,7 +290,9 @@ jobs:
       # validate-dataset-shards.yaml can read it without knowing whether the
       # generate path was launcher- or local-provider. Uses the in-image
       # rclone helper through src.pipeline.r2_io to keep all rclone invocations
-      # in one place.
+      # in one place. The destination URI is the matrix cell's entry in the
+      # ``spec_uris`` map computed in ``setup`` — so per-experiment
+      # ``r2_bucket`` overrides reach validate without divergence.
       - name: Upload spec to R2 for validate handoff
         env:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
@@ -290,15 +308,14 @@ jobs:
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
-            -e R2_BUCKET \
-            -e CLUSTER_NAME \
+            -e SPEC_URI \
             -e PYTHONPATH=/home/build/synth-setter \
             "${IMAGE}" \
             python3 -c "
           import os
           from pathlib import Path
           from src.pipeline.r2_io import upload_to_uri
-          uri = f\"r2://{os.environ['R2_BUCKET']}/skypilot-launcher-specs/{os.environ['CLUSTER_NAME']}.json\"
+          uri = os.environ['SPEC_URI']
           upload_to_uri(Path('/run-metadata/input_spec.json'), uri)
           print(f'spec uploaded to {uri}')
           "
@@ -363,12 +380,13 @@ jobs:
       artifact_name: test-run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}
     secrets: inherit
 
-  # validate-spec + validate-shard pull the spec from R2 directly. The URI is
-  # constructed deterministically from the per-provider × format cluster_name
-  # pattern (matching what generate-launcher's launcher and generate-local's
-  # explicit upload step both write to). `if: !cancelled()` decouples each
-  # provider × format cell from the OTHER cells' generate outcomes — RunPod
-  # transients won't skip OCI validation, and an hdf5 failure won't skip wds.
+  # validate-spec + validate-shard pull the spec from R2 directly. The URI for
+  # the matrix cell is read from ``setup.outputs.spec_uris`` — that map already
+  # honors per-experiment ``r2_bucket`` overrides, matching what
+  # generate-launcher's launcher and generate-local's explicit upload step both
+  # write to. `if: !cancelled()` decouples each provider × format cell from the
+  # OTHER cells' generate outcomes — RunPod transients won't skip OCI
+  # validation, and an hdf5 failure won't skip wds.
   validate:
     name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} dataset
     needs: [setup, generate-local, generate-launcher]
@@ -381,5 +399,5 @@ jobs:
     uses: ./.github/workflows/validate-dataset-shards.yaml
     with:
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      spec_uri: r2://${{ needs.setup.outputs.r2_bucket }}/skypilot-launcher-specs/synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}.json
+      spec_uri: ${{ fromJSON(needs.setup.outputs.spec_uris)[format('{0}-{1}', matrix.provider, matrix.output_format)] }}
     secrets: inherit
