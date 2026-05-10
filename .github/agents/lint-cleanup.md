@@ -19,7 +19,7 @@ For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shell
    - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`)
 5. **Remove the file from all `exclude` blocks** in `.pre-commit-config.yaml`
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
-7. **Run tests**: `make test` — all tests must still pass
+7. **Run tests**: `make test-fast` — all tests must still pass
 8. **Commit**: Use conventional commits format: `chore(lint): clean up <filename>`
 9. **Open PR**: Reference #25, check off the file in the issue checklist. Add to "Code Health" project.
 
@@ -32,7 +32,7 @@ For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shell
 - If a file requires functional changes to pass lint (e.g., unused imports that are actually used dynamically), skip it and leave a comment on #25
 - Line length is 99 (configured in `pyproject.toml` under `[tool.ruff]`)
 - Docstrings follow Sphinx style (`:param:`, `:returns:`, `:raises:`) — matches `docformatter` config (`style = "sphinx"` in `pyproject.toml`)
-- Run `make test` after every file to catch regressions
+- Run `make test-fast` after every file to catch regressions
 
 ## Files
 

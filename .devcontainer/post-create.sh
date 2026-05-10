@@ -60,4 +60,4 @@ fi
 git config --local --unset-all core.hooksPath 2>/dev/null || true
 pre-commit install
 
-echo "Dev container ready. Run 'make test' to verify."
+echo "Dev container ready. Run 'make test-fast' to verify."
