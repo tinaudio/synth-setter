@@ -33,9 +33,10 @@ ______________________________________________________________________
 All common selectors are defined as Makefile targets — read [`Makefile`](../../Makefile) for the exact `pytest` flags each invokes (they evolve; don't memorize):
 
 - `make test-fast` — quick CPU-only suite. Excludes slow, gpu, mps, requires_vst.
-- `make test-full-cpu` — all CPU tests (slow + requires_vst included; gpu/mps excluded).
-- `make test-full-gpu` — GPU + CPU tests on a host with a CUDA GPU. Serial — exclusive device access.
+- `make test-full-cpu` — all CPU tests (slow + requires_vst included; gpu/mps excluded). Linux: bootstraps Xvfb.
+- `make test-full-gpu` — GPU + CPU tests on a host with a CUDA GPU. Serial — exclusive device access. Linux: bootstraps Xvfb.
 - `make test-full-mps` — MPS + CPU tests on a host with Apple silicon. Serial — exclusive device access.
+- `make test-vst-cpu` — VST-only suite (requires_vst, slow included; gpu/mps excluded). Linux: bootstraps Xvfb.
 - `pytest tests/path/to/test_x.py::test_name -v` — one test, for iteration.
 
 CI selectors live in [`.github/workflows/`](../../.github/workflows):
