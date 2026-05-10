@@ -1,6 +1,6 @@
 import hashlib
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Protocol, cast
@@ -58,9 +58,9 @@ class VSTDataSample:
 
     audio: np.ndarray
     mel_spec: np.ndarray
-    param_array: np.ndarray = None
+    param_array: np.ndarray = field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
@@ -266,7 +266,7 @@ def create_datasets_and_get_start_idx(
     sample_rate: float,
     signal_duration_seconds: float,
     num_params: int,
-):
+) -> tuple[h5py.Dataset, h5py.Dataset, h5py.Dataset, int]:
     audio_dataset, audio_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
         "audio",
