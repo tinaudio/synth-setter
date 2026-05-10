@@ -1,4 +1,0 @@
-# CI-only config for spec materialization smoke test (wds output_format).
-# Inherits everything from ci-materialize-test.yaml; only output_format diverges.
-_extends: ci-materialize-test
-output_format: wds

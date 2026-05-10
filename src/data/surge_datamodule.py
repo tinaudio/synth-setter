@@ -233,6 +233,12 @@ class ShiftedBatchSampler(torch.utils.data.BatchSampler):
 
 
 class SurgeDataModule(LightningDataModule):
+    # ``**_unused_datagen_keys`` swallows datagen-only fields (e.g.
+    # ``train_val_test_sizes``, ``train_val_test_seeds``) that live on the
+    # shared ``configs/data/surge*.yaml`` group for the dataset pipeline's
+    # consumption. The training-side LightningDataModule reads pre-rendered
+    # shards and has no use for them; accepting+ignoring keeps one data group
+    # serving both call sites without forcing a parallel datagen-only group.
     def __init__(
         self,
         dataset_root: Union[str, Path],
@@ -245,6 +251,7 @@ class SurgeDataModule(LightningDataModule):
         predict_file: Optional[str] = None,
         conditioning: Literal["mel", "m2l"] = "mel",
         pin_memory: bool = True,
+        **_unused_datagen_keys: object,
     ):
         super().__init__()
 

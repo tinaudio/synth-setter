@@ -43,8 +43,8 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
     kwargs: dict[str, Any] = {
         "task_name": "ci-smoke-test",
         "output_format": "hdf5",
-        "train_val_test_sizes": (300, 0, 0),
-        "train_val_test_seeds": (123, 456, 789),
+        "train_val_test_sizes": [300, 0, 0],
+        "train_val_test_seeds": [123, 456, 789],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": _valid_render_kwargs(plugin_path),
@@ -67,12 +67,16 @@ def patch_runtime_io(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestShardSpec:
+    """Behavioral tests for Test Shard Spec."""
+
     def test_shard_spec_is_frozen(self) -> None:
+        """Shard spec is frozen."""
         shard = ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42)
         with pytest.raises(ValidationError):
             shard.shard_id = 99  # type: ignore[misc]
 
     def test_shard_spec_rejects_extra_fields(self) -> None:
+        """Shard spec rejects extra fields."""
         with pytest.raises(ValidationError):
             ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42, extra="oops")  # type: ignore[call-arg]
 
@@ -83,7 +87,10 @@ class TestShardSpec:
 
 
 class TestRenderConfig:
+    """Behavioral tests for Test Render Config."""
+
     def test_render_config_rejects_extra_fields(self) -> None:
+        """Render config rejects extra fields."""
         kwargs = _valid_render_kwargs()
         kwargs["surprise"] = "value"
         with pytest.raises(ValidationError):
@@ -103,12 +110,14 @@ class TestRenderConfig:
         ],
     )
     def test_render_config_range_validators(self, field: str, bad_value: Any, match: str) -> None:
+        """Render config range validators."""
         kwargs = _valid_render_kwargs()
         kwargs[field] = bad_value
         with pytest.raises(ValidationError, match=match):
             RenderConfig(**kwargs)
 
     def test_render_config_velocity_bounds_are_inclusive(self) -> None:
+        """Render config velocity bounds are inclusive."""
         for valid in (0, 127):
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
@@ -120,7 +129,10 @@ class TestRenderConfig:
 
 
 class TestDatasetSpecConstruction:
+    """Behavioral tests for Test Dataset Spec Construction."""
+
     def test_fresh_construction_fills_runtime_fields(self, patch_runtime_io: None) -> None:
+        """Fresh construction fills runtime fields."""
         spec = DatasetSpec(**_valid_spec_kwargs())
 
         assert spec.git_sha == "abc123def456"
@@ -130,58 +142,72 @@ class TestDatasetSpecConstruction:
         assert spec.r2_prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
 
     def test_run_id_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
+        """Run id uses explicit value when present."""
         spec = DatasetSpec(**_valid_spec_kwargs(run_id="custom-run-id-001"))
         assert spec.run_id == "custom-run-id-001"
 
     def test_r2_prefix_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
+        """R2 prefix uses explicit value when present."""
         spec = DatasetSpec(**_valid_spec_kwargs(r2_prefix="custom/prefix/here/"))
         assert spec.r2_prefix == "custom/prefix/here/"
 
     def test_r2_prefix_root_default_is_data(self, patch_runtime_io: None) -> None:
+        """R2 prefix root default is data."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         assert spec.r2_prefix.startswith("data/")
 
     def test_r2_prefix_root_custom_threads_through(self, patch_runtime_io: None) -> None:
+        """R2 prefix root custom threads through."""
         spec = DatasetSpec(**_valid_spec_kwargs(r2_prefix_root="experiments"))
         assert spec.r2_prefix.startswith("experiments/")
 
     def test_dataset_spec_strict_rejects_extra_fields(self, patch_runtime_io: None) -> None:
+        """Dataset spec strict rejects extra fields."""
         kwargs = _valid_spec_kwargs(unexpected_field="surprise")
         with pytest.raises(ValidationError):
             DatasetSpec(**kwargs)
 
 
 class TestDatasetSpecValidators:
+    """Behavioral tests for Test Dataset Spec Validators."""
+
     def test_r2_bucket_blank_raises(self, patch_runtime_io: None) -> None:
+        """R2 bucket blank raises."""
         for blank in ("", "   ", "\t\n"):
             with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
                 DatasetSpec(**_valid_spec_kwargs(r2_bucket=blank))
 
     def test_task_name_blank_raises(self, patch_runtime_io: None) -> None:
+        """Task name blank raises."""
         with pytest.raises(ValidationError, match="task_name must not be blank"):
             DatasetSpec(**_valid_spec_kwargs(task_name="   "))
 
     def test_explicit_r2_prefix_missing_trailing_slash_raises(
         self, patch_runtime_io: None
     ) -> None:
+        """Explicit r2 prefix missing trailing slash raises."""
         with pytest.raises(ValidationError, match="r2_prefix must end with"):
             DatasetSpec(**_valid_spec_kwargs(r2_prefix="data/no/slash"))
 
     def test_split_size_not_multiple_of_batch_per_shard_raises(
         self, patch_runtime_io: None
     ) -> None:
+        """Split size not multiple of batch per shard raises."""
         with pytest.raises(ValidationError, match="not a multiple"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(150, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[150, 0, 0]))
 
     def test_negative_split_size_raises(self, patch_runtime_io: None) -> None:
+        """Negative split size raises."""
         with pytest.raises(ValidationError, match="must be non-negative"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(-100, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[-100, 0, 0]))
 
     def test_zero_total_split_raises(self, patch_runtime_io: None) -> None:
+        """Zero total split raises."""
         with pytest.raises(ValidationError, match="must sum to a positive count"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(0, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[0, 0, 0]))
 
     def test_invalid_output_format_literal_raises(self, patch_runtime_io: None) -> None:
+        """Invalid output format literal raises."""
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
 
@@ -192,17 +218,22 @@ class TestDatasetSpecValidators:
 
 
 class TestDatasetSpecComputedFields:
+    """Behavioral tests for Test Dataset Spec Computed Fields."""
+
     def test_shards_count_matches_total_size_div_batch(self, patch_runtime_io: None) -> None:
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(400, 100, 100)))
+        """Shards count matches total size div batch."""
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         assert spec.num_shards == 6
         assert len(spec.shards) == 6
 
     def test_shard_seeds_are_base_plus_shard_id(self, patch_runtime_io: None) -> None:
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(300, 0, 0)))
+        """Shard seeds are base plus shard id."""
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert [s.seed for s in spec.shards] == [42, 43, 44]
 
     def test_shard_filenames_zero_padded_six_digits(self, patch_runtime_io: None) -> None:
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(300, 0, 0)))
+        """Shard filenames zero padded six digits."""
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert spec.shards[0].filename == "shard-000000.h5"
         assert spec.shards[-1].filename == "shard-000002.h5"
 
@@ -210,14 +241,17 @@ class TestDatasetSpecComputedFields:
     def test_shard_filename_extension_matches_output_format(
         self, patch_runtime_io: None, output_format: str, ext: str
     ) -> None:
+        """Shard filename extension matches output format."""
         spec = DatasetSpec(**_valid_spec_kwargs(output_format=output_format))
         assert all(s.filename.endswith(ext) for s in spec.shards)
 
     def test_num_params_resolved_from_registry(self, patch_runtime_io: None) -> None:
+        """Num params resolved from registry."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         assert spec.num_params == len(param_specs["surge_simple"])
 
     def test_unknown_param_spec_name_raises_at_compute(self, patch_runtime_io: None) -> None:
+        """Unknown param spec name raises at compute."""
         kwargs = _valid_spec_kwargs()
         kwargs["render"] = {**kwargs["render"], "param_spec_name": "nonexistent_synth"}
         spec = DatasetSpec(**kwargs)
@@ -231,7 +265,10 @@ class TestDatasetSpecComputedFields:
 
 
 class TestDatasetSpecRoundTrip:
+    """Behavioral tests for Test Dataset Spec Round Trip."""
+
     def test_json_round_trip_preserves_runtime_fields(self, patch_runtime_io: None) -> None:
+        """Json round trip preserves runtime fields."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         json_str = spec.model_dump_json()
         restored = DatasetSpec.model_validate_json(json_str)
@@ -243,12 +280,14 @@ class TestDatasetSpecRoundTrip:
         assert restored.r2_prefix == spec.r2_prefix
 
     def test_json_round_trip_preserves_shards(self, patch_runtime_io: None) -> None:
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(400, 100, 100)))
+        """Json round trip preserves shards."""
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
         assert restored.shards == spec.shards
         assert restored.num_shards == spec.num_shards
 
     def test_json_round_trip_works_without_plugin_on_disk(self, patch_runtime_io: None) -> None:
+        """Json round trip works without plugin on disk."""
         spec = DatasetSpec(**_valid_spec_kwargs(plugin_path="/nonexistent/path.vst3"))
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
         assert restored.render.plugin_path == "/nonexistent/path.vst3"
@@ -281,7 +320,10 @@ class TestDatasetSpecRoundTrip:
 
 
 class TestDatasetConfigIdFromPath:
+    """Behavioral tests for Test Dataset Config Id From Path."""
+
     def test_extracts_stem(self) -> None:
+        """Extracts stem."""
         assert (
             dataset_config_id_from_path(Path("configs/dataset/surge-simple-480k-10k.yaml"))
             == "surge-simple-480k-10k"
@@ -321,18 +363,22 @@ def legacy_yaml(tmp_path: Path) -> Path:
 
 
 class TestLoadDatasetSpecYaml:
+    """Behavioral tests for Test Load Dataset Spec Yaml."""
+
     def test_legacy_yaml_round_trips_into_dataset_spec(
         self, patch_runtime_io: None, legacy_yaml: Path
     ) -> None:
+        """Legacy yaml round trips into dataset spec."""
         spec = load_dataset_spec_yaml(legacy_yaml)
         assert spec.task_name == "ci-smoke-test"
         assert spec.output_format == "hdf5"
-        assert spec.train_val_test_sizes == (300, 0, 0)
+        assert spec.train_val_test_sizes == [300, 0, 0]
         assert spec.render.plugin_path == "plugins/Surge XT.vst3"
         assert spec.render.batch_per_shard == 100
         assert spec.num_shards == 3
 
     def test_legacy_yaml_extends_merges_base(self, patch_runtime_io: None, tmp_path: Path) -> None:
+        """Legacy yaml extends merges base."""
         import yaml
 
         base = tmp_path / "base.yaml"
@@ -346,10 +392,12 @@ class TestLoadDatasetSpecYaml:
         assert spec.shards[0].filename.endswith(".tar")
 
     def test_legacy_yaml_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
+        """Legacy yaml missing file raises file not found."""
         with pytest.raises(FileNotFoundError, match="Config file not found"):
             load_dataset_spec_yaml(tmp_path / "nonexistent.yaml")
 
     def test_legacy_yaml_extends_missing_base_raises(self, tmp_path: Path) -> None:
+        """Legacy yaml extends missing base raises."""
         child = tmp_path / "child.yaml"
         child.write_text("_extends: nonexistent\noutput_format: wds\n")
         with pytest.raises(FileNotFoundError, match="_extends target not found"):

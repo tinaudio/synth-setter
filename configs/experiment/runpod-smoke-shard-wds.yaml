@@ -1,0 +1,11 @@
+# @package _global_
+
+# wds-format variant of runpod-smoke-shard. Inherits the layout via Hydra
+# defaults composition; only output_format diverges.
+
+defaults:
+  - runpod-smoke-shard
+  - _self_
+
+output_format: wds
+task_name: runpod-smoke-shard-wds

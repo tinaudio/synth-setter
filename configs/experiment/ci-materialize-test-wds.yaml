@@ -1,0 +1,10 @@
+# @package _global_
+
+# wds-format variant of ci-materialize-test.
+
+defaults:
+  - ci-materialize-test
+  - _self_
+
+output_format: wds
+task_name: ci-materialize-test-wds

@@ -5,3 +5,9 @@ batch_size: 128
 ot: true
 num_workers: 11
 predict_file: ???
+
+# Datagen-only — describes split sizes the dataset pipeline targets when
+# generating shards for this data group. Silently ignored by SurgeDataModule
+# (which reads pre-rendered shards). Carried over from the kosc/ksin convention.
+train_val_test_sizes: [440000, 20000, 20000]
+train_val_test_seeds: [42, 43, 44]

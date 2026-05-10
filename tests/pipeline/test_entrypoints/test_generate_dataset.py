@@ -75,8 +75,8 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",
-        "train_val_test_sizes": (10000, 0, 0),
-        "train_val_test_seeds": (42, 43, 44),
+        "train_val_test_sizes": [10000, 0, 0],
+        "train_val_test_seeds": [42, 43, 44],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": {
@@ -107,7 +107,7 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
     """Return a DatasetSpec with ``n`` shards (deterministic filenames/seeds)."""
     kwargs = _base_spec_kwargs(
         tmp_path,
-        train_val_test_sizes=(10000 * n, 0, 0),
+        train_val_test_sizes=[10000 * n, 0, 0],
     )
     return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 

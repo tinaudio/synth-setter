@@ -1,0 +1,19 @@
+# @package _global_
+
+# Production surge_simple dataset: 480k total samples → 48 shards at
+# batch_per_shard=10000.
+
+defaults:
+  - override /data: surge_simple
+  - override /render: surge_simple
+  - _self_
+
+task_name: surge-simple-480k-10k
+output_format: hdf5
+
+train_val_test_sizes: [440000, 20000, 20000]
+train_val_test_seeds: [42, 43, 44]
+
+render:
+  sample_rate: 44100
+  min_loudness: -50.0

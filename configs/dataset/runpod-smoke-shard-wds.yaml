@@ -1,4 +1,0 @@
-# CI smoke-test config for the wds matrix leg of test-dataset-generation.
-# Inherits everything from runpod-smoke-shard.yaml; only output_format diverges.
-_extends: runpod-smoke-shard
-output_format: wds

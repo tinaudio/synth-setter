@@ -1,0 +1,22 @@
+# @package _global_
+
+# Small experiment dataset: 10k total samples → 10 shards at batch_per_shard=1000.
+
+defaults:
+  - override /data: surge_simple
+  - override /render: surge_simple
+  - _self_
+
+task_name: 10-1k-shards
+output_format: hdf5
+
+train_val_test_sizes: [10000, 0, 0]
+train_val_test_seeds: [42, 43, 44]
+
+r2_bucket: experiments
+
+render:
+  sample_rate: 44100
+  min_loudness: -50.0
+  sample_batch_size: 64
+  batch_per_shard: 1000
