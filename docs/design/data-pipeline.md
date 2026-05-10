@@ -776,7 +776,7 @@ import random
 
 _spawn_ctx = multiprocessing.get_context("spawn")
 
-def _render_shard(shard_spec, shard_path):
+def _render_shard(shard_spec, shard_path, render_cfg):
     """Runs in a child process — SIGSEGV here won't kill the parent.
 
     Under spawn, the child is a fresh Python interpreter with no inherited state.
@@ -789,10 +789,10 @@ def _render_shard(shard_spec, shard_path):
     # np.random.seed(shard_spec.seed)
     make_hdf5_dataset(shard_path, render_cfg)
 
-# In the parent worker:
+# In the parent worker (spec is the worker's DatasetSpec):
 p = _spawn_ctx.Process(
     target=_render_shard,
-    args=(shard_spec, local_path),
+    args=(shard_spec, local_path, spec.render),
 )
 p.start()
 p.join(timeout=SHARD_TIMEOUT)

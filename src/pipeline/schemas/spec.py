@@ -115,6 +115,20 @@ class RenderConfig(BaseModel):
     sample_batch_size: int
     batch_per_shard: int
 
+    @field_validator("param_spec_name")
+    @classmethod
+    def _param_spec_name_must_be_registered(cls, value: str) -> str:
+        """Reject unknown ``param_spec_name`` at construction.
+
+        Without this check, the error surfaces as a raw ``KeyError`` deep
+        inside ``DatasetSpec.num_params`` (e.g., during ``model_dump_json``),
+        producing a stack trace instead of a clean validation message.
+        """
+        if value not in param_specs:
+            valid = sorted(param_specs.keys())
+            raise ValueError(f"param_spec_name {value!r} not in registry; valid: {valid}")
+        return value
+
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
         if self.sample_rate <= 0:
@@ -129,8 +143,6 @@ class RenderConfig(BaseModel):
             raise ValueError("sample_batch_size must be positive")
         if self.batch_per_shard <= 0:
             raise ValueError("batch_per_shard must be positive")
-        if not self.param_spec_name.strip():
-            raise ValueError("param_spec_name must not be blank")
         if not self.renderer_version.strip():
             raise ValueError("renderer_version must not be blank")
         return self

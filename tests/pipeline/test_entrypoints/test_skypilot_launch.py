@@ -352,7 +352,7 @@ class TestMainCli:
     def test_no_env_anywhere_fails_with_clear_error(
         self,
         tmp_path: Path,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
@@ -370,7 +370,7 @@ class TestMainCli:
     def test_empty_env_file_with_no_process_env_fails(
         self,
         tmp_path: Path,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
@@ -389,7 +389,7 @@ class TestMainCli:
     def test_process_env_resolves_when_env_file_absent(
         self,
         tmp_path: Path,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
@@ -414,7 +414,7 @@ class TestMainCli:
 
     def test_materialized_spec_round_trips_as_pipeline_spec(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -437,7 +437,7 @@ class TestMainCli:
 
     def test_worker_env_is_forwarded_to_task(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -457,7 +457,7 @@ class TestMainCli:
 
     def test_spec_uri_forwarded_to_worker_env_after_r2_upload(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -498,7 +498,7 @@ class TestMainCli:
 
     def test_launch_uses_autostop_window_and_down_true(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -518,7 +518,7 @@ class TestMainCli:
 
     def test_tail_logs_invoked_with_follow_true_under_tail(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -536,7 +536,7 @@ class TestMainCli:
 
     def test_teardown_runs_on_success_under_tail(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -579,7 +579,7 @@ class TestMainCli:
     def test_spec_out_overrides_default_path(
         self,
         tmp_path: Path,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -594,7 +594,7 @@ class TestMainCli:
 
     def test_worker_failed_rc_fails_launcher_under_tail(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -616,7 +616,7 @@ class TestMainCli:
 
     def test_launch_returning_none_job_id_aborts(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -639,7 +639,7 @@ class TestMainCli:
 
     def test_teardown_runs_when_tail_logs_raises_under_tail(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -656,7 +656,7 @@ class TestMainCli:
 
     def test_local_spec_persists_for_artifact_upload_even_on_launch_exception(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -693,7 +693,7 @@ class TestNoTailMode:
 
     def test_no_tail_is_default_and_skips_tail_logs(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -707,7 +707,7 @@ class TestNoTailMode:
 
     def test_no_tail_does_not_tear_down_cluster_on_success(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -724,7 +724,7 @@ class TestNoTailMode:
 
     def test_no_tail_prints_sky_logs_and_sky_down_commands_per_cluster(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -742,7 +742,7 @@ class TestNoTailMode:
 
     def test_no_tail_multi_worker_prints_per_cluster_block_for_each_rank(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -772,7 +772,7 @@ class TestNoTailMode:
 
     def test_no_tail_partial_launch_failure_only_tears_down_failed_cluster(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -818,7 +818,7 @@ class TestNoTailMode:
 
     def test_no_tail_single_worker_launch_failure_tears_down_that_cluster(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -887,7 +887,7 @@ class TestNumWorkersFanOut:
 
     def test_three_workers_launches_three_clusters_under_tail(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -916,7 +916,7 @@ class TestNumWorkersFanOut:
 
     def test_three_workers_use_rank_suffixed_cluster_names(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -945,7 +945,7 @@ class TestNumWorkersFanOut:
 
     def test_one_worker_keeps_unsuffixed_cluster_name(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -968,7 +968,7 @@ class TestNumWorkersFanOut:
 
     def test_three_workers_inject_distinct_rank_world_per_cluster(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1006,7 +1006,7 @@ class TestNumWorkersFanOut:
 
     def test_three_workers_upload_spec_only_once(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1041,7 +1041,7 @@ class TestNumWorkersFanOut:
 
     def test_one_worker_failure_among_three_fails_launcher_after_full_teardown_under_tail(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1071,7 +1071,7 @@ class TestNumWorkersFanOut:
 
     def test_worker_git_ref_forwarded_to_every_rank(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1105,7 +1105,7 @@ class TestNumWorkersFanOut:
 
     def test_zero_or_negative_num_workers_rejected(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1139,7 +1139,7 @@ class TestNumWorkersFanOut:
     )
     def test_invalid_worker_image_tag_rejected(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1444,7 +1444,7 @@ class TestNumWorkersConfigPrecedence:
 
     def test_cli_num_workers_drives_fan_out(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1469,7 +1469,7 @@ class TestNumWorkersConfigPrecedence:
 
     def test_default_when_cli_omitted(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1494,7 +1494,7 @@ class TestDispatchMode:
 
     def test_local_flag_clears_inherited_api_server_endpoint(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1515,7 +1515,7 @@ class TestDispatchMode:
 
     def test_api_server_flag_sets_endpoint_in_os_environ(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1542,7 +1542,7 @@ class TestDispatchMode:
 
     def test_api_server_flag_strips_surrounding_whitespace(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1568,7 +1568,7 @@ class TestDispatchMode:
 
     def test_api_server_flag_rejects_blank_value(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1596,7 +1596,7 @@ class TestDispatchMode:
 
     def test_api_server_flag_skips_cred_bootstrap(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1641,7 +1641,7 @@ class TestDispatchMode:
 
     def test_local_flag_runs_cred_bootstrap_even_with_inherited_endpoint(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1677,7 +1677,7 @@ class TestDispatchMode:
 
     def test_both_flags_passed_is_rejected(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1703,7 +1703,7 @@ class TestDispatchMode:
 
     def test_neither_flag_preserves_inherited_endpoint(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1722,7 +1722,7 @@ class TestDispatchMode:
 
     def test_neither_flag_with_unset_endpoint_leaves_it_unset(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1749,7 +1749,7 @@ class TestWorkerEnvToOsEnvironBridge:
 
     def test_env_file_prefixed_keys_bridge_to_os_environ(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         tmp_path: Path,
         patch_materialize_io: None,

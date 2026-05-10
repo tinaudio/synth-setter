@@ -103,7 +103,7 @@ class TestRenderConfig:
             ("signal_duration_seconds", 0.0, "signal_duration_seconds must be positive"),
             ("sample_batch_size", 0, "sample_batch_size must be positive"),
             ("batch_per_shard", 0, "batch_per_shard must be positive"),
-            ("param_spec_name", "   ", "param_spec_name must not be blank"),
+            ("param_spec_name", "   ", "param_spec_name.*not in registry"),
             ("renderer_version", "", "renderer_version must not be blank"),
         ],
     )
@@ -248,13 +248,17 @@ class TestDatasetSpecComputedFields:
         spec = DatasetSpec(**_valid_spec_kwargs())
         assert spec.num_params == len(param_specs["surge_simple"])
 
-    def test_unknown_param_spec_name_raises_at_compute(self, patch_runtime_io: None) -> None:
-        """Unknown param spec name raises at compute."""
+    def test_unknown_param_spec_name_raises_at_validation(self, patch_runtime_io: None) -> None:
+        """Unknown param spec name raises a clean ValidationError at construction.
+
+        Lazy KeyError from ``num_params`` would surface as an opaque stack trace
+        (e.g., during ``model_dump_json``); the field validator turns it into a
+        Pydantic ``ValidationError`` listing the valid registry names.
+        """
         kwargs = _valid_spec_kwargs()
         kwargs["render"] = {**kwargs["render"], "param_spec_name": "nonexistent_synth"}
-        spec = DatasetSpec(**kwargs)
-        with pytest.raises(KeyError):
-            _ = spec.num_params
+        with pytest.raises(ValidationError, match="not in registry"):
+            DatasetSpec(**kwargs)
 
 
 # ---------------------------------------------------------------------------

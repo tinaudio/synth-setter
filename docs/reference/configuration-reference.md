@@ -88,7 +88,8 @@ configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
   and forwards the `r2://` URI to the worker via `task.update_envs(WORKER_SPEC_URI=...)`.
   R2 is used instead of `task.update_file_mounts` because the SkyPilot RunPod backend
   rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
-- Invoked via: `python -m src.pipeline.skypilot_launch --config <yaml> --template <yaml>`
+- Invoked via: `python -m src.pipeline.skypilot_launch --experiment <name> --template <yaml>`
+  (e.g., `--experiment datagen/runpod-smoke-shard --template configs/compute/runpod-template.yaml`).
 
 Reference: `training-pipeline.md` Appendix D
 
