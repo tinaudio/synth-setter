@@ -35,7 +35,7 @@ on:
         required: true
         type: string
       experiment:
-        description: "Hydra experiment name (under configs/experiment/, e.g. runpod-smoke-shard)"
+        description: "Hydra experiment name (datagen experiments live under configs/experiment/datagen/, e.g. datagen/runpod-smoke-shard)"
         required: true
         type: string
       image_tag:
@@ -83,10 +83,10 @@ on:
           - runpod
           - oci
       experiment:
-        description: "Hydra experiment name (under configs/experiment/)"
+        description: "Hydra experiment name (datagen experiments live under configs/experiment/datagen/)"
         required: true
         type: string
-        default: "runpod-smoke-shard"
+        default: "datagen/runpod-smoke-shard"
       image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false

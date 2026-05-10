@@ -72,7 +72,7 @@ docs:
       - pattern: "configs/dataset.yaml"
         covers: "Top-level Hydra @hydra.main config for src/generate_dataset.py (mirrors train.yaml/eval.yaml); composes data, render, and experiment groups into a DatasetSpec"
       - pattern: "configs/experiment/**"
-        covers: "Hydra experiment overrides — both training experiments (configs/experiment/<task>/<name>.yaml) and datagen experiments (configs/experiment/<name>.yaml; e.g. surge-simple-480k-10k, runpod-smoke-shard, ci-materialize-test)"
+        covers: "Hydra experiment overrides — training experiments at `configs/experiment/<task>/<name>.yaml` (kosc/, ksin/, surge/, etc.); datagen experiments under the dedicated `configs/experiment/datagen/<name>.yaml` namespace (e.g. surge-simple-480k-10k, runpod-smoke-shard, ci-materialize-test)"
       - pattern: "configs/render/**"
         covers: "RenderConfig sub-model values (plugin_path, preset_path, param_spec_name, renderer_version, sample_rate, etc.)"
       - pattern: "src/generate_dataset.py"

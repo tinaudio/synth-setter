@@ -97,7 +97,7 @@ def config_yaml(fake_plugin: Path, monkeypatch: pytest.MonkeyPatch) -> str:
         return original(experiment, overrides=merged)
 
     monkeypatch.setattr("src.pipeline.skypilot_launch.compose_dataset_spec", _compose_with_plugin)
-    return "ci-materialize-test"
+    return "datagen/ci-materialize-test"
 
 
 @pytest.fixture()
@@ -331,7 +331,7 @@ def _invoke(
     experiment NAME (str) — pre-existing fixtures pass either through unchanged.
     """
     runner = CliRunner()
-    experiment = config_yaml if isinstance(config_yaml, str) else "ci-materialize-test"
+    experiment = config_yaml if isinstance(config_yaml, str) else "datagen/ci-materialize-test"
     return runner.invoke(
         main,
         [
@@ -565,9 +565,14 @@ class TestMainCli:
         result = _invoke(config_yaml, template_yaml, env_file)
         assert result.exit_code == 0, result.output
 
+        # The fixture composes ``datagen/ci-materialize-test`` (Hydra group path),
+        # but the cluster-name suffix comes from the spec's ``task_name``
+        # (``ci-materialize-test``), not the group path.
+        assert isinstance(config_yaml, str)
+        task_name_prefix = config_yaml.rsplit("/", 1)[-1][:8]
         kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"].startswith("synth-setter-smoke-")
-        assert kwargs["cluster_name"].endswith(config_yaml[:8])
+        assert kwargs["cluster_name"].endswith(task_name_prefix)
         assert kwargs["idle_minutes_to_autostop"] >= 2
         assert kwargs["down"] is True
 

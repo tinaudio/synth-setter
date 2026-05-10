@@ -92,7 +92,7 @@ _CRED_BOOTSTRAP_SCRIPT = (
 _TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_EXPERIMENT = "runpod-smoke-shard"
+DEFAULT_EXPERIMENT = "datagen/runpod-smoke-shard"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 

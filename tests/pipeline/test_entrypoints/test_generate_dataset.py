@@ -649,10 +649,10 @@ class TestComposeDatasetSpec:
     """compose_dataset_spec materializes a DatasetSpec from a Hydra experiment."""
 
     def test_composes_known_experiment(self) -> None:
-        """``ci-materialize-test`` composes to a 3-shard hdf5 spec."""
+        """``datagen/ci-materialize-test`` composes to a 3-shard hdf5 spec."""
         from src.generate_dataset import compose_dataset_spec
 
-        spec = compose_dataset_spec("ci-materialize-test")
+        spec = compose_dataset_spec("datagen/ci-materialize-test")
         assert spec.task_name == "ci-materialize-test"
         assert spec.output_format == "hdf5"
         assert spec.num_shards == 3
@@ -661,5 +661,7 @@ class TestComposeDatasetSpec:
         """Hydra-style overrides modify nested fields on the composed spec."""
         from src.generate_dataset import compose_dataset_spec
 
-        spec = compose_dataset_spec("ci-materialize-test", overrides=["render.sample_rate=22050"])
+        spec = compose_dataset_spec(
+            "datagen/ci-materialize-test", overrides=["render.sample_rate=22050"]
+        )
         assert spec.render.sample_rate == 22050

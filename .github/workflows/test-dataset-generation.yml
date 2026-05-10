@@ -56,9 +56,9 @@ on:
   workflow_dispatch:
     inputs:
       experiment:
-        description: "Hydra experiment name (under configs/experiment/)"
+        description: "Hydra experiment name (datagen experiments live under configs/experiment/datagen/)"
         required: true
-        default: "runpod-smoke-shard"
+        default: "datagen/runpod-smoke-shard"
       docker_image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -220,9 +220,9 @@ jobs:
         ${{
           github.event_name == 'pull_request'
             && (matrix.output_format == 'wds'
-                && 'runpod-smoke-shard-wds'
-                || 'runpod-smoke-shard')
-            || (inputs.experiment || 'runpod-smoke-shard')
+                && 'datagen/runpod-smoke-shard-wds'
+                || 'datagen/runpod-smoke-shard')
+            || (inputs.experiment || 'datagen/runpod-smoke-shard')
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -358,9 +358,9 @@ jobs:
         ${{
           github.event_name == 'pull_request'
             && (matrix.output_format == 'wds'
-                && 'runpod-smoke-shard-wds'
-                || 'runpod-smoke-shard')
-            || (inputs.experiment || 'runpod-smoke-shard')
+                && 'datagen/runpod-smoke-shard-wds'
+                || 'datagen/runpod-smoke-shard')
+            || (inputs.experiment || 'datagen/runpod-smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}

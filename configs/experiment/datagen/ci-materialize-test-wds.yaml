@@ -3,7 +3,7 @@
 # wds-format variant of ci-materialize-test.
 
 defaults:
-  - ci-materialize-test
+  - datagen/ci-materialize-test
   - _self_
 
 output_format: wds

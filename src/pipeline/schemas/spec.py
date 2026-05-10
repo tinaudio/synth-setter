@@ -50,10 +50,17 @@ __all__ = [
 _OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5", "wds": ".tar"}
 
 
+# Pin git invocations to the repo root so spec construction works regardless
+# of the caller's CWD (workers, ad-hoc scripts, IDEs, …). spec.py lives at
+# ``<repo>/src/pipeline/schemas/spec.py`` so the repo root is four levels up.
+_REPO_ROOT: Path = Path(__file__).resolve().parents[3]
+
+
 def _get_git_sha() -> str:
-    """Get the current git commit SHA."""
-    result = subprocess.run(  # noqa: S603
-        ["git", "rev-parse", "HEAD"],  # noqa: S607
+    """Get the current git commit SHA at the repo root."""
+    result = subprocess.run(  # noqa: S603 — git is a fixed argv, no shell
+        ["git", "rev-parse", "HEAD"],  # noqa: S607 — relying on PATH-resolved git is fine here
+        cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
@@ -62,8 +69,12 @@ def _get_git_sha() -> str:
 
 
 def _is_repo_dirty() -> bool:
-    """Check if the git working tree has uncommitted changes."""
-    result = subprocess.run(["git", "diff", "--quiet"], capture_output=True)  # noqa: S603, S607
+    """Check if the repo's git working tree has uncommitted changes."""
+    result = subprocess.run(  # noqa: S603 — git is a fixed argv, no shell
+        ["git", "diff", "--quiet"],  # noqa: S607 — relying on PATH-resolved git is fine here
+        cwd=_REPO_ROOT,
+        capture_output=True,
+    )
     return result.returncode != 0
 
 

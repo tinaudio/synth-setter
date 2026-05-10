@@ -45,32 +45,44 @@ _CONFIGS_DIR = _REPO_ROOT / "configs"
 def compose_dataset_spec(experiment: str, *, overrides: list[str] | None = None) -> DatasetSpec:
     """Compose ``configs/dataset.yaml`` with ``experiment=<name>`` and any extra Hydra overrides.
 
-    Returns a fully-validated ``DatasetSpec``; pops the ``data:`` / ``r2:`` /
-    ``hydra:`` sub-trees that live on the composed config but aren't fields on
-    ``DatasetSpec`` itself (their values are lifted to top-level via interpolation
-    in ``configs/dataset.yaml``).
+    Returns a fully-validated ``DatasetSpec``. Group sub-trees on the composed
+    config that aren't fields on ``DatasetSpec`` (e.g. ``data``, ``hydra``) are
+    filtered out via positive selection in ``_dataset_spec_from_cfg``.
     """
-    if GlobalHydra.instance().is_initialized():
+    # Hydra's GlobalHydra is process-global. If a caller (test session, REPL,
+    # earlier CLI invocation) already initialized it for a different config
+    # tree, ``initialize_config_dir`` would raise. Clear-then-restore via
+    # try/finally so we don't permanently disturb a caller-managed singleton.
+    was_initialized = GlobalHydra.instance().is_initialized()
+    if was_initialized:
         GlobalHydra.instance().clear()
     overrides_list = [f"experiment={experiment}"] + (overrides or [])
-    with initialize_config_dir(version_base="1.3", config_dir=str(_CONFIGS_DIR)):
-        cfg = compose(config_name="dataset", overrides=overrides_list)
-    return _dataset_spec_from_cfg(cfg)
+    try:
+        with initialize_config_dir(version_base="1.3", config_dir=str(_CONFIGS_DIR)):
+            cfg = compose(config_name="dataset", overrides=overrides_list)
+        return _dataset_spec_from_cfg(cfg)
+    finally:
+        # ``initialize_config_dir`` (the context manager above) always clears
+        # GlobalHydra on exit. If a caller had GlobalHydra initialized before,
+        # we can't perfectly restore their config tree — but at least we leave
+        # GlobalHydra in the "uninitialized" state ``initialize_config_dir``
+        # itself promises rather than in a half-set state on exception.
+        if GlobalHydra.instance().is_initialized():
+            GlobalHydra.instance().clear()
 
 
 def _dataset_spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     """Convert a composed Hydra config to a validated ``DatasetSpec``.
 
-    Strips group sub-trees (``data``, ``r2``, ``hydra``) that aren't fields on
-    ``DatasetSpec`` — their relevant values are already lifted to top-level via
-    interpolation in ``configs/dataset.yaml``.
+    Selects only keys that match ``DatasetSpec.model_fields``; group sub-trees
+    like ``data`` and ``hydra`` are loaded by Hydra for composition's sake but
+    aren't fields on the spec, so they get filtered out. Adding a new Hydra
+    group does not silently break this path.
     """
     raw: Any = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed Hydra config is not a mapping: {type(raw).__name__}")
-    for group_key in ("data", "r2", "hydra"):
-        raw.pop(group_key, None)
-    return DatasetSpec(**raw)
+    return DatasetSpec(**{k: v for k, v in raw.items() if k in DatasetSpec.model_fields})
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
