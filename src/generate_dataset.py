@@ -148,17 +148,38 @@ def _rclone_copy(src: str, dest: str) -> None:
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
-    The renderer takes a single ``--render-cfg-json`` arg holding the JSON-
-    serialized ``RenderConfig`` sub-model; ``shard.filename``'s suffix is
-    what selects the writer (``.h5`` → hdf5, ``.tar`` → wds).
+    Emits one flag per ``RenderConfig`` field; ``shard.filename``'s suffix
+    selects the writer (``.h5`` → hdf5, ``.tar`` → wds). Planned migration
+    to pydantic-settings (auto-generated flags) tracked in #885.
     """
     output_path = output_dir / shard.filename
+    r = spec.render
     return [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
         str(output_path),
-        "--render-cfg-json",
-        spec.render.model_dump_json(),
+        "--plugin-path",
+        r.plugin_path,
+        "--preset-path",
+        r.preset_path,
+        "--param-spec-name",
+        r.param_spec_name,
+        "--renderer-version",
+        r.renderer_version,
+        "--sample-rate",
+        str(r.sample_rate),
+        "--channels",
+        str(r.channels),
+        "--velocity",
+        str(r.velocity),
+        "--signal-duration-seconds",
+        str(r.signal_duration_seconds),
+        "--min-loudness",
+        str(r.min_loudness),
+        "--sample-batch-size",
+        str(r.sample_batch_size),
+        "--batch-per-shard",
+        str(r.batch_per_shard),
     ]
 
 

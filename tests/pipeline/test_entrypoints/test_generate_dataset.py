@@ -46,6 +46,33 @@ TEST_PLUGIN_VST3 = Path(__file__).resolve().parent.parent / "fixtures" / "TestPl
 TEST_PLUGIN_VERSION = "1.0.0-test"
 
 
+# Per-field flag → RenderConfig field name and the type to coerce CLI args back to.
+# RenderConfig is strict-mode (no str → int / str → float coercion), so the test must
+# cast each flag value before model_validate. Mirrors generate_vst_dataset.main's flags.
+_RENDER_FLAG_FIELDS: dict[str, tuple[str, type]] = {
+    "--plugin-path": ("plugin_path", str),
+    "--preset-path": ("preset_path", str),
+    "--param-spec-name": ("param_spec_name", str),
+    "--renderer-version": ("renderer_version", str),
+    "--sample-rate": ("sample_rate", int),
+    "--channels": ("channels", int),
+    "--velocity": ("velocity", int),
+    "--signal-duration-seconds": ("signal_duration_seconds", float),
+    "--min-loudness": ("min_loudness", float),
+    "--sample-batch-size": ("sample_batch_size", int),
+    "--batch-per-shard": ("batch_per_shard", int),
+}
+
+
+def _render_config_from_cli_args(args: list[str]) -> RenderConfig:
+    """Reconstruct a ``RenderConfig`` from the per-field CLI flags emitted by
+    build_generate_args."""
+    kwargs: dict[str, object] = {}
+    for flag, (field, caster) in _RENDER_FLAG_FIELDS.items():
+        kwargs[field] = caster(args[args.index(flag) + 1])
+    return RenderConfig.model_validate(kwargs)
+
+
 def _find_script_index(args: list[str]) -> int:
     """Locate generate_vst_dataset.py in subprocess args, with a clear failure on miss.
 
@@ -188,20 +215,14 @@ class TestRun:
         mock_check_call: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """The --render-cfg-json arg round-trips back to a RenderConfig equal to spec.render."""
+        """Per-field flags round-trip back to a RenderConfig equal to spec.render."""
         mock_check_call.side_effect = _materialize_shard
         run(spec)
 
         mock_check_call.assert_called_once()
         args = mock_check_call.call_args[0][0]
-        # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py,
-        #         <output-path>, --render-cfg-json, <json>]
         assert any("generate_vst_dataset.py" in a for a in args)
-        render_cfg_idx = args.index("--render-cfg-json")
-        rendered_json = args[render_cfg_idx + 1]
-        # Full round-trip — every render field, not just batch_per_shard, has to survive
-        # the JSON serialization handed to the subprocess.
-        restored = RenderConfig.model_validate_json(rendered_json)
+        restored = _render_config_from_cli_args(args)
         assert restored == spec.render
 
     @patch("src.generate_dataset.subprocess.check_call")
@@ -612,17 +633,13 @@ class TestBuildGenerateArgs:
 
         assert args[2] == str(tmp_path / "shard-000000.h5")
 
-    def test_render_cfg_json_arg_carries_full_render_config(self, spec: DatasetSpec) -> None:
-        """The single ``--render-cfg-json`` arg holds a serialized RenderConfig — every render
-        field round-trips."""
+    def test_per_field_flags_carry_full_render_config(self, spec: DatasetSpec) -> None:
+        """The per-field flags hold every RenderConfig field — full round-trip."""
         shard = spec.shards[0]
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        render_cfg_idx = args.index("--render-cfg-json")
-        rendered_json = args[render_cfg_idx + 1]
-        # Deserialization must produce a RenderConfig equal to spec.render.
-        restored = RenderConfig.model_validate_json(rendered_json)
+        restored = _render_config_from_cli_args(args)
         assert restored == spec.render
 
     def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:

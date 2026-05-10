@@ -555,18 +555,71 @@ def _shard_metadata_from_render(render_cfg: RenderConfig) -> ShardMetadata:
     )
 
 
+# The 11 click options below mirror RenderConfig.model_fields by hand. See #885
+# for the planned migration to pydantic-settings so flags auto-generate from the
+# model — the parallel update is drift-prone and isn't enforced today.
 @click.command()
 @click.argument("data_file", type=str, required=True)
+@click.option("--plugin-path", type=str, required=True, help="Path to the VST3 bundle.")
+@click.option("--preset-path", type=str, required=True, help="Path to the .vstpreset file.")
 @click.option(
-    "--render-cfg-json",
-    "render_cfg_json",
+    "--param-spec-name",
     type=str,
     required=True,
-    help="JSON-serialized RenderConfig (model_dump_json() output).",
+    help="Registered ParamSpec key (e.g. 'surge_simple').",
 )
-def main(data_file: str, render_cfg_json: str) -> None:
+@click.option(
+    "--renderer-version",
+    type=str,
+    required=True,
+    help="Plugin version pinned in the spec; must match the loaded VST3.",
+)
+@click.option("--sample-rate", type=int, default=16000, show_default=True)
+@click.option("--channels", type=int, default=2, show_default=True)
+@click.option("--velocity", type=int, default=100, show_default=True)
+@click.option(
+    "--signal-duration-seconds",
+    "-d",
+    type=float,
+    default=4.0,
+    show_default=True,
+)
+@click.option("--min-loudness", "-l", type=float, default=-55.0, show_default=True)
+@click.option("--sample-batch-size", type=int, default=32, show_default=True)
+@click.option(
+    "--batch-per-shard",
+    type=int,
+    required=True,
+    help="Number of samples this shard contains (= num rows in each dataset).",
+)
+def main(
+    data_file: str,
+    plugin_path: str,
+    preset_path: str,
+    param_spec_name: str,
+    renderer_version: str,
+    sample_rate: int,
+    channels: int,
+    velocity: int,
+    signal_duration_seconds: float,
+    min_loudness: float,
+    sample_batch_size: int,
+    batch_per_shard: int,
+) -> None:
     """Render a single shard at ``data_file`` (suffix selects writer)."""
-    render_cfg = RenderConfig.model_validate_json(render_cfg_json)
+    render_cfg = RenderConfig(
+        plugin_path=plugin_path,
+        preset_path=preset_path,
+        param_spec_name=param_spec_name,
+        renderer_version=renderer_version,
+        sample_rate=sample_rate,
+        channels=channels,
+        velocity=velocity,
+        signal_duration_seconds=signal_duration_seconds,
+        min_loudness=min_loudness,
+        sample_batch_size=sample_batch_size,
+        batch_per_shard=batch_per_shard,
+    )
     suffix = Path(data_file).suffix
     fmt = EXTENSION_TO_OUTPUT_FORMAT.get(suffix)
     if fmt == "hdf5":
