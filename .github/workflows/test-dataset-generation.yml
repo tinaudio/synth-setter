@@ -55,10 +55,10 @@ name: Test Dataset Generation
 on:
   workflow_dispatch:
     inputs:
-      dataset_config:
-        description: "Path to dataset config YAML (under configs/dataset/)"
+      experiment:
+        description: "Hydra experiment name (under configs/experiment/)"
         required: true
-        default: "configs/dataset/runpod-smoke-shard.yaml"
+        default: "runpod-smoke-shard"
       docker_image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -78,7 +78,11 @@ on:
     paths:
       - "src/data/vst/**"
       - "pipeline/schemas/**"
-      - "configs/dataset/**"
+      - "configs/dataset.yaml"
+      - "configs/experiment/**"
+      - "configs/render/**"
+      - "configs/r2/**"
+      - "configs/data/**"
       - "configs/compute/**"
       - "pipeline/entrypoints/**"
       - "pipeline/ci/**"
@@ -178,26 +182,19 @@ jobs:
           echo "providers_launcher: ${providers_launcher}"
           echo "output_formats: ${output_formats}"
 
-      - name: Install PyYAML for dataset-config parsing
+      - name: Install PyYAML for r2-group parsing
         run: pip install pyyaml
 
-      # Bucket comes from the dataset config (the source of truth the launcher
-      # uses for `spec.r2_bucket` and therefore for its R2 upload destination).
-      # Reading from configs/image/dev-snapshot.yaml would be wrong: that's the
-      # CI image's bucket, not the dataset's. They happen to match for
-      # runpod-smoke-shard.yaml, but configs like 10-1k-shards.yaml use
-      # `experiments` instead.
+      # Bucket comes from configs/r2/default.yaml — the Hydra group that
+      # configs/dataset.yaml composes for every experiment's r2_bucket. An
+      # experiment that overrides r2_bucket directly (e.g. 10-1k-shards.yaml
+      # using ``experiments``) is handled by the launcher at compose time;
+      # validate-dataset-shards.yaml only consults this default for the
+      # spec-key URI it pulls.
       - id: bucket
-        env:
-          DATASET_CONFIG: >-
-            ${{
-              github.event_name == 'pull_request'
-                && 'configs/dataset/runpod-smoke-shard.yaml'
-                || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
-            }}
         run: |
           set -euo pipefail
-          R2_BUCKET=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['r2_bucket'])" "$DATASET_CONFIG")
+          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/r2/default.yaml'))['bucket'])")
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket: ${R2_BUCKET}"
 
@@ -219,13 +216,13 @@ jobs:
         provider: ${{ fromJSON(needs.setup.outputs.providers_local) }}
         output_format: ${{ fromJSON(needs.setup.outputs.output_formats) }}
     env:
-      DATASET_CONFIG: >-
+      EXPERIMENT: >-
         ${{
           github.event_name == 'pull_request'
             && (matrix.output_format == 'wds'
-                && 'configs/dataset/runpod-smoke-shard-wds.yaml'
-                || 'configs/dataset/runpod-smoke-shard.yaml')
-            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+                && 'runpod-smoke-shard-wds'
+                || 'runpod-smoke-shard')
+            || (inputs.experiment || 'runpod-smoke-shard')
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -246,13 +243,12 @@ jobs:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-          CONFIG_PATH: ${{ env.DATASET_CONFIG }}
         run: |
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v "/tmp/run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}:/run-metadata" \
-            -e CONFIG_PATH \
+            -e EXPERIMENT \
             -e RCLONE_CONFIG_R2_TYPE=s3 \
             -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
@@ -267,7 +263,14 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
+              python -c "
+              import sys
+              from pipeline.entrypoints.generate_dataset import compose_dataset_spec
+              spec = compose_dataset_spec(\"$EXPERIMENT\")
+              with open(\"/run-metadata/input_spec.json\", \"w\") as f:
+                  f.write(spec.model_dump_json(indent=2))
+              print(f\"materialized spec → /run-metadata/input_spec.json (num_shards={spec.num_shards})\")
+              "
               python scripts/docker_entrypoint.py generate_dataset \
                 --spec /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
@@ -351,13 +354,13 @@ jobs:
     uses: ./.github/workflows/generate-dataset-shards.yaml
     with:
       provider: ${{ matrix.provider }}
-      dataset_config: >-
+      experiment: >-
         ${{
           github.event_name == 'pull_request'
             && (matrix.output_format == 'wds'
-                && 'configs/dataset/runpod-smoke-shard-wds.yaml'
-                || 'configs/dataset/runpod-smoke-shard.yaml')
-            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+                && 'runpod-smoke-shard-wds'
+                || 'runpod-smoke-shard')
+            || (inputs.experiment || 'runpod-smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}

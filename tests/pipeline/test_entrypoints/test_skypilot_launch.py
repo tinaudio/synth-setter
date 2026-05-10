@@ -32,7 +32,7 @@ from pipeline.entrypoints.skypilot_launch import (
 from pipeline.entrypoints.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
-from pipeline.schemas.spec import DatasetSpec, dataset_config_id_from_path
+from pipeline.schemas.spec import DatasetSpec
 
 FIXED_NOW = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -76,11 +76,30 @@ def patch_materialize_io(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture()
-def config_yaml(tmp_path: Path, fake_plugin: Path) -> Path:
-    """Write a valid legacy-shape dataset YAML pointed at the fake plugin."""
-    path = tmp_path / "runpod-smoke-shard.yaml"
-    path.write_text(yaml.safe_dump(_make_legacy_config(fake_plugin), sort_keys=False))
-    return path
+def config_yaml(fake_plugin: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Resolve a known experiment name and patch its plugin to the test fixture.
+
+    Pre-Hydra tests passed a YAML path; under the new launcher CLI the first positional arg is the
+    experiment NAME instead. The fixture name is kept for diff stability across the surrounding
+    test bodies.
+    """
+    # The launcher composes via Hydra and reads ``render.plugin_path`` from
+    # the experiment + render groups. Tests need the path to point at the
+    # fake VST3 bundle they constructed; we monkeypatch ``compose_dataset_spec``
+    # so it injects the override transparently.
+    from pipeline.entrypoints import generate_dataset as gd_mod
+
+    original = gd_mod.compose_dataset_spec
+
+    def _compose_with_plugin(experiment: str, *, overrides: list[str] | None = None):
+        merged = list(overrides or [])
+        merged.append(f"render.plugin_path={fake_plugin}")
+        return original(experiment, overrides=merged)
+
+    monkeypatch.setattr(
+        "pipeline.entrypoints.skypilot_launch.compose_dataset_spec", _compose_with_plugin
+    )
+    return "ci-materialize-test"
 
 
 @pytest.fixture()
@@ -302,18 +321,24 @@ class TestResolveWorkerEnvR2RemoteConstants:
 
 
 def _invoke(
-    config_yaml: Path,
+    config_yaml: Any,
     template_yaml: Path,
     env_file: Path,
     *extra: str,
 ) -> Any:
-    """Invoke the launcher CLI with the standard required options + any `extra` args."""
+    """Invoke the launcher CLI with the standard required options + any `extra` args.
+
+    The first positional arg is kept named ``config_yaml`` for diff stability with
+    the existing test bodies; under the @hydra.main migration it now holds the
+    experiment NAME (str) — pre-existing fixtures pass either through unchanged.
+    """
     runner = CliRunner()
+    experiment = config_yaml if isinstance(config_yaml, str) else "ci-materialize-test"
     return runner.invoke(
         main,
         [
-            "--config",
-            str(config_yaml),
+            "--experiment",
+            experiment,
             "--template",
             str(template_yaml),
             "--env-file",
@@ -407,7 +432,9 @@ class TestMainCli:
         spec = DatasetSpec.model_validate_json(spec_files[0].read_text())
         assert spec.git_sha == "abc123def456"
         assert spec.is_repo_dirty is False
-        assert spec.num_shards == 1
+        # The ``ci-materialize-test`` experiment composes to 3 shards
+        # (96 total samples ÷ 32 per shard).
+        assert spec.num_shards == 3
         assert spec.r2_bucket == "intermediate-data"
 
     def test_worker_env_is_forwarded_to_task(
@@ -529,21 +556,20 @@ class TestMainCli:
 
     def test_default_cluster_name_uses_config_id_prefix(
         self,
-        config_yaml: Path,
+        config_yaml: str,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Without --cluster-name the launcher derives the name from `config_id[:8]`."""
+        """Without --cluster-name the launcher derives the name from `task_name[:8]`."""
         result = _invoke(config_yaml, template_yaml, env_file)
         assert result.exit_code == 0, result.output
 
-        config_id = dataset_config_id_from_path(config_yaml)
         kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"].startswith("synth-setter-smoke-")
-        assert kwargs["cluster_name"].endswith(config_id[:8])
+        assert kwargs["cluster_name"].endswith(config_yaml[:8])
         assert kwargs["idle_minutes_to_autostop"] >= 2
         assert kwargs["down"] is True
 

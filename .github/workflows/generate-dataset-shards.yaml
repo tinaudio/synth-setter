@@ -34,8 +34,8 @@ on:
         description: "skypilot-local, runpod, or oci"
         required: true
         type: string
-      dataset_config:
-        description: "Path to dataset config YAML (under configs/dataset/)"
+      experiment:
+        description: "Hydra experiment name (under configs/experiment/, e.g. runpod-smoke-shard)"
         required: true
         type: string
       image_tag:
@@ -82,11 +82,11 @@ on:
           - skypilot-local
           - runpod
           - oci
-      dataset_config:
-        description: "Path to dataset config YAML (under configs/dataset/)"
+      experiment:
+        description: "Hydra experiment name (under configs/experiment/)"
         required: true
         type: string
-        default: "configs/dataset/runpod-smoke-shard.yaml"
+        default: "runpod-smoke-shard"
       image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -131,7 +131,7 @@ jobs:
     env:
       IMAGE_TAG: ${{ inputs.image_tag }}
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag }}
-      CONFIG_PATH: ${{ inputs.dataset_config }}
+      EXPERIMENT: ${{ inputs.experiment }}
       PROVIDER: ${{ inputs.provider }}
       RUN_METADATA_DIR: /tmp/run-metadata-${{ inputs.provider }}
     steps:
@@ -233,7 +233,7 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(
-            --config "$CONFIG_PATH"
+            --experiment "$EXPERIMENT"
             --template configs/compute/local-template.yaml
             --cluster-name "$CLUSTER_NAME"
             --worker-image-tag "$IMAGE_TAG"
@@ -304,7 +304,7 @@ jobs:
             -e OCI_REGION \
             -e OCI_COMPARTMENT_OCID \
             -e OCI_API_KEY_PEM \
-            -e CONFIG_PATH \
+            -e EXPERIMENT \
             -e WORKER_GIT_REF \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
@@ -322,7 +322,7 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
               python -m pipeline.entrypoints.skypilot_launch \
-                --config "$CONFIG_PATH" \
+                --experiment "$EXPERIMENT" \
                 --template "$TEMPLATE" \
                 --cluster-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \

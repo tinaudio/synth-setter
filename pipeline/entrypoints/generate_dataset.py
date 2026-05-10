@@ -1,16 +1,20 @@
 """Spec-driven generate_dataset runner.
 
 Public API:
+    compose_dataset_spec(experiment, overrides): Build a DatasetSpec by composing
+        ``configs/dataset.yaml`` with the named experiment override.
     load_spec_from_uri(uri): Parse a DatasetSpec from a local path or r2:// URI.
-    run(spec): Full flow — upload spec to R2, generate shard, upload shard to R2.
     run(spec): Full flow — upload spec to R2 once, then loop over
         ``spec.shards`` rendering and uploading each.
     build_generate_args(spec, shard, output_dir): Build CLI args for
         src/data/vst/generate_vst_dataset.py.
+    main(cfg): @hydra.main entrypoint — composes via ``configs/dataset.yaml``,
+        constructs DatasetSpec, and calls run(spec) when invoked directly.
 
-This module is no longer invocable via ``python -m``; the container's CLI
-entrypoint (``scripts/docker_entrypoint.py generate_dataset --spec <path-or-uri>``)
-parses the spec and calls ``run(spec)`` in-process.
+The container's runtime CLI (``scripts/docker_entrypoint.py generate_dataset
+--spec <path-or-uri>``) parses an already-materialized spec and calls
+``run(spec)`` in-process; that path skips Hydra composition because workers
+receive the spec JSON via R2.
 """
 
 from __future__ import annotations
@@ -19,8 +23,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
+import hydra
+from hydra import compose, initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
 from loguru import logger
+from omegaconf import DictConfig, OmegaConf
 
 from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.partitioning import get_my_shards, read_rank_world_from_env
@@ -28,6 +37,40 @@ from pipeline.schemas.spec import DatasetSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
 
 _R2_URI_SCHEME = "r2://"
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_CONFIGS_DIR = _REPO_ROOT / "configs"
+
+
+def compose_dataset_spec(experiment: str, *, overrides: list[str] | None = None) -> DatasetSpec:
+    """Compose ``configs/dataset.yaml`` with ``experiment=<name>`` and any extra Hydra overrides.
+
+    Returns a fully-validated ``DatasetSpec``; pops the ``data:`` / ``r2:`` /
+    ``hydra:`` sub-trees that live on the composed config but aren't fields on
+    ``DatasetSpec`` itself (their values are lifted to top-level via interpolation
+    in ``configs/dataset.yaml``).
+    """
+    if GlobalHydra.instance().is_initialized():
+        GlobalHydra.instance().clear()
+    overrides_list = [f"experiment={experiment}"] + (overrides or [])
+    with initialize_config_dir(version_base="1.3", config_dir=str(_CONFIGS_DIR)):
+        cfg = compose(config_name="dataset", overrides=overrides_list)
+    return _dataset_spec_from_cfg(cfg)
+
+
+def _dataset_spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
+    """Convert a composed Hydra config to a validated ``DatasetSpec``.
+
+    Strips group sub-trees (``data``, ``r2``, ``hydra``) that aren't fields on
+    ``DatasetSpec`` — their relevant values are already lifted to top-level via
+    interpolation in ``configs/dataset.yaml``.
+    """
+    raw: Any = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(raw, dict):
+        raise TypeError(f"composed Hydra config is not a mapping: {type(raw).__name__}")
+    for group_key in ("data", "r2", "hydra"):
+        raw.pop(group_key, None)
+    return DatasetSpec(**raw)
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
@@ -225,8 +268,19 @@ def _render_and_upload_shard(
     logger.info(f"shard removed locally: {shard_path}")
 
 
+@hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
+def main(cfg: DictConfig) -> None:
+    """Hydra-driven entrypoint: compose ``configs/dataset.yaml``, materialize, run.
+
+    Constructs a ``DatasetSpec`` from the composed config on line 1 of the body
+    and proceeds to ``run(spec)``. Operators invoke this via
+    ``python -m pipeline.entrypoints.generate_dataset experiment=<name> [+overrides...]``;
+    workers in containerized clusters bypass this path and consume an
+    already-materialized spec via ``scripts/docker_entrypoint.py generate_dataset --spec <uri>``.
+    """
+    spec = _dataset_spec_from_cfg(cfg)
+    run(spec)
+
+
 if __name__ == "__main__":
-    raise SystemExit(
-        "pipeline.entrypoints.generate_dataset is no longer invocable via `python -m`. "
-        "Use `scripts/docker_entrypoint.py generate_dataset --spec <path>` instead."
-    )
+    main()

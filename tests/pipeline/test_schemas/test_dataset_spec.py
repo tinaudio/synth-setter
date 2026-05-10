@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,7 +14,6 @@ from pipeline.schemas.spec import (
     RenderConfig,
     ShardSpec,
     dataset_config_id_from_path,
-    load_dataset_spec_yaml,
 )
 from src.data.vst import param_specs
 
@@ -328,77 +326,3 @@ class TestDatasetConfigIdFromPath:
             dataset_config_id_from_path(Path("configs/dataset/surge-simple-480k-10k.yaml"))
             == "surge-simple-480k-10k"
         )
-
-
-# ---------------------------------------------------------------------------
-# load_dataset_spec_yaml — legacy bridge (removed in A.3)
-# ---------------------------------------------------------------------------
-
-LEGACY_YAML_KWARGS: dict[str, Any] = {
-    "param_spec": "surge_simple",
-    "plugin_path": "plugins/Surge XT.vst3",
-    "output_format": "hdf5",
-    "sample_rate": 16000,
-    "shard_size": 100,
-    "num_shards": 3,
-    "base_seed": 42,
-    "r2_bucket": "intermediate-data",
-    "splits": {"train": 3, "val": 0, "test": 0},
-    "preset_path": "presets/surge-base.vstpreset",
-    "channels": 2,
-    "velocity": 100,
-    "signal_duration_seconds": 4.0,
-    "min_loudness": -55.0,
-    "sample_batch_size": 32,
-}
-
-
-@pytest.fixture()
-def legacy_yaml(tmp_path: Path) -> Path:
-    import yaml
-
-    path = tmp_path / "ci-smoke-test.yaml"
-    path.write_text(yaml.safe_dump(copy.deepcopy(LEGACY_YAML_KWARGS), sort_keys=False))
-    return path
-
-
-class TestLoadDatasetSpecYaml:
-    """Behavioral tests for Test Load Dataset Spec Yaml."""
-
-    def test_legacy_yaml_round_trips_into_dataset_spec(
-        self, patch_runtime_io: None, legacy_yaml: Path
-    ) -> None:
-        """Legacy yaml round trips into dataset spec."""
-        spec = load_dataset_spec_yaml(legacy_yaml)
-        assert spec.task_name == "ci-smoke-test"
-        assert spec.output_format == "hdf5"
-        assert spec.train_val_test_sizes == [300, 0, 0]
-        assert spec.render.plugin_path == "plugins/Surge XT.vst3"
-        assert spec.render.batch_per_shard == 100
-        assert spec.num_shards == 3
-
-    def test_legacy_yaml_extends_merges_base(self, patch_runtime_io: None, tmp_path: Path) -> None:
-        """Legacy yaml extends merges base."""
-        import yaml
-
-        base = tmp_path / "base.yaml"
-        base.write_text(yaml.safe_dump(copy.deepcopy(LEGACY_YAML_KWARGS), sort_keys=False))
-        child = tmp_path / "child.yaml"
-        child.write_text("_extends: base\noutput_format: wds\n")
-
-        spec = load_dataset_spec_yaml(child)
-        assert spec.output_format == "wds"
-        assert spec.render.plugin_path == "plugins/Surge XT.vst3"
-        assert spec.shards[0].filename.endswith(".tar")
-
-    def test_legacy_yaml_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
-        """Legacy yaml missing file raises file not found."""
-        with pytest.raises(FileNotFoundError, match="Config file not found"):
-            load_dataset_spec_yaml(tmp_path / "nonexistent.yaml")
-
-    def test_legacy_yaml_extends_missing_base_raises(self, tmp_path: Path) -> None:
-        """Legacy yaml extends missing base raises."""
-        child = tmp_path / "child.yaml"
-        child.write_text("_extends: nonexistent\noutput_format: wds\n")
-        with pytest.raises(FileNotFoundError, match="_extends target not found"):
-            load_dataset_spec_yaml(child)

@@ -193,25 +193,25 @@ jobs:
             template: configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher
-            config: configs/dataset/runpod-smoke-shard.yaml
+            config: runpod-smoke-shard
           - variant: launcher-in-docker
             mode: launcher-docker
             template: configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher-docker
-            config: configs/dataset/runpod-smoke-shard.yaml
+            config: runpod-smoke-shard
           - variant: generate-tiny
             mode: launcher-runner
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny
-            config: configs/dataset/runpod-smoke-shard.yaml
+            config: runpod-smoke-shard
           - variant: generate-tiny-in-docker
             mode: launcher-docker
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny-docker
-            config: configs/dataset/runpod-smoke-shard.yaml
+            config: runpod-smoke-shard
 
     steps:
       - name: Checkout
@@ -371,13 +371,13 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           PYTHONPATH: ${{ github.workspace }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
-          CONFIG_PATH: ${{ matrix.config }}
+          EXPERIMENT: ${{ matrix.config }}
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -euo pipefail
           python -m pipeline.entrypoints.skypilot_launch \
-            --config "$CONFIG_PATH" \
+            --experiment "$EXPERIMENT" \
             --template "$TEMPLATE" \
             --cluster-name "$CLUSTER_NAME" \
             --tail \
@@ -395,7 +395,7 @@ jobs:
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
-          CONFIG_PATH: ${{ matrix.config }}
+          EXPERIMENT: ${{ matrix.config }}
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
@@ -406,7 +406,7 @@ jobs:
             -e SKYPILOT_API_SERVER_ENDPOINT \
             -e RUNPOD_API_KEY \
             -e CLUSTER_NAME \
-            -e CONFIG_PATH \
+            -e EXPERIMENT \
             -e TEMPLATE \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
@@ -420,7 +420,7 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
               python -m pipeline.entrypoints.skypilot_launch \
-                --config "$CONFIG_PATH" \
+                --experiment "$EXPERIMENT" \
                 --template "$TEMPLATE" \
                 --cluster-name "$CLUSTER_NAME" \
                 --tail

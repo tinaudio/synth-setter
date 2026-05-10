@@ -44,8 +44,9 @@ import sky.check  # accessed conditionally on the kubernetes path; see provider 
 import yaml
 from dotenv import dotenv_values
 
+from pipeline.entrypoints.generate_dataset import compose_dataset_spec
 from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from pipeline.schemas.spec import DatasetSpec, load_dataset_spec_yaml
+from pipeline.schemas.spec import DatasetSpec
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
@@ -91,7 +92,7 @@ _CRED_BOOTSTRAP_SCRIPT = (
 _TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "runpod-smoke-shard.yaml"
+DEFAULT_EXPERIMENT = "runpod-smoke-shard"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 
@@ -306,14 +307,18 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     return spec_uri
 
 
-@click.command()
+@click.command(context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
 @click.option(
-    "--config",
-    "config_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=DEFAULT_CONFIG,
+    "--experiment",
+    "experiment",
+    type=str,
+    default=DEFAULT_EXPERIMENT,
     show_default=True,
-    help="Path to a DatasetConfig YAML.",
+    help=(
+        "Hydra experiment name (under configs/experiment/). The launcher composes "
+        "configs/dataset.yaml with this experiment override and any extra positional "
+        "args (Hydra-style overrides, e.g. `+render.sample_rate=22050`)."
+    ),
 )
 @click.option(
     "--template",
@@ -417,8 +422,10 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
         "the local cred bootstrap. Mutually exclusive with --api-server."
     ),
 )
+@click.pass_context
 def main(
-    config_path: Path,
+    ctx: click.Context,
+    experiment: str,
     template_path: Path,
     env_file_path: Path,
     cluster_name: str | None,
@@ -463,7 +470,8 @@ def main(
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value
 
-    spec = load_dataset_spec_yaml(config_path)
+    hydra_overrides = list(ctx.args)
+    spec = compose_dataset_spec(experiment, overrides=hydra_overrides)
 
     # `--num-workers` overrides the launcher default of 1. Worker count is a
     # launcher concern, no longer baked into the dataset spec.

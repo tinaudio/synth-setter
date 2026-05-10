@@ -659,19 +659,25 @@ class TestBuildGenerateArgs:
 
 
 # ---------------------------------------------------------------------------
-# __main__ — fail loud
+# compose_dataset_spec — Hydra composition entrypoint
 # ---------------------------------------------------------------------------
 
 
-class TestMainFailLoud:
-    """The module is no longer executable as ``python -m``."""
+class TestComposeDatasetSpec:
+    """compose_dataset_spec materializes a DatasetSpec from a Hydra experiment."""
 
-    def test_running_module_as_main_raises_system_exit(self) -> None:
-        """Executing the module's __main__ block raises SystemExit with a pointer to the CLI."""
-        import runpy
+    def test_composes_known_experiment(self) -> None:
+        """``ci-materialize-test`` composes to a 3-shard hdf5 spec."""
+        from pipeline.entrypoints.generate_dataset import compose_dataset_spec
 
-        with pytest.raises(SystemExit) as exc_info:
-            runpy.run_module("pipeline.entrypoints.generate_dataset", run_name="__main__")
+        spec = compose_dataset_spec("ci-materialize-test")
+        assert spec.task_name == "ci-materialize-test"
+        assert spec.output_format == "hdf5"
+        assert spec.num_shards == 3
 
-        # SystemExit.code carries the message (string), not an int.
-        assert "docker_entrypoint" in str(exc_info.value.code)
+    def test_overrides_apply(self) -> None:
+        """Hydra-style overrides modify nested fields on the composed spec."""
+        from pipeline.entrypoints.generate_dataset import compose_dataset_spec
+
+        spec = compose_dataset_spec("ci-materialize-test", overrides=["render.sample_rate=22050"])
+        assert spec.render.sample_rate == 22050
