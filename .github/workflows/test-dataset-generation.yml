@@ -81,7 +81,6 @@ on:
       - "configs/dataset.yaml"
       - "configs/experiment/**"
       - "configs/render/**"
-      - "configs/r2/**"
       - "configs/data/**"
       - "configs/compute/**"
       - "src/pipeline/**"
@@ -182,19 +181,17 @@ jobs:
           echo "providers_launcher: ${providers_launcher}"
           echo "output_formats: ${output_formats}"
 
-      - name: Install PyYAML for r2-group parsing
+      - name: Install PyYAML for dataset.yaml parsing
         run: pip install pyyaml
 
-      # Bucket comes from configs/r2/default.yaml — the Hydra group that
-      # configs/dataset.yaml composes for every experiment's r2_bucket. An
-      # experiment that overrides r2_bucket directly (e.g. 10-1k-shards.yaml
-      # using ``experiments``) is handled by the launcher at compose time;
-      # validate-dataset-shards.yaml only consults this default for the
-      # spec-key URI it pulls.
+      # Bucket comes from configs/dataset.yaml's `r2_bucket` field — the
+      # default that experiments inherit (configs/experiment/datagen/<x>.yaml
+      # may override, but validate-dataset-shards.yaml only consults this
+      # default for the spec-key URI it pulls).
       - id: bucket
         run: |
           set -euo pipefail
-          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/r2/default.yaml'))['bucket'])")
+          R2_BUCKET=$(python3 -c "import yaml; print(yaml.safe_load(open('configs/dataset.yaml'))['r2_bucket'])")
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket: ${R2_BUCKET}"
 
