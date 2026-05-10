@@ -641,6 +641,26 @@ class TestBuildGenerateArgs:
 
 
 # ---------------------------------------------------------------------------
+# _dataset_spec_from_cfg — Hydra → Pydantic adapter
+# ---------------------------------------------------------------------------
+
+
+class TestDatasetSpecFromCfg:
+    """``_dataset_spec_from_cfg`` rejects non-mapping Hydra configs with a clear error."""
+
+    def test_dataset_spec_from_cfg_non_mapping_raises_type_error(self) -> None:
+        """A composed config that resolves to a list (not a dict) raises TypeError loudly."""
+        from omegaconf import OmegaConf
+
+        from src.generate_dataset import _dataset_spec_from_cfg
+
+        list_cfg = OmegaConf.create([1, 2, 3])
+
+        with pytest.raises(TypeError, match="composed Hydra config is not a mapping"):
+            _dataset_spec_from_cfg(list_cfg)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
 # compose_dataset_spec — Hydra composition entrypoint
 # ---------------------------------------------------------------------------
 
@@ -665,3 +685,105 @@ class TestComposeDatasetSpec:
             "datagen/ci-materialize-test", overrides=["render.sample_rate=22050"]
         )
         assert spec.render.sample_rate == 22050
+
+    def test_unknown_experiment_raises_missing_config(self) -> None:
+        """A typo'd experiment name surfaces as Hydra's MissingConfigException, not a KeyError."""
+        from hydra.errors import MissingConfigException
+
+        from src.generate_dataset import compose_dataset_spec
+
+        with pytest.raises(MissingConfigException):
+            compose_dataset_spec("datagen/does-not-exist")
+
+    def test_invalid_override_field_raises_composition_error(self) -> None:
+        """Overrides targeting a non-existent field raise ConfigCompositionException."""
+        from hydra.errors import ConfigCompositionException
+
+        from src.generate_dataset import compose_dataset_spec
+
+        with pytest.raises(ConfigCompositionException):
+            compose_dataset_spec(
+                "datagen/ci-materialize-test",
+                overrides=["render.does_not_exist=42"],
+            )
+
+    def test_global_hydra_left_uninitialized_after_failure(self) -> None:
+        """A failed compose still leaves GlobalHydra in the uninitialized state.
+
+        ``initialize_config_dir``'s context manager promises to clear GlobalHydra on
+        exit; ``compose_dataset_spec`` adds a try/finally outside the context manager
+        to defend against an exception thrown before the manager runs.
+        """
+        from hydra.core.global_hydra import GlobalHydra
+        from hydra.errors import MissingConfigException
+
+        from src.generate_dataset import compose_dataset_spec
+
+        with pytest.raises(MissingConfigException):
+            compose_dataset_spec("datagen/does-not-exist")
+
+        assert not GlobalHydra.instance().is_initialized()
+
+    def test_consecutive_composes_are_idempotent(self) -> None:
+        """Calling compose twice produces equivalent specs — GlobalHydra reset works."""
+        from src.generate_dataset import compose_dataset_spec
+
+        spec_a = compose_dataset_spec("datagen/ci-materialize-test")
+        spec_b = compose_dataset_spec("datagen/ci-materialize-test")
+
+        assert spec_a.task_name == spec_b.task_name
+        assert spec_a.num_shards == spec_b.num_shards
+        assert spec_a.render == spec_b.render
+
+
+# ---------------------------------------------------------------------------
+# main — @hydra.main entrypoint
+# ---------------------------------------------------------------------------
+
+
+class TestMain:
+    """``main(cfg)`` materializes the spec and delegates to ``run``."""
+
+    def test_main_passes_composed_spec_to_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Main() builds a DatasetSpec from cfg and forwards it to run() unchanged."""
+        # Compose a known cfg via the same path main()'s decorator would use.
+        # Calling compose_dataset_spec gives us the spec; we then need an
+        # equivalent DictConfig to feed into main.__wrapped__. Since main's body
+        # only calls _dataset_spec_from_cfg(cfg) → run(spec), we can drive it via
+        # any DictConfig that round-trips to the same DatasetSpec.
+        from hydra import compose, initialize_config_dir
+        from hydra.core.global_hydra import GlobalHydra
+
+        from src import generate_dataset
+        from src.generate_dataset import compose_dataset_spec
+
+        captured: list[generate_dataset.DatasetSpec] = []
+
+        def _capture_run(spec: generate_dataset.DatasetSpec) -> None:
+            captured.append(spec)
+
+        monkeypatch.setattr(generate_dataset, "run", _capture_run)
+
+        if GlobalHydra.instance().is_initialized():
+            GlobalHydra.instance().clear()
+        try:
+            with initialize_config_dir(
+                version_base="1.3", config_dir=str(generate_dataset._CONFIGS_DIR)
+            ):
+                cfg = compose(
+                    config_name="dataset",
+                    overrides=["experiment=datagen/ci-materialize-test"],
+                )
+        finally:
+            if GlobalHydra.instance().is_initialized():
+                GlobalHydra.instance().clear()
+
+        # Bypass the @hydra.main decorator and call the underlying function directly.
+        generate_dataset.main.__wrapped__(cfg)
+
+        assert len(captured) == 1
+        expected = compose_dataset_spec("datagen/ci-materialize-test")
+        # task_name, num_shards, and render config are deterministic for this experiment.
+        assert captured[0].task_name == expected.task_name
+        assert captured[0].num_shards == expected.num_shards
+        assert captured[0].render == expected.render
