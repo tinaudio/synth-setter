@@ -260,14 +260,14 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              python -c "
-              import sys
-              from src.generate_dataset import compose_dataset_spec
-              spec = compose_dataset_spec(\"$EXPERIMENT\")
-              with open(\"/run-metadata/input_spec.json\", \"w\") as f:
-                  f.write(spec.model_dump_json(indent=2))
-              print(f\"materialized spec → /run-metadata/input_spec.json (num_shards={spec.num_shards})\")
-              "
+              python3 -c "
+          import os
+          from src.generate_dataset import compose_dataset_spec
+          spec = compose_dataset_spec(os.environ[\"EXPERIMENT\"])
+          with open(\"/run-metadata/input_spec.json\", \"w\") as f:
+              f.write(spec.model_dump_json(indent=2))
+          print(f\"materialized spec → /run-metadata/input_spec.json (num_shards={spec.num_shards})\")
+          "
               python scripts/docker_entrypoint.py generate_dataset \
                 --spec /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
