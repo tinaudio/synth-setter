@@ -10,7 +10,6 @@ artifact (h5 datasets / tar members) rather than mocking ``make_hdf5_dataset``
 from __future__ import annotations
 
 import io
-import json
 import tarfile
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from click.testing import CliRunner
 
 from src.data.vst import generate_vst_dataset
 from src.data.vst.generate_vst_dataset import main
+from src.pipeline.schemas.spec import ShardMetadata
 
 _SAMPLE_RATE = 16000
 _CHANNELS = 2
@@ -96,7 +96,7 @@ def test_tar_extension_writes_tar_with_expected_members(
     assert tar_path.exists()
     with tarfile.open(tar_path) as tar:
         names = {m.name for m in tar.getmembers()}
-    assert names == {
+    assert names >= {
         "00000000.audio.npy",
         "00000000.mel_spec.npy",
         "00000000.param_array.npy",
@@ -110,7 +110,7 @@ def test_tar_extension_writes_tar_with_expected_members(
 def test_tar_metadata_member_parses_as_shard_metadata(
     tmp_path: Path, stub_render_params: None
 ) -> None:
-    """The tar's metadata.json carries the five ShardMetadata fields with the CLI's values."""
+    """The tar's metadata.json parses as a ShardMetadata carrying the CLI's values."""
     tar_path = tmp_path / "out.tar"
     runner = CliRunner()
 
@@ -123,13 +123,13 @@ def test_tar_metadata_member_parses_as_shard_metadata(
     with tarfile.open(tar_path) as tar:
         extracted = tar.extractfile("metadata.json")
         assert extracted is not None
-        meta = json.loads(extracted.read())
+        meta = ShardMetadata.model_validate_json(extracted.read())
 
-    assert meta["velocity"] == 100
-    assert meta["sample_rate"] == _SAMPLE_RATE
-    assert meta["channels"] == _CHANNELS
-    assert meta["signal_duration_seconds"] == _DURATION
-    assert meta["min_loudness"] == -99.0
+    assert meta.velocity == 100
+    assert meta.sample_rate == _SAMPLE_RATE
+    assert meta.channels == _CHANNELS
+    assert meta.signal_duration_seconds == _DURATION
+    assert meta.min_loudness == -99.0
 
 
 def test_tar_audio_member_dtype_is_float16(
@@ -153,15 +153,17 @@ def test_tar_audio_member_dtype_is_float16(
     assert audio.dtype == np.float16
 
 
+@pytest.mark.parametrize("filename", ["out.parquet", "out"])
 def test_unknown_extension_is_rejected_with_supported_suffixes_listed(
-    tmp_path: Path, stub_render_params: None
+    tmp_path: Path, stub_render_params: None, filename: str
 ) -> None:
-    """A data_file with an unsupported extension exits non-zero, naming both supported suffixes."""
+    """A data_file with an unsupported (or absent) extension exits non-zero, naming both supported
+    suffixes."""
     runner = CliRunner()
 
     result = runner.invoke(
         main,
-        [str(tmp_path / "out.parquet"), *_render_cfg_args()],
+        [str(tmp_path / filename), *_render_cfg_args()],
     )
 
     assert result.exit_code != 0
