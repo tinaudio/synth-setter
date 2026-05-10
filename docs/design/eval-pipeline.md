@@ -552,7 +552,7 @@ hands Lightning a resolved local path transparently.
 
 ### 7.3 Makefile as CLI Interface
 
-**Decision:** All eval operations are `make` targets — consistent with the existing `make test`, `make format` pattern.
+**Decision:** All eval operations are `make` targets — consistent with the existing `make test-fast`, `make format` pattern.
 
 > **Not yet implemented.** These `make` targets are proposed but do not exist in the Makefile yet ([#86](https://github.com/tinaudio/synth-setter/issues/86)).
 

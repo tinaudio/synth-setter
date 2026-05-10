@@ -129,12 +129,12 @@ set -a && source .env && set +a
 ### 2f. Verify the installation
 
 ```bash
-make test
+make test-fast
 ```
 
-This runs the quick test suite (excluding slow tests and tests that require a
-VST plugin). All tests should pass. If you see import errors, double-check that
-the virtual environment is active and dependencies installed correctly.
+This runs the quick CPU-only test suite (excludes slow, gpu, mps, and
+requires_vst). All tests should pass. If you see import errors, double-check
+that the virtual environment is active and dependencies installed correctly.
 
 > **Writing or reading tests?** See
 > [docs/reference/testing.md](reference/testing.md) for the fixtures,
@@ -226,7 +226,7 @@ pytest -m requires_vst -v
 ```
 
 If the plugin is found, VST-dependent tests will run. If not, they are
-automatically skipped (they are excluded from `make test`).
+automatically skipped (they are excluded from `make test-fast`).
 
 ### 4b. rclone + Cloudflare R2
 
@@ -565,8 +565,8 @@ Or add it to your `.env` file (never commit this file).
 ### VST tests are skipped
 
 This is expected. VST tests require Surge XT to be installed (see
-[section 4a](#4a-surge-xt-vst-plugin)). They are excluded from `make test` by
-default.
+[section 4a](#4a-surge-xt-vst-plugin)). They are excluded from `make test-fast`
+by default.
 
 ______________________________________________________________________
 
@@ -695,7 +695,7 @@ credentials are required.
 **Verify:**
 
 ```bash
-make test
+make test-fast
 python -c "import torch; print(torch.cuda.is_available())"   # False (CPU)
 rclone lsd r2:intermediate-data
 ```

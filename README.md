@@ -106,7 +106,7 @@ install the remaining dependencies as described above.
 
 ```bash
 # Run tests
-make test
+make test-fast
 
 # Run all pre-commit hooks (formatting + linting)
 make format

@@ -21,12 +21,19 @@ sync: ## Merge changes from main branch to your current branch
 	git pull
 	git pull origin main
 
-test: ## Run quick tests (excludes slow, requires_vst)
-	pytest -n auto -m "not slow and not requires_vst"
+test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
+	pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
-# test-full runs serially: GPU and DDP tests require exclusive device access
-test-full: ## Run all tests
-	pytest
+# test-full-* split per hardware. test-full-cpu can parallelize; test-full-gpu and
+# test-full-mps run serially because GPU/MPS tests need exclusive device access.
+test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps excluded).
+	pytest -n auto -m "not gpu and not mps"
+
+test-full-gpu: ## GPU + CPU tests (mps excluded). Runs serially for exclusive GPU access.
+	pytest -m "not mps"
+
+test-full-mps: ## MPS + CPU tests (gpu excluded). Runs serially for exclusive MPS access.
+	pytest -m "not gpu"
 
 test-bats: ## Run BATS shell tests
 	bats --recursive tests/

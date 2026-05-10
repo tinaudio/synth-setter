@@ -32,8 +32,10 @@ ______________________________________________________________________
 
 All common selectors are defined as Makefile targets — read [`Makefile`](../../Makefile) for the exact `pytest` flags each invokes (they evolve; don't memorize):
 
-- `make test` — quick local suite. Exact marker filter + parallelism settings live in the Makefile.
-- `make test-full` — everything, including slow / GPU / VST-gated tests.
+- `make test-fast` — quick CPU-only suite. Excludes slow, gpu, mps, requires_vst.
+- `make test-full-cpu` — all CPU tests (slow + requires_vst included; gpu/mps excluded).
+- `make test-full-gpu` — GPU + CPU tests on a host with a CUDA GPU. Serial — exclusive device access.
+- `make test-full-mps` — MPS + CPU tests on a host with Apple silicon. Serial — exclusive device access.
 - `pytest tests/path/to/test_x.py::test_name -v` — one test, for iteration.
 
 CI selectors live in [`.github/workflows/`](../../.github/workflows):
@@ -146,7 +148,7 @@ ______________________________________________________________________
 
 2. **`configs/train.yaml` and `configs/eval.yaml` require explicit `data=` / `model=`.** Both entry points use `???` for `data` and `model`, so Hydra fails fast if either is missing. Production runs pass them via an `experiment=` config; tests pass them at compose time inside `conftest.py`. There is no fallback to a researcher-local default.
 
-3. **GPU tests use a three-marker stack.** `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` each do distinct things. The CI selector for GPU tests lives in [`.github/workflows/test-gpu.yml`](../../.github/workflows/test-gpu.yml); local `make test` filter lives in the Makefile. If the CI filter changes, the docs don't need updating — the code does.
+3. **GPU tests use a three-marker stack.** `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` each do distinct things. The CI selector for GPU tests lives in [`.github/workflows/test-gpu.yml`](../../.github/workflows/test-gpu.yml); local `make test-fast` and `make test-full-gpu` filters live in the Makefile. If the CI filter changes, the docs don't need updating — the code does.
 
 4. **`weights_only=False` when loading a checkpoint for eval.** PyTorch 2.6 tightened `torch.load`'s default to `weights_only=True`, which refuses Lightning checkpoint metadata. `src/eval.py` passes `weights_only=False` explicitly to `trainer.test/validate/predict(ckpt_path=...)`. New standalone loader code needs the same.
 
