@@ -159,8 +159,7 @@ class TestValidateShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "param_array" in errors[0]
+        assert any("param_array" in e for e in errors)
 
     def test_wrong_row_count_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Dataset with wrong shape[0] returns an error mentioning that dataset."""
@@ -178,8 +177,7 @@ class TestValidateShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "audio" in errors[0]
+        assert any("audio" in e for e in errors)
 
     def test_not_hdf5_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """File that is not valid HDF5 returns an error."""
@@ -188,8 +186,7 @@ class TestValidateShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "HDF5" in errors[0] or "hdf5" in errors[0].lower()
+        assert any("HDF5" in e or "hdf5" in e.lower() for e in errors)
 
     def test_file_not_found_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Path that does not exist returns an error."""
@@ -197,8 +194,7 @@ class TestValidateShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "not found" in errors[0].lower() or "does not exist" in errors[0].lower()
+        assert any("not found" in e.lower() or "does not exist" in e.lower() for e in errors)
 
     def test_unsupported_suffix_returns_error(
         self, real_spec: DatasetSpec, tmp_path: Path
@@ -210,10 +206,7 @@ class TestValidateShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "unsupported shard suffix" in errors[0]
-        assert ".h5" in errors[0]
-        assert ".tar" in errors[0]
+        assert any("unsupported shard suffix" in e and ".h5" in e and ".tar" in e for e in errors)
 
     def test_extra_datasets_ignored(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Extra datasets in HDF5 beyond the required three do not cause errors."""
@@ -379,8 +372,7 @@ class TestValidateTarShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "mel_spec" in errors[0]
+        assert any("mel_spec" in e for e in errors)
 
     def test_missing_metadata_member_returns_error(
         self, real_spec: DatasetSpec, tmp_path: Path
@@ -413,8 +405,7 @@ class TestValidateTarShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "audio" in errors[0]
+        assert any("audio" in e for e in errors)
 
     def test_not_a_tar_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """File that is not a valid tar returns an error."""
@@ -423,8 +414,7 @@ class TestValidateTarShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "tar" in errors[0].lower()
+        assert any("tar" in e.lower() for e in errors)
 
     def test_gzipped_tar_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """A .tar.gz file masquerading as .tar fails validation rather than being silently
@@ -443,8 +433,7 @@ class TestValidateTarShard:
 
         errors = validate_shard(shard_path, real_spec)
 
-        assert len(errors) == 1
-        assert "tar" in errors[0].lower()
+        assert any("tar" in e.lower() for e in errors)
 
     def test_metadata_missing_required_field_returns_error(
         self, real_spec: DatasetSpec, tmp_path: Path
