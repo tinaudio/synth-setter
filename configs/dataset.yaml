@@ -3,6 +3,17 @@
 # Top-level @hydra.main composition for dataset generation. Mirrors eval.yaml's
 # shape: each group below contributes a slice of the DatasetSpec the entrypoint
 # constructs in main(). Required (???) fields are filled in by an experiment.
+#
+# Example invocations:
+#   python -m src.generate_dataset experiment=datagen/ci-materialize-test
+#   python -m src.generate_dataset experiment=datagen/surge-simple-480k-10k
+#   python -m src.generate_dataset experiment=datagen/runpod-smoke-shard \
+#       render.sample_rate=22050
+#
+# Datagen experiments live under configs/experiment/datagen/<name>.yaml.
+# Hydra's `--help` does not recurse into subgroups, so it will not enumerate
+# them — list them with `ls configs/experiment/datagen/` or
+# `python -c "import os; print(os.listdir('configs/experiment/datagen'))"`.
 
 defaults:
   - _self_
