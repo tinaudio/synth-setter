@@ -24,6 +24,7 @@ from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from hydra.errors import ConfigCompositionException, MissingConfigException
 from omegaconf import OmegaConf
+from pydantic import ValidationError
 
 from src import generate_dataset
 from src.generate_dataset import (
@@ -662,6 +663,30 @@ class TestDatasetSpecFromCfg:
         with pytest.raises(TypeError, match="composed Hydra config is not a mapping"):
             _dataset_spec_from_cfg(list_cfg)  # type: ignore[arg-type]
 
+    def test_dataset_spec_from_cfg_missing_required_fields_raises_validation_error(
+        self,
+    ) -> None:
+        """A config dict missing a required DatasetSpec field surfaces as ValidationError.
+
+        ``_dataset_spec_from_cfg`` is the trust boundary between Hydra composition and the
+        Pydantic spec; a YAML that omits required fields must surface a clean Pydantic
+        error rather than crashing inside the spec constructor. Provides enough fields
+        for the runtime default_factories (run_id, r2_prefix) to fire so the failure
+        attributes to the missing field, not to a default_factory that crashed first.
+        """
+        cfg = OmegaConf.create(
+            {
+                "task_name": "missing-render-and-sizes",
+                "output_format": "hdf5",
+                "base_seed": 42,
+                "r2_bucket": "intermediate-data",
+                # train_val_test_sizes and render intentionally omitted
+            }
+        )
+
+        with pytest.raises(ValidationError):
+            _dataset_spec_from_cfg(cfg)  # type: ignore[arg-type]
+
 
 # ---------------------------------------------------------------------------
 # compose_dataset_spec — Hydra composition entrypoint
@@ -785,6 +810,22 @@ class TestLoadSpecFromUri:
 
         assert loaded.task_name == spec.task_name
         assert loaded.num_shards == spec.num_shards
+
+    def test_local_malformed_json_raises_validation_error(self, tmp_path: Path) -> None:
+        """A local spec file containing malformed JSON surfaces a Pydantic ValidationError."""
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text('{"task_name": "missing-required-fields"}')
+
+        with pytest.raises(ValidationError):
+            generate_dataset.load_spec_from_uri(str(spec_path))
+
+    def test_local_non_json_payload_raises_validation_error(self, tmp_path: Path) -> None:
+        """Non-JSON text from the trust boundary also surfaces a clean ValidationError."""
+        spec_path = tmp_path / "spec.json"
+        spec_path.write_text("this is not json")
+
+        with pytest.raises(ValidationError):
+            generate_dataset.load_spec_from_uri(str(spec_path))
 
     def test_r2_uri_dispatches_through_downloaded_to_tempfile(self, tmp_path: Path) -> None:
         """R2:// URIs delegate to ``src.pipeline.r2_io.downloaded_to_tempfile``.

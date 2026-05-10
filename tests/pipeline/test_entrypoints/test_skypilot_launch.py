@@ -22,6 +22,7 @@ from src.pipeline.schemas.spec import DatasetSpec
 from src.pipeline.skypilot_launch import (
     _WORKER_ENV_KEYS,
     _WORKER_SPEC_URI_ENV,
+    _launch_one_rank,
     _override_image_id,
     load_worker_env,
     main,
@@ -1240,6 +1241,84 @@ class TestOverrideImageId:
 
         oci_res.copy.assert_not_called()
         task.set_resources.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _launch_one_rank — module-level helper (lifted from a closure in eac9d52)
+# ---------------------------------------------------------------------------
+
+
+class TestLaunchOneRank:
+    """Direct unit tests on `_launch_one_rank`.
+
+    The helper was lifted from a `_run_workers` closure so it could be tested
+    without standing up the full E2E mock surface in `TestNumWorkersFanOut`.
+    These tests pin the per-rank env injection, image_id override, and error
+    handling that the previous closure shape made hard to exercise in isolation.
+    """
+
+    def test_returns_job_id_from_stream_and_get(
+        self, template_yaml: Path, mock_sky: MagicMock
+    ) -> None:
+        """A successful sky.launch + sky.stream_and_get returns the job_id."""
+        mock_sky.stream_and_get.side_effect = lambda _req: (42, MagicMock())
+
+        job_id = _launch_one_rank(
+            rank=0,
+            cluster_names=["smoke-r0"],
+            worker_env_base={"WORKER_SPEC_URI": "r2://b/spec.json"},
+            worker_image="tinaudio/synth-setter:test-tag",
+            template_path=template_yaml,
+        )
+
+        assert job_id == 42
+        mock_sky.launch.assert_called_once()
+        assert mock_sky.launch.call_args.kwargs["cluster_name"] == "smoke-r0"
+
+    def test_injects_per_rank_env_keys(self, template_yaml: Path, mock_sky: MagicMock) -> None:
+        """update_envs receives WORKER_RANK / NUM_WORKERS / WORKER_IMAGE alongside the base."""
+        _launch_one_rank(
+            rank=2,
+            cluster_names=["smoke-r0", "smoke-r1", "smoke-r2"],
+            worker_env_base={"WORKER_SPEC_URI": "r2://b/spec.json"},
+            worker_image="tinaudio/synth-setter:test-tag",
+            template_path=template_yaml,
+        )
+
+        task = mock_sky.Task.from_yaml.return_value
+        env_for_rank = task.update_envs.call_args.args[0]
+        assert env_for_rank["WORKER_SPEC_URI"] == "r2://b/spec.json"
+        assert env_for_rank["SYNTH_SETTER_WORKER_RANK"] == "2"
+        assert env_for_rank["SYNTH_SETTER_NUM_WORKERS"] == "3"
+        assert env_for_rank["WORKER_IMAGE"] == "tinaudio/synth-setter:test-tag"
+
+    def test_raises_when_stream_and_get_returns_none(
+        self, template_yaml: Path, mock_sky: MagicMock
+    ) -> None:
+        """A None response from sky.stream_and_get surfaces as ClickException."""
+        mock_sky.stream_and_get.side_effect = lambda _req: None
+
+        with pytest.raises(click.ClickException, match="launch yielded no job_id"):
+            _launch_one_rank(
+                rank=0,
+                cluster_names=["smoke-r0"],
+                worker_env_base={},
+                worker_image="tinaudio/synth-setter:test-tag",
+                template_path=template_yaml,
+            )
+
+    def test_raises_when_job_id_is_none(self, template_yaml: Path, mock_sky: MagicMock) -> None:
+        """A (None, handle) response from sky.stream_and_get surfaces as ClickException."""
+        mock_sky.stream_and_get.side_effect = lambda _req: (None, MagicMock())
+
+        with pytest.raises(click.ClickException, match="launch yielded no job_id"):
+            _launch_one_rank(
+                rank=0,
+                cluster_names=["smoke-r0"],
+                worker_env_base={},
+                worker_image="tinaudio/synth-setter:test-tag",
+                template_path=template_yaml,
+            )
 
 
 # ---------------------------------------------------------------------------
