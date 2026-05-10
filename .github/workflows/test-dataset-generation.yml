@@ -3,7 +3,7 @@ name: Test Dataset Generation
 # Smoke test for the data-pipeline. Three execution modes share the same
 # `validate-dataset-shards.yaml` downstream:
 #
-#   * `local`  — runs `src.pipeline.ci.materialize_spec` + `docker_entrypoint.py
+#   * `local`  — runs `src.generate_dataset.compose_dataset_spec` + `docker_entrypoint.py
 #     generate_dataset` directly inside the dev-snapshot container on the
 #     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). Manual
 #     dispatch fallback for ad-hoc smoke; superseded by `skypilot-local` for

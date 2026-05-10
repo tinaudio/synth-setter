@@ -42,9 +42,9 @@ original parameters.
 ## Data Flow
 
 1. **Configure** -- Define a dataset by composing `configs/dataset.yaml`
-   with an experiment override (`configs/experiment/<name>.yaml`); the
-   composed dict materializes into a `DatasetSpec` (synth, sample count,
-   shard size, parameter spec).
+   with an experiment override (`configs/experiment/datagen/<name>.yaml`);
+   the composed dict materializes into a `DatasetSpec` (synth, sample
+   count, shard size, parameter spec).
 
 2. **Generate** -- Workers render audio samples through Surge XT, producing HDF5
    shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,

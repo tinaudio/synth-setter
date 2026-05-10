@@ -437,13 +437,13 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 
 ### Entrypoint errors
 
-| Error                                    | Cause                               | Fix                                                                          |
-| ---------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
-| `Missing subcommand`                     | Ran the image with no subcommand    | Append one of: `idle`, `passthrough <cmd>`, `generate_dataset --spec <path>` |
-| `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train` |
-| `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                          |
-| `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)         |
-| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `pipeline.schemas.spec.materialize_spec`        |
+| Error                                    | Cause                               | Fix                                                                              |
+| ---------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------- |
+| `Missing subcommand`                     | Ran the image with no subcommand    | Append one of: `idle`, `passthrough <cmd>`, `generate_dataset --spec <path>`     |
+| `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train`     |
+| `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                              |
+| `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)             |
+| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-build the spec via Hydra: see `src/generate_dataset.py::compose_dataset_spec` |
 
 ______________________________________________________________________
 

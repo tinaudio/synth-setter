@@ -73,12 +73,12 @@ RunPod is used because it's the platform where GPUs are already available and co
 ## 2. Typical Workflow
 
 ```bash
-# 1. Create a dataset config (filename = dataset_config_id)
-cat configs/dataset/surge-simple-480k-10k.yaml
-# → num_shards: 48, shard_size: 10000, ...
+# 1. Inspect the datagen experiment (filename stem = dataset_config_id)
+cat configs/experiment/datagen/surge-simple-480k-10k.yaml
+# → 48 shards, 10000 samples per shard, ...
 
 # 2. Launch generation — creates spec, launches workers, exits
-# **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)
+# **Planned CLI** — the distributed pipeline CLI (`python -m src.pipeline generate/status/finalize`)
 # is not yet implemented. Currently only single-shard generation is available via:
 python -m src.generate_dataset experiment=datagen/surge-simple-480k-10k
 # → Sequential multi-shard MVP. Loops over spec.shards on a single worker; distributed parallelism still tracked under #411.
@@ -86,18 +86,18 @@ python -m src.generate_dataset experiment=datagen/surge-simple-480k-10k
 # `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
-# python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
+# python -m src.pipeline generate experiment=datagen/surge-simple-480k-10k --workers 10
 # → Created run surge-simple-480k-10k-20260313T100000123Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
 #
-# python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m src.pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 # → Valid: 44/48  Missing: 2  Quarantined: 2
 #
-# python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m src.pipeline generate --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 4 shards missing, launching 1 worker
 #
-# python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m src.pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 48/48 valid. output_format: hdf5
 # → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
 # → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
@@ -109,7 +109,7 @@ Make targets are thin aliases for convenience:
 > **Not yet implemented.** These `make` targets are planned but do not exist in the Makefile yet ([#72](https://github.com/tinaudio/synth-setter/issues/72)).
 
 ```bash
-make generate ARGS="--config configs/dataset/surge-simple-480k-10k.yaml --workers 10"
+make generate ARGS="experiment=datagen/surge-simple-480k-10k --workers 10"
 make status ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 ```
