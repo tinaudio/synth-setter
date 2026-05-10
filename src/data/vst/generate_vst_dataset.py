@@ -64,23 +64,56 @@ class VSTDataSample:
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
-def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Values hardcoded to be roughly like those used by the audio spectrogram transformer.
+# STFT params for the mel writer. Roughly the audio-spectrogram-transformer
+# defaults: 100 frames/sec, 128 mels, ~25ms window, hamming window. Centralised
+# here so ``_mel_shape`` and ``make_spectrogram`` agree on the time-axis size.
+_MEL_FRAMES_PER_SECOND = 100
+_MEL_N_MELS = 128
+_MEL_N_FFT_FRACTION_OF_SAMPLE_RATE = 0.025
+_MEL_WINDOW = "hamming"
 
-    i.e. 100 frames per second, 128 mels, ~25ms window, hamming window.
+
+def _mel_hop_length(sample_rate: float) -> int:
+    return int(sample_rate / _MEL_FRAMES_PER_SECOND)
+
+
+def _mel_n_fft(sample_rate: float) -> int:
+    return int(_MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate)
+
+
+def _mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
+    """Compute the number of mel-time frames librosa produces for the given audio length.
+
+    Mirrors librosa.feature.melspectrogram's frame count when ``center=True`` (its default):
+    ``1 + audio_length // hop_length``. Adding a row to ``hdf5_file`` for any duration
+    other than the legacy 4s-at-16kHz default would silently produce wrong-shape mel
+    data without this helper — see ml-pipeline:block #3 in PR #883.
     """
+    audio_length = int(sample_rate * signal_duration_seconds)
+    return 1 + audio_length // _mel_hop_length(sample_rate)
 
-    n_fft = int(0.025 * sample_rate)
-    hop_length = int(sample_rate / 100.0)
-    window = "hamming"
 
+def _mel_dataset_shape(
+    num_samples: int, channels: int, sample_rate: float, signal_duration_seconds: float
+) -> tuple[int, int, int, int]:
+    """Mel-spectrogram dataset shape ``(N, C, n_mels, n_frames)`` for the writer."""
+    return (
+        num_samples,
+        channels,
+        _MEL_N_MELS,
+        _mel_n_frames(sample_rate, signal_duration_seconds),
+    )
+
+
+def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Per-channel mel-spectrogram in dB; STFT params come from module-level constants."""
     spec = librosa.feature.melspectrogram(
         y=audio,
         sr=sample_rate,
-        n_mels=128,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        window=window,
+        n_mels=_MEL_N_MELS,
+        n_fft=_mel_n_fft(sample_rate),
+        hop_length=_mel_hop_length(sample_rate),
+        window=_MEL_WINDOW,
     )
     spec_db = librosa.power_to_db(spec, ref=np.max)
     return spec_db
@@ -277,7 +310,7 @@ def create_datasets_and_get_start_idx(
     mel_dataset, mel_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
         "mel_spec",
-        (num_samples, 2, 128, 401),
+        _mel_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),
     )
