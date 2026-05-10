@@ -27,7 +27,6 @@ output_format: hdf5
 base_seed: 42
 
 train_val_test_sizes: ???
-train_val_test_seeds: ???
 
 # Default R2 bucket; experiments override (e.g. `r2_bucket: experiments`).
 # `r2_prefix_root` is omitted here — DatasetSpec's model default ("data") applies.

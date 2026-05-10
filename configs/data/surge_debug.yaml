@@ -9,4 +9,3 @@ repeat_first_batch: true
 
 # Datagen-only — see comment in surge.yaml.
 train_val_test_sizes: [12, 0, 0]
-train_val_test_seeds: [42, 43, 44]

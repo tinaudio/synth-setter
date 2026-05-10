@@ -13,7 +13,6 @@ task_name: runpod-smoke-shard
 output_format: hdf5
 
 train_val_test_sizes: [12, 0, 0]
-train_val_test_seeds: [42, 43, 44]
 
 render:
   sample_rate: 16000

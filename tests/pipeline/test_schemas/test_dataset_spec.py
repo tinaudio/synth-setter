@@ -42,7 +42,6 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
         "task_name": "ci-smoke-test",
         "output_format": "hdf5",
         "train_val_test_sizes": [300, 0, 0],
-        "train_val_test_seeds": [123, 456, 789],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": _valid_render_kwargs(plugin_path),
@@ -229,6 +228,19 @@ class TestDatasetSpecValidators:
         """A JSON-style naive ISO string on ``created_at`` is rejected after parsing."""
         with pytest.raises(ValidationError, match="created_at must be timezone-aware UTC"):
             DatasetSpec(**_valid_spec_kwargs(created_at="2026-03-28T12:00:00"))
+
+    def test_train_val_test_seeds_default_is_empty(self, patch_runtime_io: None) -> None:
+        """Default ``train_val_test_seeds`` is empty — per-sample seeding lands later (see
+        #884)."""
+        spec = DatasetSpec(**_valid_spec_kwargs())
+        assert spec.train_val_test_seeds == []
+
+    def test_populated_train_val_test_seeds_raises_not_implemented(
+        self, patch_runtime_io: None
+    ) -> None:
+        """A non-empty ``train_val_test_seeds`` raises NotImplementedError pointing at #884."""
+        with pytest.raises(NotImplementedError, match=r"issues/884"):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=[1, 2, 3]))
 
 
 # ---------------------------------------------------------------------------

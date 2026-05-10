@@ -93,6 +93,7 @@ class ShardSpec(BaseModel):
 
     shard_id: int
     filename: str
+    # Derived value, not yet plumbed into the writer. Tracked in #884.
     seed: int
 
 
@@ -201,7 +202,11 @@ class DatasetSpec(BaseModel):
     task_name: str
     output_format: Literal["hdf5", "wds"]
     train_val_test_sizes: list[int] = Field(min_length=3, max_length=3)
-    train_val_test_seeds: list[int] = Field(min_length=3, max_length=3)
+    # Per-sample reproducible seeding is not implemented yet — see #884.
+    # Field is kept on the model for forward compatibility but must remain
+    # empty until the writer learns to consume it; the
+    # ``_train_val_test_seeds_unsupported`` validator below enforces that.
+    train_val_test_seeds: list[int] = Field(default_factory=list)
     base_seed: int
     r2_bucket: str
     r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
@@ -318,6 +323,20 @@ class DatasetSpec(BaseModel):
                 )
         if sum(self.train_val_test_sizes) == 0:
             raise ValueError("train_val_test_sizes must sum to a positive count")
+        return self
+
+    @model_validator(mode="after")
+    def _train_val_test_seeds_unsupported(self) -> DatasetSpec:
+        """Reject populated ``train_val_test_seeds`` until per-sample seeding lands.
+
+        The field is advertised on the spec but neither the writer nor the sampler consume it
+        today, so a non-empty list would silently ship a non-reproducible dataset. Tracked in #884.
+        """
+        if self.train_val_test_seeds:
+            raise NotImplementedError(
+                "per-sample reproducible seeding is not implemented yet — see "
+                "https://github.com/tinaudio/synth-setter/issues/884"
+            )
         return self
 
     @model_validator(mode="after")

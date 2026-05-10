@@ -8,4 +8,3 @@ predict_file: ???
 
 # Datagen-only — see comment in surge.yaml.
 train_val_test_sizes: [440000, 20000, 20000]
-train_val_test_seeds: [42, 43, 44]

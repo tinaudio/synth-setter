@@ -11,7 +11,6 @@ task_name: 10-1k-shards
 output_format: hdf5
 
 train_val_test_sizes: [10000, 0, 0]
-train_val_test_seeds: [42, 43, 44]
 
 r2_bucket: experiments
 

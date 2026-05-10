@@ -12,7 +12,6 @@ task_name: ci-materialize-test
 output_format: hdf5
 
 train_val_test_sizes: [32, 32, 32]
-train_val_test_seeds: [42, 43, 44]
 
 render:
   sample_rate: 16000
