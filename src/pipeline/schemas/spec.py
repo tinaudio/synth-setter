@@ -13,9 +13,11 @@ layout + render fields.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import cached_property
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 from pydantic import (
@@ -45,8 +47,10 @@ __all__ = [
 
 # Source-of-truth mapping from ``output_format`` to shard filename suffix.
 # Adding a format means adding a row here; missing entries surface as KeyError
-# at construction rather than producing a silently-wrong filename.
-_OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5", "wds": ".tar"}
+# at construction rather than producing a silently-wrong filename. Wrapped in
+# ``MappingProxyType`` so the ALL_CAPS name actually denotes an immutable
+# constant.
+OUTPUT_FORMAT_TO_EXTENSION: Mapping[str, str] = MappingProxyType({"hdf5": ".h5", "wds": ".tar"})
 
 
 # Pin git invocations to the repo root so spec construction works regardless
@@ -296,7 +300,7 @@ class DatasetSpec(BaseModel):
     @model_validator(mode="after")
     def _shard_filenames_match_output_format(self) -> DatasetSpec:
         """Defense-in-depth: every computed shard filename ends with the format's extension."""
-        expected_ext = _OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        expected_ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
         for shard in self.shards:
             if not shard.filename.endswith(expected_ext):
                 raise ValueError(
@@ -311,7 +315,7 @@ class DatasetSpec(BaseModel):
         """Shard identities derived from total sample counts and ``batch_per_shard``."""
         bps = self.render.batch_per_shard
         total_shards = sum(self.train_val_test_sizes) // bps
-        ext = _OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
         return tuple(
             ShardSpec(
                 shard_id=i,

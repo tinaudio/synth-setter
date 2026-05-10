@@ -10,43 +10,27 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from src.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
-from src.pipeline.schemas.spec import _OUTPUT_FORMAT_TO_EXTENSION
+from src.pipeline.schemas.spec import (
+    OUTPUT_FORMAT_TO_EXTENSION,
+    DatasetSpec,
+    RenderConfig,
+)
 
-_REQUIRED_TOP_LEVEL_FIELDS = [
-    "base_seed",
-    "created_at",
-    "git_sha",
-    "is_repo_dirty",
-    "num_params",
-    "num_shards",
-    "output_format",
-    "r2_bucket",
-    "r2_prefix",
-    "render",
-    "run_id",
-    "shards",
-    "task_name",
-    "train_val_test_seeds",
-    "train_val_test_sizes",
-]
-_REQUIRED_RENDER_FIELDS = [
-    "batch_per_shard",
-    "channels",
-    "min_loudness",
-    "param_spec_name",
-    "plugin_path",
-    "preset_path",
-    "renderer_version",
-    "sample_batch_size",
-    "sample_rate",
-    "signal_duration_seconds",
-    "velocity",
-]
+_GIT_SHA_HEX_LEN = 40
+
+# Required keys are derived from the model so adding a field to ``DatasetSpec``
+# (including computed_fields, which serialize on dump) automatically tightens
+# the structural check on the next CI run — no parallel list to update.
+_REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
+    sorted(set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
+)
+_REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(sorted(RenderConfig.model_fields))
 
 
-def validate_structure(spec: dict) -> list[str]:
+def validate_structure(spec: dict[str, Any]) -> list[str]:
     """Validate structural correctness of a spec dict.
 
     Returns a list of error strings (empty means valid).
@@ -67,9 +51,9 @@ def validate_structure(spec: dict) -> list[str]:
     if missing_render:
         errors.append(f"missing required render fields: {missing_render}")
 
-    cv = spec.get("git_sha", "")
-    if not (len(cv) == 40 and all(c in "0123456789abcdef" for c in cv)):
-        errors.append(f"git_sha is not a valid 40-char hex SHA: {cv!r}")
+    git_sha = spec.get("git_sha", "")
+    if not (len(git_sha) == _GIT_SHA_HEX_LEN and all(c in "0123456789abcdef" for c in git_sha)):
+        errors.append(f"git_sha is not a valid {_GIT_SHA_HEX_LEN}-char hex SHA: {git_sha!r}")
 
     if not render.get("renderer_version"):
         errors.append("render.renderer_version is empty")
@@ -80,7 +64,7 @@ def validate_structure(spec: dict) -> list[str]:
     return errors
 
 
-def validate_test_values(spec: dict) -> list[str]:
+def validate_test_values(spec: dict[str, Any]) -> list[str]:
     """Validate test-specific values expected from ci-materialize-test.yaml.
 
     Returns a list of error strings (empty means valid).
@@ -98,7 +82,7 @@ def validate_test_values(spec: dict) -> list[str]:
         errors.append(f"expected seeds [42, 43, 44], got {seeds}")
 
     filenames = [s["filename"] for s in shards]
-    ext = _OUTPUT_FORMAT_TO_EXTENSION[spec.get("output_format", "hdf5")]
+    ext = OUTPUT_FORMAT_TO_EXTENSION[spec.get("output_format", "hdf5")]
     expected_filenames = [f"shard-{i:06d}{ext}" for i in range(3)]
     if filenames != expected_filenames:
         errors.append(f"expected filenames {expected_filenames}, got {filenames}")

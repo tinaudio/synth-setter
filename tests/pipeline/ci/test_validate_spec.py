@@ -27,6 +27,7 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "num_params": 92,
         "num_shards": 3,
         "r2_bucket": "intermediate-data",
+        "r2_prefix_root": "data",
         "r2_prefix": "data/test/test-20260328T120000000Z/",
         "render": {
             "plugin_path": "plugins/Surge XT.vst3",
