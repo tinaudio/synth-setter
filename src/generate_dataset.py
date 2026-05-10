@@ -48,13 +48,12 @@ def compose_dataset_spec(experiment: str, *, overrides: list[str] | None = None)
     Returns a fully-validated ``DatasetSpec``. Group sub-trees on the composed
     config that aren't fields on ``DatasetSpec`` (e.g. ``data``, ``hydra``) are
     filtered out via positive selection in ``_dataset_spec_from_cfg``.
+
+    Hydra's ``GlobalHydra`` is a process-global singleton; clear-then-restore
+    ensures a caller (test session, REPL) that already initialized it for a
+    different tree isn't left in a half-set state if composition raises.
     """
-    # Hydra's GlobalHydra is process-global. If a caller (test session, REPL,
-    # earlier CLI invocation) already initialized it for a different config
-    # tree, ``initialize_config_dir`` would raise. Clear-then-restore via
-    # try/finally so we don't permanently disturb a caller-managed singleton.
-    was_initialized = GlobalHydra.instance().is_initialized()
-    if was_initialized:
+    if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
     overrides_list = [f"experiment={experiment}"] + (overrides or [])
     try:
@@ -62,11 +61,6 @@ def compose_dataset_spec(experiment: str, *, overrides: list[str] | None = None)
             cfg = compose(config_name="dataset", overrides=overrides_list)
         return _dataset_spec_from_cfg(cfg)
     finally:
-        # ``initialize_config_dir`` (the context manager above) always clears
-        # GlobalHydra on exit. If a caller had GlobalHydra initialized before,
-        # we can't perfectly restore their config tree — but at least we leave
-        # GlobalHydra in the "uninitialized" state ``initialize_config_dir``
-        # itself promises rather than in a half-set state on exception.
         if GlobalHydra.instance().is_initialized():
             GlobalHydra.instance().clear()
 
@@ -264,7 +258,7 @@ def _render_and_upload_shard(
     logger.info(f"shard removed locally: {shard_path}")
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="dataset")
+@hydra.main(version_base="1.3", config_path=str(_CONFIGS_DIR), config_name="dataset")
 def main(cfg: DictConfig) -> None:
     """Hydra-driven entrypoint: compose ``configs/dataset.yaml``, materialize, run.
 
