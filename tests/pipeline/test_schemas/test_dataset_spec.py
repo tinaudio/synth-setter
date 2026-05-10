@@ -65,16 +65,16 @@ def patch_runtime_io(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestShardSpec:
-    """Behavioral tests for Test Shard Spec."""
+    """Pin ShardSpec immutability + extra-field rejection so workers can't mutate it."""
 
     def test_shard_spec_is_frozen(self) -> None:
-        """Shard spec is frozen."""
+        """Mutating a constructed ShardSpec raises — workers can't drift their assignment."""
         shard = ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42)
         with pytest.raises(ValidationError):
             shard.shard_id = 99  # type: ignore[misc]
 
     def test_shard_spec_rejects_extra_fields(self) -> None:
-        """Shard spec rejects extra fields."""
+        """Unknown fields raise so a renamed key in the spec doesn't silently lose data."""
         with pytest.raises(ValidationError):
             ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42, extra="oops")  # type: ignore[call-arg]
 
@@ -85,10 +85,10 @@ class TestShardSpec:
 
 
 class TestRenderConfig:
-    """Behavioral tests for Test Render Config."""
+    """Pin RenderConfig field-level validation so bad render args fail at construction."""
 
     def test_render_config_rejects_extra_fields(self) -> None:
-        """Render config rejects extra fields."""
+        """Unknown render-config keys raise — guards against typos in render YAML."""
         kwargs = _valid_render_kwargs()
         kwargs["surprise"] = "value"
         with pytest.raises(ValidationError):
@@ -108,14 +108,14 @@ class TestRenderConfig:
         ],
     )
     def test_render_config_range_validators(self, field: str, bad_value: Any, match: str) -> None:
-        """Render config range validators."""
+        """Each numeric/string field's range constraint surfaces a field-specific message."""
         kwargs = _valid_render_kwargs()
         kwargs[field] = bad_value
         with pytest.raises(ValidationError, match=match):
             RenderConfig(**kwargs)
 
     def test_render_config_velocity_bounds_are_inclusive(self) -> None:
-        """Render config velocity bounds are inclusive."""
+        """MIDI velocity boundary values (0, 127) are accepted, not rejected as off-by-one."""
         for valid in (0, 127):
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
@@ -127,10 +127,10 @@ class TestRenderConfig:
 
 
 class TestDatasetSpecConstruction:
-    """Behavioral tests for Test Dataset Spec Construction."""
+    """Pin runtime-field auto-fill: launcher-supplied values win over default factories."""
 
     def test_fresh_construction_fills_runtime_fields(self, patch_runtime_io: None) -> None:
-        """Fresh construction fills runtime fields."""
+        """git_sha, created_at, run_id, and r2_prefix are derived from stubbed factories."""
         spec = DatasetSpec(**_valid_spec_kwargs())
 
         assert spec.git_sha == "abc123def456"
@@ -140,72 +140,72 @@ class TestDatasetSpecConstruction:
         assert spec.r2_prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
 
     def test_run_id_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
-        """Run id uses explicit value when present."""
+        """A caller-supplied run_id overrides the timestamp-derived default."""
         spec = DatasetSpec(**_valid_spec_kwargs(run_id="custom-run-id-001"))
         assert spec.run_id == "custom-run-id-001"
 
     def test_r2_prefix_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
-        """R2 prefix uses explicit value when present."""
+        """A caller-supplied r2_prefix overrides the {root}/{task}/{run_id}/ default."""
         spec = DatasetSpec(**_valid_spec_kwargs(r2_prefix="custom/prefix/here/"))
         assert spec.r2_prefix == "custom/prefix/here/"
 
     def test_r2_prefix_root_default_is_data(self, patch_runtime_io: None) -> None:
-        """R2 prefix root default is data."""
+        """Without an override, the derived r2_prefix lives under the ``data/`` root."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         assert spec.r2_prefix.startswith("data/")
 
     def test_r2_prefix_root_custom_threads_through(self, patch_runtime_io: None) -> None:
-        """R2 prefix root custom threads through."""
+        """Custom r2_prefix_root replaces ``data/`` in the derived prefix."""
         spec = DatasetSpec(**_valid_spec_kwargs(r2_prefix_root="experiments"))
         assert spec.r2_prefix.startswith("experiments/")
 
     def test_dataset_spec_strict_rejects_extra_fields(self, patch_runtime_io: None) -> None:
-        """Dataset spec strict rejects extra fields."""
+        """Strict mode rejects unknown top-level fields so a renamed key fails loudly."""
         kwargs = _valid_spec_kwargs(unexpected_field="surprise")
         with pytest.raises(ValidationError):
             DatasetSpec(**kwargs)
 
 
 class TestDatasetSpecValidators:
-    """Behavioral tests for Test Dataset Spec Validators."""
+    """Pin DatasetSpec field validators: blank/zero/non-UTC inputs fail at construction."""
 
     def test_r2_bucket_blank_raises(self, patch_runtime_io: None) -> None:
-        """R2 bucket blank raises."""
+        """Empty / whitespace-only bucket names are rejected — fail loud, not at upload time."""
         for blank in ("", "   ", "\t\n"):
             with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
                 DatasetSpec(**_valid_spec_kwargs(r2_bucket=blank))
 
     def test_task_name_blank_raises(self, patch_runtime_io: None) -> None:
-        """Task name blank raises."""
+        """Blank task_name is rejected — empty task names produce malformed run_ids."""
         with pytest.raises(ValidationError, match="task_name must not be blank"):
             DatasetSpec(**_valid_spec_kwargs(task_name="   "))
 
     def test_explicit_r2_prefix_missing_trailing_slash_raises(
         self, patch_runtime_io: None
     ) -> None:
-        """Explicit r2 prefix missing trailing slash raises."""
+        """Explicit r2_prefix must end with ``/`` — rclone treats the dest as a directory."""
         with pytest.raises(ValidationError, match="r2_prefix must end with"):
             DatasetSpec(**_valid_spec_kwargs(r2_prefix="data/no/slash"))
 
     def test_split_size_not_multiple_of_batch_per_shard_raises(
         self, patch_runtime_io: None
     ) -> None:
-        """Split size not multiple of batch per shard raises."""
+        """Every split size must be a multiple of batch_per_shard so shards aren't ragged."""
         with pytest.raises(ValidationError, match="not a multiple"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[150, 0, 0]))
 
     def test_negative_split_size_raises(self, patch_runtime_io: None) -> None:
-        """Negative split size raises."""
+        """Negative split sizes are rejected — they would produce ill-defined shard ranges."""
         with pytest.raises(ValidationError, match="must be non-negative"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[-100, 0, 0]))
 
     def test_zero_total_split_raises(self, patch_runtime_io: None) -> None:
-        """Zero total split raises."""
+        """All-zero splits are rejected — a spec must produce at least one shard."""
         with pytest.raises(ValidationError, match="must sum to a positive count"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[0, 0, 0]))
 
     def test_invalid_output_format_literal_raises(self, patch_runtime_io: None) -> None:
-        """Invalid output format literal raises."""
+        """output_format is restricted to the supported literals — typos fail at parse time."""
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
 
@@ -237,21 +237,21 @@ class TestDatasetSpecValidators:
 
 
 class TestDatasetSpecComputedFields:
-    """Behavioral tests for Test Dataset Spec Computed Fields."""
+    """Pin shards/num_params derivations so workers see the same plan the launcher built."""
 
     def test_shards_count_matches_total_size_div_batch(self, patch_runtime_io: None) -> None:
-        """Shards count matches total size div batch."""
+        """num_shards == sum(splits) / batch_per_shard, not derived from anything else."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         assert spec.num_shards == 6
         assert len(spec.shards) == 6
 
     def test_shard_seeds_are_base_plus_shard_id(self, patch_runtime_io: None) -> None:
-        """Shard seeds are base plus shard id."""
+        """Each shard's seed = base_seed + shard_id — deterministic across workers."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert [s.seed for s in spec.shards] == [42, 43, 44]
 
     def test_shard_filenames_zero_padded_six_digits(self, patch_runtime_io: None) -> None:
-        """Shard filenames zero padded six digits."""
+        """Shard filenames sort lexicographically — zero-pad to six digits or rclone reorders."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert spec.shards[0].filename == "shard-000000.h5"
         assert spec.shards[-1].filename == "shard-000002.h5"
@@ -260,12 +260,12 @@ class TestDatasetSpecComputedFields:
     def test_shard_filename_extension_matches_output_format(
         self, patch_runtime_io: None, output_format: str, ext: str
     ) -> None:
-        """Shard filename extension matches output format."""
+        """Shard extension is selected by output_format — the writer dispatches on it."""
         spec = DatasetSpec(**_valid_spec_kwargs(output_format=output_format))
         assert all(s.filename.endswith(ext) for s in spec.shards)
 
     def test_num_params_resolved_from_registry(self, patch_runtime_io: None) -> None:
-        """Num params resolved from registry."""
+        """num_params is resolved by name from the param-spec registry, not hardcoded."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         assert spec.num_params == len(param_specs["surge_simple"])
 
@@ -288,10 +288,10 @@ class TestDatasetSpecComputedFields:
 
 
 class TestDatasetSpecRoundTrip:
-    """Behavioral tests for Test Dataset Spec Round Trip."""
+    """Pin JSON round-trip: launcher-built spec is reproduced byte-for-byte on the worker."""
 
     def test_json_round_trip_preserves_runtime_fields(self, patch_runtime_io: None) -> None:
-        """Json round trip preserves runtime fields."""
+        """git_sha / created_at / run_id / r2_prefix survive a JSON round-trip unchanged."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         json_str = spec.model_dump_json()
         restored = DatasetSpec.model_validate_json(json_str)
@@ -303,14 +303,14 @@ class TestDatasetSpecRoundTrip:
         assert restored.r2_prefix == spec.r2_prefix
 
     def test_json_round_trip_preserves_shards(self, patch_runtime_io: None) -> None:
-        """Json round trip preserves shards."""
+        """Computed shard list and num_shards are stable across serialize → deserialize."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
         assert restored.shards == spec.shards
         assert restored.num_shards == spec.num_shards
 
     def test_json_round_trip_works_without_plugin_on_disk(self, patch_runtime_io: None) -> None:
-        """Json round trip works without plugin on disk."""
+        """plugin_path is opaque text, not a Path — round-trip succeeds when no file exists."""
         spec = DatasetSpec(**_valid_spec_kwargs(plugin_path="/nonexistent/path.vst3"))
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
         assert restored.render.plugin_path == "/nonexistent/path.vst3"
@@ -343,10 +343,10 @@ class TestDatasetSpecRoundTrip:
 
 
 class TestDatasetConfigIdFromPath:
-    """Behavioral tests for Test Dataset Config Id From Path."""
+    """dataset_config_id_from_path returns the stem, not the full path."""
 
     def test_extracts_stem(self) -> None:
-        """Extracts stem."""
+        """Strips parent dirs and the ``.yaml`` extension to yield the bare config id."""
         assert (
             dataset_config_id_from_path(Path("configs/experiment/surge-simple-480k-10k.yaml"))
             == "surge-simple-480k-10k"
