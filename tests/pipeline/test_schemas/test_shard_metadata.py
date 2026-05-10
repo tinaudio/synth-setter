@@ -100,8 +100,8 @@ class TestShardMetadata:
 class TestShardMetadataLeafModuleInvariant:
     """The leaf module must stay leaf — no project imports allowed — so the renderer in
     ``src/data/vst/generate_vst_dataset.py`` can import ``ShardMetadata`` without pulling in
-    ``pipeline.schemas.config`` and ``src.data.vst.param_specs`` (which would form an import cycle
-    with the renderer itself)."""
+    ``src.pipeline.schemas.spec`` and ``src.data.vst.param_specs`` (which would form an import
+    cycle with the renderer itself)."""
 
     def test_leaf_module_imports_no_project_modules(self) -> None:
         """The leaf module's source AST contains no ``pipeline.``/``src.``/``scripts.`` imports."""

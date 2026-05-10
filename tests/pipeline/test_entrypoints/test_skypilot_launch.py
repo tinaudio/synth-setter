@@ -1,4 +1,4 @@
-"""Tests for pipeline/entrypoints/skypilot_launch.py — SkyPilot launcher (RunPod / OCI / kind).
+"""Tests for src/pipeline/skypilot_launch.py — SkyPilot launcher (RunPod / OCI / kind).
 
 Mock-based: no real SkyPilot or RunPod calls. The `mock_sky` fixture replaces the launcher's
 module-level `sky` reference with a MagicMock, and `local_spec_dir` redirects the on-disk spec

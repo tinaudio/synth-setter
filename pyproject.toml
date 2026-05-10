@@ -77,7 +77,7 @@ ignore = ["E501", "S101"]
 "tests/scripts/test_r2_shard_report.py" = ["S603", "S607"]
 # ANN001: pytest fixture-injected args left un-annotated on legacy callsites.
 "tests/scripts/test_surge_xt_interactive.py" = ["ANN001"]
-"tests/pipeline/test_schemas/test_config.py" = ["ANN001"]
+"tests/pipeline/test_schemas/test_dataset_spec.py" = ["ANN001"]
 "tests/pipeline/test_schemas/test_prefix.py" = ["ANN001"]
 "tests/test_benchmarks.py" = ["ANN001"]
 "tests/test_configs.py" = ["ANN001"]

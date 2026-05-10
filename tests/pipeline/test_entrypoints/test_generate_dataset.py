@@ -1,4 +1,4 @@
-"""Tests for pipeline/entrypoints/generate_dataset.py — spec-driven run.
+"""Tests for src/generate_dataset.py — spec-driven run.
 
 The entrypoint's public surface is a single ``run(spec)`` function that:
   1. Serializes the spec to a tempfile.
