@@ -44,9 +44,10 @@ _CONFIGS_DIR = _REPO_ROOT / "configs"
 def compose_dataset_spec(experiment: str, *, overrides: list[str] | None = None) -> DatasetSpec:
     """Compose ``configs/dataset.yaml`` with ``experiment=<name>`` and any extra Hydra overrides.
 
-    Returns a fully-validated ``DatasetSpec``. Group sub-trees on the composed
-    config that aren't fields on ``DatasetSpec`` (e.g. ``data``, ``hydra``) are
-    filtered out via positive selection in ``_dataset_spec_from_cfg``.
+    Returns a fully-validated ``DatasetSpec``. Known Hydra group sub-trees
+    (e.g. ``data``, ``hydra``) are stripped in ``_dataset_spec_from_cfg``;
+    unknown top-level keys reach the spec's ``extra="forbid"`` boundary and
+    surface as ``ValidationError``.
 
     Hydra's ``GlobalHydra`` is a process-global singleton: any prior
     initialization is cleared on entry, and the singleton is cleared again
@@ -67,20 +68,28 @@ def compose_dataset_spec(experiment: str, *, overrides: list[str] | None = None)
             GlobalHydra.instance().clear()
 
 
+_HYDRA_GROUP_KEYS: frozenset[str] = frozenset({"data", "hydra"})
+
+
 def _dataset_spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     """Convert a composed Hydra config to a validated ``DatasetSpec``.
 
-    Selects only keys that match ``DatasetSpec.model_fields``; group sub-trees
-    like ``data`` and ``hydra`` are loaded by Hydra for composition's sake but
-    aren't fields on the spec, so they get filtered out. Adding a new Hydra
-    group does not silently break this path.
+    Strips only the known Hydra group sub-trees (``_HYDRA_GROUP_KEYS``) before
+    handing the rest to ``DatasetSpec``. This is the trust boundary between
+    Hydra composition and Pydantic: any unknown top-level key surfaces as a
+    ``ValidationError`` from ``DatasetSpec``'s ``extra="forbid"`` rather than
+    being silently dropped, so a typo in YAML cannot fail-open.
     """
     raw: object = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed Hydra config is not a mapping: {type(raw).__name__}")
-    spec_kwargs: dict[str, Any] = {
-        k: v for k, v in raw.items() if isinstance(k, str) and k in DatasetSpec.model_fields
-    }
+    spec_kwargs: dict[str, Any] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        if key in _HYDRA_GROUP_KEYS:
+            continue
+        spec_kwargs[key] = value
     return DatasetSpec(**spec_kwargs)
 
 
@@ -117,14 +126,7 @@ VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
 def _rclone_copy(src: str, dest: str) -> None:
     """Upload a file to R2 via rclone with checksum verification.
 
-    Connection-level timeouts and retries are rclone's job, not ours:
-      --contimeout=30s   bound the TCP connect phase
-      --timeout=300s     bound any single HTTP request (PUT, list, etc.)
-      --retries=3        retry the whole copy on transient failure
-      -vv                emit per-request debug log so a failure leaves
-                         actionable evidence in the worker stdout
-    A non-zero rclone exit raises CalledProcessError and the run fails — we
-    do not silently accept partial uploads behind a Python wall-clock.
+    Timeout/retry/verbosity flags are tuned per the hang investigation in #735.
     """
     args = [  # noqa: S607 — rclone resolved by the image's PATH
         "rclone",
@@ -222,17 +224,18 @@ def run(spec: DatasetSpec) -> None:
 
     r2_dest_prefix = f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
-    with tempfile.TemporaryDirectory() as work_dir_str:
-        work_dir = Path(work_dir_str)
-        # rclone copy preserves the source basename, and the local file is already
-        # named INPUT_SPEC_FILENAME — so the prefix-directory destination lands at
-        # `{prefix}{INPUT_SPEC_FILENAME}` without a double-name.
-        spec_path = work_dir / INPUT_SPEC_FILENAME
+    # rclone copy preserves the source basename, and the local file is already
+    # named INPUT_SPEC_FILENAME — so the prefix-directory destination lands at
+    # `{prefix}{INPUT_SPEC_FILENAME}` without a double-name.
+    with tempfile.TemporaryDirectory() as spec_dir_str:
+        spec_path = Path(spec_dir_str) / INPUT_SPEC_FILENAME
         spec_path.write_text(spec.model_dump_json(indent=2))
         logger.info(f"spec written: {spec_path}")
         _rclone_copy(str(spec_path), r2_dest_prefix)
         logger.info(f"spec uploaded -> {r2_dest_prefix}")
 
+    with tempfile.TemporaryDirectory() as work_dir_str:
+        work_dir = Path(work_dir_str)
         for shard_id in my_range:
             _render_and_upload_shard(spec, spec.shards[shard_id], work_dir, r2_dest_prefix)
 

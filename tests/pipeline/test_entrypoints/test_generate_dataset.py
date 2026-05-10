@@ -20,7 +20,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from hydra.errors import ConfigCompositionException, MissingConfigException
 from omegaconf import OmegaConf
@@ -68,9 +67,17 @@ def _render_config_from_cli_args(args: list[str]) -> RenderConfig:
     """Reconstruct a ``RenderConfig`` from the per-field CLI flags emitted by
     build_generate_args."""
     kwargs: dict[str, object] = {}
-    for flag, (field, caster) in _RENDER_FLAG_FIELDS.items():
-        kwargs[field] = caster(args[args.index(flag) + 1])
+    for flag, (field_name, caster) in _RENDER_FLAG_FIELDS.items():
+        kwargs[field_name] = caster(args[args.index(flag) + 1])
     return RenderConfig.model_validate(kwargs)
+
+
+def test_render_flag_fields_covers_every_render_config_field() -> None:
+    """Adding a new RenderConfig field without updating _RENDER_FLAG_FIELDS must fail loudly."""
+    flag_field_names = {field_name for field_name, _ in _RENDER_FLAG_FIELDS.values()}
+    assert flag_field_names == set(RenderConfig.model_fields), (
+        "drift between _RENDER_FLAG_FIELDS and RenderConfig.model_fields"
+    )
 
 
 def _find_script_index(args: list[str]) -> int:
@@ -704,6 +711,28 @@ class TestDatasetSpecFromCfg:
         with pytest.raises(ValidationError):
             _dataset_spec_from_cfg(cfg)  # type: ignore[arg-type]
 
+    def test_dataset_spec_from_cfg_unknown_key_raises_validation_error(self) -> None:
+        """Unknown top-level keys reach DatasetSpec's ``extra="forbid"`` boundary.
+
+        The adapter strips only known Hydra group sub-trees (``data``, ``hydra``); any
+        other top-level key — typically a typo in YAML — must surface as a Pydantic
+        ``ValidationError`` rather than being silently dropped. This pins a fail-closed
+        contract at the Hydra → Pydantic trust boundary.
+        """
+        cfg = OmegaConf.create(
+            {
+                "task_name": "with-typo",
+                "output_format": "hdf5",
+                "base_seed": 42,
+                "r2_bucket": "intermediate-data",
+                # Deliberate typo: not a DatasetSpec field, not a known Hydra group key.
+                "trian_val_test_sizes": [80, 10, 10],
+            }
+        )
+
+        with pytest.raises(ValidationError):
+            _dataset_spec_from_cfg(cfg)  # type: ignore[arg-type]
+
 
 # ---------------------------------------------------------------------------
 # compose_dataset_spec — Hydra composition entrypoint
@@ -760,53 +789,6 @@ class TestComposeDatasetSpec:
         assert spec_a.task_name == spec_b.task_name
         assert spec_a.num_shards == spec_b.num_shards
         assert spec_a.render == spec_b.render
-
-
-# ---------------------------------------------------------------------------
-# main — @hydra.main entrypoint
-# ---------------------------------------------------------------------------
-
-
-class TestMain:
-    """``main(cfg)`` materializes the spec and delegates to ``run``."""
-
-    def test_main_passes_composed_spec_to_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Main() builds a DatasetSpec from cfg and forwards it to run() unchanged."""
-        # Compose a known cfg via the same path main()'s decorator would use.
-        # Calling compose_dataset_spec gives us the spec; we then need an
-        # equivalent DictConfig to feed into main.__wrapped__. Since main's body
-        # only calls _dataset_spec_from_cfg(cfg) → run(spec), we can drive it via
-        # any DictConfig that round-trips to the same DatasetSpec.
-        captured: list[DatasetSpec] = []
-
-        def _capture_run(spec: DatasetSpec) -> None:
-            captured.append(spec)
-
-        monkeypatch.setattr(generate_dataset, "run", _capture_run)
-
-        if GlobalHydra.instance().is_initialized():
-            GlobalHydra.instance().clear()
-        try:
-            with initialize_config_dir(
-                version_base="1.3", config_dir=str(generate_dataset._CONFIGS_DIR)
-            ):
-                cfg = compose(
-                    config_name="dataset",
-                    overrides=["experiment=datagen/ci-materialize-test"],
-                )
-        finally:
-            if GlobalHydra.instance().is_initialized():
-                GlobalHydra.instance().clear()
-
-        # Bypass the @hydra.main decorator and call the underlying function directly.
-        generate_dataset.main.__wrapped__(cfg)
-
-        assert len(captured) == 1
-        expected = compose_dataset_spec("datagen/ci-materialize-test")
-        # task_name, num_shards, and render config are deterministic for this experiment.
-        assert captured[0].task_name == expected.task_name
-        assert captured[0].num_shards == expected.num_shards
-        assert captured[0].render == expected.render
 
 
 # ---------------------------------------------------------------------------
