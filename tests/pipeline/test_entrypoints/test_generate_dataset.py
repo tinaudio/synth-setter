@@ -20,14 +20,21 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from hydra import compose, initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
+from hydra.errors import ConfigCompositionException, MissingConfigException
+from omegaconf import OmegaConf
 
+from src import generate_dataset
 from src.generate_dataset import (
     VST_HEADLESS_WRAPPER,
+    _dataset_spec_from_cfg,
     build_generate_args,
+    compose_dataset_spec,
     run,
 )
 from src.pipeline.constants import INPUT_SPEC_FILENAME
-from src.pipeline.schemas.spec import DatasetSpec
+from src.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version
@@ -181,7 +188,7 @@ class TestRun:
         mock_check_call: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """subprocess.check_call invokes generate_vst_dataset.py with spec-derived args."""
+        """The --render-cfg-json arg round-trips back to a RenderConfig equal to spec.render."""
         mock_check_call.side_effect = _materialize_shard
         run(spec)
 
@@ -192,7 +199,10 @@ class TestRun:
         assert any("generate_vst_dataset.py" in a for a in args)
         render_cfg_idx = args.index("--render-cfg-json")
         rendered_json = args[render_cfg_idx + 1]
-        assert str(spec.render.batch_per_shard) in rendered_json
+        # Full round-trip — every render field, not just batch_per_shard, has to survive
+        # the JSON serialization handed to the subprocess.
+        restored = RenderConfig.model_validate_json(rendered_json)
+        assert restored == spec.render
 
     @patch("src.generate_dataset.subprocess.check_call")
     @patch("src.generate_dataset._rclone_copy")
@@ -612,8 +622,6 @@ class TestBuildGenerateArgs:
         render_cfg_idx = args.index("--render-cfg-json")
         rendered_json = args[render_cfg_idx + 1]
         # Deserialization must produce a RenderConfig equal to spec.render.
-        from src.pipeline.schemas.spec import RenderConfig
-
         restored = RenderConfig.model_validate_json(rendered_json)
         assert restored == spec.render
 
@@ -650,10 +658,6 @@ class TestDatasetSpecFromCfg:
 
     def test_dataset_spec_from_cfg_non_mapping_raises_type_error(self) -> None:
         """A composed config that resolves to a list (not a dict) raises TypeError loudly."""
-        from omegaconf import OmegaConf
-
-        from src.generate_dataset import _dataset_spec_from_cfg
-
         list_cfg = OmegaConf.create([1, 2, 3])
 
         with pytest.raises(TypeError, match="composed Hydra config is not a mapping"):
@@ -670,8 +674,6 @@ class TestComposeDatasetSpec:
 
     def test_composes_known_experiment(self) -> None:
         """``datagen/ci-materialize-test`` composes to a 3-shard hdf5 spec."""
-        from src.generate_dataset import compose_dataset_spec
-
         spec = compose_dataset_spec("datagen/ci-materialize-test")
         assert spec.task_name == "ci-materialize-test"
         assert spec.output_format == "hdf5"
@@ -679,8 +681,6 @@ class TestComposeDatasetSpec:
 
     def test_overrides_apply(self) -> None:
         """Hydra-style overrides modify nested fields on the composed spec."""
-        from src.generate_dataset import compose_dataset_spec
-
         spec = compose_dataset_spec(
             "datagen/ci-materialize-test", overrides=["render.sample_rate=22050"]
         )
@@ -688,19 +688,11 @@ class TestComposeDatasetSpec:
 
     def test_unknown_experiment_raises_missing_config(self) -> None:
         """A typo'd experiment name surfaces as Hydra's MissingConfigException, not a KeyError."""
-        from hydra.errors import MissingConfigException
-
-        from src.generate_dataset import compose_dataset_spec
-
         with pytest.raises(MissingConfigException):
             compose_dataset_spec("datagen/does-not-exist")
 
     def test_invalid_override_field_raises_composition_error(self) -> None:
         """Overrides targeting a non-existent field raise ConfigCompositionException."""
-        from hydra.errors import ConfigCompositionException
-
-        from src.generate_dataset import compose_dataset_spec
-
         with pytest.raises(ConfigCompositionException):
             compose_dataset_spec(
                 "datagen/ci-materialize-test",
@@ -714,11 +706,6 @@ class TestComposeDatasetSpec:
         exit; ``compose_dataset_spec`` adds a try/finally outside the context manager
         to defend against an exception thrown before the manager runs.
         """
-        from hydra.core.global_hydra import GlobalHydra
-        from hydra.errors import MissingConfigException
-
-        from src.generate_dataset import compose_dataset_spec
-
         with pytest.raises(MissingConfigException):
             compose_dataset_spec("datagen/does-not-exist")
 
@@ -726,8 +713,6 @@ class TestComposeDatasetSpec:
 
     def test_consecutive_composes_are_idempotent(self) -> None:
         """Calling compose twice produces equivalent specs — GlobalHydra reset works."""
-        from src.generate_dataset import compose_dataset_spec
-
         spec_a = compose_dataset_spec("datagen/ci-materialize-test")
         spec_b = compose_dataset_spec("datagen/ci-materialize-test")
 
@@ -751,15 +736,9 @@ class TestMain:
         # equivalent DictConfig to feed into main.__wrapped__. Since main's body
         # only calls _dataset_spec_from_cfg(cfg) → run(spec), we can drive it via
         # any DictConfig that round-trips to the same DatasetSpec.
-        from hydra import compose, initialize_config_dir
-        from hydra.core.global_hydra import GlobalHydra
+        captured: list[DatasetSpec] = []
 
-        from src import generate_dataset
-        from src.generate_dataset import compose_dataset_spec
-
-        captured: list[generate_dataset.DatasetSpec] = []
-
-        def _capture_run(spec: generate_dataset.DatasetSpec) -> None:
+        def _capture_run(spec: DatasetSpec) -> None:
             captured.append(spec)
 
         monkeypatch.setattr(generate_dataset, "run", _capture_run)

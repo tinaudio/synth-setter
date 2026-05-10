@@ -28,8 +28,18 @@ from src.data.vst.generate_vst_dataset import make_hdf5_dataset, make_wds_datase
 from src.data.vst.param_spec import ParamSpec
 
 
-def _render_cfg(num_samples: int, **overrides: object) -> RenderConfig:
-    """Build a RenderConfig matching the test-suite defaults; ``num_samples`` → batch_per_shard."""
+def _render_cfg(
+    batch_per_shard: int,
+    *,
+    sample_batch_size: int | None = None,
+    **overrides: object,
+) -> RenderConfig:
+    """Build a RenderConfig matching the test-suite defaults.
+
+    ``batch_per_shard`` sizes the shard. ``sample_batch_size`` defaults to the
+    same value (the common case in this suite) but can be overridden when a
+    test exercises the multi-batch loop.
+    """
     base: dict[str, object] = {
         "plugin_path": _PLUGIN_PATH,
         "preset_path": _PRESET_PATH,
@@ -40,8 +50,8 @@ def _render_cfg(num_samples: int, **overrides: object) -> RenderConfig:
         "velocity": _VELOCITY,
         "signal_duration_seconds": _DURATION,
         "min_loudness": _MIN_LOUDNESS,
-        "sample_batch_size": num_samples,
-        "batch_per_shard": num_samples,
+        "sample_batch_size": batch_per_shard if sample_batch_size is None else sample_batch_size,
+        "batch_per_shard": batch_per_shard,
     }
     base.update(overrides)
     return RenderConfig(**base)  # type: ignore[arg-type]
