@@ -441,3 +441,35 @@ class TestSpecConstructionStaysPedalboardFree:
             f"pedalboard leaked into spec serialization:\n"
             f"stdout={result.stdout}\nstderr={result.stderr}"
         )
+
+    def test_bare_spec_import_does_not_pull_data_vst_core(self) -> None:
+        """`import src.pipeline.schemas.spec` alone must not transitively load
+        ``src.data.vst.core``.
+
+        spec.py's two lazy imports (``_param_spec_name_must_be_registered``,
+        ``num_params``) point at ``src.data.vst.param_spec_registry``, NOT
+        ``src.data.vst`` (whose package ``__init__`` previously pulled
+        ``src.data.vst.core`` via re-exports). If either lazy import is
+        re-promoted to module level — or repointed at ``src.data.vst`` — this
+        test fails immediately, preserving the launcher's interpreter-only
+        contract documented in ``DatasetSpec``'s docstring.
+        """
+        script = (
+            "import sys\n"
+            "import src.pipeline.schemas.spec  # noqa: F401\n"
+            "for name in ('src.data.vst.core', 'src.data.vst', 'pedalboard'):\n"
+            "    assert name not in sys.modules, (\n"
+            "        f'{name!r} leaked into spec module import; '\n"
+            "        f'this breaks the launcher-pure invariant'\n"
+            "    )\n"
+        )
+        result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"bare spec import is no longer launcher-pure:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
