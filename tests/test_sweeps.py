@@ -19,6 +19,12 @@ overrides = [
     "~callbacks.lr_monitor",
 ]
 
+# DDP-sim forks the dataloader; the default ksin dataset is large enough that the
+# shared-memory transfer trips `RuntimeError: unable to resize file ... Invalid argument`
+# in torch.multiprocessing. Shrink the dataset and disable worker multiprocessing
+# to dodge that failure mode.
+DDP_SIM_DATA_OVERRIDES = ["data.train_val_test_sizes=[100,100,100]", "data.num_workers=0"]
+
 
 @pytest.mark.gpu
 @RunIf(min_gpus=1)
@@ -47,10 +53,6 @@ def test_hydra_sweep_ddp_sim(tmp_path: Path) -> None:
 
     :param tmp_path: The temporary logging path.
     """
-    # Shrink the default ksin dataset (409M train samples) and disable worker
-    # multiprocessing — DDP-sim forks the dataloader, and the large shared-memory
-    # transfer trips `RuntimeError: unable to resize file ... Invalid argument`
-    # in torch.multiprocessing on this size.
     command = [
         startfile,
         "-m",
@@ -60,8 +62,7 @@ def test_hydra_sweep_ddp_sim(tmp_path: Path) -> None:
         "+trainer.limit_train_batches=1",
         "+trainer.limit_val_batches=1",
         "+trainer.limit_test_batches=1",
-        "data.train_val_test_sizes=[100,100,100]",
-        "data.num_workers=0",
+        *DDP_SIM_DATA_OVERRIDES,
         "model.optimizer.lr=0.005,0.01,0.02",
     ] + overrides
     run_sh_command(command)

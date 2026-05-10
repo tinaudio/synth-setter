@@ -28,6 +28,10 @@ _SURGE_SIGNAL_DURATION_SECONDS = 4.0
 _SURGE_AUDIO_CHANNELS = 2
 _SURGE_AUDIO_SAMPLES_PER_CLIP = int(_SURGE_SAMPLE_RATE * _SURGE_SIGNAL_DURATION_SECONDS)
 _SURGE_MEL_SHAPE = (2, 128, 401)
+_SURGE_PLUGIN_PATH = "plugins/Surge XT.vst3"
+# Must match the plugin version pinned in the worker image — a mismatch here would
+# silently render against a different Surge XT build than production workers use.
+_SURGE_RENDERER_VERSION = "1.3.4"
 # ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
 # silent renders that would later poison metric computation.
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
@@ -406,13 +410,13 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         "src/data/vst/generate_vst_dataset.py",
         str(smoke_dataset_dir / "train.h5"),
         "--plugin-path",
-        "plugins/Surge XT.vst3",
+        _SURGE_PLUGIN_PATH,
         "--preset-path",
         preset_paths[param_spec_name],
         "--param-spec-name",
         param_spec_name,
         "--renderer-version",
-        "1.3.4",
+        _SURGE_RENDERER_VERSION,
         "--sample-rate",
         str(_SURGE_SAMPLE_RATE),
         "--channels",

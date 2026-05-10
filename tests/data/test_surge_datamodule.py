@@ -27,3 +27,12 @@ def test_init_accepts_extra_datagen_kwargs(tmp_path: Path) -> None:
     )
 
     assert module.dataset_root == tmp_path
+    # Positive assertion that the datagen-only kwargs were SWALLOWED (dropped),
+    # not silently stored on the instance — a future signature tightening that
+    # turns the catch-all into stored attributes would fail here.
+    assert "train_val_test_sizes" not in module.__dict__
+    assert "train_val_test_seeds" not in module.__dict__
+    assert "base_seed" not in module.__dict__
+    assert not hasattr(module, "train_val_test_sizes")
+    assert not hasattr(module, "train_val_test_seeds")
+    assert not hasattr(module, "base_seed")
