@@ -36,9 +36,9 @@ class ShardMetadata(BaseModel):
     def _ranges_must_be_sane(self) -> ShardMetadata:
         """Reject metadata.json sidecars whose values are strict-typed but semantically broken.
 
-        DatasetConfig validates these on the upstream side; mirroring the same checks here closes
-        the trust boundary on read so an externally-produced metadata.json can't ship with negative
-        sample_rate or out-of-range velocity.
+        ``DatasetSpec`` / ``RenderConfig`` validate these on the upstream side; mirroring the same
+        checks here closes the trust boundary on read so an externally-produced metadata.json can't
+        ship with negative sample_rate or out-of-range velocity.
         """
         if not (0 <= self.velocity <= 127):
             raise ValueError(f"velocity must be in [0, 127], got {self.velocity}")

@@ -1421,8 +1421,8 @@ src/
       image_config.py   # Docker image configuration
 
     ci/                 # CI validation scripts (implemented)
-      validate_spec.py  # Spec structural validation (required fields, code_version SHA, etc.)
-      validate_shard.py # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
+      validate_spec.py  # Spec structural validation (required fields, git_sha format, etc.)
+      validate_shard.py # Shard validation (HDF5 .h5 or wds .tar, expected arrays, row count); iterates spec.shards via R2
 
     constants.py        # Well-known filenames and paths (R2_BUCKET, etc.)
     r2_io.py            # rclone wrappers used by ci/, the entrypoint, and CI workflows

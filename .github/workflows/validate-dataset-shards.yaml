@@ -9,7 +9,8 @@ name: Validate Dataset Shards
 # Two jobs:
 #   * validate-spec   — structural checks on the spec (src.pipeline.ci.validate_spec).
 #   * validate-shard  — iterates spec.shards and validates each downloaded
-#                       HDF5 (src.pipeline.ci.validate_shard).
+#                       shard (HDF5 .h5 or wds .tar, dispatched on suffix by
+#                       src.pipeline.ci.validate_shard).
 #
 # Required secrets (callers should `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
