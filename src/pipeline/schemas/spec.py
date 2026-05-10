@@ -27,7 +27,6 @@ from pydantic import (
     model_validator,
 )
 
-from src.data.vst import param_specs
 from src.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
@@ -79,6 +78,7 @@ def _is_repo_dirty() -> bool:
 
 
 def _utc_now() -> datetime:
+    """Return ``datetime.now`` in UTC; isolated for test monkeypatching."""
     return datetime.now(timezone.utc)
 
 
@@ -97,8 +97,11 @@ class RenderConfig(BaseModel):
 
     Carries every parameter the per-shard writer needs to produce audio +
     parameter arrays for its assigned shard. ``param_spec_name`` is resolved
-    against the in-process registry inside the writer (not at the launcher),
-    so launcher-side construction stays interpreter-only.
+    against the in-process registry inside the writer; the registry is also
+    consulted at construction (lazily) for an early validity check, so a typo
+    surfaces as a ``ValidationError`` rather than a ``KeyError`` during JSON
+    serialization. The lazy import keeps ``import spec`` itself
+    interpreter-only — pedalboard is not pulled at module load.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid")
@@ -124,6 +127,8 @@ class RenderConfig(BaseModel):
         inside ``DatasetSpec.num_params`` (e.g., during ``model_dump_json``),
         producing a stack trace instead of a clean validation message.
         """
+        from src.data.vst import param_specs
+
         if value not in param_specs:
             valid = sorted(param_specs.keys())
             raise ValueError(f"param_spec_name {value!r} not in registry; valid: {valid}")
@@ -131,6 +136,7 @@ class RenderConfig(BaseModel):
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
+        """Reject out-of-range numeric fields and a blank renderer_version."""
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be positive")
         if self.channels < 1:
@@ -260,6 +266,7 @@ class DatasetSpec(BaseModel):
     @field_validator("task_name")
     @classmethod
     def _task_name_must_not_be_blank(cls, value: str) -> str:
+        """Reject a blank ``task_name`` so derived run_id / r2_prefix stay well-formed."""
         if not value.strip():
             raise ValueError("task_name must not be blank")
         return value
@@ -317,11 +324,19 @@ class DatasetSpec(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def num_shards(self) -> int:
+        """Total shards across all splits (derived from ``self.shards``)."""
         return len(self.shards)
 
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def num_params(self) -> int:
+        """Encoded parameter count for ``render.param_spec_name``.
+
+        ``param_specs`` is imported lazily so that loading ``spec`` itself
+        does not transitively pull ``pedalboard`` into the launcher.
+        """
+        from src.data.vst import param_specs
+
         return len(param_specs[self.render.param_spec_name])
 
 
