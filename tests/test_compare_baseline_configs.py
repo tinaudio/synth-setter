@@ -313,6 +313,9 @@ ACCEPTED_DIFFS: tuple[str, ...] = (
     "data.dataset_root",
     "data.predict_file",
     "data.stats_file",
+    # Added to `configs/data/surge*.yaml` by the new Hydra dataset tree (#882) — datagen-only,
+    # silently ignored by SurgeDataModule.__init__ (which reads pre-rendered shards).
+    "data.train_val_test_sizes",
 )
 
 
