@@ -19,12 +19,14 @@ from src.data.vst import param_specs, preset_paths
 from src.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
-# Defaults baked into `src/data/vst/generate_vst_dataset.py` (channels=2,
-# sample_rate=44100, signal_duration_seconds=4.0, mel shape (2, 128, 401)).
-# The fixture invokes the script with these defaults, so the generated H5
-# file must match.
-_SURGE_AUDIO_SAMPLES_PER_CLIP = int(44100 * 4.0)
+# Render parameters the smoke fixture pins explicitly when invoking
+# `generate_vst_dataset.py` (see `surge_xt_smoke_datasets`); the validator below
+# checks against these same values so any drift between fixture flags and
+# validation surfaces here, not as an opaque shape mismatch later.
+_SURGE_SAMPLE_RATE = 44100
+_SURGE_SIGNAL_DURATION_SECONDS = 4.0
 _SURGE_AUDIO_CHANNELS = 2
+_SURGE_AUDIO_SAMPLES_PER_CLIP = int(_SURGE_SAMPLE_RATE * _SURGE_SIGNAL_DURATION_SECONDS)
 _SURGE_MEL_SHAPE = (2, 128, 401)
 # ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
 # silent renders that would later poison metric computation.
@@ -381,8 +383,8 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.
     :param param_spec_name: Param spec name (key into :data:`src.data.vst.param_specs`
-        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param_spec``
-        and ``--preset_path`` for ``generate_vst_dataset``.
+        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param-spec-name``
+        and ``--preset-path`` for ``generate_vst_dataset``.
 
     :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
         dataset.
@@ -395,13 +397,30 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     if sys.platform == "linux":
         generate_dataset_args.append(VST_HEADLESS_WRAPPER)
 
+    # Pin every render-config field the validator below depends on; the CLI's
+    # own defaults differ (e.g. sample-rate=16000) and would silently produce
+    # a shard with the wrong shape. ``--batch-per-shard`` doubles as the
+    # per-shard sample count under the new per-field CLI (see #885).
     generate_dataset_args += [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
         str(smoke_dataset_dir / "train.h5"),
+        "--plugin-path",
+        "plugins/Surge XT.vst3",
+        "--preset-path",
+        preset_paths[param_spec_name],
+        "--param-spec-name",
+        param_spec_name,
+        "--renderer-version",
+        "1.3.4",
+        "--sample-rate",
+        str(_SURGE_SAMPLE_RATE),
+        "--channels",
+        str(_SURGE_AUDIO_CHANNELS),
+        "--signal-duration-seconds",
+        str(_SURGE_SIGNAL_DURATION_SECONDS),
+        "--batch-per-shard",
         str(NUM_FIXTURE_SAMPLES),
-        f"--preset_path={preset_paths[param_spec_name]}",
-        f"--param_spec={param_spec_name}",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
