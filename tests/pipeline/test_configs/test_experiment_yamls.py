@@ -1,9 +1,11 @@
 """Round-trip every datagen experiment YAML through DatasetSpec validation.
 
-Each experiment under ``configs/experiment/*.yaml`` (excluding the train-side
-nested experiments under ``kosc/``, ``ksin/``, etc.) composes via the
-production ``compose_dataset_spec`` helper, must validate as ``DatasetSpec``,
-and must JSON-round-trip without drift.
+Each experiment under ``configs/experiment/datagen/*.yaml`` (enumerated in
+``DATASET_EXPERIMENTS`` below — train-side experiment YAMLs at the top of
+``configs/experiment/`` and under ``kosc/``, ``ksin/``, etc. are out of scope
+here and tested separately) composes via the production
+``compose_dataset_spec`` helper, must validate as ``DatasetSpec``, and must
+JSON-round-trip without drift.
 """
 
 from __future__ import annotations
