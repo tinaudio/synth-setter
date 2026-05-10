@@ -27,12 +27,33 @@ import h5py
 import numpy as np
 from pydantic import ValidationError
 
-from src.data.vst.generate_vst_dataset import DATASET_FIELD_NAMES
+from src.data.vst.generate_vst_dataset import (
+    DATASET_FIELD_NAMES,
+    audio_dataset_shape,
+    mel_dataset_shape,
+    param_array_dataset_shape,
+)
 from src.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from src.pipeline.schemas.shard_metadata import ShardMetadata
 from src.pipeline.schemas.spec import EXTENSION_TO_OUTPUT_FORMAT, DatasetSpec
 
 _TAR_METADATA_MEMBER = "metadata.json"
+
+
+def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
+    """Full per-field shapes (N + inner) the writer emits for ``spec``.
+
+    Drives both HDF5 ``dataset.shape`` and tar ``arr.shape[1:]`` checks.
+    Keys match ``DATASET_FIELD_NAMES``; values come from the writer's own
+    shape helpers in ``src.data.vst.generate_vst_dataset``.
+    """
+    r = spec.render
+    n = r.batch_per_shard
+    return {
+        "audio": audio_dataset_shape(n, r.channels, r.sample_rate, r.signal_duration_seconds),
+        "mel_spec": mel_dataset_shape(n, r.channels, r.sample_rate, r.signal_duration_seconds),
+        "param_array": param_array_dataset_shape(n, spec.num_params),
+    }
 
 
 def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
@@ -62,24 +83,23 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 
 
 def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
-    """Validate an HDF5 shard's datasets and row counts."""
+    """Validate an HDF5 shard's datasets, row counts, and inner shapes."""
     try:
         f = h5py.File(shard_path, "r")
     except OSError:
         return [f"file is not valid HDF5: {shard_path}"]
 
+    expected_shapes = _expected_dataset_shapes(spec)
     errors: list[str] = []
     with f:
         for name in DATASET_FIELD_NAMES:
             if name not in f:
                 errors.append(f"missing dataset: {name!r}")
                 continue
-
-            row_count = cast(h5py.Dataset, f[name]).shape[0]
-            if row_count != spec.render.batch_per_shard:
-                errors.append(
-                    f"dataset {name!r} has {row_count} rows, expected {spec.render.batch_per_shard}"
-                )
+            actual = cast(h5py.Dataset, f[name]).shape
+            expected = expected_shapes[name]
+            if actual != expected:
+                errors.append(f"dataset {name!r} has shape {actual}, expected {expected}")
 
     return errors
 
@@ -102,7 +122,8 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 
     Tar member layout: per-batch-keyed ``<batch_key>.<field>.npy`` plus a single
     ``metadata.json``. The summed row count across all batches per field must
-    equal ``spec.render.batch_per_shard``; ``metadata.json`` must parse as a strict
+    equal ``spec.render.batch_per_shard``; each batch's inner shape must match
+    the writer's emission contract; ``metadata.json`` must parse as a strict
     ``ShardMetadata``.
     """
     try:
@@ -110,6 +131,8 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     except tarfile.TarError:
         return [f"file is not a valid uncompressed tar archive: {shard_path}"]
 
+    expected_shapes = _expected_dataset_shapes(spec)
+    expected_inner = {field: shape[1:] for field, shape in expected_shapes.items()}
     errors: list[str] = []
     with tar:
         members = sorted(m.name for m in tar.getmembers())
@@ -139,6 +162,11 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
                 continue
             rows_by_field[field] += arr.shape[0]
             seen_by_field[field] += 1
+            if arr.shape[1:] != expected_inner[field]:
+                errors.append(
+                    f"{name}: inner shape {arr.shape[1:]} does not match "
+                    f"expected {expected_inner[field]}"
+                )
 
         for field in DATASET_FIELD_NAMES:
             if seen_by_field[field] == 0:

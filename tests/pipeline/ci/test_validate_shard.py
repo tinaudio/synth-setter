@@ -207,6 +207,66 @@ class TestValidateShard:
 
         assert any("unsupported shard suffix" in e and ".h5" in e and ".tar" in e for e in errors)
 
+    def test_h5_mel_inner_shape_mismatch_returns_error(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """HDF5 mel_spec with wrong n_mels surfaces an inner-shape mismatch error."""
+        shard_path = tmp_path / "shard-000000.h5"
+        shard_size = real_spec.render.batch_per_shard
+        _create_shard(
+            shard_path,
+            shard_size=shard_size,
+            datasets={
+                "audio": (shard_size, 2, 64000),
+                "mel_spec": (shard_size, 2, 64, 401),  # n_mels 64 vs expected 128
+                "param_array": (shard_size, 92),
+            },
+        )
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("mel_spec" in e and "shape" in e and "64" in e for e in errors)
+
+    def test_h5_audio_inner_shape_mismatch_returns_error(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """HDF5 audio with wrong time-axis length surfaces an inner-shape mismatch error."""
+        shard_path = tmp_path / "shard-000000.h5"
+        shard_size = real_spec.render.batch_per_shard
+        _create_shard(
+            shard_path,
+            shard_size=shard_size,
+            datasets={
+                "audio": (shard_size, 2, 32000),  # half the expected duration
+                "mel_spec": (shard_size, 2, 128, 401),
+                "param_array": (shard_size, 92),
+            },
+        )
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("audio" in e and "shape" in e and "32000" in e for e in errors)
+
+    def test_tar_mel_inner_shape_mismatch_returns_error(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """Wds tar with mel_spec wrong n_mels surfaces an inner-shape mismatch error."""
+        shard_path = tmp_path / "shard-000000.tar"
+        shard_size = real_spec.render.batch_per_shard
+        _create_tar_shard(
+            shard_path,
+            shard_size=shard_size,
+            arrays={
+                "audio": (shard_size, 2, 64000),
+                "mel_spec": (shard_size, 2, 64, 401),  # n_mels 64 vs expected 128
+                "param_array": (shard_size, 92),
+            },
+        )
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("mel_spec" in e and "inner shape" in e for e in errors)
+
     def test_extra_datasets_ignored(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Extra datasets in HDF5 beyond the required three do not cause errors."""
         shard_path = tmp_path / "shard-000000.h5"
