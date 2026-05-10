@@ -1017,6 +1017,25 @@ def test_make_hdf5_dataset_raises_when_fixed_params_list_is_too_short(
         )
 
 
+def test_make_wds_dataset_raises_when_fixed_params_list_is_too_short(
+    tmp_path: Path,
+) -> None:
+    """make_wds_dataset rejects fixed_*_params_list shorter than num_samples.
+
+    The wds writer is non-resumable, so its ``start_idx`` is fixed at 0 and the check
+    expects ``len(fixed_*) >= num_samples``. Pinning this contract surfaces drift if a
+    future resumable wds path threads a non-zero ``start_idx`` without updating the
+    length check — that path would silently skip the first ``start_idx`` rows.
+    """
+    out = tmp_path / "should_not_write.tar"
+    with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
+        make_wds_dataset(
+            wds_file=out,
+            render_cfg=_render_cfg(3),
+            fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS],
+        )
+
+
 # Unit tests for the loudness-loop retry/raise semantics. Mocking
 # ``render_params`` and ``param_spec.sample`` keeps these CPU-only and fast —
 # no VST plugin, no real audio rendering. They guard the asymmetric guard in

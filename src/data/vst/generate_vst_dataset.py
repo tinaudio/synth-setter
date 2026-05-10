@@ -498,9 +498,14 @@ def make_wds_dataset(
     param_spec = param_specs[render_cfg.param_spec_name]
     num_samples = render_cfg.batch_per_shard
     meta = _shard_metadata_from_render(render_cfg)
+    # Single named source of truth: if the wds writer ever becomes resumable
+    # (TODO above), thread the resume offset through this local so the
+    # fixed-params length check, batch start, and sample index all stay in
+    # sync. Splitting them again risks silently skipping rows.
+    start_idx = 0
     _validate_fixed_params_lengths(
         num_samples=num_samples,
-        start_idx=0,
+        start_idx=start_idx,
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,
     )
@@ -509,13 +514,13 @@ def make_wds_dataset(
         wds.TarWriter(str(wds_file)),  # pyright: ignore[reportAttributeAccessIssue]
     ) as sink:
         sample_batch: list[VSTDataSample] = []
-        sample_batch_start = 0
-        for i in trange(num_samples):
+        sample_batch_start = start_idx
+        for i in trange(start_idx, num_samples):
             logger.info(f"Making sample {i}")
             sample_batch.append(
                 _generate_sample_for_index(
                     i,
-                    0,
+                    start_idx,
                     plugin_path=render_cfg.plugin_path,
                     preset_path=render_cfg.preset_path,
                     velocity=render_cfg.velocity,
