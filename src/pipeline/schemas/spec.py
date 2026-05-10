@@ -52,6 +52,13 @@ __all__ = [
 # constant.
 OUTPUT_FORMAT_TO_EXTENSION: Mapping[str, str] = MappingProxyType({"hdf5": ".h5", "wds": ".tar"})
 
+# Reverse lookup, derived from the forward map so adding a row above
+# auto-extends the dispatcher in ``src/pipeline/ci/validate_shard.py`` and
+# the click CLI in ``src/data/vst/generate_vst_dataset.py``.
+EXTENSION_TO_OUTPUT_FORMAT: Mapping[str, str] = MappingProxyType(
+    {ext: fmt for fmt, ext in OUTPUT_FORMAT_TO_EXTENSION.items()}
+)
+
 
 # Pin git invocations to the repo root so spec construction works regardless
 # of the caller's CWD (workers, ad-hoc scripts, IDEs, …). spec.py lives at

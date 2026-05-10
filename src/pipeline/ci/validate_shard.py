@@ -3,8 +3,10 @@
 
 Performs full per-shard validation: each shard file is a valid HDF5 (.h5) or
 tar (.tar) shard, contains every expected per-row array, and each row count
-matches ``spec.render.batch_per_shard``. The expected array names are listed in
-``_EXPECTED_H5_DATASETS`` / ``_TAR_ARRAY_FIELDS``.
+matches ``spec.render.batch_per_shard``. The expected array names come from
+``src.data.vst.generate_vst_dataset.DATASET_FIELD_NAMES`` — the writer's
+own emission contract — so adding a new persisted field at the writer
+auto-extends validation here.
 
 CLI usage:
     python3 -m src.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
@@ -25,35 +27,38 @@ import h5py
 import numpy as np
 from pydantic import ValidationError
 
+from src.data.vst.generate_vst_dataset import DATASET_FIELD_NAMES
 from src.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from src.pipeline.schemas.shard_metadata import ShardMetadata
-from src.pipeline.schemas.spec import DatasetSpec
+from src.pipeline.schemas.spec import EXTENSION_TO_OUTPUT_FORMAT, DatasetSpec
 
-_EXPECTED_H5_DATASETS = ("audio", "mel_spec", "param_array")
 _TAR_METADATA_MEMBER = "metadata.json"
-_TAR_ARRAY_FIELDS = ("audio", "mel_spec", "param_array")
 
 
 def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     """Validate one shard against a DatasetSpec.
 
-    Dispatches explicitly on suffix: ``.h5`` -> HDF5 path, ``.tar`` -> tar path.
-    Any other suffix is rejected with an error naming the accepted set so a
+    Dispatches on the shard's filename suffix via
+    ``EXTENSION_TO_OUTPUT_FORMAT``: ``.h5`` -> HDF5 path, ``.tar`` -> tar path.
+    Any other suffix is rejected with an error naming the registered set so a
     typo / wrong-format file does not surface as a misleading "not valid HDF5".
-    Both paths check that the expected per-row arrays exist and that each row
-    count matches ``spec.render.batch_per_shard``.
+    Both paths check that the expected per-row arrays (``DATASET_FIELD_NAMES``)
+    exist and that each row count matches ``spec.render.batch_per_shard``.
 
     Returns list of error strings (empty = valid).
     """
     if not shard_path.exists():
         return [f"shard file not found: {shard_path}"]
 
-    suffix = shard_path.suffix
-    if suffix == ".h5":
+    fmt = EXTENSION_TO_OUTPUT_FORMAT.get(shard_path.suffix)
+    if fmt == "hdf5":
         return _validate_h5_shard(shard_path, spec)
-    if suffix == ".tar":
+    if fmt == "wds":
         return _validate_tar_shard(shard_path, spec)
-    return [f"unsupported shard suffix {suffix!r} (expected one of: '.h5', '.tar')"]
+    return [
+        f"unsupported shard suffix {shard_path.suffix!r} "
+        f"(expected one of: {sorted(EXTENSION_TO_OUTPUT_FORMAT)})"
+    ]
 
 
 def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
@@ -65,7 +70,7 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 
     errors: list[str] = []
     with f:
-        for name in _EXPECTED_H5_DATASETS:
+        for name in DATASET_FIELD_NAMES:
             if name not in f:
                 errors.append(f"missing dataset: {name!r}")
                 continue
@@ -114,8 +119,8 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         else:
             errors.extend(_validate_tar_metadata(tar, _TAR_METADATA_MEMBER))
 
-        rows_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
-        seen_by_field: dict[str, int] = {field: 0 for field in _TAR_ARRAY_FIELDS}
+        rows_by_field: dict[str, int] = {field: 0 for field in DATASET_FIELD_NAMES}
+        seen_by_field: dict[str, int] = {field: 0 for field in DATASET_FIELD_NAMES}
         for name in members:
             if not name.endswith(".npy"):
                 continue
@@ -135,7 +140,7 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
             rows_by_field[field] += arr.shape[0]
             seen_by_field[field] += 1
 
-        for field in _TAR_ARRAY_FIELDS:
+        for field in DATASET_FIELD_NAMES:
             if seen_by_field[field] == 0:
                 errors.append(f"missing tar member: '*.{field}.npy'")
                 continue

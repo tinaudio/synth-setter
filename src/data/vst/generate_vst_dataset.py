@@ -18,7 +18,7 @@ from tqdm import trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from src.pipeline.schemas.shard_metadata import ShardMetadata  # noqa
-from src.pipeline.schemas.spec import RenderConfig  # noqa
+from src.pipeline.schemas.spec import EXTENSION_TO_OUTPUT_FORMAT, RenderConfig  # noqa
 from src.data.vst import param_specs  # noqa
 from src.data.vst.core import render_params  # noqa
 from src.data.vst.param_spec import ParamSpec  # noqa
@@ -563,14 +563,15 @@ def main(data_file: str, render_cfg_json: str) -> None:
     """Render a single shard at ``data_file`` (suffix selects writer)."""
     render_cfg = RenderConfig.model_validate_json(render_cfg_json)
     suffix = Path(data_file).suffix
-    if suffix == ".h5":
+    fmt = EXTENSION_TO_OUTPUT_FORMAT.get(suffix)
+    if fmt == "hdf5":
         make_hdf5_dataset(hdf5_file=data_file, render_cfg=render_cfg)
         return
-    if suffix == ".tar":
+    if fmt == "wds":
         make_wds_dataset(wds_file=data_file, render_cfg=render_cfg)
         return
     raise click.BadParameter(
-        f"data_file must end in .h5 (hdf5) or .tar (wds), got {suffix!r}",
+        f"data_file must end in one of {sorted(EXTENSION_TO_OUTPUT_FORMAT)}, got {suffix!r}",
         param_hint="data_file",
     )
 
