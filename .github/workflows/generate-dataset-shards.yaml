@@ -147,10 +147,12 @@ jobs:
       - id: cluster
         env:
           INPUT_CLUSTER_NAME: ${{ inputs.cluster_name }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          if [[ -n "$INPUT_CLUSTER_NAME" ]]; then
-            CLUSTER_NAME="$INPUT_CLUSTER_NAME"
+          if [[ -n "${INPUT_CLUSTER_NAME}" ]]; then
+            CLUSTER_NAME="${INPUT_CLUSTER_NAME}"
           else
             CLUSTER_NAME="synth-setter-manual-${PROVIDER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           fi
@@ -233,19 +235,19 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(
-            --experiment "$EXPERIMENT"
+            --experiment "${EXPERIMENT}"
             --template configs/compute/local-template.yaml
-            --cluster-name "$CLUSTER_NAME"
-            --worker-image-tag "$IMAGE_TAG"
+            --cluster-name "${CLUSTER_NAME}"
+            --worker-image-tag "${IMAGE_TAG}"
             --spec-out "${RUN_METADATA_DIR}/input_spec.json"
           )
-          if [[ "$INPUT_LOCAL" == "true" ]]; then
+          if [[ "${INPUT_LOCAL}" == "true" ]]; then
             ARGS+=(--local)
           fi
-          if [[ -n "$INPUT_NUM_WORKERS" ]]; then
-            ARGS+=(--num-workers "$INPUT_NUM_WORKERS")
+          if [[ -n "${INPUT_NUM_WORKERS}" ]]; then
+            ARGS+=(--num-workers "${INPUT_NUM_WORKERS}")
           fi
-          if [[ "$INPUT_TAIL" == "true" ]]; then
+          if [[ "${INPUT_TAIL}" == "true" ]]; then
             ARGS+=(--tail)
           fi
           python -m src.pipeline.skypilot_launch "${ARGS[@]}" \
@@ -355,7 +357,6 @@ jobs:
         run: |
           set -euo pipefail
           SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
-          R2_BUCKET=
           R2_BUCKET=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['r2_bucket'])" "${SPEC_PATH}")
           SPEC_URI="r2://${R2_BUCKET}/skypilot-launcher-specs/${CLUSTER_NAME}.json"
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"

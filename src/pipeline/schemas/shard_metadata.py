@@ -1,3 +1,12 @@
+"""Sidecar metadata model for wds tar shards.
+
+Owns ``ShardMetadata`` — the leaf-module Pydantic model written as
+``metadata.json`` inside each wds tar. Pinned in its own module so consumers
+on either side of the ``src/`` ↔ ``pipeline/`` boundary can import it
+without picking up transitive ML dependencies (``pedalboard`` via
+``src.data.vst``) that would form an import cycle with the renderer.
+"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, model_validator

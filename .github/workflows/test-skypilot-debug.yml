@@ -145,73 +145,73 @@ jobs:
             template: configs/compute/runpod-debug-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: noop
-            config: ""
+            experiment: ""
           - variant: image-pull
             mode: inline-sky
             template: configs/compute/runpod-debug-image-pull-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: image-pull
-            config: ""
+            experiment: ""
           - variant: spec-mount
             mode: inline-sky
             template: configs/compute/runpod-debug-spec-mount-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: spec-mount
-            config: ""
+            experiment: ""
           - variant: headless
             mode: inline-sky
             template: configs/compute/runpod-debug-headless-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: headless
-            config: ""
+            experiment: ""
           - variant: rclone
             mode: inline-sky
             template: configs/compute/runpod-debug-rclone-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: rclone
-            config: ""
+            experiment: ""
           - variant: headless-rclone
             mode: inline-sky
             template: configs/compute/runpod-debug-headless-rclone-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: headless-rclone
-            config: ""
+            experiment: ""
           - variant: pedalboard-load
             mode: inline-sky
             template: configs/compute/runpod-debug-pedalboard-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: pedalboard
-            config: ""
+            experiment: ""
           - variant: stickiness-probe
             mode: inline-sky
             template: configs/compute/runpod-debug-template.yaml
             cluster_prefix: synth-setter-smoke
             cluster_suffix: stickiness
-            config: ""
+            experiment: ""
           - variant: launcher
             mode: launcher-runner
             template: configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher
-            config: datagen/runpod-smoke-shard
+            experiment: datagen/runpod-smoke-shard
           - variant: launcher-in-docker
             mode: launcher-docker
             template: configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher-docker
-            config: datagen/runpod-smoke-shard
+            experiment: datagen/runpod-smoke-shard
           - variant: generate-tiny
             mode: launcher-runner
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny
-            config: datagen/runpod-smoke-shard
+            experiment: datagen/runpod-smoke-shard
           - variant: generate-tiny-in-docker
             mode: launcher-docker
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny-docker
-            config: datagen/runpod-smoke-shard
+            experiment: datagen/runpod-smoke-shard
 
     steps:
       - name: Checkout
@@ -371,7 +371,7 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           PYTHONPATH: ${{ github.workspace }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
-          EXPERIMENT: ${{ matrix.config }}
+          EXPERIMENT: ${{ matrix.experiment }}
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
@@ -395,7 +395,7 @@ jobs:
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           CLUSTER_NAME: ${{ matrix.cluster_prefix }}-${{ matrix.cluster_suffix }}-${{ github.run_id }}
-          EXPERIMENT: ${{ matrix.config }}
+          EXPERIMENT: ${{ matrix.experiment }}
           TEMPLATE: ${{ matrix.template }}
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
