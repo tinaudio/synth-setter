@@ -59,25 +59,41 @@ OUTPUT_FORMAT_TO_EXTENSION: Mapping[str, str] = MappingProxyType({"hdf5": ".h5",
 _REPO_ROOT: Path = Path(__file__).resolve().parents[3]
 
 
+# Sentinel returned by ``_get_git_sha`` when called outside a git working
+# tree (worker host without ``.git/``, fresh extract from a tarball, etc).
+# Workers normally receive ``git_sha`` populated in the JSON spec from R2,
+# so the default_factory only fires when something has gone off-script —
+# returning a sentinel rather than raising lets the failure surface as a
+# clear "spec serialized with git_sha=git-unavailable" rather than a
+# CalledProcessError deep in pydantic's default_factory.
+_GIT_UNAVAILABLE_SENTINEL = "git-unavailable"
+
+
 def _get_git_sha() -> str:
-    """Get the current git commit SHA at the repo root."""
-    result = subprocess.run(  # noqa: S603 — git is a fixed argv, no shell
-        ["git", "rev-parse", "HEAD"],  # noqa: S607 — relying on PATH-resolved git is fine here
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    """Get the current git commit SHA at the repo root, or a sentinel if unavailable."""
+    try:
+        result = subprocess.run(  # noqa: S603 — git is a fixed argv, no shell
+            ["git", "rev-parse", "HEAD"],  # noqa: S607 — relying on PATH-resolved git is fine here
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return _GIT_UNAVAILABLE_SENTINEL
     return result.stdout.strip()
 
 
 def _is_repo_dirty() -> bool:
-    """Check if the repo's git working tree has uncommitted changes."""
-    result = subprocess.run(  # noqa: S603 — git is a fixed argv, no shell
-        ["git", "diff", "--quiet"],  # noqa: S607 — relying on PATH-resolved git is fine here
-        cwd=_REPO_ROOT,
-        capture_output=True,
-    )
+    """Check if the repo's git working tree has uncommitted changes (False if no git)."""
+    try:
+        result = subprocess.run(  # noqa: S603 — git is a fixed argv, no shell
+            ["git", "diff", "--quiet"],  # noqa: S607 — relying on PATH-resolved git is fine here
+            cwd=_REPO_ROOT,
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        return False
     return result.returncode != 0
 
 
