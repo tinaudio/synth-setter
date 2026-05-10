@@ -27,7 +27,7 @@ from pipeline.entrypoints.generate_dataset import (
     build_generate_args,
     run,
 )
-from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
+from pipeline.schemas.spec import DatasetSpec
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version
@@ -66,52 +66,50 @@ def _materialize_shard(args: list[str]) -> int:
 
 
 def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
-    """Return valid DatasetPipelineSpec kwargs for direct construction."""
+    """Return valid DatasetSpec kwargs for direct construction."""
     kwargs: dict[str, object] = {
-        "run_id": "test-dataset-20260328T120000Z",
-        "r2_prefix": "data/test-dataset/test-dataset-20260328T120000Z/",
+        "task_name": "test-dataset",
+        "run_id": "test-dataset-20260328T120000000Z",
+        "r2_prefix": "data/test-dataset/test-dataset-20260328T120000000Z/",
         "created_at": datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc),
-        "code_version": "a" * 40,
+        "git_sha": "a" * 40,
         "is_repo_dirty": False,
-        "param_spec": "surge_simple",
-        "renderer_version": TEST_PLUGIN_VERSION,
         "output_format": "hdf5",
-        "sample_rate": 16000,
-        "shard_size": 10000,
+        "train_val_test_sizes": (10000, 0, 0),
+        "train_val_test_seeds": (42, 43, 44),
         "base_seed": 42,
-        "num_params": 92,
         "r2_bucket": "intermediate-data",
-        "splits": {"train": 1, "val": 0, "test": 0},
-        "plugin_path": str(TEST_PLUGIN_VST3),
-        "preset_path": "presets/surge-base.vstpreset",
-        "channels": 2,
-        "velocity": 100,
-        "signal_duration_seconds": 4.0,
-        "min_loudness": -55.0,
-        "sample_batch_size": 32,
-        "shards": (ShardSpec(shard_id=0, filename="shard-000000.h5", seed=42),),
+        "render": {
+            "plugin_path": str(TEST_PLUGIN_VST3),
+            "preset_path": "presets/surge-base.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": TEST_PLUGIN_VERSION,
+            "sample_rate": 16000,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "batch_per_shard": 10000,
+        },
     }
     kwargs.update(overrides)
     return kwargs
 
 
 @pytest.fixture()
-def spec(tmp_path: Path) -> DatasetPipelineSpec:
-    """Return a valid single-shard DatasetPipelineSpec."""
-    return DatasetPipelineSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+def spec(tmp_path: Path) -> DatasetSpec:
+    """Return a valid single-shard DatasetSpec."""
+    return DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
 
 
-def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetPipelineSpec:
-    """Return a DatasetPipelineSpec with ``n`` shards (deterministic filenames/seeds)."""
-    shards = tuple(
-        ShardSpec(shard_id=i, filename=f"shard-{i:06d}.h5", seed=42 + i) for i in range(n)
-    )
+def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
+    """Return a DatasetSpec with ``n`` shards (deterministic filenames/seeds)."""
     kwargs = _base_spec_kwargs(
         tmp_path,
-        splits={"train": n, "val": 0, "test": 0},
-        shards=shards,
+        train_val_test_sizes=(10000 * n, 0, 0),
     )
-    return DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
+    return DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +139,7 @@ class TestRun:
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
-        spec: DatasetPipelineSpec,
+        spec: DatasetSpec,
     ) -> None:
         """Spec upload copies spec_path into the prefix directory (rclone preserves basename)."""
         mock_check_call.side_effect = _materialize_shard
@@ -162,7 +160,7 @@ class TestRun:
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
-        spec: DatasetPipelineSpec,
+        spec: DatasetSpec,
     ) -> None:
         """Spec is uploaded to R2 before the shard-generating subprocess runs."""
         mock_check_call.side_effect = _materialize_shard
@@ -181,7 +179,7 @@ class TestRun:
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
-        spec: DatasetPipelineSpec,
+        spec: DatasetSpec,
     ) -> None:
         """subprocess.check_call invokes generate_vst_dataset.py with spec-derived args."""
         mock_check_call.side_effect = _materialize_shard
@@ -191,7 +189,7 @@ class TestRun:
         args = mock_check_call.call_args[0][0]
         # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
-        assert str(spec.shard_size) in args
+        assert str(spec.render.batch_per_shard) in args
 
     @patch("pipeline.entrypoints.generate_dataset.subprocess.check_call")
     @patch("pipeline.entrypoints.generate_dataset._rclone_copy")
@@ -199,7 +197,7 @@ class TestRun:
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
-        spec: DatasetPipelineSpec,
+        spec: DatasetSpec,
     ) -> None:
         """The VST subprocess is prefixed with scripts/run-linux-vst-headless.sh on Linux.
 
@@ -225,7 +223,7 @@ class TestRun:
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
-        spec: DatasetPipelineSpec,
+        spec: DatasetSpec,
     ) -> None:
         """Second rclone call uploads the shard to r2:{bucket}/{prefix}/."""
         mock_check_call.side_effect = _materialize_shard
@@ -243,7 +241,7 @@ class TestRun:
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
-        spec: DatasetPipelineSpec,
+        spec: DatasetSpec,
     ) -> None:
         """CalledProcessError from generate_vst_dataset propagates to caller."""
         mock_check_call.side_effect = subprocess.CalledProcessError(1, "generate_vst_dataset.py")
@@ -257,7 +255,7 @@ class TestRun:
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
-        spec: DatasetPipelineSpec,
+        spec: DatasetSpec,
     ) -> None:
         """CalledProcessError from rclone propagates to caller."""
         mock_rclone.side_effect = subprocess.CalledProcessError(1, "rclone")
@@ -277,12 +275,8 @@ class TestRun:
         """output_format 'wds' renders a .tar shard and uploads only the tar (not the temp h5)."""
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-        kwargs = _base_spec_kwargs(
-            tmp_path,
-            output_format="wds",
-            shards=(ShardSpec(shard_id=0, filename="shard-000000.tar", seed=42),),
-        )
-        spec = DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
+        kwargs = _base_spec_kwargs(tmp_path, output_format="wds")
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
         def _materialize_tar(args: list[str]) -> int:
             script_idx = _find_script_index(args)
@@ -430,7 +424,7 @@ class TestRun:
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
-        spec: DatasetPipelineSpec,
+        spec: DatasetSpec,
     ) -> None:
         """If the renderer exits 0 but never wrote the expected shard file, fail loudly.
 
@@ -457,8 +451,9 @@ class TestRun:
         """When the plugin's actual version disagrees with spec.renderer_version, run() fails
         before any rclone/subprocess work happens (prevents emitting a shard tagged with the wrong
         renderer_version)."""
-        kwargs = _base_spec_kwargs(tmp_path, renderer_version="999.999.999")
-        spec = DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
+        kwargs = _base_spec_kwargs(tmp_path)
+        kwargs["render"] = {**kwargs["render"], "renderer_version": "999.999.999"}  # type: ignore[dict-item]
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
 
         with pytest.raises(RuntimeError, match="Renderer version mismatch"):
             run(spec)
@@ -596,9 +591,7 @@ class TestRun:
 class TestBuildGenerateArgs:
     """build_generate_args() produces correct CLI arg lists from spec + shard."""
 
-    def test_output_file_uses_shard_filename(
-        self, spec: DatasetPipelineSpec, tmp_path: Path
-    ) -> None:
+    def test_output_file_uses_shard_filename(self, spec: DatasetSpec, tmp_path: Path) -> None:
         """Output file path is {output_dir}/{shard.filename}."""
         shard = spec.shards[0]
 
@@ -606,15 +599,15 @@ class TestBuildGenerateArgs:
 
         assert args[2] == str(tmp_path / "shard-000000.h5")
 
-    def test_num_samples_is_shard_size(self, spec: DatasetPipelineSpec) -> None:
-        """num_samples arg comes from spec.shard_size."""
+    def test_num_samples_is_shard_size(self, spec: DatasetSpec) -> None:
+        """num_samples arg comes from spec.render.batch_per_shard."""
         shard = spec.shards[0]
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        assert args[3] == str(spec.shard_size)
+        assert args[3] == str(spec.render.batch_per_shard)
 
-    def test_all_spec_fields_passed_as_options(self, spec: DatasetPipelineSpec) -> None:
+    def test_all_spec_fields_passed_as_options(self, spec: DatasetSpec) -> None:
         """All generation parameters from spec are passed as --key value options."""
         shard = spec.shards[0]
 
@@ -642,7 +635,7 @@ class TestBuildGenerateArgs:
         }
         assert expected_keys <= option_keys
 
-    def test_args_start_with_python_and_script(self, spec: DatasetPipelineSpec) -> None:
+    def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:
         """First arg is the Python executable, second is the generation script."""
         shard = spec.shards[0]
 
@@ -654,12 +647,8 @@ class TestBuildGenerateArgs:
         self, tmp_path: Path
     ) -> None:
         """For wds specs, positional is the tar path; format is implicit in the extension."""
-        kwargs = _base_spec_kwargs(
-            tmp_path,
-            output_format="wds",
-            shards=(ShardSpec(shard_id=0, filename="shard-000000.tar", seed=42),),
-        )
-        spec = DatasetPipelineSpec(**kwargs)  # type: ignore[arg-type]
+        kwargs = _base_spec_kwargs(tmp_path, output_format="wds")
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
         shard = spec.shards[0]
 
         args = build_generate_args(spec, shard, tmp_path)

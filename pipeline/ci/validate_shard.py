@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Validate dataset shards against a DatasetPipelineSpec.
+"""Validate dataset shards against a DatasetSpec.
 
 Performs full per-shard validation: each shard file is a valid HDF5 (.h5) or
 tar (.tar) shard, contains every expected per-row array, and each row count
-matches ``spec.shard_size``. The expected array names are listed in
+matches ``spec.render.batch_per_shard``. The expected array names are listed in
 ``_EXPECTED_H5_DATASETS`` / ``_TAR_ARRAY_FIELDS``.
 
 CLI usage:
@@ -27,19 +27,19 @@ from pydantic import ValidationError
 
 from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from pipeline.schemas.shard_metadata import ShardMetadata
-from pipeline.schemas.spec import DatasetPipelineSpec
+from pipeline.schemas.spec import DatasetSpec
 
 _EXPECTED_H5_DATASETS = ("audio", "mel_spec", "param_array")
 _TAR_METADATA_MEMBER = "metadata.json"
 _TAR_ARRAY_FIELDS = ("audio", "mel_spec", "param_array")
 
 
-def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
-    """Validate one shard against a DatasetPipelineSpec.
+def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
+    """Validate one shard against a DatasetSpec.
 
     Dispatches on suffix: ``.h5`` -> HDF5 path, ``.tar`` -> tar path. Both paths
     check that the expected per-row arrays exist and that each row count
-    matches ``spec.shard_size``.
+    matches ``spec.render.batch_per_shard``.
 
     Returns list of error strings (empty = valid).
     """
@@ -51,7 +51,7 @@ def validate_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
     return _validate_h5_shard(shard_path, spec)
 
 
-def _validate_h5_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
+def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     """Validate an HDF5 shard's datasets and row counts."""
     try:
         f = h5py.File(shard_path, "r")
@@ -66,8 +66,10 @@ def _validate_h5_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]
                 continue
 
             row_count = cast(h5py.Dataset, f[name]).shape[0]
-            if row_count != spec.shard_size:
-                errors.append(f"dataset {name!r} has {row_count} rows, expected {spec.shard_size}")
+            if row_count != spec.render.batch_per_shard:
+                errors.append(
+                    f"dataset {name!r} has {row_count} rows, expected {spec.render.batch_per_shard}"
+                )
 
     return errors
 
@@ -85,12 +87,12 @@ def _validate_tar_metadata(tar: tarfile.TarFile, member_name: str) -> list[str]:
     return []
 
 
-def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str]:
+def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     """Full-tier validation of a wds tar shard.
 
     Tar member layout: per-batch-keyed ``<batch_key>.<field>.npy`` plus a single
     ``metadata.json``. The summed row count across all batches per field must
-    equal ``spec.shard_size``; ``metadata.json`` must parse as a strict
+    equal ``spec.render.batch_per_shard``; ``metadata.json`` must parse as a strict
     ``ShardMetadata``.
     """
     try:
@@ -132,29 +134,29 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetPipelineSpec) -> list[str
             if seen_by_field[field] == 0:
                 errors.append(f"missing tar member: '*.{field}.npy'")
                 continue
-            if rows_by_field[field] != spec.shard_size:
+            if rows_by_field[field] != spec.render.batch_per_shard:
                 errors.append(
                     f"field {field!r} summed {rows_by_field[field]} rows across "
-                    f"{seen_by_field[field]} batch(es), expected {spec.shard_size}"
+                    f"{seen_by_field[field]} batch(es), expected {spec.render.batch_per_shard}"
                 )
 
     return errors
 
 
-def _load_spec(spec_arg: str) -> DatasetPipelineSpec:
+def _load_spec(spec_arg: str) -> DatasetSpec:
     """Load a spec from a local path or `r2://bucket/key` URI."""
     if is_r2_uri(spec_arg):
         with downloaded_to_tempfile(spec_arg) as local_path:
-            return DatasetPipelineSpec.model_validate_json(local_path.read_text())
-    return DatasetPipelineSpec.model_validate_json(Path(spec_arg).read_text())
+            return DatasetSpec.model_validate_json(local_path.read_text())
+    return DatasetSpec.model_validate_json(Path(spec_arg).read_text())
 
 
-def _shard_uri(spec: DatasetPipelineSpec, shard_filename: str) -> str:
+def _shard_uri(spec: DatasetSpec, shard_filename: str) -> str:
     """Build the R2 URI where the spec says shard `shard_filename` lives."""
     return f"r2://{spec.r2_bucket}/{spec.r2_prefix}{shard_filename}"
 
 
-def validate_all_shards_from_r2(spec: DatasetPipelineSpec) -> list[str]:
+def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
     """Validate every shard in `spec.shards` by downloading from R2.
 
     Returns aggregated error strings across all shards (empty = all valid). Each error is prefixed

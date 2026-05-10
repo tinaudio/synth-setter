@@ -12,33 +12,42 @@ from pipeline.ci.validate_spec import _read_spec_text, validate_structure, valid
 
 
 def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dict:
-    """Build a minimal valid spec dict for testing."""
+    """Build a minimal valid spec dict mirroring DatasetSpec.model_dump output."""
     ext = ".h5" if output_format == "hdf5" else ".tar"
     spec: dict = {
-        "run_id": "test-20260328T120000Z",
+        "task_name": "test",
+        "run_id": "test-20260328T120000000Z",
         "created_at": "2026-03-28T12:00:00+00:00",
-        "code_version": "a" * 40,
+        "git_sha": "a" * 40,
         "is_repo_dirty": False,
-        "param_spec": "surge_simple",
-        "renderer_version": "1.3.4",
         "output_format": output_format,
-        "sample_rate": 16000,
-        "shard_size": 32,
+        "train_val_test_sizes": [32, 32, 32],
+        "train_val_test_seeds": [42, 43, 44],
         "base_seed": 42,
         "num_params": 92,
-        "splits": {"train": 1, "val": 1, "test": 1},
-        "plugin_path": "plugins/Surge XT.vst3",
-        "preset_path": "presets/surge-base.vstpreset",
-        "channels": 2,
-        "r2_prefix": "data/test/test-20260328T120000Z/",
-        "velocity": 100,
-        "signal_duration_seconds": 4.0,
-        "min_loudness": -55.0,
-        "sample_batch_size": 32,
+        "num_shards": 3,
+        "r2_bucket": "intermediate-data",
+        "r2_prefix": "data/test/test-20260328T120000000Z/",
+        "render": {
+            "plugin_path": "plugins/Surge XT.vst3",
+            "preset_path": "presets/surge-base.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "1.3.4",
+            "sample_rate": 16000,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "batch_per_shard": 32,
+        },
         "shards": [
             {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)
         ],
     }
+    if "render" in overrides:
+        # Merge nested render overrides instead of replacing the whole sub-dict.
+        spec["render"] = {**spec["render"], **overrides.pop("render")}  # type: ignore[dict-item]
     spec.update(overrides)
     return spec
 
@@ -59,14 +68,14 @@ class TestValidateStructure:
         assert len(errors) == 1
         assert "missing" in errors[0]
 
-    def test_invalid_code_version_returns_error(self) -> None:
-        """Non-hex code_version returns a code_version error."""
-        spec = _make_valid_spec(code_version="not-a-sha")
-        assert any("code_version" in e for e in validate_structure(spec))
+    def test_invalid_git_sha_returns_error(self) -> None:
+        """Non-hex git_sha returns a git_sha error."""
+        spec = _make_valid_spec(git_sha="not-a-sha")
+        assert any("git_sha" in e for e in validate_structure(spec))
 
     def test_empty_renderer_version_returns_error(self) -> None:
-        """Empty renderer_version returns a renderer_version error."""
-        spec = _make_valid_spec(renderer_version="")
+        """Empty render.renderer_version returns a renderer_version error."""
+        spec = _make_valid_spec(render={"renderer_version": ""})
         assert any("renderer_version" in e for e in validate_structure(spec))
 
     def test_empty_shards_returns_error(self) -> None:

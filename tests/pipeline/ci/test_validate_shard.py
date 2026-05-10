@@ -20,7 +20,7 @@ from pipeline.ci.validate_shard import (
     validate_all_shards_from_r2,
     validate_shard,
 )
-from pipeline.schemas.spec import DatasetPipelineSpec
+from pipeline.schemas.spec import DatasetSpec
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -93,49 +93,38 @@ def _create_tar_shard(
 
 
 @pytest.fixture()
-def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetPipelineSpec:
-    """Create a real DatasetPipelineSpec with mocked I/O."""
-    from pipeline.schemas.config import DatasetConfig, SplitsConfig
-    from pipeline.schemas.prefix import DatasetConfigId
-    from pipeline.schemas.spec import materialize_spec
-
+def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
+    """Build a real DatasetSpec with mocked git/timestamp factories."""
+    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr("pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
     monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: False)
-    fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(
-        "pipeline.schemas.spec.datetime",
-        type(
-            "FakeDatetime",
-            (),
-            {
-                "now": staticmethod(lambda tz: fixed_now),
-                "fromisoformat": datetime.fromisoformat,
-            },
-        )(),
-    )
+    monkeypatch.setattr("pipeline.schemas.spec._utc_now", lambda: fixed_now)
 
     contents = tmp_path / "FakePlugin.vst3" / "Contents"
     contents.mkdir(parents=True)
     (contents / "moduleinfo.json").write_text('{"Version": "1.3.4"}')
 
-    config = DatasetConfig(
-        param_spec="surge_simple",
-        plugin_path=str(tmp_path / "FakePlugin.vst3"),
+    return DatasetSpec(
+        task_name="test-dataset",
         output_format="hdf5",
-        sample_rate=16000,
-        shard_size=10,
-        num_shards=1,
+        train_val_test_sizes=(10, 0, 0),
+        train_val_test_seeds=(42, 43, 44),
         base_seed=42,
         r2_bucket="intermediate-data",
-        splits=SplitsConfig(train=1, val=0, test=0),
-        preset_path="presets/surge-base.vstpreset",
-        channels=2,
-        velocity=100,
-        signal_duration_seconds=4.0,
-        min_loudness=-55.0,
-        sample_batch_size=32,
+        render={
+            "plugin_path": str(tmp_path / "FakePlugin.vst3"),
+            "preset_path": "presets/surge-base.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "1.3.4",
+            "sample_rate": 16000,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "batch_per_shard": 10,
+        },  # type: ignore[arg-type]
     )
-    return materialize_spec(config, DatasetConfigId("test-dataset"))
 
 
 # ---------------------------------------------------------------------------
@@ -146,28 +135,24 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetPipelin
 class TestValidateShard:
     """Tests for validate_shard() function."""
 
-    def test_valid_shard_returns_no_errors(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
-    ) -> None:
+    def test_valid_shard_returns_no_errors(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Correct HDF5 with all expected datasets and correct row counts returns []."""
         shard_path = tmp_path / "shard-000000.h5"
-        _create_shard(shard_path, shard_size=real_spec.shard_size)
+        _create_shard(shard_path, shard_size=real_spec.render.batch_per_shard)
 
         errors = validate_shard(shard_path, real_spec)
 
         assert errors == []
 
-    def test_missing_dataset_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
-    ) -> None:
+    def test_missing_dataset_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """HDF5 missing one of the expected datasets returns an error."""
         shard_path = tmp_path / "shard-000000.h5"
         _create_shard(
             shard_path,
-            shard_size=real_spec.shard_size,
+            shard_size=real_spec.render.batch_per_shard,
             datasets={
-                "audio": (real_spec.shard_size, 2, 64000),
-                "mel_spec": (real_spec.shard_size, 2, 128, 401),
+                "audio": (real_spec.render.batch_per_shard, 2, 64000),
+                "mel_spec": (real_spec.render.batch_per_shard, 2, 128, 401),
                 # param_array intentionally omitted
             },
         )
@@ -177,19 +162,17 @@ class TestValidateShard:
         assert len(errors) == 1
         assert "param_array" in errors[0]
 
-    def test_wrong_row_count_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
-    ) -> None:
+    def test_wrong_row_count_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Dataset with wrong shape[0] returns an error mentioning that dataset."""
         shard_path = tmp_path / "shard-000000.h5"
-        wrong_size = real_spec.shard_size + 5
+        wrong_size = real_spec.render.batch_per_shard + 5
         _create_shard(
             shard_path,
             shard_size=wrong_size,
             datasets={
                 "audio": (wrong_size, 2, 64000),
-                "mel_spec": (real_spec.shard_size, 2, 128, 401),
-                "param_array": (real_spec.shard_size, 92),
+                "mel_spec": (real_spec.render.batch_per_shard, 2, 128, 401),
+                "param_array": (real_spec.render.batch_per_shard, 92),
             },
         )
 
@@ -198,7 +181,7 @@ class TestValidateShard:
         assert len(errors) == 1
         assert "audio" in errors[0]
 
-    def test_not_hdf5_returns_error(self, real_spec: DatasetPipelineSpec, tmp_path: Path) -> None:
+    def test_not_hdf5_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """File that is not valid HDF5 returns an error."""
         shard_path = tmp_path / "not-an-hdf5.h5"
         shard_path.write_bytes(b"this is not an hdf5 file\n")
@@ -208,9 +191,7 @@ class TestValidateShard:
         assert len(errors) == 1
         assert "HDF5" in errors[0] or "hdf5" in errors[0].lower()
 
-    def test_file_not_found_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
-    ) -> None:
+    def test_file_not_found_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Path that does not exist returns an error."""
         shard_path = tmp_path / "nonexistent.h5"
 
@@ -219,10 +200,10 @@ class TestValidateShard:
         assert len(errors) == 1
         assert "not found" in errors[0].lower() or "does not exist" in errors[0].lower()
 
-    def test_extra_datasets_ignored(self, real_spec: DatasetPipelineSpec, tmp_path: Path) -> None:
+    def test_extra_datasets_ignored(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Extra datasets in HDF5 beyond the required three do not cause errors."""
         shard_path = tmp_path / "shard-000000.h5"
-        shard_size = real_spec.shard_size
+        shard_size = real_spec.render.batch_per_shard
         _create_shard(
             shard_path,
             shard_size=shard_size,
@@ -247,7 +228,7 @@ class TestValidateShard:
 class TestShardUri:
     """Tests for _shard_uri helper."""
 
-    def test_builds_r2_uri_from_spec_and_filename(self, real_spec: DatasetPipelineSpec) -> None:
+    def test_builds_r2_uri_from_spec_and_filename(self, real_spec: DatasetSpec) -> None:
         """The constructed URI embeds bucket, prefix, and filename."""
         spec = real_spec  # type: ignore[assignment]
         uri = _shard_uri(spec, "shard-000007.h5")
@@ -260,15 +241,13 @@ class TestShardUri:
 class TestValidateAllShardsFromR2:
     """Tests for validate_all_shards_from_r2 — iterates spec.shards via R2."""
 
-    def test_all_valid_returns_no_errors(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
-    ) -> None:
+    def test_all_valid_returns_no_errors(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """When every shard downloads valid HDF5, returns []."""
         spec = real_spec  # type: ignore[assignment]
 
         def fake_check_call(args: list[str]) -> None:
             # Simulate rclone copyto: write a valid shard to dest path
-            _create_shard(Path(args[-1]), shard_size=spec.shard_size)
+            _create_shard(Path(args[-1]), shard_size=spec.render.batch_per_shard)
 
         with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
             errors = validate_all_shards_from_r2(spec)
@@ -276,7 +255,7 @@ class TestValidateAllShardsFromR2:
         assert errors == []
 
     def test_invalid_shard_error_carries_shard_filename(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+        self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
         """Validation errors are prefixed with the shard filename."""
         spec = real_spec  # type: ignore[assignment]
@@ -297,7 +276,7 @@ class TestMain:
     """Tests for the CLI entry point main() with the new single-arg shape."""
 
     def test_cli_rejects_two_args(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, real_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The legacy 2-arg shape (spec + shard) is rejected."""
         from pipeline.ci.validate_shard import main
@@ -313,7 +292,7 @@ class TestMain:
         assert exc_info.value.code == 1
 
     def test_cli_exits_zero_when_all_shards_valid(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, real_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Valid spec + R2-served valid shards → exit 0."""
         from pipeline.ci.validate_shard import main
@@ -323,7 +302,7 @@ class TestMain:
         spec_json_path.write_text(spec.model_dump_json())
 
         def fake_check_call(args: list[str]) -> None:
-            _create_shard(Path(args[-1]), shard_size=spec.shard_size)
+            _create_shard(Path(args[-1]), shard_size=spec.render.batch_per_shard)
 
         monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
         with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
@@ -333,7 +312,7 @@ class TestMain:
         assert exc_info.value.code == 0
 
     def test_cli_exits_one_when_a_shard_is_invalid(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, real_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """If any shard in spec.shards fails validation, exit 1."""
         from pipeline.ci.validate_shard import main
@@ -362,24 +341,24 @@ class TestValidateTarShard:
     """Tests for validate_shard() on .tar shards."""
 
     def test_valid_tar_shard_returns_no_errors(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+        self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
         """Tar with all expected members and correct row counts returns []."""
         shard_path = tmp_path / "shard-000000.tar"
-        _create_tar_shard(shard_path, shard_size=real_spec.shard_size)
+        _create_tar_shard(shard_path, shard_size=real_spec.render.batch_per_shard)
 
         errors = validate_shard(shard_path, real_spec)
 
         assert errors == []
 
     def test_missing_mel_member_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+        self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
         """Tar missing all mel_spec members returns a missing-member error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,
+            shard_size=real_spec.render.batch_per_shard,
             omit_fields=("mel_spec",),
         )
 
@@ -389,13 +368,13 @@ class TestValidateTarShard:
         assert "mel_spec" in errors[0]
 
     def test_missing_metadata_member_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+        self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
         """Tar missing metadata.json returns a missing-member error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,
+            shard_size=real_spec.render.batch_per_shard,
             omit_metadata=True,
         )
 
@@ -403,19 +382,17 @@ class TestValidateTarShard:
 
         assert any("metadata.json" in e for e in errors)
 
-    def test_wrong_row_count_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
-    ) -> None:
+    def test_wrong_row_count_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Tar with summed audio rows != shard_size returns an error mentioning the field."""
         shard_path = tmp_path / "shard-000000.tar"
-        wrong_size = real_spec.shard_size + 5
+        wrong_size = real_spec.render.batch_per_shard + 5
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,
+            shard_size=real_spec.render.batch_per_shard,
             arrays={
                 "audio": (wrong_size, 2, 64000),
-                "mel_spec": (real_spec.shard_size, 2, 128, 401),
-                "param_array": (real_spec.shard_size, 92),
+                "mel_spec": (real_spec.render.batch_per_shard, 2, 128, 401),
+                "param_array": (real_spec.render.batch_per_shard, 92),
             },
         )
 
@@ -424,7 +401,7 @@ class TestValidateTarShard:
         assert len(errors) == 1
         assert "audio" in errors[0]
 
-    def test_not_a_tar_returns_error(self, real_spec: DatasetPipelineSpec, tmp_path: Path) -> None:
+    def test_not_a_tar_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """File that is not a valid tar returns an error."""
         shard_path = tmp_path / "shard-000000.tar"
         shard_path.write_bytes(b"definitely not a tar file")
@@ -434,9 +411,7 @@ class TestValidateTarShard:
         assert len(errors) == 1
         assert "tar" in errors[0].lower()
 
-    def test_gzipped_tar_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
-    ) -> None:
+    def test_gzipped_tar_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """A .tar.gz file masquerading as .tar fails validation rather than being silently
         accepted.
 
@@ -457,13 +432,13 @@ class TestValidateTarShard:
         assert "tar" in errors[0].lower()
 
     def test_metadata_missing_required_field_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+        self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
         """Tar with metadata.json that fails ShardMetadata validation returns an error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,
+            shard_size=real_spec.render.batch_per_shard,
             metadata={"sample_rate": 16000.0},  # missing velocity, channels, ...
         )
 
@@ -472,13 +447,13 @@ class TestValidateTarShard:
         assert any("metadata.json" in e for e in errors)
 
     def test_metadata_wrong_type_returns_error(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+        self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
         """Tar metadata.json with a strict-typed field violation returns an error."""
         shard_path = tmp_path / "shard-000000.tar"
         _create_tar_shard(
             shard_path,
-            shard_size=real_spec.shard_size,
+            shard_size=real_spec.render.batch_per_shard,
             metadata={
                 "velocity": "100",  # strict=True rejects str-for-int
                 "signal_duration_seconds": 4.0,
@@ -493,7 +468,7 @@ class TestValidateTarShard:
         assert any("metadata.json" in e for e in errors)
 
     def test_malformed_npy_payload_returns_error_does_not_raise(
-        self, real_spec: DatasetPipelineSpec, tmp_path: Path
+        self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
         """Garbage bytes inside an ``audio.npy`` member surface as an error string, not an
         exception.
@@ -506,9 +481,9 @@ class TestValidateTarShard:
         with tarfile.open(shard_path, "w") as tar:
             for field in ("mel_spec", "param_array"):
                 shape = (
-                    (real_spec.shard_size, 2, 64000)
+                    (real_spec.render.batch_per_shard, 2, 64000)
                     if field == "audio"
-                    else (real_spec.shard_size, 92)
+                    else (real_spec.render.batch_per_shard, 92)
                 )
                 buf = io.BytesIO()
                 np.save(buf, np.zeros(shape, dtype=np.float32))

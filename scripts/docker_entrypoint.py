@@ -15,7 +15,7 @@ Subcommands:
     Errors if no ARGV given (prevents silent no-op containers).
 
   generate_dataset --spec <path>
-    Parse <path> as a DatasetPipelineSpec and call
+    Parse <path> as a DatasetSpec and call
     ``pipeline.entrypoints.generate_dataset.run(spec)`` in-process.
 
   render_eval --spec <path>
@@ -42,7 +42,7 @@ from pydantic import VERSION as _PYDANTIC_VERSION
 from pydantic import ValidationError
 
 from pipeline.entrypoints.generate_dataset import load_spec_from_uri, run
-from pipeline.schemas.spec import DatasetPipelineSpec
+from pipeline.schemas.spec import DatasetSpec
 
 if not _PYDANTIC_VERSION.startswith("2."):
     raise RuntimeError(f"docker_entrypoint requires pydantic v2, got {_PYDANTIC_VERSION}")
@@ -111,12 +111,12 @@ def passthrough(args: tuple[str, ...]) -> None:
     required=True,
     type=str,
     help=(
-        "Local path to a JSON-serialized DatasetPipelineSpec, or an `r2://bucket/key` "
+        "Local path to a JSON-serialized DatasetSpec, or an `r2://bucket/key` "
         "URI (downloaded via rclone before parsing — RCLONE_CONFIG_R2_* env vars must be set)."
     ),
 )
 def generate_dataset(spec_path_or_uri: str) -> None:
-    """Parse --spec into DatasetPipelineSpec and run the generate pipeline in-process."""
+    """Parse --spec into DatasetSpec and run the generate pipeline in-process."""
     logger.info("Entering generate_dataset mode — spec=%s", spec_path_or_uri)
     try:
         spec = load_spec_from_uri(spec_path_or_uri)
@@ -126,7 +126,7 @@ def generate_dataset(spec_path_or_uri: str) -> None:
     except ValidationError as exc:
         logger.error("Spec validation failed for %s: %s", spec_path_or_uri, exc)
         raise click.ClickException(f"Invalid spec at {spec_path_or_uri}: {exc}") from exc
-    run(cast(DatasetPipelineSpec, spec))
+    run(cast(DatasetSpec, spec))
     # Defensive force-exit — see #735.
     logger.info("Exiting after run() (#735 defensive)")
     os._exit(0)

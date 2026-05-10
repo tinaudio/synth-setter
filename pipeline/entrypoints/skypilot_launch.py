@@ -45,8 +45,7 @@ import yaml
 from dotenv import dotenv_values
 
 from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from pipeline.schemas.config import dataset_config_id_from_path, load_dataset_config
-from pipeline.schemas.spec import DatasetPipelineSpec, materialize_spec
+from pipeline.schemas.spec import DatasetSpec, load_dataset_spec_yaml
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
@@ -271,7 +270,7 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
         click.echo(result.stderr, err=True)
 
 
-def upload_spec_to_r2(spec: DatasetPipelineSpec, cluster_name: str) -> str:
+def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     """Upload `spec` to R2 under a per-cluster key; return the `r2://bucket/key` URI.
 
     Uses `rclone copyto` (configured via `RCLONE_CONFIG_R2_*` in process env)
@@ -464,16 +463,13 @@ def main(
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value
 
-    config = load_dataset_config(config_path)
-    config_id = dataset_config_id_from_path(config_path)
-    spec = materialize_spec(config, config_id)
+    spec = load_dataset_spec_yaml(config_path)
 
-    # `--num-workers` (if passed) wins over the dataset config's `num_workers`. Schema
-    # default applies when neither is set. The launcher's run-time fan-out is the single
-    # source of truth for worker count from here on.
-    resolved_num_workers = num_workers if num_workers is not None else config.num_workers
+    # `--num-workers` overrides the launcher default of 1. Worker count is a
+    # launcher concern, no longer baked into the dataset spec.
+    resolved_num_workers = num_workers if num_workers is not None else 1
 
-    base_cluster_name = cluster_name or f"synth-setter-smoke-{config_id[:8]}"
+    base_cluster_name = cluster_name or f"synth-setter-smoke-{spec.task_name[:8]}"
 
     # Per-cluster filename so parallel launches (CI matrix, local dev concurrent with CI on
     # the same host) don't clobber one another's spec.
