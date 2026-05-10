@@ -119,10 +119,11 @@ class RenderConfig(BaseModel):
     Carries every parameter the per-shard writer needs to produce audio +
     parameter arrays for its assigned shard. ``param_spec_name`` is resolved
     against the in-process registry inside the writer; the registry is also
-    consulted at construction (lazily) for an early validity check, so a typo
-    surfaces as a ``ValidationError`` rather than a ``KeyError`` during JSON
-    serialization. The lazy import keeps ``import spec`` itself
-    interpreter-only — pedalboard is not pulled at module load.
+    consulted at construction (lazily, via ``param_spec_registry``) for an
+    early validity check, so a typo surfaces as a ``ValidationError`` rather
+    than a ``KeyError`` during JSON serialization. The lazy import points at
+    ``src.data.vst.param_spec_registry`` (not ``src.data.vst``) so spec
+    construction stays interpreter-only — pedalboard is never pulled.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid")
@@ -148,7 +149,7 @@ class RenderConfig(BaseModel):
         inside ``DatasetSpec.num_params`` (e.g., during ``model_dump_json``),
         producing a stack trace instead of a clean validation message.
         """
-        from src.data.vst import param_specs
+        from src.data.vst.param_spec_registry import param_specs
 
         if value not in param_specs:
             valid = sorted(param_specs.keys())
@@ -394,10 +395,11 @@ class DatasetSpec(BaseModel):
     def num_params(self) -> int:
         """Encoded parameter count for ``render.param_spec_name``.
 
-        ``param_specs`` is imported lazily so that loading ``spec`` itself
-        does not transitively pull ``pedalboard`` into the launcher.
+        Imported from ``param_spec_registry`` (not ``src.data.vst``) so that
+        ``model_dump_json`` — which evaluates this computed field — does not
+        transitively pull ``pedalboard`` into the launcher.
         """
-        from src.data.vst import param_specs
+        from src.data.vst.param_spec_registry import param_specs
 
         return len(param_specs[self.render.param_spec_name])
 

@@ -32,8 +32,8 @@ from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.logging import RichHandler  # noqa: E402
 
-from src.data.vst import load_plugin, load_preset, param_specs, preset_paths  # noqa: E402
-from src.data.vst.core import make_midi_events, set_params  # noqa: E402
+from src.data.vst import param_specs, preset_paths  # noqa: E402
+from src.data.vst.core import load_plugin, load_preset, make_midi_events, set_params  # noqa: E402
 from src.data.vst.generate_vst_dataset import make_hdf5_dataset  # noqa: E402
 from src.data.vst.param_spec import ParamSpec  # noqa: E402
 from src.pipeline.schemas.spec import RenderConfig  # noqa: E402

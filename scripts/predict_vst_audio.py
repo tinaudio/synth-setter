@@ -12,7 +12,8 @@ from pedalboard.io import AudioFile
 from tqdm import tqdm, trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from src.data.vst import param_specs, render_params
+from src.data.vst import param_specs
+from src.data.vst.core import render_params
 from src.data.vst.param_spec import ParamSpec
 
 

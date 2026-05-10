@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -357,4 +359,85 @@ class TestDatasetConfigIdFromPath:
         assert (
             dataset_config_id_from_path(Path("configs/experiment/surge-simple-480k-10k.yaml"))
             == "surge-simple-480k-10k"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Interpreter-only contract: spec construction + serialization must not
+# transitively pull pedalboard / VST3 native deps. The launcher (and CI
+# validators) build/serialize specs in lightweight processes that lack
+# pedalboard's runtime requirements.
+# ---------------------------------------------------------------------------
+
+
+class TestSpecConstructionStaysPedalboardFree:
+    """Importing schemas + building/serializing a DatasetSpec must not load pedalboard.
+
+    Run in a fresh subprocess so the parent test session — which loads pedalboard
+    transitively via ``tests/conftest.py`` — does not poison the check.
+    """
+
+    def test_render_config_validation_does_not_import_pedalboard(self) -> None:
+        """Constructing RenderConfig (which runs the param_spec_name validator) must stay
+        interpreter-only."""
+        script = (
+            "import sys\n"
+            "from src.pipeline.schemas.spec import RenderConfig\n"
+            "RenderConfig(\n"
+            "    plugin_path='/tmp/x.vst3', preset_path='/tmp/x.vstpreset',\n"
+            "    param_spec_name='surge_simple', renderer_version='v1',\n"
+            "    sample_rate=16000, channels=1, velocity=64,\n"
+            "    signal_duration_seconds=1.0, min_loudness=-30.0,\n"
+            "    sample_batch_size=1, batch_per_shard=1,\n"
+            ")\n"
+            "assert 'pedalboard' not in sys.modules, sorted(\n"
+            "    m for m in sys.modules if m.startswith('pedalboard')\n"
+            ")\n"
+        )
+        result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"pedalboard leaked into spec construction:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
+
+    def test_dataset_spec_num_params_does_not_import_pedalboard(self) -> None:
+        """``num_params`` is emitted by ``model_dump_json`` so its lazy import path runs in every
+        serialize.
+
+        It must remain interpreter-only.
+        """
+        script = (
+            "import sys\n"
+            "from src.pipeline.schemas.spec import DatasetSpec\n"
+            "spec = DatasetSpec(\n"
+            "    task_name='ci', output_format='hdf5', train_val_test_sizes=[1, 0, 0],\n"
+            "    base_seed=0, r2_bucket='b',\n"
+            "    render={\n"
+            "        'plugin_path': '/tmp/x.vst3', 'preset_path': '/tmp/x.vstpreset',\n"
+            "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
+            "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
+            "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
+            "        'sample_batch_size': 1, 'batch_per_shard': 1,\n"
+            "    },\n"
+            ")\n"
+            "_ = spec.num_params\n"
+            "_ = spec.model_dump_json()\n"
+            "assert 'pedalboard' not in sys.modules, sorted(\n"
+            "    m for m in sys.modules if m.startswith('pedalboard')\n"
+            ")\n"
+        )
+        result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"pedalboard leaked into spec serialization:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
         )

@@ -765,3 +765,52 @@ class TestMain:
         assert captured[0].task_name == expected.task_name
         assert captured[0].num_shards == expected.num_shards
         assert captured[0].render == expected.render
+
+
+# ---------------------------------------------------------------------------
+# load_spec_from_uri — local path / r2:// dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestLoadSpecFromUri:
+    """load_spec_from_uri() reads local paths directly and r2:// via downloaded_to_tempfile."""
+
+    def test_local_path_reads_directly(self, tmp_path: Path) -> None:
+        """Local paths bypass rclone and parse the file in place."""
+        spec_path = tmp_path / "spec.json"
+        spec = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+        spec_path.write_text(spec.model_dump_json())
+
+        loaded = generate_dataset.load_spec_from_uri(str(spec_path))
+
+        assert loaded.task_name == spec.task_name
+        assert loaded.num_shards == spec.num_shards
+
+    def test_r2_uri_dispatches_through_downloaded_to_tempfile(self, tmp_path: Path) -> None:
+        """R2:// URIs delegate to ``src.pipeline.r2_io.downloaded_to_tempfile``.
+
+        Critical regression: an earlier implementation called ``rclone copy`` against a tempdir
+        and then read ``Path(tmpdir) / Path(uri).name``, which broke for r2:// URIs whose key
+        contained subdirectory components (rclone copy mirrors directory structure under the
+        destination). ``downloaded_to_tempfile`` uses ``rclone copyto`` with an explicit
+        destination path, sidestepping the subdirectory hazard.
+        """
+        spec = DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+        spec_json = spec.model_dump_json()
+
+        captured_args: list[list[str]] = []
+
+        def fake_check_call(args: list[str]) -> None:
+            captured_args.append(args)
+            # downloaded_to_tempfile uses rclone copyto, so the last arg is the target file path.
+            Path(args[-1]).write_text(spec_json)
+
+        with patch("src.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+            loaded = generate_dataset.load_spec_from_uri(
+                "r2://bucket/skypilot-launcher-specs/cluster-abc.json"
+            )
+
+        assert loaded.task_name == spec.task_name
+        assert len(captured_args) == 1
+        assert captured_args[0][1] == "copyto"
+        assert captured_args[0][-2] == "r2:bucket/skypilot-launcher-specs/cluster-abc.json"

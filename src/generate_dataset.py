@@ -34,9 +34,8 @@ from omegaconf import DictConfig, OmegaConf
 from src.data.vst.core import extract_renderer_version
 from src.pipeline.constants import INPUT_SPEC_FILENAME
 from src.pipeline.partitioning import get_my_shards, read_rank_world_from_env
+from src.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from src.pipeline.schemas.spec import DatasetSpec, ShardSpec
-
-_R2_URI_SCHEME = "r2://"
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIGS_DIR = _REPO_ROOT / "configs"
@@ -49,9 +48,12 @@ def compose_dataset_spec(experiment: str, *, overrides: list[str] | None = None)
     config that aren't fields on ``DatasetSpec`` (e.g. ``data``, ``hydra``) are
     filtered out via positive selection in ``_dataset_spec_from_cfg``.
 
-    Hydra's ``GlobalHydra`` is a process-global singleton; clear-then-restore
-    ensures a caller (test session, REPL) that already initialized it for a
-    different tree isn't left in a half-set state if composition raises.
+    Hydra's ``GlobalHydra`` is a process-global singleton: any prior
+    initialization is cleared on entry, and the singleton is cleared again
+    in ``finally`` so a composition failure leaves the process in a clean
+    uninitialized state rather than half-set. We do not save and restore the
+    caller's prior tree — callers that need their own Hydra context must
+    re-initialize after this returns.
     """
     if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
@@ -85,27 +87,19 @@ def _dataset_spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
     """Load a DatasetSpec from a local path or `r2://bucket/key` URI.
 
-    Local paths are read directly. R2 URIs are downloaded via rclone (which
-    requires the standard `RCLONE_CONFIG_R2_*` env vars to be set in the
-    caller's environment) into a tmpdir and parsed.
+    Local paths are read directly. R2 URIs are downloaded via the shared
+    ``src.pipeline.r2_io.downloaded_to_tempfile`` helper (rclone copyto to a
+    fully-specified destination — robust to keys with subdirectory components
+    that ``rclone copy`` would mirror under the tmpdir). The standard
+    ``RCLONE_CONFIG_R2_*`` env vars must be set in the caller's environment.
 
     The R2-URI path exists because SkyPilot's RunPod backend rejects
     programmatic `task.update_file_mounts(...)` with a public-key-overflow
     error (see #749), so the launcher ships the spec via R2 instead of
     file_mounts.
     """
-    if spec_uri.startswith(_R2_URI_SCHEME):
-        rclone_path = "r2:" + spec_uri[len(_R2_URI_SCHEME) :]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            args = [  # noqa: S607 — rclone resolved by image's PATH
-                "rclone",
-                "copy",
-                "--checksum",
-                rclone_path,
-                tmpdir,
-            ]
-            subprocess.check_call(args)  # noqa: S603 — args from validated spec URI
-            local_path = Path(tmpdir) / Path(spec_uri).name
+    if is_r2_uri(spec_uri):
+        with downloaded_to_tempfile(spec_uri) as local_path:
             spec_text = local_path.read_text()
     else:
         spec_text = Path(spec_uri).read_text()
