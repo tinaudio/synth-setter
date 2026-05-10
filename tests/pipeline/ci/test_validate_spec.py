@@ -1,4 +1,4 @@
-"""Tests for pipeline.ci.validate_spec validation functions."""
+"""Tests for src.pipeline.ci.validate_spec validation functions."""
 
 from __future__ import annotations
 
@@ -143,7 +143,7 @@ class TestReadSpecText:
         assert json.loads(_read_spec_text(str(spec_path))) == {"hello": "world"}
 
     def test_r2_uri_downloads_via_r2_io(self) -> None:
-        """R2:// URI dispatches through pipeline.r2_io.downloaded_to_tempfile."""
+        """R2:// URI dispatches through src.pipeline.r2_io.downloaded_to_tempfile."""
 
         def fake_check_call(args: list[str]) -> None:
             Path(args[-1]).write_text(json.dumps({"hello": "from-r2"}))

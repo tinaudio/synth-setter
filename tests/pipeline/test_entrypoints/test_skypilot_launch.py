@@ -843,7 +843,7 @@ class TestNumWorkersFanOut:
     RunPod's backend doesn't support num_nodes>1, so the launcher synthesizes multi-worker
     partitioning by launching N clusters in parallel and injecting SYNTH_SETTER_WORKER_RANK /
     SYNTH_SETTER_NUM_WORKERS per cluster. Each cluster downloads the same materialized spec;
-    pipeline.partitioning.get_my_shards slices each worker's shard ownership.
+    src.pipeline.partitioning.get_my_shards slices each worker's shard ownership.
     """
 
     @staticmethod

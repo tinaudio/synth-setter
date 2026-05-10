@@ -1,4 +1,4 @@
-"""Tests for pipeline.ci.validate_shard."""
+"""Tests for src.pipeline.ci.validate_shard."""
 
 from __future__ import annotations
 

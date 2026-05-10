@@ -1,10 +1,10 @@
 """Unified dataset specification: a single Pydantic model is the spec on R2.
 
-``DatasetSpec`` replaces the prior split between ``DatasetConfig`` (the YAML-
-shaped config) and ``DatasetPipelineSpec`` (the runtime-materialized artifact).
-Hydra composes a dict from groups; the entrypoint constructs ``DatasetSpec``
-directly from that dict on line 1 of ``main``. Runtime fields (``git_sha``,
-``created_at``, ``run_id``, ``r2_prefix``) auto-fill via ``default_factory``
+``DatasetSpec`` is the only spec model; the prior split between a YAML-shaped
+config and a runtime-materialized artifact (both removed) collapsed into this
+one class. Hydra composes a dict from groups; the entrypoint constructs
+``DatasetSpec`` directly from that dict on line 1 of ``main``. Runtime fields
+(``git_sha``, ``created_at``, ``run_id``, ``r2_prefix``) auto-fill via ``default_factory``
 when missing and pass through when present (worker reconstruction from JSON).
 ``shards``/``num_shards``/``num_params`` are computed deterministically from
 layout + render fields.

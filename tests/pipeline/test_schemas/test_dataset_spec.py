@@ -264,8 +264,9 @@ class TestDatasetSpecValidators:
     def test_populated_train_val_test_seeds_raises_not_implemented(
         self, patch_runtime_io: None
     ) -> None:
-        """A non-empty ``train_val_test_seeds`` raises NotImplementedError pointing at #884."""
-        with pytest.raises(NotImplementedError, match=r"issues/884"):
+        """A non-empty ``train_val_test_seeds`` raises NotImplementedError — per-sample seeding
+        lands later (see #884)."""
+        with pytest.raises(NotImplementedError, match=r"per-sample"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=[1, 2, 3]))
 
 
@@ -381,7 +382,9 @@ class TestDatasetConfigIdFromPath:
     def test_extracts_stem(self) -> None:
         """Strips parent dirs and the ``.yaml`` extension to yield the bare config id."""
         assert (
-            dataset_config_id_from_path(Path("configs/experiment/surge-simple-480k-10k.yaml"))
+            dataset_config_id_from_path(
+                Path("configs/experiment/datagen/surge-simple-480k-10k.yaml")
+            )
             == "surge-simple-480k-10k"
         )
 
@@ -394,11 +397,13 @@ class TestDatasetConfigIdFromPath:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestSpecConstructionStaysPedalboardFree:
     """Importing schemas + building/serializing a DatasetSpec must not load pedalboard.
 
     Run in a fresh subprocess so the parent test session — which loads pedalboard
-    transitively via ``tests/conftest.py`` — does not poison the check.
+    transitively via ``tests/conftest.py`` — does not poison the check. Marked slow
+    because each method spawns a fresh Python interpreter (~hundreds of ms each).
     """
 
     def test_render_config_validation_does_not_import_pedalboard(self) -> None:
