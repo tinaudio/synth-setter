@@ -2,7 +2,9 @@
 
 # Top-level @hydra.main composition for dataset generation. Mirrors eval.yaml's
 # shape: each group below contributes a slice of the DatasetSpec the entrypoint
-# constructs in main(). Required (???) fields are filled in by an experiment.
+# constructs in main(). Fields marked `???` below are Hydra's mandatory-missing
+# sentinel — an experiment (or CLI override) must supply them, otherwise Hydra
+# raises ConfigCompositionException at compose-time.
 #
 # Example invocations:
 #   python -m src.generate_dataset experiment=datagen/ci-materialize-test

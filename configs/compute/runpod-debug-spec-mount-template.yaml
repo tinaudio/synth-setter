@@ -1,12 +1,18 @@
 # SkyPilot task template for RunPod — DEBUG variant: spec-mount canary.
 #
 # Layer 3 in the progressive triage matrix: builds on `noop` / `image-pull` by
-# also exercising SkyPilot's `file_mounts` (which the production launcher uses
-# via `task.update_file_mounts(...)` to ship the materialized DatasetSpec
-# to the worker). PASS = file_mounts upload during provisioning works on RunPod
-# and the worker can read the mounted file. FAIL = something about the mount
-# upload extends pod-boot timing past the SSH-readiness window, OR mounts land
-# in unexpected paths / permissions on RunPod.
+# also exercising SkyPilot's `file_mounts` upload path on RunPod. This is a
+# debug canary, NOT a mirror of production. The production launcher does not
+# use `task.update_file_mounts(...)` to ship the materialized DatasetSpec —
+# RunPod rejected programmatic file_mounts with a public-key-overflow error
+# (#749), so the launcher uploads the spec to R2 and the worker downloads it
+# via `src.pipeline.r2_io.downloaded_to_tempfile`. This template exists so we
+# can re-probe RunPod's file_mounts support in isolation if/when it changes.
+#
+# PASS = file_mounts upload during provisioning works on RunPod and the worker
+# can read the mounted file. FAIL = something about the mount upload extends
+# pod-boot timing past the SSH-readiness window, OR mounts land in unexpected
+# paths / permissions on RunPod.
 #
 # Mounts an in-repo file (this template itself) so we don't need a fixture —
 # the worker just verifies the file is present and non-empty.
