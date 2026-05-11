@@ -416,7 +416,9 @@ ARG USER_GID=$USER_UID
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
 RUN chown -R $USER_UID:$USER_GID .git
-RUN chown -R $USER_UID:$USER_GID /venv/main
+# Directories only: pip writes are governed by the parent dir's permission bit,
+# and skipping files avoids overlayfs copy-up of ~2.5 GB of prebuilt deps.
+RUN find /venv/main -type d -exec chown $USER_UID:$USER_GID {} +
 
 # Persist bash history for non-root dev: user
 RUN mkdir -p /commandhistory \
