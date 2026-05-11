@@ -30,6 +30,7 @@ markers = [
   "r2: tests requiring R2/rclone access",
   "docker_smoke: smoke tests that run inside the built Docker image",
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
+  "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
 ]
 minversion = "6.0"
 testpaths = "tests/"
