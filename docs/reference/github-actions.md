@@ -6,6 +6,8 @@ All workflows run on GitHub-hosted runners. `test-gpu` uses the `gpu-x64` larger
 
 For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/actions).
 
+To run these workflows locally with `act` (for debugging or iterating on the YAML), see [`docs/operations/running-workflows-locally.md`](../operations/running-workflows-locally.md).
+
 ## Workflow catalog
 
 ### CI & quality
