@@ -12,7 +12,6 @@ def _make_dataset_spec_kwargs(plugin_path: str = "plugins/Surge XT.vst3") -> dic
         "task_name": "ci-smoke-test",
         "output_format": "hdf5",
         "train_val_test_sizes": [440000, 20000, 20000],
-        "train_val_test_seeds": [42, 43, 44],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": {

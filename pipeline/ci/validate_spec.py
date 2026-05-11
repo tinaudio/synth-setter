@@ -28,7 +28,6 @@ _REQUIRED_TOP_LEVEL_FIELDS = [
     "run_id",
     "shards",
     "task_name",
-    "train_val_test_seeds",
     "train_val_test_sizes",
 ]
 _REQUIRED_RENDER_FIELDS = [

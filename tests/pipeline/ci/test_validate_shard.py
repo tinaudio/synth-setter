@@ -58,7 +58,6 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
         task_name="test-dataset",
         output_format="hdf5",
         train_val_test_sizes=(10, 0, 0),
-        train_val_test_seeds=(42, 43, 44),
         base_seed=42,
         r2_bucket="intermediate-data",
         render={

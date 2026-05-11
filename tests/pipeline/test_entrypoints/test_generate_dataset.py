@@ -76,7 +76,6 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
         "is_repo_dirty": False,
         "output_format": "hdf5",
         "train_val_test_sizes": [10000, 0, 0],
-        "train_val_test_seeds": [42, 43, 44],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": {

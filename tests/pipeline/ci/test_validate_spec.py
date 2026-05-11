@@ -20,7 +20,6 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "is_repo_dirty": False,
         "output_format": output_format,
         "train_val_test_sizes": [32, 32, 32],
-        "train_val_test_seeds": [42, 43, 44],
         "base_seed": 42,
         "num_params": 92,
         "num_shards": 3,

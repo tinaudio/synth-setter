@@ -40,7 +40,6 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
         "task_name": "ci-smoke-test",
         "output_format": "hdf5",
         "train_val_test_sizes": [300, 0, 0],
-        "train_val_test_seeds": [123, 456, 789],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": _valid_render_kwargs(plugin_path),
@@ -234,13 +233,26 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=bad_length))
 
-    @pytest.mark.parametrize("bad_length", [[42, 43], [42, 43, 44, 45]])
-    def test_train_val_test_seeds_must_be_length_three(
-        self, patch_runtime_io: None, bad_length: list[int]
+    @pytest.mark.parametrize(
+        "bad_value",
+        [[42, 43, 44], (42, 43, 44), [1, 2, 3, 4], "anything", 0],
+    )
+    def test_train_val_test_seeds_setting_raises_not_implemented(
+        self, patch_runtime_io: None, bad_value: Any
     ) -> None:
-        """train_val_test_seeds must be exactly length 3 — parity with sizes."""
-        with pytest.raises(ValidationError):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_length))
+        """Setting train_val_test_seeds raises NotImplementedError — reserved for #884."""
+        with pytest.raises(NotImplementedError, match="reserved for per-sample seeding"):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_value))
+
+    def test_train_val_test_seeds_defaults_to_none(self, patch_runtime_io: None) -> None:
+        """Omitting train_val_test_seeds yields the default None — field is optional."""
+        spec = DatasetSpec(**_valid_spec_kwargs())
+        assert spec.train_val_test_seeds is None
+
+    def test_train_val_test_seeds_explicit_none_is_allowed(self, patch_runtime_io: None) -> None:
+        """Explicit None passes (NotImplementedError gate fires only on non-None)."""
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=None))
+        assert spec.train_val_test_seeds is None
 
     def test_explicit_empty_r2_prefix_raises(self, patch_runtime_io: None) -> None:
         """An explicit empty ``r2_prefix`` raises via the ``_r2_prefix_must_end_with_slash`` field
@@ -290,7 +302,6 @@ class TestDatasetSpecValidators:
         """
         spec = DatasetSpec(**_valid_spec_kwargs())
         assert isinstance(spec.train_val_test_sizes, tuple)
-        assert isinstance(spec.train_val_test_seeds, tuple)
         with pytest.raises(TypeError):
             spec.train_val_test_sizes[0] = 999  # type: ignore[index]
 
