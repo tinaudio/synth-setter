@@ -122,6 +122,18 @@ class TestRenderConfig:
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
 
+    def test_render_config_is_frozen(self) -> None:
+        """Mutating a RenderConfig field after construction raises ValidationError.
+
+        Pins ``frozen=True``: ``DatasetSpec.shards`` / ``num_params`` /
+        ``num_shards`` are ``@cached_property`` over ``render.batch_per_shard``
+        and ``render.param_spec_name``, so post-construction mutation could
+        leave cached values stale.
+        """
+        cfg = RenderConfig(**_valid_render_kwargs())
+        with pytest.raises(ValidationError):
+            cfg.sample_rate = 48000  # type: ignore[misc]
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — construction & runtime-field auto-fill
@@ -175,6 +187,18 @@ class TestDatasetSpecConstruction:
         DatasetSpec.model_validate(round_trip)
         assert set(round_trip) == before_keys
         assert {"shards", "num_shards", "num_params"}.issubset(round_trip)
+
+    def test_dataset_spec_is_frozen(self, patch_runtime_io: None) -> None:
+        """Mutating a DatasetSpec field after construction raises ValidationError.
+
+        Pins ``frozen=True``: ``shards`` / ``num_shards`` / ``num_params``
+        are ``@cached_property`` over input fields, so allowing reassignment
+        of (e.g.) ``train_val_test_sizes`` after first access would leave the
+        cached values stale.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs())
+        with pytest.raises(ValidationError):
+            spec.task_name = "renamed-after-construction"  # type: ignore[misc]
 
 
 class TestDatasetSpecValidators:
