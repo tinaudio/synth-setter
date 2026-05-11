@@ -256,6 +256,42 @@ jobs:
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
 
+      # Capture controller-side state from the kind cluster BEFORE `sky local
+      # down` tears it down. SkyPilot's on-disk sky_logs don't include
+      # controller pod status, scheduler events, or worker-pod RBAC errors —
+      # all of which live in the kube apiserver and vanish with the cluster.
+      # Best-effort (`set +e`, each call `|| true`) so a missing pod or rename
+      # never fails the step. See PR #876 for the original `sky.jobs.tail_logs`
+      # hang this is meant to diagnose.
+      - name: Capture kind cluster state (skypilot-local row)
+        if: ${{ always() && inputs.provider == 'skypilot-local' }}
+        run: |
+          set +e
+          out_dir="${RUN_METADATA_DIR}/k8s_state"
+          mkdir -p "${out_dir}"
+          kubectl get pods -A -o wide > "${out_dir}/pods.txt" 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp \
+            > "${out_dir}/events.txt" 2>&1 || true
+          kubectl describe nodes > "${out_dir}/nodes.txt" 2>&1 || true
+          kubectl get pods -A -o yaml > "${out_dir}/pods-yaml.txt" 2>&1 || true
+          controller_line="$(kubectl get pods -A --no-headers 2>/dev/null \
+            | grep sky-jobs-controller | head -n1)"
+          if [[ -n "${controller_line}" ]]; then
+            controller_ns="$(awk '{print $1}' <<<"${controller_line}")"
+            controller_pod="$(awk '{print $2}' <<<"${controller_line}")"
+            kubectl describe pod -n "${controller_ns}" "${controller_pod}" \
+              > "${out_dir}/describe-controller.txt" 2>&1 || true
+            kubectl logs -n "${controller_ns}" "${controller_pod}" \
+              > "${out_dir}/logs-controller.txt" 2>&1 || true
+            kubectl logs -n "${controller_ns}" "${controller_pod}" --previous \
+              > "${out_dir}/logs-controller-previous.txt" 2>&1 || true
+          else
+            echo "no sky-jobs-controller pod found" \
+              > "${out_dir}/describe-controller.txt"
+          fi
+          echo "=== k8s_state sizes ==="
+          du -sh "${out_dir}" 2>/dev/null || true
+
       - name: sky local down (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
         run: sky local down || true
