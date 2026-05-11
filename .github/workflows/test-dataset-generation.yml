@@ -173,15 +173,14 @@ jobs:
           echo "providers_local: ${providers_local}"
           echo "providers_launcher: ${providers_launcher}"
 
-      - name: Install PyYAML for dataset-config parsing
-        run: pip install pyyaml
+      - name: Install Hydra for dataset-config composition
+        run: pip install hydra-core
 
-      # Bucket comes from the dataset config (the source of truth the launcher
-      # uses for `spec.r2_bucket` and therefore for its R2 upload destination).
-      # Reading from configs/image/dev-snapshot.yaml would be wrong: that's the
-      # CI image's bucket, not the dataset's. They happen to match for
-      # runpod-smoke-shard.yaml, but configs like 10-1k-shards.yaml use
-      # `experiments` instead.
+      # Bucket comes from the composed dataset config (the source of truth the
+      # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
+      # destination). Post-Hydra migration, the experiment id is composed
+      # against `configs/dataset.yaml` rather than read from a YAML path —
+      # `r2_bucket` resolves through `${r2.bucket}` from the `r2` config group.
       - id: bucket
         env:
           DATASET_CONFIG: >-
@@ -192,7 +191,16 @@ jobs:
             }}
         run: |
           set -euo pipefail
-          R2_BUCKET=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['r2_bucket'])" "$DATASET_CONFIG")
+          R2_BUCKET=$(python3 -c "
+          import os
+          from pathlib import Path
+          from hydra import compose, initialize_config_dir
+          cfg_dir = str(Path.cwd() / 'configs')
+          experiment = os.environ['DATASET_CONFIG']
+          with initialize_config_dir(version_base='1.3', config_dir=cfg_dir):
+              cfg = compose(config_name='dataset', overrides=[f'experiment={experiment}'])
+          print(cfg.r2_bucket)
+          ")
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket: ${R2_BUCKET}"
 
