@@ -141,7 +141,7 @@ def run(spec: DatasetSpec) -> None:
 
     Raises:
         RuntimeError: If the worker's plugin version disagrees with
-            ``spec.renderer_version``.
+            ``spec.render.renderer_version``.
     """
     render = spec.render
     actual_renderer_version = extract_renderer_version(Path(render.plugin_path))

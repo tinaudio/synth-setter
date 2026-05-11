@@ -121,7 +121,7 @@ The block-scalar should contain only commands. The reader who wants to know *why
   - `stages/` — generate and finalize stage logic (planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
   - `backends/` — compute providers: local, RunPod (planned — [#71](https://github.com/tinaudio/synth-setter/issues/71))
 - `scripts/` — standalone scripts
-- `configs/` — Hydra YAML configs. `dataset.yaml` is the top-level datagen entrypoint config (mirrors `train.yaml` / `eval.yaml`); groups: `data/`, `trainer/`, `render/`, `experiment/<name>.yaml`
+- `configs/` — Hydra YAML configs. `dataset.yaml` is the top-level datagen entrypoint config (mirrors `train.yaml` / `eval.yaml`); see `configs/dataset.yaml`'s `defaults:` for its composition groups
 - `tests/` — mirrors `src/` (including `tests/pipeline/` for `src/pipeline/`)
 - `docs/design/` — design documents
 

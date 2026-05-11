@@ -786,11 +786,11 @@ def _render_shard(shard_spec, shard_path):
     The import happens here, in the child, so the VST plugin loads cleanly.
     """
     import numpy as np
-    from pipeline.vst import make_dataset
+    from src.data.vst.generate_vst_dataset import make_hdf5_dataset
     # P3 (post-launch): seed both RNGs for reproducibility — see #100
     # random.seed(shard_spec.seed)
     # np.random.seed(shard_spec.seed)
-    make_dataset(shard_path, shard_spec)
+    make_hdf5_dataset(shard_path, shard_spec)
 
 # In the parent worker:
 p = _spawn_ctx.Process(
