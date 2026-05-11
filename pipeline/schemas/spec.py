@@ -35,7 +35,6 @@ from pipeline.schemas.prefix import (
     make_dataset_wandb_run_id,
     make_r2_prefix,
 )
-from src.data.vst import param_specs
 
 __all__ = [
     "OUTPUT_FORMAT_TO_EXTENSION",
@@ -301,7 +300,15 @@ class DatasetSpec(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def num_params(self) -> int:
-        """Total encoded parameter count looked up by name in the param-spec registry."""
+        """Total encoded parameter count looked up by name in the param-spec registry.
+
+        Imports ``param_specs`` lazily: ``src.data.vst.__init__`` pulls in
+        ``mido`` + ``pedalboard`` via the renderer, which the launcher and
+        validate-spec runner don't have installed. Top-level import here would
+        prevent spec serialization on those minimal envs.
+        """
+        from src.data.vst import param_specs
+
         return len(param_specs[self.render.param_spec_name])
 
 
