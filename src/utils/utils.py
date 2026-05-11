@@ -65,13 +65,12 @@ def task_wrapper(task_func: Callable) -> Callable:
         - mark the run as failed with a dedicated file in the `logs/` folder (so we can find and rerun it later)
         - etc. (adjust depending on your needs)
 
-    Example:
-    ```
-    @utils.task_wrapper
-    def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        ...
-        return metric_dict, object_dict
-    ```
+    .. code-block:: python
+
+        @utils.task_wrapper
+        def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+            ...
+            return metric_dict, object_dict
 
     :param task_func: The task function to be wrapped.
 

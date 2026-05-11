@@ -27,11 +27,10 @@ def extract_renderer_version(plugin_path: Path) -> str:
     function's output before rendering (see
     `pipeline.entrypoints.generate_dataset.run`).
 
-    Raises:
-        FileNotFoundError: plugin_path does not exist.
-        RuntimeError: version cannot be extracted by any method.
-        json.JSONDecodeError: moduleinfo.json is malformed.
-        plistlib.InvalidFileException: Info.plist is malformed.
+    :raises FileNotFoundError: plugin_path does not exist.
+    :raises RuntimeError: version cannot be extracted by any method.
+    :raises json.JSONDecodeError: moduleinfo.json is malformed.
+    :raises plistlib.InvalidFileException: Info.plist is malformed.
     """
     if not plugin_path.exists():
         raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")

@@ -34,12 +34,9 @@ def read_rank_world_from_env() -> tuple[int, int]:
     Silent defaults are refused so a misconfigured worker can't duplicate every
     shard across every node — see #763.
 
-    Returns:
-        ``(rank, world)`` as integers, validated against ``validate_rank_world``.
-
-    Raises:
-        ValueError: If either env var is missing, can't parse as int, or fails the
-            rank/world bounds check.
+    :return: ``(rank, world)`` as integers, validated against ``validate_rank_world``.
+    :raises ValueError: If either env var is missing, can't parse as int, or fails the
+        rank/world bounds check.
     """
     missing = [
         name for name in (WORKER_RANK_ENV_VAR, NUM_WORKERS_ENV_VAR) if name not in os.environ
@@ -63,17 +60,12 @@ def read_rank_world_from_env() -> tuple[int, int]:
 def get_my_shards(total_shards: int, rank: int, world: int) -> range:
     """Contiguous shard-ID range owned by ``rank`` of ``world``; balanced ±1 on uneven splits.
 
-    Args:
-        total_shards: Total number of shards across the run. Must be ``>= 0``.
-        rank: This worker's index in ``[0, world)``.
-        world: Total number of workers.
-
-    Returns:
-        A ``range`` over the shard IDs owned by this worker. Empty (``len() == 0``)
+    :param total_shards: Total number of shards across the run. Must be ``>= 0``.
+    :param rank: This worker's index in ``[0, world)``.
+    :param world: Total number of workers.
+    :return: A ``range`` over the shard IDs owned by this worker. Empty (``len() == 0``)
         when ``world > total_shards`` and ``rank`` is past the last shard.
-
-    Raises:
-        ValueError: If ``total_shards < 0``, ``world < 1``, ``rank < 0``, or ``rank >= world``.
+    :raises ValueError: If ``total_shards < 0``, ``world < 1``, ``rank < 0``, or ``rank >= world``.
     """
     if total_shards < 0:
         raise ValueError(f"total_shards must be >= 0, got {total_shards}")

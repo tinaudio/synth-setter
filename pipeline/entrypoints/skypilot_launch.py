@@ -617,15 +617,12 @@ def _run_workers(
     half-provisioned clusters — those whose `sky.launch`/`sky.stream_and_get` raised or
     yielded no `job_id`.
 
-    Args:
-        worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
-        template_path: SkyPilot Task YAML to instantiate per rank.
-        cluster_names: One name per rank; ``len()`` defines the world size.
-        worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
-        tail: If True, tail logs and tear down all clusters. If False, detach after launch.
-
-    Returns:
-        Per-rank result code (``0`` = success, anything else = failure).
+    :param worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
+    :param template_path: SkyPilot Task YAML to instantiate per rank.
+    :param cluster_names: One name per rank; ``len()`` defines the world size.
+    :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
+    :param tail: If True, tail logs and tear down all clusters. If False, detach after launch.
+    :return: Per-rank result code (``0`` = success, anything else = failure).
     """
     num_workers = len(cluster_names)
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
