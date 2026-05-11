@@ -247,8 +247,8 @@ class TestDatasetSpecValidators:
             DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_length))
 
     def test_explicit_empty_r2_prefix_raises(self, patch_runtime_io: None) -> None:
-        """An explicit empty ``r2_prefix`` raises (the default_factory's "no slash" check
-        fires)."""
+        """An explicit empty ``r2_prefix`` raises via the ``_r2_prefix_must_end_with_slash`` field
+        validator (the default_factory is bypassed when a value is supplied)."""
         with pytest.raises(ValidationError, match="r2_prefix must end with"):
             DatasetSpec(**_valid_spec_kwargs(r2_prefix=""))
 

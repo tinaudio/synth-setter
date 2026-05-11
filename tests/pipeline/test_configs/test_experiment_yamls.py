@@ -1,11 +1,16 @@
-"""Round-trip every dataset experiment YAML through DatasetSpec validation.
+"""Round-trip an explicit allowlist of dataset experiment YAMLs through DatasetSpec.
 
-Each datagen experiment under ``configs/experiment/*.yaml`` (excluding the
-train-side experiments nested under ``kosc/``, ``ksin/``, etc.) composes via
-Hydra's ``initialize_config_dir`` + ``compose``. The composed dict — minus
-the ``data:``, ``r2:``, and ``hydra:`` group sub-trees that are lifted to
-top-level via interpolation — must validate as ``DatasetSpec`` and JSON
-round-trip without drift.
+Each entry in :data:`DATASET_EXPERIMENTS` names a top-level datagen experiment under
+``configs/experiment/`` that composes ``dataset.yaml`` via Hydra's
+``initialize_config_dir`` + ``compose``. The composed dict — minus the ``data:``,
+``r2:``, and ``hydra:`` group sub-trees that are lifted to top-level via interpolation
+— must validate as ``DatasetSpec`` and JSON round-trip without drift.
+
+The list is curated rather than auto-discovered: ``configs/experiment/`` also holds
+train-side configs (top-level files like ``time_weighting.yaml`` and the nested
+``kosc/``, ``ksin/``, ``surge/``, … subdirectories) that compose ``train.yaml``, not
+``dataset.yaml``, and would not validate as ``DatasetSpec``. Add a new entry here when
+landing a new datagen experiment.
 """
 
 from __future__ import annotations
@@ -21,9 +26,8 @@ from pipeline.schemas.spec import DatasetSpec
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
 
-# Datagen experiments — flat at the top of configs/experiment/. Excludes the
-# train-side experiment subdirectories (kosc/, ksin/, surge/, etc.) which use
-# train.yaml's composition.
+# Curated list of datagen experiments (those that compose dataset.yaml). See the
+# module docstring for why this is an allowlist rather than a directory scan.
 DATASET_EXPERIMENTS: tuple[str, ...] = (
     "10-1k-shards",
     "ci-materialize-test",
