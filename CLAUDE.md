@@ -207,6 +207,22 @@ Pure documentation edits (`.md` files, `docs/`) are exempt. There are no other e
 - In chat responses, use full markdown hyperlinks for PR/issue references: `[#N](https://github.com/tinaudio/synth-setter/issues/N)`. In PR/issue bodies, use bare `Fixes #N` / `Closes #N` / `Refs #N` so GitHub auto-close works.
 - Never add "Generated with Claude Code" or similar attribution footers to PRs, commits, issues, or comments.
 
+### PR Titles
+
+A PR title must stand on its own. A reader who is familiar with the project but has not opened the linked issue should be able to tell from the title alone *what part of the system the PR touches and what concrete change it makes*. Reviewers, release-notes consumers, and people scanning `git log` rarely click through to the issue — the title is the only context many of them get.
+
+- **Name the specific subject, not just the action.** If the PR migrates *one specific schema or component*, say which one. "Complete migration" or "fix bug" without a noun is not enough.
+- **Don't rely on the issue, PR body, or commit list to disambiguate.** If the title would be ambiguous without that context, it is ambiguous, period.
+- **Keep the conventional-commit prefix and scope.** The added context goes in the human-readable subject after the colon, not in the scope.
+- **Stay under the gitlint title limit.** If the natural phrasing won't fit, shorten the action verb ("complete" → "finish", "remove" → "drop") or compress the scope — but never drop the specific subject to save characters.
+
+Example:
+
+- Bad: `feat(pipeline)!: complete Hydra migration; remove load_dataset_spec_yaml`
+- Good: `feat(pipeline)!: complete dataset_spec Hydra migration; remove load_dataset_spec_yaml`
+
+The bad version forces the reader to ask "Hydra migration of *what*?" — the project has had several. The good version answers that question in the title.
+
 ### PR Readiness
 
 A PR is **not ready** — for review, merge, or hand-off — until **all** of these hold:
