@@ -30,15 +30,22 @@ jobs:
           echo "::endgroup::"
 
           # --- Linked issue check ---
-          # Check for currently-linked issues via the timeline API
-          # Count "connected" events minus "disconnected" events to get current links
+          # Check for currently-linked issues via the timeline API.
+          # Count "connected" events minus "disconnected" events to get current links.
+          #
+          # `gh api --paginate --jq` runs the jq filter once per fetched page
+          # and concatenates the outputs, so a long-timeline PR yields one
+          # length per page (e.g. "0\n0"). Pipe through awk to sum the
+          # per-page counts into a single integer.
           CONNECTED=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" \
-            --paginate --jq '[.[] | select(.event == "connected")] | length') || {
+            --paginate --jq '[.[] | select(.event == "connected")] | length' \
+            | awk '{s+=$1} END {print s+0}') || {
             echo "::error::Failed to fetch timeline events from GitHub API. Re-run the job if transient."
             exit 1
           }
           DISCONNECTED=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/timeline" \
-            --paginate --jq '[.[] | select(.event == "disconnected")] | length') || {
+            --paginate --jq '[.[] | select(.event == "disconnected")] | length' \
+            | awk '{s+=$1} END {print s+0}') || {
             echo "::error::Failed to fetch timeline events from GitHub API. Re-run the job if transient."
             exit 1
           }
