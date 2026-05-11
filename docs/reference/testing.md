@@ -163,7 +163,7 @@ ______________________________________________________________________
 - [`tests/pipeline/conftest.py`](../../tests/pipeline/conftest.py) — pipeline-test fixtures (separate tree, separate fixtures)
 - [`tests/helpers/`](../../tests/helpers) — `RunIf`, `run_sh_command`, `package_available`
 - [`tests/test_eval.py::test_train_eval`](../../tests/test_eval.py) — canonical E2E template
-- [`Makefile`](../../Makefile) — `test`, `test-full`, and friends
+- [`Makefile`](../../Makefile) — `test-fast`, the `test-full-*` targets, and friends
 - [`pyproject.toml`](../../pyproject.toml) — registered markers + pytest config
 - [`.github/workflows/`](../../.github/workflows) — which CI job runs which markers
 - Lightning [DataModule](https://lightning.ai/docs/pytorch/stable/data/datamodule.html) and [Trainer](https://lightning.ai/docs/pytorch/stable/common/trainer.html) docs — stage semantics and the `fit/validate/test/predict` contract
