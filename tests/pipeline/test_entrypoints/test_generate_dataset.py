@@ -13,6 +13,7 @@ recorded call args + ordering.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -830,3 +831,36 @@ class TestSpecFromCfg:
         spec = _spec_from_cfg(OmegaConf.create(kwargs))
 
         assert spec.r2_bucket == "interpolated-bucket"
+
+
+# ---------------------------------------------------------------------------
+# main — Hydra CLI entry; PROJECT_ROOT bootstrap
+# ---------------------------------------------------------------------------
+
+
+class TestMain:
+    """``main()`` bootstraps rootutils before invoking @hydra.main.
+
+    ``configs/paths/default.yaml`` interpolates ``${oc.env:PROJECT_ROOT}``; without setup,
+    a fresh-shell ``python -m pipeline.entrypoints.generate_dataset`` raises
+    ``InterpolationResolutionError`` from omegaconf before the user's ``_main`` is reached.
+    """
+
+    def test_main_sets_project_root_before_invoking_hydra(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``PROJECT_ROOT`` is set in the env by ``main()`` prior to the lazy hydra import."""
+        monkeypatch.delenv("PROJECT_ROOT", raising=False)
+        # Replace hydra with a stub so the decorator is a no-op and we don't trigger a real
+        # @hydra.main run — we only assert the bootstrap side-effect.
+        fake_hydra = MagicMock()
+        fake_hydra.main.return_value = lambda fn: lambda: None
+        monkeypatch.setitem(sys.modules, "hydra", fake_hydra)
+
+        from pipeline.entrypoints.generate_dataset import main
+
+        main()
+
+        assert "PROJECT_ROOT" in os.environ
+        # Indicator file lives at the repo root; setup_root resolves to its parent dir.
+        assert (Path(os.environ["PROJECT_ROOT"]) / ".project-root").is_file()

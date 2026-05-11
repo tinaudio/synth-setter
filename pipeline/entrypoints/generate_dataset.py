@@ -1,6 +1,6 @@
 """Spec-driven generate_dataset runner.
 
-``main(cfg)`` is the Hydra-composed CLI (``python -m pipeline.entrypoints.generate_dataset
+``main()`` is the Hydra-composed CLI (``python -m pipeline.entrypoints.generate_dataset
 experiment=<id>``). The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker
 entry that reads a pre-materialized spec from R2 via ``load_spec_from_uri``.
 """
@@ -252,10 +252,15 @@ def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
 def main() -> None:
     """Hydra-composed CLI entry: ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``.
 
-    Hydra is imported lazily so callers that only need ``load_spec_from_uri`` / ``run``
-    (notably ``scripts/docker_entrypoint.py``) don't pay the hydra import cost on every
-    container startup.
+    Bootstraps ``rootutils.setup_root`` so ``configs/paths/default.yaml``'s
+    ``${oc.env:PROJECT_ROOT}`` resolves in a fresh shell, then lazy-imports hydra.
+    Both imports are local: ``scripts/docker_entrypoint.py`` only needs
+    ``load_spec_from_uri`` / ``run`` and shouldn't pay these costs on worker startup.
     """
+    import rootutils
+
+    rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
     import hydra
 
     @hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
