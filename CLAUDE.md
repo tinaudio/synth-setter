@@ -188,6 +188,8 @@ Whenever Claude implements or modifies non-documentation code (anything other th
 2. `/code-health` — review and clean up the resulting code.
 3. `/simplify` — final reuse and efficiency pass.
 
+`/tdd-implementation` and `/code-health` ship in the `tinaudio-synth-setter-skills` plugin (same source as `/repo-review-full`); `/simplify` is a Claude Code built-in. None are defined locally under `.claude/skills/`. If the plugin or built-in is not available in the current environment, note the gap in your response rather than silently skipping the step.
+
 Pure documentation edits (`.md` files, `docs/`) are exempt. There are no other exemptions — this is a hard rule, not a suggestion.
 
 ## Workflow Rules
