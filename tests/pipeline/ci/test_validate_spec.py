@@ -6,7 +6,14 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from src.pipeline.ci.validate_spec import _read_spec_text, validate_structure, validate_test_values
+from src.pipeline.ci.validate_spec import (
+    _REQUIRED_RENDER_FIELDS,
+    _REQUIRED_TOP_LEVEL_FIELDS,
+    _read_spec_text,
+    validate_structure,
+    validate_test_values,
+)
+from src.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 
 def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dict:
@@ -20,10 +27,12 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
         "is_repo_dirty": False,
         "output_format": output_format,
         "train_val_test_sizes": [32, 32, 32],
+        "train_val_test_seeds": None,
         "base_seed": 42,
         "num_params": 92,
         "num_shards": 3,
         "r2_bucket": "intermediate-data",
+        "r2_prefix_root": "data",
         "r2_prefix": "data/test/test-20260328T120000000Z/",
         "render": {
             "plugin_path": "plugins/Surge XT.vst3",
@@ -85,6 +94,27 @@ class TestValidateStructure:
         spec = _make_valid_spec(output_format="parquet")
         errors = validate_structure(spec)
         assert any("output_format" in e and "parquet" in e for e in errors)
+
+    def test_missing_r2_prefix_root_returns_error(self) -> None:
+        """Spec missing r2_prefix_root (a DatasetSpec model field) is rejected.
+
+        Locks the model-derived required set: r2_prefix_root is defined on
+        DatasetSpec with a default, so the hand-rolled required list used to
+        miss it. The derived set surfaces it.
+        """
+        spec = _make_valid_spec()
+        del spec["r2_prefix_root"]
+        errors = validate_structure(spec)
+        assert any("missing" in e and "r2_prefix_root" in e for e in errors)
+
+    def test_required_top_level_fields_match_dataset_spec_model(self) -> None:
+        """Required top-level set is derived from DatasetSpec, not hand-mirrored."""
+        expected = set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)
+        assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
+
+    def test_required_render_fields_match_render_config_model(self) -> None:
+        """Required render set is derived from RenderConfig, not hand-mirrored."""
+        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields)
 
 
 class TestValidateTestValues:
