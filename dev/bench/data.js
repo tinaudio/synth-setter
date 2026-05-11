@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778479000939,
+  "lastUpdate": 1778482078002,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -1170,6 +1170,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.041991591453552246,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b4830f755d99be27f99869c4cb7067cbe5296864",
+          "message": "fix(evaluation): clamp compute_rms denominator to defuse MPS pred.wav silence flake (#899)\n\n* fix(testing): clamp compute_rms denominator to defuse MPS pred.wav silence flake\n\n`test_train_eval_surge_xt[mps]` intermittently failed with `pred.wav is silent`\nbecause MPS has non-deterministic ops and a 1-step-trained model occasionally\npredicted params Surge XT renders below -120 dBFS. The silence assertion\nexisted only as a defensive proxy for `compute_rms`'s `0/0 → NaN` when\n`pred_norm = 0`.\n\nMove the protection into `compute_rms` itself (matches the epsilon-clip\npattern already used in `compute_sot`), so silent pred yields\n`cosine_sim = 0` rather than NaN. Drop the pred.wav silence assertion; keep\nthe target.wav check (target silence would be a real bug).\n\nReturning 0 is within the natural [0, 1] range of cosine similarity for\nnon-negative vectors and correctly penalizes silent predictions; it cannot\nbe gamed upward. No consumer relies on NaN-as-marker.\n\nCloses #898\n\n* fix(testing): short-circuit compute_rms underflow to actually return 0\n\nPer Copilot review on PR #899: the prior commit logged \"returning 0\" on\ndenominator underflow but still computed ``dot/np.clip(denom, 1e-12, None)``,\nwhich only collapsed to 0 when the numerator was exactly 0 (bit-silent pred).\nFor quiet-but-non-zero inputs the clamped division returned an unbounded\nsmall value, contradicting the warning text and the PR's documented intent.\n\nMove the clamp branch to an explicit ``return 0.0`` and add a regression test\nwith ``target = pred = uniform 1e-7`` that would have returned ~0.4 pre-fix.",
+          "timestamp": "2026-05-11T02:33:58-04:00",
+          "tree_id": "87433cbbb9491ed60b0129b4d29bc731c66dc02a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b4830f755d99be27f99869c4cb7067cbe5296864"
+        },
+        "date": 1778482077656,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.6596744060516357,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.252902333587408,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.023899059742689133,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.027762949466705322,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.1610922813415527,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 10.985038660083335,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.8948307037353516,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.5721086424589155,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.027645153924822807,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.02806752920150757,
             "unit": "1-cos"
           },
           {
