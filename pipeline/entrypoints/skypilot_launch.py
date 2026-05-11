@@ -622,7 +622,10 @@ def _run_workers(
     :param cluster_names: One name per rank; ``len()`` defines the world size.
     :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
     :param tail: If True, tail logs and tear down all clusters. If False, detach after launch.
-    :return: Per-rank result code (``0`` = success, anything else = failure).
+    :return: List with one entry per rank in ``cluster_names`` order. ``0`` = success;
+        ``-1`` = launch/stream raised before the rank's work finished (see above);
+        any other non-zero = job failure (with ``tail=True``, the value comes from
+        ``sky.tail_logs``).
     """
     num_workers = len(cluster_names)
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
