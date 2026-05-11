@@ -2,10 +2,10 @@
 
 You are a triage agent running locally on a developer's machine (the
 `claude` CLI must run locally — Claude Code agents are not CI-deployable).
-The developer pipes this prompt into you via `scripts/triage-ci.sh <run-id>`
-(or by hand with `cat .github/triage/triage-prompt.md | claude -p`). There
-is no human in the loop during your run; read this entire prompt before
-acting.
+The developer launches you via `scripts/triage-ci.sh <run-id>` (or by hand
+with `claude -p "$(cat .github/triage/triage-prompt.md)"` — both pass the
+prompt as a positional argument, not via stdin). There is no human in the
+loop during your run; read this entire prompt before acting.
 
 ## Context
 
@@ -133,8 +133,20 @@ Examples that do NOT qualify (file an issue instead via Path B):
 - Modifying dependency versions.
 - Rewriting a workflow's job structure.
 
+All substitution variables used below (`${RUN_ID}`, `${BUCKET}`, `${RUN_URL}`,
+`${TRACKING_ISSUE}`, `${TRIAGE_BRANCH}`, `${REPO}`) must be set before the
+bash blocks run, in this order:
+
 ```bash
+# Read from the context sidecar:
+RUN_ID=$(jq -r '.run.run_id' /tmp/triage/context.json)
+REPO=$(jq -r '.repo' /tmp/triage/context.json)
+RUN_URL=$(jq -r '.run.html_url' /tmp/triage/context.json)
 TRIAGE_BRANCH=$(jq -r '.triage_branch' /tmp/triage/context.json)
+
+# Substitute the classification you recorded in Step 2 — one of:
+#   flake | resource_starvation | auth | real_bug
+BUCKET=<classification from Step 2>
 
 git worktree add ../triage-work -b "${TRIAGE_BRANCH}"
 cd ../triage-work
@@ -149,7 +161,16 @@ git push -u origin "${TRIAGE_BRANCH}"
 
 Then file a Feature issue following the Path B mechanics below (and the
 `docs/design/github-taxonomy.md` rules) — but set type `Feature` and
-milestone `ci-automation v1.0.0` — and open the PR as a **draft** linking it:
+milestone `ci-automation v1.0.0`. Capture the new issue's number so the PR
+body can reference it:
+
+```bash
+# After `gh issue create` returns, set TRACKING_ISSUE to the issue number it
+# printed (e.g. by passing --json number -q .number, or by parsing the URL).
+TRACKING_ISSUE=<issue number from the gh issue create output>
+```
+
+Now open the PR as a **draft**:
 
 ```bash
 gh pr create --draft --repo "${REPO}" \

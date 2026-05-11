@@ -10,18 +10,22 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
-RUN_ID="$1"
-REPO="${TRIAGE_REPO:-tinaudio/synth-setter}"
-CONTEXT_DIR="${TRIAGE_DIR:-/tmp/triage}"
-PROMPT_FILE="${TRIAGE_PROMPT:-$(git rev-parse --show-toplevel)/.github/triage/triage-prompt.md}"
-
-for cmd in gh jq claude; do
+for cmd in gh jq claude git; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "$0: required command not found on PATH: $cmd" >&2
     echo "  see .github/triage/README.md for setup" >&2
     exit 3
   fi
 done
+
+RUN_ID="$1"
+REPO="${TRIAGE_REPO:-tinaudio/synth-setter}"
+
+# /tmp/triage is hard-coded in .github/triage/triage-prompt.md (the agent reads
+# /tmp/triage/context.json directly); don't expose an override that would
+# silently desync the launcher and the agent.
+CONTEXT_DIR="/tmp/triage"
+PROMPT_FILE="${TRIAGE_PROMPT:-$(git rev-parse --show-toplevel)/.github/triage/triage-prompt.md}"
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
   echo "$0: prompt template missing: $PROMPT_FILE" >&2

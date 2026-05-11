@@ -37,9 +37,16 @@ claude --version
 # gh authenticated with repo write scope
 gh auth login --scopes repo
 
-# nektos/act for local reproduction (optional but recommended)
-curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh \
-  | sudo bash -s -- -b /usr/local/bin
+# nektos/act for local reproduction (optional but recommended).
+# Pin the version and verify the upstream checksums.txt to avoid running
+# unpinned remote code as root; bump ACT_VERSION intentionally.
+ACT_VERSION=v0.2.88
+curl -fsSL -o /tmp/act.tar.gz \
+  "https://github.com/nektos/act/releases/download/${ACT_VERSION}/act_Linux_x86_64.tar.gz"
+curl -fsSL -o /tmp/act.checksums.txt \
+  "https://github.com/nektos/act/releases/download/${ACT_VERSION}/checksums.txt"
+(cd /tmp && grep "act_Linux_x86_64.tar.gz" act.checksums.txt | sha256sum -c -)
+sudo tar -C /usr/local/bin -xzf /tmp/act.tar.gz act
 act --version
 ```
 
