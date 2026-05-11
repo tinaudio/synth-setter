@@ -363,7 +363,8 @@ WORKDIR /home/build/synth-setter
 RUN git init && \
     git remote add origin "https://github.com/tinaudio/synth-setter.git" && \
     git fetch origin && \
-    git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
+    git checkout -B main "${SYNTH_PERMUTATIONS_GIT_REF}" && \
+    git branch --set-upstream-to=origin/main main
 
 # Install the project package so `import src` works from any working directory.
 # --no-deps: all runtime deps already installed via uv pip install above.

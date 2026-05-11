@@ -37,12 +37,6 @@ cd "$dir"
 # before later git config calls and pre-commit install.
 git config --global --add safe.directory "$(pwd)"
 
-# Isolated devcontainers land detached in the baked image clone — switch to main.
-if ! git symbolic-ref -q HEAD >/dev/null; then
-  git fetch origin main && git checkout -B main origin/main \
-    || echo "WARNING: could not move detached HEAD onto main." >&2
-fi
-
 if [ -n "${RESTRICTED_AGENT_GIT_PAT:-}" ]; then
   # Strip surrounding double or single quotes if present
   # (Docker's --env-file doesn't strip them like shell `source` does)
