@@ -78,7 +78,6 @@ RunPod is used because it's the platform where GPUs are already available and co
 ```bash
 # 1. Pick an experiment config (filename = experiment id).
 #    Hydra composes the final DatasetSpec from configs/dataset.yaml + this overlay.
-#    configs/experiment/*.yaml is the legacy launcher path (`--config`), not the Hydra CLI input.
 cat configs/experiment/surge-simple-480k-10k.yaml
 # → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 

@@ -44,6 +44,7 @@ import sky.check  # accessed conditionally on the kubernetes path; see provider 
 import yaml
 from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
+from hydra.errors import HydraException
 
 from pipeline.entrypoints.generate_dataset import spec_from_cfg
 from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
@@ -108,11 +109,18 @@ def _compose_dataset_spec(experiment: str, overrides: list[str]) -> DatasetSpec:
     ``@hydra.main`` does), and ``paths.output_dir = ${hydra:runtime.output_dir}`` would
     otherwise fail to resolve.
     """
-    with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
-        cfg = compose(
-            config_name="dataset",
-            overrides=[f"experiment={experiment}", *overrides],
-        )
+    try:
+        with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
+            cfg = compose(
+                config_name="dataset",
+                overrides=[f"experiment={experiment}", *overrides],
+            )
+    except HydraException as exc:
+        # Unknown experiment or malformed override surfaces here; convert the Hydra
+        # traceback into a one-line CLI error so the launcher reads as a normal click failure.
+        raise click.ClickException(
+            f"Hydra compose failed for experiment {experiment!r}: {exc}"
+        ) from exc
     cfg.paths.root_dir = str(REPO_ROOT)
     cfg.paths.output_dir = str(REPO_ROOT)
     cfg.paths.work_dir = str(REPO_ROOT)
@@ -330,9 +338,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     return spec_uri
 
 
-@click.command(
-    context_settings={"ignore_unknown_options": True},
-)
+@click.command()
 @click.option(
     "--experiment",
     "experiment",

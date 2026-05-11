@@ -341,6 +341,64 @@ class TestMainCli:
         mock_sky.Task.from_yaml.assert_not_called()
         mock_sky.launch.assert_not_called()
 
+    def test_unknown_experiment_surfaces_as_click_error(
+        self,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A missing experiment fails as a click error (not a Hydra traceback) and never launches.
+
+        Hydra raises ``HydraException`` from ``compose`` when the named experiment file isn't
+        on the config-search path; the launcher wraps that as a ``click.ClickException`` so the
+        user sees a one-line CLI error.
+        """
+        result = _invoke(
+            "this-experiment-does-not-exist",
+            template_yaml,
+            env_file,
+            fake_plugin=fake_plugin,
+        )
+        assert result.exit_code != 0
+        assert "Hydra compose failed for experiment 'this-experiment-does-not-exist'" in (
+            result.output
+        )
+        mock_sky.launch.assert_not_called()
+
+    def test_unknown_launcher_flag_is_rejected(
+        self,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Typos of `--`-style launcher options are rejected by Click instead of being silently
+        forwarded as Hydra overrides — Hydra overrides are positional ``key=value`` args, not
+        flags, so strict option validation catches misspellings of real launcher flags."""
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--experiment",
+                "runpod-smoke-shard",
+                "--template",
+                str(template_yaml),
+                "--env-file",
+                str(env_file),
+                "--not-a-real-flag",
+                "oops",
+                f"render.plugin_path={fake_plugin}",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "no such option" in result.output.lower()
+        mock_sky.launch.assert_not_called()
+
     def test_empty_env_file_with_no_process_env_fails(
         self,
         tmp_path: Path,
@@ -582,6 +640,7 @@ class TestMainCli:
 
     def test_default_cluster_name_uses_task_name_prefix(
         self,
+        tmp_path: Path,
         experiment: str,
         fake_plugin: Path,
         template_yaml: Path,
@@ -591,12 +650,24 @@ class TestMainCli:
         mock_sky: MagicMock,
     ) -> None:
         """Without --cluster-name the launcher derives the name from ``spec.task_name[:8]``."""
-        result = _invoke(experiment, template_yaml, env_file, fake_plugin=fake_plugin)
+        # Pin --spec-out so the test reads back the same spec the launcher composed,
+        # rather than assuming spec.task_name equals the experiment id (an experiment
+        # YAML may override `task_name`).
+        spec_out = tmp_path / "input_spec.json"
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--spec-out",
+            str(spec_out),
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
+        spec = DatasetSpec.model_validate_json(spec_out.read_text())
 
         kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"].startswith("synth-setter-smoke-")
-        assert kwargs["cluster_name"].endswith(experiment[:8])
+        assert kwargs["cluster_name"].endswith(spec.task_name[:8])
         assert kwargs["idle_minutes_to_autostop"] >= 2
         assert kwargs["down"] is True
 
