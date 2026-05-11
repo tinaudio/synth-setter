@@ -86,13 +86,26 @@ account); `gh auth token` is always live and matches the identity in
 `gh auth status`. Use either, but expect a `gh: Bad credentials (HTTP 401)`
 from the workflow if the token is expired.
 
-### Gotcha: `-s GITHUB_TOKEN=…` does *not* always propagate
+### Gotcha: bash evaluation order with `-s KEY=$VAR`
 
-`act -s KEY=value` and `act --secret-file …` look interchangeable but aren't
-for `GITHUB_TOKEN` specifically. The reliable pattern is to put the line in
-the `--secret-file`. A `-s GITHUB_TOKEN=…` alone has been observed to leave
-`secrets.GITHUB_TOKEN` empty inside the step's env, so steps like
-`gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable` fire even though the flag was passed.
+`act -s KEY=value` and `act --secret-file …` work equivalently — *as long as
+the shell evaluates `value` correctly at the call site*. The trap is the bash
+assignment-on-command-line form:
+
+```bash
+# WRONG — $TOKEN expands to empty in the parent shell, so act gets -s GITHUB_TOKEN=
+TOKEN="$(gh auth token)" act … -s "GITHUB_TOKEN=$TOKEN"
+
+# OK — assign first, then reference
+TOKEN="$(gh auth token)"
+act … -s "GITHUB_TOKEN=$TOKEN"
+
+# OK — substitute inline so the value is captured before act sees the flag
+act … -s "GITHUB_TOKEN=$(gh auth token)"
+```
+
+If `secrets.GITHUB_TOKEN` ends up empty inside the workflow, `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable` fires from any step that calls `gh`. Check your shell invocation
+before blaming `act`.
 
 ## Working tree: copy vs `--bind`
 
