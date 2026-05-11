@@ -235,7 +235,7 @@ A PR is **not ready** — for review, merge, or hand-off — until **all** of th
    gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate \
      --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, body}]'
    # Top-level reviews (overall summary, including a no-findings note)
-   gh api repos/<OWNER>/<REPO>/pulls/<N>/reviews \
+   gh api repos/<OWNER>/<REPO>/pulls/<N>/reviews --paginate \
      --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, state, submitted_at, body}]'
    ```
 
