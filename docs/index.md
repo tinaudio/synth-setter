@@ -1,4 +1,4 @@
-# synth-permutations config reference
+# synth-setter config reference
 
 This site documents the project's Hydra config schemas — the Pydantic models
 that define how datasets, training runs, and pipeline stages are configured.
