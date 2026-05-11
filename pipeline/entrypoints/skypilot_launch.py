@@ -527,7 +527,7 @@ def main(
 
     # Single-worker keeps the unsuffixed cluster name for backward compatibility with debug
     # workflows / CI dashboards that key off it; multi-worker uses -rN suffixes.
-    cluster_names = (
+    job_names = (
         [base_cluster_name]
         if resolved_num_workers == 1
         else [f"{base_cluster_name}-r{i}" for i in range(resolved_num_workers)]
@@ -536,13 +536,13 @@ def main(
     rcs = _run_workers(
         worker_env_base=worker_env,
         template_path=template_path,
-        cluster_names=cluster_names,
+        job_names=job_names,
         worker_image_tag=worker_image_tag,
         tail=tail,
     )
 
     failed = [
-        (cluster_names[i], rcs[i])
+        (job_names[i], rcs[i])
         for i in range(resolved_num_workers)
         if rcs[i] != _TAIL_LOGS_RC_SUCCESS
     ]
@@ -578,11 +578,11 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
 def _run_workers(
     worker_env_base: dict[str, str],
     template_path: Path,
-    cluster_names: list[str],
+    job_names: list[str],
     worker_image_tag: str,
     tail: bool,
 ) -> list[int]:
-    """Launch len(cluster_names) managed jobs in parallel; return per-rank result code.
+    """Launch len(job_names) managed jobs in parallel; return per-rank result code.
 
     Each rank's task gets SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected. A rank's
     slot in the result is ``-1`` if launch/stream raised before the rank's per-mode work
@@ -598,18 +598,18 @@ def _run_workers(
     Args:
         worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
         template_path: SkyPilot Task YAML to instantiate per rank.
-        cluster_names: One managed-job name per rank; ``len()`` defines the world size.
+        job_names: One managed-job name per rank; ``len()`` defines the world size.
         worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
         tail: If True, tail logs and cancel all jobs. If False, detach after launch.
 
     Returns:
         Per-rank result code (``0`` = success, anything else = failure).
     """
-    num_workers = len(cluster_names)
+    num_workers = len(job_names)
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
 
     def _launch_get_job_id(rank: int) -> int:
-        job_name = cluster_names[rank]
+        job_name = job_names[rank]
         env_for_rank = {
             **worker_env_base,
             WORKER_RANK_ENV_VAR: str(rank),
@@ -632,19 +632,17 @@ def _run_workers(
         return job_ids[0]
 
     if tail:
-        return _run_workers_tail(cluster_names, _launch_get_job_id)
-    return _run_workers_detached(cluster_names, _launch_get_job_id)
+        return _run_workers_tail(job_names, _launch_get_job_id)
+    return _run_workers_detached(job_names, _launch_get_job_id)
 
 
-def _run_workers_tail(
-    cluster_names: list[str], launch_get_job_id: Callable[[int], int]
-) -> list[int]:
+def _run_workers_tail(job_names: list[str], launch_get_job_id: Callable[[int], int]) -> list[int]:
     """Tail-mode runner: tail managed-job logs per rank and cancel every job in the finally block."""
-    num_workers = len(cluster_names)
+    num_workers = len(job_names)
     rcs: list[int] = [-1] * num_workers
 
     def _launch_and_tail(rank: int) -> int:
-        job_name = cluster_names[rank]
+        job_name = job_names[rank]
         job_id = launch_get_job_id(rank)
         click.echo(f"[{job_name}] streaming logs for job {job_id}")
         # sky.jobs.tail_logs returns the rc int directly (None only when follow=False) — no
@@ -674,17 +672,17 @@ def _run_workers_tail(
                 try:
                     rcs[rank] = fut.result()
                 except Exception as exc:  # noqa: BLE001 — keep cancel reachable for every rank.
-                    click.echo(f"[{cluster_names[rank]}] launch or tail raised: {exc}")
+                    click.echo(f"[{job_names[rank]}] launch or tail raised: {exc}")
                     rcs[rank] = -1
     finally:
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            for job_name in cluster_names:
+            for job_name in job_names:
                 executor.submit(_cancel_job, job_name)
     return rcs
 
 
 def _run_workers_detached(
-    cluster_names: list[str], launch_get_job_id: Callable[[int], int]
+    job_names: list[str], launch_get_job_id: Callable[[int], int]
 ) -> list[int]:
     """Detach-mode runner.
 
@@ -695,7 +693,7 @@ def _run_workers_detached(
     ``launch_get_job_id``) — still get cancelled here so the controller doesn't accumulate
     orphan state.
     """
-    num_workers = len(cluster_names)
+    num_workers = len(job_names)
     rcs: list[int] = [-1] * num_workers
     failed_jobs: list[str] = []
 
@@ -703,7 +701,7 @@ def _run_workers_detached(
         future_to_rank = {executor.submit(launch_get_job_id, i): i for i in range(num_workers)}
         for fut in as_completed(future_to_rank):
             rank = future_to_rank[fut]
-            job_name = cluster_names[rank]
+            job_name = job_names[rank]
             try:
                 job_id = fut.result()
             except Exception as exc:  # noqa: BLE001 — half-submitted job still needs cleanup.

@@ -854,13 +854,15 @@ class TestNumWorkersFanOut:
         tail_rcs_by_name: dict[str, int] | None = None,
         base_job_name: str = "smoke-job-1",
     ) -> dict[str, MagicMock]:
-        """Configure `mock_sky` for an N-job run with deterministic per-name routing.
+        """Configure `mock_sky` for an N-job run with deterministic per-rank routing.
 
         Returns a ``job_name -> Task`` dict keyed by the managed-job name the launcher will
         request, so tests can inspect each rank's ``update_envs`` call without depending on
-        ThreadPoolExecutor scheduling order. ``jobs.tail_logs`` and ``jobs.launch`` route by
-        their ``name`` kwarg (not by call order), so an rc=100 for ``smoke-job-1-r1``
-        deterministically attaches to rank 1 regardless of which thread ran first.
+        ThreadPoolExecutor scheduling order. ``jobs.launch`` and ``jobs.cancel`` route by
+        their ``name`` kwarg; ``jobs.tail_logs`` routes by ``job_id`` (the launcher passes
+        only ``job_id`` because the SDK rejects ``name + job_id`` together). Either way
+        an rc=100 for the rank-1 job deterministically attaches to rank 1 regardless of
+        which thread ran first.
         """
         rcs = tail_rcs_by_name if tail_rcs_by_name is not None else {}
         job_names = [f"{base_job_name}-r{i}" for i in range(n)]

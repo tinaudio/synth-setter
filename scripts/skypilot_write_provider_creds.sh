@@ -207,7 +207,12 @@ write_oci_creds() {
 # floor), and an earlier "skip if file exists" guard meant running the script for
 # one provider after another would silently leave the second provider without its
 # section. Upsert by top-level key instead: replace exactly the key we manage,
-# preserve any other keys the user (or another provider's run) already populated.
+# preserve the *data* under any other top-level keys the user (or another
+# provider's run) already populated. NB: the file is re-serialized via PyYAML
+# `safe_dump`, so comments and original key ordering / formatting are dropped —
+# only mapping data round-trips. This is acceptable because `~/.sky/config.yaml`
+# is bootstrap-owned in CI; hand-managed local-dev configs that rely on comments
+# should be edited outside this script.
 #
 # Secret-borne fragments (e.g. `oci:` carrying OCI_COMPARTMENT_OCID) are passed
 # to python3 via an env var rather than argv — `/proc/<pid>/cmdline` is
