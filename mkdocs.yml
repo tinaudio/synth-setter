@@ -1,0 +1,61 @@
+site_name: synth-permutations
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [.]
+          options:
+            show_root_heading: true
+            show_source: false
+            members_order: source
+            docstring_style: google
+            show_if_no_docstring: true
+            separate_signature: true
+            show_signature_annotations: true
+
+# Only surface the config-reference site for now; existing engineering docs
+# under docs/ (architecture, design, guides, etc.) are kept out of the build
+# so this scaffolding can grow incrementally without pulling them in.
+exclude_docs: |
+  architecture.md
+  doc-map.yaml
+  getting-started.md
+  glossary.md
+  org-migration-checklist.md
+  data-pipeline-implementation-plan.md
+  design/
+  guides/
+  operations/
+  reference/
+
+nav:
+  - Home: index.md
+  - Config Reference:
+      - Dataset Spec: config_reference/dataset_spec.md
