@@ -1,9 +1,15 @@
 #!/usr/bin/env python
-"""Queue commands from a text file using pueue.
+"""Queue shell commands from a text file as background jobs.
 
-Reads a path to a UTF-8 text file containing one shell command per line, and
-enqueues each line as a separate task in a configurable pueue group. Blank
-lines and lines whose first non-whitespace character is ``#`` are skipped.
+Reads a path to a UTF-8 text file containing one shell command per line and
+submits each line as a separate background job in a configurable group.
+Blank lines and lines whose first non-whitespace character is ``#`` are
+skipped.
+
+The current backend is `pueue <https://github.com/Nukesor/pueue>`_ — it is
+treated as an implementation detail and may be swapped without changing this
+CLI's user-facing flags or output. References to ``pueue`` below describe
+the current backend's behavior.
 
 Example file::
 
@@ -13,13 +19,13 @@ Example file::
 
 Example invocation::
 
-    python scripts/pueue_queue.py sweeps/train.txt \\
+    python scripts/job_queue.py sweeps/train.txt \\
         --group train --parallel 2 --label-prefix sweep
 
-Each line becomes one ``pueue add`` invocation. Pueue itself runs the command
-through a shell, so all shell features (``=``, ``&&``, env-var expansion) work
-as written. Submission is fail-fast: a non-zero ``pueue add`` aborts the run
-and the remaining commands are not enqueued.
+Each line becomes one ``pueue add`` invocation. Pueue runs the command through
+a shell, so all shell syntax (``=``, ``&&``, env-var expansion) works as
+written. Submission is fail-fast: a non-zero ``pueue add`` aborts the run and
+the remaining commands are not enqueued.
 """
 
 from __future__ import annotations
@@ -138,7 +144,7 @@ def enqueue_all(
     "--group",
     default=DEFAULT_GROUP,
     show_default=True,
-    help="Pueue group to enqueue into. Created if missing.",
+    help="Job-queue group to enqueue into. Created if missing.",
 )
 @click.option(
     "--parallel",
@@ -151,7 +157,7 @@ def enqueue_all(
     "--working-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     default=None,
-    help="Directory each task runs in. Defaults to pueue's own CWD.",
+    help="Directory each job runs in. Defaults to the backend's own CWD.",
 )
 @click.option(
     "--label-prefix",
@@ -163,12 +169,12 @@ def enqueue_all(
     "--start-daemon/--no-start-daemon",
     default=True,
     show_default=True,
-    help="Start `pueued -d` if no daemon is reachable.",
+    help="Start the backend daemon (`pueued -d`) if it isn't already reachable.",
 )
 @click.option(
     "--dry-run",
     is_flag=True,
-    help="Print the pueue commands that would run, without invoking pueue.",
+    help="Print the backend commands that would run, without invoking the backend.",
 )
 def main(
     command_file: Path,
@@ -179,7 +185,7 @@ def main(
     start_daemon: bool,
     dry_run: bool,
 ) -> None:
-    """Queue each line of COMMAND_FILE as a separate pueue task."""
+    """Queue each line of COMMAND_FILE as a separate background job."""
     commands = parse_command_file(command_file)
     if not commands:
         raise click.UsageError(f"no commands found in {command_file} (only blanks/comments?)")
@@ -204,9 +210,9 @@ def main(
         enqueue_all(commands, group, working_dir, label_prefix, runner)
     except subprocess.CalledProcessError as exc:
         msg = exc.stderr.strip() if exc.stderr else f"exit {exc.returncode}"
-        raise click.ClickException(f"pueue add failed: {msg}") from exc
+        raise click.ClickException(f"job submission failed: {msg}") from exc
 
-    click.echo(f"Enqueued {len(commands)} task(s) into group '{group}'.")
+    click.echo(f"Enqueued {len(commands)} job(s) into group '{group}'.")
 
 
 if __name__ == "__main__":

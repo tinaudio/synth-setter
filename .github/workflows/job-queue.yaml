@@ -1,28 +1,28 @@
-name: Pueue Queue Dispatch
+name: Job Queue Dispatch
 
 # Dispatchable workflow that feeds a line-separated command file into the
-# pueue task queue manager (https://github.com/Nukesor/pueue) via the
-# `scripts/pueue_queue.py` CLI. Each non-blank, non-comment line of the input
-# file becomes one queued task in the named pueue group, then the workflow
-# uploads the persisted pueue state directory as a workflow artifact.
+# job-queue CLI (`scripts/job_queue.py`). Each non-blank, non-comment line of
+# the input file becomes one queued job in the named group; the workflow then
+# uploads the persisted queue state directory as a workflow artifact.
+#
+# The current backend is pueue (https://github.com/Nukesor/pueue), baked into
+# the `tinaudio/synth-setter` Docker image. Pueue is treated as an
+# implementation detail — the workflow inputs and CLI flags are
+# backend-neutral.
 #
 # Waiting for the queue to drain is opt-in: set `wait_timeout_seconds` > 0 to
 # block on `pueue wait` (bounded by that timeout) before the container exits.
-# The default of 0 returns immediately after `pueue add` — the tasks keep
+# The default of 0 returns immediately after submission — the jobs keep
 # running inside the container, so the artifact upload still captures their
 # in-flight state, but the workflow does not gate on completion.
 #
 # Use cases:
 #   - smoke-test a sweep file from the repo (e.g. sweeps/quick.txt) without
 #     standing up a worker on RunPod
-#   - dry-run a sweep file to validate the pueue invocations the CLI would
+#   - dry-run a sweep file to validate the backend invocations the CLI would
 #     produce before committing to a real run
 #
-# The runner pulls the `tinaudio/synth-setter` Docker image — the same image
-# that has the `pueue` and `pueued` binaries baked in by
-# `docker/ubuntu22_04/Dockerfile` — and mounts the repo checkout, so the
-# queued commands run inside the project's full Python + VST3 env. Pueue
-# state is rooted via XDG_DATA_HOME so the persisted path is the same
+# Queue state is rooted via XDG_DATA_HOME so the persisted path is the same
 # regardless of whether the image runs as root or as a non-root user (e.g.
 # `devcontainer-tools` sets `USER dev`).
 
@@ -39,27 +39,27 @@ on:
         type: string
         default: "dev-snapshot"
       group:
-        description: "Pueue group to enqueue into. Created if missing."
+        description: "Job-queue group to enqueue into. Created if missing."
         required: false
         type: string
         default: "default"
       parallel:
-        description: "Concurrent task slots for the group."
+        description: "Concurrent job slots for the group."
         required: false
         type: number
         default: 1
       label_prefix:
-        description: "Prefix for per-task labels (each label becomes '<prefix>-<index>')."
+        description: "Prefix for per-job labels (each label becomes '<prefix>-<index>')."
         required: false
         type: string
         default: "gha"
       dry_run:
-        description: "Print the pueue commands instead of running them."
+        description: "Print the backend commands instead of running them."
         required: false
         type: boolean
         default: false
       wait_timeout_seconds:
-        description: "How long to block on `pueue wait` after enqueueing. 0 means do not wait."
+        description: "How long to block waiting for the queue to drain. 0 means do not wait."
         required: false
         type: number
         default: 0
@@ -75,11 +75,10 @@ jobs:
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag }}
       COMMAND_FILE: ${{ inputs.command_file }}
-      PUEUE_GROUP: ${{ inputs.group }}
-      PUEUE_PARALLEL: ${{ inputs.parallel }}
-      PUEUE_LABEL_PREFIX: ${{ inputs.label_prefix }}
-      PUEUE_DRY_RUN: ${{ inputs.dry_run }}
-      PUEUE_WAIT_TIMEOUT: ${{ inputs.wait_timeout_seconds }}
+      JOB_GROUP: ${{ inputs.group }}
+      JOB_PARALLEL: ${{ inputs.parallel }}
+      JOB_LABEL_PREFIX: ${{ inputs.label_prefix }}
+      JOB_WAIT_TIMEOUT: ${{ inputs.wait_timeout_seconds }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -97,11 +96,10 @@ jobs:
       - name: Pull synth-setter image
         run: docker pull "${IMAGE}"
 
-      # Dry-run mode skips the daemon — `python scripts/pueue_queue.py --dry-run`
-      # only prints the `pueue add` argv it would emit, so we don't need to
-      # start `pueued`. This branch is also what we run in CI smoke tests of
-      # the workflow itself.
-      - name: Dry-run pueue_queue CLI
+      # Dry-run mode skips the daemon — `python scripts/job_queue.py --dry-run`
+      # only prints the backend argv it would emit, so we don't need a running
+      # daemon. This branch is also what the validate workflow exercises.
+      - name: Dry-run job_queue CLI
         if: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
@@ -110,56 +108,56 @@ jobs:
             -e PYTHONPATH=/home/build/synth-setter \
             -w /home/build/synth-setter \
             "${IMAGE}" \
-            python scripts/pueue_queue.py "${COMMAND_FILE}" \
-              --group "${PUEUE_GROUP}" \
-              --parallel "${PUEUE_PARALLEL}" \
-              --label-prefix "${PUEUE_LABEL_PREFIX}" \
+            python scripts/job_queue.py "${COMMAND_FILE}" \
+              --group "${JOB_GROUP}" \
+              --parallel "${JOB_PARALLEL}" \
+              --label-prefix "${JOB_LABEL_PREFIX}" \
               --dry-run
 
-      # Real run: persist the pueue daemon state outside the container so we
+      # Real run: persist the queue daemon state outside the container so we
       # can upload the queue log as an artifact afterwards. The daemon runs
       # in the background inside the container; the script enqueues and
       # (optionally) waits for completion before the container exits.
       #
-      # Mount path uses XDG_DATA_HOME=/pueue-state rather than
-      # `/root/.local/share/pueue` so the persisted directory is the same
-      # whether the image runs as root or as a non-root user (e.g. the
-      # `devcontainer-tools` image sets `USER dev`). Pueue honors
+      # Mount path uses XDG_DATA_HOME=/queue-state rather than the
+      # backend-default `~/.local/share/pueue` so the persisted directory is
+      # the same whether the image runs as root or as a non-root user (e.g.
+      # the `devcontainer-tools` image sets `USER dev`). Pueue honors
       # XDG_DATA_HOME for its data_local_dir lookup.
-      - name: Run pueue_queue CLI
+      - name: Run job_queue CLI
         if: ${{ !inputs.dry_run }}
         run: |
           set -euo pipefail
-          mkdir -p "${{ github.workspace }}/.pueue-state"
+          mkdir -p "${{ github.workspace }}/.queue-state"
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v "${{ github.workspace }}/.pueue-state:/pueue-state" \
+            -v "${{ github.workspace }}/.queue-state:/queue-state" \
             -e PYTHONPATH=/home/build/synth-setter \
-            -e XDG_DATA_HOME=/pueue-state \
+            -e XDG_DATA_HOME=/queue-state \
             -e COMMAND_FILE \
-            -e PUEUE_GROUP \
-            -e PUEUE_PARALLEL \
-            -e PUEUE_LABEL_PREFIX \
-            -e PUEUE_WAIT_TIMEOUT \
+            -e JOB_GROUP \
+            -e JOB_PARALLEL \
+            -e JOB_LABEL_PREFIX \
+            -e JOB_WAIT_TIMEOUT \
             -w /home/build/synth-setter \
             "${IMAGE}" \
             bash -euxo pipefail -c '
-              python scripts/pueue_queue.py "$COMMAND_FILE" \
-                --group "$PUEUE_GROUP" \
-                --parallel "$PUEUE_PARALLEL" \
-                --label-prefix "$PUEUE_LABEL_PREFIX"
-              if [ "$PUEUE_WAIT_TIMEOUT" -gt 0 ]; then
-                echo "Waiting up to ${PUEUE_WAIT_TIMEOUT}s for queue to drain..."
-                timeout "$PUEUE_WAIT_TIMEOUT" pueue wait --group "$PUEUE_GROUP" || true
+              python scripts/job_queue.py "$COMMAND_FILE" \
+                --group "$JOB_GROUP" \
+                --parallel "$JOB_PARALLEL" \
+                --label-prefix "$JOB_LABEL_PREFIX"
+              if [ "$JOB_WAIT_TIMEOUT" -gt 0 ]; then
+                echo "Waiting up to ${JOB_WAIT_TIMEOUT}s for queue to drain..."
+                timeout "$JOB_WAIT_TIMEOUT" pueue wait --group "$JOB_GROUP" || true
               fi
-              pueue status --group "$PUEUE_GROUP"
+              pueue status --group "$JOB_GROUP"
             '
 
-      - name: Upload pueue state and logs
+      - name: Upload queue state and logs
         if: ${{ !inputs.dry_run && always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: pueue-state-${{ github.run_id }}
-          path: .pueue-state/
+          name: queue-state-${{ github.run_id }}
+          path: .queue-state/
           if-no-files-found: warn
           retention-days: 7

@@ -317,7 +317,8 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 
 # Install pueue task queue manager (https://github.com/Nukesor/pueue). Static
 # musl binaries from the upstream release page — no apt repo and no rust
-# toolchain pulled into the image. Used by `scripts/pueue_queue.py`.
+# toolchain pulled into the image. Used by `scripts/job_queue.py` as the
+# job-queue backend.
 #
 # Integrity: each binary is verified against a pinned SHA256 (per arch) before
 # chmod. Bump these alongside PUEUE_VERSION — values come from running

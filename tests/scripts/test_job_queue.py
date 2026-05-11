@@ -1,9 +1,9 @@
-"""Tests for scripts/pueue_queue.py — line-by-line command queueing via pueue.
+"""Tests for scripts/job_queue.py — line-by-line command queueing.
 
 The CLI shells out to the pueue binary, so the tests pin the public typed API
 (parse_command_file, build_pueue_add_args, ensure_group, enqueue_all) and use
 fake subprocess runners injected as callables — no real `pueue` process is ever
-spawned. The contract under test is "given this input, what `pueue` args are
+spawned. The contract under test is "given this input, what backend args are
 emitted, in what order?"
 """
 
@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from scripts.pueue_queue import (
+from scripts.job_queue import (
     DEFAULT_GROUP,
     build_pueue_add_args,
     enqueue_all,
