@@ -208,6 +208,11 @@ write_oci_creds() {
 # one provider after another would silently leave the second provider without its
 # section. Upsert by top-level key instead: replace exactly the key we manage,
 # preserve any other keys the user (or another provider's run) already populated.
+#
+# Secret-borne fragments (e.g. `oci:` carrying OCI_COMPARTMENT_OCID) are passed
+# to python3 via an env var rather than argv — `/proc/<pid>/cmdline` is
+# world-readable on Linux but `/proc/<pid>/environ` is owner-readable, so an
+# env-borne secret can't be observed by other users on the runner via ps.
 upsert_sky_config_key() {
   local key="$1"
   local fragment="$2"
@@ -215,14 +220,15 @@ upsert_sky_config_key() {
 
   mkdir -p "$HOME/.sky"
 
-  python3 - "${key}" "${fragment}" "${sky_config}" <<'PY'
+  SYNTH_UPSERT_FRAGMENT="${fragment}" python3 - "${key}" "${sky_config}" <<'PY'
 import os
 import sys
 from pathlib import Path
 
 import yaml
 
-key, fragment, path_str = sys.argv[1], sys.argv[2], sys.argv[3]
+key, path_str = sys.argv[1], sys.argv[2]
+fragment = os.environ.pop("SYNTH_UPSERT_FRAGMENT")
 path = Path(path_str)
 existing = {}
 if path.is_file() and path.stat().st_size > 0:

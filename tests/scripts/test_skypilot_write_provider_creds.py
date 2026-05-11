@@ -24,8 +24,10 @@ can't reintroduce a leak surface.
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -126,6 +128,42 @@ class TestNoStdoutLeak:
             assert value not in result.stderr, (
                 f"secret value {value!r} leaked to stderr: {result.stderr!r}"
             )
+
+    def test_oci_compartment_ocid_never_passed_as_subprocess_argv(self, tmp_path: Path) -> None:
+        """The `upsert_sky_config_key` helper must NOT pass a secret-bearing YAML fragment to
+        ``python3`` via argv. ``/proc/<pid>/cmdline`` is world-readable on Linux, so a secret
+        carried in argv can be observed by any other user on the runner via ``ps``. Stdin/env-var
+        carriage is required.
+
+        Test approach: shim ``python3`` with a wrapper that logs its argv to a
+        file before exec'ing the real interpreter; run ``--provider oci``; assert
+        the OCI_COMPARTMENT_OCID value never appears anywhere in the logged argv.
+        """
+        real_python = shutil.which("python3") or sys.executable
+        log_path = tmp_path / "argv.log"
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        shim = bin_dir / "python3"
+        shim.write_text(
+            "#!/usr/bin/env bash\n"
+            f'{{ printf "argv:\\n"; printf "  %s\\n" "$@"; echo "---"; }} >> {log_path}\n'
+            f'exec {real_python} "$@"\n'
+        )
+        shim.chmod(0o755)
+
+        env_overrides = {
+            **R2_ENV,
+            **OCI_ENV,
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        }
+        _run(tmp_path, env_overrides, "--provider", "oci")
+
+        logged = log_path.read_text() if log_path.exists() else ""
+        # Sanity: shim was actually invoked (otherwise the test would pass vacuously).
+        assert "argv:" in logged, f"python3 shim was not invoked: log={logged!r}"
+        assert OCI_ENV["OCI_COMPARTMENT_OCID"] not in logged, (
+            f"OCI_COMPARTMENT_OCID leaked into a subprocess argv: {logged!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -7,8 +7,12 @@
 # already running.
 #
 # The launcher detects `cloud: kubernetes` and runs the cred bootstrap with
-# `--provider local`, which writes only the R2 cred files — kind needs no
-# compute provider auth. R2 still ships the materialized spec
+# `--provider local`, which writes the R2 cred files (kind itself needs no
+# compute provider auth) AND upserts a shrunken `jobs.controller.resources`
+# block into `~/.sky/config.yaml` so the managed-jobs controller pod fits on
+# the kind cluster `sky local up` provisions in CI (the SkyPilot defaults
+# of cpus=4+/mem=4x/disk_size=50 don't fit, and k8s rejects disk_size).
+# R2 still ships the materialized spec
 # (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`).
 #
 # Image: `tinaudio/synth-setter:<worker-image-tag>` is loaded into the kind
