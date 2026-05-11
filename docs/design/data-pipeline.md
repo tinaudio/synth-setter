@@ -78,7 +78,7 @@ RunPod is used because it's the platform where GPUs are already available and co
 ```bash
 # 1. Pick an experiment config (filename = experiment id).
 #    Hydra composes the final DatasetSpec from configs/dataset.yaml + this overlay.
-#    configs/dataset/*.yaml is the legacy launcher path (`--config`), not the Hydra CLI input.
+#    configs/experiment/*.yaml is the legacy launcher path (`--config`), not the Hydra CLI input.
 cat configs/experiment/surge-simple-480k-10k.yaml
 # → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 
@@ -90,7 +90,7 @@ python -m pipeline.entrypoints.generate_dataset experiment=surge-simple-480k-10k
 # `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
-# python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
+# python -m pipeline generate --experiment surge-simple-480k-10k --workers 10
 # → Created run surge-simple-480k-10k-20260313T100000123Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
@@ -113,7 +113,7 @@ Make targets are thin aliases for convenience:
 > **Not yet implemented.** These `make` targets are planned but do not exist in the Makefile yet ([#72](https://github.com/tinaudio/synth-setter/issues/72)).
 
 ```bash
-make generate ARGS="--config configs/dataset/surge-simple-480k-10k.yaml --workers 10"
+make generate ARGS="--experiment surge-simple-480k-10k --workers 10"
 make status ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 ```
@@ -1359,7 +1359,7 @@ Pydantic is for trust boundaries — where data enters the system from an extern
 A run starts from a typed YAML config file:
 
 ```yaml
-# configs/dataset/surge-simple-480k-10k.yaml (filename = dataset_config_id)
+# configs/experiment/surge-simple-480k-10k.yaml (filename = dataset_config_id)
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3
 output_format: hdf5       # "hdf5" (local training) or "wds" (multi-GPU streaming)
@@ -1406,7 +1406,7 @@ On first `generate`:
 | Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022500Z`                             |
 | R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/` |
 
-Config filenames live in `configs/dataset/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `runpod-smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
+Config filenames live in `configs/experiment/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `runpod-smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
 
 ### 14.7 CLI & Directory Structure
 
@@ -1453,7 +1453,7 @@ pipeline/
   # logging_config.py   # structlog configuration
 ```
 
-Pipeline configs live in `configs/dataset/` (filename = `dataset_config_id`) to distinguish them from training configs in `configs/data/` and `configs/trainer/`:
+Pipeline configs live in `configs/experiment/` (filename = `dataset_config_id`) to distinguish them from training configs in `configs/data/` and `configs/trainer/`:
 
 ```
 configs/

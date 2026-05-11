@@ -41,7 +41,7 @@ original parameters.
 
 ## Data Flow
 
-1. **Configure** -- Define a dataset in `configs/dataset/*.yaml` (synth, sample
+1. **Configure** -- Define a dataset in `configs/experiment/*.yaml` (synth, sample
    count, shard size, parameter spec).
 
 2. **Generate** -- Workers render audio samples through Surge XT, producing HDF5

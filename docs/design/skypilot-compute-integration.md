@@ -155,7 +155,7 @@ Source of truth: a `.env` file at the repo root.
 cp .env.example .env
 $EDITOR .env  # fill in RCLONE_CONFIG_R2_* + WANDB_API_KEY
 python -m pipeline.entrypoints.skypilot_launch \
-    --config configs/dataset/runpod-smoke-shard.yaml
+    --experiment runpod-smoke-shard
 ```
 
 The launcher finds `<repo_root>/.env`, parses it via `python-dotenv`, and resolves all keys from there. Process env is a non-event because `.env` wins per key — useful when you have stale shell exports.
@@ -274,7 +274,7 @@ Replace RunPod references with SkyPilot/provider-agnostic language.
 
 - `pipeline/schemas/config.py` — add `num_workers`, `compute_config` fields + validators
 - `pipeline/schemas/spec.py` — add `compute_config` to `DatasetPipelineSpec`, update `materialize_spec()`
-- `configs/dataset/surge-simple-480k-10k.yaml` — add optional new fields (or leave defaults)
+- `configs/experiment/surge-simple-480k-10k.yaml` — add optional new fields (or leave defaults)
 - Tests: `tests/pipeline/test_schemas/` — add test cases for new fields, backward compat
 
 ### Phase B: SkyPilot compute configs

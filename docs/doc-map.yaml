@@ -71,7 +71,7 @@ docs:
         covers: "Pipeline config schema, dataset config fields, validation rules"
       - pattern: "pipeline/schemas/prefix.py"
         covers: "Run ID prefix generation, shard ID scheme, deterministic naming"
-      - pattern: "configs/dataset/**"
+      - pattern: "configs/experiment/**"
         covers: "Dataset generation configs, shard counts, sample counts, synth params"
       - pattern: "pipeline/entrypoints/generate_dataset.py"
         covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
@@ -225,7 +225,7 @@ docs:
   - doc: docs/reference/configuration-reference.md
     description: Configuration architecture layers, cloud provider comparison, boundary rules, known gaps
     sources:
-      - pattern: "configs/dataset/**"
+      - pattern: "configs/experiment/**"
         covers: "Pipeline input configs, Pydantic-validated YAML"
       - pattern: "configs/experiment/**"
         covers: "Hydra experiment composition, defaults list"
