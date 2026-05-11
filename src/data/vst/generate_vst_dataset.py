@@ -3,7 +3,6 @@ import random
 from dataclasses import dataclass
 from typing import Any, List, Tuple
 
-import click
 import h5py
 import hdf5plugin
 import librosa
@@ -11,9 +10,11 @@ import numpy as np
 import rootutils
 from loguru import logger
 from pyloudnorm import Meter
+from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from tqdm import trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+from pipeline.schemas.spec import RenderConfig  # noqa: E402
 from src.data.vst import param_specs, render_params  # noqa
 from src.data.vst.param_spec import ParamSpec  # noqa
 
@@ -241,27 +242,28 @@ def create_datasets_and_get_start_idx(
 
 def make_dataset(
     hdf5_file: h5py.File,
-    num_samples: int,
-    plugin_path: str,
-    preset_path: str,
-    sample_rate: float,
-    channels: int,
-    velocity: int,
-    signal_duration_seconds: float,
-    min_loudness: float,
-    param_spec: ParamSpec,
-    sample_batch_size: int,
+    render_cfg: RenderConfig,
+    *,
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
 ) -> None:
+    """Render ``render_cfg.batch_per_shard`` samples and append them to ``hdf5_file``.
+
+    Resumable: a partially-written file picks up at the first all-zero row, so a
+    crashed worker can re-run with the same ``render_cfg`` and only the missing tail
+    is regenerated. The ``param_spec_name`` is resolved against the in-process
+    registry here (not at the launcher) so the per-shard config stays JSON-only.
+    """
+    param_spec = param_specs[render_cfg.param_spec_name]
+    num_samples = render_cfg.batch_per_shard
 
     audio_dataset, mel_dataset, param_dataset, start_idx = (
         create_datasets_and_get_start_idx(
             hdf5_file=hdf5_file,
             num_samples=num_samples,
-            channels=channels,
-            sample_rate=sample_rate,
-            signal_duration_seconds=signal_duration_seconds,
+            channels=render_cfg.channels,
+            sample_rate=render_cfg.sample_rate,
+            signal_duration_seconds=render_cfg.signal_duration_seconds,
             num_params=len(param_spec),
         )
     )
@@ -278,27 +280,28 @@ def make_dataset(
                 f"(num_samples={num_samples}, start_idx={start_idx})"
             )
 
-    audio_dataset.attrs["velocity"] = velocity
-    audio_dataset.attrs["signal_duration_seconds"] = signal_duration_seconds
-    audio_dataset.attrs["sample_rate"] = sample_rate
-    audio_dataset.attrs["channels"] = channels
-    audio_dataset.attrs["min_loudness"] = min_loudness
+    audio_dataset.attrs["velocity"] = render_cfg.velocity
+    audio_dataset.attrs["signal_duration_seconds"] = render_cfg.signal_duration_seconds
+    audio_dataset.attrs["sample_rate"] = render_cfg.sample_rate
+    audio_dataset.attrs["channels"] = render_cfg.channels
+    audio_dataset.attrs["min_loudness"] = render_cfg.min_loudness
 
     sample_batch = []
     sample_batch_start = start_idx
+    batch_size = render_cfg.sample_batch_size
 
     for i in trange(start_idx, num_samples):
         logger.info(f"Making sample {i}")
         fixed_idx = i - start_idx
         sample = generate_sample(
-            plugin_path,
-            velocity=velocity,
-            signal_duration_seconds=signal_duration_seconds,
-            sample_rate=sample_rate,
-            channels=channels,
-            min_loudness=min_loudness,
+            render_cfg.plugin_path,
+            velocity=render_cfg.velocity,
+            signal_duration_seconds=render_cfg.signal_duration_seconds,
+            sample_rate=render_cfg.sample_rate,
+            channels=render_cfg.channels,
+            min_loudness=render_cfg.min_loudness,
             param_spec=param_spec,
-            preset_path=preset_path,
+            preset_path=render_cfg.preset_path,
             fixed_synth_params=(
                 fixed_synth_params_list[fixed_idx]
                 if fixed_synth_params_list is not None
@@ -312,7 +315,7 @@ def make_dataset(
         )
 
         sample_batch.append(sample)
-        if len(sample_batch) == sample_batch_size:
+        if len(sample_batch) == batch_size:
             save_samples(
                 sample_batch,
                 audio_dataset,
@@ -321,7 +324,7 @@ def make_dataset(
                 sample_batch_start,
             )
             sample_batch = []
-            sample_batch_start += sample_batch_size
+            sample_batch_start += batch_size
 
     if len(sample_batch) > 0:
         save_samples(
@@ -333,46 +336,31 @@ def make_dataset(
         )
 
 
-@click.command()
-@click.argument("data_file", type=str, required=True)
-@click.argument("num_samples", type=int, required=True)
-@click.option("--plugin_path", "-p", type=str, default="plugins/Surge XT.vst3")
-@click.option("--preset_path", "-r", type=str, default="presets/surge-base.vstpreset")
-@click.option("--sample_rate", "-s", type=float, default=44100.0)
-@click.option("--channels", "-c", type=int, default=2)
-@click.option("--velocity", "-v", type=int, default=100)
-@click.option("--signal_duration_seconds", "-d", type=float, default=4.0)
-@click.option("--min_loudness", "-l", type=float, default=-55.0)
-@click.option("--param_spec", "-t", type=str, default="surge_xt")
-@click.option("--sample_batch_size", "-b", type=int, default=32)
-def main(
-    data_file: str,
-    num_samples: int,
-    plugin_path: str = "plugins/Surge XT.vst3",
-    preset_path: str = "presets/surge-base.vstpreset",
-    sample_rate: float = 44100.0,
-    channels: int = 2,
-    velocity: int = 100,
-    signal_duration_seconds: float = 4.0,
-    min_loudness: float = -50.0,
-    param_spec: str = "surge_xt",
-    sample_batch_size: int = 32,
-):
-    param_spec = param_specs[param_spec]
-    with h5py.File(data_file, "a") as f:
-        make_dataset(
-            f,
-            num_samples,
-            plugin_path,
-            preset_path,
-            sample_rate,
-            channels,
-            velocity,
-            signal_duration_seconds,
-            min_loudness,
-            param_spec,
-            sample_batch_size,
-        )
+class _GenerateCliArgs(RenderConfig, BaseSettings):
+    """Pydantic-settings CLI binding for ``generate_vst_dataset.py``.
+
+    Inherits every ``RenderConfig`` field so the CLI flag set tracks the model
+    automatically — adding or removing a field on ``RenderConfig`` extends or
+    shrinks the CLI surface without a parallel update here. Adds ``data_file``
+    as the sole positional arg (the destination path for the HDF5 shard).
+    """
+
+    model_config = SettingsConfigDict(
+        cli_parse_args=True,
+        cli_prog_name="generate_vst_dataset",
+        strict=True,
+        extra="forbid",
+    )
+
+    data_file: CliPositionalArg[str]
+
+
+def main() -> None:
+    """Entry point — parse CLI args into a ``RenderConfig`` and render one shard."""
+    args = CliApp.run(_GenerateCliArgs)
+    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file"}))
+    with h5py.File(args.data_file, "a") as f:
+        make_dataset(f, render_cfg)
 
 
 if __name__ == "__main__":

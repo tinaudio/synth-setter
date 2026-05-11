@@ -27,7 +27,7 @@ from pipeline.entrypoints.generate_dataset import (
     build_generate_args,
     run,
 )
-from pipeline.schemas.spec import DatasetSpec
+from pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version
@@ -736,41 +736,28 @@ class TestBuildGenerateArgs:
 
         assert args[2] == str(tmp_path / "shard-000000.h5")
 
-    def test_num_samples_is_shard_size(self, spec: DatasetSpec) -> None:
-        """num_samples arg comes from spec.render.batch_per_shard."""
+    def test_batch_per_shard_passed_as_option(self, spec: DatasetSpec) -> None:
+        """batch_per_shard is emitted as ``--batch_per_shard <count>`` flag.
+
+        The CLI no longer takes a positional ``num_samples`` — every renderer
+        config field is exposed as a flag, including the per-shard sample count.
+        """
         shard = spec.shards[0]
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        assert args[3] == str(spec.render.batch_per_shard)
+        flag_idx = args.index("--batch_per_shard")
+        assert args[flag_idx + 1] == str(spec.render.batch_per_shard)
 
-    def test_all_spec_fields_passed_as_options(self, spec: DatasetSpec) -> None:
-        """All generation parameters from spec are passed as --key value options."""
+    def test_all_render_config_fields_passed_as_options(self, spec: DatasetSpec) -> None:
+        """The flag set equals ``RenderConfig.model_fields`` — auto-derived parity guard."""
         shard = spec.shards[0]
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        option_keys: set[str] = set()
-        i = 4
-        while i < len(args):
-            if args[i].startswith("--"):
-                option_keys.add(args[i].lstrip("-"))
-                i += 2
-            else:
-                i += 1
+        option_keys: set[str] = {arg.lstrip("-") for arg in args if arg.startswith("--")}
 
-        expected_keys = {
-            "plugin_path",
-            "preset_path",
-            "sample_rate",
-            "channels",
-            "velocity",
-            "signal_duration_seconds",
-            "min_loudness",
-            "param_spec",
-            "sample_batch_size",
-        }
-        assert expected_keys <= option_keys
+        assert option_keys == set(RenderConfig.model_fields.keys())
 
     def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:
         """First arg is the Python executable, second is the generation script."""

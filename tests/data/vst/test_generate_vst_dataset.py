@@ -16,6 +16,7 @@ _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
 
+from pipeline.schemas.spec import RenderConfig
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from src.data.vst import param_specs
 from src.data.vst.core import render_params
@@ -33,8 +34,30 @@ _DURATION = 4.0
 _VELOCITY = 100
 _MIN_LOUDNESS = -55.0
 _SPEC_NAME = "surge_xt"
+_RENDERER_VERSION = "1.3.4"
 _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
+
+
+def _render_cfg(num_samples: int, sample_batch_size: int | None = None) -> RenderConfig:
+    """Build a RenderConfig with this module's test defaults.
+
+    ``batch_per_shard`` is set to ``num_samples`` (one shard = one batch in tests);
+    ``sample_batch_size`` defaults to the same so each test renders in a single batch.
+    """
+    return RenderConfig(
+        plugin_path=_PLUGIN_PATH,
+        preset_path=_PRESET_PATH,
+        param_spec_name=_SPEC_NAME,
+        renderer_version=_RENDERER_VERSION,
+        sample_rate=int(_SAMPLE_RATE),
+        channels=_CHANNELS,
+        velocity=_VELOCITY,
+        signal_duration_seconds=_DURATION,
+        min_loudness=_MIN_LOUDNESS,
+        sample_batch_size=sample_batch_size if sample_batch_size is not None else num_samples,
+        batch_per_shard=num_samples,
+    )
 
 # Phase-robust audio similarity thresholds for replayed-params vs. candidates.
 # Two independent renders of identical params differ at the sample level on main
@@ -728,19 +751,7 @@ def test_datasets_from_hardcoded_params_are_identical(
         h5py.File(expected_dataset, "a") as f,
         _patched_sample(spec, replay),
     ):
-        make_dataset(
-            hdf5_file=f,
-            num_samples=num_samples,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=num_samples,
-        )
+        make_dataset(hdf5_file=f, render_cfg=_render_cfg(num_samples))
     stage1_seconds = time.perf_counter() - t0
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
@@ -753,19 +764,7 @@ def test_datasets_from_hardcoded_params_are_identical(
         h5py.File(got_dataset, "a") as f,
         _patched_sample(spec, replay),
     ):
-        make_dataset(
-            hdf5_file=f,
-            num_samples=num_samples,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=num_samples,
-        )
+        make_dataset(hdf5_file=f, render_cfg=_render_cfg(num_samples))
     stage2_seconds = time.perf_counter() - t0
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
@@ -843,19 +842,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     expected_dataset = tmp_path / "candidates.h5"
     t0 = time.perf_counter()
     with h5py.File(expected_dataset, "a") as expected_file:
-        make_dataset(
-            hdf5_file=expected_file,
-            num_samples=_NUM_SAMPLES,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=_NUM_SAMPLES,
-        )
+        make_dataset(hdf5_file=expected_file, render_cfg=_render_cfg(_NUM_SAMPLES))
     stage1_seconds = time.perf_counter() - t0
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
@@ -892,19 +879,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
         h5py.File(got_dataset, "a") as f,
         _patched_sample(spec, replay),
     ):
-        make_dataset(
-            hdf5_file=f,
-            num_samples=_NUM_SAMPLES,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=_NUM_SAMPLES,
-        )
+        make_dataset(hdf5_file=f, render_cfg=_render_cfg(_NUM_SAMPLES))
     stage2_seconds = time.perf_counter() - t0
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
@@ -945,19 +920,7 @@ def test_make_dataset(tmp_path: Path) -> None:
     spec = param_specs[_SPEC_NAME]
 
     with h5py.File(out, "a") as f:
-        make_dataset(
-            hdf5_file=f,
-            num_samples=_NUM_SAMPLES,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=_NUM_SAMPLES,
-        )
+        make_dataset(hdf5_file=f, render_cfg=_render_cfg(_NUM_SAMPLES))
 
     _, _, params = _assert_h5_structure_is_valid(out, spec, _NUM_SAMPLES)
 
@@ -1028,23 +991,13 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
 def test_make_dataset_raises_when_fixed_params_list_is_too_short(
     tmp_path: Path,
 ) -> None:
-    """make_dataset rejects fixed_*_params_list shorter than num_samples - start_idx."""
-    spec = param_specs[_SPEC_NAME]
+    """make_dataset rejects fixed_*_params_list shorter than batch_per_shard - start_idx."""
     out = tmp_path / "should_not_write.h5"
     with h5py.File(out, "a") as f:
         with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
             make_dataset(
                 hdf5_file=f,
-                num_samples=3,
-                plugin_path=_PLUGIN_PATH,
-                preset_path=_PRESET_PATH,
-                sample_rate=_SAMPLE_RATE,
-                channels=_CHANNELS,
-                velocity=_VELOCITY,
-                signal_duration_seconds=_DURATION,
-                min_loudness=_MIN_LOUDNESS,
-                param_spec=spec,
-                sample_batch_size=3,
+                render_cfg=_render_cfg(num_samples=3),
                 fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS],
             )
 
@@ -1184,16 +1137,7 @@ def test_make_dataset_uses_fixed_params_lists_when_provided(
     with h5py.File(out, "a") as f:
         make_dataset(
             hdf5_file=f,
-            num_samples=num_samples,
-            plugin_path=_PLUGIN_PATH,
-            preset_path=_PRESET_PATH,
-            sample_rate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            velocity=_VELOCITY,
-            signal_duration_seconds=_DURATION,
-            min_loudness=_MIN_LOUDNESS,
-            param_spec=spec,
-            sample_batch_size=num_samples,
+            render_cfg=_render_cfg(num_samples),
             fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
             fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
         )
