@@ -1,11 +1,11 @@
 """Pedalboard-free registry of ``ParamSpec`` objects keyed by name.
 
 Importing this module pulls only ``param_spec`` and ``surge_xt_param_spec`` —
-both of which are pure-Python and free of pedalboard / VST3 native deps. Use
-this entrypoint from interpreter-only contexts (the SkyPilot launcher, spec
-construction in ``src.pipeline.schemas.spec``) so importing the spec model
-does not transitively pull pedalboard via ``src.data.vst.__init__``'s
-``from src.data.vst.core import ...``.
+both of which are pure-Python and free of pedalboard / VST3 native deps. This
+is the canonical pedalboard-free entrypoint for interpreter-only contexts
+(the SkyPilot launcher, spec construction in ``src.pipeline.schemas.spec``);
+``src.data.vst`` re-exports the same names for backward compat, but importing
+``src.data.vst.core`` directly is what pulls pedalboard.
 """
 
 from __future__ import annotations

@@ -87,9 +87,10 @@ _R2_RCLONE_CONSTANTS: dict[str, str] = {
 }
 
 # Residual `_WORKER_ENV_KEYS` that are not defaulted by `_R2_RCLONE_CONSTANTS`.
-# Used to detect the unconfigured-creds case: the non-secret rclone constants
+# Used to detect the unconfigured-creds case: the rclone TYPE/PROVIDER constants
 # default in, so an "empty" worker_env still has those keys — only this residual
-# subset signals whether real secrets were resolved from .env / process env.
+# subset (R2 access creds, WANDB_API_KEY, WORKER_GIT_REF) signals whether
+# anything was actually resolved from .env / process env.
 _SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
     k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
 )
