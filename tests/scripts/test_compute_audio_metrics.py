@@ -35,3 +35,16 @@ def test_compute_rms_silent_pred_returns_zero_not_nan() -> None:
     rms = compute_rms(target, pred)
     assert np.isfinite(rms), f"compute_rms produced non-finite {rms!r} for silent pred"
     assert rms == 0.0
+
+
+def test_compute_rms_quiet_nonzero_inputs_return_zero() -> None:
+    """Quiet (but non-zero) inputs whose ``target_norm * pred_norm < 1e-12`` return 0.
+
+    Without the explicit short-circuit, the pre-fix path of
+    ``dot(target_rms, pred_rms) / np.clip(denom, 1e-12, None)`` would return ~``0.4``
+    here (numerator and clamped denominator both ≈ ``4e-13``), contradicting the
+    warning's "returning 0" claim — see the Copilot review on PR #899.
+    """
+    quiet = np.full((1, _SR), 1e-7, dtype=np.float64)
+    rms = compute_rms(quiet, quiet)
+    assert rms == 0.0
