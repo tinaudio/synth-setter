@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778482855349,
+  "lastUpdate": 1778535731349,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -1338,6 +1338,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.011965036392211914,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1f6eb7a34e4320b73ed5d42fd72c6a2b86b41167",
+          "message": "internal-feat(vst): renderer signatures take RenderConfig + migrate CLI to pydantic-settings (#942)\n\n* internal-feat(vst): renderer signatures take RenderConfig + migrate CLI to pydantic-settings\n\n`make_dataset` now takes a single `render_cfg: RenderConfig` arg in place of\nnine separate kwargs. `param_spec_name` is resolved against the in-process\nregistry inside `make_dataset` (previously the launcher did the lookup);\n`num_samples` comes from `render_cfg.batch_per_shard`. The `fixed_*_params_list`\nkwarg-only args remain for `surge_xt_interactive` and the fixed-params tests.\n\nThe CLI on `generate_vst_dataset.py` is rewritten using pydantic-settings:\n`_GenerateCliArgs(RenderConfig, BaseSettings)` inherits every `RenderConfig`\nfield so the CLI flag set tracks the model automatically. Adding/removing a\nfield on `RenderConfig` extends/shrinks the CLI without a parallel update.\nA new test in `tests/data/vst/test_generate_vst_dataset_cli.py` pins the\nparity invariant.\n\n`pipeline/entrypoints/generate_dataset.py::build_generate_args` derives the\nflag set from `RenderConfig.model_fields` for the same reason — single source\nof truth for the renderer config surface.\n\n`scripts/surge_xt_interactive.py` constructs a `RenderConfig` for its\ncaptured-patches dataset write, with `batch_per_shard` set to the patch count\nand `renderer_version` pulled from the plugin's static metadata.\n\nCloses #885\nCloses #940\n\n* fix(vst): pin CLI flag style + harden round-trip + repair smoke fixture\n\nAddress PR #942 review round 1.\n\n- Pin `cli_kebab_case=False` on `_GenerateCliArgs.model_config` so a future\n  pydantic-settings minor flipping the default to kebab-case can't silently\n  desync the CLI from `build_generate_args`'s underscore output. (Copilot\n  comments on the producer + consumer sides.)\n- Add `test_build_generate_args_roundtrips_through_cli_parser`: builds args\n  with `build_generate_args`, parses them with `CliApp.run`, asserts the\n  reconstructed `RenderConfig` equals the original. Catches flag-spelling\n  and value-coercion drift the field-set parity tests miss. (Copilot\n  round-trip suggestion.)\n- Repair `tests/conftest.py::surge_xt_smoke_datasets`: the subprocess call\n  passed the old positional `num_samples` and `--param_spec`. The new\n  pydantic-settings CLI takes only `data_file` positional and the flag is\n  `--param_spec_name`, plus all other RenderConfig fields are required\n  (no model defaults). The fixture now passes every required flag. (doc-drift\n  follow-up flagging a likely VST-tier CI failure.)\n\nRefs #940\n\n* internal-fix(spec): gate unused train_val_test_seeds with NotImplementedError\n\ntrain_val_test_seeds was a required DatasetSpec field reserved for per-sample\nseeding (#884) but never consumed — yamls, fixtures, and worker payloads were\nforced to carry a dead `[42, 43, 44]` triple. Made it optional (default None)\nwith a model_validator(mode=\"before\") that raises NotImplementedError if any\nnon-None value is set, so the field can't quietly accumulate stale values\nbetween now and #884. Removed the boilerplate from configs/dataset.yaml,\nvalidate_spec's required-keys list, and all eight test fixtures that were\nplumbing the dead value through.\n\nAddresses ktinubu's self-comment on PR #942\n(https://github.com/tinaudio/synth-setter/pull/942#discussion_r3221956327).\n\nRefs #884\n\n* docs(conftest): align surge_xt_smoke_datasets docstring with new CLI flag\n\nThe docstring referenced the old `--param_spec` flag while the\nsubprocess invocation uses `--param_spec_name` (renamed in e73e0f4).",
+          "timestamp": "2026-05-11T17:29:19-04:00",
+          "tree_id": "f408503e7e68b78ba2dc332a2777ca998cd63abc",
+          "url": "https://github.com/tinaudio/synth-setter/commit/1f6eb7a34e4320b73ed5d42fd72c6a2b86b41167"
+        },
+        "date": 1778535730528,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.48840856552124,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.452329257773235,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.03422567993402481,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.04677313566207886,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.9609272480010986,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.264664071666664,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.652944564819336,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.511173404343427,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03683341667056084,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.05584162473678589,
             "unit": "1-cos"
           },
           {
