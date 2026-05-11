@@ -235,12 +235,47 @@ A PR is **not ready** — for review, merge, or hand-off — until **all** of th
 "I pushed the fix" is not the same as "the PR is ready." After pushing, iterate until all conditions are satisfied — use `/loop` (e.g. `/loop 2m gh pr checks <N>`) or repeated polling, do not stop at the first push:
 
 1. Push the change.
+
 2. Wait for CI to finish: `gh pr checks <N> --watch` or `/loop` the checks command.
+
 3. If any check fails, diagnose, fix, push again, return to step 2.
+
 4. Check mergeability with `gh pr view <N> --json mergeable -q .mergeable`. If `CONFLICTING`, rebase or merge the base branch, resolve the conflict, push, return to step 2. If `UNKNOWN`, GitHub hasn't finished computing — wait and poll again. Only `MERGEABLE` clears this step.
+
 5. Reply inline to every open review comment — list them with `gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate`. If a reply required a code change, push and return to step 2. Use `/pr-review-resolver` to drive this systematically.
-6. Wait for Copilot to complete its post-push review (~60s). List its comments with `gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, body}]'`. If Copilot left new unaddressed comments, return to step 5.
-7. Only when checks are all green AND `mergeable=MERGEABLE` AND every review comment has an inline reply AND Copilot has produced no new comments since the last push is the PR ready.
+
+6. Wait for Copilot to complete its post-push review (~60s, but allow up to 15 minutes). Two endpoints matter here: inline review comments live at `/pulls/<N>/comments`, and top-level review summaries (including a "no findings" note) live at `/pulls/<N>/reviews`. Check both:
+
+   ```bash
+   # Inline review comments (per-line nits)
+   gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate \
+     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, body}]'
+   # Top-level reviews (overall summary, including a no-findings note)
+   gh api repos/<OWNER>/<REPO>/pulls/<N>/reviews --paginate \
+     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, state, submitted_at, body}]'
+   ```
+
+   If Copilot left new unaddressed inline comments, **or** a new top-level review with actionable content (`state=COMMENTED`/`CHANGES_REQUESTED` with a non-empty body that isn't just a "no findings" note), return to step 5 and address it the same way you would inline comments. If 15 minutes have elapsed since the push and Copilot has produced neither an inline comment nor a top-level review note explicitly stating it has no findings, treat the auto-review as not triggered and manually re-request it before continuing — see step 6a below.
+
+   **Step 6a — Manually re-request a Copilot review** when step 6's 15-minute window elapses with no Copilot activity. Try in this order, stopping at the first one that succeeds:
+
+   1. Re-request via the reviewers API (equivalent of clicking the re-request button):
+      ```bash
+      gh api --method POST \
+        /repos/<OWNER>/<REPO>/pulls/<N>/requested_reviewers \
+        -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+      ```
+      If that errors, confirm the exact bot slug your org uses with `gh pr view <N> --json reviewRequests,reviews` and retry with the correct login.
+   2. If the reviewers API still won't take Copilot as a reviewer, force a re-trigger with an empty commit (works when Copilot is wired to run on push rather than as a requested reviewer):
+      ```bash
+      git commit --allow-empty -m "chore: trigger copilot review"
+      git push
+      ```
+      Pushing restarts the readiness loop — return to step 2.
+
+   After re-requesting, wait another ~60s (allow up to 15 minutes again) and re-check Copilot's comments. Repeat at most once; if Copilot still produces nothing after a manual re-request, record that in the PR thread and move on.
+
+7. Only when checks are all green AND `mergeable=MERGEABLE` AND every review comment has an inline reply AND Copilot has produced no new comments since the last push (or has been confirmed silent via step 6a) is the PR ready.
 
 This applies whether the PR is yours or one you were asked to drive across the finish line.
 
