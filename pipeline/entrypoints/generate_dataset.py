@@ -1,8 +1,11 @@
 """Spec-driven generate_dataset runner.
 
-``main()`` is the Hydra-composed CLI (``python -m pipeline.entrypoints.generate_dataset
-experiment=<id>``). The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker
-entry that reads a pre-materialized spec from R2 via ``load_spec_from_uri``.
+``main()`` is the Hydra-composed CLI entry (no params on the public signature; it lazy-imports
+hydra and dispatches to an inner ``@hydra.main``-decorated callable that receives the composed
+``cfg``). Invoked via ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``.
+
+The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker entry that reads a
+pre-materialized spec from R2 via ``load_spec_from_uri``.
 """
 
 from __future__ import annotations
@@ -13,21 +16,29 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import rootutils
 from loguru import logger
 from omegaconf import OmegaConf
 
-from pipeline import r2_io
-from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.partitioning import get_my_shards, read_rank_world_from_env
-from pipeline.schemas.spec import DatasetSpec, ShardSpec
-from src.data.vst.core import extract_renderer_version
+# Set PROJECT_ROOT env var and add the repo root to sys.path so
+# ``configs/paths/default.yaml``'s ``root_dir: ${oc.env:PROJECT_ROOT}`` interpolation
+# resolves under ``python -m pipeline.entrypoints.generate_dataset``. Mirrors the
+# bootstrap in ``src/train.py`` / ``src/eval.py``.
+rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
+from pipeline import r2_io  # noqa: E402
+from pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
+from pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
+from pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
+from src.data.vst.core import extract_renderer_version  # noqa: E402
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
-# Composed-config sub-trees that aren't DatasetSpec fields: ``data`` / ``r2`` exist as
-# interpolation sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime.
-_NON_SPEC_GROUPS: tuple[str, ...] = ("data", "r2", "paths", "hydra")
+# Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
+# sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``
+# is a Hydra-output-dir interpolation source (see ``configs/dataset.yaml``).
+_NON_SPEC_KEYS: tuple[str, ...] = ("data", "r2", "paths", "hydra", "run_name")
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
@@ -244,7 +255,7 @@ def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     raw: Any = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
-    for key in _NON_SPEC_GROUPS:
+    for key in _NON_SPEC_KEYS:
         raw.pop(key, None)
     return DatasetSpec(**raw)
 
