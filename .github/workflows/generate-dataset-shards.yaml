@@ -272,7 +272,14 @@ jobs:
           set -euo pipefail
           mkdir -p "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs"
           cp -r "${HOME}/sky_logs/." "${RUN_METADATA_DIR}/sky_logs/" 2>/dev/null || true
-          cp -r "${HOME}/.sky/api_server/clients/." "${RUN_METADATA_DIR}/sky_api_server_logs/" 2>/dev/null || true
+          shopt -s nullglob
+          for client_dir in "${HOME}"/.sky/api_server/clients/*/; do
+            [[ -d "${client_dir}sky_logs" ]] || continue
+            client_hash="$(basename "${client_dir}")"
+            mkdir -p "${RUN_METADATA_DIR}/sky_api_server_logs/${client_hash}"
+            cp -r "${client_dir}sky_logs/." \
+              "${RUN_METADATA_DIR}/sky_api_server_logs/${client_hash}/" 2>/dev/null || true
+          done
           echo "=== snapshot sizes ==="
           du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
 
