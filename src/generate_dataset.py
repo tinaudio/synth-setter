@@ -122,30 +122,27 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 
 
 def run(spec: DatasetSpec) -> None:
-    """Materialized-spec driven run: upload spec to R2 once, then render+upload each shard.
+    """Upload the spec to R2 once, then render+upload each owned shard in turn.
 
     Spec serialization, spec upload, and the renderer-version constraint check
-    happen once per run (pre-loop). Each shard is then rendered, uploaded, and
-    its local file unlinked before moving on — so local disk usage is bounded
-    to one shard at a time. Subprocess failures propagate immediately
-    (fail-fast); later shards are not attempted.
+    happen once pre-loop. Each shard is rendered, uploaded, and unlinked before
+    moving on — bounding local disk to one shard at a time. Subprocesses
+    fail-fast: later shards are not attempted on subprocess error.
 
     Before each render, R2 is probed for the shard's destination object: if it already exists with
     non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
     ``check=True``, so a non-zero rclone exit (auth, network) propagates as a hard failure rather
     than degrading silently into a re-render.
 
-    HDF5-only for now: ``spec.output_format`` is restricted to ``"hdf5"``.
+    The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
+    ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
+    — verifies the plugin and pinned ``renderer_version`` agree. HDF5-only for now:
+    ``spec.output_format`` is restricted to ``"hdf5"``.
 
     Raises:
         RuntimeError: If the worker's plugin version disagrees with
-            ``spec.renderer_version``.
+            ``spec.render.renderer_version``.
     """
-    # The launcher builds the spec interpreter-only (no pedalboard / X11)
-    # trusting the ``render.renderer_version`` value from its dataset config;
-    # the worker has pedalboard, so this is where we verify against the actual
-    # plugin bundle. Bump renderer_version in the dataset config alongside the
-    # SURGE_GIT_REF baked into the worker image.
     render = spec.render
     actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
     if actual_renderer_version != render.renderer_version:
@@ -159,7 +156,6 @@ def run(spec: DatasetSpec) -> None:
         f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"
     )
 
-    # Read rank/world before any tmpdir / R2 work — fail loudly on missing env.
     rank, world = read_rank_world_from_env()
     my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
     logger.info(
@@ -172,12 +168,9 @@ def run(spec: DatasetSpec) -> None:
 
     with tempfile.TemporaryDirectory() as work_dir_str:
         work_dir = Path(work_dir_str)
-
-        # `rclone copy` treats the destination as a directory and preserves
-        # the source's basename. The local spec file is already named
-        # INPUT_SPEC_FILENAME, so uploading to the prefix directory lands
-        # the object at `{prefix}{INPUT_SPEC_FILENAME}` without the
-        # double-name issue a full object-key destination would cause.
+        # rclone copy preserves the source basename, and the local file is already
+        # named INPUT_SPEC_FILENAME — so the prefix-directory destination lands at
+        # `{prefix}{INPUT_SPEC_FILENAME}` without a double-name.
         spec_path = work_dir / INPUT_SPEC_FILENAME
         spec_path.write_text(spec.model_dump_json(indent=2))
         logger.info(f"spec written: {spec_path}")
@@ -212,16 +205,16 @@ def _render_and_upload_shard(
 ) -> None:
     """Render a single shard, upload it to R2, then unlink the local file.
 
-    Unlinking after upload bounds local disk to one shard at a time — necessary for multi-shard
-    runs on disk-constrained workers.
+    Unlinking after upload bounds local disk to one shard at a time — necessary on disk-constrained
+    workers running multi-shard partitions.
     """
     args = [VST_HEADLESS_WRAPPER] if sys.platform == "linux" else []
     args += build_generate_args(spec, shard, work_dir)
     logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
     subprocess.check_call(args)  # noqa: S603 — args built from validated spec
     shard_path = work_dir / shard.filename
-    # Catches a generator that exits 0 without writing output — surfaces a clear error
-    # at the rendering boundary rather than a downstream rclone "source not found".
+    # Surface a generator that exited 0 without writing output here, not as a
+    # downstream rclone "source not found".
     if not shard_path.is_file():
         raise RuntimeError(
             f"generate_vst_dataset.py exited 0 but did not write expected shard file: {shard_path}"

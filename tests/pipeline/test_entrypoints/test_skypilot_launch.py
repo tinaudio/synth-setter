@@ -1,4 +1,4 @@
-"""Tests for pipeline/entrypoints/skypilot_launch.py — SkyPilot launcher (RunPod / OCI / kind).
+"""Tests for src/pipeline/skypilot_launch.py — SkyPilot launcher (RunPod / OCI / kind).
 
 Mock-based: no real SkyPilot or RunPod calls. The `mock_sky` fixture replaces the launcher's
 module-level `sky` reference with a MagicMock, and `local_spec_dir` redirects the on-disk spec
@@ -982,7 +982,7 @@ class TestNumWorkersFanOut:
     RunPod's backend doesn't support num_nodes>1, so the launcher synthesizes multi-worker
     partitioning by launching N clusters in parallel and injecting SYNTH_SETTER_WORKER_RANK /
     SYNTH_SETTER_NUM_WORKERS per cluster. Each cluster downloads the same materialized spec;
-    pipeline.partitioning.get_my_shards slices each worker's shard ownership.
+    src.pipeline.partitioning.get_my_shards slices each worker's shard ownership.
     """
 
     @staticmethod

@@ -574,8 +574,8 @@ ______________________________________________________________________
 
 - **Experiment configs:** Browse `configs/experiment/` for pre-configured
   experiments across different models and datasets.
-- **Data generation:** See `pipeline/entrypoints/generate_dataset.py` for the
-  dataset generation entry point.
+- **Data generation:** See `src/generate_dataset.py` for the dataset
+  generation entry point (Hydra; `configs/dataset.yaml` is the root config).
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.
 - **Configuration reference:**
