@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778482080050,
+  "lastUpdate": 1778482853117,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -1254,6 +1254,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.02806752920150757,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1181351e9c287dfdd8f4f25e3acb88fd3fe8c3e5",
+          "message": "internal-feat(schemas): unify DatasetConfig + DatasetPipelineSpec into DatasetSpec (#887)\n\n* internal-feat(schemas): unify DatasetConfig + DatasetPipelineSpec into DatasetSpec\n\nReplace the prior split between DatasetConfig (YAML-shaped config) and\nDatasetPipelineSpec (runtime-materialized artifact) with a single\nDatasetSpec model whose model_dump_json() is the artifact written to R2.\nRenderer-specific fields move to a nested RenderConfig sub-model.\nRuntime fields (git_sha, is_repo_dirty, created_at, run_id, r2_prefix)\nauto-fill via default_factory when missing and pass through when present\nin JSON-loaded input. shards / num_shards / num_params are computed\ndeterministically as @computed_field cached_properties.\n\nSURGE_XT_RENDERER_VERSION moves out of the schema into RenderConfig as\na config field; the worker still verifies the running plugin version\nmatches the pinned value before rendering.\n\nA legacy YAML loader (load_dataset_spec_yaml) keeps the launcher and\nci.materialize_spec working through this PR; both are removed in a\nfollow-up PR once the entrypoint migrates to @hydra.main.\n\nThe launcher's num_workers knob now lives on the CLI only (default 1);\nthe legacy YAML field is silently ignored.\n\noutput_format remains restricted to \"hdf5\" — wds support lands later\nin the chain.\n\nCloses #886\nPart of #882\n\n* fix(compute): invoke synced docker_entrypoint.py, not stale baked path\n\nThe skypilot templates execed /usr/local/bin/entrypoint.py — the copy baked\ninto the dev-snapshot image. After the pipeline/ → src/pipeline/ relocation\nand src/generate_dataset.py entrypoint move, the in-image script's imports\n('from pipeline.entrypoints.generate_dataset ...') stopped resolving and PR\nworkers failed with ModuleNotFoundError: No module named 'pipeline'.\n\nsync_worker_checkout.sh already updates /home/build/synth-setter to the PR\nhead ref before launch, so invoke scripts/docker_entrypoint.py from the\nsynced checkout instead. The Dockerfile still bakes the same script at\n/usr/local/bin/entrypoint.py for the no-sync (no WORKER_GIT_REF) fallback.\n\nRefs #882\n\n* ci(workflows): install pydantic + pyyaml + omegaconf for validate-spec runner step\n\nAfter unifying DatasetConfig + DatasetPipelineSpec into a single Pydantic\nDatasetSpec, `pipeline.ci.validate_spec` imports\n`pipeline.schemas.spec.DatasetSpec`. The spec module transitively imports\npydantic, pyyaml (for the load_dataset_spec_yaml bridge function), and\nomegaconf — none of which are on the runner's bare Python install.\n\nInstall only those three packages to keep the runner-side env minimal\ninstead of pulling the full requirements.txt (which would drag in torch\nand the rest of the training stack).\n\n* internal-fix(schemas): address Copilot review feedback on PR #887\n\n- pipeline/schemas/spec.py _strip_computed_field_keys: copy the input\n  mapping before popping computed keys so callers holding the dict\n  (logging, retries) see it unchanged (Copilot #3216318943).\n- pipeline/schemas/spec.py legacy YAML bridge: raise ValueError when\n  legacy 'num_shards' disagrees with sum(splits) instead of silently\n  computing a different shard count (Copilot #3216318975).\n- pipeline/schemas/prefix.py make_r2_prefix: strip leading/trailing\n  slashes from prefix_root so 'data/' and '/data' both produce a clean\n  prefix instead of doubled slashes; reject empty-after-strip with a\n  clear error (Copilot #3216319001).\n- pipeline/schemas/spec.py OUTPUT_FORMAT_TO_EXTENSION: rename from the\n  private '_OUTPUT_FORMAT_TO_EXTENSION' and add to __all__ so\n  pipeline.ci.validate_spec is no longer reaching across a private\n  boundary (Copilot #3216319015).\n- pipeline/ci/validate_spec.py: validate output_format in\n  validate_structure and look up extension via .get(...) in\n  validate_test_values so an unknown format produces a structural\n  error instead of a KeyError crash (Copilot #3216319025).\n\nAlso adds the missing docstrings required by interrogate (80% threshold)\non the touched files: the validator/computed-field methods in spec.py\nthat lacked them, and the existing tests in test_dataset_spec.py that\nwere previously undocumented.\n\n* internal-fix(schemas): defer param_specs import inside num_params\n\n`pipeline.schemas.spec` top-level imported `from src.data.vst import param_specs`,\nwhich transitively pulls `src.data.vst.core` → `mido` + `pedalboard`. The\nvalidate-spec runner doesn't install those, so `python -m pipeline.ci.validate_spec`\non the GitHub runner aborts with `ModuleNotFoundError: No module named 'mido'`\nbefore any validation runs.\n\nMove the import inside `num_params`'s body — the only call site. Side effects\nof `src.data.vst.__init__` (mido / pedalboard imports) now only happen when a\nspec's `num_params` is actually evaluated, not when the schema module is\nimported. `validate_spec` only consumes the module-level\n`OUTPUT_FORMAT_TO_EXTENSION` constant, so the deferred import is fine for that\ncode path.\n\n* internal-fix(schemas): address second Copilot review round on PR #887\n\n- pipeline/schemas/spec.py: add `frozen=True` to `DatasetSpec` and\n  `RenderConfig` so the `@cached_property` computed fields (`shards`,\n  `num_shards`, `num_params`) cannot go stale via post-construction field\n  mutation. The internal `_populate_derived_runtime_fields` validator\n  already uses `object.__setattr__`, which bypasses Pydantic's frozen\n  guard, so init-time runtime-field population still works.\n\n- pipeline/entrypoints/generate_dataset.py: replace the misleading\n  \"renderer CLI dispatches on filename suffix\" claim in both\n  `build_generate_args` and `run` docstrings with HDF5-only reality.\n  Drop the `configs/render/<spec>.yaml` / `configs/render/surge_xt.yaml`\n  references in the renderer-version inline comment and error message\n  (this PR keeps materialization in legacy `configs/dataset/*.yaml`;\n  the Hydra `configs/render/` group lands in PR-2).\n\n- src/data/vst/core.py: drop the `configs/render/<spec>.yaml` reference\n  in `extract_renderer_version`'s docstring.",
+          "timestamp": "2026-05-11T02:47:18-04:00",
+          "tree_id": "f514fd01bc7df5ec77f412c2b21fd73c322a895f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/1181351e9c287dfdd8f4f25e3acb88fd3fe8c3e5"
+        },
+        "date": 1778482852257,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.16964054107666,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.417810511142015,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.015445916913449764,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.00636821985244751,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.021010637283325,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.868632628249998,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.411895751953125,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 5.957260514153168,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.018764929845929146,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.011965036392211914,
             "unit": "1-cos"
           },
           {
