@@ -217,8 +217,12 @@ jobs:
       # because the kind cluster can't host parallel workers (#843). The
       # argument array is built conditionally so optional flags don't expand
       # to empty strings.
+      # 20-min step cap: if the launcher (sky.jobs SDK) hangs, fail-fast and
+      # let the `if: always()` `Snapshot sky logs` step run, instead of
+      # burning the full 60-min job timeout before logs are uploaded.
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
+        timeout-minutes: 20
         env:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
