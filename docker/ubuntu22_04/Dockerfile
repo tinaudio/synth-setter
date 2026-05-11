@@ -416,6 +416,7 @@ ARG USER_GID=$USER_UID
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
 RUN chown -R $USER_UID:$USER_GID .git
+RUN chown -R $USER_UID:$USER_GID /venv/main
 
 # Persist bash history for non-root dev: user
 RUN mkdir -p /commandhistory \
