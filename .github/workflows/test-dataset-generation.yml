@@ -173,8 +173,13 @@ jobs:
           echo "providers_local: ${providers_local}"
           echo "providers_launcher: ${providers_launcher}"
 
+      # configs/hydra/default.yaml's `defaults` block overrides job_logging /
+      # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
+      # plugin. Without it, Hydra compose fails with:
+      #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
+      # Pin both to the same versions as requirements-app.txt.
       - name: Install Hydra for dataset-config composition
-        run: pip install "hydra-core==1.3.2"
+        run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
       # Bucket comes from the composed dataset config (the source of truth the
       # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
