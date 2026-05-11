@@ -388,11 +388,10 @@ class DatasetSpec(BaseModel):
     def num_params(self) -> int:
         """Total encoded parameter count looked up by name in the param-spec registry.
 
-        Imports ``param_specs`` lazily: ``src.data.vst.__init__`` pulls in
-        ``mido`` + ``pedalboard`` via the renderer, which the launcher and
-        validate-spec runner don't have installed. Top-level import here would
-        prevent spec serialization on those minimal envs.
+        Imported from ``param_spec_registry`` (not ``src.data.vst``) so that
+        ``model_dump_json`` — which evaluates this computed field — does not
+        transitively pull ``pedalboard`` into the launcher.
         """
-        from src.data.vst import param_specs
+        from src.data.vst.param_spec_registry import param_specs
 
         return len(param_specs[self.render.param_spec_name])

@@ -1999,3 +1999,145 @@ class TestWorkerEnvToOsEnvironBridge:
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak-from-env"
         assert captured["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] == "sk-from-env"  # noqa: S105 — fixture value, not a real secret
         assert captured["RCLONE_CONFIG_R2_ENDPOINT"] == "https://e.r2"
+
+
+# ---------------------------------------------------------------------------
+# _SECRET_WORKER_ENV_KEYS — module-level constant for the unconfigured-creds
+# check. Subset of `_WORKER_ENV_KEYS` excluding the non-secret rclone
+# defaults that ``_R2_RCLONE_CONSTANTS`` already supplies.
+# ---------------------------------------------------------------------------
+
+
+class TestSecretWorkerEnvKeys:
+    """`_SECRET_WORKER_ENV_KEYS` is the residual subset used to detect unconfigured creds."""
+
+    def test_excludes_non_secret_rclone_constants(self) -> None:
+        """TYPE / PROVIDER are public rclone configuration — they must not appear in the secret
+        subset."""
+        from src.pipeline.skypilot_launch import (
+            _R2_RCLONE_CONSTANTS,
+            _SECRET_WORKER_ENV_KEYS,
+        )
+
+        assert "RCLONE_CONFIG_R2_TYPE" not in _SECRET_WORKER_ENV_KEYS
+        assert "RCLONE_CONFIG_R2_PROVIDER" not in _SECRET_WORKER_ENV_KEYS
+        for key in _R2_RCLONE_CONSTANTS:
+            assert key not in _SECRET_WORKER_ENV_KEYS
+
+    def test_includes_runtime_secret_keys(self) -> None:
+        """The access-key / secret-key / endpoint triple must remain in the secret subset."""
+        from src.pipeline.skypilot_launch import _SECRET_WORKER_ENV_KEYS
+
+        assert "RCLONE_CONFIG_R2_ACCESS_KEY_ID" in _SECRET_WORKER_ENV_KEYS
+        assert "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY" in _SECRET_WORKER_ENV_KEYS
+        assert "RCLONE_CONFIG_R2_ENDPOINT" in _SECRET_WORKER_ENV_KEYS
+
+    def test_is_subset_of_worker_env_keys(self) -> None:
+        """The secret subset is closed-form derived from `_WORKER_ENV_KEYS`."""
+        from src.pipeline.skypilot_launch import (
+            _SECRET_WORKER_ENV_KEYS,
+            _WORKER_ENV_KEYS,
+        )
+
+        assert set(_SECRET_WORKER_ENV_KEYS).issubset(set(_WORKER_ENV_KEYS))
+
+
+# ---------------------------------------------------------------------------
+# _launch_one_rank — module-level helper for fan-out launch (lifted from
+# _run_workers closure for testability).
+# ---------------------------------------------------------------------------
+
+
+class TestLaunchOneRank:
+    """`_launch_one_rank` builds the per-rank Task, calls sky.launch, returns the job_id."""
+
+    def test_returns_job_id_from_stream_and_get(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Happy path: stream_and_get returns ``(job_id, ...)`` and the helper returns the
+        job_id."""
+        from src.pipeline.skypilot_launch import _launch_one_rank
+
+        fake_sky = MagicMock()
+        fake_sky.Task.from_yaml.return_value = MagicMock()
+        fake_sky.launch.return_value = "req-1"
+        fake_sky.stream_and_get.return_value = (42, None)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake_sky)
+
+        job_id = _launch_one_rank(
+            0,
+            cluster_names=["cluster-0"],
+            worker_env_base={"RCLONE_CONFIG_R2_TYPE": "s3"},
+            worker_image="repo:tag",
+            template_path=Path("template.yaml"),
+        )
+
+        assert job_id == 42
+
+    def test_raises_when_stream_and_get_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If stream_and_get yields ``None``, the helper raises ``ClickException``."""
+        from src.pipeline.skypilot_launch import _launch_one_rank
+
+        fake_sky = MagicMock()
+        fake_sky.Task.from_yaml.return_value = MagicMock()
+        fake_sky.launch.return_value = "req-1"
+        fake_sky.stream_and_get.return_value = None
+        monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake_sky)
+
+        with pytest.raises(click.ClickException, match="launch yielded no job_id"):
+            _launch_one_rank(
+                0,
+                cluster_names=["cluster-0"],
+                worker_env_base={},
+                worker_image="repo:tag",
+                template_path=Path("template.yaml"),
+            )
+
+    def test_raises_when_stream_and_get_returns_none_job_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If stream_and_get returns ``(None, ...)``, the helper raises ``ClickException``."""
+        from src.pipeline.skypilot_launch import _launch_one_rank
+
+        fake_sky = MagicMock()
+        fake_sky.Task.from_yaml.return_value = MagicMock()
+        fake_sky.launch.return_value = "req-1"
+        fake_sky.stream_and_get.return_value = (None, None)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake_sky)
+
+        with pytest.raises(click.ClickException, match="launch yielded no job_id"):
+            _launch_one_rank(
+                0,
+                cluster_names=["cluster-0"],
+                worker_env_base={},
+                worker_image="repo:tag",
+                template_path=Path("template.yaml"),
+            )
+
+    def test_injects_rank_and_num_workers_into_task_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`update_envs` receives the rank, world size, and worker image alongside the base env."""
+        from src.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+        from src.pipeline.skypilot_launch import _WORKER_IMAGE_ENV, _launch_one_rank
+
+        fake_task = MagicMock()
+        fake_sky = MagicMock()
+        fake_sky.Task.from_yaml.return_value = fake_task
+        fake_sky.launch.return_value = "req-1"
+        fake_sky.stream_and_get.return_value = (7, None)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake_sky)
+
+        _launch_one_rank(
+            2,
+            cluster_names=["a", "b", "c", "d"],
+            worker_env_base={"BASE_KEY": "base-value"},
+            worker_image="repo:tag",
+            template_path=Path("template.yaml"),
+        )
+
+        envs_passed = fake_task.update_envs.call_args.args[0]
+        assert envs_passed["BASE_KEY"] == "base-value"
+        assert envs_passed[WORKER_RANK_ENV_VAR] == "2"
+        assert envs_passed[NUM_WORKERS_ENV_VAR] == "4"
+        assert envs_passed[_WORKER_IMAGE_ENV] == "repo:tag"

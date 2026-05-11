@@ -519,3 +519,56 @@ class TestSpecImportStaysLauncherPure:
             f"bare spec import is no longer launcher-pure:\n"
             f"stdout={result.stdout}\nstderr={result.stderr}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Stronger pedalboard-free invariant — construction + serialization must not
+# pull pedalboard either. Catches regressions where the lazy import path
+# inside ``num_params`` (or its callers via ``model_dump_json``) silently
+# starts loading native deps.
+# ---------------------------------------------------------------------------
+
+
+class TestSpecConstructionStaysPedalboardFree:
+    """Importing schemas + building/serializing a DatasetSpec must not load pedalboard.
+
+    Run in a fresh subprocess so the parent test session — which loads pedalboard
+    transitively via ``tests/conftest.py`` — does not poison the check.
+    """
+
+    def test_dataset_spec_num_params_does_not_import_pedalboard(self) -> None:
+        """``num_params`` is emitted by ``model_dump_json`` so its lazy import path runs in every
+        serialize.
+
+        It must remain interpreter-only.
+        """
+        script = (
+            "import sys\n"
+            "from src.pipeline.schemas.spec import DatasetSpec\n"
+            "spec = DatasetSpec(\n"
+            "    task_name='ci', output_format='hdf5', train_val_test_sizes=[1, 0, 0],\n"
+            "    base_seed=0, r2_bucket='b',\n"
+            "    render={\n"
+            "        'plugin_path': '/tmp/x.vst3', 'preset_path': '/tmp/x.vstpreset',\n"
+            "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
+            "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
+            "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
+            "        'sample_batch_size': 1, 'batch_per_shard': 1,\n"
+            "    },\n"
+            ")\n"
+            "_ = spec.num_params\n"
+            "_ = spec.model_dump_json()\n"
+            "assert 'pedalboard' not in sys.modules, sorted(\n"
+            "    m for m in sys.modules if m.startswith('pedalboard')\n"
+            ")\n"
+        )
+        result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"pedalboard leaked into spec serialization:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )

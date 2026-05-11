@@ -30,6 +30,7 @@ SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import subprocess
@@ -40,7 +41,6 @@ from pathlib import Path
 
 import click
 import sky
-import sky.check  # accessed conditionally on the kubernetes path; see provider == "local" branch in main()
 import yaml
 from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
@@ -85,6 +85,14 @@ _R2_RCLONE_CONSTANTS: dict[str, str] = {
     "RCLONE_CONFIG_R2_TYPE": "s3",
     "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
 }
+
+# Residual `_WORKER_ENV_KEYS` that are not defaulted by `_R2_RCLONE_CONSTANTS`.
+# Used to detect the unconfigured-creds case: the non-secret rclone constants
+# default in, so an "empty" worker_env still has those keys — only this residual
+# subset signals whether real secrets were resolved from .env / process env.
+_SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
+    k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
+)
 
 _CRED_BOOTSTRAP_SCRIPT = (
     Path(__file__).resolve().parent.parent.parent / "scripts" / "skypilot_write_provider_creds.sh"
@@ -480,14 +488,11 @@ def main(
         )
 
     worker_env = resolve_worker_env(env_file_path)
-    # `_R2_RCLONE_CONSTANTS` defaults TYPE/PROVIDER, so an "empty" worker_env still has those.
-    # Check the actual secret keys to detect the unconfigured-creds case.
-    secret_keys = tuple(k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS)
-    if not any(k in worker_env for k in secret_keys):
+    if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
         raise click.ClickException(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
             f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate {env_file_path}. "
-            f"Expected at least one of: {', '.join(secret_keys)}."
+            f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
 
     # rclone subprocess inherits os.environ; mirror launcher-resolved values so .env wins.
@@ -538,6 +543,9 @@ def main(
     # `sky.check.check` in-process before launch is the documented workaround
     # (test-skypilot-local.yml). RunPod/OCI source creds from disk on every launch.
     if provider == "local":
+        # Deferred so non-kubernetes runs (RunPod / OCI) skip the submodule import entirely.
+        import sky.check
+
         sky.check.check(clouds=["kubernetes"], quiet=False)
 
     # Single-worker keeps the unsuffixed cluster name for backward compatibility with debug
@@ -620,35 +628,58 @@ def _run_workers(
     Returns:
         Per-rank result code (``0`` = success, anything else = failure).
     """
-    num_workers = len(cluster_names)
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
-
-    def _launch_get_job_id(rank: int) -> int:
-        cluster = cluster_names[rank]
-        env_for_rank = {
-            **worker_env_base,
-            WORKER_RANK_ENV_VAR: str(rank),
-            NUM_WORKERS_ENV_VAR: str(num_workers),
-            _WORKER_IMAGE_ENV: worker_image,
-        }
-        task = sky.Task.from_yaml(str(template_path))
-        _override_image_id(task, worker_image)
-        task.update_envs(env_for_rank)
-        click.echo(f"[{cluster}] provisioning rank={rank}/{num_workers}")
-        launch_request_id = sky.launch(
-            task,
-            cluster_name=cluster,
-            idle_minutes_to_autostop=5,
-            down=True,
-        )
-        launch_result = sky.stream_and_get(launch_request_id)
-        if launch_result is None or launch_result[0] is None:
-            raise click.ClickException(f"[{cluster}] launch yielded no job_id")
-        return launch_result[0]
-
+    launch_get_job_id = functools.partial(
+        _launch_one_rank,
+        cluster_names=cluster_names,
+        worker_env_base=worker_env_base,
+        worker_image=worker_image,
+        template_path=template_path,
+    )
     if tail:
-        return _run_workers_tail(cluster_names, _launch_get_job_id)
-    return _run_workers_detached(cluster_names, _launch_get_job_id)
+        return _run_workers_tail(cluster_names, launch_get_job_id)
+    return _run_workers_detached(cluster_names, launch_get_job_id)
+
+
+def _launch_one_rank(
+    rank: int,
+    *,
+    cluster_names: list[str],
+    worker_env_base: dict[str, str],
+    worker_image: str,
+    template_path: Path,
+) -> int:
+    """Provision rank ``rank``'s cluster and return its ``job_id``.
+
+    Used by ``_run_workers`` to fan out per-rank launches; lives at module level
+    rather than as a closure so it can be tested directly without re-running
+    the parent ``_run_workers`` setup.
+
+    Raises ``click.ClickException`` if ``sky.launch`` / ``sky.stream_and_get``
+    yields no ``job_id``.
+    """
+    num_workers = len(cluster_names)
+    cluster = cluster_names[rank]
+    env_for_rank = {
+        **worker_env_base,
+        WORKER_RANK_ENV_VAR: str(rank),
+        NUM_WORKERS_ENV_VAR: str(num_workers),
+        _WORKER_IMAGE_ENV: worker_image,
+    }
+    task = sky.Task.from_yaml(str(template_path))
+    _override_image_id(task, worker_image)
+    task.update_envs(env_for_rank)
+    click.echo(f"[{cluster}] provisioning rank={rank}/{num_workers}")
+    launch_request_id = sky.launch(
+        task,
+        cluster_name=cluster,
+        idle_minutes_to_autostop=5,
+        down=True,
+    )
+    launch_result = sky.stream_and_get(launch_request_id)
+    if launch_result is None or launch_result[0] is None:
+        raise click.ClickException(f"[{cluster}] launch yielded no job_id")
+    return launch_result[0]
 
 
 def _run_workers_tail(
