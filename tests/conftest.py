@@ -21,7 +21,7 @@ from src.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
 # Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
-# ``pipeline.schemas.spec`` declares no field defaults — the fixture passes
+# ``src.pipeline.schemas.spec`` declares no field defaults — the fixture passes
 # explicit values for every flag below, so these constants must match the values
 # the subprocess is invoked with.
 _SURGE_FIXTURE_SAMPLE_RATE = 44100

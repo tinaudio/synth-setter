@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pipeline.entrypoints.generate_dataset import build_generate_args
-from pipeline.schemas.spec import DatasetSpec, RenderConfig
+from src.generate_dataset import build_generate_args
+from src.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from pydantic_settings import CliApp
 from src.data.vst.generate_vst_dataset import _GenerateCliArgs
 

@@ -136,16 +136,16 @@ exclude = '''(?x)
   | ^\.claude/
   | ^\.worktrees/
   | ^notebooks/
-  | ^pipeline/ci/load_image_config\.py$
-  | ^pipeline/ci/validate_shard\.py$
-  | ^pipeline/ci/validate_spec\.py$
-  | ^pipeline/entrypoints/generate_dataset\.py$
-  | ^pipeline/entrypoints/skypilot_launch\.py$
-  | ^pipeline/partitioning\.py$
-  | ^pipeline/r2_io\.py$
-  | ^pipeline/schemas/image_config\.py$
-  | ^pipeline/schemas/prefix\.py$
-  | ^pipeline/schemas/spec\.py$
+  | ^src/pipeline/ci/load_image_config\.py$
+  | ^src/pipeline/ci/validate_shard\.py$
+  | ^src/pipeline/ci/validate_spec\.py$
+  | ^src/generate_dataset\.py$
+  | ^src/pipeline/skypilot_launch\.py$
+  | ^src/pipeline/partitioning\.py$
+  | ^src/pipeline/r2_io\.py$
+  | ^src/pipeline/schemas/image_config\.py$
+  | ^src/pipeline/schemas/prefix\.py$
+  | ^src/pipeline/schemas/spec\.py$
   | ^scripts/add_music2latent\.py$
   | ^scripts/compute_audio_metrics\.py$
   | ^scripts/docker_entrypoint\.py$
@@ -178,6 +178,7 @@ exclude = '''(?x)
   | ^tests/conftest\.py$
   | ^tests/data/vst/test_core\.py$
   | ^tests/data/vst/test_generate_vst_dataset\.py$
+  | ^tests/data/vst/test_generate_vst_dataset_cli\.py$
   | ^tests/data/vst/test_preset_coverage\.py$
   | ^tests/fixtures/baseline_repo/scripts/baseline_app\.py$
   | ^tests/fixtures/diff_repo/scripts/diff_app\.py$

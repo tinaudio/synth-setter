@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline.partitioning import (
+from src.pipeline.partitioning import (
     get_my_shards,
     read_rank_world_from_env,
     validate_rank_world,

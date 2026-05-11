@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.ci.load_image_config import main
+from src.pipeline.ci.load_image_config import main
 
 VALID_SHA = "a" * 40
 VALID_ISSUE = "311"
@@ -311,7 +311,7 @@ class TestModuleInvocable:
 
     def test_module_help_exits_zero(self) -> None:
         result = subprocess.run(  # noqa: S603
-            [sys.executable, "-m", "pipeline.ci.load_image_config", "--help"],
+            [sys.executable, "-m", "src.pipeline.ci.load_image_config", "--help"],
             capture_output=True,
             text=True,
             cwd=str(PROJECT_ROOT),

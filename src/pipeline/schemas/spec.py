@@ -26,7 +26,7 @@ from pydantic import (
     model_validator,
 )
 
-from pipeline.schemas.prefix import (
+from src.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
     make_dataset_wandb_run_id,

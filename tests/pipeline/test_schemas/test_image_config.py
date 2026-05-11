@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from pipeline.schemas.image_config import load_image_config
+from src.pipeline.schemas.image_config import load_image_config
 
 VALID_SHA = "a" * 40
 VALID_ISSUE = 266

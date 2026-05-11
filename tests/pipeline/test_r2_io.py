@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline import r2_io
+from src.pipeline import r2_io
 
 
 class TestIsR2Uri:
