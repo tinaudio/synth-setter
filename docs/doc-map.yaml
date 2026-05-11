@@ -128,7 +128,7 @@ docs:
         covers: "Run ID format, shard ID format, prefix construction rules"
       - pattern: "scripts/r2_shard_report.py"
         covers: "R2 listing commands, shard status reporting, path parsing"
-      - pattern: "configs/image/dev-snapshot.yaml"
+      - pattern: "configs/dataset/*.yaml"
         covers: "r2_bucket value, storage configuration"
       - pattern: "pipeline/entrypoints/generate_dataset.py"
         covers: "rclone upload of spec and shard files, R2 path construction"

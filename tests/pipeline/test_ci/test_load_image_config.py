@@ -27,7 +27,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: test-bucket
 """
 
 _EXPECTED_LINES = [
@@ -38,7 +37,6 @@ _EXPECTED_LINES = [
     "build_mode=prebuilt",
     "target_platform=linux/amd64",
     "torch_backend=cu128",
-    "r2_bucket=test-bucket",
     f"github_sha={VALID_SHA}",
     "issue_number=311",
     "image_config_id=dev-snapshot",
@@ -248,7 +246,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: test-bucket
 """
         config_path = tmp_path / "dev-snapshot.yaml"
         config_path.write_text(yaml_with_newline)
@@ -282,7 +279,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: test-bucket
 """
         config_path = tmp_path / "dev-snapshot.yaml"
         config_path.write_text(yaml_with_cr)

@@ -25,7 +25,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: test-bucket
 """
 
 
@@ -61,7 +60,6 @@ class TestLoadImageConfigValid:
         assert result.github_sha == VALID_SHA
         assert result.issue_number == VALID_ISSUE
         assert result.image_config_id == "dev-snapshot"
-        assert result.r2_bucket == "test-bucket"
 
 
 # ---------------------------------------------------------------------------
@@ -122,22 +120,6 @@ class TestIssueNumberValidation:
 
         with pytest.raises(ValidationError, match="issue_number"):
             load_image_config(config_path, github_sha=VALID_SHA, issue_number=-1)
-
-
-# ---------------------------------------------------------------------------
-# load_image_config — r2 field validation
-# ---------------------------------------------------------------------------
-
-
-class TestR2BucketValidation:
-    """r2_bucket must not be empty or whitespace-only."""
-
-    def test_empty_r2_bucket_rejected(self, tmp_path: Path) -> None:
-        """Empty r2_bucket is rejected."""
-        config_path = _write_config(tmp_path, overrides='r2_bucket: ""\n')
-
-        with pytest.raises(ValidationError, match="must not be blank"):
-            load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +198,6 @@ class TestLoadImageConfigErrors:
     def test_missing_field_rejected(self, tmp_path: Path) -> None:
         """YAML missing a required field raises ValidationError."""
         config_path = tmp_path / "incomplete.yaml"
-        # Write config missing r2_bucket
         config_path.write_text(
             "dockerfile: docker/ubuntu22_04/Dockerfile\n"
             "image: tinaudio/synth-setter\n"
@@ -224,7 +205,6 @@ class TestLoadImageConfigErrors:
             "base_image_tag: ubuntu22_04\n"
             "build_mode: prebuilt\n"
             "target_platform: linux/amd64\n"
-            'torch_backend: "cu128"\n'
         )
 
         with pytest.raises(ValidationError):
@@ -276,5 +256,4 @@ class TestStaticFieldsAndYamlMerge:
         assert result.build_mode == "prebuilt"
         assert result.target_platform == "linux/amd64"
         assert result.torch_backend == "cu128"
-        assert result.r2_bucket == "intermediate-data"
         assert result.image_config_id == "dev-snapshot"
