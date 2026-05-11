@@ -239,7 +239,7 @@ A PR is **not ready** — for review, merge, or hand-off — until **all** of th
      --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, state, submitted_at, body}]'
    ```
 
-   If Copilot left new unaddressed inline comments, return to step 5. If 15 minutes have elapsed since the push and Copilot has produced neither an inline comment nor a top-level review note explicitly stating it has no findings, treat the auto-review as not triggered and manually re-request it before continuing — see step 6a below.
+   If Copilot left new unaddressed inline comments, **or** a new top-level review with actionable content (`state=COMMENTED`/`CHANGES_REQUESTED` with a non-empty body that isn't just a "no findings" note), return to step 5 and address it the same way you would inline comments. If 15 minutes have elapsed since the push and Copilot has produced neither an inline comment nor a top-level review note explicitly stating it has no findings, treat the auto-review as not triggered and manually re-request it before continuing — see step 6a below.
 
    **Step 6a — Manually re-request a Copilot review** when step 6's 15-minute window elapses with no Copilot activity. Try in this order, stopping at the first one that succeeds:
 
