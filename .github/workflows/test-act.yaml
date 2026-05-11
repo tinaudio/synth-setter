@@ -12,6 +12,9 @@ on:
       - ".actrc"
       - "docs/operations/act-runner.Dockerfile"
       - ".github/workflows/test-act.yaml"
+      - ".github/workflows/test-dataset-generation.yml"
+      - ".github/workflows/generate-dataset-shards.yaml"
+      - ".github/workflows/validate-dataset-shards.yaml"
   workflow_dispatch:
 
 permissions:
@@ -74,3 +77,16 @@ jobs:
             -W .github/workflows/pr-metadata-gate.yaml \
             -P ubuntu-latest=act-runner-gh:latest \
             --pull=false -n
+
+      # Dry-run the data-pipeline workflow chain. test-dataset-generation has
+      # a dynamic matrix (`fromJSON(needs.setup.outputs.providers)`) that act
+      # cannot evaluate at dry-run, so target the `setup` orchestrator job
+      # specifically — it's the entry point and where new bash/python lands.
+      # Then dry-run each `workflow_call` reusable directly so the full
+      # parse-chain stays covered.
+      - name: Dry-run test-dataset-generation chain
+        run: |
+          set -euo pipefail
+          act pull_request -W .github/workflows/test-dataset-generation.yml -j setup -n
+          act workflow_dispatch -W .github/workflows/generate-dataset-shards.yaml -n
+          act workflow_dispatch -W .github/workflows/validate-dataset-shards.yaml -n
