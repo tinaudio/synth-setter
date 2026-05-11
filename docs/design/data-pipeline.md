@@ -1355,45 +1355,40 @@ Pydantic is for trust boundaries — where data enters the system from an extern
 
 ### 14.5 Config Materialization
 
-A run starts from a typed YAML config file:
+A run starts from a Hydra experiment YAML composed against `configs/dataset.yaml`:
 
 ```yaml
 # configs/experiment/surge-simple-480k-10k.yaml (filename = dataset_config_id)
-param_spec: surge_simple
-plugin_path: plugins/Surge XT.vst3
-output_format: hdf5       # "hdf5" (local training) or "wds" (multi-GPU streaming)
-sample_rate: 44100
-shard_size: 10000
-num_shards: 48
-base_seed: 42
-r2_bucket: intermediate-data
+# @package _global_
 
-splits:
-  train: 44
-  val: 2
-  test: 2
+defaults:
+  - override /data: surge_simple
+  - override /render: surge_simple
+  - _self_
 
-# Generation params (consumed by generate_vst_dataset)
-preset_path: presets/surge-simple.vstpreset
-channels: 2
-velocity: 100
-signal_duration_seconds: 4.0
-min_loudness: -50.0
-sample_batch_size: 32
+task_name: surge-simple-480k-10k
+
+train_val_test_sizes: [440000, 20000, 20000]
+
+render:
+  sample_rate: 44100
+  min_loudness: -50.0
 ```
 
-On first `generate`:
+`configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
 
-1. Load YAML, validate against Pydantic `DatasetConfig` (strict mode)
-2. Pin `renderer_version` to `SURGE_XT_RENDERER_VERSION` (the constant in `pipeline/schemas/spec.py`, kept in lockstep with the `dev-snapshot` image's `SURGE_GIT_REF`). The launcher path stays interpreter-only — the worker re-derives via `extract_renderer_version` (`Version` from `moduleinfo.json` on Linux, `CFBundleShortVersionString` from `Info.plist` on macOS, pedalboard fallback if neither is present) and refuses to render on mismatch.
-3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision)
-4. Materialize `DatasetPipelineSpec` — expand config into per-shard specs (seeds, filenames) and capture runtime state (git SHA, pinned renderer version, num_params)
-5. Upload spec + source config to R2
-6. Proceed with reconciliation
+On first `generate` (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`):
+
+1. Hydra composes the experiment against `configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
+2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
+3. Runtime fields (`run_id`, `r2_prefix`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2_prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
+4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
+5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2_prefix>/input_spec.json`).
+6. Proceed with reconciliation.
 
 **Dirty repo handling:** When `is_repo_dirty` is true, `generate` automatically creates a `git diff` and uploads it to `metadata/run_diff.patch`. This allows reconstructing the exact code state even when changes weren't committed — common during rapid ML research iteration.
 
-**Config drift protection:** If `--config` is passed for a `run_id` that already has a spec, the command errors. The spec is authoritative after creation.
+**Config drift protection:** If `experiment=<id>` is composed against a `run_id` that already has a spec on R2, the command errors. The spec is authoritative after creation.
 
 ### 14.6 Run ID Format
 
@@ -1415,19 +1410,20 @@ pipeline/
 
   schemas/              # Pydantic models (implemented)
     __init__.py
-    config.py           # DatasetConfig, SplitsConfig, load/ID helpers
-    spec.py             # DatasetPipelineSpec, ShardSpec, materialize_spec
+    spec.py             # DatasetSpec (unified config + runtime), RenderConfig, ShardSpec, spec_from_cfg flow
     prefix.py           # DatasetConfigId, DatasetRunId, R2Prefix helpers
     image_config.py     # Docker image configuration
 
   entrypoints/          # Pipeline entry points (implemented)
     __init__.py
     generate_dataset.py # Sequential multi-shard dataset generation (MVP) + Hydra CLI entry (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`); deprecated when generate-shards lands (#411)
+    skypilot_launch.py  # Click CLI wrapping SkyPilot launch; composes a DatasetSpec via `--experiment <id>` + ad-hoc Hydra overrides
 
   ci/                   # CI validation scripts (implemented)
-    materialize_spec.py # Materialize a DatasetPipelineSpec from a config YAML
+    materialize_spec.py # Compose a DatasetSpec from a Hydra experiment and write it to disk as JSON
     validate_spec.py    # Spec structural validation (required fields, code_version SHA, etc.)
     validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
+    load_image_config.py # Resolve Docker image configuration for the launcher
 
   constants.py          # Well-known filenames and paths (R2_BUCKET, etc.)
   r2_io.py              # rclone-backed R2 helpers (URI handling, download, upload, size probe)
@@ -1452,16 +1448,23 @@ pipeline/
   # logging_config.py   # structlog configuration
 ```
 
-Pipeline configs live in `configs/experiment/` (filename = `dataset_config_id`) to distinguish them from training configs in `configs/data/` and `configs/trainer/`:
+Pipeline configs live under `configs/` as Hydra groups composed by `configs/dataset.yaml` (filename of `configs/experiment/<id>.yaml` = `dataset_config_id`):
 
 ```
 configs/
-  dataset/             # Dataset generation recipes (YAML); filename = dataset_config_id
+  dataset.yaml         # @hydra.main entry point; defaults list (data/render/r2/paths/hydra/experiment)
+  experiment/          # Dataset generation recipes; filename = dataset_config_id
     surge-simple-480k-10k.yaml
-    surge-xt-1m-10k.yaml
-  data/                # Training data module configs (Hydra)
+    runpod-smoke-shard.yaml
+    ci-materialize-test.yaml
+  data/                # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
+  render/              # Renderer + plugin / preset / sample rate / batch sizes
+    surge_simple.yaml
+    surge_xt.yaml
+  r2/                  # R2 bucket + prefix root
+    default.yaml
   trainer/             # Training configs (Hydra)
     ddp.yaml
 ```

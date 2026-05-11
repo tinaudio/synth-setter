@@ -19,6 +19,7 @@ from pathlib import Path
 
 import rootutils
 from hydra import compose, initialize_config_dir
+from hydra.errors import HydraException
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
@@ -39,8 +40,12 @@ def main() -> None:
     output_dir = Path(sys.argv[2])
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
-        cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
+    try:
+        with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
+            cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
+    except HydraException as exc:
+        sys.stderr.write(f"error: Hydra compose failed for experiment {experiment!r}: {exc}\n")
+        sys.exit(2)
     cfg.paths.root_dir = str(REPO_ROOT)
     cfg.paths.output_dir = str(REPO_ROOT)
     cfg.paths.work_dir = str(REPO_ROOT)
