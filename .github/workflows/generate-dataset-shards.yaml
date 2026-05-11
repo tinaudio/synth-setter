@@ -35,7 +35,7 @@ on:
         required: true
         type: string
       dataset_config:
-        description: "Path to dataset config YAML (under configs/dataset/)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `runpod-smoke-shard`)"
         required: true
         type: string
       image_tag:
@@ -83,10 +83,10 @@ on:
           - runpod
           - oci
       dataset_config:
-        description: "Path to dataset config YAML (under configs/dataset/)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `runpod-smoke-shard`)"
         required: true
         type: string
-        default: "configs/dataset/runpod-smoke-shard.yaml"
+        default: "runpod-smoke-shard"
       image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -233,7 +233,7 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(
-            --config "$CONFIG_PATH"
+            --experiment "$CONFIG_PATH"
             --template configs/compute/local-template.yaml
             --cluster-name "$CLUSTER_NAME"
             --worker-image-tag "$IMAGE_TAG"
@@ -322,7 +322,7 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
               python -m pipeline.entrypoints.skypilot_launch \
-                --config "$CONFIG_PATH" \
+                --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
                 --cluster-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \

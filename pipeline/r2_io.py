@@ -72,6 +72,40 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 
+def shard_uri(bucket: str, prefix: str, shard_filename: str) -> str:
+    """Build the canonical R2 URI for a shard object: ``r2://{bucket}/{prefix}{filename}``.
+
+    Centralizes the convention so the worker's skip-existing probe, the worker's upload, and the
+    CI validator agree on one URI shape — protects resumability and reconciliation from
+    prefix-format drift.
+    """
+    return f"{R2_URI_SCHEME}{bucket}/{prefix}{shard_filename}"
+
+
+def object_size(r2_uri: str) -> int | None:
+    """Return the size in bytes of the R2 object at ``r2_uri``, or ``None`` if it does not exist.
+
+    Uses ``rclone lsf --format=s`` for a size-only single-line listing: integer stdout if the
+    object exists, empty stdout if it does not. A non-zero rclone exit (auth, network, etc.) raises
+    ``subprocess.CalledProcessError`` so callers fail fast on environmental issues rather than
+    silently masking them. ``--checksum`` does not apply to listings.
+
+    A zero-size object exists and returns ``0``. Callers that want to treat zero-size as absent
+    (e.g. defending against half-uploaded objects) test ``size and size > 0`` themselves.
+    """
+    args = [  # noqa: S607 — rclone resolved by image's PATH
+        "rclone",
+        "lsf",
+        "--format=s",
+        _to_rclone_path(r2_uri),
+    ]
+    result = subprocess.run(  # noqa: S603 — args from validated URI
+        args, check=True, capture_output=True, text=True
+    )
+    out = result.stdout.strip()
+    return int(out) if out else None
+
+
 @contextmanager
 def downloaded_to_tempfile(r2_uri: str) -> Iterator[Path]:
     """Download an R2 object to a tempdir; yield local Path; clean up on exit.

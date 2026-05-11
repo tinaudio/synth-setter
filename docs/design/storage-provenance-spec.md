@@ -15,11 +15,11 @@ ______________________________________________________________________
 
 | ID                     | Construction                                                      | Source                             | Example                           |
 | ---------------------- | ----------------------------------------------------------------- | ---------------------------------- | --------------------------------- |
-| `dataset_config_id`    | Config filename (stem)                                            | `configs/dataset/{id}.yaml`        | `diva-v1`                         |
+| `dataset_config_id`    | Config filename (stem)                                            | `configs/experiment/{id}.yaml`     | `diva-v1`                         |
 | `dataset_wandb_run_id` | Configurable, default `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022500Z`     |
 | `train_config_id`      | Config filename (stem)                                            | `configs/experiment/.../{id}.yaml` | `flow-simple`                     |
 | `train_wandb_run_id`   | Configurable, default `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500250Z` |
-| `eval_config_id`       | Eval dataset config filename (stem)                               | `configs/dataset/{id}.yaml`        | `nsynth-v1`                       |
+| `eval_config_id`       | Eval dataset config filename (stem)                               | `configs/experiment/{id}.yaml`     | `nsynth-v1`                       |
 | `eval_wandb_run_id`    | Configurable, default `{eval_config_id}-{YYYYMMDDTHHMMSSsssZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000750Z`   |
 
 - `*_config_id` = filename of the YAML config, without extension

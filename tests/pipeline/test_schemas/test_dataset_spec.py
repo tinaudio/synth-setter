@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import copy
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,8 +12,6 @@ from pipeline.schemas.spec import (
     DatasetSpec,
     RenderConfig,
     ShardSpec,
-    dataset_config_id_from_path,
-    load_dataset_spec_yaml,
 )
 from src.data.vst import param_specs
 
@@ -43,8 +39,8 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
     kwargs: dict[str, Any] = {
         "task_name": "ci-smoke-test",
         "output_format": "hdf5",
-        "train_val_test_sizes": (300, 0, 0),
-        "train_val_test_seeds": (123, 456, 789),
+        "train_val_test_sizes": [300, 0, 0],
+        "train_val_test_seeds": [123, 456, 789],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": _valid_render_kwargs(plugin_path),
@@ -203,22 +199,108 @@ class TestDatasetSpecValidators:
     ) -> None:
         """A split size that doesn't divide evenly into ``batch_per_shard`` raises."""
         with pytest.raises(ValidationError, match="not a multiple"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(150, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[150, 0, 0]))
 
     def test_negative_split_size_raises(self, patch_runtime_io: None) -> None:
         """Negative split sizes raise rather than silently truncating shards."""
         with pytest.raises(ValidationError, match="must be non-negative"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(-100, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[-100, 0, 0]))
 
     def test_zero_total_split_raises(self, patch_runtime_io: None) -> None:
         """Three-zero splits raise (a dataset with zero samples is a config error)."""
         with pytest.raises(ValidationError, match="must sum to a positive count"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(0, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[0, 0, 0]))
 
     def test_invalid_output_format_literal_raises(self, patch_runtime_io: None) -> None:
         """An output_format outside ``Literal['hdf5']`` is rejected by Pydantic literal check."""
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
+
+    def test_strict_mode_rejects_int_for_string_field(self, patch_runtime_io: None) -> None:
+        """Strict mode rejects silent int→str coercion at the trust boundary."""
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(task_name=12345))
+
+    def test_strict_mode_rejects_string_for_bool_field(self, patch_runtime_io: None) -> None:
+        """Strict mode rejects silent str→bool coercion (e.g., ``is_repo_dirty="false"``)."""
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(is_repo_dirty="false"))
+
+    @pytest.mark.parametrize("bad_length", [[300, 0], [300, 0, 0, 0]])
+    def test_train_val_test_sizes_must_be_length_three(
+        self, patch_runtime_io: None, bad_length: list[int]
+    ) -> None:
+        """train_val_test_sizes must be exactly length 3 — not 2, not 4."""
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=bad_length))
+
+    @pytest.mark.parametrize("bad_length", [[42, 43], [42, 43, 44, 45]])
+    def test_train_val_test_seeds_must_be_length_three(
+        self, patch_runtime_io: None, bad_length: list[int]
+    ) -> None:
+        """train_val_test_seeds must be exactly length 3 — parity with sizes."""
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_length))
+
+    def test_explicit_empty_r2_prefix_raises(self, patch_runtime_io: None) -> None:
+        """An explicit empty ``r2_prefix`` raises via the ``_r2_prefix_must_end_with_slash`` field
+        validator (the default_factory is bypassed when a value is supplied)."""
+        with pytest.raises(ValidationError, match="r2_prefix must end with"):
+            DatasetSpec(**_valid_spec_kwargs(r2_prefix=""))
+
+    def test_z_suffixed_created_at_string_parses(self, patch_runtime_io: None) -> None:
+        """``model_dump_json``'s ``Z``-suffixed UTC timestamps round-trip on Python 3.10.
+
+        ``datetime.fromisoformat`` rejects the ``Z`` offset on 3.10 (accepts on 3.11+); the
+        ``_parse_iso_datetime`` validator normalizes it before strict-mode validation runs.
+        """
+        payload = {**_valid_spec_kwargs(), "created_at": "2026-03-28T12:00:00Z"}
+        spec = DatasetSpec(**payload)
+        assert spec.created_at == FIXED_NOW
+
+    def test_malformed_created_at_string_raises(self, patch_runtime_io: None) -> None:
+        """A malformed datetime string surfaces a clear validation error, not a silent coerce."""
+        payload = {**_valid_spec_kwargs(), "created_at": "not-a-datetime"}
+        with pytest.raises(ValidationError):
+            DatasetSpec(**payload)
+
+    def test_naive_created_at_string_raises(self, patch_runtime_io: None) -> None:
+        """Naive ISO datetimes are rejected at the ``created_at`` boundary.
+
+        ``make_dataset_wandb_run_id`` downstream needs tz-aware UTC; without this check
+        an invalid ``created_at`` would surface as a run_id derivation crash with the
+        wrong error attribution.
+        """
+        payload = {**_valid_spec_kwargs(), "created_at": "2026-03-28T12:00:00"}
+        with pytest.raises(ValidationError, match="created_at must be timezone-aware UTC"):
+            DatasetSpec(**payload)
+
+    def test_non_utc_created_at_string_raises(self, patch_runtime_io: None) -> None:
+        """Non-UTC ISO offsets are rejected so run_id derivation produces correct timestamps."""
+        payload = {**_valid_spec_kwargs(), "created_at": "2026-03-28T12:00:00+05:00"}
+        with pytest.raises(ValidationError, match="created_at must be UTC"):
+            DatasetSpec(**payload)
+
+    def test_train_val_test_sizes_stored_as_immutable_tuple(self, patch_runtime_io: None) -> None:
+        """Splits stored as ``tuple`` so in-place mutation can't invalidate cached ``shards``.
+
+        ``frozen=True`` only blocks attribute reassignment, not in-place mutation of
+        contained-types. Tuple makes in-place mutation a ``TypeError``, preserving the
+        frozen contract end-to-end.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs())
+        assert isinstance(spec.train_val_test_sizes, tuple)
+        assert isinstance(spec.train_val_test_seeds, tuple)
+        with pytest.raises(TypeError):
+            spec.train_val_test_sizes[0] = 999  # type: ignore[index]
+
+    def test_train_val_test_sizes_accepts_json_list(self, patch_runtime_io: None) -> None:
+        """JSON-loaded specs deliver lists (no native tuple type); they coerce to tuples on
+        input."""
+        payload = {**_valid_spec_kwargs(), "train_val_test_sizes": [300, 0, 0]}
+        spec = DatasetSpec(**payload)
+        assert spec.train_val_test_sizes == (300, 0, 0)
+        assert isinstance(spec.train_val_test_sizes, tuple)
 
 
 # ---------------------------------------------------------------------------
@@ -231,18 +313,18 @@ class TestDatasetSpecComputedFields:
 
     def test_shards_count_matches_total_size_div_batch(self, patch_runtime_io: None) -> None:
         """num_shards = sum(train_val_test_sizes) / batch_per_shard."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(400, 100, 100)))
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         assert spec.num_shards == 6
         assert len(spec.shards) == 6
 
     def test_shard_seeds_are_base_plus_shard_id(self, patch_runtime_io: None) -> None:
         """Per-shard seed equals ``base_seed + shard_id``."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(300, 0, 0)))
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert [s.seed for s in spec.shards] == [42, 43, 44]
 
     def test_shard_filenames_zero_padded_six_digits(self, patch_runtime_io: None) -> None:
         """Shard filenames use the ``shard-NNNNNN`` six-digit zero-padded form."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(300, 0, 0)))
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert spec.shards[0].filename == "shard-000000.h5"
         assert spec.shards[-1].filename == "shard-000002.h5"
 
@@ -287,7 +369,7 @@ class TestDatasetSpecRoundTrip:
 
     def test_json_round_trip_preserves_shards(self, patch_runtime_io: None) -> None:
         """Computed ``shards`` / ``num_shards`` round-trip identically through JSON."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(400, 100, 100)))
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
         assert restored.shards == spec.shards
         assert restored.num_shards == spec.num_shards
@@ -318,120 +400,3 @@ class TestDatasetSpecRoundTrip:
             spec_mod._get_git_sha = original
 
         assert restored.git_sha == "abc123def456"
-
-
-# ---------------------------------------------------------------------------
-# dataset_config_id_from_path
-# ---------------------------------------------------------------------------
-
-
-class TestDatasetConfigIdFromPath:
-    """Tests for ``dataset_config_id_from_path`` filename-stem extraction."""
-
-    def test_extracts_stem(self) -> None:
-        """Returns the filename stem (no extension, no parent directories)."""
-        assert (
-            dataset_config_id_from_path(Path("configs/dataset/surge-simple-480k-10k.yaml"))
-            == "surge-simple-480k-10k"
-        )
-
-
-# ---------------------------------------------------------------------------
-# load_dataset_spec_yaml — legacy bridge (removed in A.3)
-# ---------------------------------------------------------------------------
-
-LEGACY_YAML_KWARGS: dict[str, Any] = {
-    "param_spec": "surge_simple",
-    "plugin_path": "plugins/Surge XT.vst3",
-    "output_format": "hdf5",
-    "sample_rate": 16000,
-    "shard_size": 100,
-    "num_shards": 3,
-    "base_seed": 42,
-    "r2_bucket": "intermediate-data",
-    "splits": {"train": 3, "val": 0, "test": 0},
-    "preset_path": "presets/surge-base.vstpreset",
-    "channels": 2,
-    "velocity": 100,
-    "signal_duration_seconds": 4.0,
-    "min_loudness": -55.0,
-    "sample_batch_size": 32,
-}
-
-
-@pytest.fixture()
-def legacy_yaml(tmp_path: Path) -> Path:
-    """Write a legacy-shape YAML config to tmp_path and return its path."""
-    import yaml
-
-    path = tmp_path / "ci-smoke-test.yaml"
-    path.write_text(yaml.safe_dump(copy.deepcopy(LEGACY_YAML_KWARGS), sort_keys=False))
-    return path
-
-
-class TestLoadDatasetSpecYaml:
-    """Tests for the legacy YAML → DatasetSpec bridge (removed in PR-3)."""
-
-    def test_legacy_yaml_round_trips_into_dataset_spec(
-        self, patch_runtime_io: None, legacy_yaml: Path
-    ) -> None:
-        """A legacy flat YAML loads into a valid DatasetSpec with expected derived fields."""
-        spec = load_dataset_spec_yaml(legacy_yaml)
-        assert spec.task_name == "ci-smoke-test"
-        assert spec.output_format == "hdf5"
-        assert spec.train_val_test_sizes == (300, 0, 0)
-        assert spec.render.plugin_path == "plugins/Surge XT.vst3"
-        assert spec.render.batch_per_shard == 100
-        assert spec.num_shards == 3
-
-    def test_legacy_yaml_extends_merges_base(self, patch_runtime_io: None, tmp_path: Path) -> None:
-        """A child YAML's ``_extends`` merges its base, with child values overriding."""
-        import yaml
-
-        base = tmp_path / "base.yaml"
-        base.write_text(yaml.safe_dump(copy.deepcopy(LEGACY_YAML_KWARGS), sort_keys=False))
-        child = tmp_path / "child.yaml"
-        child.write_text("_extends: base\nvelocity: 110\n")
-
-        spec = load_dataset_spec_yaml(child)
-        assert spec.output_format == "hdf5"
-        assert spec.render.plugin_path == "plugins/Surge XT.vst3"
-        assert spec.render.velocity == 110
-
-    def test_legacy_yaml_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
-        """A nonexistent YAML path raises FileNotFoundError with a clear message."""
-        with pytest.raises(FileNotFoundError, match="Config file not found"):
-            load_dataset_spec_yaml(tmp_path / "nonexistent.yaml")
-
-    def test_legacy_yaml_extends_missing_base_raises(self, tmp_path: Path) -> None:
-        """A YAML extending a missing base raises FileNotFoundError naming the missing target."""
-        child = tmp_path / "child.yaml"
-        child.write_text("_extends: nonexistent\nvelocity: 110\n")
-        with pytest.raises(FileNotFoundError, match="_extends target not found"):
-            load_dataset_spec_yaml(child)
-
-    def test_legacy_yaml_num_shards_mismatch_raises(
-        self, patch_runtime_io: None, tmp_path: Path
-    ) -> None:
-        """Legacy YAML where num_shards disagrees with sum(splits) raises a clear error."""
-        import yaml as _yaml
-
-        bad = copy.deepcopy(LEGACY_YAML_KWARGS)
-        bad["num_shards"] = 99  # splits sum to 3 — they disagree
-        path = tmp_path / "mismatch.yaml"
-        path.write_text(_yaml.safe_dump(bad, sort_keys=False))
-        with pytest.raises(ValueError, match="num_shards=99 disagrees with sum"):
-            load_dataset_spec_yaml(path)
-
-    def test_legacy_yaml_without_num_shards_loads(
-        self, patch_runtime_io: None, tmp_path: Path
-    ) -> None:
-        """Legacy YAML missing num_shards still loads (the check only fires when present)."""
-        import yaml as _yaml
-
-        raw = copy.deepcopy(LEGACY_YAML_KWARGS)
-        del raw["num_shards"]
-        path = tmp_path / "no_num_shards.yaml"
-        path.write_text(_yaml.safe_dump(raw, sort_keys=False))
-        spec = load_dataset_spec_yaml(path)
-        assert spec.num_shards == 3

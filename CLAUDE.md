@@ -207,6 +207,27 @@ Pure documentation edits (`.md` files, `docs/`) are exempt. There are no other e
 - In chat responses, use full markdown hyperlinks for PR/issue references: `[#N](https://github.com/tinaudio/synth-setter/issues/N)`. In PR/issue bodies, use bare `Fixes #N` / `Closes #N` / `Refs #N` so GitHub auto-close works.
 - Never add "Generated with Claude Code" or similar attribution footers to PRs, commits, issues, or comments.
 
+### PR Readiness
+
+A PR is **not ready** — for review, merge, or hand-off — until **all** of these hold:
+
+- **All CI checks pass.** Both required and optional checks must pass — a failing, errored, or still-pending check means not ready.
+- **No merge conflicts with the base branch.** `gh pr view <N> --json mergeable -q .mergeable` must report `MERGEABLE`. Anything else means not ready, including `UNKNOWN` (GitHub is still computing mergeability) — keep polling until it resolves to `MERGEABLE` or `CONFLICTING`.
+- **Every open review comment has an inline reply.** Every unresolved review thread — human reviewers AND Copilot's automated comments — has either a code change linked by commit SHA or an inline reply with justification. See `### PR Review Comments` below for the reply mechanics.
+- **Copilot has generated no new comments since the last push.** Copilot re-reviews after every push, usually finishing within ~60s. The PR is not ready until you have verified Copilot is done and either has zero new comments or every new comment has been addressed.
+
+"I pushed the fix" is not the same as "the PR is ready." After pushing, iterate until all conditions are satisfied — use `/loop` (e.g. `/loop 2m gh pr checks <N>`) or repeated polling, do not stop at the first push:
+
+1. Push the change.
+2. Wait for CI to finish: `gh pr checks <N> --watch` or `/loop` the checks command.
+3. If any check fails, diagnose, fix, push again, return to step 2.
+4. Check mergeability with `gh pr view <N> --json mergeable -q .mergeable`. If `CONFLICTING`, rebase or merge the base branch, resolve the conflict, push, return to step 2. If `UNKNOWN`, GitHub hasn't finished computing — wait and poll again. Only `MERGEABLE` clears this step.
+5. Reply inline to every open review comment — list them with `gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate`. If a reply required a code change, push and return to step 2. Use `/pr-review-resolver` to drive this systematically.
+6. Wait for Copilot to complete its post-push review (~60s). List its comments with `gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, body}]'`. If Copilot left new unaddressed comments, return to step 5.
+7. Only when checks are all green AND `mergeable=MERGEABLE` AND every review comment has an inline reply AND Copilot has produced no new comments since the last push is the PR ready.
+
+This applies whether the PR is yours or one you were asked to drive across the finish line.
+
 ### PR Verification
 
 - `/pr-checkbox` is verification-only — look for existing branches/PRs and run checks, never plan implementation.

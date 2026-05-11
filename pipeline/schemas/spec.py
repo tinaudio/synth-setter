@@ -13,13 +13,10 @@ layout + render fields.
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import cached_property
-from pathlib import Path
 from typing import Any, Literal
 
-import yaml
-from omegaconf import OmegaConf
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -41,19 +38,12 @@ __all__ = [
     "DatasetSpec",
     "RenderConfig",
     "ShardSpec",
-    "dataset_config_id_from_path",
-    "load_dataset_spec_yaml",
 ]
 
 # Source-of-truth mapping from ``output_format`` to shard filename suffix.
 # Adding a format means adding a row here; missing entries surface as KeyError
 # at construction rather than producing a silently-wrong filename.
 OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5"}
-
-# YAML key in legacy ``configs/dataset/*.yaml`` files that names a base config
-# whose keys are merged under the override. Removed in Phase A.3 once Hydra
-# defaults inheritance handles composition.
-_LEGACY_EXTENDS_KEY = "_extends"
 
 
 def _get_git_sha() -> str:
@@ -133,6 +123,26 @@ class RenderConfig(BaseModel):
         return self
 
 
+# Names paired with ``train_val_test_sizes`` indices in error messages.
+_SPLIT_LABELS: tuple[str, str, str] = ("train", "val", "test")
+
+
+def _default_run_id(data: dict[str, Any]) -> str:
+    """Compute a deterministic run_id from already-validated layout fields."""
+    return make_dataset_wandb_run_id(
+        DatasetConfigId(data["task_name"]), timestamp=data["created_at"]
+    )
+
+
+def _default_r2_prefix(data: dict[str, Any]) -> str:
+    """Compute the R2 object prefix from already-validated layout fields."""
+    return make_r2_prefix(
+        DatasetConfigId(data["task_name"]),
+        data["run_id"],
+        prefix_root=data["r2_prefix_root"],
+    )
+
+
 class DatasetSpec(BaseModel):
     """Unified dataset specification — config + materialized runtime in one model.
 
@@ -144,22 +154,20 @@ class DatasetSpec(BaseModel):
       ``default_factory`` when missing and pass through when present.
     - Workers re-validate ``model_dump_json()`` from R2 and get an equal model.
 
-    ``strict`` is intentionally off on this top-level model so JSON-mode
-    round-trips coerce list→tuple and str→datetime (JSON has no native tuple
-    or datetime types). ``extra="forbid"`` plus the per-field validators keep
-    the trust boundary tight. ``frozen=True`` matches the prior spec's
-    immutability so ``shards``/``num_shards``/``num_params`` cached values
-    can't go stale via post-construction mutation; the internal
-    ``_populate_derived_runtime_fields`` validator uses ``object.__setattr__``
-    to bypass frozen during construction.
+    Strict mode is on (the model is a trust boundary for JSON-from-R2);
+    ``extra="forbid"`` plus the per-field validators keep the boundary tight.
+    Frozen so the materialized artifact is immutable post-construction.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    # Layout fields
+    # Layout fields. Splits are stored as immutable tuples so the frozen-model
+    # guarantee carries through to the contents; JSON-loaded values arrive as
+    # lists and get coerced via ``_splits_list_to_tuple`` below.
     task_name: str
     output_format: Literal["hdf5"]
     train_val_test_sizes: tuple[int, int, int]
+    # Reserved for per-sample seeding (#884); not consumed yet.
     train_val_test_seeds: tuple[int, int, int]
     base_seed: int
     r2_bucket: str
@@ -169,14 +177,14 @@ class DatasetSpec(BaseModel):
     render: RenderConfig
 
     # Auto-filled runtime fields. ``default_factory`` runs only when the field
-    # is missing in input — JSON-loaded specs preserve the materialization-time
-    # values that the worker needs to remain consistent across the run. The
-    # lambdas re-look-up the helpers per call so test monkeypatches take effect.
+    # is missing on input — JSON-loaded specs preserve the materialization-time
+    # values that workers must reuse for consistency. Lambdas wrap the
+    # module-level helpers so test monkeypatches take effect.
     git_sha: str = Field(default_factory=lambda: _get_git_sha())
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
-    run_id: str = ""
-    r2_prefix: str = ""
+    run_id: str = Field(default_factory=_default_run_id)
+    r2_prefix: str = Field(default_factory=_default_r2_prefix)
 
     @model_validator(mode="before")
     @classmethod
@@ -194,38 +202,58 @@ class DatasetSpec(BaseModel):
                 data.pop(computed_key, None)
         return data
 
-    @model_validator(mode="after")
-    def _populate_derived_runtime_fields(self) -> DatasetSpec:
-        """Fill ``run_id`` / ``r2_prefix`` from ``task_name`` + ``created_at`` when empty.
+    @field_validator("train_val_test_sizes", "train_val_test_seeds", mode="before")
+    @classmethod
+    def _splits_list_to_tuple(cls, value: Any) -> Any:
+        """Coerce JSON-loaded ``list[int]`` into ``tuple[int, int, int]``.
 
-        Empty defaults mean the input dict didn't carry materialization-time values; non-empty
-        values came from a JSON-loaded spec and pass through unchanged.
+        Tuples are immutable, so the frozen-model guarantee carries through to
+        the contents (a mutable list would let ``spec.train_val_test_sizes[0] =
+        x`` silently invalidate the cached ``shards`` / ``num_shards``). JSON
+        has no native tuple, so model_dump_json emits a list and the worker
+        round-trip lands here on validation; in-process construction can pass
+        either form.
         """
-        if not self.run_id:
-            object.__setattr__(
-                self,
-                "run_id",
-                make_dataset_wandb_run_id(
-                    DatasetConfigId(self.task_name), timestamp=self.created_at
-                ),
-            )
-        if not self.r2_prefix:
-            object.__setattr__(
-                self,
-                "r2_prefix",
-                make_r2_prefix(
-                    DatasetConfigId(self.task_name),
-                    self.run_id,
-                    prefix_root=self.r2_prefix_root,
-                ),
-            )
-        return self
+        if isinstance(value, list):
+            if len(value) != 3:
+                raise ValueError(f"must have exactly 3 entries, got {len(value)}")
+            return tuple(value)
+        return value
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _parse_iso_datetime(cls, value: Any) -> Any:
+        """Parse an ISO 8601 string into a tz-aware UTC ``datetime``.
+
+        Strict-mode Python validation rejects str → datetime coercion, so JSON inputs (where
+        datetime is a string) need pre-conversion here. Also normalizes the trailing ``Z``
+        offset that ``model_dump_json`` emits for UTC, which Python 3.10's ``fromisoformat``
+        does not accept (3.11+ does).
+
+        Rejects naive datetimes and non-UTC offsets so error attribution stays at the
+        ``created_at`` boundary rather than surfacing later as a ``run_id`` derivation crash
+        (``make_dataset_wandb_run_id`` requires tz-aware UTC).
+        """
+        if isinstance(value, str):
+            if value.endswith("Z"):
+                value = value[:-1] + "+00:00"
+            value = datetime.fromisoformat(value)
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                raise ValueError(
+                    f"created_at must be timezone-aware UTC; got naive datetime {value!r}"
+                )
+            if value.utcoffset() != timedelta(0):
+                raise ValueError(
+                    f"created_at must be UTC (offset 0); got offset {value.utcoffset()}"
+                )
+        return value
 
     @field_validator("r2_prefix")
     @classmethod
     def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
         """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
-        if value and not value.endswith("/"):
+        if not value.endswith("/"):
             raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
         return value
 
@@ -255,7 +283,7 @@ class DatasetSpec(BaseModel):
         spec-validation time rather than mid-render.
         """
         bps = self.render.batch_per_shard
-        for label, size in zip(("train", "val", "test"), self.train_val_test_sizes, strict=True):
+        for label, size in zip(_SPLIT_LABELS, self.train_val_test_sizes, strict=True):
             if size < 0:
                 raise ValueError(f"train_val_test_sizes[{label}] must be non-negative, got {size}")
             if size % bps != 0:
@@ -314,112 +342,3 @@ class DatasetSpec(BaseModel):
         from src.data.vst import param_specs
 
         return len(param_specs[self.render.param_spec_name])
-
-
-def dataset_config_id_from_path(config_path: Path) -> DatasetConfigId:
-    """Extract the dataset config ID (filename stem) from a config path."""
-    return DatasetConfigId(config_path.stem)
-
-
-def _resolve_legacy_extends(config_path: Path, raw: dict[str, Any]) -> dict[str, Any]:
-    """Merge a base config into ``raw`` if it declares ``_extends:``.
-
-    Bridges the old flat ``configs/dataset/*.yaml`` shape until Phase A.3
-    migrates the entrypoint to ``@hydra.main`` and Hydra's defaults
-    inheritance replaces this loader.
-    """
-    if _LEGACY_EXTENDS_KEY not in raw:
-        return raw
-    base_name = raw[_LEGACY_EXTENDS_KEY]
-    if not isinstance(base_name, str):
-        raise TypeError(
-            f"{_LEGACY_EXTENDS_KEY} must name a base config (string), "
-            f"got {type(base_name).__name__}"
-        )
-    base_path = config_path.parent / f"{base_name}.yaml"
-    if not base_path.is_file():
-        raise FileNotFoundError(
-            f"_extends target not found: {base_path} (referenced from {config_path})"
-        )
-    with open(base_path) as f:
-        base_raw = yaml.safe_load(f)
-    if not isinstance(base_raw, dict):
-        raise TypeError(f"Expected a YAML mapping in {base_path}, got {type(base_raw).__name__}")
-    base_resolved = _resolve_legacy_extends(base_path, base_raw)
-    override = {k: v for k, v in raw.items() if k != _LEGACY_EXTENDS_KEY}
-    merged = OmegaConf.merge(OmegaConf.create(base_resolved), OmegaConf.create(override))
-    return OmegaConf.to_container(merged, resolve=True)  # type: ignore[return-value]
-
-
-# Pinned plugin version baked into ``tinaudio/synth-setter:dev-snapshot``;
-# legacy YAML files predate ``render.renderer_version`` so the loader injects
-# this default. Phase A.2 surfaces it as a Hydra-composed config field.
-_LEGACY_PINNED_RENDERER_VERSION = "1.3.4"
-
-
-def _legacy_dict_to_dataset_spec_kwargs(raw: dict[str, Any], task_name: str) -> dict[str, Any]:
-    """Reshape a legacy flat dataset YAML dict into ``DatasetSpec`` kwargs.
-
-    Maps ``shard_size``/``num_shards``/``splits`` onto ``train_val_test_sizes``
-    and lifts renderer fields under ``render``. Removed in Phase A.3 with the
-    rest of the legacy YAML loader.
-    """
-    splits = raw["splits"]
-    shard_size = raw["shard_size"]
-    declared_num_shards = raw.get("num_shards")
-    splits_total_shards = splits["train"] + splits["val"] + splits["test"]
-    if declared_num_shards is not None and declared_num_shards != splits_total_shards:
-        raise ValueError(
-            f"legacy YAML num_shards={declared_num_shards} disagrees with "
-            f"sum(splits)={splits_total_shards} (train={splits['train']}, "
-            f"val={splits['val']}, test={splits['test']}); update one or the other"
-        )
-    train_val_test_sizes = (
-        splits["train"] * shard_size,
-        splits["val"] * shard_size,
-        splits["test"] * shard_size,
-    )
-    train_val_test_seeds = (
-        raw["base_seed"],
-        raw["base_seed"] + 1,
-        raw["base_seed"] + 2,
-    )
-    render = {
-        "plugin_path": raw["plugin_path"],
-        "preset_path": raw["preset_path"],
-        "param_spec_name": raw["param_spec"],
-        "renderer_version": raw.get("renderer_version", _LEGACY_PINNED_RENDERER_VERSION),
-        "sample_rate": raw["sample_rate"],
-        "channels": raw["channels"],
-        "velocity": raw["velocity"],
-        "signal_duration_seconds": raw["signal_duration_seconds"],
-        "min_loudness": raw["min_loudness"],
-        "sample_batch_size": raw["sample_batch_size"],
-        "batch_per_shard": shard_size,
-    }
-    return {
-        "task_name": task_name,
-        "output_format": raw.get("output_format", "hdf5"),
-        "train_val_test_sizes": train_val_test_sizes,
-        "train_val_test_seeds": train_val_test_seeds,
-        "base_seed": raw["base_seed"],
-        "r2_bucket": raw["r2_bucket"],
-        "render": render,
-    }
-
-
-def load_dataset_spec_yaml(config_path: Path) -> DatasetSpec:
-    """Load a legacy flat dataset YAML and construct a ``DatasetSpec``.
-
-    Bridge for callers that haven't migrated to ``@hydra.main``. Removed in
-    Phase A.3 once the entrypoint composes the spec dict via Hydra defaults.
-    """
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    with open(config_path) as f:
-        raw = yaml.safe_load(f)
-    if not isinstance(raw, dict):
-        raise TypeError(f"Expected a YAML mapping in {config_path}, got {type(raw).__name__}")
-    merged = _resolve_legacy_extends(config_path, raw)
-    kwargs = _legacy_dict_to_dataset_spec_kwargs(merged, task_name=config_path.stem)
-    return DatasetSpec(**kwargs)

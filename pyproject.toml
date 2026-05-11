@@ -1,6 +1,6 @@
 [project]
 name = "synth-permutations"
-version = "0.14.1"
+version = "1.0.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"

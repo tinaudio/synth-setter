@@ -3,7 +3,7 @@ name: Test Dataset Generation
 # Smoke test for the data-pipeline. Three execution modes share the same
 # `validate-dataset-shards.yaml` downstream:
 #
-#   * `local`  — runs `pipeline.ci.materialize_spec` + `docker_entrypoint.py
+#   * `local`  — composes the Hydra dataset config + invokes `docker_entrypoint.py
 #     generate_dataset` directly inside the dev-snapshot container on the
 #     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). Manual
 #     dispatch fallback for ad-hoc smoke; superseded by `skypilot-local` for
@@ -56,9 +56,9 @@ on:
   workflow_dispatch:
     inputs:
       dataset_config:
-        description: "Path to dataset config YAML (under configs/dataset/)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `runpod-smoke-shard`)"
         required: true
-        default: "configs/dataset/runpod-smoke-shard.yaml"
+        default: "runpod-smoke-shard"
       docker_image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -78,7 +78,10 @@ on:
     paths:
       - "src/data/vst/**"
       - "pipeline/schemas/**"
-      - "configs/dataset/**"
+      - "configs/experiment/**"
+      - "configs/dataset.yaml"
+      - "configs/render/**"
+      - "configs/r2/**"
       - "configs/compute/**"
       - "pipeline/entrypoints/**"
       - "pipeline/ci/**"
@@ -170,26 +173,39 @@ jobs:
           echo "providers_local: ${providers_local}"
           echo "providers_launcher: ${providers_launcher}"
 
-      - name: Install PyYAML for dataset-config parsing
-        run: pip install pyyaml
+      # configs/hydra/default.yaml's `defaults` block overrides job_logging /
+      # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
+      # plugin. Without it, Hydra compose fails with:
+      #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
+      # Pin both to the same versions as requirements-app.txt.
+      - name: Install Hydra for dataset-config composition
+        run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
-      # Bucket comes from the dataset config (the source of truth the launcher
-      # uses for `spec.r2_bucket` and therefore for its R2 upload destination).
-      # Reading from configs/image/dev-snapshot.yaml would be wrong: that's the
-      # CI image's bucket, not the dataset's. They happen to match for
-      # runpod-smoke-shard.yaml, but configs like 10-1k-shards.yaml use
-      # `experiments` instead.
+      # Bucket comes from the composed dataset config (the source of truth the
+      # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
+      # destination). Post-Hydra migration, the experiment id is composed
+      # against `configs/dataset.yaml` rather than read from a YAML path —
+      # `r2_bucket` resolves through `${r2.bucket}` from the `r2` config group.
       - id: bucket
         env:
           DATASET_CONFIG: >-
             ${{
               github.event_name == 'pull_request'
-                && 'configs/dataset/runpod-smoke-shard.yaml'
-                || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+                && 'runpod-smoke-shard'
+                || (inputs.dataset_config || 'runpod-smoke-shard')
             }}
         run: |
           set -euo pipefail
-          R2_BUCKET=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['r2_bucket'])" "$DATASET_CONFIG")
+          R2_BUCKET=$(python3 -c "
+          import os
+          from pathlib import Path
+          from hydra import compose, initialize_config_dir
+          cfg_dir = str(Path.cwd() / 'configs')
+          experiment = os.environ['DATASET_CONFIG']
+          with initialize_config_dir(version_base='1.3', config_dir=cfg_dir):
+              cfg = compose(config_name='dataset', overrides=[f'experiment={experiment}'])
+          print(cfg.r2_bucket)
+          ")
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket: ${R2_BUCKET}"
 
@@ -213,8 +229,8 @@ jobs:
       DATASET_CONFIG: >-
         ${{
           github.event_name == 'pull_request'
-            && 'configs/dataset/runpod-smoke-shard.yaml'
-            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+            && 'runpod-smoke-shard'
+            || (inputs.dataset_config || 'runpod-smoke-shard')
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -335,8 +351,8 @@ jobs:
       dataset_config: >-
         ${{
           github.event_name == 'pull_request'
-            && 'configs/dataset/runpod-smoke-shard.yaml'
-            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+            && 'runpod-smoke-shard'
+            || (inputs.dataset_config || 'runpod-smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
