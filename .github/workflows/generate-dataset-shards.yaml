@@ -262,6 +262,26 @@ jobs:
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
         run: sky local down || true
 
+      # Snapshot SkyPilot's two on-disk log roots into the run-metadata dir so
+      # the existing `Upload run metadata` step picks them up. Without this,
+      # a launcher hang/cancel leaves the operator with only the bare
+      # `View logs: sky api logs -l <id>/file_mounts.log` pointer the SDK
+      # printed to stdout — the actual log file is destroyed with the runner.
+      #   * `~/sky_logs/`                       — CLI invocations (sky local up/down).
+      #   * `~/.sky/api_server/clients/<hash>/sky_logs/` — SDK client logs that
+      #     `sky api logs -l <id>` resolves to (file_mounts.log, provision.log,
+      #     setup.log, etc.). Local API server in 0.12 stores them here.
+      # Placed AFTER `sky local down` so local_down.log is captured too.
+      - name: Snapshot sky logs (skypilot-local row)
+        if: ${{ always() && inputs.provider == 'skypilot-local' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs"
+          cp -r "${HOME}/sky_logs/." "${RUN_METADATA_DIR}/sky_logs/" 2>/dev/null || true
+          cp -r "${HOME}/.sky/api_server/clients/." "${RUN_METADATA_DIR}/sky_api_server_logs/" 2>/dev/null || true
+          echo "=== snapshot sizes ==="
+          du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
+
       # ----- runpod / oci row: in-container launcher
       # Optional launcher flags are pre-rendered into env-var strings on the
       # outer step (so GHA expression evaluation stays out of the bash
