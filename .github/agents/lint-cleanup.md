@@ -4,6 +4,18 @@
 
 Fix pre-existing lint violations in legacy files one at a time, removing them from the pre-commit exclusion lists in `.pre-commit-config.yaml`. Tracked in #25.
 
+## How this is invoked
+
+This runbook is the canonical workflow. Three entry points delegate to it; edits to the steps below land here and reach every entry point automatically.
+
+| Tool                       | Entry point                        | How to invoke                                         |
+| -------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| Claude Code (programmatic) | `.claude/agents/lint-cleanup.md`   | `Agent(subagent_type: "lint-cleanup", prompt: "...")` |
+| Claude Code (interactive)  | `.claude/commands/lint-cleanup.md` | Type `/lint-cleanup <path>` in a Claude Code session  |
+| Copilot Coding Agent       | `.github/copilot-instructions.md`  | Assign a #25 sub-issue to Copilot in the GitHub UI    |
+
+Do **not** paraphrase the workflow steps into the entry-point stubs — they are intentionally thin pointers so the runbook stays single-sourced.
+
 ## Scope
 
 Only formatting, docstrings, and lint fixes. **No functional changes.**
