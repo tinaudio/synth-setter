@@ -17,7 +17,7 @@ For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `pydoc
 3. **Auto-fix what you can**: `ruff check --fix` and `docformatter --in-place` handle most formatting issues automatically
 4. **Manually fix remaining violations**:
    - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`) — and must pass `pydoclint` DOC1xx/DOC2xx/DOC5xx (signature ↔ docstring consistency)
-5. **Remove the file from all `exclude` blocks** in `.pre-commit-config.yaml`
+5. **Remove the file from all `exclude` blocks** in `.pre-commit-config.yaml` **and from `[tool.pydoclint].exclude` in `pyproject.toml`** (pydoclint's path-exclude list lives there, not in the pre-commit config)
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
 7. **Run tests**: `make test-fast` — the quick CPU suite (excludes `slow`, `gpu`, `mps`, `requires_vst`) must still pass as a smoke check; lint-only changes shouldn't affect behavior
 8. **Commit**: Use conventional commits format: `chore(lint): clean up <filename>`
