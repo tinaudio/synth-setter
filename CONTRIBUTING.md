@@ -85,6 +85,26 @@ make format         # runs: pre-commit run -a
 Always run `make format` before committing. This catches issues early and
 auto-fixes what it can.
 
+#### Editor integration
+
+The repo also ships editor-side wiring so the same fast formatters run on save,
+not just at commit time:
+
+- `.editorconfig` — cross-editor indent, EOL, and trim-trailing-whitespace
+  rules.
+- `.vscode/extensions.json` — when you open the project in VS Code or Cursor,
+  you'll be prompted to install the recommended extensions (ruff, prettier,
+  editorconfig, runonsave, shellcheck).
+- `.vscode/settings.json` — once those extensions are installed, save will
+  format Python via ruff, YAML via prettier, and Markdown via
+  `pre-commit run mdformat --files <path>`.
+- `.claude/settings.json` — Claude Code's Edit/Write tool calls trigger the
+  same dispatch.
+
+All three editor surfaces go through `pre-commit run <hook> --files <path>`
+for Markdown and YAML, so save-time output is byte-identical to `make format`
+output — no version drift.
+
 ### Writing code
 
 - **Type-annotate all function signatures.** Avoid `Any` -- use `Union`,
