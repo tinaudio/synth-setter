@@ -740,10 +740,9 @@ def derive_state(
     Performs every gh + git call, returns the bundle.
     """
     chain = load_chain(chain_path)
-    if chain.tracking_issue != tracking_issue:
-        chain.tracking_issue = tracking_issue
-    if chain.repo != repo:
-        chain.repo = repo
+    # `tracking_issue` / `repo` args control which issue we *query*. They are
+    # session-scoped overrides from the CLI — never propagate them back into
+    # the manifest, or `--issue 999` would silently rewrite chain.yaml.
     comments = fetch_issue_comments(repo, tracking_issue)
     prior_handoffs = filter_handoff_comments(comments)
     since_iso = prior_handoffs[0].created_at if prior_handoffs else None

@@ -315,6 +315,20 @@ def test_fetch_commit_committer_date_returns_empty_on_subprocess_failure(
     assert ds._fetch_commit_committer_date("org/repo", "abc1234") == ""
 
 
+def test_update_chain_from_state_preserves_tracking_issue_and_repo() -> None:
+    """Session-scoped overrides must NOT bleed back into the saved chain."""
+    chain = ds.Chain(
+        tracking_issue=882,
+        repo="tinaudio/synth-setter",
+        parent_phase=72,
+        task_prefix="Task 5",
+        plan_prs=[ds.ChainPR(id="PR-5", title="foo")],
+    )
+    out = ds.update_chain_from_state(chain, done_since=[], in_flight=[])
+    assert out.tracking_issue == 882
+    assert out.repo == "tinaudio/synth-setter"
+
+
 def test_load_chain_reads_the_shipped_chain_yaml() -> None:
     """The chain.yaml shipped with the skill loads cleanly into a Chain."""
     chain = ds.load_chain(SKILL_ROOT / "chain.yaml")
