@@ -49,7 +49,6 @@ exclude_docs: |
   getting-started.md
   glossary.md
   org-migration-checklist.md
-  data-pipeline-implementation-plan.md
   design/
   guides/
   operations/
