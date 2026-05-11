@@ -3,5 +3,6 @@
 Canonical names from docs/design/data-pipeline.md §7.1 (storage layout).
 """
 
-# Frozen input specification — written once by materialize_spec, never modified.
+# Frozen input specification — written once at @hydra.main as a DatasetSpec
+# JSON serialization, never modified after launch.
 INPUT_SPEC_FILENAME = "input_spec.json"

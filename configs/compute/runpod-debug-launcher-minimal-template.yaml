@@ -9,7 +9,7 @@
 # This isolates "the launcher's launch flow on RunPod" from "the worker's
 # render flow."
 #
-# PASS = launcher's materialize_spec, task.update_envs, task.update_file_mounts,
+# PASS = launcher's _compose_dataset_spec + spec upload, task.update_envs, task.update_file_mounts,
 #        sky.launch + stream_and_get, sky.tail_logs, sky.down all work on RunPod.
 # FAIL = the launcher itself has a bug, or the launcher's specific provisioning
 #        shape (cluster name pattern, mount upload, env injection) is what

@@ -1,4 +1,4 @@
-"""Tests for pipeline.r2_io — rclone-backed R2 I/O helpers."""
+"""Tests for src.pipeline.r2_io — rclone-backed R2 I/O helpers."""
 
 from __future__ import annotations
 

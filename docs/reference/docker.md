@@ -155,7 +155,7 @@ YAML (see Image config below). CLI takes precedence.
 
 For CI builds, image parameters are defined in YAML config files under
 `configs/image/` and validated by
-[image_config.py](../../pipeline/schemas/image_config.py) — a Pydantic `BaseModel`
+[image_config.py](../../src/pipeline/schemas/image_config.py) — a Pydantic `BaseModel`
 with `strict=True` and `extra="forbid"`. The config loader rejects unknown
 keys, invalid types, and malformed values at load time.
 
@@ -236,7 +236,7 @@ docker run --rm synth-setter:dev-snapshot \
 Generates one or more VST dataset shards (looping over `spec.shards`) via `generate_vst_dataset.py` under
 headless X11 (Xvfb). The click entrypoint itself is X11-agnostic; the
 headless bootstrap (`scripts/run-linux-vst-headless.sh`) is applied
-inside `pipeline.entrypoints.generate_dataset.run()` at the
+inside `src.generate_dataset.run()` at the
 audio-rendering boundary, wrapping only the generator subprocess — so
 `idle` and `passthrough` don't pay the Xvfb startup cost.
 
@@ -441,13 +441,13 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 
 ### Entrypoint errors
 
-| Error                                    | Cause                               | Fix                                                                               |
-| ---------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------- |
-| `Missing subcommand`                     | Ran the image with no subcommand    | Append one of: `idle`, `passthrough <cmd>`, `generate_dataset --spec <path>`      |
-| `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train`      |
-| `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                               |
-| `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)              |
-| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `pipeline.ci.materialize_spec` (CI bootstrap script) |
+| Error                                    | Cause                               | Fix                                                                                   |
+| ---------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
+| `Missing subcommand`                     | Ran the image with no subcommand    | Append one of: `idle`, `passthrough <cmd>`, `generate_dataset --spec <path>`          |
+| `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train`          |
+| `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                                   |
+| `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)                  |
+| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `src.pipeline.ci.materialize_spec` (CI bootstrap script) |
 
 ______________________________________________________________________
 
@@ -477,5 +477,5 @@ ______________________________________________________________________
 - rclone.md (planned — [#310](https://github.com/tinaudio/synth-setter/issues/310)) — R2 setup, Docker credential baking
 - [wandb-integration.md](wandb-integration.md) — W&B logging and auth
 - [data-pipeline.md](../design/data-pipeline.md) — pipeline architecture, worker provisioning
-- [image_config.py](../../pipeline/schemas/image_config.py) — image config schema (Pydantic model)
+- [image_config.py](../../src/pipeline/schemas/image_config.py) — image config schema (Pydantic model)
 - [test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) — config validation tests

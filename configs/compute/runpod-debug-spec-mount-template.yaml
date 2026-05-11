@@ -2,7 +2,7 @@
 #
 # Layer 3 in the progressive triage matrix: builds on `noop` / `image-pull` by
 # also exercising SkyPilot's `file_mounts` (which the production launcher uses
-# via `task.update_file_mounts(...)` to ship the materialized DatasetPipelineSpec
+# via `task.update_file_mounts(...)` to ship the materialized DatasetSpec
 # to the worker). PASS = file_mounts upload during provisioning works on RunPod
 # and the worker can read the mounted file. FAIL = something about the mount
 # upload extends pod-boot timing past the SSH-readiness window, OR mounts land

@@ -1,4 +1,4 @@
-"""Tests for pipeline.partitioning.
+"""Tests for src.pipeline.partitioning.
 
 ``get_my_shards`` and ``validate_rank_world`` are pure — tests pass
 ``rank`` / ``world`` / ``total_shards`` as direct arguments. ``read_rank_world_from_env``
