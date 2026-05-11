@@ -4,8 +4,10 @@ description: |
   Quick PR review using the repo's core checklist (CLAUDE.md hard rules).
   Use when the tinaudio-synth-setter-skills plugin isn't available, or for a
   fast sanity-check before opening for full review. Single agent, no plugin
-  dependency. Posts findings as individual unresolved inline PR review
-  comments via .claude/skills/_shared/post_review.py.
+  dependency. Posts diff-anchored findings as individual unresolved inline
+  PR review comments via .claude/skills/_shared/post_review.py; non-diff
+  findings (merge conflicts, failing checks) go in a `## PR health` section
+  in the review body.
 ---
 
 # repo-review — MVP PR Review
@@ -155,6 +157,8 @@ If the checklist found zero findings AND Step 2 found no PR-health BLOCKs (no me
 Convert your BLOCK/WARN list to the JSON shape `post_review.py` consumes. Each diff-anchored finding becomes one inline comment with a `[repo-review:<severity>]` prefix.
 
 **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+
+Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[repo-review:block]** `, leaving the `[pr-health] …` body unchanged. For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…`.
 
 Example shape when both health flags fire:
 

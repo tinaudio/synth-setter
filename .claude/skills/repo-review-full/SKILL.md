@@ -2,9 +2,10 @@
 name: repo-review-full
 description: |
   Full multi-skill PR review. Fans out one parallel agent per applicable plugin
-  checklist (selection rules in Step 3) and posts every BLOCK/WARN as an
-  individual unresolved inline PR review comment. Requires the
-  tinaudio-synth-setter-skills plugin.
+  checklist (selection rules in Step 3) and posts every diff-anchored BLOCK/WARN
+  as an individual unresolved inline PR review comment; non-diff findings
+  (merge conflicts, failing checks) go in a `## PR health` section in the
+  review body. Requires the tinaudio-synth-setter-skills plugin.
 ---
 
 # repo-review-full — Multi-Skill Parallel PR Review
@@ -138,6 +139,8 @@ Do NOT dedupe near-duplicate findings across skills (e.g. shell-style and synth-
 ## Step 6: Build the findings JSON
 
 Same shape `post_review.py` consumes. **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+
+Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[repo-review-full:block]** `, leaving the `[pr-health] …` body unchanged. For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…`.
 
 ```json
 {
