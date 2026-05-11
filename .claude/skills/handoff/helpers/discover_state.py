@@ -110,7 +110,7 @@ class PhaseTaskNumbering:
 
     @property
     def next_free(self) -> int:
-        """Return the smallest integer not in `used_numbers` (or 1 if empty)."""
+        """Return one past the maximum used number (or 1 if empty)."""
         return (max(self.used_numbers) + 1) if self.used_numbers else 1
 
 

@@ -137,6 +137,51 @@ def test_render_comment_in_flight_next_action_ready_to_merge_when_clean() -> Non
     assert "Ready to merge" in out
 
 
+def test_render_comment_in_flight_next_action_rebase_when_conflicting() -> None:
+    """In-flight next-action wording when the branch conflicts with base."""
+    ctx = _minimal_context(
+        in_flight=[
+            ds.InFlightPR(
+                number=942,
+                title="internal-feat(vst): foo",
+                branch="b",
+                head_oid="abc",
+                head_committer_date="",
+                mergeable="CONFLICTING",
+                review_decision="REVIEW_REQUIRED",
+                checks_state="passing",
+                unresolved_threads=0,
+                new_copilot_comments_since_push=0,
+            )
+        ]
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "Rebase or merge base, resolve conflicts" in out
+
+
+def test_render_comment_in_flight_next_action_address_threads_when_unresolved() -> None:
+    """In-flight next-action wording when there are open review threads."""
+    ctx = _minimal_context(
+        in_flight=[
+            ds.InFlightPR(
+                number=942,
+                title="internal-feat(vst): foo",
+                branch="b",
+                head_oid="abc",
+                head_committer_date="",
+                mergeable="MERGEABLE",
+                review_decision="REVIEW_REQUIRED",
+                checks_state="passing",
+                unresolved_threads=3,
+                new_copilot_comments_since_push=2,
+            )
+        ]
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "Address the 3 unresolved thread(s) + 2 new Copilot comment(s)" in out
+    assert "/pr-review-resolver" in out
+
+
 def test_render_comment_prior_handoff_breadcrumbs() -> None:
     """Render comment prior handoff breadcrumbs."""
     ctx = _minimal_context(

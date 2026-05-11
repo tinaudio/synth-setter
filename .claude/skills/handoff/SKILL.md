@@ -54,6 +54,7 @@ The writer composes both artifacts, applies the idempotency guard, and (unless g
 ```bash
 python3 .claude/skills/handoff/helpers/write_handoff.py \
   [--issue N] \
+  [--repo OWNER/NAME] \
   [--chain PATH] \
   [--dry-run] \
   [--comment-only | --prompt-only] \
@@ -92,6 +93,7 @@ If the writer exited non-zero, surface the stderr verbatim and stop. Common fail
 |------|--------|
 | (none) | Full flow: render, post comment, print + save prompt |
 | `--issue N` | Override `chain.yaml`'s `tracking_issue` |
+| `--repo OWNER/NAME` | Override `chain.yaml`'s `repo` |
 | `--chain PATH` | Use a different manifest (e.g. `chain.wds.yaml`) |
 | `--dry-run` | Render both, post nothing, print everything, leave `chain.yaml` unchanged |
 | `--comment-only` | Post comment, suppress prompt printing |
