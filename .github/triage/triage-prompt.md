@@ -39,15 +39,16 @@ Tools available to you:
    this server-side; you must also not attempt it. All branches you create
    start with `ci-triage/`.
 2. **Work in an isolated git worktree.** Run
-   `git worktree add ../triage-work <triage_branch>` and operate from there.
-   Do not edit files in the checkout root.
+   `git worktree add ../triage-work -b "${TRIAGE_BRANCH}"` and operate from
+   there. Do not edit files in the checkout root.
 3. **Any PR you open is a draft** (`gh pr create --draft`). Never mark ready
    for review. Never apply auto-merge labels. A human approves the merge.
 4. **Never modify `.env`, secrets, or credentials.** Never commit them.
 5. **No `--no-verify` on commits.** Pre-commit hooks must run.
 6. **Do not invoke `/loop` or schedule recurring jobs.** Single-shot only.
-7. **Time budget:** finish within ~25 turns. If you cannot route to a clear
-   action, file a tracking issue (Path B) and exit.
+7. **Time budget:** the runtime ceiling is `--max-turns` in
+   `.github/workflows/ci-triage.yaml`. If you cannot route to a clear action
+   before approaching it, file a tracking issue (Path B) and exit.
 
 ## Playbook
 
@@ -96,7 +97,7 @@ WORKFLOW_FILE=$(gh api "repos/${REPO}/actions/workflows" \
 # Use the project's dev-snapshot image so gh/rclone/etc. are present.
 act -W "${WORKFLOW_FILE}" \
   --job "${JOB_NAME}" \
-  -P ubuntu-latest=ghcr.io/tinaudio/synth-setter-dev:dev-snapshot \
+  -P ubuntu-latest=tinaudio/synth-setter:dev-snapshot \
   --container-architecture linux/amd64 \
   2>&1 | tee /tmp/triage/act-output.txt
 ```
@@ -179,16 +180,19 @@ fix the underlying bug.
 #### Path B — File a taxonomy-compliant tracking issue
 
 This is the default when Path A doesn't fit. Follow the `github-taxonomy`
-skill (`docs/design/github-taxonomy.md` and `.claude/skills/github-taxonomy/`).
-Required metadata:
+skill (from the `tinaudio-synth-setter-skills` plugin) and
+`docs/design/github-taxonomy.md`. Required metadata:
 
 - **Issue type**: `Bug` (failures) or `Task` (auth/setup work).
 - **Domain label**: `ci-automation` (or the domain the failing workflow lives
   in — e.g. `data-pipeline` for `generate-dataset-shards.yaml`).
 - **Milestone**: matches the domain label per `docs/design/github-taxonomy.md`
   (e.g. `ci-automation v1.0.0`).
-- **Sub-issue of**: an open Epic (Epic #148 `CI & automation platform` is the
-  default home).
+- **Sub-issue of**: an open **Phase** under the matching Epic. Task/Bug/Feature
+  MUST be sub-issues of a Phase, never direct children of an Epic
+  (`docs/design/github-taxonomy.md` §3). For `ci-automation`, the default
+  home is the active Phase under Epic #148; find it with
+  `gh issue list --repo tinaudio/synth-setter --label ci-automation --search 'Phase in:title state:open'`.
 - **Project**: `synth-setter` board, Status `Todo`, Priority `P2` unless the
   failure is on `main` (then `P1`).
 

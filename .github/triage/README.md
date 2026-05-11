@@ -6,9 +6,8 @@ rationale: [#923](https://github.com/tinaudio/synth-setter/issues/923).
 ## How it fires
 
 `.github/workflows/ci-triage.yaml` listens for `workflow_run` completion on
-the workflows declared in its `on:` block (mostly `Tests`, `Code Quality PR`,
-`cpu-slow`, `test-dataset-generation`, the SkyPilot smoke jobs, etc.). On
-`conclusion: failure`, the job:
+the workflows in its `on.workflow_run.workflows` list (see the workflow
+file for the authoritative list). On `conclusion: failure`, the job:
 
 1. Skips if the failing run was on a fork (head_repository != this repo) —
    write perms must not run against untrusted code.
@@ -105,6 +104,7 @@ It **will not**:
 
 Every failed run on the watched workflows fires this job. The job is
 ~5 minutes (mostly the agent), so cost ~= (failure rate) × (token cost per
-30-turn session). Watch the `Actions` minutes budget; if it gets noisy,
-trim the `workflows:` list in `ci-triage.yaml` to the high-value ones
-(`cpu-slow`, `test-dataset-generation`) and let small flakes go untriaged.
+session, capped by `--max-turns` in `.github/workflows/ci-triage.yaml`).
+Watch the `Actions` minutes budget; if it gets noisy, trim the `workflows:`
+list in `ci-triage.yaml` to the high-value ones and let small flakes go
+untriaged.
