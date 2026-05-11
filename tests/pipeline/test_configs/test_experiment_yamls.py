@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from hydra import compose, initialize_config_dir
 
-from pipeline.entrypoints.generate_dataset import _spec_from_cfg
+from pipeline.entrypoints.generate_dataset import spec_from_cfg
 from pipeline.schemas.spec import DatasetSpec
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
@@ -47,7 +47,7 @@ def _compose_dataset_spec(experiment: str) -> DatasetSpec:
     cfg.paths.root_dir = str(CONFIG_DIR.parent)
     cfg.paths.output_dir = str(CONFIG_DIR.parent)
     cfg.paths.work_dir = str(CONFIG_DIR.parent)
-    return _spec_from_cfg(cfg)
+    return spec_from_cfg(cfg)
 
 
 @pytest.mark.parametrize("experiment", DATASET_EXPERIMENTS)

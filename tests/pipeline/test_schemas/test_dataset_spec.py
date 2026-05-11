@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import copy
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,8 +12,6 @@ from pipeline.schemas.spec import (
     DatasetSpec,
     RenderConfig,
     ShardSpec,
-    dataset_config_id_from_path,
-    load_dataset_spec_yaml,
 )
 from src.data.vst import param_specs
 
@@ -404,120 +400,3 @@ class TestDatasetSpecRoundTrip:
             spec_mod._get_git_sha = original
 
         assert restored.git_sha == "abc123def456"
-
-
-# ---------------------------------------------------------------------------
-# dataset_config_id_from_path
-# ---------------------------------------------------------------------------
-
-
-class TestDatasetConfigIdFromPath:
-    """Tests for ``dataset_config_id_from_path`` filename-stem extraction."""
-
-    def test_extracts_stem(self) -> None:
-        """Returns the filename stem (no extension, no parent directories)."""
-        assert (
-            dataset_config_id_from_path(Path("configs/dataset/surge-simple-480k-10k.yaml"))
-            == "surge-simple-480k-10k"
-        )
-
-
-# ---------------------------------------------------------------------------
-# load_dataset_spec_yaml — legacy bridge (removed in A.3)
-# ---------------------------------------------------------------------------
-
-LEGACY_YAML_KWARGS: dict[str, Any] = {
-    "param_spec": "surge_simple",
-    "plugin_path": "plugins/Surge XT.vst3",
-    "output_format": "hdf5",
-    "sample_rate": 16000,
-    "shard_size": 100,
-    "num_shards": 3,
-    "base_seed": 42,
-    "r2_bucket": "intermediate-data",
-    "splits": {"train": 3, "val": 0, "test": 0},
-    "preset_path": "presets/surge-base.vstpreset",
-    "channels": 2,
-    "velocity": 100,
-    "signal_duration_seconds": 4.0,
-    "min_loudness": -55.0,
-    "sample_batch_size": 32,
-}
-
-
-@pytest.fixture()
-def legacy_yaml(tmp_path: Path) -> Path:
-    """Write a legacy-shape YAML config to tmp_path and return its path."""
-    import yaml
-
-    path = tmp_path / "ci-smoke-test.yaml"
-    path.write_text(yaml.safe_dump(copy.deepcopy(LEGACY_YAML_KWARGS), sort_keys=False))
-    return path
-
-
-class TestLoadDatasetSpecYaml:
-    """Tests for the legacy YAML → DatasetSpec bridge (removed in PR-3)."""
-
-    def test_legacy_yaml_round_trips_into_dataset_spec(
-        self, patch_runtime_io: None, legacy_yaml: Path
-    ) -> None:
-        """A legacy flat YAML loads into a valid DatasetSpec with expected derived fields."""
-        spec = load_dataset_spec_yaml(legacy_yaml)
-        assert spec.task_name == "ci-smoke-test"
-        assert spec.output_format == "hdf5"
-        assert spec.train_val_test_sizes == (300, 0, 0)
-        assert spec.render.plugin_path == "plugins/Surge XT.vst3"
-        assert spec.render.batch_per_shard == 100
-        assert spec.num_shards == 3
-
-    def test_legacy_yaml_extends_merges_base(self, patch_runtime_io: None, tmp_path: Path) -> None:
-        """A child YAML's ``_extends`` merges its base, with child values overriding."""
-        import yaml
-
-        base = tmp_path / "base.yaml"
-        base.write_text(yaml.safe_dump(copy.deepcopy(LEGACY_YAML_KWARGS), sort_keys=False))
-        child = tmp_path / "child.yaml"
-        child.write_text("_extends: base\nvelocity: 110\n")
-
-        spec = load_dataset_spec_yaml(child)
-        assert spec.output_format == "hdf5"
-        assert spec.render.plugin_path == "plugins/Surge XT.vst3"
-        assert spec.render.velocity == 110
-
-    def test_legacy_yaml_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
-        """A nonexistent YAML path raises FileNotFoundError with a clear message."""
-        with pytest.raises(FileNotFoundError, match="Config file not found"):
-            load_dataset_spec_yaml(tmp_path / "nonexistent.yaml")
-
-    def test_legacy_yaml_extends_missing_base_raises(self, tmp_path: Path) -> None:
-        """A YAML extending a missing base raises FileNotFoundError naming the missing target."""
-        child = tmp_path / "child.yaml"
-        child.write_text("_extends: nonexistent\nvelocity: 110\n")
-        with pytest.raises(FileNotFoundError, match="_extends target not found"):
-            load_dataset_spec_yaml(child)
-
-    def test_legacy_yaml_num_shards_mismatch_raises(
-        self, patch_runtime_io: None, tmp_path: Path
-    ) -> None:
-        """Legacy YAML where num_shards disagrees with sum(splits) raises a clear error."""
-        import yaml as _yaml
-
-        bad = copy.deepcopy(LEGACY_YAML_KWARGS)
-        bad["num_shards"] = 99  # splits sum to 3 — they disagree
-        path = tmp_path / "mismatch.yaml"
-        path.write_text(_yaml.safe_dump(bad, sort_keys=False))
-        with pytest.raises(ValueError, match="num_shards=99 disagrees with sum"):
-            load_dataset_spec_yaml(path)
-
-    def test_legacy_yaml_without_num_shards_loads(
-        self, patch_runtime_io: None, tmp_path: Path
-    ) -> None:
-        """Legacy YAML missing num_shards still loads (the check only fires when present)."""
-        import yaml as _yaml
-
-        raw = copy.deepcopy(LEGACY_YAML_KWARGS)
-        del raw["num_shards"]
-        path = tmp_path / "no_num_shards.yaml"
-        path.write_text(_yaml.safe_dump(raw, sort_keys=False))
-        spec = load_dataset_spec_yaml(path)
-        assert spec.num_shards == 3

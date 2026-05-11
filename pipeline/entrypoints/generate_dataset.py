@@ -243,7 +243,7 @@ def _render_and_upload_shard(
     logger.info(f"shard removed locally: {shard_path}")
 
 
-def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
+def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     """Build a DatasetSpec from a Hydra-composed cfg.
 
     Resolves all interpolations, drops the non-DatasetSpec sub-trees, and constructs the model.
@@ -260,7 +260,7 @@ def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
 @hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
 def main(cfg: DictConfig) -> None:
     """Hydra-composed CLI entry: ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``."""
-    run(_spec_from_cfg(cfg))
+    run(spec_from_cfg(cfg))
 
 
 if __name__ == "__main__":

@@ -782,12 +782,12 @@ class TestBuildGenerateArgs:
 
 
 # ---------------------------------------------------------------------------
-# _spec_from_cfg — Hydra-composed cfg → DatasetSpec
+# spec_from_cfg — Hydra-composed cfg → DatasetSpec
 # ---------------------------------------------------------------------------
 
 
 class TestSpecFromCfg:
-    """``_spec_from_cfg`` drops Hydra-only groups and constructs a DatasetSpec."""
+    """``spec_from_cfg`` drops Hydra-only groups and constructs a DatasetSpec."""
 
     def test_drops_non_spec_groups(self, valid_dataset_spec_kwargs: dict[str, object]) -> None:
         """``data``, ``r2``, ``paths``, ``hydra`` are dropped so strict validation passes.
@@ -798,7 +798,7 @@ class TestSpecFromCfg:
         """
         from omegaconf import OmegaConf
 
-        from pipeline.entrypoints.generate_dataset import _spec_from_cfg
+        from pipeline.entrypoints.generate_dataset import spec_from_cfg
 
         cfg_dict: dict[str, object] = dict(valid_dataset_spec_kwargs)
         cfg_dict["data"] = {"sample_rate": 16000}
@@ -806,7 +806,7 @@ class TestSpecFromCfg:
         cfg_dict["paths"] = {"root_dir": "/fake-root"}
         cfg_dict["hydra"] = {"runtime": {"output_dir": "/fake-out"}}
 
-        spec = _spec_from_cfg(OmegaConf.create(cfg_dict))
+        spec = spec_from_cfg(OmegaConf.create(cfg_dict))
 
         assert spec.task_name == valid_dataset_spec_kwargs["task_name"]
 
@@ -821,13 +821,13 @@ class TestSpecFromCfg:
         """
         from omegaconf import OmegaConf
 
-        from pipeline.entrypoints.generate_dataset import _spec_from_cfg
+        from pipeline.entrypoints.generate_dataset import spec_from_cfg
 
         kwargs = dict(valid_dataset_spec_kwargs)
         kwargs["r2_bucket"] = "${r2.bucket}"
         kwargs["r2"] = {"bucket": "interpolated-bucket"}
 
-        spec = _spec_from_cfg(OmegaConf.create(kwargs))
+        spec = spec_from_cfg(OmegaConf.create(kwargs))
 
         assert spec.r2_bucket == "interpolated-bucket"
 

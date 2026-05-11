@@ -66,7 +66,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
       # pipeline.ci.validate_spec imports pipeline.schemas.spec.DatasetSpec, which
-      # depends on pydantic, pyyaml (load_dataset_spec_yaml bridge), and omegaconf.
+      # depends on pydantic, hydra-core, and omegaconf.
       # Install only those — keep the runner-side env minimal instead of
       # `pip install -r requirements.txt` (which pulls torch and friends).
       - name: Install validate_spec runtime deps

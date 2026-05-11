@@ -13,7 +13,7 @@ jobs:
     uses: ./.github/workflows/spec-materialization.yml
     with:
       image_tag: ${{ inputs.image_tag }}
-      config_path: configs/dataset/ci-materialize-test.yaml
+      config_path: ci-materialize-test
       artifact_name: test-materialized-spec
     secrets: inherit
 

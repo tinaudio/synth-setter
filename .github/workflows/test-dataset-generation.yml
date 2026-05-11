@@ -3,7 +3,7 @@ name: Test Dataset Generation
 # Smoke test for the data-pipeline. Three execution modes share the same
 # `validate-dataset-shards.yaml` downstream:
 #
-#   * `local`  — runs `pipeline.ci.materialize_spec` + `docker_entrypoint.py
+#   * `local`  — composes the Hydra dataset config + invokes `docker_entrypoint.py
 #     generate_dataset` directly inside the dev-snapshot container on the
 #     GitHub runner. No SkyPilot launcher, no cloud creds (R2 only). Manual
 #     dispatch fallback for ad-hoc smoke; superseded by `skypilot-local` for
@@ -56,9 +56,9 @@ on:
   workflow_dispatch:
     inputs:
       dataset_config:
-        description: "Path to dataset config YAML (under configs/dataset/)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `runpod-smoke-shard`)"
         required: true
-        default: "configs/dataset/runpod-smoke-shard.yaml"
+        default: "runpod-smoke-shard"
       docker_image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -78,7 +78,10 @@ on:
     paths:
       - "src/data/vst/**"
       - "pipeline/schemas/**"
-      - "configs/dataset/**"
+      - "configs/experiment/**"
+      - "configs/dataset.yaml"
+      - "configs/render/**"
+      - "configs/r2/**"
       - "configs/compute/**"
       - "pipeline/entrypoints/**"
       - "pipeline/ci/**"
@@ -184,8 +187,8 @@ jobs:
           DATASET_CONFIG: >-
             ${{
               github.event_name == 'pull_request'
-                && 'configs/dataset/runpod-smoke-shard.yaml'
-                || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+                && 'runpod-smoke-shard'
+                || (inputs.dataset_config || 'runpod-smoke-shard')
             }}
         run: |
           set -euo pipefail
@@ -213,8 +216,8 @@ jobs:
       DATASET_CONFIG: >-
         ${{
           github.event_name == 'pull_request'
-            && 'configs/dataset/runpod-smoke-shard.yaml'
-            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+            && 'runpod-smoke-shard'
+            || (inputs.dataset_config || 'runpod-smoke-shard')
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -335,8 +338,8 @@ jobs:
       dataset_config: >-
         ${{
           github.event_name == 'pull_request'
-            && 'configs/dataset/runpod-smoke-shard.yaml'
-            || (inputs.dataset_config || 'configs/dataset/runpod-smoke-shard.yaml')
+            && 'runpod-smoke-shard'
+            || (inputs.dataset_config || 'runpod-smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
