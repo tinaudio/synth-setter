@@ -174,7 +174,7 @@ jobs:
           echo "providers_launcher: ${providers_launcher}"
 
       - name: Install Hydra for dataset-config composition
-        run: pip install hydra-core
+        run: pip install "hydra-core==1.3.2"
 
       # Bucket comes from the composed dataset config (the source of truth the
       # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
