@@ -260,9 +260,15 @@ jobs:
       # down` tears it down. SkyPilot's on-disk sky_logs don't include
       # controller pod status, scheduler events, or worker-pod RBAC errors —
       # all of which live in the kube apiserver and vanish with the cluster.
-      # Best-effort (`set +e`, each call `|| true`) so a missing pod or rename
-      # never fails the step. See PR #876 for the original `sky.jobs.tail_logs`
-      # hang this is meant to diagnose.
+      # In addition to apiserver state we also `kubectl exec` into the
+      # controller pod to capture its on-pod `~/sky_logs/sky-*/provision.log`
+      # and `~/.sky/jobs.db` — those contain the per-retry "Insufficient cpu /
+      # memory" + `terminate_instances` loop that pinpoints scheduling-side
+      # hangs (the surface symptom in CI is silent dead-air after
+      # `streaming logs for job N`, and only the controller's provision.log
+      # reveals why). Worker-pod describes catch transient Pending state.
+      # Best-effort (`set +e`, each call `|| true`) so a missing pod, rename,
+      # or unprivileged exec never fails the step. See PR #876.
       - name: Capture kind cluster state (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
         run: |
@@ -274,6 +280,18 @@ jobs:
             > "${out_dir}/events.txt" 2>&1 || true
           kubectl describe nodes > "${out_dir}/nodes.txt" 2>&1 || true
           kubectl get pods -A -o yaml > "${out_dir}/pods-yaml.txt" 2>&1 || true
+          worker_pods="$(kubectl get pods -n default --no-headers 2>/dev/null \
+            | awk '$1 !~ /^sky-jobs-controller/ {print $1}')"
+          if [[ -n "${worker_pods}" ]]; then
+            for p in ${worker_pods}; do
+              safe="$(printf %s "${p}" | tr -c 'A-Za-z0-9_-' '_')"
+              kubectl describe pod -n default "${p}" \
+                > "${out_dir}/describe-worker-${safe}.txt" 2>&1 || true
+            done
+          else
+            echo "no non-controller pods in default namespace at capture time" \
+              > "${out_dir}/describe-worker-none.txt"
+          fi
           controller_line="$(kubectl get pods -A --no-headers 2>/dev/null \
             | grep sky-jobs-controller | head -n1)"
           if [[ -n "${controller_line}" ]]; then
@@ -285,6 +303,9 @@ jobs:
               > "${out_dir}/logs-controller.txt" 2>&1 || true
             kubectl logs -n "${controller_ns}" "${controller_pod}" --previous \
               > "${out_dir}/logs-controller-previous.txt" 2>&1 || true
+            kubectl exec -n "${controller_ns}" "${controller_pod}" -c ray-node -- \
+              bash -lc 'latest="$(ls -td "${HOME}/sky_logs/sky-"*/ 2>/dev/null | head -n1)"; if [[ -n "${latest}" ]]; then echo "=== ${latest}provision.log ==="; tail -400 "${latest}provision.log" 2>/dev/null; fi' \
+              > "${out_dir}/controller-provision-log.txt" 2>&1 || true
           else
             echo "no sky-jobs-controller pod found" \
               > "${out_dir}/describe-controller.txt"
