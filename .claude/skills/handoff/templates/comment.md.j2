@@ -64,7 +64,7 @@ _No open PRs reference this tracking issue._
 | Plan PR | Status | PR # | Title | Source-commit pointer | Linked issue | Notes |
 |---------|--------|------|-------|-----------------------|--------------|-------|
 {% for pr in remaining -%}
-| {{ pr.id }} | {{ pr.status }} | {% if pr.pr_number %}#{{ pr.pr_number }}{% else %}—{% endif %} | `{{ pr.title }}` | {{ pr.source_commits | join(", ") }} | {% if pr.linked_issue.existing %}existing #{{ pr.linked_issue.existing }}{% else %}create under #{{ chain.parent_phase }}{% endif %} | {% if pr.notes %}{{ pr.notes | join(" / ") }}{% else %}—{% endif %} |
+| {{ pr.id }} | {{ pr.status }} | {% if pr.pr_number %}#{{ pr.pr_number }}{% else %}—{% endif %} | `{{ pr.title }}` | {{ pr.source_commits | join(", ") }} | {% if pr.linked_issue.existing %}existing #{{ pr.linked_issue.existing }}{% elif pr.linked_issue.parent_issue %}create under #{{ pr.linked_issue.parent_issue }}{% else %}create under #{{ chain.parent_phase }}{% endif %} | {% if pr.notes %}{{ pr.notes | join(" / ") }}{% else %}—{% endif %} |
 {% endfor %}
 
 #### Dependency graph
@@ -83,7 +83,11 @@ _The chain is complete — every plan PR has merged._
 {% if phase_numbering.used_numbers -%}
 Used `{{ chain.task_prefix }}.N` numbers: {{ phase_numbering.used_numbers | join(", ") }}.
 
+{% if remaining -%}
 Next free numbers, in order: **{% for offset in range(remaining | length) %}{{ chain.task_prefix }}.{{ phase_numbering.next_free + offset }}{% if not loop.last %}, {% endif %}{% endfor %}** — assign in plan-PR order.
+{%- else -%}
+Next free number: **`{{ chain.task_prefix }}.{{ phase_numbering.next_free }}`** (chain is complete; reserved for any follow-up Task).
+{%- endif %}
 {%- else -%}
 No existing `{{ chain.task_prefix }}.N` issues found under Phase #{{ chain.parent_phase }}. Start at `{{ chain.task_prefix }}.1`.
 {%- endif %}

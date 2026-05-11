@@ -47,6 +47,8 @@ Notes:
 {% endif -%}
 {% if first_remaining.linked_issue.existing -%}
 Link to issue: existing #{{ first_remaining.linked_issue.existing }}
+{% elif first_remaining.linked_issue.parent_issue -%}
+Link to issue: create a new Task under #{{ first_remaining.linked_issue.parent_issue }} (next free: `{{ chain.task_prefix }}.{{ phase_numbering.next_free }}`) via `/github-taxonomy`.
 {% else -%}
 Link to issue: create a new Task under Phase #{{ chain.parent_phase }} (next free: `{{ chain.task_prefix }}.{{ phase_numbering.next_free }}`) via `/github-taxonomy`.
 {% endif -%}

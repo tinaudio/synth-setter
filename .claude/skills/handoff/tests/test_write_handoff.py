@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SKILL_ROOT))
 sys.path.insert(0, str(SKILL_ROOT / "helpers"))
@@ -381,3 +383,82 @@ def test_parse_surprise_with_no_colon_falls_back_to_other() -> None:
     s = wh.parse_surprise("just a free-form note")
     assert s.category == "Other"
     assert s.note == "just a free-form note"
+
+
+def test_parse_args_rejects_comment_only_and_prompt_only_together() -> None:
+    """`--comment-only` and `--prompt-only` are mutually exclusive — argparse must error."""
+    with pytest.raises(SystemExit):
+        wh.parse_args(["--comment-only", "--prompt-only"])
+
+
+def test_render_comment_chain_complete_does_not_emit_empty_bold_list() -> None:
+    """When every plan PR is merged, the Task-numbering section must not render `****`."""
+    chain = ds.Chain(
+        tracking_issue=882,
+        repo="tinaudio/synth-setter",
+        parent_phase=72,
+        task_prefix="Task 5",
+        plan_prs=[ds.ChainPR(id="PR-5", title="t", status="merged", pr_number=900)],
+    )
+    ctx = wh.HandoffContext(
+        repo="tinaudio/synth-setter",
+        tracking_issue=882,
+        chain=chain,
+        prior_handoffs=[],
+        done_since=[],
+        in_flight=[],
+        phase_numbering=ds.PhaseTaskNumbering(
+            phase_number=72, task_prefix="Task 5", used_numbers=[1, 2, 3]
+        ),
+        worktrees=[],
+        now_utc="2026-05-11 22:00 UTC",
+        surprises=[],
+        anti_patterns=[],
+        handoff_comment_url=None,
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "****" not in out
+    assert "chain is complete" in out
+    assert "Task 5.4" in out
+
+
+def test_render_comment_honors_linked_issue_parent_issue_over_phase() -> None:
+    """`linked_issue.parent_issue` overrides `chain.parent_phase` in the remaining table."""
+    chain = ds.Chain(
+        tracking_issue=882,
+        repo="tinaudio/synth-setter",
+        parent_phase=72,
+        task_prefix="Task 5",
+        plan_prs=[
+            ds.ChainPR(
+                id="PR-15",
+                title="ci(workflows): parallel WDS run",
+                linked_issue=ds.LinkedIssue(strategy="create_under_phase", parent_issue=874),
+            )
+        ],
+    )
+    ctx = _minimal_context(chain=chain)
+    out = wh.render(ctx, "comment.md.j2")
+    assert "create under #874" in out
+    assert "create under #72" not in out
+
+
+def test_render_prompt_honors_linked_issue_parent_issue_over_phase() -> None:
+    """Prompt's `Link to issue` line prefers `parent_issue` over `chain.parent_phase`."""
+    chain = ds.Chain(
+        tracking_issue=882,
+        repo="tinaudio/synth-setter",
+        parent_phase=72,
+        task_prefix="Task 5",
+        plan_prs=[
+            ds.ChainPR(
+                id="PR-15",
+                title="ci(workflows): parallel WDS run",
+                linked_issue=ds.LinkedIssue(strategy="create_under_phase", parent_issue=874),
+            )
+        ],
+    )
+    ctx = _minimal_context(chain=chain)
+    out = wh.render(ctx, "prompt.md.j2")
+    assert "create a new Task under #874" in out
+    assert "under Phase #72" not in out

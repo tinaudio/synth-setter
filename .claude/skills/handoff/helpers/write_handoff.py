@@ -80,10 +80,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--dry-run", action="store_true", help="Render both, post nothing, print everything"
     )
-    parser.add_argument(
+    output_mode = parser.add_mutually_exclusive_group()
+    output_mode.add_argument(
         "--comment-only", action="store_true", help="Post comment, don't print prompt"
     )
-    parser.add_argument(
+    output_mode.add_argument(
         "--prompt-only", action="store_true", help="Print prompt, don't post comment"
     )
     parser.add_argument(

@@ -456,13 +456,16 @@ def _fetch_unresolved_threads(repo: str, pr_number: int) -> int:
 
 
 def _fetch_commit_committer_date(repo: str, sha: str) -> str:
-    """Return the committer date for `sha` as ISO8601, or empty on failure."""
+    """Return the committer date for `sha` as ISO8601, or empty on failure.
+
+    `gh api --jq` prints scalar jq results unquoted, so we use the stripped stdout directly rather
+    than `json.loads()` — see review on PR #950.
+    """
     try:
-        raw = json.loads(
-            run_gh(["api", f"repos/{repo}/commits/{sha}", "--jq", ".commit.committer.date"])
-        )
-        return str(raw) if not isinstance(raw, dict) else ""
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return run_gh(
+            ["api", f"repos/{repo}/commits/{sha}", "--jq", ".commit.committer.date"]
+        ).strip()
+    except subprocess.CalledProcessError:
         return ""
 
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SKILL_ROOT))
 
@@ -282,6 +284,35 @@ def test_chain_round_trip_preserves_fields(tmp_path: Path) -> None:
     assert pr5.status == "merged"
     assert pr5.pr_number == 999
     assert reloaded.plan_prs[1].depends_on == ["PR-5"]
+
+
+def test_fetch_commit_committer_date_uses_raw_jq_string_not_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`gh api --jq` prints scalar values unquoted; helper must use stripped stdout."""
+    captured: dict = {}
+
+    def fake_run_gh(args: list[str]) -> str:
+        captured["args"] = args
+        return "2026-05-11T20:34:56Z\n"
+
+    monkeypatch.setattr(ds, "run_gh", fake_run_gh)
+    out = ds._fetch_commit_committer_date("org/repo", "abc1234")
+    assert out == "2026-05-11T20:34:56Z"
+    assert captured["args"][:2] == ["api", "repos/org/repo/commits/abc1234"]
+
+
+def test_fetch_commit_committer_date_returns_empty_on_subprocess_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Helper returns "" on `gh` failure rather than propagating CalledProcessError."""
+    import subprocess as sp
+
+    def boom(args: list[str]) -> str:
+        raise sp.CalledProcessError(returncode=1, cmd=["gh", *args])
+
+    monkeypatch.setattr(ds, "run_gh", boom)
+    assert ds._fetch_commit_committer_date("org/repo", "abc1234") == ""
 
 
 def test_load_chain_reads_the_shipped_chain_yaml() -> None:
