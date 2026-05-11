@@ -2,6 +2,13 @@ name: CI Triage Agent
 
 # Autonomous triage on failed workflow runs. Design: #923.
 # Gated on the CLAUDE_CODE_OAUTH_TOKEN secret — no-op without it.
+#
+# Required secrets:
+#   CLAUDE_CODE_OAUTH_TOKEN — Claude Code headless OAuth token. Generate
+#                             with `claude setup-token` locally; set on the
+#                             repo with `gh secret set`. No-op without it.
+#   GITHUB_TOKEN            — auto-provided; used for branch / PR / issue
+#                             writes under the job's `permissions:` block.
 
 on:
   workflow_run:
@@ -70,8 +77,13 @@ jobs:
             echo "id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
           fi
 
-      # Cooldown: one triage run per failing run ID. Prevents re-triage when
-      # multiple matrix jobs in the same workflow all fail.
+      # Cooldown: one triage attempt per failing run ID. The branch-existence
+      # check is what protects against duplicate work — typical sources are
+      # manual `workflow_dispatch` re-runs against the same run_id, or a
+      # second `workflow_run` event firing if the failing workflow itself is
+      # re-run from the UI. (`workflow_run` fires once per workflow run, not
+      # per matrix job, so multiple in-matrix failures already collapse to a
+      # single triage trigger.)
       - name: Check for existing triage branch (cooldown)
         if: steps.token-check.outputs.configured == 'true'
         id: cooldown
@@ -94,20 +106,48 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install nektos/act
+      # Pinned act release with SHA-256 verification. Bump ACT_VERSION + the
+      # matching checksum from the upstream `checksums.txt` together.
+      - name: Install nektos/act (pinned + checksum-verified)
         if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        env:
+          ACT_VERSION: v0.2.88
+          ACT_SHA256: 1eb9996682dfcc053ac8f3f90f2ec50376f0cdfc229712d82da03d673c63a2b3
         run: |
           set -euo pipefail
-          curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh \
-            | sudo bash -s -- -b /usr/local/bin
+          curl -fsSL -o /tmp/act.tar.gz \
+            "https://github.com/nektos/act/releases/download/${ACT_VERSION}/act_Linux_x86_64.tar.gz"
+          echo "${ACT_SHA256}  /tmp/act.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/act.tar.gz -C /usr/local/bin act
           act --version
 
-      - name: Install Claude Code CLI
+      # Pinned Claude Code CLI release. Bump CLAUDE_CODE_VERSION intentionally;
+      # do not float to `latest` so triage runs stay reproducible across days.
+      - name: Install Claude Code CLI (pinned)
+        if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        env:
+          CLAUDE_CODE_VERSION: 2.1.105
+        run: |
+          set -euo pipefail
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      # Path A in the triage prompt runs `make format`, which invokes
+      # `pre-commit run -a` and must have pre-commit on PATH. Setup Python
+      # explicitly so the toolchain is deterministic across runner images.
+      - name: Set up Python + pre-commit (for Path A `make format`)
+        if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install pre-commit
         if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
         run: |
           set -euo pipefail
-          npm install -g @anthropic-ai/claude-code
-          claude --version
+          python -m pip install --upgrade pip
+          python -m pip install pre-commit
+          pre-commit --version
 
       # Write run metadata to a JSON sidecar so the agent can jq it instead
       # of inheriting potentially-unsafe strings via shell interpolation.

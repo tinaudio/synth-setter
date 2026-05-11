@@ -143,9 +143,9 @@ git commit -m "ci: add telemetry to surface ${BUCKET} failures on run ${RUN_ID}"
 git push -u origin "${TRIAGE_BRANCH}"
 ```
 
-Then file a Feature issue via the github-taxonomy skill (see Path B
-mechanics, but set type `Feature` and milestone `ci-automation v1.0.0`),
-and open the PR as a **draft** linking it:
+Then file a Feature issue following the Path B mechanics below (and the
+`docs/design/github-taxonomy.md` rules) — but set type `Feature` and
+milestone `ci-automation v1.0.0` — and open the PR as a **draft** linking it:
 
 ```bash
 gh pr create --draft --repo "${REPO}" \
@@ -179,9 +179,11 @@ fix the underlying bug.
 
 #### Path B — File a taxonomy-compliant tracking issue
 
-This is the default when Path A doesn't fit. Follow the `github-taxonomy`
-skill (from the `tinaudio-synth-setter-skills` plugin) and
-`docs/design/github-taxonomy.md`. Required metadata:
+This is the default when Path A doesn't fit. The authoritative ruleset is the
+in-repo design doc `docs/design/github-taxonomy.md` (always available in the
+checkout — the plugin skill of the same name is NOT available in this
+headless CI environment). Required metadata, inlined here so the agent does
+not need to fetch anything else:
 
 - **Issue type**: `Bug` (failures) or `Task` (auth/setup work).
 - **Domain label**: `ci-automation` (or the domain the failing workflow lives
@@ -195,6 +197,10 @@ skill (from the `tinaudio-synth-setter-skills` plugin) and
   `gh issue list --repo tinaudio/synth-setter --label ci-automation --search 'Phase in:title state:open'`.
 - **Project**: `synth-setter` board, Status `Todo`, Priority `P2` unless the
   failure is on `main` (then `P1`).
+
+Before filing, re-read `docs/design/github-taxonomy.md` (§3 hierarchy rules,
+§4 label/milestone mapping) so the issue passes the `pr-metadata-gate.yaml`
+check downstream.
 
 Body must include:
 
