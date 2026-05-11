@@ -216,7 +216,7 @@ Only skip as "no GPU available" if both probes indicate no usable CUDA GPU: `nvi
 ### PR Review Comments
 
 - Always reply to PR review comments after pushing a fix — never push silently.
-- Reply **inline on the specific review comment** that the change addresses (using `gh api repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies` or the equivalent threaded reply), not as a generic top-level PR comment. One inline reply per comment addressed.
+- Reply **inline on the specific review comment** that the change addresses (using `gh api repos/{owner}/{repo}/pulls/comments/{comment_id}/replies` or the equivalent threaded reply), not as a generic top-level PR comment. One inline reply per comment addressed.
 - Link the specific fix commit SHA in the reply (e.g., "Fixed in abc1234").
 - If a pushed change addresses multiple review comments, post a separate inline reply on each — do not consolidate them into a single comment elsewhere on the PR.
 
