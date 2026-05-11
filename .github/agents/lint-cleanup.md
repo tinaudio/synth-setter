@@ -19,7 +19,7 @@ For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shell
    - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`)
 5. **Remove the file from all `exclude` blocks** in `.pre-commit-config.yaml`
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
-7. **Run tests**: `make test-fast` — all tests must still pass
+7. **Run tests**: `make test-fast` — the quick CPU suite (excludes `slow`, `gpu`, `mps`, `requires_vst`) must still pass as a smoke check; lint-only changes shouldn't affect behavior
 8. **Commit**: Use conventional commits format: `chore(lint): clean up <filename>`
 9. **Open PR**: Reference #25, check off the file in the issue checklist. Add to "Code Health" project.
 

@@ -40,7 +40,7 @@ test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps 
 test-full-gpu: ## GPU + CPU tests (mps excluded). Runs serially for exclusive GPU access. Linux: bootstraps Xvfb.
 	$(HEADLESS_WRAPPER) pytest -m "not mps"
 
-test-full-mps: ## MPS + CPU tests (gpu excluded). Runs serially for exclusive MPS access. Linux: bootstraps Xvfb.
+test-full-mps: ## MPS + CPU tests (gpu excluded). Runs serially for exclusive MPS access. (macOS only.)
 	$(HEADLESS_WRAPPER) pytest -m "not gpu"
 
 test-vst-cpu: ## VST tests only (slow included; gpu/mps excluded). Linux: bootstraps Xvfb.
