@@ -315,6 +315,22 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
+# Install pueue task queue manager (https://github.com/Nukesor/pueue). Static
+# musl binaries from the upstream release page — no apt repo and no rust
+# toolchain pulled into the image. Used by `scripts/pueue_queue.py`.
+ARG PUEUE_VERSION=v4.0.4
+RUN case "${TARGETARCH:-}" in \
+      amd64) pueue_arch=x86_64 ;; \
+      arm64) pueue_arch=aarch64 ;; \
+      *) echo "ERROR: unsupported TARGETARCH for pueue: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
+    esac && \
+    base="https://github.com/Nukesor/pueue/releases/download/${PUEUE_VERSION}" && \
+    wget -q -O /usr/local/bin/pueue  "${base}/pueue-${pueue_arch}-unknown-linux-musl"  && \
+    wget -q -O /usr/local/bin/pueued "${base}/pueued-${pueue_arch}-unknown-linux-musl" && \
+    chmod +x /usr/local/bin/pueue /usr/local/bin/pueued && \
+    pueue --version && \
+    pueued --version
+
 WORKDIR /artifacts
 COPY --from=synth-setter-src /home/build/synth-setter/scripts/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/data/vst/core.py /artifacts/

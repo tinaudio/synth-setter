@@ -1,0 +1,150 @@
+name: Pueue Queue Dispatch
+
+# Dispatchable workflow that feeds a line-separated command file into the
+# pueue task queue manager (https://github.com/Nukesor/pueue) via the
+# `scripts/pueue_queue.py` CLI. Each non-blank, non-comment line of the input
+# file becomes one queued task in the named pueue group; once all tasks have
+# been submitted the workflow blocks on `pueue wait` and uploads the queue's
+# logs as a workflow artifact.
+#
+# Use cases:
+#   - smoke-test a sweep file from the repo (e.g. sweeps/quick.txt) without
+#     standing up a worker on RunPod
+#   - dry-run a sweep file to validate the pueue invocations the CLI would
+#     produce before committing to a real run
+#
+# The runner pulls the `tinaudio/synth-setter` Docker image — the same image
+# that has the `pueue` and `pueued` binaries baked in by
+# `docker/ubuntu22_04/Dockerfile` — and mounts the repo checkout read-only,
+# so the queued commands run inside the project's full Python + VST3 env.
+
+on:
+  workflow_dispatch:
+    inputs:
+      command_file:
+        description: "Path (relative to repo root) of the line-separated command file."
+        required: true
+        type: string
+      image_tag:
+        description: "Docker image tag for tinaudio/synth-setter."
+        required: false
+        type: string
+        default: "dev-snapshot"
+      group:
+        description: "Pueue group to enqueue into. Created if missing."
+        required: false
+        type: string
+        default: "default"
+      parallel:
+        description: "Concurrent task slots for the group."
+        required: false
+        type: number
+        default: 1
+      label_prefix:
+        description: "Prefix for per-task labels (each label becomes '<prefix>-<index>')."
+        required: false
+        type: string
+        default: "gha"
+      dry_run:
+        description: "Print the pueue commands instead of running them."
+        required: false
+        type: boolean
+        default: false
+      wait_timeout_seconds:
+        description: "How long to block on `pueue wait` after enqueueing. 0 means do not wait."
+        required: false
+        type: number
+        default: 0
+
+permissions:
+  contents: read
+
+jobs:
+  enqueue:
+    name: Enqueue ${{ inputs.command_file }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag }}
+      COMMAND_FILE: ${{ inputs.command_file }}
+      PUEUE_GROUP: ${{ inputs.group }}
+      PUEUE_PARALLEL: ${{ inputs.parallel }}
+      PUEUE_LABEL_PREFIX: ${{ inputs.label_prefix }}
+      PUEUE_DRY_RUN: ${{ inputs.dry_run }}
+      PUEUE_WAIT_TIMEOUT: ${{ inputs.wait_timeout_seconds }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate command file exists in checkout
+        run: |
+          set -euo pipefail
+          if [[ ! -f "${COMMAND_FILE}" ]]; then
+            echo "ERROR: command file not found in checkout: ${COMMAND_FILE}" >&2
+            exit 1
+          fi
+          echo "Command file (${COMMAND_FILE}):"
+          cat "${COMMAND_FILE}"
+
+      - name: Pull synth-setter image
+        run: docker pull "${IMAGE}"
+
+      # Dry-run mode skips the daemon — `python scripts/pueue_queue.py --dry-run`
+      # only prints the `pueue add` argv it would emit, so we don't need to
+      # start `pueued`. This branch is also what we run in CI smoke tests of
+      # the workflow itself.
+      - name: Dry-run pueue_queue CLI
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -e PYTHONPATH=/home/build/synth-setter \
+            -w /home/build/synth-setter \
+            "${IMAGE}" \
+            python scripts/pueue_queue.py "${COMMAND_FILE}" \
+              --group "${PUEUE_GROUP}" \
+              --parallel "${PUEUE_PARALLEL}" \
+              --label-prefix "${PUEUE_LABEL_PREFIX}" \
+              --dry-run
+
+      # Real run: persist the pueue daemon state outside the container so we
+      # can upload the queue log as an artifact afterwards. The daemon runs
+      # in the background inside the container; the script enqueues and
+      # (optionally) waits for completion before the container exits.
+      - name: Run pueue_queue CLI
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ github.workspace }}/.pueue-state"
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v "${{ github.workspace }}/.pueue-state:/root/.local/share/pueue" \
+            -e PYTHONPATH=/home/build/synth-setter \
+            -e COMMAND_FILE \
+            -e PUEUE_GROUP \
+            -e PUEUE_PARALLEL \
+            -e PUEUE_LABEL_PREFIX \
+            -e PUEUE_WAIT_TIMEOUT \
+            -w /home/build/synth-setter \
+            "${IMAGE}" \
+            bash -euxo pipefail -c '
+              python scripts/pueue_queue.py "$COMMAND_FILE" \
+                --group "$PUEUE_GROUP" \
+                --parallel "$PUEUE_PARALLEL" \
+                --label-prefix "$PUEUE_LABEL_PREFIX"
+              if [ "$PUEUE_WAIT_TIMEOUT" -gt 0 ]; then
+                echo "Waiting up to ${PUEUE_WAIT_TIMEOUT}s for queue to drain..."
+                timeout "$PUEUE_WAIT_TIMEOUT" pueue wait --group "$PUEUE_GROUP" || true
+              fi
+              pueue status --group "$PUEUE_GROUP"
+            '
+
+      - name: Upload pueue state and logs
+        if: ${{ !inputs.dry_run && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pueue-state-${{ github.run_id }}
+          path: .pueue-state/
+          if-no-files-found: warn
+          retention-days: 7
