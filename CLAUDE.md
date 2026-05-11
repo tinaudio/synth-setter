@@ -228,7 +228,18 @@ A PR is **not ready** — for review, merge, or hand-off — until **all** of th
 
 5. Reply inline to every open review comment — list them with `gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate`. If a reply required a code change, push and return to step 2. Use `/pr-review-resolver` to drive this systematically.
 
-6. Wait for Copilot to complete its post-push review (~60s, but allow up to 15 minutes). List its comments with `gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, body}]'`. If Copilot left new unaddressed comments, return to step 5. If 15 minutes have elapsed since the push and Copilot has neither posted a comment nor a top-level review note explicitly stating it has no findings, treat the auto-review as not triggered and manually re-request it before continuing — see step 6a below.
+6. Wait for Copilot to complete its post-push review (~60s, but allow up to 15 minutes). Two endpoints matter here: inline review comments live at `/pulls/<N>/comments`, and top-level review summaries (including a "no findings" note) live at `/pulls/<N>/reviews`. Check both:
+
+   ```bash
+   # Inline review comments (per-line nits)
+   gh api repos/<OWNER>/<REPO>/pulls/<N>/comments --paginate \
+     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, path, line, body}]'
+   # Top-level reviews (overall summary, including a no-findings note)
+   gh api repos/<OWNER>/<REPO>/pulls/<N>/reviews \
+     --jq '[.[] | select(.user.login | test("[Cc]opilot")) | {id, state, submitted_at, body}]'
+   ```
+
+   If Copilot left new unaddressed inline comments, return to step 5. If 15 minutes have elapsed since the push and Copilot has produced neither an inline comment nor a top-level review note explicitly stating it has no findings, treat the auto-review as not triggered and manually re-request it before continuing — see step 6a below.
 
    **Step 6a — Manually re-request a Copilot review** when step 6's 15-minute window elapses with no Copilot activity. Try in this order, stopping at the first one that succeeds:
 
