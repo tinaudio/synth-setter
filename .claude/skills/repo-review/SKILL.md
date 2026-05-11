@@ -23,12 +23,38 @@ Fetch the PR's metadata once and remember it:
 
 ```bash
 gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
-  --json number,headRefOid,baseRefOid,files,title,headRefName
+  --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
 ```
 
 If there is no PR for the current branch, stop and tell the user to push and open a PR first.
 
-## Step 2: Read the diff
+## Step 2: Inspect PR health (merge conflicts + failing checks)
+
+Reviewers need to know up front if the PR can't merge or has failing CI — both are independent of the diff but reviewers shouldn't have to dig for them. Surface each as a top-of-review `[repo-review:block]` item folded into the review body in Step 5 (not as inline comments — they have no diff anchor).
+
+**Merge conflicts.** From the JSON in Step 1:
+
+- `mergeable == "CONFLICTING"` → record one BLOCK line:
+  ```
+  BLOCK: <PR> — [pr-health] Merge conflict with base branch (mergeStateStatus=<value>). Rebase or merge base before review.
+  ```
+- `mergeable == "UNKNOWN"` → GitHub hasn't computed mergeability yet; skip (no finding).
+- `mergeable == "MERGEABLE"` → no finding.
+
+**Failing checks.** Parse `statusCheckRollup` from Step 1. Each entry is either a check run (has `conclusion`) or a legacy commit status (has `state`). A check is *failing* if any of these hold:
+
+- `conclusion` ∈ {`FAILURE`, `TIMED_OUT`, `STARTUP_FAILURE`, `ACTION_REQUIRED`}.
+- `state` ∈ {`FAILURE`, `ERROR`}.
+
+Skip `SUCCESS`, `SKIPPED`, `NEUTRAL`, `CANCELLED`, and anything still pending/in-progress — they're noise here. For each failing entry record one BLOCK line:
+
+```
+BLOCK: <PR> — [pr-health] Failing check: <name> (<conclusion-or-state>) — <detailsUrl-or-targetUrl>
+```
+
+If `gh pr checks <N>` is easier than parsing the JSON, use it instead — but capture the same fields (name, fail reason, link).
+
+## Step 3: Read the diff
 
 Get the full unified diff:
 
@@ -38,7 +64,7 @@ gh pr diff <N> --repo <owner>/<repo>
 
 Read every changed file at the head SHA (use the `Read` tool, not `cat`). Skim the PR description for context on intent.
 
-## Step 3: Apply the core checklist
+## Step 4: Apply the core checklist
 
 Evaluate ONLY the changed code. Skip items that don't apply to the diff (e.g. don't flag missing type annotations on a YAML-only PR).
 
@@ -122,17 +148,21 @@ End the listing with:
 Summary: X BLOCK, Y WARN
 ```
 
-If there are zero findings, output `PASS` and stop — do not post an empty review.
+If the checklist found zero findings AND Step 2 found no PR-health BLOCKs (no merge conflict, no failing checks), output `PASS` and stop — do not post an empty review. If PR-health turned up anything, always submit so the merge-conflict / failing-check banner reaches the author.
 
-## Step 4: Build the findings JSON
+## Step 5: Build the findings JSON
 
-Convert your BLOCK/WARN list to the JSON shape `post_review.py` consumes. Each finding becomes one inline comment with a `[repo-review:<severity>]` prefix.
+Convert your BLOCK/WARN list to the JSON shape `post_review.py` consumes. Each diff-anchored finding becomes one inline comment with a `[repo-review:<severity>]` prefix.
+
+**Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+
+Example shape when both health flags fire:
 
 ```json
 {
   "pr_number": <N>,
   "repo": "<owner>/<repo>",
-  "review_body": "Repo-review (MVP): <X> BLOCK, <Y> WARN. Inline core checklist from CLAUDE.md.",
+  "review_body": "Repo-review (MVP): <X> BLOCK, <Y> WARN. Inline core checklist from CLAUDE.md.\n\n## PR health\n\n- **[repo-review:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[repo-review:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123",
   "findings": [
     {
       "path": "<path>",
@@ -143,6 +173,8 @@ Convert your BLOCK/WARN list to the JSON shape `post_review.py` consumes. Each f
 }
 ```
 
+Count PR-health BLOCKs toward the `<X> BLOCK` total in the summary. If the checklist found zero issues but PR health did, still submit — don't `PASS`-and-stop when there are merge conflicts or failing checks to surface.
+
 Write the JSON to a temp file (do NOT echo it inline — keep it readable):
 
 ```bash
@@ -151,7 +183,7 @@ cat > /tmp/repo-review-findings.json <<'JSON'
 JSON
 ```
 
-## Step 5: Submit the review
+## Step 6: Submit the review
 
 ```bash
 python3 .claude/skills/_shared/post_review.py < /tmp/repo-review-findings.json
