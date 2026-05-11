@@ -8,11 +8,11 @@ Fix pre-existing lint violations in legacy files one at a time, removing them fr
 
 This runbook is the canonical workflow. Three entry points delegate to it; edits to the steps below land here and reach every entry point automatically.
 
-| Tool                       | Entry point                        | How to invoke                                         |
-| -------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| Claude Code (programmatic) | `.claude/agents/lint-cleanup.md`   | `Agent(subagent_type: "lint-cleanup", prompt: "...")` |
-| Claude Code (interactive)  | `.claude/commands/lint-cleanup.md` | Type `/lint-cleanup <path>` in a Claude Code session  |
-| Copilot Coding Agent       | `.github/copilot-instructions.md`  | Assign a #25 sub-issue to Copilot in the GitHub UI    |
+| Tool                       | Entry point                        | How to invoke                                                                |
+| -------------------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
+| Claude Code (programmatic) | `.claude/agents/lint-cleanup.md`   | `Agent(subagent_type: "lint-cleanup", isolation: "worktree", prompt: "...")` |
+| Claude Code (interactive)  | `.claude/commands/lint-cleanup.md` | Type `/lint-cleanup <path>` in a Claude Code session                         |
+| Copilot Coding Agent       | `.github/copilot-instructions.md`  | Assign a #25 sub-issue to Copilot in the GitHub UI                           |
 
 The entry-point stubs may surface a short cross-reference of the rules most often forgotten (commit prefix, `Refs #25`, isolated-worktree requirement) so a contributor seeing only the stub still gets the load-bearing constraints. They must not paraphrase or fork the workflow steps themselves — those live here, single-sourced.
 
@@ -22,7 +22,7 @@ Only formatting, docstrings, and lint fixes. **No functional changes.**
 
 ## Workflow
 
-For each file listed in any `exclude:` block in `.pre-commit-config.yaml` (e.g. `pyright`, `interrogate`, `shellcheck`, `codespell`) **or** under `[tool.pydoclint].exclude` or `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` (pydoclint and ruff configure their path-excludes there, not in the pre-commit config):
+For each file listed in any `exclude:` block in `.pre-commit-config.yaml` (e.g. `pyright`, `interrogate`, `shellcheck`, `codespell`) **or** under `[tool.pydoclint].exclude` or `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` (pydoclint path excludes and ruff per-file rule ignores are configured there, not in the pre-commit config; note that `per-file-ignores` still runs ruff on the file but suppresses specific rules — it is not a path exclude):
 
 1. **Create a branch**: `chore/lint-cleanup/<module-name>` (e.g., `chore/lint-cleanup/surge-datamodule`)
 2. **Run hooks on the file**, e.g. `interrogate`
