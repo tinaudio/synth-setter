@@ -1,0 +1,76 @@
+name: Verify act setup
+
+# Regression guard for the local `act` setup documented in
+# docs/operations/running-workflows-locally.md. The runbook is the contract
+# the rest of the team relies on; if `.actrc`, the runner Dockerfile, or any
+# workflow YAML drifts in a way that breaks `act`, this job fails before the
+# next contributor wastes 20 minutes discovering it locally.
+
+on:
+  pull_request:
+    paths:
+      - ".actrc"
+      - "docs/operations/act-runner.Dockerfile"
+      - ".github/workflows/test-act.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-act-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-act:
+    name: Verify act parses repo + builds runner image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Pin the act release so this job doesn't break when nektos/act cuts a new tag.
+      # Bump the version here intentionally when adopting new act features.
+      - name: Install act
+        env:
+          ACT_VERSION: v0.2.88
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh \
+            | sudo bash -s -- -b /usr/local/bin "${ACT_VERSION}"
+          act --version
+
+      # `act -l` parses every workflow file under .github/workflows/ and applies
+      # the repo `.actrc` (runner-label mappings). It fails if any workflow YAML
+      # is malformed, or if `.actrc` references an unknown flag.
+      - name: List workflows (parses every .yml + honors .actrc)
+        run: act -l
+
+      # `act -n` (dry-run) resolves action references in addition to parsing,
+      # catching broken `uses:` pins that `-l` would miss. pr-metadata-gate.yaml
+      # is a stable, short workflow that exercises the common shape.
+      - name: Dry-run pr-metadata-gate.yaml
+        run: act pull_request -W .github/workflows/pr-metadata-gate.yaml -n
+
+      # The runbook's custom-image recipe is what users follow when a workflow
+      # shells out to `gh`. Build it from scratch every time (no cache) so a
+      # broken upstream apt repo or base-image bump fails this step rather
+      # than someone's laptop a week later.
+      - name: Build act-runner-gh image from docs Dockerfile
+        run: |
+          set -euo pipefail
+          DOCKER_BUILDKIT=0 docker build --no-cache \
+            -f docs/operations/act-runner.Dockerfile \
+            -t act-runner-gh:latest \
+            docs/operations
+          docker run --rm act-runner-gh:latest gh --version
+
+      # Verify the documented `-P ubuntu-latest=<image>` override syntax still
+      # works against the just-built image.
+      - name: Dry-run with custom runner image
+        run: |
+          act pull_request \
+            -W .github/workflows/pr-metadata-gate.yaml \
+            -P ubuntu-latest=act-runner-gh:latest \
+            --pull=false -n

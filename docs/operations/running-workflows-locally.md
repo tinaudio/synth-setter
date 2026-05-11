@@ -25,27 +25,26 @@ secret/artifact graph, read [`../reference/github-actions.md`](../reference/gith
 
 ## First-time setup
 
-`act` prompts on first run for a default image size and dies on EOF in a
-non-TTY (CI containers, dev container `bash -c`, ssh-without-tty). Avoid the
-prompt by writing the mappings once:
+The repo ships an [`.actrc`](../../.actrc) at the root that maps the runner
+labels used by our workflows to the medium [`catthehacker/ubuntu:act-*`](https://github.com/catthehacker/docker_images)
+images. `act` picks it up automatically when run from inside the repo, so you
+don't need to create a per-user `~/.config/act/actrc`. The committed mappings
+cover `ubuntu-latest`, `ubuntu-latest-4core` (used by `cpu-slow`,
+`docker-build-validation`, `test-vst-slow`), `ubuntu-22.04`, and
+`ubuntu-20.04`. Without that mapping, `act` prompts on first run for a
+default image size and dies on EOF in a non-TTY (CI containers, dev
+container `bash -c`, ssh-without-tty).
 
-```bash
-mkdir -p ~/.config/act
-cat > ~/.config/act/actrc <<'EOF'
--P ubuntu-latest=catthehacker/ubuntu:act-latest
--P ubuntu-latest-4core=catthehacker/ubuntu:act-latest
--P ubuntu-22.04=catthehacker/ubuntu:act-22.04
--P ubuntu-20.04=catthehacker/ubuntu:act-20.04
-EOF
-```
+The full GitHub-runner clone (`full-latest`, ~60 GB) is rarely necessary;
+the medium images (~2.3 GB) cover everything except a handful of
+GitHub-only tools. The [Custom runner image](#custom-runner-image-for-gh-using-workflows)
+section below shows how to layer `gh` on top, which is the only common gap.
 
-`ubuntu-latest-4core` is used by `cpu-slow`, `docker-build-validation`, and
-`test-vst-slow`; mapping it to the same image keeps act from prompting (or
-failing) on first run of those workflows.
-
-The medium [`catthehacker/ubuntu:act-*`](https://github.com/catthehacker/docker_images)
-images are ~2.3 GB and cover the bulk of our workflows. The full GitHub-runner
-clone (`full-latest`) is ~60 GB and rarely necessary.
+The [`test-act.yaml`](../../.github/workflows/test-act.yaml) workflow guards
+this setup: any PR that touches `.actrc`, the runner Dockerfile, or the
+test-act workflow itself runs `act -l` and an `act -n` dry-run against a
+known workflow on a GitHub runner, so config rot is caught at PR time
+instead of on someone's laptop.
 
 ## Listing what's available
 
