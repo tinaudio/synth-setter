@@ -131,3 +131,19 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# P6 — adversarial probe; do-not-merge. This file is in
+# [tool.pydoclint].exclude in pyproject.toml, so the function below
+# should NOT be linted by pre-commit even though it has a deliberately
+# broken sphinx docstring (mismatched :param: name, missing :raises:).
+# See the adversarial probe PR for results.
+def adversarial_excluded_probe(x: int) -> int:
+    """Add one — broken docstring.
+
+    :param y: WRONG NAME — signature has ``x``.
+    :return: result.
+    """
+    if x < 0:
+        raise ValueError("negative")
+    return x + 1
