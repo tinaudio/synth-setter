@@ -167,6 +167,11 @@ plugins/
 # Claude Code
 .claude/
 
+# Session-local handoff prompts written by /handoff. Redundant with the
+# blanket .claude/ ignore above, but kept explicit so any future contributor
+# who adds a !.claude/ allow-list still won't accidentally commit these.
+.claude/handoffs/handoff-*.md
+
 # Advisory reports written by .claude/hooks/doc-drift.sh and pr-review-resolver.sh
 .agent-reviews/
 

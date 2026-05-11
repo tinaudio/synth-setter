@@ -1,0 +1,338 @@
+"""Unit tests for handoff/helpers/write_handoff.py — pure rendering only."""
+
+from __future__ import annotations
+
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SKILL_ROOT))
+sys.path.insert(0, str(SKILL_ROOT / "helpers"))
+
+from helpers import discover_state as ds  # noqa: E402
+from helpers import write_handoff as wh  # noqa: E402
+
+
+def _minimal_context(**overrides) -> wh.HandoffContext:
+    chain = ds.Chain(
+        tracking_issue=882,
+        repo="tinaudio/synth-setter",
+        parent_phase=72,
+        task_prefix="Task 5",
+        plan_prs=[
+            ds.ChainPR(
+                id="PR-5",
+                title="refactor(pipeline): relocate pipeline → src/pipeline",
+                source_commits=["abc1234"],
+            ),
+            ds.ChainPR(
+                id="PR-6",
+                title="internal-fix(pipeline): post-relocation doc sweep",
+                source_commits=["def5678"],
+                depends_on=["PR-5"],
+            ),
+        ],
+    )
+    base = wh.HandoffContext(
+        repo="tinaudio/synth-setter",
+        tracking_issue=882,
+        chain=chain,
+        prior_handoffs=[],
+        done_since=[],
+        in_flight=[],
+        phase_numbering=ds.PhaseTaskNumbering(
+            phase_number=72, task_prefix="Task 5", used_numbers=[1, 2, 3]
+        ),
+        worktrees=[],
+        now_utc="2026-05-11 22:00 UTC",
+        surprises=[],
+        anti_patterns=[],
+        handoff_comment_url=None,
+    )
+    for key, value in overrides.items():
+        setattr(base, key, value)
+    return base
+
+
+def test_render_comment_renders_first_handoff_header() -> None:
+    """Render comment renders first handoff header."""
+    out = wh.render(_minimal_context(), "comment.md.j2")
+    assert "## Handoff update — chain progress as of 2026-05-11 22:00 UTC" in out
+    assert "First handoff on tracking issue #882" in out
+
+
+def test_render_comment_lists_remaining_chain_table() -> None:
+    """Render comment lists remaining chain table."""
+    out = wh.render(_minimal_context(), "comment.md.j2")
+    assert "| PR-5 | pending" in out
+    assert "| PR-6 | pending" in out
+    assert "Click to expand the 2-row table" in out
+
+
+def test_render_comment_includes_done_since_when_merged() -> None:
+    """Render comment includes done since when merged."""
+    ctx = _minimal_context(
+        done_since=[
+            ds.ClosedPR(
+                number=999,
+                title="feat(x): foo (#999)",
+                merged_at="2026-05-12T00:00:00Z",
+                closes_issues=[908],
+            ),
+        ]
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "| #999 | `feat(x): foo (#999)` | #908 |" in out
+
+
+def test_render_comment_omits_done_table_when_empty() -> None:
+    """Render comment omits done table when empty."""
+    out = wh.render(_minimal_context(), "comment.md.j2")
+    assert "_No new merges referencing this tracking issue since the prior handoff._" in out
+
+
+def test_render_comment_in_flight_has_next_action_when_failing() -> None:
+    """Render comment in flight has next action when failing."""
+    ctx = _minimal_context(
+        in_flight=[
+            ds.InFlightPR(
+                number=942,
+                title="internal-feat(vst): render config CLI",
+                branch="pr-4",
+                head_oid="899449e0",
+                head_committer_date="2026-05-11T20:00:00Z",
+                mergeable="MERGEABLE",
+                review_decision="REVIEW_REQUIRED",
+                checks_state="failing",
+                unresolved_threads=0,
+                new_copilot_comments_since_push=0,
+            )
+        ]
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "PR #942" in out
+    assert "Fix the failing checks" in out
+
+
+def test_render_comment_in_flight_next_action_ready_to_merge_when_clean() -> None:
+    """Render comment in flight next action ready to merge when clean."""
+    ctx = _minimal_context(
+        in_flight=[
+            ds.InFlightPR(
+                number=942,
+                title="internal-feat(vst): foo",
+                branch="b",
+                head_oid="abc",
+                head_committer_date="2026-05-11T20:00:00Z",
+                mergeable="MERGEABLE",
+                review_decision="APPROVED",
+                checks_state="passing",
+                unresolved_threads=0,
+                new_copilot_comments_since_push=0,
+            )
+        ]
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "Ready to merge" in out
+
+
+def test_render_comment_prior_handoff_breadcrumbs() -> None:
+    """Render comment prior handoff breadcrumbs."""
+    ctx = _minimal_context(
+        prior_handoffs=[
+            ds.PriorHandoff(
+                comment_id=1,
+                url="https://example.com/h1",
+                created_at="2026-05-11T19:50:00Z",
+                body="## Handoff update — A",
+            ),
+            ds.PriorHandoff(
+                comment_id=2,
+                url="https://example.com/h2",
+                created_at="2026-05-11T03:18:00Z",
+                body="## Handoff update — B",
+            ),
+        ]
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "Predecessors:" in out
+    assert "https://example.com/h1" in out
+    assert "https://example.com/h2" in out
+
+
+def test_render_comment_lists_safe_to_remove_worktrees() -> None:
+    """Render comment lists safe to remove worktrees."""
+    ctx = _minimal_context(
+        worktrees=[
+            ds.WorktreeEntry(
+                path="/wt/a",
+                branch="feat-x",
+                head="abc1234",
+                associated_pr_number=101,
+                associated_pr_state="MERGED",
+                safe_to_remove=True,
+            ),
+            ds.WorktreeEntry(
+                path="/wt/b",
+                branch="feat-y",
+                head="def5678",
+                associated_pr_number=102,
+                associated_pr_state="OPEN",
+                safe_to_remove=False,
+            ),
+        ]
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "safe to `git worktree remove`" in out
+    assert "/wt/a" in out
+    assert "/wt/b" in out
+
+
+def test_render_comment_renders_surprises_with_category_lead() -> None:
+    """Render comment renders surprises with category lead."""
+    ctx = _minimal_context(
+        surprises=[
+            wh.Surprise(
+                category="Copilot race", note="Maintainer self-push raced with parallel PR plan."
+            ),
+        ]
+    )
+    out = wh.render(ctx, "comment.md.j2")
+    assert "- **Copilot race:**" in out
+
+
+def test_render_prompt_includes_first_commands_block() -> None:
+    """Render prompt includes first commands block."""
+    ctx = _minimal_context(
+        in_flight=[
+            ds.InFlightPR(
+                number=942,
+                title="t",
+                branch="b",
+                head_oid="abc",
+                head_committer_date="",
+                mergeable="MERGEABLE",
+                review_decision="REVIEW_REQUIRED",
+                checks_state="passing",
+                unresolved_threads=0,
+                new_copilot_comments_since_push=0,
+            )
+        ]
+    )
+    out = wh.render(ctx, "prompt.md.j2")
+    assert "git fetch origin --prune" in out
+    assert "gh pr view 942" in out
+    assert "git worktree list" in out
+
+
+def test_render_prompt_default_action_drives_in_flight_first() -> None:
+    """Render prompt default action drives in flight first."""
+    ctx = _minimal_context(
+        in_flight=[
+            ds.InFlightPR(
+                number=942,
+                title="t",
+                branch="b",
+                head_oid="abc",
+                head_committer_date="",
+                mergeable="MERGEABLE",
+                review_decision="REVIEW_REQUIRED",
+                checks_state="passing",
+                unresolved_threads=0,
+                new_copilot_comments_since_push=0,
+            )
+        ]
+    )
+    out = wh.render(ctx, "prompt.md.j2")
+    assert "Default: drive the in-flight PR(s) above to merge" in out
+
+
+def test_render_prompt_mandatory_skills_cycle_listed() -> None:
+    """Render prompt mandatory skills cycle listed."""
+    out = wh.render(_minimal_context(), "prompt.md.j2")
+    assert "/tdd-implementation" in out
+    assert "/code-health" in out
+    assert "/simplify" in out
+
+
+def test_render_prompt_anti_patterns_render_each_line() -> None:
+    """Render prompt anti patterns render each line."""
+    ctx = _minimal_context(anti_patterns=["Don't compose @hydra.main outside the entrypoint."])
+    out = wh.render(ctx, "prompt.md.j2")
+    assert "Don't compose @hydra.main outside the entrypoint." in out
+
+
+def test_render_ascii_graph_linear_chain() -> None:
+    """Render ascii graph linear chain."""
+    rows = [
+        ds.ChainPR(id="PR-5", title="t"),
+        ds.ChainPR(id="PR-6", title="t", depends_on=["PR-5"]),
+        ds.ChainPR(id="PR-7", title="t", depends_on=["PR-6"]),
+    ]
+    out = wh.render_ascii_graph(rows)
+    lines = out.splitlines()
+    assert "PR-5  (root)" in lines[0]
+    assert "PR-6  ← PR-5" in lines[1]
+    assert "PR-7  ← PR-6" in lines[2]
+
+
+def test_render_ascii_graph_fanout() -> None:
+    """Render ascii graph fanout."""
+    rows = [
+        ds.ChainPR(id="PR-5", title="t"),
+        ds.ChainPR(id="PR-6", title="t", depends_on=["PR-5"]),
+        ds.ChainPR(id="PR-7", title="t", depends_on=["PR-5"]),
+        ds.ChainPR(id="PR-8", title="t", depends_on=["PR-5"]),
+    ]
+    out = wh.render_ascii_graph(rows)
+    assert "PR-5  (root)" in out
+    assert "PR-6  ← PR-5" in out
+    assert "PR-7  ← PR-5" in out
+    assert "PR-8  ← PR-5" in out
+
+
+def test_render_ascii_graph_empty_says_no_remaining() -> None:
+    """Render ascii graph empty says no remaining."""
+    assert wh.render_ascii_graph([]) == "(no remaining PRs)"
+
+
+def test_check_idempotency_guard_blocks_recent_handoff() -> None:
+    """Check idempotency guard blocks recent handoff."""
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    handoffs = [
+        ds.PriorHandoff(comment_id=1, url="u", created_at=recent, body="## Handoff update — A")
+    ]
+    msg = wh.check_idempotency_guard(handoffs)
+    assert msg is not None
+    assert "5min ago" in msg
+
+
+def test_check_idempotency_guard_allows_old_handoff() -> None:
+    """Check idempotency guard allows old handoff."""
+    now = datetime.now(timezone.utc)
+    old = (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+    handoffs = [
+        ds.PriorHandoff(comment_id=1, url="u", created_at=old, body="## Handoff update — A")
+    ]
+    assert wh.check_idempotency_guard(handoffs) is None
+
+
+def test_check_idempotency_guard_no_prior_returns_none() -> None:
+    """Check idempotency guard no prior returns none."""
+    assert wh.check_idempotency_guard([]) is None
+
+
+def test_parse_surprise_splits_category_and_note() -> None:
+    """Parse surprise splits category and note."""
+    s = wh.parse_surprise("Copilot race: maintainer self-push raced with parallel PR plan")
+    assert s.category == "Copilot race"
+    assert s.note == "maintainer self-push raced with parallel PR plan"
+
+
+def test_parse_surprise_with_no_colon_falls_back_to_other() -> None:
+    """Parse surprise with no colon falls back to other."""
+    s = wh.parse_surprise("just a free-form note")
+    assert s.category == "Other"
+    assert s.note == "just a free-form note"

@@ -1,0 +1,173 @@
+# Structured manifest of the remaining PR chain rooted at the tracking issue.
+#
+# The /handoff skill reads this on every invocation, updates `status` and
+# `pr_number` from live `gh` queries, and writes the file back only when one
+# of those columns changes. Merged PRs automatically surface in the "Done
+# since prior handoff" table; pending and in-flight PRs surface in the
+# "Remaining chain" table.
+#
+# To start a new chain, copy this file (e.g. chain.wds.yaml) and edit. One
+# tracking issue per chain — multi-issue chains are out of scope.
+tracking_issue: 882
+repo: tinaudio/synth-setter
+parent_phase: 72
+task_prefix: "Task 5"
+
+plan_prs:
+  - id: "PR-5"
+    title: "refactor(pipeline): relocate pipeline/ → src/pipeline/"
+    source_commits: ["51b574e"]
+    linked_issue:
+      strategy: create_under_phase
+      existing: null
+    status: pending
+    pr_number: null
+    depends_on: []
+
+  - id: "PR-6"
+    title: "internal-fix(pipeline): post-relocation doc + comment sweep"
+    source_commits:
+      - "789bf93"
+      - "c2e760b"
+      - "e3eb698"
+      - "9dbe920"
+      - "38eef7d"
+      - "e190ea6"
+      - "f91737b"
+    linked_issue:
+      strategy: create_under_phase
+      existing: null
+    status: pending
+    pr_number: null
+    depends_on: ["PR-5"]
+
+  - id: "PR-7"
+    title: "internal-fix(schemas): tighten DatasetSpec validators + graceful runtime fields"
+    source_commits:
+      - "2e2f4d2"
+      - "2bc6cb5"
+      - "cc8d783"
+      - "d56e496"
+      - "c38417a"
+    notes:
+      - "b516b67 (seeds gate) intentionally dropped — already shipped via #944"
+    linked_issue:
+      strategy: create_under_phase
+      existing: null
+    status: pending
+    pr_number: null
+    depends_on: ["PR-5"]
+
+  - id: "PR-8"
+    title: "internal-fix(pipeline): tighten validate_spec — derive required fields from model"
+    source_commits: ["69e0835"]
+    linked_issue:
+      strategy: create_under_phase
+      existing: null
+    status: pending
+    pr_number: null
+    depends_on: ["PR-5"]
+
+  - id: "PR-9"
+    title: "internal-fix(pipeline): code-health pass on skypilot_launch + pedalboard-free spec import"
+    source_commits:
+      - "eac9d52"
+      - "3e45f1d"
+      - "49b0ab7"
+      - "e8ca78d"
+      - "e7affbb"
+      - "147d705"
+    linked_issue:
+      strategy: create_under_phase
+      existing: null
+    status: pending
+    pr_number: null
+    depends_on: ["PR-5"]
+
+  - id: "PR-11"
+    title: "fix(compute,ci,workflows): docker entrypoint path + validate-spec pydantic + pr-metadata-gate pagination"
+    source_commits: ["b866fb4", "3b0c7cb", "7b71e52"]
+    linked_issue:
+      strategy: create_under_phase
+      existing: null
+    status: pending
+    pr_number: null
+    depends_on: ["PR-5"]
+
+  - id: "PR-12"
+    title: "internal-feat(schemas): add ShardMetadata + EXTENSION_TO_OUTPUT_FORMAT mapping"
+    source_commits:
+      - "95bd6e3"
+      - "9eb526b"
+      - "a455a67"
+      - "e28bd84"
+      - "88cfea3"
+    notes:
+      - "Source commits will need to be re-applied post-relocation if PR-5 lands first."
+    linked_issue:
+      strategy: existing
+      existing: 874
+    status: pending
+    pr_number: null
+    depends_on: ["PR-11"]
+
+  - id: "PR-13"
+    title: "internal-feat(pipeline): support wds writer + tar validate_shard"
+    source_commits:
+      - "0234eeb"
+      - "b0d36ca"
+      - "9d77aa3"
+      - "1720d19"
+      - "3247fd3"
+      - "e0c52f7"
+      - "e1007f6"
+      - "7354ee3"
+      - "27ed53d"
+      - "78dc576"
+      - "cf53448"
+      - "f71905f"
+      - "2ed600d"
+      - "80df242"
+      - "b5bf975"
+      - "218cd13"
+      - "97baacd"
+      - "359ad3e"
+      - "018dcbc"
+      - "32b7eba"
+      - "b885804"
+    linked_issue:
+      strategy: existing
+      existing: 874
+    status: pending
+    pr_number: null
+    depends_on: ["PR-12"]
+
+  - id: "PR-14"
+    title: "feat(pipeline): write WDS tar shard from make_dataset alongside hdf5 (closes #874)"
+    source_commits: ["a465815"]
+    notes:
+      - "PR-14 is the user-facing wiring PR; closes #874."
+    linked_issue:
+      strategy: existing
+      existing: 874
+    status: pending
+    pr_number: null
+    depends_on: ["PR-13"]
+
+  - id: "PR-15"
+    title: "ci(workflows): parallel WDS run in test-dataset-generation matrix"
+    source_commits:
+      - "666a909"
+      - "fd36bdd"
+      - "f6d9b3d"
+      - "478b402"
+      - "b10f30c"
+      - "8dafb19"
+      - "0f27452"
+    linked_issue:
+      strategy: create_under_phase
+      existing: null
+      parent_issue: 874
+    status: pending
+    pr_number: null
+    depends_on: ["PR-14"]

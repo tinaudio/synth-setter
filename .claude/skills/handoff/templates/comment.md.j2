@@ -1,0 +1,143 @@
+## Handoff update — chain progress as of {{ now_utc }}
+
+{% if prior_handoffs -%}
+{%- set breadcrumbs = [] -%}
+{%- for handoff in prior_handoffs[:3] -%}
+{%- set _ = breadcrumbs.append("[" ~ handoff.created_at[:10] ~ " handoff](" ~ handoff.url ~ ")") -%}
+{%- endfor -%}
+Predecessors: {{ breadcrumbs | join(" ← ") }}{% if prior_handoffs | length > 3 %} ← …{% endif %}
+{% else -%}
+First handoff on tracking issue #{{ tracking_issue }}.
+{% endif %}
+
+A fresh agent reading just this comment + the linked predecessor handoffs should be able to pick the work up.
+
+### Done since the prior handoff
+
+{% if done_since -%}
+| PR | Title | Closes |
+|----|-------|--------|
+{% for pr in done_since -%}
+| #{{ pr.number }} | `{{ pr.title }}` | {% if pr.closes_issues %}{% for n in pr.closes_issues %}#{{ n }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}—{% endif %} |
+{% endfor %}
+{%- else -%}
+_No new merges referencing this tracking issue since the prior handoff._
+{%- endif %}
+
+### In flight (awaiting maintainer approval or further work)
+
+{% if in_flight -%}
+{% for pr in in_flight %}
+#### PR #{{ pr.number }} — `{{ pr.title }}`
+
+- **Branch:** `{{ pr.branch }}` at `{{ pr.head_oid[:7] }}`
+- **Checks:** {{ pr.checks_state }} · **Mergeable:** {{ pr.mergeable }} · **Review decision:** {{ pr.review_decision }}
+- **Unresolved review threads:** {{ pr.unresolved_threads }} · **New Copilot comments since last push:** {{ pr.new_copilot_comments_since_push }}
+
+##### Next action
+
+{%- if pr.checks_state == "failing" %}
+Fix the failing checks, push, reply inline to each affected review thread linking the fix SHA, then re-poll.
+{%- elif pr.mergeable == "CONFLICTING" %}
+Rebase or merge base, resolve conflicts, push. Reply inline to any review threads invalidated by the rebase.
+{%- elif pr.unresolved_threads > 0 or pr.new_copilot_comments_since_push > 0 %}
+Address the {{ pr.unresolved_threads }} unresolved thread(s) + {{ pr.new_copilot_comments_since_push }} new Copilot comment(s); reply inline linking the fix SHA. Use `/pr-review-resolver`.
+{%- elif pr.review_decision == "REVIEW_REQUIRED" %}
+Wait for maintainer approval — all CI green, mergeable, no open threads.
+{%- elif pr.review_decision == "APPROVED" and pr.mergeable == "MERGEABLE" and pr.checks_state == "passing" %}
+Ready to merge. Confirm with the maintainer, then `gh pr merge --squash`.
+{%- else %}
+Re-poll status; nothing obvious blocking.
+{%- endif %}
+{% endfor %}
+{%- else -%}
+_No open PRs reference this tracking issue._
+{%- endif %}
+
+### Remaining chain (next agent: start here)
+
+{% set remaining = chain.plan_prs | rejectattr("status", "equalto", "merged") | list -%}
+{% if remaining -%}
+<details>
+<summary>Click to expand the {{ remaining | length }}-row table</summary>
+
+| Plan PR | Status | PR # | Title | Source-commit pointer | Linked issue | Notes |
+|---------|--------|------|-------|-----------------------|--------------|-------|
+{% for pr in remaining -%}
+| {{ pr.id }} | {{ pr.status }} | {% if pr.pr_number %}#{{ pr.pr_number }}{% else %}—{% endif %} | `{{ pr.title }}` | {{ pr.source_commits | join(", ") }} | {% if pr.linked_issue.existing %}existing #{{ pr.linked_issue.existing }}{% else %}create under #{{ chain.parent_phase }}{% endif %} | {% if pr.notes %}{{ pr.notes | join(" / ") }}{% else %}—{% endif %} |
+{% endfor %}
+
+#### Dependency graph
+
+```
+{{ render_ascii_graph(remaining) }}
+```
+
+</details>
+{%- else -%}
+_The chain is complete — every plan PR has merged._
+{%- endif %}
+
+### Task numbering — current state of Phase #{{ chain.parent_phase }}
+
+{% if phase_numbering.used_numbers -%}
+Used `{{ chain.task_prefix }}.N` numbers: {{ phase_numbering.used_numbers | join(", ") }}.
+
+Next free numbers, in order: **{% for offset in range(remaining | length) %}{{ chain.task_prefix }}.{{ phase_numbering.next_free + offset }}{% if not loop.last %}, {% endif %}{% endfor %}** — assign in plan-PR order.
+{%- else -%}
+No existing `{{ chain.task_prefix }}.N` issues found under Phase #{{ chain.parent_phase }}. Start at `{{ chain.task_prefix }}.1`.
+{%- endif %}
+
+### Recommended task list for the next agent
+
+{% set first_remaining = remaining[0] if remaining else None -%}
+{% if first_remaining -%}
+1. **Check on any in-flight PRs above.** Each has a Next-action sub-bullet — execute it. Use `/loop 2m gh pr checks <N>` to drive the iteration.
+2. **Once in-flight PRs merge**, file the next Task under Phase #{{ chain.parent_phase }} (next free: `{{ chain.task_prefix }}.{{ phase_numbering.next_free }}`) via `/github-taxonomy`, branch off the latest `origin/main`, and start **{{ first_remaining.id }}** (`{{ first_remaining.title }}`).
+3. **Apply mandatory skills cycle:** `/tdd-implementation` → `/code-health` → `/simplify` on every code-touching PR.
+4. **Drive the rest of the chain in waves** — non-dependent PRs can land in parallel via `/wave-orchestration`.
+{%- else -%}
+1. **The chain is done.** Close out any open follow-ups and archive the worktree(s) listed below.
+{%- endif %}
+
+### Local worktree inventory at handoff
+
+{% set tracked = worktrees | selectattr("branch") | list -%}
+{% if tracked -%}
+{% for entry in tracked -%}
+- `{{ entry.path }}` — branch `{{ entry.branch }}`, head `{{ entry.head[:7] }}`{% if entry.associated_pr_number %} → PR #{{ entry.associated_pr_number }} ({{ entry.associated_pr_state }}){% endif %}{% if entry.safe_to_remove %} · **safe to `git worktree remove`**{% endif %}
+{% endfor %}
+{%- else -%}
+_No additional worktrees on disk._
+{%- endif %}
+{%- set detached_count = worktrees | rejectattr("branch") | list | length -%}
+{%- if detached_count %}
+
+_({{ detached_count }} detached worktrees omitted — typically `/tmp` and `data/` test fixtures.)_
+{%- endif %}
+
+### Surprises this session
+
+{% if surprises -%}
+{% for s in surprises -%}
+- **{{ s.category }}:** {{ s.note }}
+{% endfor %}
+{%- else -%}
+_No surprises recorded._
+{%- endif %}
+
+### Conventions to keep applying
+
+These have been working — the next agent should keep them:
+
+- **One PR = one review surface.** Foundation PRs touch one logical concern each.
+- **Conventional-commit prefix drives semver.** `internal-feat` / `internal-fix` for non-user-facing scaffolding; `feat` / `fix` for user-facing changes; `feat!` for breaking.
+- **CLAUDE.md PR Readiness rule:** a PR is not ready until CI green + `MERGEABLE` + every Copilot thread has an inline reply + Copilot has produced no new comments since the last push. Use `/loop` to drive iteration; don't stop at "I pushed the fix."
+- **`/pr-review-resolver`** for triaging Copilot rounds — addresses every thread, posts inline replies linking the fix SHA, resolves via GraphQL.
+- **`doc-drift` advisory is real signal** — don't dismiss "out of scope" findings without checking.
+- **Mandatory skills cycle:** `/tdd-implementation` → `/code-health` → `/simplify`. Pure docs are exempt.
+- **Taxonomy compliance:** every PR's linked issue needs Type + Domain label + Milestone + Phase parent + Project + Priority. Run `/github-taxonomy` before `gh pr create`.
+
+---
+
+_Generated by `.claude/skills/handoff` from `chain.yaml`. To regenerate, run `/handoff`._

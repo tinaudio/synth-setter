@@ -71,6 +71,9 @@ ignore = ["E501", "S101"]
 # with a partial path — `gh` is on PATH by design (same pattern used by the
 # scripts/r2_shard_report.py exemption above).
 ".claude/skills/_shared/post_review.py" = ["T201", "S603", "S607"]
+# .claude/skills/handoff/helpers/*.py: same rationale as post_review.py — shells
+# out to `gh` and `git` on PATH; prints the rendered prompt to stdout.
+".claude/skills/handoff/helpers/*.py" = ["T201", "S603", "S607"]
 "scripts/rewrite_dataset_to_latest.py" = ["ANN001"]
 "scripts/subdir_funtime.py" = ["F841", "ANN001"]
 # S603/S607: rclone subprocess calls in R2 integration test fixtures.

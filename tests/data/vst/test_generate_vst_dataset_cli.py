@@ -42,7 +42,11 @@ def test_cli_args_class_adds_only_data_file_beyond_render_config() -> None:
 
 
 def _smoke_spec() -> DatasetSpec:
-    """A minimal ``DatasetSpec`` for round-trip tests — no I/O, no plugin required."""
+    """A minimal ``DatasetSpec`` for round-trip tests — no I/O, no plugin required.
+
+    :returns: a minimal in-memory ``DatasetSpec`` suitable for CLI round-trip tests
+    :rtype: DatasetSpec
+    """
     render_cfg = RenderConfig(
         plugin_path="plugins/Surge XT.vst3",
         preset_path="presets/surge-base.vstpreset",

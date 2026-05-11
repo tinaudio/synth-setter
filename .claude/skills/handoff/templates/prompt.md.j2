@@ -1,0 +1,113 @@
+# Continuing the chain rooted at #{{ tracking_issue }}
+
+START HERE: {{ handoff_comment_url or "(handoff comment URL will be inserted on post)" }}
+
+## Run these three commands first to sync with the chain's current state
+
+```bash
+git fetch origin --prune
+{% if in_flight -%}
+{% for pr in in_flight -%}
+gh pr view {{ pr.number }} --repo {{ repo }} --json mergeable,reviewDecision,statusCheckRollup
+{% endfor -%}
+{% else -%}
+# (no in-flight PRs to poll)
+{% endif -%}
+git worktree list
+```
+
+## Default action
+
+{% set first_remaining = (chain.plan_prs | rejectattr("status", "equalto", "merged") | list)[0] if (chain.plan_prs | rejectattr("status", "equalto", "merged") | list) else None -%}
+{% if in_flight -%}
+**Default: drive the in-flight PR(s) above to merge before starting new work.**
+
+For each in-flight PR:
+1. Run `gh pr checks <N> --watch` until checks complete.
+2. If checks fail, diagnose, fix, push, return to step 1.
+3. Check `gh pr view <N> --json mergeable -q .mergeable` — must be `MERGEABLE`.
+4. Use `/pr-review-resolver` to address every open review thread + Copilot comment.
+5. Once green + mergeable + zero open threads, hand back to the maintainer for approval.
+
+Deviate only if:
+- The maintainer explicitly asks you to start a parallel PR first.
+- An in-flight PR is blocked on an external dependency you can't unblock — note in a comment and proceed to the next-remaining chain PR.
+
+{% endif -%}
+{% if first_remaining -%}
+**Next remaining PR after the in-flight ones merge:** {{ first_remaining.id }} — `{{ first_remaining.title }}`
+{% if first_remaining.source_commits -%}
+Source commits on the umbrella branch: {{ first_remaining.source_commits | join(", ") }}
+{% endif -%}
+{% if first_remaining.notes -%}
+Notes:
+{% for note in first_remaining.notes -%}
+- {{ note }}
+{% endfor -%}
+{% endif -%}
+{% if first_remaining.linked_issue.existing -%}
+Link to issue: existing #{{ first_remaining.linked_issue.existing }}
+{% else -%}
+Link to issue: create a new Task under Phase #{{ chain.parent_phase }} (next free: `{{ chain.task_prefix }}.{{ phase_numbering.next_free }}`) via `/github-taxonomy`.
+{% endif -%}
+{% endif %}
+
+## Execution graph (remaining PRs)
+
+```
+{{ render_ascii_graph(chain.plan_prs | rejectattr("status", "equalto", "merged") | list) }}
+```
+
+## Mandatory skills cycle
+
+Every code-touching PR MUST go through, in order:
+
+1. `/tdd-implementation` — drive test-first; pin behavior before writing code.
+2. `/code-health` — review and clean up after green.
+3. `/simplify` — final reuse and efficiency pass.
+
+Pure-documentation edits (`.md`, `docs/`) are exempt; nothing else is.
+
+## Anti-patterns (don't retry these)
+
+{% if anti_patterns -%}
+{% for ap in anti_patterns -%}
+- {{ ap }}
+{% endfor -%}
+{% else -%}
+- _No anti-patterns recorded from the prior session._
+{% endif %}
+
+## PR readiness checklist (CLAUDE.md hard rule)
+
+A PR is not ready until **all** of:
+
+1. All CI checks pass (required + optional).
+2. `gh pr view <N> --json mergeable -q .mergeable` reports `MERGEABLE`.
+3. Every open review thread (human + Copilot) has either a code change linked by commit SHA, or an inline reply with justification.
+4. Copilot has produced no new comments since the last push (poll ~60s after push).
+
+"I pushed the fix" is not "the PR is ready." Iterate with `/loop` until all four conditions hold.
+
+## Worktree inventory you're inheriting
+
+{% set tracked = worktrees | selectattr("branch") | list -%}
+{% if tracked -%}
+{% for entry in tracked -%}
+- `{{ entry.path }}` — `{{ entry.branch }}`{% if entry.associated_pr_number %} → PR #{{ entry.associated_pr_number }} ({{ entry.associated_pr_state }}){% endif %}{% if entry.safe_to_remove %} — **safe to `git worktree remove`**{% endif %}
+{% endfor -%}
+{% else -%}
+_No worktrees inherited._
+{% endif %}
+
+## Reference
+
+- Tracking issue: {{ tracking_issue }}
+- Chain manifest: `.claude/skills/handoff/chain.yaml`
+- Regenerate this prompt: `/handoff`
+- Predecessor handoffs (most recent first):
+{%- for handoff in prior_handoffs[:5] %}
+  - {{ handoff.url }} ({{ handoff.created_at[:10] }})
+{%- else %}
+  _(none — this is the first handoff)_
+{%- endfor %}
