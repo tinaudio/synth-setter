@@ -32,11 +32,11 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "description": "Auto-format: runs ruff check --fix and ruff format on Python files after every edit. Goal: catch lint and formatting errors immediately rather than waiting for pre-commit.",
+        "description": "Auto-format on every Edit/Write: ruff (Python), mdformat (Markdown), prettier (YAML). Markdown and YAML go via `pre-commit run <hook> --files` so the exact pinned versions and excludes from .pre-commit-config.yaml apply — no version drift between save-time and commit-time. Goal: catch lint and formatting errors immediately rather than waiting for pre-commit.",
         "hooks": [
           {
             "type": "command",
-            "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in *.py) ruff check --fix --quiet \"$file_path\" 2>/dev/null; ruff format --quiet \"$file_path\" 2>/dev/null;; esac; exit 0"
+            "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in *.py) ruff check --fix --quiet \"$file_path\" 2>/dev/null; ruff format --quiet \"$file_path\" 2>/dev/null;; *.md) pre-commit run mdformat --files \"$file_path\" >/dev/null 2>&1 || true;; *.yaml|*.yml) pre-commit run prettier --files \"$file_path\" >/dev/null 2>&1 || true;; esac; exit 0"
           }
         ]
       },

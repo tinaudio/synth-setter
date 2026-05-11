@@ -52,9 +52,11 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 
 > **Implementation status:** Single-machine sequential multi-shard generation is
 > implemented today (`pipeline/entrypoints/generate_dataset.py` loops over
-> `spec.shards`). The distributed/parallel pipeline described below — CLI,
-> backends, reconciliation, and finalize stages — is the design target and not
-> yet built.
+> `spec.shards`, skipping shards already present in R2 — worker-side
+> resumability MVP per #750; the launcher-side reconciliation engine described
+> in §7.4 / §7.7 is not yet built). The distributed/parallel pipeline described
+> below — CLI, backends, reconciliation, and finalize stages — is the design
+> target and not yet built.
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step downloads all shards, reshards them into train/val/test splits, computes normalization statistics, registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact, and uploads the final dataset.
 
@@ -74,20 +76,20 @@ RunPod is used because it's the platform where GPUs are already available and co
 ## 2. Typical Workflow
 
 ```bash
-# 1. Create a dataset config (filename = dataset_config_id)
-cat configs/dataset/surge-simple-480k-10k.yaml
-# → num_shards: 48, shard_size: 10000, ...
+# 1. Pick an experiment config (filename = experiment id).
+#    Hydra composes the final DatasetSpec from configs/dataset.yaml + this overlay.
+cat configs/experiment/surge-simple-480k-10k.yaml
+# → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 
-# 2. Launch generation — creates spec, launches workers, exits
+# 2. Run sequential multi-shard generation on a single worker.
+python -m pipeline.entrypoints.generate_dataset experiment=surge-simple-480k-10k
+# → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
 # **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)
-# is not yet implemented. Currently only single-shard generation is available via:
-DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml python -m pipeline.entrypoints.generate_dataset
-# → Sequential multi-shard MVP. Loops over spec.shards on a single worker; distributed parallelism still tracked under #411.
-# `generate_dataset` is the current MVP. It will be deprecated when
+# is not yet implemented; `generate_dataset` is the current MVP, deprecated when
 # `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
-# python -m pipeline generate --config configs/dataset/surge-simple-480k-10k.yaml --workers 10
+# python -m pipeline generate --experiment surge-simple-480k-10k --workers 10
 # → Created run surge-simple-480k-10k-20260313T100000123Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
@@ -110,7 +112,7 @@ Make targets are thin aliases for convenience:
 > **Not yet implemented.** These `make` targets are planned but do not exist in the Makefile yet ([#72](https://github.com/tinaudio/synth-setter/issues/72)).
 
 ```bash
-make generate ARGS="--config configs/dataset/surge-simple-480k-10k.yaml --workers 10"
+make generate ARGS="--experiment surge-simple-480k-10k --workers 10"
 make status ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 ```
@@ -521,7 +523,7 @@ Shard IDs are logical and deterministic: `shard-000000.h5` through `shard-000479
 
 1. Write `.rendering` marker: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
 2. Render shard to a local temp file
-3. **Validate locally** — basic 3-check validation (opens as HDF5, expected datasets exist, row count matches shard_size). The design target is 4-check validation adding shape and value checks ([#103](https://github.com/tinaudio/synth-setter/issues/103)). This is the primary defense against corrupt data.
+3. **Validate locally** — basic 3-check validation (opens as HDF5, expected datasets exist, row count matches `render.batch_per_shard`). The design target is 4-check validation adding shape and value checks ([#103](https://github.com/tinaudio/synth-setter/issues/103)). This is the primary defense against corrupt data.
 4. **If validation passes:**
    - Upload shard to staging: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.h5`
    - Write worker report (content hash, timing, per-shard results): `metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json`
@@ -1207,55 +1209,70 @@ This section covers how the design is realized — specific libraries, configura
 
 Schema for the frozen input specification described in [§7.1](#71-storage-as-the-source-of-truth) and [§6 artifact taxonomy](#artifact-taxonomy).
 
+See `pipeline/schemas/spec.py` for the authoritative definition. The model is `DatasetSpec` (unifies the previous `DatasetConfig` + `DatasetPipelineSpec` split; the constructed Pydantic instance **is** the artifact on R2 — `model.model_dump_json()` is the JSON).
+
 ```python
-class SplitsConfig(BaseModel):
-    """Train/val/test shard counts."""
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
-
-    train: int
-    val: int
-    test: int
-
 class ShardSpec(BaseModel):
     """Per-shard identity and pre-computed derived values."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     shard_id: int
-    filename: str           # "shard-000042.h5"
-    seed: int               # base_seed + shard_id
+    filename: str
+    seed: int
 
-class DatasetPipelineSpec(BaseModel):
-    """Frozen runtime specification materialized from DatasetConfig."""
+class RenderConfig(BaseModel):
+    """Renderer-specific configuration nested as ``DatasetSpec.render``."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    run_id: DatasetRunId    # unique run ID: {config_id}-{YYYYMMDDTHHMMSSsssZ}
-    r2_prefix: R2Prefix     # R2 storage path: data/{config_id}/{run_id}/
-    created_at: datetime    # UTC, timezone-aware
-    code_version: str       # git commit SHA
-    is_repo_dirty: bool
-    param_spec: str
-    renderer_version: str   # Pinned to SURGE_XT_RENDERER_VERSION at materialization; worker re-derives via extract_renderer_version and refuses on mismatch
-    output_format: Literal["hdf5", "wds"]
+    plugin_path: str
+    preset_path: str
+    param_spec_name: str
+    renderer_version: str
     sample_rate: int
-    shard_size: int
-    base_seed: int
-    num_params: int         # total encoded param count from param_spec registry
-    splits: SplitsConfig
-    plugin_path: str        # VST3 plugin to render through
-    preset_path: str        # VST preset to load
-    channels: int           # audio channels (e.g. 2 for stereo)
-    velocity: int           # MIDI velocity for note rendering
-    signal_duration_seconds: float  # audio length per sample
-    min_loudness: float     # loudness floor — retry if below
-    sample_batch_size: int  # batch size for generation efficiency
-    shards: tuple[ShardSpec, ...]
+    channels: int
+    velocity: int
+    signal_duration_seconds: float
+    min_loudness: float
+    sample_batch_size: int
+    batch_per_shard: int
 
-    @property
-    def num_shards(self) -> int:
-        return len(self.shards)
+class DatasetSpec(BaseModel):
+    """Unified dataset specification — input config + materialized runtime in one model."""
+    # Strict everywhere; JSON round-trip coercions (list→tuple, str→datetime) happen via
+    # explicit per-field validators, not by relaxing strict mode at the trust boundary.
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    # Layout
+    task_name: str
+    output_format: Literal["hdf5"]                                 # wds in a later PR
+    train_val_test_sizes: tuple[int, int, int]
+    train_val_test_seeds: tuple[int, int, int]
+    base_seed: int
+    r2_bucket: str
+    r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
+
+    # Sub-model
+    render: RenderConfig
+
+    # Runtime fields. All five auto-fill via ``default_factory`` when missing on
+    # input; ``run_id`` / ``r2_prefix`` use the data-aware factories that derive
+    # from already-validated ``task_name`` + ``created_at``. JSON-loaded values
+    # pass through unchanged (workers reuse materialization-time values).
+    git_sha: str = Field(default_factory=lambda: _get_git_sha())
+    is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
+    created_at: datetime = Field(default_factory=lambda: _utc_now())
+    run_id: str = Field(default_factory=_default_run_id)
+    r2_prefix: str = Field(default_factory=_default_r2_prefix)
+
+    # Computed: @computed_field + @cached_property — emitted by model_dump and
+    # stripped on input (see _strip_computed_field_keys) so JSON round-trip works.
+    @computed_field
+    @cached_property
+    def shards(self) -> tuple[ShardSpec, ...]: ...
+    # num_shards / num_params follow the same @computed_field / @cached_property pattern.
 ```
 
-All structured data uses Pydantic `BaseModel` in strict mode. Strict mode catches silent type coercion at serialization boundaries. `frozen=True` makes specs immutable at the type level.
+All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
 
 **Seed derivation:** Per-shard seeds are computed deterministically during spec materialization: `seed = base_seed + shard_id`, where `base_seed` is derived from the run config. This means the same config always produces the same spec (and therefore the same seeds). Reproducibility comes from re-running with the same frozen spec — the spec is the reproducibility unit, not the config.
 
@@ -1272,7 +1289,7 @@ class DatasetCard(BaseModel):
     finalized_at: str       # ISO 8601
 
     # Provenance
-    code_version: str
+    git_sha: str
     is_repo_dirty: bool
     param_spec: str
     renderer_version: str
@@ -1281,7 +1298,7 @@ class DatasetCard(BaseModel):
 
     # Structure
     total_samples: int
-    splits: SplitsConfig  # sample counts per split
+    splits: list[int]  # sample counts per split (length 3: train, val, test)
     stats: dict[str, float]
 
     # Integrity
@@ -1353,45 +1370,40 @@ Pydantic is for trust boundaries — where data enters the system from an extern
 
 ### 14.5 Config Materialization
 
-A run starts from a typed YAML config file:
+A run starts from a Hydra experiment YAML composed against `configs/dataset.yaml`:
 
 ```yaml
-# configs/dataset/surge-simple-480k-10k.yaml (filename = dataset_config_id)
-param_spec: surge_simple
-plugin_path: plugins/Surge XT.vst3
-output_format: hdf5       # "hdf5" (local training) or "wds" (multi-GPU streaming)
-sample_rate: 44100
-shard_size: 10000
-num_shards: 48
-base_seed: 42
-r2_bucket: intermediate-data
+# configs/experiment/surge-simple-480k-10k.yaml (filename = dataset_config_id)
+# @package _global_
 
-splits:
-  train: 44
-  val: 2
-  test: 2
+defaults:
+  - override /data: surge_simple
+  - override /render: surge_simple
+  - _self_
 
-# Generation params (consumed by generate_vst_dataset)
-preset_path: presets/surge-simple.vstpreset
-channels: 2
-velocity: 100
-signal_duration_seconds: 4.0
-min_loudness: -50.0
-sample_batch_size: 32
+task_name: surge-simple-480k-10k
+
+train_val_test_sizes: [440000, 20000, 20000]
+
+render:
+  sample_rate: 44100
+  min_loudness: -50.0
 ```
 
-On first `generate`:
+`configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
 
-1. Load YAML, validate against Pydantic `DatasetConfig` (strict mode)
-2. Pin `renderer_version` to `SURGE_XT_RENDERER_VERSION` (the constant in `pipeline/schemas/spec.py`, kept in lockstep with the `dev-snapshot` image's `SURGE_GIT_REF`). The launcher path stays interpreter-only — the worker re-derives via `extract_renderer_version` (`Version` from `moduleinfo.json` on Linux, `CFBundleShortVersionString` from `Info.plist` on macOS, pedalboard fallback if neither is present) and refuses to render on mismatch.
-3. Derive `dataset_wandb_run_id`: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision)
-4. Materialize `DatasetPipelineSpec` — expand config into per-shard specs (seeds, filenames) and capture runtime state (git SHA, pinned renderer version, num_params)
-5. Upload spec + source config to R2
-6. Proceed with reconciliation
+On first `generate` (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`):
 
-**Dirty repo handling:** When `is_repo_dirty` is true, `generate` automatically creates a `git diff` and uploads it to `metadata/run_diff.patch`. This allows reconstructing the exact code state even when changes weren't committed — common during rapid ML research iteration.
+1. Hydra composes the experiment against `configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
+2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
+3. Runtime fields (`run_id`, `r2_prefix`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2_prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
+4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
+5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2_prefix>/input_spec.json`).
+6. Proceed with reconciliation.
 
-**Config drift protection:** If `--config` is passed for a `run_id` that already has a spec, the command errors. The spec is authoritative after creation.
+**Dirty repo handling (planned):** `is_repo_dirty` is captured in the spec, but the design's auto-upload of `git diff` to `metadata/run_diff.patch` is not yet implemented in `generate_dataset` — captured here as the intended behavior so a dirty repo's exact code state can be reconstructed during rapid ML research iteration.
+
+**Config drift protection (planned, [#386](https://github.com/tinaudio/synth-setter/issues/386)):** The intended behavior is that composing `experiment=<id>` against a `run_id` that already has a spec on R2 errors and treats the existing spec as authoritative. Today, `generate_dataset` always derives a fresh `run_id` from `task_name + created_at` and writes a new spec — so this check is documented intent, not enforced behavior.
 
 ### 14.6 Run ID Format
 
@@ -1403,7 +1415,7 @@ On first `generate`:
 | Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022500Z`                             |
 | R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/` |
 
-Config filenames live in `configs/dataset/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `runpod-smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
+Config filenames live in `configs/experiment/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `runpod-smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
 
 ### 14.7 CLI & Directory Structure
 
@@ -1413,23 +1425,23 @@ pipeline/
 
   schemas/              # Pydantic models (implemented)
     __init__.py
-    config.py           # DatasetConfig, SplitsConfig, load/ID helpers
-    spec.py             # DatasetPipelineSpec, ShardSpec, materialize_spec
+    spec.py             # DatasetSpec (unified config + runtime), RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, spec_from_cfg flow
     prefix.py           # DatasetConfigId, DatasetRunId, R2Prefix helpers
     image_config.py     # Docker image configuration
 
   entrypoints/          # Pipeline entry points (implemented)
     __init__.py
-    generate_dataset.py # Sequential multi-shard dataset generation (MVP); deprecated when generate-shards lands (#411)
+    generate_dataset.py # Sequential multi-shard dataset generation (MVP) + Hydra CLI entry (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`); deprecated when generate-shards lands (#411)
+    skypilot_launch.py  # Click CLI wrapping SkyPilot launch; composes a DatasetSpec via `--experiment <id>` + ad-hoc Hydra overrides
 
   ci/                   # CI validation scripts (implemented)
-    materialize_spec.py # Materialize a DatasetPipelineSpec from a config YAML
-    validate_spec.py    # Spec structural validation (required fields, code_version SHA, etc.)
+    materialize_spec.py # Compose a DatasetSpec from a Hydra experiment and write it to disk as JSON
+    validate_spec.py    # Spec structural validation (required fields, git_sha format, etc.)
     validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
+    load_image_config.py # Resolve Docker image configuration for the launcher
 
   constants.py          # Well-known filenames and paths (R2_BUCKET, etc.)
-  r2_io.py              # rclone wrappers used by ci/, entrypoints/, and CI workflows
-                        # (is_r2_uri, download_to_path, upload_to_uri, downloaded_to_tempfile)
+  r2_io.py              # rclone-backed R2 helpers (URI handling, download, upload, size probe)
 
   # --- Planned (not yet implemented) ---
   # cli.py              # Click entry point: generate, status, finalize
@@ -1451,66 +1463,83 @@ pipeline/
   # logging_config.py   # structlog configuration
 ```
 
-Pipeline configs live in `configs/dataset/` (filename = `dataset_config_id`) to distinguish them from training configs in `configs/data/` and `configs/trainer/`:
+Pipeline configs live under `configs/` as Hydra groups composed by `configs/dataset.yaml` (filename of `configs/experiment/<id>.yaml` = `dataset_config_id`):
 
 ```
 configs/
-  dataset/             # Dataset generation recipes (YAML); filename = dataset_config_id
+  dataset.yaml         # @hydra.main entry point; defaults list (data/render/r2/paths/hydra/experiment)
+  experiment/          # Dataset generation recipes; filename = dataset_config_id
     surge-simple-480k-10k.yaml
-    surge-xt-1m-10k.yaml
-  data/                # Training data module configs (Hydra)
+    runpod-smoke-shard.yaml
+    ci-materialize-test.yaml
+  data/                # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
+  render/              # Renderer + plugin / preset / sample rate / batch sizes
+    surge_simple.yaml
+    surge_xt.yaml
+  r2/                  # R2 bucket + prefix root
+    default.yaml
   trainer/             # Training configs (Hydra)
     ddp.yaml
+
+  # --- Planned (Hydra-composed dataset layout; lands when PR-3 migrates the
+  #     launcher to @hydra.main and removes load_dataset_spec_yaml) ---
+  # dataset.yaml         # Top-level @hydra.main composition target
+  # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
+  #   surge-simple-480k-10k.yaml
+  # render/              # Renderer-specific configs (param_spec_name, renderer_version, batch_per_shard, …)
+  #   surge_xt.yaml
+  # r2/                  # R2 bucket + prefix_root
+  #   default.yaml
 ```
 
 ## Appendix A: Glossary
 
-| Term                       | Definition                                                                                                                                                                                                                                                                                                                                                           |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **R2**                     | [Cloudflare R2](https://developers.cloudflare.com/r2/), an S3-compatible object storage service. Key feature: free egress (no cost to download data). Used for shard storage and pipeline coordination. [Consistency model](https://developers.cloudflare.com/r2/reference/consistency/): strong read-after-write.                                                   |
-| **RunPod**                 | [RunPod](https://www.runpod.io/), a cloud compute marketplace offering on-demand GPU and CPU instances ("pods"). Used for running data generation workers. Pods are ephemeral — they run a Docker container and terminate.                                                                                                                                           |
-| **Worker**                 | A cloud compute instance that generates shards. On RunPod, a worker is a "pod" — a single Docker container with assigned shard work. The design uses "worker" to stay infrastructure-agnostic.                                                                                                                                                                       |
-| **Shard**                  | An HDF5 file containing a batch of training samples (audio, mel spectrograms, parameter arrays). Typically 1k-10k samples per shard. Named by logical index (`shard-000042.h5`).                                                                                                                                                                                     |
-| **W&B (Weights & Biases)** | [Weights & Biases](https://wandb.ai/), an experiment tracking platform. Used here as a lightweight observability layer: pipeline metrics, dataset artifact registry, and lineage tracking from dataset → training run.                                                                                                                                               |
-| **Virtual dataset**        | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                                                                                                                                                         |
-| **Input spec**             | JSON file (`input_spec.json`) defining the frozen input specification for a run — shard specs, seeds, shapes, splits, renderer version. Written once on first `generate`, never modified.                                                                                                                                                                            |
-| **dataset_config_id**      | Stable identifier for a dataset configuration, derived from the config filename (without extension). Production training configs follow `{name}-{total_train_samples}-{shard_size}` (example: `surge-simple-480k-10k`); CI smoke and partitioner-exercise configs use role-descriptive names. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
-| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). Example: `surge-simple-480k-10k-20260312T143022500Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                                                                |
-| **Shard ID**               | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                                                                                                                                                         |
-| **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                                                                            |
-| **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                                                                         |
-| **dataset.complete**       | Marker file written by finalize as the very last step. Means "finalization is done" — not a mutex or lock. Contains run_id and timestamp.                                                                                                                                                                                                                            |
-| **Debug log**              | JSONL file (`metadata/workers/attempts/{worker_id}-{attempt}/debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                                                                   |
-| **Worker report**          | JSON summary (`metadata/workers/attempts/{worker_id}-{attempt}/report.json`) of a worker's results, including content hashes for provenance. Written at exit, missing if worker crashed.                                                                                                                                                                             |
-| **Lifecycle marker**       | Empty file in `metadata/workers/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. Three commit points: `.rendering` (attempt started), `.valid` (staged shard committed), `.promoted` (canonical shard committed). Plus `.invalid` (validation failed). Presence is the state — no content to parse.                                                        |
-| **Quarantined shard**      | A corrupt shard uploaded by the worker to `metadata/workers/shards/shard-{id}/quarantine/` on validation failure. Preserves the evidence for debugging alongside lifecycle markers.                                                                                                                                                                                  |
-| **Dataset card**           | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                                                                           |
-| **param_spec**             | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Registered specs live in `param_specs` in [`src/data/vst/__init__.py`](../../src/data/vst/__init__.py); see also the [glossary entry](../glossary.md).                                                                                                      |
-| **VST**                    | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                                                                            |
-| **Mel spectrogram**        | Frequency-domain audio representation used as neural network input. 128 mels, ~100 frames/sec.                                                                                                                                                                                                                                                                       |
-| **Fully parallel**         | Workload where tasks are completely independent — no communication or shared state between workers.                                                                                                                                                                                                                                                                  |
-| **rclone**                 | CLI tool for syncing files to cloud storage. Used as the R2 upload/download mechanism.                                                                                                                                                                                                                                                                               |
-| **WebDataset**             | [WebDataset](https://github.com/webdataset/webdataset), a PyTorch-compatible format for streaming training data. Stores samples in sequential `.tar` archives optimized for HTTP/S3 streaming. Used as the `wds` output format for multi-GPU training.                                                                                                               |
+| Term                       | Definition                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **R2**                     | [Cloudflare R2](https://developers.cloudflare.com/r2/), an S3-compatible object storage service. Key feature: free egress (no cost to download data). Used for shard storage and pipeline coordination. [Consistency model](https://developers.cloudflare.com/r2/reference/consistency/): strong read-after-write.                                                                                                                                                                                     |
+| **RunPod**                 | [RunPod](https://www.runpod.io/), a cloud compute marketplace offering on-demand GPU and CPU instances ("pods"). Used for running data generation workers. Pods are ephemeral — they run a Docker container and terminate.                                                                                                                                                                                                                                                                             |
+| **Worker**                 | A cloud compute instance that generates shards. On RunPod, a worker is a "pod" — a single Docker container with assigned shard work. The design uses "worker" to stay infrastructure-agnostic.                                                                                                                                                                                                                                                                                                         |
+| **Shard**                  | An HDF5 file containing a batch of training samples (audio, mel spectrograms, parameter arrays). Typically 1k-10k samples per shard. Named by logical index (`shard-000042.h5`).                                                                                                                                                                                                                                                                                                                       |
+| **W&B (Weights & Biases)** | [Weights & Biases](https://wandb.ai/), an experiment tracking platform. Used here as a lightweight observability layer: pipeline metrics, dataset artifact registry, and lineage tracking from dataset → training run.                                                                                                                                                                                                                                                                                 |
+| **Virtual dataset**        | HDF5 feature that creates a logical view over multiple files without copying data. Used by finalize to compose train/val/test splits from individual shards.                                                                                                                                                                                                                                                                                                                                           |
+| **Input spec**             | JSON file (`input_spec.json`) defining the frozen input specification for a run — shard specs, seeds, shapes, splits, renderer version. Written once on first `generate`, never modified.                                                                                                                                                                                                                                                                                                              |
+| **dataset_config_id**      | Stable identifier for a dataset configuration, derived from the config filename (without extension). Production training configs follow `{name}-{total_train_samples}-{shard_size}` (example: `surge-simple-480k-10k`); CI smoke and partitioner-exercise configs use role-descriptive names. The legacy flat YAML's `shard_size` becomes `render.batch_per_shard` on the resulting `DatasetSpec` via `load_dataset_spec_yaml`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids). |
+| **dataset_wandb_run_id**   | Unique identifier for a pipeline execution. Format: `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). Example: `surge-simple-480k-10k-20260312T143022500Z`. See [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).                                                                                                                                                                                                                                                  |
+| **Shard ID**               | Logical index for a shard (`shard-000042`). Deterministic, defined at run creation, independent of which worker computes it.                                                                                                                                                                                                                                                                                                                                                                           |
+| **worker_id**              | Infrastructure identifier (e.g., RunPod's `RUNPOD_POD_ID`). Appears only in metadata, not in shard paths.                                                                                                                                                                                                                                                                                                                                                                                              |
+| **Reconciliation**         | Comparing desired state (spec) against actual state (validated shards in R2) to determine what work remains.                                                                                                                                                                                                                                                                                                                                                                                           |
+| **dataset.complete**       | Marker file written by finalize as the very last step. Means "finalization is done" — not a mutex or lock. Contains run_id and timestamp.                                                                                                                                                                                                                                                                                                                                                              |
+| **Debug log**              | JSONL file (`metadata/workers/attempts/{worker_id}-{attempt}/debug.log`) of structured events from a worker. Append-only, uploaded by EXIT trap, survives crashes.                                                                                                                                                                                                                                                                                                                                     |
+| **Worker report**          | JSON summary (`metadata/workers/attempts/{worker_id}-{attempt}/report.json`) of a worker's results, including content hashes for provenance. Written at exit, missing if worker crashed.                                                                                                                                                                                                                                                                                                               |
+| **Lifecycle marker**       | Empty file in `metadata/workers/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. Three commit points: `.rendering` (attempt started), `.valid` (staged shard committed), `.promoted` (canonical shard committed). Plus `.invalid` (validation failed). Presence is the state — no content to parse.                                                                                                                                                                                          |
+| **Quarantined shard**      | A corrupt shard uploaded by the worker to `metadata/workers/shards/shard-{id}/quarantine/` on validation failure. Preserves the evidence for debugging alongside lifecycle markers.                                                                                                                                                                                                                                                                                                                    |
+| **Dataset card**           | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                                                                                                                                                                                                             |
+| **param_spec**             | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Registered specs live in `param_specs` in [`src/data/vst/__init__.py`](../../src/data/vst/__init__.py); see also the [glossary entry](../glossary.md).                                                                                                                                                                                                                                        |
+| **VST**                    | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                                                                                                                                                                                                              |
+| **Mel spectrogram**        | Frequency-domain audio representation used as neural network input. 128 mels, ~100 frames/sec.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Fully parallel**         | Workload where tasks are completely independent — no communication or shared state between workers.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **rclone**                 | CLI tool for syncing files to cloud storage. Used as the R2 upload/download mechanism.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **WebDataset**             | [WebDataset](https://github.com/webdataset/webdataset), a PyTorch-compatible format for streaming training data. Stores samples in sequential `.tar` archives optimized for HTTP/S3 streaming. Used as the `wds` output format for multi-GPU training.                                                                                                                                                                                                                                                 |
 
 ## Appendix B: Tech Stack
 
-| Component       | Technology                                                        | Role                                               |
-| --------------- | ----------------------------------------------------------------- | -------------------------------------------------- |
-| Build           | Docker (BuildKit)                                                 | Reproducible compute environments                  |
-| Storage         | Cloudflare R2                                                     | Data + coordination, free egress                   |
-| Execution       | RunPod                                                            | Cheap on-demand cloud workers                      |
-| Tracking        | Weights & Biases                                                  | Pipeline metrics, dataset artifact registry        |
-| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                 | Shard generation + local training format           |
-| Training format | [WebDataset](https://github.com/webdataset/webdataset)            | Streaming `.tar` shards for multi-GPU training     |
-| CLI             | [Click](https://click.palletsprojects.com/)                       | Typed arguments, validation, `--help`              |
-| Validation      | [Pydantic](https://docs.pydantic.dev/) (strict mode)              | DatasetPipelineSpec, report, and config validation |
-| Logging         | [structlog](https://www.structlog.org/)                           | Structured JSON debug logging                      |
-| Retry           | [tenacity](https://tenacity.readthedocs.io/)                      | Centralized retry policy                           |
-| Upload/download | [rclone](https://rclone.org/)                                     | R2 file transfer; all transfers use `--checksum`   |
-| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)      | Reproducible environments                          |
-| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb) | VST synthesis                                      |
+| Component       | Technology                                                                                                                                                                  | Role                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Build           | Docker (BuildKit)                                                                                                                                                           | Reproducible compute environments                |
+| Storage         | Cloudflare R2                                                                                                                                                               | Data + coordination, free egress                 |
+| Execution       | RunPod                                                                                                                                                                      | Cheap on-demand cloud workers                    |
+| Tracking        | Weights & Biases                                                                                                                                                            | Pipeline metrics, dataset artifact registry      |
+| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                                                                                                                           | Shard generation + local training format         |
+| Training format | [WebDataset](https://github.com/webdataset/webdataset)                                                                                                                      | Streaming `.tar` shards for multi-GPU training   |
+| CLI             | [Click](https://click.palletsprojects.com/)                                                                                                                                 | Typed arguments, validation, `--help`            |
+| Validation      | [Pydantic](https://docs.pydantic.dev/) (frozen models; `strict=True` on `DatasetSpec`, `RenderConfig`, and `ShardSpec`; JSON round-trip coercions via per-field validators) | DatasetSpec, report, and config validation       |
+| Logging         | [structlog](https://www.structlog.org/)                                                                                                                                     | Structured JSON debug logging                    |
+| Retry           | [tenacity](https://tenacity.readthedocs.io/)                                                                                                                                | Centralized retry policy                         |
+| Upload/download | [rclone](https://rclone.org/)                                                                                                                                               | R2 file transfer; all transfers use `--checksum` |
+| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)                                                                                                                | Reproducible environments                        |
+| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb)                                                                                                           | VST synthesis                                    |
 
 ## Appendix C: References
 

@@ -15,11 +15,11 @@ ______________________________________________________________________
 
 | ID                     | Construction                                                      | Source                             | Example                           |
 | ---------------------- | ----------------------------------------------------------------- | ---------------------------------- | --------------------------------- |
-| `dataset_config_id`    | Config filename (stem)                                            | `configs/dataset/{id}.yaml`        | `diva-v1`                         |
+| `dataset_config_id`    | Config filename (stem)                                            | `configs/experiment/{id}.yaml`     | `diva-v1`                         |
 | `dataset_wandb_run_id` | Configurable, default `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022500Z`     |
 | `train_config_id`      | Config filename (stem)                                            | `configs/experiment/.../{id}.yaml` | `flow-simple`                     |
 | `train_wandb_run_id`   | Configurable, default `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500250Z` |
-| `eval_config_id`       | Eval dataset config filename (stem)                               | `configs/dataset/{id}.yaml`        | `nsynth-v1`                       |
+| `eval_config_id`       | Eval dataset config filename (stem)                               | `configs/experiment/{id}.yaml`     | `nsynth-v1`                       |
 | `eval_wandb_run_id`    | Configurable, default `{eval_config_id}-{YYYYMMDDTHHMMSSsssZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000750Z`   |
 
 - `*_config_id` = filename of the YAML config, without extension
@@ -146,11 +146,11 @@ ______________________________________________________________________
 
 ## 6. W&B Metadata Convention
 
-| Location            | What Goes Here                                   | Examples                                                |
-| ------------------- | ------------------------------------------------ | ------------------------------------------------------- |
-| `wandb.config`      | Hyperparams — things you SET before the run      | `lr`, `epochs`, `batch_size`, `github_sha`              |
-| `wandb.summary`     | Final metrics — things you MEASURE after the run | `mse`, `spectral_convergence`, `param_accuracy`         |
-| `artifact.metadata` | Properties of the artifact itself                | `n_samples`, `mel_shape`, `shard_count`, `code_version` |
+| Location            | What Goes Here                                   | Examples                                           |
+| ------------------- | ------------------------------------------------ | -------------------------------------------------- |
+| `wandb.config`      | Hyperparams — things you SET before the run      | `lr`, `epochs`, `batch_size`, `github_sha`         |
+| `wandb.summary`     | Final metrics — things you MEASURE after the run | `mse`, `spectral_convergence`, `param_accuracy`    |
+| `artifact.metadata` | Properties of the artifact itself                | `n_samples`, `mel_shape`, `shard_count`, `git_sha` |
 
 - Dataset properties belong on the dataset artifact, not on training runs that consume it
 

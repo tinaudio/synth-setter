@@ -1,0 +1,18 @@
+# @package _global_
+
+# Spec materialization smoke test. 96 total samples → 3 shards at
+# batch_per_shard=32. Used by CI to round-trip a YAML through DatasetSpec.
+
+defaults:
+  - override /data: surge_simple
+  - override /render: surge_simple
+  - _self_
+
+task_name: ci-materialize-test
+
+train_val_test_sizes: [32, 32, 32]
+
+render:
+  sample_rate: 16000
+  min_loudness: -50.0
+  batch_per_shard: 32

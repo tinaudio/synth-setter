@@ -160,6 +160,16 @@ repos:
             src/utils/math\.py
           )$
 
+  # pydoclint: signature ↔ docstring consistency. Config lives in pyproject.toml
+  # under [tool.pydoclint]; rule families documented at
+  # https://jsh9.github.io/pydoclint/violation_codes.html. The path exclude list
+  # in pyproject.toml enumerates files that currently violate the rules and
+  # shrinks as files are cleaned up — tracked by #938.
+  - repo: https://github.com/jsh9/pydoclint
+    rev: 0.8.3
+    hooks:
+      - id: pydoclint
+
   # yaml formatting
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v3.0.0-alpha.6

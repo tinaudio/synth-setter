@@ -1,6 +1,6 @@
 [project]
-name = "synth-permutations"
-version = "0.14.1"
+name = "synth-setter"
+version = "1.0.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -108,6 +108,107 @@ wrap-summaries = 99
 wrap-descriptions = 99
 style = "sphinx"
 black = true
+
+# pydoclint: signature ↔ docstring consistency checks. Rule families documented
+# at https://jsh9.github.io/pydoclint/violation_codes.html. Sphinx style chosen
+# to match existing :param:/:return: docstrings and [tool.docformatter] above.
+[tool.pydoclint]
+style = "sphinx"
+arg-type-hints-in-signature = true
+arg-type-hints-in-docstring = false
+check-return-types = true
+check-yield-types = true
+check-style-mismatch = true
+require-return-section-when-returning-nothing = false
+skip-checking-raises = false
+skip-checking-short-docstrings = false
+allow-init-docstring = true
+check-class-attributes = true
+# Path-level exclude regex (verbose). Default infra paths plus files that
+# currently violate the rules — shrinks as files are cleaned up. See #938.
+exclude = '''(?x)
+    (^|/)\.git(/|$)
+  | (^|/)\.tox(/|$)
+  | (^|/)\.venv(/|$)
+  | ^build/
+  | ^dist/
+  | ^node_modules/
+  | ^\.claude/
+  | ^\.worktrees/
+  | ^notebooks/
+  | ^src/pipeline/ci/load_image_config\.py$
+  | ^src/pipeline/ci/validate_shard\.py$
+  | ^src/pipeline/ci/validate_spec\.py$
+  | ^src/generate_dataset\.py$
+  | ^src/pipeline/skypilot_launch\.py$
+  | ^src/pipeline/partitioning\.py$
+  | ^src/pipeline/r2_io\.py$
+  | ^src/pipeline/schemas/image_config\.py$
+  | ^src/pipeline/schemas/prefix\.py$
+  | ^src/pipeline/schemas/spec\.py$
+  | ^scripts/add_music2latent\.py$
+  | ^scripts/compute_audio_metrics\.py$
+  | ^scripts/docker_entrypoint\.py$
+  | ^scripts/predict_vst_audio\.py$
+  | ^scripts/r2_shard_report\.py$
+  | ^scripts/rewrite_dataset_to_latest\.py$
+  | ^scripts/subdir_funtime\.py$
+  | ^scripts/surge_xt_interactive\.py$
+  | ^src/data/audio_datamodule\.py$
+  | ^src/data/fm_datamodule\.py$
+  | ^src/data/kosc_datamodule\.py$
+  | ^src/data/ksin_datamodule\.py$
+  | ^src/data/surge_datamodule\.py$
+  | ^src/data/vst/core\.py$
+  | ^src/data/vst/generate_vst_dataset\.py$
+  | ^src/data/vst/param_spec\.py$
+  | ^src/eval\.py$
+  | ^src/models/components/loss\.py$
+  | ^src/models/components/sinkhorn\.py$
+  | ^src/models/components/transformer\.py$
+  | ^src/models/components/vae\.py$
+  | ^src/models/ksin_flow_matching_module\.py$
+  | ^src/train\.py$
+  | ^src/utils/callbacks\.py$
+  | ^src/utils/instantiators\.py$
+  | ^src/utils/pylogger\.py$
+  | ^src/utils/rich_utils\.py$
+  | ^src/utils/utils\.py$
+  | ^tests/_baseline_worktree\.py$
+  | ^tests/conftest\.py$
+  | ^tests/data/vst/test_core\.py$
+  | ^tests/data/vst/test_generate_vst_dataset\.py$
+  | ^tests/data/vst/test_generate_vst_dataset_cli\.py$
+  | ^tests/data/vst/test_preset_coverage\.py$
+  | ^tests/fixtures/baseline_repo/scripts/baseline_app\.py$
+  | ^tests/fixtures/diff_repo/scripts/diff_app\.py$
+  | ^tests/helpers/package_available\.py$
+  | ^tests/helpers/run_if\.py$
+  | ^tests/pipeline/ci/test_validate_shard\.py$
+  | ^tests/pipeline/ci/test_validate_spec\.py$
+  | ^tests/pipeline/conftest\.py$
+  | ^tests/pipeline/test_ci/test_load_image_config\.py$
+  | ^tests/pipeline/test_ci/test_materialize_spec\.py$
+  | ^tests/pipeline/test_configs/test_experiment_yamls\.py$
+  | ^tests/pipeline/test_entrypoints/test_generate_dataset\.py$
+  | ^tests/pipeline/test_entrypoints/test_skypilot_launch\.py$
+  | ^tests/pipeline/test_partitioning\.py$
+  | ^tests/pipeline/test_r2_io\.py$
+  | ^tests/pipeline/test_schemas/test_dataset_spec\.py$
+  | ^tests/pipeline/test_schemas/test_image_config\.py$
+  | ^tests/pipeline/test_schemas/test_prefix\.py$
+  | ^tests/scripts/test_compute_audio_metrics\.py$
+  | ^tests/scripts/test_r2_shard_report\.py$
+  | ^tests/scripts/test_skypilot_write_provider_creds\.py$
+  | ^tests/scripts/test_surge_xt_interactive\.py$
+  | ^tests/test_benchmarks\.py$
+  | ^tests/test_callbacks\.py$
+  | ^tests/test_compare_baseline_configs\.py$
+  | ^tests/test_configs\.py$
+  | ^tests/test_docker_entrypoint\.py$
+  | ^tests/test_logging_utils\.py$
+  | ^tests/test_properties\.py$
+'''
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]

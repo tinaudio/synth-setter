@@ -7,8 +7,8 @@ on:
         description: "Docker image tag (e.g. dev-snapshot)"
         required: true
         type: string
-      config_path:
-        description: "Path to dataset config YAML (relative to repo root)"
+      experiment:
+        description: "Datagen experiment id (e.g. ci-materialize-test) — composed via Hydra against configs/dataset.yaml"
         required: true
         type: string
       artifact_name:
@@ -28,19 +28,19 @@ jobs:
       - name: Pull image
         run: docker pull tinaudio/synth-setter:${{ inputs.image_tag }}
 
+      # Mount the PR's code into the container so we test THIS branch's code
+      # against the image's environment (Surge XT, Python, pedalboard, etc.).
+      # Image has no ENTRYPOINT (#721 dropped it for SkyPilot); CMD defaults
+      # to /bin/bash, so `docker run img bash -c '...'` overrides CMD with
+      # the bash invocation. EXPERIMENT is forwarded via -e so the inner
+      # script references it via $EXPERIMENT instead of splicing a workflow
+      # input into the command text.
       - name: Materialize spec in Docker
         env:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-          CONFIG_PATH: ${{ inputs.config_path }}
-        # Mount the PR's code into the container so we test THIS branch's code
-        # against the image's environment (Surge XT, Python, pedalboard, etc.).
-        # Image has no ENTRYPOINT (#721 dropped it for SkyPilot); CMD defaults
-        # to /bin/bash, so `docker run img bash -c '...'` overrides CMD with
-        # the bash invocation. CONFIG_PATH is forwarded via -e so the inner
-        # script references it via $CONFIG_PATH instead of splicing a workflow
-        # input into the command text.
+          EXPERIMENT: ${{ inputs.experiment }}
         run: |
           mkdir -p /tmp/spec-output
           docker run --rm \
@@ -51,7 +51,7 @@ jobs:
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
-            -e CONFIG_PATH \
+            -e EXPERIMENT \
             -e PYTHONPATH=/home/build/synth-setter \
             tinaudio/synth-setter:${{ inputs.image_tag }} \
             bash -c '
@@ -62,7 +62,7 @@ jobs:
               bash scripts/ensure_plugin_symlinks.sh
               # Headless X11 needed because importing pedalboard (via param_specs) requires it
               scripts/run-linux-vst-headless.sh \
-                python -m pipeline.ci.materialize_spec "$CONFIG_PATH" /spec-output
+                python -m src.pipeline.ci.materialize_spec "$EXPERIMENT" /spec-output
             '
 
       - name: Validate spec structure
@@ -71,7 +71,7 @@ jobs:
           cat /tmp/spec-output/input_spec.json
           echo ""
           echo "=== Structural Validation ==="
-          python3 -m pipeline.ci.validate_spec /tmp/spec-output/input_spec.json
+          python3 -m src.pipeline.ci.validate_spec /tmp/spec-output/input_spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@v4

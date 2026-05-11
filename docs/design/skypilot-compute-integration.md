@@ -24,57 +24,38 @@ The reconciliation-based pipeline design is naturally compatible with SkyPilot m
 
 ## 2. Architecture Decisions
 
-| Decision          | Choice                                                  | Rationale                                                                                                               |
-| ----------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Integration depth | Full managed jobs                                       | Spot recovery + R2 markers as natural checkpoints. Cost savings 3-5x on interruptible instances                         |
-| Local dev/test    | Keep LocalBackend                                       | In-process execution for fast unit tests. Two code paths (local vs SkyPilot)                                            |
-| Field name        | `compute_config`                                        | Tool-agnostic. Value is a path to a SkyPilot YAML today. Survives tool changes without schema migration                 |
-| Backend selection | Presence of `compute_config`                            | `None` → local, path → SkyPilot. No enum, no protocol, no extra plumbing                                                |
-| Shard parallelism | `num_workers` in DatasetConfig                          | Parallelism is a reproducible property of the config, not a runtime variable                                            |
-| Worker identity   | UUID generated at worker start                          | Decoupled from any provider. Fully portable                                                                             |
-| Deployment        | Docker image                                            | Reproducible; aligns with `pipeline/schemas/image_config.py` (see `docs/reference/docker.md`). SkyPilot pulls the image |
-| CLI ownership     | `python -m pipeline generate` wraps SkyPilot            | Single entry point. User never touches `sky` CLI directly for generation                                                |
-| Frozen spec       | Include `compute_config`                                | For provenance and cost tracking                                                                                        |
-| Scope             | Design all three config types, implement pipeline first | DatasetConfig, train, eval all get `compute_config`                                                                     |
+| Decision          | Choice                                                  | Rationale                                                                                                                               |
+| ----------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Integration depth | Full managed jobs                                       | Spot recovery + R2 markers as natural checkpoints. Cost savings 3-5x on interruptible instances                                         |
+| Local dev/test    | Keep LocalBackend                                       | In-process execution for fast unit tests. Two code paths (local vs SkyPilot)                                                            |
+| Field name        | `compute_config` *(proposed)*                           | Tool-agnostic. Value is the resolved SkyPilot YAML *content* (embedded dict — see §3.1). Survives tool changes without schema migration |
+| Backend selection | Presence of `compute_config` *(proposed)*               | `None` → local, dict → SkyPilot. No enum, no protocol, no extra plumbing                                                                |
+| Shard parallelism | `--num-workers` CLI flag on the launcher                | Worker count is a launcher concern, not a `DatasetSpec` field; parallelism is recoverable from the per-cluster spec upload              |
+| Worker identity   | UUID generated at worker start                          | Decoupled from any provider. Fully portable                                                                                             |
+| Deployment        | Docker image                                            | Reproducible; aligns with `pipeline/schemas/image_config.py` (see `docs/reference/docker.md`). SkyPilot pulls the image                 |
+| CLI ownership     | `python -m pipeline generate` wraps SkyPilot            | Single entry point. User never touches `sky` CLI directly for generation                                                                |
+| Frozen spec       | Include `compute_config` *(proposed)*                   | For provenance and cost tracking                                                                                                        |
+| Scope             | Design all three config types, implement pipeline first | DatasetSpec, train, eval all get `compute_config` *(proposed)*                                                                          |
 
 ## 3. Schema Changes
 
-### 3.1 DatasetConfig (`pipeline/schemas/config.py`)
+### 3.1 DatasetSpec (`pipeline/schemas/spec.py`) — *proposed, not yet implemented*
 
-Add two fields:
-
-```python
-class DatasetConfig(BaseModel):
-    # ... existing fields ...
-    num_workers: int = 1                       # Number of parallel workers for shard generation
-    compute_config: str | None = None          # Path to SkyPilot YAML. None = local execution
-
-    @field_validator("num_workers")
-    @classmethod
-    def _positive_workers(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("num_workers must be >= 1")
-        return v
-```
-
-- `num_workers` defaults to 1 (single worker, backward compatible).
-- `compute_config` defaults to None (local execution, backward compatible).
-- Both fields are optional additions — existing YAML configs continue to work.
-
-### 3.2 DatasetPipelineSpec (`pipeline/schemas/spec.py`)
-
-Add `compute_config` to the frozen spec. The spec is uploaded to R2, so a local file path is meaningless there. The SkyPilot YAML content is resolved and embedded at materialization time:
+`DatasetConfig` + `DatasetPipelineSpec` were unified into a single `DatasetSpec` in [#887](https://github.com/tinaudio/synth-setter/pull/887) (the constructed Pydantic model **is** the artifact on R2; `model.model_dump_json()` is the JSON). The current schema (see [data-pipeline.md §14.1](data-pipeline.md#141-input-spec-schema) and `pipeline/schemas/spec.py`) has no compute-related field. The SkyPilot integration adds **one** new field:
 
 ```python
-class DatasetPipelineSpec(BaseModel):
+class DatasetSpec(BaseModel):
     # ... existing fields ...
-    num_workers: int
-    compute_config: dict[str, Any] | None = None  # Resolved SkyPilot YAML content, or None for local
+    compute_config: dict[str, Any] | None = None        # Resolved SkyPilot YAML content, or None for local
 ```
 
-`materialize_spec()` reads the file and includes its parsed content. SkyPilot YAMLs are small (~20 lines), so embedding preserves full provenance without bloating the spec.
+- `compute_config` defaults to `None` (local execution, backward compatible).
+- Optional field — existing dataset YAMLs continue to construct valid specs.
+- `num_workers` is **not** a spec field — worker count is a launcher concern (see the `--num-workers` CLI flag in [§2 Architecture Decisions](#2-architecture-decisions)) and would conflate launcher provisioning with the reproducibility unit.
 
-### 3.3 Training config (Hydra — `configs/train.yaml`)
+The SkyPilot YAML content is resolved (read from disk) before the dict reaches `DatasetSpec(**kwargs)` so the frozen spec carries a self-contained snapshot rather than a path; SkyPilot YAMLs are small (~20 lines), so embedding preserves full provenance without bloating the spec.
+
+### 3.2 Training config (Hydra — `configs/train.yaml`)
 
 Training uses pure Hydra DictConfig, not Pydantic. Add `compute_config` as a top-level key:
 
@@ -92,7 +73,7 @@ compute_config: null  # Path to SkyPilot YAML. null = local execution
 
 The training entrypoint (`src/train.py`) reads `cfg.get("compute_config")` and either trains locally or launches via SkyPilot SDK.
 
-### 3.4 Eval config (Hydra — `configs/eval.yaml`)
+### 3.3 Eval config (Hydra — `configs/eval.yaml`)
 
 Same pattern as training:
 
@@ -155,7 +136,7 @@ Source of truth: a `.env` file at the repo root.
 cp .env.example .env
 $EDITOR .env  # fill in RCLONE_CONFIG_R2_* + WANDB_API_KEY
 python -m pipeline.entrypoints.skypilot_launch \
-    --config configs/dataset/runpod-smoke-shard.yaml
+    --experiment runpod-smoke-shard
 ```
 
 The launcher finds `<repo_root>/.env`, parses it via `python-dotenv`, and resolves all keys from there. Process env is a non-event because `.env` wins per key — useful when you have stale shell exports.
@@ -268,14 +249,15 @@ Replace RunPod references with SkyPilot/provider-agnostic language.
 
 ## 7. Implementation Sequence
 
-### Phase A: Schema changes (DatasetConfig + spec)
+### Phase A: Schema changes (DatasetSpec)
 
 **Files to modify:**
 
-- `pipeline/schemas/config.py` — add `num_workers`, `compute_config` fields + validators
-- `pipeline/schemas/spec.py` — add `compute_config` to `DatasetPipelineSpec`, update `materialize_spec()`
-- `configs/dataset/surge-simple-480k-10k.yaml` — add optional new fields (or leave defaults)
-- Tests: `tests/pipeline/test_schemas/` — add test cases for new fields, backward compat
+- `pipeline/schemas/spec.py` — add a `compute_config` field (optional, defaults to `None`) to `DatasetSpec`
+- `configs/experiment/surge-simple-480k-10k.yaml` — add an optional `compute_config` key, or leave it out for local execution
+- Tests: `tests/pipeline/test_schemas/` — add test cases for the new field, backward compat
+
+Note: `DatasetConfig`/`DatasetPipelineSpec`/`materialize_spec()` no longer exist as separate types — they unified into `DatasetSpec` ([#887](https://github.com/tinaudio/synth-setter/pull/887)) and the spec is now composed via Hydra (`spec_from_cfg(cfg)` from `configs/dataset.yaml` + an experiment override; the legacy `load_dataset_spec_yaml` bridge was removed in [#917](https://github.com/tinaudio/synth-setter/pull/917)).
 
 ### Phase B: SkyPilot compute configs
 
@@ -346,9 +328,9 @@ Should `skypilot` be a required or optional dependency?
 
 ### Unit tests
 
-- DatasetConfig accepts/rejects `num_workers` and `compute_config` values.
-- Existing configs without new fields still validate (backward compat).
-- `materialize_spec()` correctly resolves and embeds compute config content.
+- DatasetSpec accepts/rejects `compute_config` values (None and resolved-dict shapes).
+- Existing configs without `compute_config` still validate (backward compat).
+- The construction path correctly resolves and embeds compute config content (SkyPilot YAML read from disk before validation).
 - Spec JSON round-trip with `compute_config`.
 
 ### Integration tests

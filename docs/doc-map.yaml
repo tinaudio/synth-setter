@@ -21,7 +21,7 @@ docs:
         covers: "Dev container wrapper over devcontainer-tools stage, per-developer customization"
       - pattern: "scripts/docker_entrypoint.py"
         covers: "Click-based Python ENTRYPOINT — subcommand dispatch (idle, passthrough, generate_dataset, render_eval, train) with per-mode --spec parsing"
-      - pattern: "pipeline/schemas/image_config.py"
+      - pattern: "src/pipeline/schemas/image_config.py"
         covers: "Pydantic model fields, validation behavior, strict/forbid semantics"
       - pattern: "configs/image/**"
         covers: "YAML field names and values, build parameters, defaults"
@@ -41,7 +41,7 @@ docs:
         covers: "Click-based Python ENTRYPOINT — subcommand dispatch with per-mode --spec, exit codes, error handling"
       - pattern: "docker/**"
         covers: "Target names, stage dependencies, what each target produces"
-      - pattern: "pipeline/schemas/image_config.py"
+      - pattern: "src/pipeline/schemas/image_config.py"
         covers: "ImageConfig fields that define the target contract"
 
   # ── W&B integration reference ───────────────────────────────────
@@ -67,39 +67,37 @@ docs:
   - doc: docs/design/data-pipeline.md
     description: Distributed data pipeline design (RunPod + R2)
     sources:
-      - pattern: "pipeline/schemas/config.py"
-        covers: "Pipeline config schema, dataset config fields, validation rules"
-      - pattern: "pipeline/schemas/prefix.py"
+      - pattern: "src/pipeline/schemas/prefix.py"
         covers: "Run ID prefix generation, shard ID scheme, deterministic naming"
-      - pattern: "configs/dataset/**"
+      - pattern: "configs/experiment/**"
         covers: "Dataset generation configs, shard counts, sample counts, synth params"
-      - pattern: "pipeline/entrypoints/generate_dataset.py"
-        covers: "Dataset generation entrypoint, sequential multi-shard MVP, CLI interface"
+      - pattern: "src/generate_dataset.py"
+        covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m src.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (deterministic from `cluster_name` + the materialized spec's `r2_bucket`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
-      - pattern: "pipeline/ci/**"
+      - pattern: "src/pipeline/ci/**"
         covers: "CI validation scripts, spec materialization, shard validation"
-      - pattern: "pipeline/r2_io.py"
-        covers: "rclone-backed I/O helpers (download_to_path, upload_to_uri, downloaded_to_tempfile, is_r2_uri); single rclone call site shared by ci validators and the generate-local workflow upload step"
-      - pattern: "pipeline/constants.py"
+      - pattern: "src/pipeline/r2_io.py"
+        covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by ci validators, the worker entrypoint's skip-existing probe, and the generate-local workflow upload step"
+      - pattern: "src/pipeline/constants.py"
         covers: "R2 bucket name constant, input spec filename"
-      - pattern: "pipeline/schemas/spec.py"
-        covers: "DatasetPipelineSpec, ShardSpec, materialize_spec() flow"
+      - pattern: "src/pipeline/schemas/spec.py"
+        covers: "DatasetSpec, RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION (Hydra-composed cfg → spec_from_cfg → DatasetSpec)"
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
     description: SkyPilot launcher for the data pipeline (RunPod + OCI smoke)
     sources:
-      - pattern: "pipeline/entrypoints/skypilot_launch.py"
+      - pattern: "src/pipeline/skypilot_launch.py"
         covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → sky.jobs.launch (managed-jobs SDK) flow, --tail/--no-tail mode split (default --no-tail: _run_workers_detached waits for the controller to return a job_id per rank then prints `sky jobs logs --name` / `sky jobs cancel --name` commands and exits, leaving the controller's terminal-status lifecycle as the safety net; --tail: _run_workers_tail invokes sky.jobs.tail_logs(follow=True) and cancels every job in finally), per-launch R2 spec key (skypilot-launcher-specs/<job_name>.json) — file_mounts deliberately avoided, see #749"
       - pattern: "configs/compute/runpod-template.yaml"
         covers: "SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`--worker-image-tag`, default `dev-snapshot`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "configs/compute/oci-cpu-template.yaml"
         covers: "SkyPilot Task YAML for OCI CPU: resources block (Flex shape, no image_id — OCI rejects `docker:<image>`, so `_override_image_id` skips OCI Resources and the worker image is fed via the `WORKER_IMAGE` env), docker-in-run worker invocation, --privileged hammer for Xvfb/dbus (#776), delegates WORKER_GIT_REF checkout + uv install to `scripts/sync_worker_checkout.sh`, then `python /usr/local/bin/entrypoint.py generate_dataset`."
       - pattern: "scripts/docker_entrypoint.py"
-        covers: "Container entrypoint click CLI invoked by RunPod and OCI run: blocks (`python /usr/local/bin/entrypoint.py generate_dataset --spec $WORKER_SPEC_URI`). The generate_dataset subcommand parses --spec into DatasetPipelineSpec, calls run(), then forces interpreter exit (#735 defensive workaround) to bypass any lingering atexit hangs."
+        covers: "Container entrypoint click CLI invoked by RunPod and OCI run: blocks (`python /usr/local/bin/entrypoint.py generate_dataset --spec $WORKER_SPEC_URI`). The generate_dataset subcommand parses --spec into DatasetSpec, calls run(), then forces interpreter exit (#735 defensive workaround) to bypass any lingering atexit hangs."
       - pattern: "scripts/ensure_plugin_symlinks.sh"
         covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
       - pattern: "scripts/sync_worker_checkout.sh"
@@ -124,16 +122,16 @@ docs:
   - doc: docs/design/storage-provenance-spec.md
     description: R2 bucket layout, path conventions, ID schemes
     sources:
-      - pattern: "pipeline/schemas/prefix.py"
+      - pattern: "src/pipeline/schemas/prefix.py"
         covers: "Run ID format, shard ID format, prefix construction rules"
       - pattern: "scripts/r2_shard_report.py"
         covers: "R2 listing commands, shard status reporting, path parsing"
-      - pattern: "configs/image/dev-snapshot.yaml"
+      - pattern: "configs/dataset/*.yaml"
         covers: "r2_bucket value, storage configuration"
-      - pattern: "pipeline/entrypoints/generate_dataset.py"
+      - pattern: "src/generate_dataset.py"
         covers: "rclone upload of spec and shard files, R2 path construction"
         scope: "rclone"
-      - pattern: "pipeline/constants.py"
+      - pattern: "src/pipeline/constants.py"
         covers: "INPUT_SPEC_FILENAME constant"
 
   # ── Training pipeline design doc ────────────────────────────────
@@ -225,25 +223,23 @@ docs:
   - doc: docs/reference/configuration-reference.md
     description: Configuration architecture layers, cloud provider comparison, boundary rules, known gaps
     sources:
-      - pattern: "configs/dataset/**"
-        covers: "Pipeline input configs, Pydantic-validated YAML"
       - pattern: "configs/experiment/**"
-        covers: "Hydra experiment composition, defaults list"
+        covers: "Pipeline input configs (Pydantic-validated DatasetSpec) + Hydra experiment composition / defaults list"
+      - pattern: "configs/dataset.yaml"
+        covers: "Datagen Hydra entry point, defaults list"
       - pattern: "configs/train.yaml"
         covers: "Training entry point, Hydra defaults"
       - pattern: "configs/eval.yaml"
         covers: "Eval entry point, Hydra defaults"
-      - pattern: "pipeline/schemas/config.py"
-        covers: "DatasetConfig Pydantic model, validation rules"
-      - pattern: "pipeline/schemas/spec.py"
-        covers: "DatasetPipelineSpec, materialize_spec() flow"
+      - pattern: "src/pipeline/schemas/spec.py"
+        covers: "DatasetSpec / RenderConfig / ShardSpec Pydantic models, spec_from_cfg() flow"
       - pattern: "src/train.py"
         covers: "Training entry point, Hydra composition, instantiation flow"
       - pattern: "configs/logger/wandb.yaml"
         covers: "W&B logger config, log_model, entity/project"
-      - pattern: "pipeline/schemas/prefix.py"
+      - pattern: "src/pipeline/schemas/prefix.py"
         covers: "DatasetConfigId, DatasetRunId, R2Prefix, make_r2_prefix()"
-      - pattern: "pipeline/constants.py"
+      - pattern: "src/pipeline/constants.py"
         covers: "R2 bucket name, INPUT_SPEC_FILENAME constant"
 
   # ── Testing primer ──────────────────────────────────────────────
@@ -300,7 +296,7 @@ docs:
   # - doc: docs/reference/rclone.md
   #   description: rclone R2 operations reference
   #   sources:
-  #     - pattern: "pipeline/entrypoints/generate_dataset.py"
+  #     - pattern: "src/generate_dataset.py"
   #       covers: "rclone copy --checksum for spec + shard uploads"
   #       scope: "rclone"
   #     - pattern: "scripts/r2_shard_report.py"

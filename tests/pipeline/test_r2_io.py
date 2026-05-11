@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline import r2_io
+from src.pipeline import r2_io
 
 
 class TestIsR2Uri:
@@ -128,3 +129,71 @@ class TestDownloadedToTempfile:
                     raise RuntimeError("boom")
 
         assert not seen[0].exists()
+
+
+class TestShardUri:
+    """Tests for shard_uri — canonical R2 URI builder for shards."""
+
+    def test_constructs_full_uri_from_bucket_prefix_filename(self) -> None:
+        """The URI follows the r2://{bucket}/{prefix}{filename} convention exactly."""
+        assert (
+            r2_io.shard_uri("intermediate-data", "data/run-x/", "shard-000007.h5")
+            == "r2://intermediate-data/data/run-x/shard-000007.h5"
+        )
+
+    def test_preserves_nested_prefix(self) -> None:
+        """Multi-segment prefixes are joined verbatim (caller controls trailing slash)."""
+        assert (
+            r2_io.shard_uri("bucket", "a/b/c/", "shard-000000.h5")
+            == "r2://bucket/a/b/c/shard-000000.h5"
+        )
+
+
+class TestObjectSize:
+    """Tests for object_size — existence + size probe via `rclone lsf --format=s`."""
+
+    @staticmethod
+    def _mock_run(stdout: str) -> MagicMock:
+        """Build a CompletedProcess-shaped mock with the given stdout."""
+        completed = MagicMock(spec=subprocess.CompletedProcess)
+        completed.stdout = stdout
+        completed.returncode = 0
+        return completed
+
+    def test_present_returns_int_size(self) -> None:
+        """A non-empty integer stdout means the object exists; return its size in bytes."""
+        with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("12345\n")):
+            assert r2_io.object_size("r2://bucket/key.h5") == 12345
+
+    def test_absent_returns_none(self) -> None:
+        """Empty stdout means the object is missing; return None."""
+        with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("")):
+            assert r2_io.object_size("r2://bucket/key.h5") is None
+
+    def test_zero_size_returns_zero(self) -> None:
+        """A zero-byte object exists; return 0 (callers decide whether to treat as present)."""
+        with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("0\n")):
+            assert r2_io.object_size("r2://bucket/key.h5") == 0
+
+    def test_probe_failure_propagates(self) -> None:
+        """Non-zero rclone exit raises CalledProcessError — fail-fast on env issues."""
+        err = subprocess.CalledProcessError(returncode=1, cmd=["rclone"])
+        with patch.object(r2_io.subprocess, "run", side_effect=err):
+            with pytest.raises(subprocess.CalledProcessError):
+                r2_io.object_size("r2://bucket/key.h5")
+
+    def test_invokes_rclone_lsf_format_s(self) -> None:
+        """Probe argv shape: rclone lsf --format=s <translated path>."""
+        with patch.object(r2_io.subprocess, "run", return_value=self._mock_run("42")) as mock_run:
+            r2_io.object_size("r2://bucket/path/key.h5")
+        args = mock_run.call_args[0][0]
+        assert args == ["rclone", "lsf", "--format=s", "r2:bucket/path/key.h5"]
+        kwargs = mock_run.call_args[1]
+        assert kwargs.get("check") is True
+        assert kwargs.get("capture_output") is True
+        assert kwargs.get("text") is True
+
+    def test_rejects_non_r2_uri(self) -> None:
+        """Local paths are rejected via _to_rclone_path."""
+        with pytest.raises(ValueError, match="not an r2:// URI"):
+            r2_io.object_size("local/key.h5")

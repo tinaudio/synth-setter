@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.ci.load_image_config import main
+from src.pipeline.ci.load_image_config import main
 
 VALID_SHA = "a" * 40
 VALID_ISSUE = "311"
@@ -27,7 +27,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: test-bucket
 """
 
 _EXPECTED_LINES = [
@@ -38,7 +37,6 @@ _EXPECTED_LINES = [
     "build_mode=prebuilt",
     "target_platform=linux/amd64",
     "torch_backend=cu128",
-    "r2_bucket=test-bucket",
     f"github_sha={VALID_SHA}",
     "issue_number=311",
     "image_config_id=dev-snapshot",
@@ -248,7 +246,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: test-bucket
 """
         config_path = tmp_path / "dev-snapshot.yaml"
         config_path.write_text(yaml_with_newline)
@@ -282,7 +279,6 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: test-bucket
 """
         config_path = tmp_path / "dev-snapshot.yaml"
         config_path.write_text(yaml_with_cr)
@@ -315,7 +311,7 @@ class TestModuleInvocable:
 
     def test_module_help_exits_zero(self) -> None:
         result = subprocess.run(  # noqa: S603
-            [sys.executable, "-m", "pipeline.ci.load_image_config", "--help"],
+            [sys.executable, "-m", "src.pipeline.ci.load_image_config", "--help"],
             capture_output=True,
             text=True,
             cwd=str(PROJECT_ROOT),

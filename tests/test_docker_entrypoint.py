@@ -99,7 +99,6 @@ def _valid_spec_payload() -> dict[str, Any]:
         "is_repo_dirty": False,
         "output_format": "hdf5",
         "train_val_test_sizes": [10000, 0, 0],
-        "train_val_test_seeds": [42, 43, 44],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": {
@@ -280,7 +279,7 @@ class TestGenerateDataset:
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
         """Valid --spec JSON is parsed into DatasetSpec and passed to run()."""
-        from pipeline.schemas.spec import DatasetSpec
+        from src.pipeline.schemas.spec import DatasetSpec
 
         payload = _valid_spec_payload()
         spec_path = _write_spec_file(tmp_path, payload)
