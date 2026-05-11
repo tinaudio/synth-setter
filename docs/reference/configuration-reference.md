@@ -38,7 +38,7 @@ configs/dataset/{id}.yaml (legacy flat shape, current default)
   → uploaded to R2 as {r2_prefix}/input_spec.json
 ```
 
-The Hydra-composed layout (`configs/dataset.yaml` + `configs/experiment/<id>` + `data/<group>` + `render/<spec>` + `r2/<group>`) lands incrementally: the new groups arrive in [#907](https://github.com/tinaudio/synth-setter/pull/907) and the launcher's `@hydra.main` migration (with `load_dataset_spec_yaml`'s removal) follows in PR-3.
+The planned Hydra-composed layout — a top-level `configs/dataset.yaml` composing `configs/experiment/<id>`, `configs/render/<spec>`, `configs/r2/<group>`, and the existing `configs/data/<group>` — does **not** exist on main yet. The new groups arrive in [#907](https://github.com/tinaudio/synth-setter/pull/907) and the launcher's `@hydra.main` migration (with `load_dataset_spec_yaml`'s removal) follows in PR-3.
 
 - Config is mutable, human-authored YAML (currently `configs/dataset/*.yaml`; migrating to a Hydra-composed `configs/dataset.yaml` + `configs/experiment/` shape)
 - `DatasetSpec` is the unified model: the same frozen Pydantic instance is both the validated input and the materialized artifact (no separate `DatasetConfig` / `DatasetPipelineSpec` types anymore)

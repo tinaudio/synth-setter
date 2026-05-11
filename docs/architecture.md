@@ -42,10 +42,11 @@ original parameters.
 ## Data Flow
 
 1. **Configure** -- Define a dataset in `configs/dataset/*.yaml` (synth, sample
-   count, `render.batch_per_shard`, parameter spec); `load_dataset_spec_yaml()`
-   reshapes it into a `DatasetSpec`. The Hydra-composed layout
-   (`configs/dataset.yaml` + `configs/experiment/*.yaml` overrides) lands
-   incrementally via PR-2 and PR-3.
+   count via `shard_size` → mapped to `render.batch_per_shard` by
+   `load_dataset_spec_yaml()`, parameter spec); the loader reshapes the YAML
+   into a `DatasetSpec`. The planned Hydra-composed layout (top-level
+   `configs/dataset.yaml` composing `configs/experiment/*.yaml` overrides
+   — neither exists on main yet) lands incrementally via PR-2 and PR-3.
 
 2. **Generate** -- Workers render audio samples through Surge XT, producing HDF5
    shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,

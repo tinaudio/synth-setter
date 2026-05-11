@@ -24,18 +24,18 @@ The reconciliation-based pipeline design is naturally compatible with SkyPilot m
 
 ## 2. Architecture Decisions
 
-| Decision          | Choice                                                  | Rationale                                                                                                                  |
-| ----------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Integration depth | Full managed jobs                                       | Spot recovery + R2 markers as natural checkpoints. Cost savings 3-5x on interruptible instances                            |
-| Local dev/test    | Keep LocalBackend                                       | In-process execution for fast unit tests. Two code paths (local vs SkyPilot)                                               |
-| Field name        | `compute_config` *(proposed)*                           | Tool-agnostic. Value is a path to a SkyPilot YAML today. Survives tool changes without schema migration                    |
-| Backend selection | Presence of `compute_config` *(proposed)*               | `None` → local, path → SkyPilot. No enum, no protocol, no extra plumbing                                                   |
-| Shard parallelism | `--num-workers` CLI flag on the launcher                | Worker count is a launcher concern, not a `DatasetSpec` field; parallelism is recoverable from the per-cluster spec upload |
-| Worker identity   | UUID generated at worker start                          | Decoupled from any provider. Fully portable                                                                                |
-| Deployment        | Docker image                                            | Reproducible; aligns with `pipeline/schemas/image_config.py` (see `docs/reference/docker.md`). SkyPilot pulls the image    |
-| CLI ownership     | `python -m pipeline generate` wraps SkyPilot            | Single entry point. User never touches `sky` CLI directly for generation                                                   |
-| Frozen spec       | Include `compute_config` *(proposed)*                   | For provenance and cost tracking                                                                                           |
-| Scope             | Design all three config types, implement pipeline first | DatasetSpec, train, eval all get `compute_config` *(proposed)*                                                             |
+| Decision          | Choice                                                  | Rationale                                                                                                                               |
+| ----------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Integration depth | Full managed jobs                                       | Spot recovery + R2 markers as natural checkpoints. Cost savings 3-5x on interruptible instances                                         |
+| Local dev/test    | Keep LocalBackend                                       | In-process execution for fast unit tests. Two code paths (local vs SkyPilot)                                                            |
+| Field name        | `compute_config` *(proposed)*                           | Tool-agnostic. Value is the resolved SkyPilot YAML *content* (embedded dict — see §3.1). Survives tool changes without schema migration |
+| Backend selection | Presence of `compute_config` *(proposed)*               | `None` → local, dict → SkyPilot. No enum, no protocol, no extra plumbing                                                                |
+| Shard parallelism | `--num-workers` CLI flag on the launcher                | Worker count is a launcher concern, not a `DatasetSpec` field; parallelism is recoverable from the per-cluster spec upload              |
+| Worker identity   | UUID generated at worker start                          | Decoupled from any provider. Fully portable                                                                                             |
+| Deployment        | Docker image                                            | Reproducible; aligns with `pipeline/schemas/image_config.py` (see `docs/reference/docker.md`). SkyPilot pulls the image                 |
+| CLI ownership     | `python -m pipeline generate` wraps SkyPilot            | Single entry point. User never touches `sky` CLI directly for generation                                                                |
+| Frozen spec       | Include `compute_config` *(proposed)*                   | For provenance and cost tracking                                                                                                        |
+| Scope             | Design all three config types, implement pipeline first | DatasetSpec, train, eval all get `compute_config` *(proposed)*                                                                          |
 
 ## 3. Schema Changes
 

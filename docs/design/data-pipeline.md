@@ -1523,21 +1523,21 @@ configs/
 
 ## Appendix B: Tech Stack
 
-| Component       | Technology                                                        | Role                                             |
-| --------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
-| Build           | Docker (BuildKit)                                                 | Reproducible compute environments                |
-| Storage         | Cloudflare R2                                                     | Data + coordination, free egress                 |
-| Execution       | RunPod                                                            | Cheap on-demand cloud workers                    |
-| Tracking        | Weights & Biases                                                  | Pipeline metrics, dataset artifact registry      |
-| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                 | Shard generation + local training format         |
-| Training format | [WebDataset](https://github.com/webdataset/webdataset)            | Streaming `.tar` shards for multi-GPU training   |
-| CLI             | [Click](https://click.palletsprojects.com/)                       | Typed arguments, validation, `--help`            |
-| Validation      | [Pydantic](https://docs.pydantic.dev/) (strict mode)              | DatasetSpec, report, and config validation       |
-| Logging         | [structlog](https://www.structlog.org/)                           | Structured JSON debug logging                    |
-| Retry           | [tenacity](https://tenacity.readthedocs.io/)                      | Centralized retry policy                         |
-| Upload/download | [rclone](https://rclone.org/)                                     | R2 file transfer; all transfers use `--checksum` |
-| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)      | Reproducible environments                        |
-| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb) | VST synthesis                                    |
+| Component       | Technology                                                                                                                                              | Role                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Build           | Docker (BuildKit)                                                                                                                                       | Reproducible compute environments                |
+| Storage         | Cloudflare R2                                                                                                                                           | Data + coordination, free egress                 |
+| Execution       | RunPod                                                                                                                                                  | Cheap on-demand cloud workers                    |
+| Tracking        | Weights & Biases                                                                                                                                        | Pipeline metrics, dataset artifact registry      |
+| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                                                                                                       | Shard generation + local training format         |
+| Training format | [WebDataset](https://github.com/webdataset/webdataset)                                                                                                  | Streaming `.tar` shards for multi-GPU training   |
+| CLI             | [Click](https://click.palletsprojects.com/)                                                                                                             | Typed arguments, validation, `--help`            |
+| Validation      | [Pydantic](https://docs.pydantic.dev/) (frozen models; `strict=True` on `RenderConfig` / `ShardSpec`, non-strict on `DatasetSpec` for JSON round-trips) | DatasetSpec, report, and config validation       |
+| Logging         | [structlog](https://www.structlog.org/)                                                                                                                 | Structured JSON debug logging                    |
+| Retry           | [tenacity](https://tenacity.readthedocs.io/)                                                                                                            | Centralized retry policy                         |
+| Upload/download | [rclone](https://rclone.org/)                                                                                                                           | R2 file transfer; all transfers use `--checksum` |
+| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)                                                                                            | Reproducible environments                        |
+| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb)                                                                                       | VST synthesis                                    |
 
 ## Appendix C: References
 

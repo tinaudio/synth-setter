@@ -85,16 +85,6 @@ docs:
         covers: "R2 bucket name constant, input spec filename"
       - pattern: "pipeline/schemas/spec.py"
         covers: "DatasetSpec, RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, load_dataset_spec_yaml (legacy bridge)"
-      # Hydra-composed datagen config layout — arrives with PR-2 (#907) and
-      # the launcher's @hydra.main migration in PR-3. Uncomment when those land.
-      # - pattern: "configs/dataset.yaml"
-      #   covers: "Top-level @hydra.main composition target for dataset generation"
-      # - pattern: "configs/render/**"
-      #   covers: "Renderer-specific configs (plugin_path, preset_path, param_spec_name, renderer_version, batch_per_shard, …); nested as DatasetSpec.render"
-      # - pattern: "configs/r2/**"
-      #   covers: "R2 bucket + prefix_root group; interpolated into DatasetSpec.r2_bucket / r2_prefix_root at compose time"
-      # - pattern: "tests/pipeline/test_configs/test_experiment_yamls.py"
-      #   covers: "Round-trips each datagen experiment through Hydra compose → DatasetSpec validation → JSON round-trip"
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
