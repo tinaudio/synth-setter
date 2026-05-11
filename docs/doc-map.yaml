@@ -74,7 +74,7 @@ docs:
       - pattern: "configs/dataset/**"
         covers: "Dataset generation configs, shard counts, sample counts, synth params"
       - pattern: "pipeline/entrypoints/generate_dataset.py"
-        covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), CLI interface"
+        covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (deterministic from `cluster_name` + the materialized spec's `r2_bucket`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"

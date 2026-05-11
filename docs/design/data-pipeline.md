@@ -80,12 +80,13 @@ RunPod is used because it's the platform where GPUs are already available and co
 cat configs/dataset/surge-simple-480k-10k.yaml
 # → num_shards: 48, shard_size: 10000, ...
 
-# 2. Launch generation — creates spec, launches workers, exits
+# 2. Run sequential multi-shard generation on a single worker.
+#    Composes a DatasetSpec from configs/dataset.yaml + the selected experiment
+#    (see configs/experiment/ for the curated list).
+python -m pipeline.entrypoints.generate_dataset experiment=surge-simple-480k-10k
+# → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
 # **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)
-# is not yet implemented. Currently only single-shard generation is available via:
-DATASET_CONFIG=configs/dataset/surge-simple-480k-10k.yaml python -m pipeline.entrypoints.generate_dataset
-# → Sequential multi-shard MVP. Loops over spec.shards on a single worker; distributed parallelism still tracked under #411.
-# `generate_dataset` is the current MVP. It will be deprecated when
+# is not yet implemented; `generate_dataset` is the current MVP, deprecated when
 # `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
@@ -1422,7 +1423,7 @@ pipeline/
 
   entrypoints/          # Pipeline entry points (implemented)
     __init__.py
-    generate_dataset.py # Sequential multi-shard dataset generation (MVP); deprecated when generate-shards lands (#411)
+    generate_dataset.py # Sequential multi-shard dataset generation (MVP) + Hydra CLI entry (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`); deprecated when generate-shards lands (#411)
 
   ci/                   # CI validation scripts (implemented)
     materialize_spec.py # Materialize a DatasetPipelineSpec from a config YAML
