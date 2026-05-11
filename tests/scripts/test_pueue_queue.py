@@ -20,6 +20,7 @@ from scripts.pueue_queue import (
     DEFAULT_GROUP,
     build_pueue_add_args,
     enqueue_all,
+    ensure_daemon_running,
     ensure_group,
     main,
     parse_command_file,
@@ -69,6 +70,20 @@ def test_parse_command_file_returns_empty_list_for_only_comments(tmp_path: Path)
     file = tmp_path / "cmds.txt"
     file.write_text("# comment 1\n# comment 2\n\n")
     assert parse_command_file(file) == []
+
+
+def test_parse_command_file_strips_leading_whitespace_from_indented_commands(
+    tmp_path: Path,
+) -> None:
+    """Indented commands inside grouped sections are normalized — no leading space leaks into the
+    queued task (else pueue would try to run `  python x.py` verbatim)."""
+    file = tmp_path / "cmds.txt"
+    file.write_text("  python a.py\n\t\tpython b.py\n    python c.py --flag=1\n")
+    assert parse_command_file(file) == [
+        "python a.py",
+        "python b.py",
+        "python c.py --flag=1",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +163,22 @@ class FakeRunner:
         if rc != 0 and kwargs.get("check"):
             raise subprocess.CalledProcessError(returncode=rc, cmd=args, output=out, stderr="")
         return subprocess.CompletedProcess(args=args, returncode=rc, stdout=out, stderr="")
+
+
+def test_ensure_daemon_running_noop_when_status_succeeds() -> None:
+    """If `pueue status` returns 0, the daemon is already up — don't run `pueued -d`."""
+    runner = FakeRunner(results={("pueue", "status"): (0, "")})
+    ensure_daemon_running(runner)
+    cmds = [tuple(c) for c in runner.calls]
+    assert ("pueued", "-d") not in cmds
+
+
+def test_ensure_daemon_running_starts_daemon_when_status_fails() -> None:
+    """If `pueue status` returns non-zero, run `pueued -d` to daemonize before continuing."""
+    runner = FakeRunner(results={("pueue", "status"): (1, "")})
+    ensure_daemon_running(runner)
+    cmds = [tuple(c) for c in runner.calls]
+    assert ("pueued", "-d") in cmds
 
 
 def test_ensure_group_creates_missing_group_and_sets_parallel() -> None:

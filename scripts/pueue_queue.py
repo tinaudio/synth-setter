@@ -42,9 +42,10 @@ def parse_command_file(path: Path) -> list[str]:
     """Return one entry per non-comment, non-blank line of ``path``.
 
     Each returned string is a single shell command line, ready to be passed
-    verbatim to ``pueue add``. Trailing whitespace is stripped; leading
-    whitespace is preserved so ``  python x.py`` (intentional indent inside a
-    grouped section) is still treated as ``python x.py`` after the strip.
+    verbatim to ``pueue add``. Both leading and trailing whitespace are
+    stripped — sweep files commonly indent commands inside grouped sections
+    (e.g. ``  python x.py``) and we want the queued task to run as
+    ``python x.py``, not ``  python x.py``.
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.

@@ -3,9 +3,14 @@ name: Pueue Queue Dispatch
 # Dispatchable workflow that feeds a line-separated command file into the
 # pueue task queue manager (https://github.com/Nukesor/pueue) via the
 # `scripts/pueue_queue.py` CLI. Each non-blank, non-comment line of the input
-# file becomes one queued task in the named pueue group; once all tasks have
-# been submitted the workflow blocks on `pueue wait` and uploads the queue's
-# logs as a workflow artifact.
+# file becomes one queued task in the named pueue group, then the workflow
+# uploads the persisted pueue state directory as a workflow artifact.
+#
+# Waiting for the queue to drain is opt-in: set `wait_timeout_seconds` > 0 to
+# block on `pueue wait` (bounded by that timeout) before the container exits.
+# The default of 0 returns immediately after `pueue add` — the tasks keep
+# running inside the container, so the artifact upload still captures their
+# in-flight state, but the workflow does not gate on completion.
 #
 # Use cases:
 #   - smoke-test a sweep file from the repo (e.g. sweeps/quick.txt) without
@@ -15,8 +20,11 @@ name: Pueue Queue Dispatch
 #
 # The runner pulls the `tinaudio/synth-setter` Docker image — the same image
 # that has the `pueue` and `pueued` binaries baked in by
-# `docker/ubuntu22_04/Dockerfile` — and mounts the repo checkout read-only,
-# so the queued commands run inside the project's full Python + VST3 env.
+# `docker/ubuntu22_04/Dockerfile` — and mounts the repo checkout, so the
+# queued commands run inside the project's full Python + VST3 env. Pueue
+# state is rooted via XDG_DATA_HOME so the persisted path is the same
+# regardless of whether the image runs as root or as a non-root user (e.g.
+# `devcontainer-tools` sets `USER dev`).
 
 on:
   workflow_dispatch:
@@ -112,6 +120,12 @@ jobs:
       # can upload the queue log as an artifact afterwards. The daemon runs
       # in the background inside the container; the script enqueues and
       # (optionally) waits for completion before the container exits.
+      #
+      # Mount path uses XDG_DATA_HOME=/pueue-state rather than
+      # `/root/.local/share/pueue` so the persisted directory is the same
+      # whether the image runs as root or as a non-root user (e.g. the
+      # `devcontainer-tools` image sets `USER dev`). Pueue honors
+      # XDG_DATA_HOME for its data_local_dir lookup.
       - name: Run pueue_queue CLI
         if: ${{ !inputs.dry_run }}
         run: |
@@ -119,8 +133,9 @@ jobs:
           mkdir -p "${{ github.workspace }}/.pueue-state"
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v "${{ github.workspace }}/.pueue-state:/root/.local/share/pueue" \
+            -v "${{ github.workspace }}/.pueue-state:/pueue-state" \
             -e PYTHONPATH=/home/build/synth-setter \
+            -e XDG_DATA_HOME=/pueue-state \
             -e COMMAND_FILE \
             -e PUEUE_GROUP \
             -e PUEUE_PARALLEL \
