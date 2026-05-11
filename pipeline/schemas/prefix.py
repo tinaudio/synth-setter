@@ -7,9 +7,11 @@ DatasetConfigId = NewType("DatasetConfigId", str)
 DatasetRunId = NewType("DatasetRunId", str)
 R2Prefix = NewType("R2Prefix", str)
 
+DEFAULT_R2_PREFIX_ROOT = "data"
+
 
 def make_dataset_wandb_run_id(
-    dataset_config_id: DatasetConfigId,
+    dataset_config_id: DatasetConfigId | str,
     timestamp: datetime | None = None,
 ) -> DatasetRunId:
     """Build a unique run ID from a config ID and a UTC timestamp.
@@ -32,12 +34,15 @@ def make_dataset_wandb_run_id(
 
 
 def make_r2_prefix(
-    dataset_config_id: DatasetConfigId, dataset_wandb_run_id: DatasetRunId
+    dataset_config_id: DatasetConfigId | str,
+    dataset_wandb_run_id: DatasetRunId | str,
+    prefix_root: str = DEFAULT_R2_PREFIX_ROOT,
 ) -> R2Prefix:
     """Build the R2 object prefix for a dataset generation run.
 
     :param dataset_config_id: The dataset config identifier.
     :param dataset_wandb_run_id: The W&B run ID for this generation run.
-    :returns: A prefix string like ``data/<config_id>/<run_id>/``.
+    :param prefix_root: Root path component (default ``"data"``).
+    :returns: A prefix string like ``<prefix_root>/<config_id>/<run_id>/``.
     """
-    return R2Prefix(f"data/{dataset_config_id}/{dataset_wandb_run_id}/")
+    return R2Prefix(f"{prefix_root}/{dataset_config_id}/{dataset_wandb_run_id}/")

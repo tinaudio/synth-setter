@@ -1,103 +1,59 @@
+"""Unified dataset specification: a single Pydantic model is the spec on R2.
+
+``DatasetSpec`` replaces the prior split between ``DatasetConfig`` (the YAML-
+shaped config) and ``DatasetPipelineSpec`` (the runtime-materialized artifact).
+Hydra composes a dict from groups; the entrypoint constructs ``DatasetSpec``
+directly from that dict on line 1 of ``main``. Runtime fields (``git_sha``,
+``created_at``, ``run_id``, ``r2_prefix``) auto-fill via ``default_factory``
+when missing and pass through when present (worker reconstruction from JSON).
+``shards``/``num_shards``/``num_params`` are computed deterministically from
+layout + render fields.
+"""
+
 from __future__ import annotations
 
 import subprocess
 from datetime import datetime, timezone
-from typing import Literal
+from functools import cached_property
+from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+import yaml
+from omegaconf import OmegaConf
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
-from pipeline.schemas.config import DatasetConfig, SplitsConfig
 from pipeline.schemas.prefix import (
+    DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
-    DatasetRunId,
-    R2Prefix,
     make_dataset_wandb_run_id,
     make_r2_prefix,
 )
 from src.data.vst import param_specs
 
-# Pinned Surge XT renderer version baked into tinaudio/synth-setter:dev-snapshot
-# (built from SURGE_GIT_REF=f7b97c68 — release-xt/1.3.4). materialize_spec sets
-# this directly into DatasetPipelineSpec.renderer_version so the launcher's
-# code path stays interpreter-only (no pedalboard.VST3Plugin instantiation, no
-# X display dependency). The worker validates the running plugin against this
-# constant via src.data.vst.core.extract_renderer_version (called inline in
-# pipeline.entrypoints.generate_dataset.run) before rendering. Bump together
-# with SURGE_GIT_REF.
-SURGE_XT_RENDERER_VERSION = "1.3.4"
+__all__ = [
+    "DatasetSpec",
+    "RenderConfig",
+    "ShardSpec",
+    "dataset_config_id_from_path",
+    "load_dataset_spec_yaml",
+]
 
+# Source-of-truth mapping from ``output_format`` to shard filename suffix.
+# Adding a format means adding a row here; missing entries surface as KeyError
+# at construction rather than producing a silently-wrong filename.
+_OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5"}
 
-class ShardSpec(BaseModel):
-    """Per-shard identity and pre-computed derived values."""
-
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
-
-    shard_id: int
-    filename: str  # "shard-000000.h5"
-    seed: int  # base_seed + shard_id
-
-
-class DatasetPipelineSpec(BaseModel):
-    """Frozen runtime specification materialized from DatasetConfig."""
-
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
-
-    run_id: DatasetRunId  # unique run ID: {config_id}-{YYYYMMDDTHHMMSSsssZ}
-    r2_prefix: R2Prefix  # R2 storage path: data/{config_id}/{run_id}/
-    created_at: datetime  # UTC, timezone-aware materialization timestamp
-    code_version: str  # git commit SHA at materialization time
-    is_repo_dirty: bool  # True if working tree had uncommitted changes
-    param_spec: str  # name of param spec in registry (e.g. "surge_simple")
-    renderer_version: str  # VST plugin version, extracted from plugin bundle
-    output_format: Literal["hdf5", "wds"]  # shard file format
-    sample_rate: int  # audio sample rate in Hz
-    shard_size: int  # rows (samples) per shard
-    base_seed: int  # deterministic seed base; per-shard seed = base_seed + shard_id
-    num_params: int  # total encoded param count from param_spec registry
-    r2_bucket: str  # Cloudflare R2 bucket name for spec + shard uploads
-    splits: SplitsConfig  # train/val/test shard counts
-    plugin_path: str  # VST3 plugin to render through
-    preset_path: str  # VST preset to load
-    channels: int  # audio channels (e.g. 2 for stereo)
-    velocity: int  # MIDI velocity for note rendering
-    signal_duration_seconds: float  # audio length per sample in seconds
-    min_loudness: float  # loudness floor — retry if below
-    sample_batch_size: int  # batch size for generation efficiency
-    shards: tuple[ShardSpec, ...]  # pre-computed per-shard identity (id, filename, seed)
-
-    @property
-    def num_shards(self) -> int:
-        """Number of shards, derived from the shards tuple length."""
-        return len(self.shards)
-
-    @field_validator("r2_prefix")
-    @classmethod
-    def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
-        # Upload paths concat r2_prefix with filenames (e.g. f"{prefix}{INPUT_SPEC_FILENAME}");
-        # missing trailing slash silently produces a wrong key like ".../prefixinput_spec.json".
-        if not value.endswith("/"):
-            raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
-        return value
-
-    @field_validator("r2_bucket")
-    @classmethod
-    def _r2_bucket_must_not_be_blank(cls, value: str) -> str:
-        # DatasetConfig.r2_bucket has the same validator; this mirror enforces the
-        # invariant when specs come from a non-config path (hand-edited, externally
-        # materialized) so rclone never receives a malformed `r2:/...` destination.
-        if not value.strip():
-            raise ValueError("r2_bucket must not be blank")
-        return value
-
-    @field_validator("shards")
-    @classmethod
-    def _shards_must_not_be_empty(cls, value: tuple[ShardSpec, ...]) -> tuple[ShardSpec, ...]:
-        # DatasetConfig enforces num_shards > 0 at materialize time; this mirror catches
-        # specs loaded from external/hand-edited JSON where shards=[] would otherwise let
-        # generate_dataset.run() succeed as a silent no-op (uploads only the spec).
-        if not value:
-            raise ValueError("shards must not be empty")
-        return value
+# YAML key in legacy ``configs/dataset/*.yaml`` files that names a base config
+# whose keys are merged under the override. Removed in Phase A.3 once Hydra
+# defaults inheritance handles composition.
+_LEGACY_EXTENDS_KEY = "_extends"
 
 
 def _get_git_sha() -> str:
@@ -117,74 +73,325 @@ def _is_repo_dirty() -> bool:
     return result.returncode != 0
 
 
-def materialize_spec(
-    config: DatasetConfig,
-    config_id: DatasetConfigId,
-) -> DatasetPipelineSpec:
-    """Materialize a frozen DatasetPipelineSpec from config and environment.
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
-    Derives all runtime state internally: git SHA, repo dirty status,
-    renderer version from plugin path, current UTC timestamp.
+
+class ShardSpec(BaseModel):
+    """Per-shard identity and pre-computed derived values."""
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    shard_id: int
+    filename: str
+    seed: int
+
+
+class RenderConfig(BaseModel):
+    """Renderer-specific configuration nested as ``DatasetSpec.render``.
+
+    Carries every parameter the per-shard writer needs to produce audio +
+    parameter arrays for its assigned shard. ``param_spec_name`` is resolved
+    against the in-process registry inside the writer (not at the launcher),
+    so launcher-side construction stays interpreter-only.
     """
-    created_at = datetime.now(timezone.utc)
-    return _build_pipeline_spec(
-        config=config,
-        config_id=config_id,
-        code_version=_get_git_sha(),
-        is_repo_dirty=_is_repo_dirty(),
-        renderer_version=SURGE_XT_RENDERER_VERSION,
-        created_at=created_at,
-    )
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    plugin_path: str
+    preset_path: str
+    param_spec_name: str
+    renderer_version: str
+    sample_rate: int
+    channels: int
+    velocity: int
+    signal_duration_seconds: float
+    min_loudness: float
+    sample_batch_size: int
+    batch_per_shard: int
+
+    @model_validator(mode="after")
+    def _ranges_must_be_sane(self) -> RenderConfig:
+        if self.sample_rate <= 0:
+            raise ValueError("sample_rate must be positive")
+        if self.channels < 1:
+            raise ValueError("channels must be >= 1")
+        if not (0 <= self.velocity <= 127):
+            raise ValueError("velocity must be in [0, 127]")
+        if self.signal_duration_seconds <= 0:
+            raise ValueError("signal_duration_seconds must be positive")
+        if self.sample_batch_size <= 0:
+            raise ValueError("sample_batch_size must be positive")
+        if self.batch_per_shard <= 0:
+            raise ValueError("batch_per_shard must be positive")
+        if not self.param_spec_name.strip():
+            raise ValueError("param_spec_name must not be blank")
+        if not self.renderer_version.strip():
+            raise ValueError("renderer_version must not be blank")
+        return self
 
 
-def _build_pipeline_spec(
-    config: DatasetConfig,
-    config_id: DatasetConfigId,
-    *,
-    code_version: str,
-    is_repo_dirty: bool,
-    renderer_version: str,
-    created_at: datetime,
-) -> DatasetPipelineSpec:
-    """Build a DatasetPipelineSpec from config and pre-resolved runtime values.
+class DatasetSpec(BaseModel):
+    """Unified dataset specification — config + materialized runtime in one model.
 
-    This is the pure functional core — no I/O, no side effects.
+    Construction story:
+
+    - Hydra composes a dict from groups.
+    - ``DatasetSpec(**dict)`` runs validation; runtime fields (git_sha,
+      created_at, run_id, r2_prefix, is_repo_dirty) auto-fill via
+      ``default_factory`` when missing and pass through when present.
+    - Workers re-validate ``model_dump_json()`` from R2 and get an equal model.
+
+    ``strict`` is intentionally off on this top-level model so JSON-mode
+    round-trips coerce list→tuple and str→datetime (JSON has no native tuple
+    or datetime types). ``extra="forbid"`` plus the per-field validators keep
+    the trust boundary tight.
     """
-    if config.output_format != "hdf5":
-        raise NotImplementedError(f"Output format {config.output_format!r} not yet supported")
 
-    run_id = make_dataset_wandb_run_id(config_id, timestamp=created_at)
+    model_config = ConfigDict(extra="forbid")
 
-    shards = tuple(
-        ShardSpec(
-            shard_id=i,
-            filename=f"shard-{i:06d}.h5",
-            seed=config.base_seed + i,
+    # Layout fields
+    task_name: str
+    output_format: Literal["hdf5"]
+    train_val_test_sizes: tuple[int, int, int]
+    train_val_test_seeds: tuple[int, int, int]
+    base_seed: int
+    r2_bucket: str
+    r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
+
+    # Sub-model
+    render: RenderConfig
+
+    # Auto-filled runtime fields. ``default_factory`` runs only when the field
+    # is missing in input — JSON-loaded specs preserve the materialization-time
+    # values that the worker needs to remain consistent across the run. The
+    # lambdas re-look-up the helpers per call so test monkeypatches take effect.
+    git_sha: str = Field(default_factory=lambda: _get_git_sha())
+    is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
+    created_at: datetime = Field(default_factory=lambda: _utc_now())
+    run_id: str = ""
+    r2_prefix: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_computed_field_keys(cls, data: Any) -> Any:
+        """Strip ``shards`` / ``num_shards`` / ``num_params`` from input.
+
+        ``model_dump_json`` emits computed fields, so a JSON round-trip would
+        otherwise trip ``extra="forbid"`` on the recomputed values.
+        """
+        if isinstance(data, dict):
+            for computed_key in ("shards", "num_shards", "num_params"):
+                data.pop(computed_key, None)
+        return data
+
+    @model_validator(mode="after")
+    def _populate_derived_runtime_fields(self) -> DatasetSpec:
+        """Fill ``run_id`` / ``r2_prefix`` from ``task_name`` + ``created_at`` when empty.
+
+        Empty defaults mean the input dict didn't carry materialization-time values; non-empty
+        values came from a JSON-loaded spec and pass through unchanged.
+        """
+        if not self.run_id:
+            object.__setattr__(
+                self,
+                "run_id",
+                make_dataset_wandb_run_id(
+                    DatasetConfigId(self.task_name), timestamp=self.created_at
+                ),
+            )
+        if not self.r2_prefix:
+            object.__setattr__(
+                self,
+                "r2_prefix",
+                make_r2_prefix(
+                    DatasetConfigId(self.task_name),
+                    self.run_id,
+                    prefix_root=self.r2_prefix_root,
+                ),
+            )
+        return self
+
+    @field_validator("r2_prefix")
+    @classmethod
+    def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
+        """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
+        if value and not value.endswith("/"):
+            raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
+        return value
+
+    @field_validator("r2_bucket")
+    @classmethod
+    def _r2_bucket_must_not_be_blank(cls, value: str) -> str:
+        """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
+        if not value.strip():
+            raise ValueError("r2_bucket must not be blank")
+        return value
+
+    @field_validator("task_name")
+    @classmethod
+    def _task_name_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("task_name must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _split_sizes_must_be_multiples_of_batch_per_shard(self) -> DatasetSpec:
+        """Each split's sample count must divide cleanly into shards.
+
+        The renderer writes one shard at a time at ``batch_per_shard`` rows
+        per shard; a split size that doesn't divide evenly would either drop
+        the remainder or ship a ragged final shard — both surprises caught at
+        spec-validation time rather than mid-render.
+        """
+        bps = self.render.batch_per_shard
+        for label, size in zip(("train", "val", "test"), self.train_val_test_sizes, strict=True):
+            if size < 0:
+                raise ValueError(f"train_val_test_sizes[{label}] must be non-negative, got {size}")
+            if size % bps != 0:
+                raise ValueError(
+                    f"train_val_test_sizes[{label}]={size} is not a multiple of "
+                    f"render.batch_per_shard={bps}"
+                )
+        if sum(self.train_val_test_sizes) == 0:
+            raise ValueError("train_val_test_sizes must sum to a positive count")
+        return self
+
+    @model_validator(mode="after")
+    def _shard_filenames_match_output_format(self) -> DatasetSpec:
+        """Defense-in-depth: every computed shard filename ends with the format's extension."""
+        expected_ext = _OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        for shard in self.shards:
+            if not shard.filename.endswith(expected_ext):
+                raise ValueError(
+                    f"shard {shard.shard_id} filename {shard.filename!r} does not match "
+                    f"output_format {self.output_format!r} (expected suffix {expected_ext!r})"
+                )
+        return self
+
+    @computed_field  # type: ignore[prop-decorator]
+    @cached_property
+    def shards(self) -> tuple[ShardSpec, ...]:
+        """Shard identities derived from total sample counts and ``batch_per_shard``."""
+        bps = self.render.batch_per_shard
+        total_shards = sum(self.train_val_test_sizes) // bps
+        ext = _OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        return tuple(
+            ShardSpec(
+                shard_id=i,
+                filename=f"shard-{i:06d}{ext}",
+                seed=self.base_seed + i,
+            )
+            for i in range(total_shards)
         )
-        for i in range(config.num_shards)
-    )
 
-    return DatasetPipelineSpec(
-        run_id=run_id,
-        r2_prefix=make_r2_prefix(config_id, run_id),
-        created_at=created_at,
-        code_version=code_version,
-        is_repo_dirty=is_repo_dirty,
-        param_spec=config.param_spec,
-        renderer_version=renderer_version,
-        output_format=config.output_format,
-        sample_rate=config.sample_rate,
-        shard_size=config.shard_size,
-        base_seed=config.base_seed,
-        num_params=len(param_specs[config.param_spec]),
-        r2_bucket=config.r2_bucket,
-        splits=config.splits,
-        plugin_path=config.plugin_path,
-        preset_path=config.preset_path,
-        channels=config.channels,
-        velocity=config.velocity,
-        signal_duration_seconds=config.signal_duration_seconds,
-        min_loudness=config.min_loudness,
-        sample_batch_size=config.sample_batch_size,
-        shards=shards,
+    @computed_field  # type: ignore[prop-decorator]
+    @cached_property
+    def num_shards(self) -> int:
+        return len(self.shards)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @cached_property
+    def num_params(self) -> int:
+        return len(param_specs[self.render.param_spec_name])
+
+
+def dataset_config_id_from_path(config_path: Path) -> DatasetConfigId:
+    """Extract the dataset config ID (filename stem) from a config path."""
+    return DatasetConfigId(config_path.stem)
+
+
+def _resolve_legacy_extends(config_path: Path, raw: dict[str, Any]) -> dict[str, Any]:
+    """Merge a base config into ``raw`` if it declares ``_extends:``.
+
+    Bridges the old flat ``configs/dataset/*.yaml`` shape until Phase A.3
+    migrates the entrypoint to ``@hydra.main`` and Hydra's defaults
+    inheritance replaces this loader.
+    """
+    if _LEGACY_EXTENDS_KEY not in raw:
+        return raw
+    base_name = raw[_LEGACY_EXTENDS_KEY]
+    if not isinstance(base_name, str):
+        raise TypeError(
+            f"{_LEGACY_EXTENDS_KEY} must name a base config (string), "
+            f"got {type(base_name).__name__}"
+        )
+    base_path = config_path.parent / f"{base_name}.yaml"
+    if not base_path.is_file():
+        raise FileNotFoundError(
+            f"_extends target not found: {base_path} (referenced from {config_path})"
+        )
+    with open(base_path) as f:
+        base_raw = yaml.safe_load(f)
+    if not isinstance(base_raw, dict):
+        raise TypeError(f"Expected a YAML mapping in {base_path}, got {type(base_raw).__name__}")
+    base_resolved = _resolve_legacy_extends(base_path, base_raw)
+    override = {k: v for k, v in raw.items() if k != _LEGACY_EXTENDS_KEY}
+    merged = OmegaConf.merge(OmegaConf.create(base_resolved), OmegaConf.create(override))
+    return OmegaConf.to_container(merged, resolve=True)  # type: ignore[return-value]
+
+
+# Pinned plugin version baked into ``tinaudio/synth-setter:dev-snapshot``;
+# legacy YAML files predate ``render.renderer_version`` so the loader injects
+# this default. Phase A.2 surfaces it as a Hydra-composed config field.
+_LEGACY_PINNED_RENDERER_VERSION = "1.3.4"
+
+
+def _legacy_dict_to_dataset_spec_kwargs(raw: dict[str, Any], task_name: str) -> dict[str, Any]:
+    """Reshape a legacy flat dataset YAML dict into ``DatasetSpec`` kwargs.
+
+    Maps ``shard_size``/``num_shards``/``splits`` onto ``train_val_test_sizes``
+    and lifts renderer fields under ``render``. Removed in Phase A.3 with the
+    rest of the legacy YAML loader.
+    """
+    splits = raw["splits"]
+    shard_size = raw["shard_size"]
+    train_val_test_sizes = (
+        splits["train"] * shard_size,
+        splits["val"] * shard_size,
+        splits["test"] * shard_size,
     )
+    train_val_test_seeds = (
+        raw["base_seed"],
+        raw["base_seed"] + 1,
+        raw["base_seed"] + 2,
+    )
+    render = {
+        "plugin_path": raw["plugin_path"],
+        "preset_path": raw["preset_path"],
+        "param_spec_name": raw["param_spec"],
+        "renderer_version": raw.get("renderer_version", _LEGACY_PINNED_RENDERER_VERSION),
+        "sample_rate": raw["sample_rate"],
+        "channels": raw["channels"],
+        "velocity": raw["velocity"],
+        "signal_duration_seconds": raw["signal_duration_seconds"],
+        "min_loudness": raw["min_loudness"],
+        "sample_batch_size": raw["sample_batch_size"],
+        "batch_per_shard": shard_size,
+    }
+    return {
+        "task_name": task_name,
+        "output_format": raw.get("output_format", "hdf5"),
+        "train_val_test_sizes": train_val_test_sizes,
+        "train_val_test_seeds": train_val_test_seeds,
+        "base_seed": raw["base_seed"],
+        "r2_bucket": raw["r2_bucket"],
+        "render": render,
+    }
+
+
+def load_dataset_spec_yaml(config_path: Path) -> DatasetSpec:
+    """Load a legacy flat dataset YAML and construct a ``DatasetSpec``.
+
+    Bridge for callers that haven't migrated to ``@hydra.main``. Removed in
+    Phase A.3 once the entrypoint composes the spec dict via Hydra defaults.
+    """
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    with open(config_path) as f:
+        raw = yaml.safe_load(f)
+    if not isinstance(raw, dict):
+        raise TypeError(f"Expected a YAML mapping in {config_path}, got {type(raw).__name__}")
+    merged = _resolve_legacy_extends(config_path, raw)
+    kwargs = _legacy_dict_to_dataset_spec_kwargs(merged, task_name=config_path.stem)
+    return DatasetSpec(**kwargs)

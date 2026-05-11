@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Validate a materialized DatasetPipelineSpec JSON.
+"""Validate a materialized DatasetSpec JSON.
 
-Provides structural validation (required fields, code_version format, etc.) and optional test-value
+Provides structural validation (required fields, git_sha format, etc.) and optional test-value
 validation for ci-materialize-test.yaml expectations.
 """
 
@@ -12,28 +12,36 @@ import sys
 from pathlib import Path
 
 from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
+from pipeline.schemas.spec import _OUTPUT_FORMAT_TO_EXTENSION
 
-_REQUIRED_FIELDS = [
+_REQUIRED_TOP_LEVEL_FIELDS = [
     "base_seed",
-    "channels",
-    "code_version",
     "created_at",
+    "git_sha",
     "is_repo_dirty",
-    "min_loudness",
     "num_params",
+    "num_shards",
     "output_format",
-    "param_spec",
+    "r2_bucket",
+    "r2_prefix",
+    "render",
+    "run_id",
+    "shards",
+    "task_name",
+    "train_val_test_seeds",
+    "train_val_test_sizes",
+]
+_REQUIRED_RENDER_FIELDS = [
+    "batch_per_shard",
+    "channels",
+    "min_loudness",
+    "param_spec_name",
     "plugin_path",
     "preset_path",
-    "r2_prefix",
     "renderer_version",
-    "run_id",
     "sample_batch_size",
     "sample_rate",
-    "shard_size",
-    "shards",
     "signal_duration_seconds",
-    "splits",
     "velocity",
 ]
 
@@ -42,21 +50,29 @@ def validate_structure(spec: dict) -> list[str]:
     """Validate structural correctness of a spec dict.
 
     Returns a list of error strings (empty means valid).
-    Checks: required fields present, code_version is 40-char hex,
+    Checks: required fields present, git_sha is 40-char hex,
     renderer_version non-empty, shards non-empty.
     """
     errors: list[str] = []
 
-    missing = [f for f in _REQUIRED_FIELDS if f not in spec]
+    missing = [f for f in _REQUIRED_TOP_LEVEL_FIELDS if f not in spec]
     if missing:
         errors.append(f"missing required fields: {missing}")
 
-    cv = spec.get("code_version", "")
-    if not (len(cv) == 40 and all(c in "0123456789abcdef" for c in cv)):
-        errors.append(f"code_version is not a valid 40-char hex SHA: {cv!r}")
+    render = spec.get("render") or {}
+    if not isinstance(render, dict):
+        errors.append("render must be a mapping")
+        render = {}
+    missing_render = [f for f in _REQUIRED_RENDER_FIELDS if f not in render]
+    if missing_render:
+        errors.append(f"missing required render fields: {missing_render}")
 
-    if not spec.get("renderer_version"):
-        errors.append("renderer_version is empty")
+    cv = spec.get("git_sha", "")
+    if not (len(cv) == 40 and all(c in "0123456789abcdef" for c in cv)):
+        errors.append(f"git_sha is not a valid 40-char hex SHA: {cv!r}")
+
+    if not render.get("renderer_version"):
+        errors.append("render.renderer_version is empty")
 
     if not spec.get("shards"):
         errors.append("shards is empty")
@@ -69,7 +85,7 @@ def validate_test_values(spec: dict) -> list[str]:
 
     Returns a list of error strings (empty means valid).
     Checks: 3 shards, seeds [42,43,44], filenames zero-padded,
-    config passthrough (param_spec, sample_rate, shard_size, base_seed, velocity).
+    config passthrough (param_spec_name, sample_rate, batch_per_shard, base_seed, velocity).
     """
     errors: list[str] = []
 
@@ -82,21 +98,29 @@ def validate_test_values(spec: dict) -> list[str]:
         errors.append(f"expected seeds [42, 43, 44], got {seeds}")
 
     filenames = [s["filename"] for s in shards]
-    expected_filenames = ["shard-000000.h5", "shard-000001.h5", "shard-000002.h5"]
+    ext = _OUTPUT_FORMAT_TO_EXTENSION[spec.get("output_format", "hdf5")]
+    expected_filenames = [f"shard-{i:06d}{ext}" for i in range(3)]
     if filenames != expected_filenames:
         errors.append(f"expected filenames {expected_filenames}, got {filenames}")
 
-    passthrough = {
-        "param_spec": "surge_simple",
-        "sample_rate": 16000,
-        "shard_size": 32,
+    render = spec.get("render") or {}
+    top_passthrough = {
         "base_seed": 42,
+    }
+    render_passthrough = {
+        "param_spec_name": "surge_simple",
+        "sample_rate": 16000,
+        "batch_per_shard": 32,
         "velocity": 100,
     }
-    for field, expected in passthrough.items():
+    for field, expected in top_passthrough.items():
         actual = spec.get(field)
         if actual != expected:
             errors.append(f"{field}: expected {expected!r}, got {actual!r}")
+    for field, expected in render_passthrough.items():
+        actual = render.get(field) if isinstance(render, dict) else None
+        if actual != expected:
+            errors.append(f"render.{field}: expected {expected!r}, got {actual!r}")
 
     return errors
 
@@ -124,9 +148,10 @@ def main() -> None:
 
     errors = validate_structure(spec)
     if not errors:
+        render = spec.get("render", {})
         sys.stdout.write("All structural checks passed:\n")
-        sys.stdout.write(f"  code_version:     {spec['code_version']}\n")
-        sys.stdout.write(f"  renderer_version: {spec['renderer_version']}\n")
+        sys.stdout.write(f"  git_sha:          {spec['git_sha']}\n")
+        sys.stdout.write(f"  renderer_version: {render.get('renderer_version')}\n")
         sys.stdout.write(f"  num_params:       {spec['num_params']}\n")
         sys.stdout.write(f"  num_shards:       {len(spec['shards'])}\n")
 
