@@ -52,11 +52,13 @@ setup: |
   set -euo pipefail
   echo "synth-setter worker ready (host: $(hostname))"
 
-# sync_worker_checkout.sh handles the WORKER_GIT_REF PR-CI bake-lag bypass;
-# entrypoint.py is baked at /usr/local/bin and dispatches generate_dataset.
+# sync_worker_checkout.sh handles the WORKER_GIT_REF PR-CI bake-lag bypass.
+# The synced checkout's scripts/docker_entrypoint.py is invoked directly so
+# entrypoint changes on the PR head land before main rebuilds dev-snapshot —
+# /usr/local/bin/entrypoint.py is the baked copy and lags by one main rebuild.
 run: |
   set -euo pipefail
   cd /home/build/synth-setter
   echo "skypilot-run-cwd: $(pwd)"
   bash scripts/sync_worker_checkout.sh
-  exec python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
+  exec python scripts/docker_entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"

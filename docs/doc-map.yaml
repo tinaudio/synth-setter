@@ -269,6 +269,11 @@ docs:
       - pattern: "pyproject.toml"
         covers: "Marker registration ([tool.pytest.ini_options].markers) and default selector"
         scope: "pytest-config"
+      - pattern: "Makefile"
+        covers: "test-fast / test-full-cpu / test-full-gpu / test-full-mps / test-vst-cpu targets and the Linux HEADLESS_WRAPPER auto-prepend"
+        scope: "testing"
+      - pattern: "scripts/run-linux-vst-headless.sh"
+        covers: "Headless X11/Xvfb wrapper bootstrapped by test-full-* / test-vst-cpu on Linux"
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md

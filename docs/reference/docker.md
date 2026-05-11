@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-03-27
+> **Last verified:** 2026-05-11
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -39,8 +39,11 @@ set -a && source .env && set +a
 The image contains no baked credentials and is safe to publish on public
 registries. All credentials flow in at runtime via environment variables;
 dispatch and dataset-run configuration flow via CLI args (subcommand +
-`--spec`). This is the **single source of truth** for what the image
-expects at `docker run` time.
+`--spec`). This table enumerates the credentials and required overrides
+callers **must** supply at `docker run` time — the **single source of
+truth** for that contract. Baked defaults (e.g. `SYNTH_SETTER_PLUGIN_PATH`)
+that callers may override are listed under
+[docker-spec.md § Baked ENV vars](docker-spec.md#baked-env-vars-available-at-runtime).
 
 | Env var                              | Consumer  | Required for       | Notes                                       |
 | ------------------------------------ | --------- | ------------------ | ------------------------------------------- |
@@ -117,7 +120,9 @@ build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
 the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
 Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
-`dev` user, and a `/commandhistory` directory (owned by `dev`) that
+`dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
+`uv pip install` and editable installs work without sudo, and adds a
+`/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
 history survives container rebuilds. The same devcontainer configs also
 overlay `/home/build/synth-setter/plugins` with an anonymous volume so the

@@ -40,7 +40,7 @@ pre-commit install
 Verify your setup:
 
 ```bash
-make test           # quick tests (excludes slow and VST-dependent tests)
+make test-fast      # quick tests (CPU-only; excludes slow, gpu, mps, requires_vst)
 ```
 
 ## Good first issues
@@ -111,8 +111,11 @@ auto-fixes what it can.
 ### Running tests
 
 ```bash
-make test           # quick tests -- excludes slow and requires_vst markers
-make test-full      # all tests (some require GPU or VST plugins)
+make test-fast      # quick tests — CPU-only; excludes slow, gpu, mps, requires_vst
+make test-full-cpu  # all CPU tests (slow + requires_vst included; gpu/mps excluded)
+make test-full-gpu  # GPU + CPU tests (mps excluded). Serial — exclusive GPU access
+make test-full-mps  # MPS + CPU tests (gpu excluded). Serial — exclusive MPS access
+make test-vst-cpu   # VST-only suite (requires_vst, slow included; gpu/mps excluded)
 make test-bats      # BATS shell tests (requires bats — see Prerequisites)
 make coverage       # tests with coverage report (HTML + terminal)
 make benchmark      # performance benchmarks

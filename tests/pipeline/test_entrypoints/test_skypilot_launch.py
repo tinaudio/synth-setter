@@ -32,14 +32,13 @@ from pipeline.entrypoints.skypilot_launch import (
 from pipeline.entrypoints.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
-from pipeline.schemas.config import dataset_config_id_from_path
-from pipeline.schemas.spec import DatasetPipelineSpec
+from pipeline.schemas.spec import DatasetSpec, dataset_config_id_from_path
 
 FIXED_NOW = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _make_config(plugin: Path) -> dict[str, Any]:
-    """Return a fresh DatasetConfig dict pointed at the given fake plugin path."""
+def _make_legacy_config(plugin: Path) -> dict[str, Any]:
+    """Return a fresh legacy-shape dataset YAML dict pointed at the given fake plugin path."""
     return {
         "param_spec": "surge_simple",
         "plugin_path": str(plugin),
@@ -70,27 +69,17 @@ def fake_plugin(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def patch_materialize_io(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub out git/timestamp I/O so `materialize_spec` is deterministic."""
+    """Stub out git/timestamp I/O so DatasetSpec construction is deterministic."""
     monkeypatch.setattr("pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
     monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: False)
-    monkeypatch.setattr(
-        "pipeline.schemas.spec.datetime",
-        type(
-            "FakeDatetime",
-            (),
-            {
-                "now": staticmethod(lambda tz: FIXED_NOW),
-                "fromisoformat": datetime.fromisoformat,
-            },
-        )(),
-    )
+    monkeypatch.setattr("pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
 
 
 @pytest.fixture()
 def config_yaml(tmp_path: Path, fake_plugin: Path) -> Path:
-    """Write a valid DatasetConfig YAML pointed at the fake plugin."""
+    """Write a valid legacy-shape dataset YAML pointed at the fake plugin."""
     path = tmp_path / "runpod-smoke-shard.yaml"
-    path.write_text(yaml.safe_dump(_make_config(fake_plugin), sort_keys=False))
+    path.write_text(yaml.safe_dump(_make_legacy_config(fake_plugin), sort_keys=False))
     return path
 
 
@@ -410,14 +399,14 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """The on-disk spec validates as DatasetPipelineSpec with the patched git/now values."""
+        """The on-disk spec validates as DatasetSpec with the patched git/now values."""
         result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
         assert result.exit_code == 0, result.output
 
         spec_files = list(local_spec_dir.glob("*.json"))
         assert len(spec_files) == 1
-        spec = DatasetPipelineSpec.model_validate_json(spec_files[0].read_text())
-        assert spec.code_version == "abc123def456"
+        spec = DatasetSpec.model_validate_json(spec_files[0].read_text())
+        assert spec.git_sha == "abc123def456"
         assert spec.is_repo_dirty is False
         assert spec.num_shards == 1
         assert spec.r2_bucket == "intermediate-data"
@@ -1454,62 +1443,26 @@ class TestRunCredBootstrap:
 
 
 class TestNumWorkersConfigPrecedence:
-    """`num_workers` resolution order: `--num-workers` CLI flag wins; else dataset config's
-    `num_workers` field; else schema default.
+    """``num_workers`` resolution: ``--num-workers`` CLI flag wins; else default 1.
 
-    Drops the workflow's hardcoded `--num-workers 3` in favor of the dataset config field so the
-    same config produces the same fan-out across call sites.
+    Worker count is a launcher concern — it's not on ``DatasetSpec``. A legacy
+    YAML's ``num_workers`` field is silently ignored by the legacy bridge.
     """
 
-    def test_config_num_workers_drives_fan_out_when_cli_flag_omitted(
+    def test_cli_num_workers_drives_fan_out(
         self,
-        tmp_path: Path,
-        fake_plugin: Path,
+        config_yaml: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`num_workers: 3` in the dataset config drives a 3-cluster fan-out without any CLI
-        flag."""
-        config_dict = _make_config(fake_plugin)
-        config_dict["num_workers"] = 3
-        config_dict["num_shards"] = 3
-        config_dict["splits"] = {"train": 3, "val": 0, "test": 0}
-        config_path = tmp_path / "three-workers.yaml"
-        config_path.write_text(yaml.safe_dump(config_dict, sort_keys=False))
-
-        TestNumWorkersFanOut._setup_n_workers_mock(mock_sky, n=3)
-
-        result = _invoke(config_path, template_yaml, env_file, "--cluster-name", "smoke-job-1")
-
-        assert result.exit_code == 0, result.output
-        assert mock_sky.jobs.launch.call_count == 3
-
-    def test_cli_num_workers_overrides_config(
-        self,
-        tmp_path: Path,
-        fake_plugin: Path,
-        template_yaml: Path,
-        env_file: Path,
-        patch_materialize_io: None,
-        local_spec_dir: Path,
-        mock_sky: MagicMock,
-    ) -> None:
-        """`--num-workers 2` overrides a config that says `num_workers: 5` — CLI wins so an
-        operator can override a config without editing it."""
-        config_dict = _make_config(fake_plugin)
-        config_dict["num_workers"] = 5
-        config_dict["num_shards"] = 5
-        config_dict["splits"] = {"train": 5, "val": 0, "test": 0}
-        config_path = tmp_path / "five-workers.yaml"
-        config_path.write_text(yaml.safe_dump(config_dict, sort_keys=False))
-
+        """``--num-workers 2`` drives a 2-cluster fan-out."""
         TestNumWorkersFanOut._setup_n_workers_mock(mock_sky, n=2)
 
         result = _invoke(
-            config_path,
+            config_yaml,
             template_yaml,
             env_file,
             "--cluster-name",
@@ -1521,7 +1474,7 @@ class TestNumWorkersConfigPrecedence:
         assert result.exit_code == 0, result.output
         assert mock_sky.jobs.launch.call_count == 2
 
-    def test_default_when_neither_cli_nor_config_sets_num_workers(
+    def test_default_when_cli_omitted(
         self,
         config_yaml: Path,
         template_yaml: Path,

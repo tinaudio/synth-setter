@@ -12,6 +12,7 @@ click<8.2
 numpy
 oci
 pydantic>=2
+pydantic-settings>=2
 pyyaml
 # Pin must stay in sync with the bare-runner install in
 # .github/workflows/test-skypilot-debug.yml.
@@ -44,6 +45,7 @@ python-dotenv
 rich
 sh
 rootutils
+ruff
 runpod==1.8.1
 scipy==1.14.1
 threadpoolctl

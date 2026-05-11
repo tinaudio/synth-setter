@@ -2,9 +2,10 @@
 name: repo-review-full
 description: |
   Full multi-skill PR review. Fans out one parallel agent per applicable plugin
-  checklist (selection rules in Step 2) and posts every BLOCK/WARN as an
-  individual unresolved inline PR review comment. Requires the
-  tinaudio-synth-setter-skills plugin.
+  checklist (selection rules in Step 3) and posts every diff-anchored BLOCK/WARN
+  as an individual unresolved inline PR review comment; non-diff findings
+  (merge conflicts, failing checks) go in a `## PR health` section in the
+  review body. Requires the tinaudio-synth-setter-skills plugin.
 ---
 
 # repo-review-full — Multi-Skill Parallel PR Review
@@ -22,12 +23,38 @@ Fetch metadata once:
 
 ```bash
 gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
-  --json number,headRefOid,baseRefOid,files,title,headRefName
+  --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
 ```
 
 If no PR exists for the current branch, stop and tell the user to push and open a PR first.
 
-## Step 2: Pick which skills to fan out to
+## Step 2: Inspect PR health (merge conflicts + failing checks)
+
+Reviewers need to know up front if the PR can't merge or has failing CI — both are independent of the diff and the fan-out sub-agents would never look for them. The orchestrator handles them; sub-agents don't need to know.
+
+**Merge conflicts.** From the JSON in Step 1:
+
+- `mergeable == "CONFLICTING"` → record one BLOCK line:
+  ```
+  BLOCK: <PR> — [pr-health] Merge conflict with base branch (mergeStateStatus=<value>). Rebase or merge base before review.
+  ```
+- `mergeable == "UNKNOWN"` → GitHub hasn't computed mergeability yet; skip (no finding).
+- `mergeable == "MERGEABLE"` → no finding.
+
+**Failing checks.** Parse `statusCheckRollup` from Step 1. Each entry is either a check run (has `conclusion`) or a legacy commit status (has `state`). A check is *failing* if any of these hold:
+
+- `conclusion` ∈ {`FAILURE`, `TIMED_OUT`, `STARTUP_FAILURE`, `ACTION_REQUIRED`}.
+- `state` ∈ {`FAILURE`, `ERROR`}.
+
+Skip `SUCCESS`, `SKIPPED`, `NEUTRAL`, `CANCELLED`, and anything still pending/in-progress. For each failing entry record one BLOCK line:
+
+```
+BLOCK: <PR> — [pr-health] Failing check: <name> (<conclusion-or-state>) — <detailsUrl-or-targetUrl>
+```
+
+If `gh pr checks <N>` is easier than parsing the JSON, use it — but capture the same fields (name, fail reason, link). Hold these PR-health BLOCK lines aside; Step 6 folds them into the review body (they aren't anchored to diff lines).
+
+## Step 3: Pick which skills to fan out to
 
 Read the file list from Step 1. Map file types → relevant skills:
 
@@ -42,7 +69,7 @@ Read the file list from Step 1. Map file types → relevant skills:
 
 Always run `code-health` and `synth-setter-project-standards`. Other skills opt in based on file extensions in the diff. Note which skills you selected; you'll launch one parallel agent per skill.
 
-## Step 3: Launch parallel review agents
+## Step 4: Launch parallel review agents
 
 Launch one `general-purpose` Agent per selected skill. **All agents in a single message** so they run concurrently (Claude Code supports this — one message with N tool calls = N parallel agents).
 
@@ -74,7 +101,7 @@ Each agent returns a Markdown block:
 
 Aim each agent at a 1500-word ceiling so reports stay scannable. The orchestrator (you) can ask for tighter output if a skill's domain is small.
 
-## Step 4: Aggregate findings
+## Step 5: Aggregate findings
 
 Once every parallel agent returns, parse each report's BLOCK and WARN findings. For each finding, build one entry in the post-review JSON. Prefix each comment body with `[<skill>:<severity>]` so reviewers can see which checklist surfaced it.
 
@@ -109,15 +136,17 @@ A finding becomes:
 
 Do NOT dedupe near-duplicate findings across skills (e.g. shell-style and synth-setter-project-standards both flagging a `[ ]` vs `[[ ]]` issue) — keep each skill's signal independent. Acceptable noise per the plan's out-of-scope list.
 
-## Step 5: Build the findings JSON
+## Step 6: Build the findings JSON
 
-Same shape `post_review.py` consumes:
+Same shape `post_review.py` consumes. **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+
+Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[repo-review-full:block]** `, leaving the `[pr-health] …` body unchanged. For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…`.
 
 ```json
 {
   "pr_number": <N>,
   "repo": "<owner>/<repo>",
-  "review_body": "Multi-skill review of PR #<N> — <K> parallel passes (<list of skills>). Every BLOCK/WARN posted below as an individual unresolved thread. Findings on files outside the diff are anchored to the line in the diff that *causes* the staleness or rolled into the review body.",
+  "review_body": "Multi-skill review of PR #<N> — <K> parallel passes (<list of skills>). Every BLOCK/WARN posted below as an individual unresolved thread. Findings on files outside the diff are anchored to the line in the diff that *causes* the staleness or rolled into the review body.\n\n## PR health\n\n- **[repo-review-full:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123",
   "findings": [ ... ]
 }
 ```
@@ -130,7 +159,7 @@ cat > /tmp/repo-review-full-findings.json <<'JSON'
 JSON
 ```
 
-## Step 6: Submit the review
+## Step 7: Submit the review
 
 ```bash
 python3 .claude/skills/_shared/post_review.py < /tmp/repo-review-full-findings.json
@@ -143,7 +172,7 @@ Helper behavior matches `repo-review`:
 - Rolls orphan findings (file outside the diff) into the review body under `## Findings on files outside the diff`.
 - Submits as `event=COMMENT`. Threads stay unresolved.
 
-Report the helper's `html_url` back to the user along with a one-line summary (`Posted N findings: B BLOCK + W WARN across K skills`).
+Report the helper's `html_url` back to the user along with a one-line summary (`Posted N findings: B BLOCK + W WARN across K skills; PR-health flags: <M merge-conflict / F failing-check>`). If PR-health found nothing, drop the trailing `; PR-health flags: ...` clause.
 
 ## Notes
 

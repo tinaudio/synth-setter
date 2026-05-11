@@ -102,17 +102,23 @@ containers.
 
 ### Baked ENV vars (available at runtime)
 
-| Variable                     | Set in targets | Value                                |
-| ---------------------------- | -------------- | ------------------------------------ |
-| `SYNTH_PERMUTATIONS_GIT_REF` | `dev-snapshot` | The git ref the image was built from |
-| `VIRTUAL_ENV`                | `dev-snapshot` | `/venv/main`                         |
-| `PATH`                       | `dev-snapshot` | `$VIRTUAL_ENV/bin:$PATH`             |
+Set by the Dockerfile and inherited by every published target. Callers may
+override any of these at `docker run` time with `-e`.
 
-### Runtime env vars (full enumeration)
+| Variable                     | Set in targets                       | Value                                                                                             |
+| ---------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `SYNTH_PERMUTATIONS_GIT_REF` | `dev-snapshot`                       | The git ref the image was built from                                                              |
+| `VIRTUAL_ENV`                | `dev-snapshot`                       | `/venv/main`                                                                                      |
+| `PATH`                       | `dev-snapshot`                       | `$VIRTUAL_ENV/bin:$PATH`                                                                          |
+| `SYNTH_SETTER_PLUGIN_PATH`   | `dev-snapshot`, `devcontainer-tools` | Absolute path to the baked Surge XT VST3 (`python-base` stage in `docker/ubuntu22_04/Dockerfile`) |
 
-This table is canonical: every env var the image consumes at runtime is
-listed here. Identical to `docs/reference/docker.md` § Runtime environment
-variables — kept in sync as the single source of truth.
+### Runtime env vars — credentials & required overrides
+
+This table enumerates every env var callers **must** supply at `docker run`
+time (credentials) plus any var the image expects from outside but does not
+bake a default for. Baked defaults that callers may override are listed
+under § Baked ENV vars above. Kept in sync with the matching table in
+`docs/reference/docker.md`.
 
 | Env var                              | Consumer  | Required for       | Notes                                       |
 | ------------------------------------ | --------- | ------------------ | ------------------------------------------- |

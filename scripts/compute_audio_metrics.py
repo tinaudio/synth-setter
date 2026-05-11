@@ -224,7 +224,19 @@ def compute_rms(target: np.ndarray, pred: np.ndarray) -> float:
     target_norm = np.linalg.vector_norm(target_rms, axis=-1, ord=2)
     pred_norm = np.linalg.vector_norm(pred_rms, axis=-1, ord=2)
 
-    cosine_sim = np.dot(target_rms[0], pred_rms[0]) / (target_norm * pred_norm)
+    # Silent (or near-silent) pred would make ``pred_norm * target_norm`` underflow
+    # and the cosine become NaN (``0/0``) or unbounded. Short-circuit to ``0`` so the
+    # worst rating is returned and silence cannot be gamed into a higher score.
+    denom = target_norm * pred_norm
+    if float(denom) < 1e-12:
+        logger.warning(
+            "compute_rms: denominator underflow "
+            "(target_norm={t:.3e}, pred_norm={p:.3e}); returning 0",
+            t=float(target_norm),
+            p=float(pred_norm),
+        )
+        return 0.0
+    cosine_sim = np.dot(target_rms[0], pred_rms[0]) / denom
 
     return cosine_sim.mean()
 

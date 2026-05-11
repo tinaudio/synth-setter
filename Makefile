@@ -21,12 +21,37 @@ sync: ## Merge changes from main branch to your current branch
 	git pull
 	git pull origin main
 
-test: ## Run quick tests (excludes slow, requires_vst)
-	pytest -n auto -m "not slow and not requires_vst"
+# Auto-prepend the Linux VST3 headless wrapper (Xvfb + xsettingsd + dbus) to
+# every target that runs requires_vst tests. macOS has a real display server,
+# so HEADLESS_WRAPPER is empty there. Wrapper exits cleanly even if no VST
+# tests run (VST3-not-installed → tests skip via existing skipif decorators).
+UNAME_S := $(shell uname -s)
+HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),scripts/run-linux-vst-headless.sh,)
 
-# test-full runs serially: GPU and DDP tests require exclusive device access
-test-full: ## Run all tests
-	pytest
+test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
+	pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
+
+# test-full-* split per hardware. test-full-cpu can parallelize; test-full-gpu and
+# test-full-mps run serially because GPU/MPS tests need exclusive device access.
+# test-full-cpu/test-full-gpu include requires_vst, so HEADLESS_WRAPPER is
+# prepended on Linux. test-full-mps is guarded to macOS Apple Silicon, where
+# the wrapper is always empty, so it's omitted from that recipe.
+test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps excluded). Linux: bootstraps Xvfb.
+	$(HEADLESS_WRAPPER) pytest -n auto -m "not gpu and not mps"
+
+test-full-gpu: ## GPU + CPU tests (mps excluded). Runs serially for exclusive GPU access. Linux: bootstraps Xvfb.
+	$(HEADLESS_WRAPPER) pytest -m "not mps"
+
+test-full-mps: ## MPS + CPU tests (gpu excluded). Runs serially for exclusive MPS access. (macOS Apple Silicon only.)
+	@OS=$$(uname -s); ARCH=$$(uname -m); \
+	if [ "$$OS" != "Darwin" ] || [ "$$ARCH" != "arm64" ]; then \
+		echo "ERROR: test-full-mps requires macOS Apple Silicon (Darwin/arm64). Detected: $$OS/$$ARCH"; \
+		exit 1; \
+	fi
+	pytest -m "not gpu"
+
+test-vst-cpu: ## VST tests only (slow included; gpu/mps excluded). Linux: bootstraps Xvfb.
+	$(HEADLESS_WRAPPER) pytest -m "requires_vst and not gpu and not mps"
 
 test-bats: ## Run BATS shell tests
 	bats --recursive tests/

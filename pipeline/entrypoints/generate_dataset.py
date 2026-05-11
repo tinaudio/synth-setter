@@ -1,7 +1,7 @@
 """Spec-driven generate_dataset runner.
 
 Public API:
-    load_spec_from_uri(uri): Parse a DatasetPipelineSpec from a local path or r2:// URI.
+    load_spec_from_uri(uri): Parse a DatasetSpec from a local path or r2:// URI.
     run(spec): Full flow — upload spec to R2, generate shard, upload shard to R2.
     run(spec): Full flow — upload spec to R2 once, then loop over
         ``spec.shards`` rendering and uploading each.
@@ -24,14 +24,14 @@ from loguru import logger
 
 from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.partitioning import get_my_shards, read_rank_world_from_env
-from pipeline.schemas.spec import DatasetPipelineSpec, ShardSpec
+from pipeline.schemas.spec import DatasetSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
 
 _R2_URI_SCHEME = "r2://"
 
 
-def load_spec_from_uri(spec_uri: str) -> DatasetPipelineSpec:
-    """Load a DatasetPipelineSpec from a local path or `r2://bucket/key` URI.
+def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
+    """Load a DatasetSpec from a local path or `r2://bucket/key` URI.
 
     Local paths are read directly. R2 URIs are downloaded via rclone (which
     requires the standard `RCLONE_CONFIG_R2_*` env vars to be set in the
@@ -57,7 +57,7 @@ def load_spec_from_uri(spec_uri: str) -> DatasetPipelineSpec:
             spec_text = local_path.read_text()
     else:
         spec_text = Path(spec_uri).read_text()
-    return DatasetPipelineSpec.model_validate_json(spec_text)
+    return DatasetSpec.model_validate_json(spec_text)
 
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
@@ -99,38 +99,33 @@ def _rclone_copy(src: str, dest: str) -> None:
     logger.info(f"rclone returned cleanly: {src} -> {dest}")
 
 
-def build_generate_args(
-    spec: DatasetPipelineSpec, shard: ShardSpec, output_dir: Path
-) -> list[str]:
+def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
-    Args:
-        spec: Materialized pipeline spec (dataset-level parameters).
-        shard: The specific shard to generate (owns filename).
-        output_dir: Directory for the output HDF5 file.
-
-    Returns:
-        List of CLI arguments for generate_vst_dataset.py.
+    HDF5-only: ``DatasetSpec.output_format`` is currently restricted to
+    ``"hdf5"`` and ``generate_vst_dataset.py`` writes HDF5 regardless of the
+    output path. Format dispatch on ``shard.filename`` suffix lands when wds
+    is introduced (PR-12/13/14 in the dataset-pipeline chain).
     """
-    output_file = output_dir / shard.filename
-
+    output_path = output_dir / shard.filename
+    render = spec.render
     options = {
-        "plugin_path": spec.plugin_path,
-        "preset_path": spec.preset_path,
-        "sample_rate": spec.sample_rate,
-        "channels": spec.channels,
-        "velocity": spec.velocity,
-        "signal_duration_seconds": spec.signal_duration_seconds,
-        "min_loudness": spec.min_loudness,
-        "param_spec": spec.param_spec,
-        "sample_batch_size": spec.sample_batch_size,
+        "plugin_path": render.plugin_path,
+        "preset_path": render.preset_path,
+        "sample_rate": render.sample_rate,
+        "channels": render.channels,
+        "velocity": render.velocity,
+        "signal_duration_seconds": render.signal_duration_seconds,
+        "min_loudness": render.min_loudness,
+        "param_spec": render.param_spec_name,
+        "sample_batch_size": render.sample_batch_size,
     }
 
     args = [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
-        str(output_file),
-        str(spec.shard_size),
+        str(output_path),
+        str(render.batch_per_shard),
     ]
     for key, value in options.items():
         args.extend([f"--{key}", str(value)])
@@ -138,44 +133,38 @@ def build_generate_args(
     return args
 
 
-def run(spec: DatasetPipelineSpec) -> None:
+def run(spec: DatasetSpec) -> None:
     """Materialized-spec driven run: upload spec to R2 once, then render+upload each shard.
 
     Spec serialization, spec upload, and the renderer-version constraint check
     happen once per run (pre-loop). Each shard is then rendered, uploaded, and
-    its local HDF5 file unlinked before moving on — so local disk usage is
-    bounded to one shard's worth at a time. Subprocess failures propagate
-    immediately (fail-fast); later shards are not attempted.
+    its local file unlinked before moving on — so local disk usage is bounded
+    to one shard at a time. Subprocess failures propagate immediately
+    (fail-fast); later shards are not attempted.
 
-    HDF5-only. Other output formats (e.g. WebDataset) are not yet wired into
-    the downstream generator.
-
-    Args:
-        spec: Pre-materialized DatasetPipelineSpec.
+    HDF5-only for now: ``spec.output_format`` is restricted to ``"hdf5"``.
 
     Raises:
-        ValueError: If ``spec.output_format != "hdf5"``.
         RuntimeError: If the worker's plugin version disagrees with
             ``spec.renderer_version``.
     """
-    if spec.output_format != "hdf5":
-        raise ValueError(
-            f"generate_vst_dataset.py only supports hdf5 output, got: {spec.output_format}"
-        )
-
-    # Constraint check: the plugin actually present on this worker must match the
-    # renderer_version pinned into the spec at materialize time. The launcher trusts
-    # SURGE_XT_RENDERER_VERSION blindly so its code path stays interpreter-only;
-    # the worker is where pedalboard is available, so this is where we verify.
-    actual_renderer_version = extract_renderer_version(Path(spec.plugin_path))
-    if actual_renderer_version != spec.renderer_version:
+    # The launcher builds the spec interpreter-only (no pedalboard / X11)
+    # trusting the ``render.renderer_version`` value from its dataset config;
+    # the worker has pedalboard, so this is where we verify against the actual
+    # plugin bundle. Bump renderer_version in the dataset config alongside the
+    # SURGE_GIT_REF baked into the worker image.
+    render = spec.render
+    actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
+    if actual_renderer_version != render.renderer_version:
         raise RuntimeError(
-            f"Renderer version mismatch: spec pins {spec.renderer_version!r} but "
-            f"plugin at {spec.plugin_path} reports {actual_renderer_version!r}. "
+            f"Renderer version mismatch: spec pins {render.renderer_version!r} but "
+            f"plugin at {render.plugin_path} reports {actual_renderer_version!r}. "
             "Rebuild the image against the matching SURGE_GIT_REF, or bump "
-            "SURGE_XT_RENDERER_VERSION in pipeline.schemas.spec."
+            "renderer_version in the dataset config that produced this spec."
         )
-    logger.info(f"renderer_version OK: plugin at {spec.plugin_path} == {spec.renderer_version}")
+    logger.info(
+        f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"
+    )
 
     # Read rank/world before any tmpdir / R2 work — fail loudly on missing env.
     rank, world = read_rank_world_from_env()
@@ -207,15 +196,15 @@ def run(spec: DatasetPipelineSpec) -> None:
 
 
 def _render_and_upload_shard(
-    spec: DatasetPipelineSpec,
+    spec: DatasetSpec,
     shard: ShardSpec,
     work_dir: Path,
     r2_dest_prefix: str,
 ) -> None:
     """Render a single shard, upload it to R2, then unlink the local file.
 
-    Unlinking after upload bounds local disk to one shard's HDF5 at a time — necessary for multi-
-    shard runs on disk-constrained workers.
+    Unlinking after upload bounds local disk to one shard at a time — necessary for multi-shard
+    runs on disk-constrained workers.
     """
     args = [VST_HEADLESS_WRAPPER] if sys.platform == "linux" else []
     args += build_generate_args(spec, shard, work_dir)

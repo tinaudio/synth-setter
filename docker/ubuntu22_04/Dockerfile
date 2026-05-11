@@ -247,6 +247,10 @@ FROM builder-install-surge-from-${BUILD_MODE} AS python-base
 RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)" \
     || (echo "ERROR: Surge XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
 
+# Point tests and ensure_plugin_symlinks.sh at the system VST3 path baked above,
+# so container callers don't have to pass `-e SYNTH_SETTER_PLUGIN_PATH=...`.
+ENV SYNTH_SETTER_PLUGIN_PATH="/usr/lib/vst3/Surge XT.vst3"
+
 # Install Python and create venv
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
@@ -416,6 +420,9 @@ ARG USER_GID=$USER_UID
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID --shell /bin/bash -m $USERNAME
 RUN chown -R $USER_UID:$USER_GID .git
+# Directories only: pip writes are governed by the parent dir's permission bit,
+# and skipping files avoids overlayfs copy-up of ~2.5 GB of prebuilt deps.
+RUN find /venv/main -type d -exec chown $USER_UID:$USER_GID {} +
 
 # Persist bash history for non-root dev: user
 RUN mkdir -p /commandhistory \

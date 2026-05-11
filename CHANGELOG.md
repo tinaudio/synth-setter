@@ -1,6 +1,221 @@
 # CHANGELOG
 
 
+## v0.14.1 (2026-05-11)
+
+### Bug Fixes
+
+- **evaluation**: Clamp compute_rms denominator to defuse MPS pred.wav silence flake
+  ([#899](https://github.com/tinaudio/synth-setter/pull/899),
+  [`b4830f7`](https://github.com/tinaudio/synth-setter/commit/b4830f755d99be27f99869c4cb7067cbe5296864))
+
+* fix(testing): clamp compute_rms denominator to defuse MPS pred.wav silence flake
+
+`test_train_eval_surge_xt[mps]` intermittently failed with `pred.wav is silent` because MPS has
+  non-deterministic ops and a 1-step-trained model occasionally predicted params Surge XT renders
+  below -120 dBFS. The silence assertion existed only as a defensive proxy for `compute_rms`'s `0/0
+  → NaN` when `pred_norm = 0`.
+
+Move the protection into `compute_rms` itself (matches the epsilon-clip pattern already used in
+  `compute_sot`), so silent pred yields `cosine_sim = 0` rather than NaN. Drop the pred.wav silence
+  assertion; keep the target.wav check (target silence would be a real bug).
+
+Returning 0 is within the natural [0, 1] range of cosine similarity for non-negative vectors and
+  correctly penalizes silent predictions; it cannot be gamed upward. No consumer relies on
+  NaN-as-marker.
+
+Closes #898
+
+* fix(testing): short-circuit compute_rms underflow to actually return 0
+
+Per Copilot review on PR #899: the prior commit logged "returning 0" on denominator underflow but
+  still computed ``dot/np.clip(denom, 1e-12, None)``, which only collapsed to 0 when the numerator
+  was exactly 0 (bit-silent pred). For quiet-but-non-zero inputs the clamped division returned an
+  unbounded small value, contradicting the warning text and the PR's documented intent.
+
+Move the clamp branch to an explicit ``return 0.0`` and add a regression test with ``target = pred =
+  uniform 1e-7`` that would have returned ~0.4 pre-fix.
+
+### Build System
+
+- **docker**: Bake SYNTH_SETTER_PLUGIN_PATH env var into image
+  ([#895](https://github.com/tinaudio/synth-setter/pull/895),
+  [`5e96c0d`](https://github.com/tinaudio/synth-setter/commit/5e96c0d3c1443ea91fbefa49b1b45b7d32aeb0fd))
+
+* build(docker): bake SYNTH_SETTER_PLUGIN_PATH into image
+
+Set SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3 in the python-base stage so it inherits
+  into every downstream image. Tests and scripts/ensure_plugin_symlinks.sh now find the system VST3
+  without callers having to pass -e SYNTH_SETTER_PLUGIN_PATH=... at docker run time.
+
+Refs #893
+
+* docs(docker): document SYNTH_SETTER_PLUGIN_PATH as a baked ENV var
+
+Pair with the Dockerfile change: add the new var to the "Baked ENV vars" table in docker-spec.md,
+  tighten the "Runtime env vars" framing in both docker.md and docker-spec.md to distinguish
+  credentials/required overrides from baked defaults callers may override, and link the two tables
+  so they stay in sync. Bump docker.md's verification date to 2026-05-11.
+
+- **docker**: Make /venv/main writable by dev user in devcontainer-tools
+  ([#892](https://github.com/tinaudio/synth-setter/pull/892),
+  [`fec596a`](https://github.com/tinaudio/synth-setter/commit/fec596a78c8c51476db2e6e0fbe956bd402c1860))
+
+* build(docker): make /venv/main writable by dev user in devcontainer-tools
+
+The devcontainer-tools stage creates the non-root $USERNAME (dev) user but leaves /venv/main owned
+  by root, so the dev user cannot install or upgrade Python packages inside the running container
+  without sudo. Chown the venv to the dev UID/GID alongside the existing .git chown so editable
+  installs and tool upgrades work out of the box.
+
+Refs #539
+
+* docs(docker): note /venv/main is chowned to dev in devcontainer-tools
+
+Follow-up to the chown step added in this PR so the prose in the devcontainer-tools enumeration
+  matches what the stage actually does. Per the doc-drift report on PR #892.
+
+* build(docker): chown only /venv/main directories to avoid layer copy-up
+
+Recursive `chown -R` on /venv/main forced overlayfs copy-up of every file in the prebuilt venv (~2.5
+  GB including torch), inflating the devcontainer-tools image layer. Switch to `find -type d` so
+  only directory entries change ownership; pip add/remove/replace operations need write on the
+  parent dir, not on the files themselves, so the dev user can still install and upgrade packages
+  without sudo.
+
+- **make**: Split test-full into per-hardware targets (cpu/gpu/mps/vst) + rename test → test-fast
+  ([#891](https://github.com/tinaudio/synth-setter/pull/891),
+  [`fca7e69`](https://github.com/tinaudio/synth-setter/commit/fca7e694a836a759cb7359a1933aa54802c55183))
+
+* build(make): split test-full into per-hardware targets; rename test → test-fast
+
+Replaces: - `make test` → `make test-fast` (CPU-only inner loop; excludes slow, gpu, mps,
+  requires_vst). Fixes a latent bug where the prior `make test` filter did not exclude gpu/mps, so a
+  non-slow gpu/mps test would fail on a Linux dev box. - `make test-full` → three hardware-scoped
+  targets: - `test-full-cpu` — all CPU tests (slow + requires_vst included; gpu/mps excluded).
+  Parallel. - `test-full-gpu` — GPU + CPU tests (mps excluded). Serial — exclusive GPU access. -
+  `test-full-mps` — MPS + CPU tests (gpu excluded). Serial — exclusive MPS access.
+
+Motivation: pytest fails on mps tests when run on a host without Apple silicon (and vice versa for
+  gpu on a non-CUDA host). The old `make test-full` ran `pytest` with no marker filter, so it
+  crashed on both. Splitting per hardware lets each runtime pick the right target.
+
+Doc updates: CLAUDE.md, CONTRIBUTING.md, README.md, docs/getting-started.md,
+  docs/reference/testing.md, docs/design/eval-pipeline.md, post-create.sh, and
+  .github/agents/lint-cleanup.md updated to reference the new targets.
+
+Note: `.github/workflows/test*.yml` still calls raw `pytest` invocations with their own marker
+  filters; migrating CI to use the new make targets is left as a follow-up.
+
+Refs #882
+
+* build(make): bundle Linux Xvfb wrapper into test-full-* + add test-vst-cpu
+
+Two ergonomics wins on top of the per-hardware split:
+
+1. Auto-prepend `scripts/run-linux-vst-headless.sh` (Xvfb + xsettingsd + dbus bootstrap) to every
+  test-full-* and test-vst-cpu target on Linux. macOS has a real display server, so HEADLESS_WRAPPER
+  is empty there. Callers no longer have to remember `scripts/run-linux-vst-headless.sh make
+  test-full-cpu` — `make test-full-cpu` Just Works on both Linux and macOS. Hosts without a VST3
+  binary still skip requires_vst tests via existing skipif decorators; the Xvfb bootstrap costs ~ms
+  in that case.
+
+2. Add `test-vst-cpu` for the inner-loop VST workflow: `requires_vst and not gpu and not mps`, slow
+  included. Useful when iterating on the renderer or wds writer without re-running 500+ unrelated
+  tests.
+
+Doc updates (CONTRIBUTING.md, CLAUDE.md, docs/reference/testing.md) reflect both additions.
+
+* docs(testing): refresh make-target reference + register Makefile in doc-map
+
+Two doc-drift findings from running doc-drift on this PR:
+
+- docs/reference/testing.md:166 used to point at `make test` and `make test-full`. Both names no
+  longer exist. Repoint at `test-fast` + `test-full-*` (drift-resistant — names the category, not
+  the contents).
+
+- docs/doc-map.yaml didn't list `Makefile` or `scripts/run-linux-vst-headless.sh` under the
+  testing.md entry. After this PR, both materially define the test surface that testing.md
+  documents, so add them so future Makefile-only changes trigger doc-drift against testing.md.
+
+* docs(make): clarify test-fast scope + drop misleading Linux note from test-full-mps
+
+Address Copilot review feedback on #891:
+
+- Makefile: test-full-mps help text claimed "Linux: bootstraps Xvfb." but MPS only runs on macOS
+  (HEADLESS_WRAPPER is empty on Darwin). Replaced with "(macOS only.)". -
+  .github/agents/lint-cleanup.md: step 7 said `make test-fast` and "all tests must still pass", but
+  test-fast is a reduced suite (excludes slow/gpu/mps/requires_vst). Reworded to call it the quick
+  CPU smoke check and spell out the excluded markers.
+
+Refs #890
+
+* build(make): guard test-full-mps to macOS Apple Silicon only
+
+Address Copilot review feedback on #891 (comment #3216387196):
+
+The recipe's help text already said "(macOS only.)" after the prior review round, but the recipe
+  itself would still run on non-Darwin hosts and collect @pytest.mark.mps tests. Add a uname-based
+  guard that fails fast with a clear error if invoked outside Darwin/arm64.
+
+Since the guard prevents Linux execution, $(HEADLESS_WRAPPER) (always empty on macOS) is now
+  redundant in this recipe — dropped, and the comment block above test-full-* updated accordingly.
+
+### Chores
+
+- **deps**: Add ruff and pydantic-settings to requirements-app.txt
+  ([#894](https://github.com/tinaudio/synth-setter/pull/894),
+  [`1eb0ef1`](https://github.com/tinaudio/synth-setter/commit/1eb0ef131e1dbfa4f2b8f2d3c0cede03349dd841))
+
+ruff is already configured (pyproject.toml [tool.ruff*]) and runs in pre-commit, but isn't a direct
+  dev dep — adding it lets contributors invoke `ruff check` / `ruff format` from editors and the CLI
+  without shelling out through the pre-commit harness.
+
+pydantic-settings is required for the planned migration in #885 (generate_vst_dataset CLI
+  auto-generated from RenderConfig fields).
+
+Refs #885
+
+- **skills**: Flag merge conflicts and failing checks in /repo-review skills
+  ([#897](https://github.com/tinaudio/synth-setter/pull/897),
+  [`4c4153b`](https://github.com/tinaudio/synth-setter/commit/4c4153b3f4c1536b5d705e3ccf1864d291e07fbe))
+
+* chore(skills): flag merge conflicts and failing checks in /repo-review skills
+
+Both /repo-review and /repo-review-full now inspect PR-health up front (mergeable,
+  statusCheckRollup) and surface merge conflicts and failing required checks as block-level findings
+  in the review body. These signals aren't anchored to diff hunks, so they're folded into a `## PR
+  health` section in review_body rather than posted as inline comments.
+
+Refs #896
+
+* chore(skills): clarify PR-health rendering in /repo-review skill docs
+
+Address Copilot review on PR #897: - Document the Step 2 BLOCK -> Step 5/6 bullet transformation
+  explicitly in both repo-review and repo-review-full SKILL.md (PR comments 3216544098, 3216544127).
+  - Update both skill descriptions to note that PR-health findings land in the review body, not as
+  inline comments (PR comment 3216544115).
+
+Doc-only. No behavior change.
+
+### Continuous Integration
+
+- Sum connected/disconnected counts across paginated timeline pages
+  ([#889](https://github.com/tinaudio/synth-setter/pull/889),
+  [`2bb47b3`](https://github.com/tinaudio/synth-setter/commit/2bb47b39a5f818167daca705deb675a7b899636a))
+
+`gh api --paginate --jq` runs the jq filter once per fetched page and concatenates the per-page
+  outputs, so a long-timeline PR yields one count per page (e.g. '0\n0' for two pages). The
+  downstream regex check then classifies the multi-line value as non-numeric and the gate fails with
+  'Timeline API returned unexpected non-numeric values'.
+
+Pipe each `gh api --paginate` invocation through awk to sum the per-page counts into a single
+  integer. PR #883 has two timeline pages; this fix collapses '0\n0' → '0' so the regex passes and
+  the linked-issue check proceeds.
+
+Refs #882
+
+
 ## v0.14.0 (2026-05-08)
 
 ### Documentation

@@ -92,3 +92,21 @@ class TestMakeR2Prefix:
         """Prefix always ends with a trailing slash."""
         result = make_r2_prefix(DatasetConfigId("a"), DatasetRunId("b"))
         assert result.endswith("/")
+
+    def test_make_r2_prefix_strips_trailing_slash_from_root(self):
+        """``prefix_root="data/"`` does not produce a double slash."""
+        result = make_r2_prefix(DatasetConfigId("a"), DatasetRunId("b"), prefix_root="data/")
+        assert result == "data/a/b/"
+
+    def test_make_r2_prefix_strips_leading_slash_from_root(self):
+        """``prefix_root="/data"`` does not produce a leading slash."""
+        result = make_r2_prefix(DatasetConfigId("a"), DatasetRunId("b"), prefix_root="/data")
+        assert result == "data/a/b/"
+
+    def test_make_r2_prefix_rejects_empty_root(self):
+        """Slash-only or empty ``prefix_root`` raises rather than producing ``/a/b/``."""
+        import pytest
+
+        for bad in ("", "/", "///"):
+            with pytest.raises(ValueError, match="prefix_root"):
+                make_r2_prefix(DatasetConfigId("a"), DatasetRunId("b"), prefix_root=bad)

@@ -3,7 +3,7 @@
 The entrypoint is a click group with five subcommands:
   - idle                → execs ``sleep infinity``
   - passthrough ARGV... → execs ARGV (or errors on empty)
-  - generate_dataset    → parses --spec into DatasetPipelineSpec, calls run(spec)
+  - generate_dataset    → parses --spec into DatasetSpec, calls run(spec)
   - render_eval         → ClickException "tracked in #410"
   - train               → ClickException "tracked in #409"
 
@@ -89,30 +89,32 @@ def runner() -> CliRunner:
 
 
 def _valid_spec_payload() -> dict[str, Any]:
-    """Return a JSON-serializable dict that validates as DatasetPipelineSpec."""
+    """Return a JSON-serializable dict that validates as DatasetSpec."""
     return {
-        "run_id": "test-dataset-20260328T120000Z",
-        "r2_prefix": "data/test-dataset/test-dataset-20260328T120000Z/",
-        "created_at": "2026-03-28T12:00:00Z",
-        "code_version": "a" * 40,
+        "task_name": "test-dataset",
+        "run_id": "test-dataset-20260328T120000000Z",
+        "r2_prefix": "data/test-dataset/test-dataset-20260328T120000000Z/",
+        "created_at": "2026-03-28T12:00:00+00:00",
+        "git_sha": "a" * 40,
         "is_repo_dirty": False,
-        "param_spec": "surge_simple",
-        "renderer_version": "1.3.4",
         "output_format": "hdf5",
-        "sample_rate": 16000,
-        "shard_size": 10000,
+        "train_val_test_sizes": [10000, 0, 0],
+        "train_val_test_seeds": [42, 43, 44],
         "base_seed": 42,
-        "num_params": 92,
         "r2_bucket": "intermediate-data",
-        "splits": {"train": 1, "val": 0, "test": 0},
-        "plugin_path": "FakePlugin.vst3",
-        "preset_path": "presets/surge-base.vstpreset",
-        "channels": 2,
-        "velocity": 100,
-        "signal_duration_seconds": 4.0,
-        "min_loudness": -55.0,
-        "sample_batch_size": 32,
-        "shards": [{"shard_id": 0, "filename": "shard-000000.h5", "seed": 42}],
+        "render": {
+            "plugin_path": "FakePlugin.vst3",
+            "preset_path": "presets/surge-base.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "1.3.4",
+            "sample_rate": 16000,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "sample_batch_size": 32,
+            "batch_per_shard": 10000,
+        },
     }
 
 
@@ -272,20 +274,20 @@ class TestPassthrough:
 
 
 class TestGenerateDataset:
-    """generate_dataset parses --spec into DatasetPipelineSpec, calls run() in-process."""
+    """generate_dataset parses --spec into DatasetSpec, calls run() in-process."""
 
     def test_happy_path_parses_spec_and_calls_run(
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
-        """Valid --spec JSON is parsed into DatasetPipelineSpec and passed to run()."""
-        from pipeline.schemas.spec import DatasetPipelineSpec
+        """Valid --spec JSON is parsed into DatasetSpec and passed to run()."""
+        from pipeline.schemas.spec import DatasetSpec
 
         payload = _valid_spec_payload()
         spec_path = _write_spec_file(tmp_path, payload)
 
-        captured: list[DatasetPipelineSpec] = []
+        captured: list[DatasetSpec] = []
 
-        def fake_run(spec: DatasetPipelineSpec) -> None:
+        def fake_run(spec: DatasetSpec) -> None:
             captured.append(spec)
 
         exit_calls: list[int] = []
@@ -300,7 +302,7 @@ class TestGenerateDataset:
         parsed = captured[0]
         assert parsed.run_id == payload["run_id"]
         assert parsed.r2_bucket == payload["r2_bucket"]
-        assert parsed.shard_size == payload["shard_size"]
+        assert parsed.render.batch_per_shard == payload["render"]["batch_per_shard"]
         assert parsed.shards[0].filename == "shard-000000.h5"
 
     def test_happy_path_calls_os_exit_zero_after_run(
@@ -371,7 +373,7 @@ class TestGenerateDataset:
     def test_invalid_spec_shape_exits_nonzero_without_calling_run(
         self, runner: CliRunner, entrypoint: ModuleType, tmp_path: Path
     ) -> None:
-        """Valid JSON that doesn't satisfy DatasetPipelineSpec fails without calling run()."""
+        """Valid JSON that doesn't satisfy DatasetSpec fails without calling run()."""
         spec_path = _write_spec_file(tmp_path, {})
 
         def fake_run(spec: object) -> None:  # pragma: no cover
