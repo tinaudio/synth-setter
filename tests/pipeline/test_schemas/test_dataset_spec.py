@@ -532,8 +532,9 @@ class TestSpecImportStaysLauncherPure:
 class TestSpecConstructionStaysPedalboardFree:
     """Importing schemas + building/serializing a DatasetSpec must not load pedalboard.
 
-    Run in a fresh subprocess so the parent test session — which loads pedalboard
-    transitively via ``tests/conftest.py`` — does not poison the check.
+    Run in a fresh subprocess so the parent test session — where earlier tests
+    import ``src.data.vst.core`` (and other modules that pull pedalboard
+    transitively) — does not poison the check.
     """
 
     def test_dataset_spec_num_params_does_not_import_pedalboard(self) -> None:
