@@ -21,7 +21,7 @@ POST_CREATE_BUDGET_SECONDS = 30.0
 FORBIDDEN_SLOW_OPERATIONS: tuple[tuple[str, str], ...] = (
     (r"\bapt-get\s+install\b", "apt-get install (belongs in Dockerfile)"),
     (r"\bapt\s+install\b", "apt install (belongs in Dockerfile)"),
-    (r"\bpip\s+install\b", "pip install (belongs in Dockerfile)"),
+    (r"(?<!uv\s)\bpip\s+install\b", "pip install (belongs in Dockerfile)"),
     (r"\buv\s+pip\s+install\b", "uv pip install (belongs in Dockerfile)"),
     (r"\bconda\s+install\b", "conda install (belongs in Dockerfile)"),
     (r"\bmamba\s+install\b", "mamba install (belongs in Dockerfile)"),

@@ -20,7 +20,7 @@ import pytest
 
 SECRET_KEYWORD_PATTERN = re.compile(
     r"(?i)(?:token|secret|password|api[_-]?key|access[_-]?key)\s*=\s*"
-    r"['\"]([A-Za-z0-9_\-/+=]{16,})['\"]"
+    r"['\"]?(?!\$)([A-Za-z0-9_\-/+=]{16,})['\"]?"
 )
 
 ALLOWLISTED_VARIABLE_NAMES: frozenset[str] = frozenset(
