@@ -213,8 +213,8 @@ A PR title must stand on its own. A reader who is familiar with the project but 
 
 - **Name the specific subject, not just the action.** If the PR migrates *one specific schema or component*, say which one. "Complete migration" or "fix bug" without a noun is not enough.
 - **Don't rely on the issue, PR body, or commit list to disambiguate.** If the title would be ambiguous without that context, it is ambiguous, period.
-- **Keep the conventional-commit prefix and scope.** The added context goes in the human-readable subject after the colon, not in the scope.
-- **Stay under the gitlint title limit.** If the natural phrasing won't fit, shorten the action verb ("complete" → "finish", "remove" → "drop") or compress the scope — but never drop the specific subject to save characters.
+- **Keep the conventional commit prefix and scope.** The added context goes in the human-readable subject after the colon, not in the scope. The scope is a stable component identifier (`pipeline`, `claude-md`); the specific subject lives in the words after the colon.
+- **Stay under the gitlint title limit.** If the natural phrasing won't fit, shorten the action verb ("complete" → "finish", "remove" → "drop") or tighten the subject's phrasing — but never drop the specific subject itself to save characters.
 
 Example:
 
