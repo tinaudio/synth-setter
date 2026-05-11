@@ -239,12 +239,13 @@ def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     Resolves all interpolations, drops the non-DatasetSpec sub-trees, and constructs the model.
     Raises if the composed config is not a mapping.
     """
-    raw: Any = OmegaConf.to_container(cfg, resolve=True)
+    raw: object = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
-    for key in _NON_SPEC_KEYS:
-        raw.pop(key, None)
-    return DatasetSpec(**raw)
+    spec_kwargs: dict[str, Any] = {
+        k: v for k, v in raw.items() if isinstance(k, str) and k not in _NON_SPEC_KEYS
+    }
+    return DatasetSpec(**spec_kwargs)
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="dataset")
