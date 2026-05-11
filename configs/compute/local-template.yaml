@@ -23,7 +23,13 @@
 
 resources:
   cloud: kubernetes
-  cpus: 2+
+  # Managed-jobs on single-node kind (CI's `sky local up --no-gpus`): the kind
+  # node has ~4 vCPU allocatable, kube-system + ingress-nginx + the
+  # `sky-jobs-controller` pod consume ~2050m, leaving ~1950m. A `cpus: 2+`
+  # worker request rounded up past that headroom and pinned the worker pod in
+  # `FailedScheduling/Insufficient cpu`, which silently hangs
+  # `sky.jobs.tail_logs`. Smoke shard needs little CPU; `1+` fits with room.
+  cpus: 1+
   memory: 4+
   # NB: `disk_size` deliberately omitted — Kubernetes rejects it ("Disk size is
   # not supported by Kubernetes. To add additional disk, use volumes."), and
