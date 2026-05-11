@@ -1386,9 +1386,9 @@ On first `generate` (`python -m pipeline.entrypoints.generate_dataset experiment
 5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2_prefix>/input_spec.json`).
 6. Proceed with reconciliation.
 
-**Dirty repo handling:** When `is_repo_dirty` is true, `generate` automatically creates a `git diff` and uploads it to `metadata/run_diff.patch`. This allows reconstructing the exact code state even when changes weren't committed — common during rapid ML research iteration.
+**Dirty repo handling (planned):** `is_repo_dirty` is captured in the spec, but the design's auto-upload of `git diff` to `metadata/run_diff.patch` is not yet implemented in `generate_dataset` — captured here as the intended behavior so a dirty repo's exact code state can be reconstructed during rapid ML research iteration.
 
-**Config drift protection:** If `experiment=<id>` is composed against a `run_id` that already has a spec on R2, the command errors. The spec is authoritative after creation.
+**Config drift protection (planned, [#386](https://github.com/tinaudio/synth-setter/issues/386)):** The intended behavior is that composing `experiment=<id>` against a `run_id` that already has a spec on R2 errors and treats the existing spec as authoritative. Today, `generate_dataset` always derives a fresh `run_id` from `task_name + created_at` and writes a new spec — so this check is documented intent, not enforced behavior.
 
 ### 14.6 Run ID Format
 
