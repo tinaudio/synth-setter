@@ -38,6 +38,7 @@ from pipeline.schemas.prefix import (
 from src.data.vst import param_specs
 
 __all__ = [
+    "OUTPUT_FORMAT_TO_EXTENSION",
     "DatasetSpec",
     "RenderConfig",
     "ShardSpec",
@@ -48,7 +49,7 @@ __all__ = [
 # Source-of-truth mapping from ``output_format`` to shard filename suffix.
 # Adding a format means adding a row here; missing entries surface as KeyError
 # at construction rather than producing a silently-wrong filename.
-_OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5"}
+OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5"}
 
 # YAML key in legacy ``configs/dataset/*.yaml`` files that names a base config
 # whose keys are merged under the override. Removed in Phase A.3 once Hydra
@@ -74,6 +75,7 @@ def _is_repo_dirty() -> bool:
 
 
 def _utc_now() -> datetime:
+    """Return the current time as a timezone-aware UTC datetime."""
     return datetime.now(timezone.utc)
 
 
@@ -112,6 +114,7 @@ class RenderConfig(BaseModel):
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
+        """Reject out-of-range numeric inputs and blank required strings at construction."""
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be positive")
         if self.channels < 1:
@@ -178,9 +181,12 @@ class DatasetSpec(BaseModel):
         """Strip ``shards`` / ``num_shards`` / ``num_params`` from input.
 
         ``model_dump_json`` emits computed fields, so a JSON round-trip would
-        otherwise trip ``extra="forbid"`` on the recomputed values.
+        otherwise trip ``extra="forbid"`` on the recomputed values. Copies the
+        input mapping so callers that hold a reference (logging, retries) see
+        their dict unchanged.
         """
         if isinstance(data, dict):
+            data = dict(data)
             for computed_key in ("shards", "num_shards", "num_params"):
                 data.pop(computed_key, None)
         return data
@@ -231,6 +237,7 @@ class DatasetSpec(BaseModel):
     @field_validator("task_name")
     @classmethod
     def _task_name_must_not_be_blank(cls, value: str) -> str:
+        """Reject blank ``task_name`` so derived run_id / r2_prefix are never empty-prefixed."""
         if not value.strip():
             raise ValueError("task_name must not be blank")
         return value
@@ -260,7 +267,7 @@ class DatasetSpec(BaseModel):
     @model_validator(mode="after")
     def _shard_filenames_match_output_format(self) -> DatasetSpec:
         """Defense-in-depth: every computed shard filename ends with the format's extension."""
-        expected_ext = _OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        expected_ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
         for shard in self.shards:
             if not shard.filename.endswith(expected_ext):
                 raise ValueError(
@@ -275,7 +282,7 @@ class DatasetSpec(BaseModel):
         """Shard identities derived from total sample counts and ``batch_per_shard``."""
         bps = self.render.batch_per_shard
         total_shards = sum(self.train_val_test_sizes) // bps
-        ext = _OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
+        ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
         return tuple(
             ShardSpec(
                 shard_id=i,
@@ -288,11 +295,13 @@ class DatasetSpec(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def num_shards(self) -> int:
+        """Total number of shards across all splits."""
         return len(self.shards)
 
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def num_params(self) -> int:
+        """Total encoded parameter count looked up by name in the param-spec registry."""
         return len(param_specs[self.render.param_spec_name])
 
 
@@ -346,6 +355,14 @@ def _legacy_dict_to_dataset_spec_kwargs(raw: dict[str, Any], task_name: str) -> 
     """
     splits = raw["splits"]
     shard_size = raw["shard_size"]
+    declared_num_shards = raw.get("num_shards")
+    splits_total_shards = splits["train"] + splits["val"] + splits["test"]
+    if declared_num_shards is not None and declared_num_shards != splits_total_shards:
+        raise ValueError(
+            f"legacy YAML num_shards={declared_num_shards} disagrees with "
+            f"sum(splits)={splits_total_shards} (train={splits['train']}, "
+            f"val={splits['val']}, test={splits['test']}); update one or the other"
+        )
     train_val_test_sizes = (
         splits["train"] * shard_size,
         splits["val"] * shard_size,

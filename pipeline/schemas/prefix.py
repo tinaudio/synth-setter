@@ -42,7 +42,13 @@ def make_r2_prefix(
 
     :param dataset_config_id: The dataset config identifier.
     :param dataset_wandb_run_id: The W&B run ID for this generation run.
-    :param prefix_root: Root path component (default ``"data"``).
+    :param prefix_root: Root path component (default ``"data"``). Leading/trailing
+        slashes are stripped so callers passing ``"data/"`` or ``"/data"`` don't
+        produce a double-slashed prefix pointing at a different R2 keyspace.
     :returns: A prefix string like ``<prefix_root>/<config_id>/<run_id>/``.
+    :raises ValueError: If ``prefix_root`` is empty after stripping slashes.
     """
-    return R2Prefix(f"{prefix_root}/{dataset_config_id}/{dataset_wandb_run_id}/")
+    normalized_root = prefix_root.strip("/")
+    if not normalized_root:
+        raise ValueError(f"prefix_root must not be empty or slash-only (got {prefix_root!r})")
+    return R2Prefix(f"{normalized_root}/{dataset_config_id}/{dataset_wandb_run_id}/")

@@ -81,6 +81,12 @@ class TestValidateStructure:
         spec = _make_valid_spec(shards=[])
         assert any("shards" in e for e in validate_structure(spec))
 
+    def test_unknown_output_format_returns_error(self) -> None:
+        """An output_format outside the known mapping returns a structural error."""
+        spec = _make_valid_spec(output_format="parquet")
+        errors = validate_structure(spec)
+        assert any("output_format" in e and "parquet" in e for e in errors)
+
 
 class TestValidateTestValues:
     """Tests for validate_test_values."""
@@ -113,6 +119,12 @@ class TestValidateTestValues:
         )
         errors = validate_test_values(spec)
         assert any("seed" in e for e in errors)
+
+    def test_unknown_output_format_returns_error_not_keyerror(self) -> None:
+        """Unknown output_format produces a graceful error rather than a KeyError crash."""
+        spec = _make_valid_spec(output_format="parquet")
+        errors = validate_test_values(spec)
+        assert any("output_format" in e and "parquet" in e for e in errors)
 
 
 class TestReadSpecText:

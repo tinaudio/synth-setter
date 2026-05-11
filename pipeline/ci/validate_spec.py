@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
-from pipeline.schemas.spec import _OUTPUT_FORMAT_TO_EXTENSION
+from pipeline.schemas.spec import OUTPUT_FORMAT_TO_EXTENSION
 
 _REQUIRED_TOP_LEVEL_FIELDS = [
     "base_seed",
@@ -71,6 +71,12 @@ def validate_structure(spec: dict) -> list[str]:
     if not (len(cv) == 40 and all(c in "0123456789abcdef" for c in cv)):
         errors.append(f"git_sha is not a valid 40-char hex SHA: {cv!r}")
 
+    if "output_format" in spec and spec["output_format"] not in OUTPUT_FORMAT_TO_EXTENSION:
+        errors.append(
+            f"output_format {spec['output_format']!r} is not one of "
+            f"{sorted(OUTPUT_FORMAT_TO_EXTENSION)}"
+        )
+
     if not render.get("renderer_version"):
         errors.append("render.renderer_version is empty")
 
@@ -98,10 +104,17 @@ def validate_test_values(spec: dict) -> list[str]:
         errors.append(f"expected seeds [42, 43, 44], got {seeds}")
 
     filenames = [s["filename"] for s in shards]
-    ext = _OUTPUT_FORMAT_TO_EXTENSION[spec.get("output_format", "hdf5")]
-    expected_filenames = [f"shard-{i:06d}{ext}" for i in range(3)]
-    if filenames != expected_filenames:
-        errors.append(f"expected filenames {expected_filenames}, got {filenames}")
+    output_format = spec.get("output_format", "hdf5")
+    ext = OUTPUT_FORMAT_TO_EXTENSION.get(output_format)
+    if ext is None:
+        errors.append(
+            f"cannot compute expected filenames: output_format {output_format!r} is not one of "
+            f"{sorted(OUTPUT_FORMAT_TO_EXTENSION)}"
+        )
+    else:
+        expected_filenames = [f"shard-{i:06d}{ext}" for i in range(3)]
+        if filenames != expected_filenames:
+            errors.append(f"expected filenames {expected_filenames}, got {filenames}")
 
     render = spec.get("render") or {}
     top_passthrough = {
