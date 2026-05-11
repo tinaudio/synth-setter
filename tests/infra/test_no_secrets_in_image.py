@@ -31,7 +31,14 @@ ALLOWLISTED_VARIABLE_NAMES: frozenset[str] = frozenset(
     }
 )
 
-BASE_IMAGE_REFERENCE = "tinaudio/synth-setter:devcontainer-tools"
+
+def _read_base_image_from_dockerfile(dockerfile_path: Path) -> str:
+    """Return the first `FROM` instruction's image reference from a Dockerfile."""
+    for line in dockerfile_path.read_text().splitlines():
+        match = re.match(r"^\s*FROM\s+(?P<image>\S+)", line, flags=re.IGNORECASE)
+        if match:
+            return match.group("image")
+    raise RuntimeError(f"No FROM instruction found in {dockerfile_path}")
 
 
 def _scan_for_baked_secrets(text: str, path_label: str) -> list[str]:
@@ -77,19 +84,23 @@ def test_initialize_contains_no_baked_secret_values_no_secrets_in_image(
 
 
 @pytest.mark.infra
-def test_docker_history_contains_no_secret_keywords_no_secrets_in_image() -> None:
-    """`docker history` for the base image must not surface secret-keyword tokens."""
+def test_docker_history_contains_no_secret_keywords_no_secrets_in_image(
+    dockerfile_path: Path,
+) -> None:
+    """`docker history` for the Dockerfile's FROM image must not surface secret-keyword tokens."""
     if shutil.which("docker") is None:
         pytest.skip("'docker' binary not available on PATH")
 
+    base_image = _read_base_image_from_dockerfile(dockerfile_path)
+
     inspect = subprocess.run(  # noqa: S603 — fixed argv, no shell
-        ["docker", "image", "inspect", BASE_IMAGE_REFERENCE],  # noqa: S607 — docker on PATH
+        ["docker", "image", "inspect", base_image],  # noqa: S607 — docker on PATH
         capture_output=True,
         text=True,
         check=False,
     )
     if inspect.returncode != 0:
-        pytest.skip(f"base image {BASE_IMAGE_REFERENCE!r} not pulled locally")
+        pytest.skip(f"base image {base_image!r} not pulled locally")
 
     history = subprocess.run(  # noqa: S603 — fixed argv, no shell
         [  # noqa: S607 — docker on PATH
@@ -98,7 +109,7 @@ def test_docker_history_contains_no_secret_keywords_no_secrets_in_image() -> Non
             "--no-trunc",
             "--format",
             "{{.CreatedBy}}",
-            BASE_IMAGE_REFERENCE,
+            base_image,
         ],
         capture_output=True,
         text=True,
@@ -117,6 +128,6 @@ def test_docker_history_contains_no_secret_keywords_no_secrets_in_image() -> Non
                 continue
             findings.append(f"{line.strip()!r} (matched {value!r})")
     assert not findings, (
-        f"`docker history {BASE_IMAGE_REFERENCE}` surfaced possible secrets in layers:\n"
+        f"`docker history {base_image}` surfaced possible secrets in layers:\n"
         + "\n".join(findings)
     )

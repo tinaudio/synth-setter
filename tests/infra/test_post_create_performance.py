@@ -53,12 +53,18 @@ def _resolve_git_hooks_dir(project_root: Path) -> Path | None:
 
 
 def _iter_script_lines_without_comments(text: str) -> list[tuple[int, str]]:
-    """Return (line_number, line) pairs with shell comments stripped."""
+    """Return (line_number, line) pairs with full-line shell comments dropped.
+
+    Only `^\\s*#…` lines are treated as comments. Mid-line `#` is left intact — bash parameter
+    expansion uses `${VAR#prefix}` (and post-create.sh's PAT quote-strip relies on it), so a global
+    "strip from first #" rule would truncate those lines and let slow-op patterns hide after the
+    `#`.
+    """
     out: list[tuple[int, str]] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):
-        stripped = re.sub(r"(?<!\\)#.*$", "", raw)
-        if stripped.strip():
-            out.append((lineno, stripped))
+        if re.match(r"^\s*#", raw) or not raw.strip():
+            continue
+        out.append((lineno, raw))
     return out
 
 

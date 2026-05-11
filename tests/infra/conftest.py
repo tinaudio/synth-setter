@@ -36,13 +36,14 @@ def devcontainer_dir(project_root: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def devcontainer_json_paths(devcontainer_dir: Path) -> list[Path]:
-    """Paths to the three `devcontainer.json` files (cpu, gpu, root_gpu)."""
-    paths = [
-        devcontainer_dir / flavor / "devcontainer.json" for flavor in ("cpu", "gpu", "root_gpu")
-    ]
-    for path in paths:
-        if not path.is_file():
-            raise RuntimeError(f"Expected devcontainer config not found: {path}")
+    """Paths to every `<flavor>/devcontainer.json` under `.devcontainer/`.
+
+    Globbed (not hard-coded) so new flavors are picked up automatically — the downstream tests are
+    phrased as "every devcontainer", and the discovery set must match that intent.
+    """
+    paths = sorted(devcontainer_dir.glob("*/devcontainer.json"))
+    if not paths:
+        raise RuntimeError(f"No `<flavor>/devcontainer.json` files found under {devcontainer_dir}")
     return paths
 
 

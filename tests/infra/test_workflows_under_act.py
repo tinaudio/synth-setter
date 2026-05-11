@@ -1,4 +1,4 @@
-"""Invariant 3: representative workflows parse under `act -n` (dry-run/list mode).
+"""Invariant 3: representative workflows parse under `act --list`.
 
 `act --list` parses each workflow file the same way GitHub Actions does and
 exits 0 if the YAML is structurally valid. We do NOT execute jobs — just

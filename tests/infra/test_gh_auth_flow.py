@@ -32,10 +32,10 @@ def test_post_create_does_not_source_dotenv_for_gh_auth_flow(
 ) -> None:
     """post-create.sh must NOT `source .env`; that would clobber the env-passed token."""
     text = post_create_script.read_text()
+    dotenv_arg = r"""['"]?(?:\.?/)?(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/)?\.env['"]?"""
     forbidden_patterns = [
-        r"^\s*source\s+\.env\b",
-        r"^\s*\.\s+\.env\b",
-        r"^\s*source\s+\"?\$\{?[A-Za-z_]+\}?/\.env\"?",
+        rf"^\s*source\s+{dotenv_arg}\b",
+        rf"^\s*\.\s+{dotenv_arg}\b",
     ]
     for pattern in forbidden_patterns:
         match = re.search(pattern, text, flags=re.MULTILINE)
