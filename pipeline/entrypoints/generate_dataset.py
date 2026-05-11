@@ -1,8 +1,7 @@
 """Spec-driven generate_dataset runner.
 
-``main()`` is the Hydra-composed CLI entry (no params on the public signature; it lazy-imports
-hydra and dispatches to an inner ``@hydra.main``-decorated callable that receives the composed
-``cfg``). Invoked via ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``.
+``main(cfg)`` is the Hydra-composed CLI entry, invoked via
+``python -m pipeline.entrypoints.generate_dataset experiment=<id>``.
 
 The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker entry that reads a
 pre-materialized spec from R2 via ``load_spec_from_uri``.
@@ -14,18 +13,24 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+import hydra
+import rootutils
 from loguru import logger
+from omegaconf import DictConfig, OmegaConf
 
-from pipeline import r2_io
-from pipeline.constants import INPUT_SPEC_FILENAME
-from pipeline.partitioning import get_my_shards, read_rank_world_from_env
-from pipeline.schemas.spec import DatasetSpec, ShardSpec
-from src.data.vst.core import extract_renderer_version
+# Set PROJECT_ROOT env var and add the repo root to sys.path so
+# ``configs/paths/default.yaml``'s ``root_dir: ${oc.env:PROJECT_ROOT}`` interpolation
+# resolves under ``python -m pipeline.entrypoints.generate_dataset``. Mirrors
+# ``src/train.py`` / ``src/eval.py``.
+rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-if TYPE_CHECKING:
-    from omegaconf import DictConfig
+from pipeline import r2_io  # noqa: E402
+from pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
+from pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
+from pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
+from src.data.vst.core import extract_renderer_version  # noqa: E402
 
 # Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
 # sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``
@@ -244,8 +249,6 @@ def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     Resolves all interpolations, drops the non-DatasetSpec sub-trees, and constructs the model.
     Raises if the composed config is not a mapping.
     """
-    from omegaconf import OmegaConf
-
     raw: Any = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
@@ -254,25 +257,10 @@ def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     return DatasetSpec(**raw)
 
 
-def main() -> None:
-    """Hydra-composed CLI entry: ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``.
-
-    Bootstraps ``rootutils.setup_root`` so ``configs/paths/default.yaml``'s
-    ``${oc.env:PROJECT_ROOT}`` resolves in a fresh shell, then lazy-imports hydra.
-    Both imports are local so ``scripts/docker_entrypoint.py`` — which only needs
-    ``load_spec_from_uri`` / ``run`` — doesn't pay these costs on worker startup.
-    """
-    import rootutils
-
-    rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
-    import hydra
-
-    @hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
-    def _main(cfg: DictConfig) -> None:
-        run(_spec_from_cfg(cfg))
-
-    _main()
+@hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
+def main(cfg: DictConfig) -> None:
+    """Hydra-composed CLI entry: ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``."""
+    run(_spec_from_cfg(cfg))
 
 
 if __name__ == "__main__":
