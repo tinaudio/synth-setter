@@ -41,9 +41,14 @@ setup: |
   set -euo pipefail
   echo "synth-setter worker ready (host: $(hostname))"
 
+# The image ships scripts/docker_entrypoint.py baked at /usr/local/bin/entrypoint.py,
+# but PR CI bypasses image bake-lag via sync_worker_checkout.sh (WORKER_GIT_REF).
+# Run the synced script from the checkout — not the baked one — so the worker
+# picks up entrypoint changes from the PR head before main publishes a new
+# dev-snapshot.
 run: |
   set -euo pipefail
   cd /home/build/synth-setter
   echo "skypilot-run-cwd: $(pwd)"
   bash scripts/sync_worker_checkout.sh
-  exec python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
+  exec python scripts/docker_entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
