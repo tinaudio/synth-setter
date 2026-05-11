@@ -43,8 +43,8 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
     kwargs: dict[str, Any] = {
         "task_name": "ci-smoke-test",
         "output_format": "hdf5",
-        "train_val_test_sizes": (300, 0, 0),
-        "train_val_test_seeds": (123, 456, 789),
+        "train_val_test_sizes": [300, 0, 0],
+        "train_val_test_seeds": [123, 456, 789],
         "base_seed": 42,
         "r2_bucket": "intermediate-data",
         "render": _valid_render_kwargs(plugin_path),
@@ -203,22 +203,70 @@ class TestDatasetSpecValidators:
     ) -> None:
         """A split size that doesn't divide evenly into ``batch_per_shard`` raises."""
         with pytest.raises(ValidationError, match="not a multiple"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(150, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[150, 0, 0]))
 
     def test_negative_split_size_raises(self, patch_runtime_io: None) -> None:
         """Negative split sizes raise rather than silently truncating shards."""
         with pytest.raises(ValidationError, match="must be non-negative"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(-100, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[-100, 0, 0]))
 
     def test_zero_total_split_raises(self, patch_runtime_io: None) -> None:
         """Three-zero splits raise (a dataset with zero samples is a config error)."""
         with pytest.raises(ValidationError, match="must sum to a positive count"):
-            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(0, 0, 0)))
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[0, 0, 0]))
 
     def test_invalid_output_format_literal_raises(self, patch_runtime_io: None) -> None:
         """An output_format outside ``Literal['hdf5']`` is rejected by Pydantic literal check."""
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
+
+    def test_strict_mode_rejects_int_for_string_field(self, patch_runtime_io: None) -> None:
+        """Strict mode rejects silent int→str coercion at the trust boundary."""
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(task_name=12345))
+
+    def test_strict_mode_rejects_string_for_bool_field(self, patch_runtime_io: None) -> None:
+        """Strict mode rejects silent str→bool coercion (e.g., ``is_repo_dirty="false"``)."""
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(is_repo_dirty="false"))
+
+    @pytest.mark.parametrize("bad_length", [[300, 0], [300, 0, 0, 0]])
+    def test_train_val_test_sizes_must_be_length_three(
+        self, patch_runtime_io: None, bad_length: list[int]
+    ) -> None:
+        """train_val_test_sizes must be exactly length 3 — not 2, not 4."""
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=bad_length))
+
+    @pytest.mark.parametrize("bad_length", [[42, 43], [42, 43, 44, 45]])
+    def test_train_val_test_seeds_must_be_length_three(
+        self, patch_runtime_io: None, bad_length: list[int]
+    ) -> None:
+        """train_val_test_seeds must be exactly length 3 — parity with sizes."""
+        with pytest.raises(ValidationError):
+            DatasetSpec(**_valid_spec_kwargs(train_val_test_seeds=bad_length))
+
+    def test_explicit_empty_r2_prefix_raises(self, patch_runtime_io: None) -> None:
+        """An explicit empty ``r2_prefix`` raises (the default_factory's "no slash" check
+        fires)."""
+        with pytest.raises(ValidationError, match="r2_prefix must end with"):
+            DatasetSpec(**_valid_spec_kwargs(r2_prefix=""))
+
+    def test_z_suffixed_created_at_string_parses(self, patch_runtime_io: None) -> None:
+        """``model_dump_json``'s ``Z``-suffixed UTC timestamps round-trip on Python 3.10.
+
+        ``datetime.fromisoformat`` rejects the ``Z`` offset on 3.10 (accepts on 3.11+); the
+        ``_parse_iso_datetime`` validator normalizes it before strict-mode validation runs.
+        """
+        payload = {**_valid_spec_kwargs(), "created_at": "2026-03-28T12:00:00Z"}
+        spec = DatasetSpec(**payload)
+        assert spec.created_at == FIXED_NOW
+
+    def test_malformed_created_at_string_raises(self, patch_runtime_io: None) -> None:
+        """A malformed datetime string surfaces a clear validation error, not a silent coerce."""
+        payload = {**_valid_spec_kwargs(), "created_at": "not-a-datetime"}
+        with pytest.raises(ValidationError):
+            DatasetSpec(**payload)
 
 
 # ---------------------------------------------------------------------------
@@ -231,18 +279,18 @@ class TestDatasetSpecComputedFields:
 
     def test_shards_count_matches_total_size_div_batch(self, patch_runtime_io: None) -> None:
         """num_shards = sum(train_val_test_sizes) / batch_per_shard."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(400, 100, 100)))
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         assert spec.num_shards == 6
         assert len(spec.shards) == 6
 
     def test_shard_seeds_are_base_plus_shard_id(self, patch_runtime_io: None) -> None:
         """Per-shard seed equals ``base_seed + shard_id``."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(300, 0, 0)))
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert [s.seed for s in spec.shards] == [42, 43, 44]
 
     def test_shard_filenames_zero_padded_six_digits(self, patch_runtime_io: None) -> None:
         """Shard filenames use the ``shard-NNNNNN`` six-digit zero-padded form."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(300, 0, 0)))
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[300, 0, 0]))
         assert spec.shards[0].filename == "shard-000000.h5"
         assert spec.shards[-1].filename == "shard-000002.h5"
 
@@ -287,7 +335,7 @@ class TestDatasetSpecRoundTrip:
 
     def test_json_round_trip_preserves_shards(self, patch_runtime_io: None) -> None:
         """Computed ``shards`` / ``num_shards`` round-trip identically through JSON."""
-        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=(400, 100, 100)))
+        spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         restored = DatasetSpec.model_validate_json(spec.model_dump_json())
         assert restored.shards == spec.shards
         assert restored.num_shards == spec.num_shards
@@ -379,7 +427,7 @@ class TestLoadDatasetSpecYaml:
         spec = load_dataset_spec_yaml(legacy_yaml)
         assert spec.task_name == "ci-smoke-test"
         assert spec.output_format == "hdf5"
-        assert spec.train_val_test_sizes == (300, 0, 0)
+        assert spec.train_val_test_sizes == [300, 0, 0]
         assert spec.render.plugin_path == "plugins/Surge XT.vst3"
         assert spec.render.batch_per_shard == 100
         assert spec.num_shards == 3

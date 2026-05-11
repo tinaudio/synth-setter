@@ -1,0 +1,25 @@
+# @package _global_
+
+# Top-level @hydra.main composition for dataset generation. Mirrors eval.yaml's
+# shape: each group below contributes a slice of the DatasetSpec the entrypoint
+# constructs in main(). Required (???) fields are filled in by an experiment.
+
+defaults:
+  - _self_
+  - data: ???
+  - render: ???
+  - r2: default
+  - hydra: default
+  - experiment: ???
+
+task_name: ???
+output_format: hdf5
+base_seed: 42
+
+train_val_test_sizes: ???
+# Reserved for per-sample seeding (#884); not consumed yet. Defaulted here
+# so experiments don't all duplicate the same triple.
+train_val_test_seeds: [42, 43, 44]
+
+r2_bucket: ${r2.bucket}
+r2_prefix_root: ${r2.prefix_root}

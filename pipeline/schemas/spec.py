@@ -16,7 +16,7 @@ import subprocess
 from datetime import datetime, timezone
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import yaml
 from omegaconf import OmegaConf
@@ -133,6 +133,26 @@ class RenderConfig(BaseModel):
         return self
 
 
+# Names paired with ``train_val_test_sizes`` indices in error messages.
+_SPLIT_LABELS: tuple[str, str, str] = ("train", "val", "test")
+
+
+def _default_run_id(data: dict[str, Any]) -> str:
+    """Compute a deterministic run_id from already-validated layout fields."""
+    return make_dataset_wandb_run_id(
+        DatasetConfigId(data["task_name"]), timestamp=data["created_at"]
+    )
+
+
+def _default_r2_prefix(data: dict[str, Any]) -> str:
+    """Compute the R2 object prefix from already-validated layout fields."""
+    return make_r2_prefix(
+        DatasetConfigId(data["task_name"]),
+        data["run_id"],
+        prefix_root=data["r2_prefix_root"],
+    )
+
+
 class DatasetSpec(BaseModel):
     """Unified dataset specification — config + materialized runtime in one model.
 
@@ -144,23 +164,20 @@ class DatasetSpec(BaseModel):
       ``default_factory`` when missing and pass through when present.
     - Workers re-validate ``model_dump_json()`` from R2 and get an equal model.
 
-    ``strict`` is intentionally off on this top-level model so JSON-mode
-    round-trips coerce list→tuple and str→datetime (JSON has no native tuple
-    or datetime types). ``extra="forbid"`` plus the per-field validators keep
-    the trust boundary tight. ``frozen=True`` matches the prior spec's
-    immutability so ``shards``/``num_shards``/``num_params`` cached values
-    can't go stale via post-construction mutation; the internal
-    ``_populate_derived_runtime_fields`` validator uses ``object.__setattr__``
-    to bypass frozen during construction.
+    Strict mode is on (the model is a trust boundary for JSON-from-R2);
+    ``extra="forbid"`` plus the per-field validators keep the boundary tight.
+    Frozen so the materialized artifact is immutable post-construction.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    # Layout fields
+    # Layout fields. Splits use ``list[int]`` (not tuple) so JSON round-trip
+    # in strict mode survives without coercion (JSON has no tuple type).
     task_name: str
     output_format: Literal["hdf5"]
-    train_val_test_sizes: tuple[int, int, int]
-    train_val_test_seeds: tuple[int, int, int]
+    train_val_test_sizes: list[int] = Field(min_length=3, max_length=3)
+    # Reserved for per-sample seeding (#884); not consumed yet.
+    train_val_test_seeds: list[int] = Field(min_length=3, max_length=3)
     base_seed: int
     r2_bucket: str
     r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
@@ -169,14 +186,14 @@ class DatasetSpec(BaseModel):
     render: RenderConfig
 
     # Auto-filled runtime fields. ``default_factory`` runs only when the field
-    # is missing in input — JSON-loaded specs preserve the materialization-time
-    # values that the worker needs to remain consistent across the run. The
-    # lambdas re-look-up the helpers per call so test monkeypatches take effect.
+    # is missing on input — JSON-loaded specs preserve the materialization-time
+    # values that workers must reuse for consistency. Lambdas wrap the
+    # module-level helpers so test monkeypatches take effect.
     git_sha: str = Field(default_factory=lambda: _get_git_sha())
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
-    run_id: str = ""
-    r2_prefix: str = ""
+    run_id: str = Field(default_factory=_default_run_id)
+    r2_prefix: str = Field(default_factory=_default_r2_prefix)
 
     @model_validator(mode="before")
     @classmethod
@@ -194,38 +211,27 @@ class DatasetSpec(BaseModel):
                 data.pop(computed_key, None)
         return data
 
-    @model_validator(mode="after")
-    def _populate_derived_runtime_fields(self) -> DatasetSpec:
-        """Fill ``run_id`` / ``r2_prefix`` from ``task_name`` + ``created_at`` when empty.
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def _parse_iso_datetime(cls, value: Any) -> Any:
+        """Parse an ISO 8601 string into a ``datetime`` so strict mode accepts it.
 
-        Empty defaults mean the input dict didn't carry materialization-time values; non-empty
-        values came from a JSON-loaded spec and pass through unchanged.
+        Strict-mode Python validation rejects str → datetime coercion, so JSON inputs (where
+        datetime is a string) need pre-conversion here. Also normalizes the trailing ``Z``
+        offset that ``model_dump_json`` emits for UTC, which Python 3.10's ``fromisoformat``
+        does not accept (3.11+ does).
         """
-        if not self.run_id:
-            object.__setattr__(
-                self,
-                "run_id",
-                make_dataset_wandb_run_id(
-                    DatasetConfigId(self.task_name), timestamp=self.created_at
-                ),
-            )
-        if not self.r2_prefix:
-            object.__setattr__(
-                self,
-                "r2_prefix",
-                make_r2_prefix(
-                    DatasetConfigId(self.task_name),
-                    self.run_id,
-                    prefix_root=self.r2_prefix_root,
-                ),
-            )
-        return self
+        if isinstance(value, str):
+            if value.endswith("Z"):
+                value = value[:-1] + "+00:00"
+            return datetime.fromisoformat(value)
+        return value
 
     @field_validator("r2_prefix")
     @classmethod
     def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
         """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
-        if value and not value.endswith("/"):
+        if not value.endswith("/"):
             raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
         return value
 
@@ -255,7 +261,7 @@ class DatasetSpec(BaseModel):
         spec-validation time rather than mid-render.
         """
         bps = self.render.batch_per_shard
-        for label, size in zip(("train", "val", "test"), self.train_val_test_sizes, strict=True):
+        for label, size in zip(_SPLIT_LABELS, self.train_val_test_sizes, strict=True):
             if size < 0:
                 raise ValueError(f"train_val_test_sizes[{label}] must be non-negative, got {size}")
             if size % bps != 0:
@@ -348,7 +354,7 @@ def _resolve_legacy_extends(config_path: Path, raw: dict[str, Any]) -> dict[str,
     base_resolved = _resolve_legacy_extends(base_path, base_raw)
     override = {k: v for k, v in raw.items() if k != _LEGACY_EXTENDS_KEY}
     merged = OmegaConf.merge(OmegaConf.create(base_resolved), OmegaConf.create(override))
-    return OmegaConf.to_container(merged, resolve=True)  # type: ignore[return-value]
+    return cast(dict[str, Any], OmegaConf.to_container(merged, resolve=True))
 
 
 # Pinned plugin version baked into ``tinaudio/synth-setter:dev-snapshot``;
@@ -374,16 +380,16 @@ def _legacy_dict_to_dataset_spec_kwargs(raw: dict[str, Any], task_name: str) -> 
             f"sum(splits)={splits_total_shards} (train={splits['train']}, "
             f"val={splits['val']}, test={splits['test']}); update one or the other"
         )
-    train_val_test_sizes = (
+    train_val_test_sizes = [
         splits["train"] * shard_size,
         splits["val"] * shard_size,
         splits["test"] * shard_size,
-    )
-    train_val_test_seeds = (
+    ]
+    train_val_test_seeds = [
         raw["base_seed"],
         raw["base_seed"] + 1,
         raw["base_seed"] + 2,
-    )
+    ]
     render = {
         "plugin_path": raw["plugin_path"],
         "preset_path": raw["preset_path"],
