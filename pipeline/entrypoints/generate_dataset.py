@@ -1,16 +1,8 @@
 """Spec-driven generate_dataset runner.
 
-Public API:
-    load_spec_from_uri(uri): Parse a DatasetSpec from a local path or r2:// URI.
-    run(spec): Full flow — upload spec to R2, generate shard, upload shard to R2.
-    run(spec): Full flow — upload spec to R2 once, then loop over
-        ``spec.shards`` rendering and uploading each.
-    build_generate_args(spec, shard, output_dir): Build CLI args for
-        src/data/vst/generate_vst_dataset.py.
-
-This module is no longer invocable via ``python -m``; the container's CLI
-entrypoint (``scripts/docker_entrypoint.py generate_dataset --spec <path-or-uri>``)
-parses the spec and calls ``run(spec)`` in-process.
+``main(cfg)`` is the Hydra-composed CLI (``python -m pipeline.entrypoints.generate_dataset
+experiment=<id>``). The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker
+entry that reads a pre-materialized spec from R2 via ``load_spec_from_uri``.
 """
 
 from __future__ import annotations
@@ -19,14 +11,23 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+from omegaconf import OmegaConf
 
 from pipeline import r2_io
 from pipeline.constants import INPUT_SPEC_FILENAME
 from pipeline.partitioning import get_my_shards, read_rank_world_from_env
 from pipeline.schemas.spec import DatasetSpec, ShardSpec
 from src.data.vst.core import extract_renderer_version
+
+if TYPE_CHECKING:
+    from omegaconf import DictConfig
+
+# Composed-config sub-trees that aren't DatasetSpec fields: ``data`` / ``r2`` exist as
+# interpolation sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime.
+_NON_SPEC_GROUPS: tuple[str, ...] = ("data", "r2", "paths", "hydra")
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
@@ -234,8 +235,35 @@ def _render_and_upload_shard(
     logger.info(f"shard removed locally: {shard_path}")
 
 
+def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
+    """Build a DatasetSpec from a Hydra-composed cfg.
+
+    Resolves all interpolations, drops the non-DatasetSpec sub-trees, and constructs the model.
+    Raises if the composed config is not a mapping.
+    """
+    raw: Any = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(raw, dict):
+        raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
+    for key in _NON_SPEC_GROUPS:
+        raw.pop(key, None)
+    return DatasetSpec(**raw)
+
+
+def main() -> None:
+    """Hydra-composed CLI entry: ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``.
+
+    Hydra is imported lazily so callers that only need ``load_spec_from_uri`` / ``run``
+    (notably ``scripts/docker_entrypoint.py``) don't pay the hydra import cost on every
+    container startup.
+    """
+    import hydra
+
+    @hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
+    def _main(cfg: DictConfig) -> None:
+        run(_spec_from_cfg(cfg))
+
+    _main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(
-        "pipeline.entrypoints.generate_dataset is no longer invocable via `python -m`. "
-        "Use `scripts/docker_entrypoint.py generate_dataset --spec <path>` instead."
-    )
+    main()

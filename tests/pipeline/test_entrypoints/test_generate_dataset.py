@@ -782,19 +782,51 @@ class TestBuildGenerateArgs:
 
 
 # ---------------------------------------------------------------------------
-# __main__ — fail loud
+# _spec_from_cfg — Hydra-composed cfg → DatasetSpec
 # ---------------------------------------------------------------------------
 
 
-class TestMainFailLoud:
-    """The module is no longer executable as ``python -m``."""
+class TestSpecFromCfg:
+    """``_spec_from_cfg`` drops Hydra-only groups and constructs a DatasetSpec."""
 
-    def test_running_module_as_main_raises_system_exit(self) -> None:
-        """Executing the module's __main__ block raises SystemExit with a pointer to the CLI."""
-        import runpy
+    def test_drops_non_spec_groups(self, valid_dataset_spec_kwargs: dict[str, object]) -> None:
+        """``data``, ``r2``, ``paths``, ``hydra`` are dropped so strict validation passes.
 
-        with pytest.raises(SystemExit) as exc_info:
-            runpy.run_module("pipeline.entrypoints.generate_dataset", run_name="__main__")
+        DatasetSpec is configured with ``extra="forbid"``; if any of these groups leaked through,
+        construction would raise on the unknown field. The assertion is implicit in the absence
+        of a ValidationError.
+        """
+        from omegaconf import OmegaConf
 
-        # SystemExit.code carries the message (string), not an int.
-        assert "docker_entrypoint" in str(exc_info.value.code)
+        from pipeline.entrypoints.generate_dataset import _spec_from_cfg
+
+        cfg_dict: dict[str, object] = dict(valid_dataset_spec_kwargs)
+        cfg_dict["data"] = {"sample_rate": 16000}
+        cfg_dict["r2"] = {"bucket": "intermediate-data", "prefix_root": "data/"}
+        cfg_dict["paths"] = {"root_dir": "/fake-root"}
+        cfg_dict["hydra"] = {"runtime": {"output_dir": "/fake-out"}}
+
+        spec = _spec_from_cfg(OmegaConf.create(cfg_dict))
+
+        assert spec.task_name == valid_dataset_spec_kwargs["task_name"]
+
+    def test_resolves_interpolations_before_dropping_groups(
+        self, valid_dataset_spec_kwargs: dict[str, object]
+    ) -> None:
+        """``${r2.bucket}`` interpolation is resolved before the ``r2`` group is dropped.
+
+        Mirrors the production composition: ``configs/dataset.yaml`` has
+        ``r2_bucket: ${r2.bucket}`` and the ``r2`` group is only present for that interpolation.
+        Dropping ``r2`` before resolving would lose the bucket value.
+        """
+        from omegaconf import OmegaConf
+
+        from pipeline.entrypoints.generate_dataset import _spec_from_cfg
+
+        kwargs = dict(valid_dataset_spec_kwargs)
+        kwargs["r2_bucket"] = "${r2.bucket}"
+        kwargs["r2"] = {"bucket": "interpolated-bucket"}
+
+        spec = _spec_from_cfg(OmegaConf.create(kwargs))
+
+        assert spec.r2_bucket == "interpolated-bucket"

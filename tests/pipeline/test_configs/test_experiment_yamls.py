@@ -17,12 +17,11 @@ landing a new datagen experiment.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
 
+from pipeline.entrypoints.generate_dataset import _spec_from_cfg
 from pipeline.schemas.spec import DatasetSpec
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
@@ -48,13 +47,7 @@ def _compose_dataset_spec(experiment: str) -> DatasetSpec:
     cfg.paths.root_dir = str(CONFIG_DIR.parent)
     cfg.paths.output_dir = str(CONFIG_DIR.parent)
     cfg.paths.work_dir = str(CONFIG_DIR.parent)
-    raw: Any = OmegaConf.to_container(cfg, resolve=True)
-    assert isinstance(raw, dict), f"composed config is not a mapping: {type(raw).__name__}"
-    raw.pop("data", None)
-    raw.pop("r2", None)
-    raw.pop("hydra", None)
-    raw.pop("paths", None)
-    return DatasetSpec(**raw)
+    return _spec_from_cfg(cfg)
 
 
 @pytest.mark.parametrize("experiment", DATASET_EXPERIMENTS)
