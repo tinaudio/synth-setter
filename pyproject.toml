@@ -109,10 +109,9 @@ wrap-descriptions = 99
 style = "sphinx"
 black = true
 
-# pydoclint: signature ↔ docstring consistency checks (DOC1xx args, DOC2xx
-# returns/yields, DOC3xx class/style, DOC4xx misc, DOC5xx raises).
-# Sphinx style chosen to match existing :param:/:return: docstrings and the
-# [tool.docformatter] style above.
+# pydoclint: signature ↔ docstring consistency checks. Rule families documented
+# at https://jsh9.github.io/pydoclint/violation_codes.html. Sphinx style chosen
+# to match existing :param:/:return: docstrings and [tool.docformatter] above.
 [tool.pydoclint]
 style = "sphinx"
 arg-type-hints-in-signature = true

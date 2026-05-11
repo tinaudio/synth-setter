@@ -160,11 +160,11 @@ repos:
             src/utils/math\.py
           )$
 
-  # pydoclint: signature ↔ docstring consistency (DOC1xx args, DOC2xx
-  # returns/yields, DOC3xx style, DOC4xx misc, DOC5xx raises). Config lives in
-  # pyproject.toml under [tool.pydoclint]; the path exclude list there enumerates
-  # files that currently violate the rules and shrinks as files are cleaned up —
-  # tracked by #938.
+  # pydoclint: signature ↔ docstring consistency. Config lives in pyproject.toml
+  # under [tool.pydoclint]; rule families documented at
+  # https://jsh9.github.io/pydoclint/violation_codes.html. The path exclude list
+  # in pyproject.toml enumerates files that currently violate the rules and
+  # shrinks as files are cleaned up — tracked by #938.
   - repo: https://github.com/jsh9/pydoclint
     rev: 0.8.3
     hooks:
