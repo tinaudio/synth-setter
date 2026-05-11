@@ -16,9 +16,9 @@ defaults:
 task_name: ???
 # ``configs/hydra/default.yaml`` interpolates ``${run_name}`` into ``hydra.run.dir``;
 # dataset experiments don't have a distinct run_name concept (the spec's ``run_id`` is
-# derived from ``task_name`` + ``created_at`` at validate-time), so default it to
-# ``task_name`` for the Hydra output-dir interpolation. Dropped before DatasetSpec
-# construction (it's not a spec field).
+# computed by ``DatasetSpec``'s default_factory from ``task_name`` + ``created_at`` at
+# construction), so default it to ``task_name`` for the Hydra output-dir interpolation.
+# Dropped before DatasetSpec construction (it's not a spec field).
 run_name: ${task_name}
 output_format: hdf5
 base_seed: 42
