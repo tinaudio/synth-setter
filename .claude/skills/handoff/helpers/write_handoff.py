@@ -12,14 +12,12 @@ Usage examples:
     python3 .claude/skills/handoff/helpers/write_handoff.py --dry-run
     python3 .claude/skills/handoff/helpers/write_handoff.py --comment-only
     python3 .claude/skills/handoff/helpers/write_handoff.py --prompt-only
-    python3 .claude/skills/handoff/helpers/write_handoff.py --no-prompt-questions
     python3 .claude/skills/handoff/helpers/write_handoff.py --force
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 import sys
@@ -39,7 +37,9 @@ else:
 SKILL_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = SKILL_DIR / "templates"
 CHAIN_PATH = SKILL_DIR / "chain.yaml"
-DEFAULT_HANDOFFS_DIR = Path(".claude/handoffs")
+# Anchored to the `.claude/` tree (two levels above the skill dir) so the save location is stable
+# regardless of CWD — running the writer from anywhere on disk drops prompts in the same place.
+DEFAULT_HANDOFFS_DIR = SKILL_DIR.parent.parent / "handoffs"
 IDEMPOTENCY_GUARD = timedelta(minutes=30)
 
 
@@ -86,11 +86,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     output_mode.add_argument(
         "--prompt-only", action="store_true", help="Print prompt, don't post comment"
-    )
-    parser.add_argument(
-        "--no-prompt-questions",
-        action="store_true",
-        help="Skip the Surprises/Anti-patterns prompts; render with empty sections",
     )
     parser.add_argument(
         "--force",
@@ -321,24 +316,6 @@ def save_prompt_locally(prompt_md: str, now_utc: str) -> Path:
     out_path = DEFAULT_HANDOFFS_DIR / f"handoff-{stamp}.md"
     out_path.write_text(prompt_md)
     return out_path
-
-
-def fetch_tracking_issue_interactive() -> int:
-    """Ask the user for a tracking-issue number when chain.yaml is missing one.
-
-    Reads stdin — non-interactive callers should set the issue via --issue or populate chain.yaml.
-    Returns the parsed integer or raises ValueError.
-    """
-    sys.stderr.write("Tracking issue not configured. Enter issue number: ")
-    sys.stderr.flush()
-    line = sys.stdin.readline().strip()
-    return int(line)
-
-
-def fetch_pr_url(repo: str, pr_number: int) -> str:
-    """Look up a PR's html_url; helper for templates."""
-    raw = json.loads(ds.run_gh(["pr", "view", str(pr_number), "--repo", repo, "--json", "url"]))
-    return str(raw.get("url", ""))
 
 
 if __name__ == "__main__":

@@ -391,6 +391,25 @@ def test_parse_args_rejects_comment_only_and_prompt_only_together() -> None:
         wh.parse_args(["--comment-only", "--prompt-only"])
 
 
+def test_default_handoffs_dir_is_anchored_under_dot_claude() -> None:
+    """Save path must resolve relative to the `.claude/` tree, not CWD."""
+    assert wh.DEFAULT_HANDOFFS_DIR.is_absolute()
+    assert wh.DEFAULT_HANDOFFS_DIR.name == "handoffs"
+    assert wh.DEFAULT_HANDOFFS_DIR.parent.name == ".claude"
+
+
+def test_save_prompt_locally_writes_under_dot_claude_regardless_of_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running from a sandbox CWD must not create a stray `.claude/handoffs/` there."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(wh, "DEFAULT_HANDOFFS_DIR", tmp_path / "out")
+    saved = wh.save_prompt_locally("# body", "2026-05-12 10:00 UTC")
+    assert saved.parent == tmp_path / "out"
+    assert saved.read_text() == "# body"
+    assert not (tmp_path / ".claude").exists()
+
+
 def test_render_comment_chain_complete_does_not_emit_empty_bold_list() -> None:
     """When every plan PR is merged, the Task-numbering section must not render `****`."""
     chain = ds.Chain(

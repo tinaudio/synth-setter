@@ -60,7 +60,6 @@ python3 .claude/skills/handoff/helpers/write_handoff.py \
   [--comment-only | --prompt-only] \
   [--surprise "<category>: <note>" ...] \
   [--anti-pattern "<line>" ...] \
-  [--no-prompt-questions] \
   [--no-save-prompt] \
   [--force]
 ```
@@ -98,7 +97,6 @@ If the writer exited non-zero, surface the stderr verbatim and stop. Common fail
 | `--dry-run` | Render both, post nothing, print everything, leave `chain.yaml` unchanged |
 | `--comment-only` | Post comment, suppress prompt printing |
 | `--prompt-only` | Print prompt, suppress comment posting |
-| `--no-prompt-questions` | Skip the AskUserQuestion step; render with empty Surprises / Anti-patterns sections |
 | `--force` | Bypass the 30-min idempotency guard |
 | `--surprise "<cat>: <note>"` | Add one Surprise row (repeatable) |
 | `--anti-pattern "<line>"` | Add one Anti-pattern line (repeatable) |
