@@ -102,10 +102,9 @@ def _rclone_copy(src: str, dest: str) -> None:
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
-    HDF5-only: ``DatasetSpec.output_format`` is currently restricted to
-    ``"hdf5"`` and ``generate_vst_dataset.py`` writes HDF5 regardless of the
-    output path. Format dispatch on ``shard.filename`` suffix lands when wds
-    is introduced (PR-12/13/14 in the dataset-pipeline chain).
+    HDF5-only: ``DatasetSpec.output_format`` is restricted to ``"hdf5"`` and
+    ``generate_vst_dataset.py`` writes HDF5 regardless of the output path.
+    Suffix dispatch on ``shard.filename`` will land with the wds backend.
     """
     output_path = output_dir / shard.filename
     render = spec.render
@@ -148,11 +147,8 @@ def run(spec: DatasetSpec) -> None:
         RuntimeError: If the worker's plugin version disagrees with
             ``spec.renderer_version``.
     """
-    # The launcher builds the spec interpreter-only (no pedalboard / X11)
-    # trusting the ``render.renderer_version`` value from its dataset config;
-    # the worker has pedalboard, so this is where we verify against the actual
-    # plugin bundle. Bump renderer_version in the dataset config alongside the
-    # SURGE_GIT_REF baked into the worker image.
+    # Launcher builds the spec without pedalboard/X11, so plugin-vs-spec
+    # version verification has to happen here on the worker.
     render = spec.render
     actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
     if actual_renderer_version != render.renderer_version:

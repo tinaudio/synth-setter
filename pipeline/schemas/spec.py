@@ -147,14 +147,12 @@ class DatasetSpec(BaseModel):
     ``strict`` is intentionally off on this top-level model so JSON-mode
     round-trips coerce list→tuple and str→datetime (JSON has no native tuple
     or datetime types). ``extra="forbid"`` plus the per-field validators keep
-    the trust boundary tight. ``frozen=True`` matches the prior spec's
-    immutability so ``shards``/``num_shards``/``num_params`` cached values
-    can't go stale via post-construction mutation; the internal
-    ``_populate_derived_runtime_fields`` validator uses ``object.__setattr__``
-    to bypass frozen during construction.
+    the trust boundary tight. ``frozen=True`` prevents post-construction
+    mutation from invalidating cached derived fields (``shards``,
+    ``num_shards``, ``num_params``).
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     # Layout fields
     task_name: str
@@ -199,7 +197,8 @@ class DatasetSpec(BaseModel):
         """Fill ``run_id`` / ``r2_prefix`` from ``task_name`` + ``created_at`` when empty.
 
         Empty defaults mean the input dict didn't carry materialization-time values; non-empty
-        values came from a JSON-loaded spec and pass through unchanged.
+        values came from a JSON-loaded spec and pass through unchanged. Uses
+        ``object.__setattr__`` to bypass ``frozen=True`` during construction.
         """
         if not self.run_id:
             object.__setattr__(
