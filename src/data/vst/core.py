@@ -22,8 +22,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
     `Contents/Info.plist` on macOS), then falls back to loading the plugin via
     pedalboard and reading `plugin.version`. The fallback requires a usable
     X11 display, so callers in interpreter-only contexts (the SkyPilot
-    launcher) must avoid it — they pin `renderer_version` from
-    `configs/render/<spec>.yaml` and let the worker compare against this
+    launcher) must avoid it — they pin `renderer_version` in the dataset
+    config that produces the spec and let the worker compare against this
     function's output before rendering (see
     `pipeline.entrypoints.generate_dataset.run`).
 

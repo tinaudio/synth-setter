@@ -102,9 +102,10 @@ def _rclone_copy(src: str, dest: str) -> None:
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
     """Build CLI args for generate_vst_dataset.py from a spec and shard.
 
-    The output format is encoded in ``shard.filename``'s suffix (validated on
-    ``DatasetSpec`` against ``spec.output_format``); the CLI dispatches
-    on that suffix, so the launcher just hands the path through.
+    HDF5-only: ``DatasetSpec.output_format`` is currently restricted to
+    ``"hdf5"`` and ``generate_vst_dataset.py`` writes HDF5 regardless of the
+    output path. Format dispatch on ``shard.filename`` suffix lands when wds
+    is introduced (PR-12/13/14 in the dataset-pipeline chain).
     """
     output_path = output_dir / shard.filename
     render = spec.render
@@ -141,19 +142,17 @@ def run(spec: DatasetSpec) -> None:
     to one shard at a time. Subprocess failures propagate immediately
     (fail-fast); later shards are not attempted.
 
-    The output format follows ``spec.output_format``; the renderer's CLI
-    dispatches on each shard's filename suffix.
+    HDF5-only for now: ``spec.output_format`` is restricted to ``"hdf5"``.
 
     Raises:
         RuntimeError: If the worker's plugin version disagrees with
             ``spec.renderer_version``.
     """
-    # Constraint check: the plugin actually present on this worker must match the
-    # renderer_version pinned into the spec at construction time. The launcher
-    # builds the spec interpreter-only (no pedalboard / X11) trusting the value
-    # from configs/render/<spec>.yaml; the worker has pedalboard, so this is
-    # where we verify. Bump configs/render/surge_xt.yaml's renderer_version
-    # together with the SURGE_GIT_REF baked into the worker image.
+    # The launcher builds the spec interpreter-only (no pedalboard / X11)
+    # trusting the ``render.renderer_version`` value from its dataset config;
+    # the worker has pedalboard, so this is where we verify against the actual
+    # plugin bundle. Bump renderer_version in the dataset config alongside the
+    # SURGE_GIT_REF baked into the worker image.
     render = spec.render
     actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
     if actual_renderer_version != render.renderer_version:
@@ -161,7 +160,7 @@ def run(spec: DatasetSpec) -> None:
             f"Renderer version mismatch: spec pins {render.renderer_version!r} but "
             f"plugin at {render.plugin_path} reports {actual_renderer_version!r}. "
             "Rebuild the image against the matching SURGE_GIT_REF, or bump "
-            "renderer_version in configs/render/surge_xt.yaml."
+            "renderer_version in the dataset config that produced this spec."
         )
     logger.info(
         f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"

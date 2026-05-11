@@ -97,7 +97,7 @@ class RenderConfig(BaseModel):
     so launcher-side construction stays interpreter-only.
     """
 
-    model_config = ConfigDict(strict=True, extra="forbid")
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     plugin_path: str
     preset_path: str
@@ -147,10 +147,14 @@ class DatasetSpec(BaseModel):
     ``strict`` is intentionally off on this top-level model so JSON-mode
     round-trips coerce list→tuple and str→datetime (JSON has no native tuple
     or datetime types). ``extra="forbid"`` plus the per-field validators keep
-    the trust boundary tight.
+    the trust boundary tight. ``frozen=True`` matches the prior spec's
+    immutability so ``shards``/``num_shards``/``num_params`` cached values
+    can't go stale via post-construction mutation; the internal
+    ``_populate_derived_runtime_fields`` validator uses ``object.__setattr__``
+    to bypass frozen during construction.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     # Layout fields
     task_name: str
