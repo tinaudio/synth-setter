@@ -163,8 +163,8 @@ repos:
   # pydoclint: signature ↔ docstring consistency (DOC1xx args, DOC2xx
   # returns/yields, DOC3xx style, DOC4xx misc, DOC5xx raises). Config lives in
   # pyproject.toml under [tool.pydoclint]; the path exclude list there enumerates
-  # files that currently violate the rules and is reduced as files are cleaned up
-  # (tracked in the pydoclint audit issue).
+  # files that currently violate the rules and shrinks as files are cleaned up —
+  # tracked by #938.
   - repo: https://github.com/jsh9/pydoclint
     rev: 0.8.3
     hooks:

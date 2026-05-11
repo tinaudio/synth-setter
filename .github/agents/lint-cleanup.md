@@ -10,13 +10,13 @@ Only formatting, docstrings, and lint fixes. **No functional changes.**
 
 ## Workflow
 
-For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shellcheck`, `codespell`, and other hooks in `.pre-commit-config.yaml` (ruff per-file-ignores live in `pyproject.toml`):
+For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `pydoclint`, `shellcheck`, `codespell`, and other hooks in `.pre-commit-config.yaml` (ruff per-file-ignores and `[tool.pydoclint].exclude` live in `pyproject.toml`):
 
 1. **Create a branch**: `chore/lint-cleanup/<module-name>` (e.g., `chore/lint-cleanup/surge-datamodule`)
 2. **Run hooks on the file**, e.g. `interrogate`
 3. **Auto-fix what you can**: `ruff check --fix` and `docformatter --in-place` handle most formatting issues automatically
 4. **Manually fix remaining violations**:
-   - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`)
+   - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`) — and must pass `pydoclint` DOC1xx/DOC2xx/DOC5xx (signature ↔ docstring consistency)
 5. **Remove the file from all `exclude` blocks** in `.pre-commit-config.yaml`
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
 7. **Run tests**: `make test-fast` — the quick CPU suite (excludes `slow`, `gpu`, `mps`, `requires_vst`) must still pass as a smoke check; lint-only changes shouldn't affect behavior
@@ -31,7 +31,7 @@ For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `shell
 - `# noqa` / `# nosec` only with a justification comment explaining why
 - If a file requires functional changes to pass lint (e.g., unused imports that are actually used dynamically), skip it and leave a comment on #25
 - Line length is 99 (configured in `pyproject.toml` under `[tool.ruff]`)
-- Docstrings follow Sphinx style (`:param:`, `:returns:`, `:raises:`) — matches `docformatter` config (`style = "sphinx"` in `pyproject.toml`)
+- Docstrings follow Sphinx style (`:param:`, `:returns:`, `:raises:`) — matches `docformatter` config (`style = "sphinx"` in `pyproject.toml`) — and must pass `pydoclint` DOC1xx/DOC2xx/DOC5xx (signature ↔ docstring consistency)
 - Run `make test-fast` after every file to catch regressions
 
 ## Files

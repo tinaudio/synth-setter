@@ -67,6 +67,9 @@ every commit. The key tools are:
   (minimum 80%)
 - **[docformatter](https://github.com/PyCQA/docformatter)** for docstring
   normalization (Sphinx style)
+- **[pydoclint](https://github.com/jsh9/pydoclint)** for signature ↔ docstring
+  consistency (Sphinx style; checks args, returns/yields, raises, and class
+  attributes — config in `pyproject.toml` under `[tool.pydoclint]`)
 - **[shellcheck](https://www.shellcheck.net/)** for shell script linting
 - **[mdformat](https://mdformat.readthedocs.io/)** for Markdown formatting
 - **[codespell](https://github.com/codespell-project/codespell)** for typo
@@ -195,13 +198,14 @@ These prefixes do not trigger a release:
 This project runs a comprehensive suite of pre-commit hooks. Common failure
 modes and how to fix them:
 
-| Hook                  | Failure reason                                     | Fix                                                                |
-| --------------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
-| `interrogate`         | Docstring coverage below 80%                       | Add docstrings to new public functions/classes                     |
-| `pyright`             | Type errors in touched files                       | Fix type annotations                                               |
-| `gitlint`             | Commit message doesn't follow conventional commits | Rewrite the commit message (see prefix table above)                |
-| `ruff`                | Lint violations                                    | Ruff auto-fixes formatting; security/import issues need manual fix |
-| `no-commit-to-branch` | Attempted commit to `main`                         | Create a feature branch first                                      |
+| Hook                  | Failure reason                                      | Fix                                                                |
+| --------------------- | --------------------------------------------------- | ------------------------------------------------------------------ |
+| `interrogate`         | Docstring coverage below 80%                        | Add docstrings to new public functions/classes                     |
+| `pydoclint`           | Docstring args/returns/raises don't match signature | Update the docstring (Sphinx style) or the signature so they agree |
+| `pyright`             | Type errors in touched files                        | Fix type annotations                                               |
+| `gitlint`             | Commit message doesn't follow conventional commits  | Rewrite the commit message (see prefix table above)                |
+| `ruff`                | Lint violations                                     | Ruff auto-fixes formatting; security/import issues need manual fix |
+| `no-commit-to-branch` | Attempted commit to `main`                          | Create a feature branch first                                      |
 
 If a hook auto-fixes files (ruff, trailing-whitespace, etc.), stage the fixes
 and commit again.

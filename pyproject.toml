@@ -126,8 +126,7 @@ skip-checking-short-docstrings = false
 allow-init-docstring = true
 check-class-attributes = true
 # Path-level exclude regex (verbose). Default infra paths plus files that
-# currently violate the rules; tracked for incremental remediation by the
-# pydoclint audit issue.
+# currently violate the rules — shrinks as files are cleaned up. See #938.
 exclude = '''(?x)
     \.git
   | \.tox
