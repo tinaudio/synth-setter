@@ -168,13 +168,12 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: "intermediate-data"
 ```
 
 Runtime inputs (`github_sha`, `issue_number`) are provided by the caller, not
 stored in the YAML. The schema is tested in
-[test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) (22 tests
-covering validation, defaults, and drift detection against the real YAML).
+[test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) — covers
+validation, defaults, and drift detection against the real YAML.
 
 ______________________________________________________________________
 
