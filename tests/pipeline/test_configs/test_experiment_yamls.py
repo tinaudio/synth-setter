@@ -2,9 +2,10 @@
 
 Each entry in :data:`DATASET_EXPERIMENTS` names a top-level datagen experiment under
 ``configs/experiment/`` that composes ``dataset.yaml`` via Hydra's
-``initialize_config_dir`` + ``compose``. The composed dict — minus the ``data:``,
-``r2:``, and ``hydra:`` group sub-trees that are lifted to top-level via interpolation
-— must validate as ``DatasetSpec`` and JSON round-trip without drift.
+``initialize_config_dir`` + ``compose``. The composed dict — minus the non-``DatasetSpec``
+group sub-trees (``data:``, ``r2:``, ``paths:``, and ``hydra:``) that are either lifted
+to top-level via interpolation or only exist for Hydra runtime — must validate as
+``DatasetSpec`` and JSON round-trip without drift.
 
 The list is curated rather than auto-discovered: ``configs/experiment/`` also holds
 train-side configs (top-level files like ``time_weighting.yaml`` and the nested
