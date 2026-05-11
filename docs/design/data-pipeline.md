@@ -76,13 +76,13 @@ RunPod is used because it's the platform where GPUs are already available and co
 ## 2. Typical Workflow
 
 ```bash
-# 1. Create a dataset config (filename = dataset_config_id)
-cat configs/dataset/surge-simple-480k-10k.yaml
-# → num_shards: 48, shard_size: 10000, ...
+# 1. Pick an experiment config (filename = experiment id).
+#    Hydra composes the final DatasetSpec from configs/dataset.yaml + this overlay.
+#    configs/dataset/*.yaml is the legacy launcher path (`--config`), not the Hydra CLI input.
+cat configs/experiment/surge-simple-480k-10k.yaml
+# → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 
 # 2. Run sequential multi-shard generation on a single worker.
-#    Composes a DatasetSpec from configs/dataset.yaml + the selected experiment
-#    (see configs/experiment/ for the curated list).
 python -m pipeline.entrypoints.generate_dataset experiment=surge-simple-480k-10k
 # → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
 # **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)

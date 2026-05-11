@@ -16,21 +16,13 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import rootutils
 from loguru import logger
-from omegaconf import OmegaConf
 
-# Set PROJECT_ROOT env var and add the repo root to sys.path so
-# ``configs/paths/default.yaml``'s ``root_dir: ${oc.env:PROJECT_ROOT}`` interpolation
-# resolves under ``python -m pipeline.entrypoints.generate_dataset``. Mirrors the
-# bootstrap in ``src/train.py`` / ``src/eval.py``.
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
-from pipeline import r2_io  # noqa: E402
-from pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
-from pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
-from pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
-from src.data.vst.core import extract_renderer_version  # noqa: E402
+from pipeline import r2_io
+from pipeline.constants import INPUT_SPEC_FILENAME
+from pipeline.partitioning import get_my_shards, read_rank_world_from_env
+from pipeline.schemas.spec import DatasetSpec, ShardSpec
+from src.data.vst.core import extract_renderer_version
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -252,6 +244,8 @@ def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     Resolves all interpolations, drops the non-DatasetSpec sub-trees, and constructs the model.
     Raises if the composed config is not a mapping.
     """
+    from omegaconf import OmegaConf
+
     raw: Any = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
@@ -265,8 +259,8 @@ def main() -> None:
 
     Bootstraps ``rootutils.setup_root`` so ``configs/paths/default.yaml``'s
     ``${oc.env:PROJECT_ROOT}`` resolves in a fresh shell, then lazy-imports hydra.
-    Both imports are local: ``scripts/docker_entrypoint.py`` only needs
-    ``load_spec_from_uri`` / ``run`` and shouldn't pay these costs on worker startup.
+    Both imports are local so ``scripts/docker_entrypoint.py`` — which only needs
+    ``load_spec_from_uri`` / ``run`` — doesn't pay these costs on worker startup.
     """
     import rootutils
 
