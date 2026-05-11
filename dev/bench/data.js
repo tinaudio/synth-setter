@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778478999183,
+  "lastUpdate": 1778479000939,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2180,6 +2180,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 12.920366085599994,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1eb0ef131e1dbfa4f2b8f2d3c0cede03349dd841",
+          "message": "chore(deps): add ruff and pydantic-settings to requirements-app.txt (#894)\n\nruff is already configured (pyproject.toml [tool.ruff*]) and runs in\npre-commit, but isn't a direct dev dep — adding it lets contributors\ninvoke `ruff check` / `ruff format` from editors and the CLI without\nshelling out through the pre-commit harness.\n\npydantic-settings is required for the planned migration in #885\n(generate_vst_dataset CLI auto-generated from RenderConfig fields).\n\nRefs #885",
+          "timestamp": "2026-05-11T05:43:37Z",
+          "tree_id": "2f32f544751c56028dbb770cad1b7e8194814a3d",
+          "url": "https://github.com/tinaudio/synth-setter/commit/1eb0ef131e1dbfa4f2b8f2d3c0cede03349dd841"
+        },
+        "date": 1778479000585,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 0.994428813457489,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 1.3908210581913591,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.01973121240735054,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.013765692710876465,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 0.5949540138244629,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 13.562267545599997,
             "unit": "seconds"
           }
         ]
