@@ -14,7 +14,7 @@ This runbook is the canonical workflow. Three entry points delegate to it; edits
 | Claude Code (interactive)  | `.claude/commands/lint-cleanup.md` | Type `/lint-cleanup <path>` in a Claude Code session  |
 | Copilot Coding Agent       | `.github/copilot-instructions.md`  | Assign a #25 sub-issue to Copilot in the GitHub UI    |
 
-Do **not** paraphrase the workflow steps into the entry-point stubs — they are intentionally thin pointers so the runbook stays single-sourced.
+The entry-point stubs may surface a short cross-reference of the rules most often forgotten (commit prefix, `Refs #25`, isolated-worktree requirement) so a contributor seeing only the stub still gets the load-bearing constraints. They must not paraphrase or fork the workflow steps themselves — those live here, single-sourced.
 
 ## Scope
 
@@ -33,7 +33,7 @@ For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `pydoc
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
 7. **Run tests**: `make test-fast` — the quick CPU suite (excludes `slow`, `gpu`, `mps`, `requires_vst`) must still pass as a smoke check; lint-only changes shouldn't affect behavior
 8. **Commit**: Use conventional commits format: `chore(lint): clean up <filename>`
-9. **Open PR**: Reference #25, check off the file in the issue checklist. Add to "Code Health" project.
+9. **Open PR**: PR body references `#25` with `Refs #25` (not `Fixes`/`Closes` — #25 stays open until every file is done). Check off the file in the issue checklist. Add to "Code Health" project.
 
 ## Rules
 

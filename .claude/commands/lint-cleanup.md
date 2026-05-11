@@ -1,5 +1,5 @@
 ---
-description: Run the lint-cleanup workflow on a legacy file from issue #25's exclusion list
+description: "Run the lint-cleanup workflow on a legacy file from issue #25's exclusion list"
 argument-hint: <path-to-file>
 ---
 
