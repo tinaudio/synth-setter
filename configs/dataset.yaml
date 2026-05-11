@@ -9,6 +9,7 @@ defaults:
   - data: ???
   - render: ???
   - r2: default
+  - paths: default
   - hydra: default
   - experiment: ???
 

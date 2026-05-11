@@ -39,16 +39,20 @@ DATASET_EXPERIMENTS: tuple[str, ...] = (
 def _compose_dataset_spec(experiment: str) -> DatasetSpec:
     """Compose ``configs/dataset.yaml`` with the named experiment override."""
     with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
-        cfg = compose(
-            config_name="dataset",
-            overrides=[f"experiment={experiment}", "+dataset_root=/dev/null"],
-        )
+        cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
+    # ``configs/paths/default.yaml`` interpolates ``${oc.env:PROJECT_ROOT}`` and
+    # ``${hydra:runtime.output_dir}``; the latter is only set under @hydra.main,
+    # not bare ``compose()``. Pin both so ``resolve=True`` doesn't trip in unit
+    # tests (mirrors the train/eval conftest pattern in ``tests/conftest.py``).
+    cfg.paths.root_dir = str(CONFIG_DIR.parent)
+    cfg.paths.output_dir = str(CONFIG_DIR.parent)
+    cfg.paths.work_dir = str(CONFIG_DIR.parent)
     raw: Any = OmegaConf.to_container(cfg, resolve=True)
     assert isinstance(raw, dict), f"composed config is not a mapping: {type(raw).__name__}"
     raw.pop("data", None)
     raw.pop("r2", None)
     raw.pop("hydra", None)
-    raw.pop("dataset_root", None)
+    raw.pop("paths", None)
     return DatasetSpec(**raw)
 
 

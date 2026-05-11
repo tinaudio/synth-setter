@@ -268,6 +268,44 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError):
             DatasetSpec(**payload)
 
+    def test_naive_created_at_string_raises(self, patch_runtime_io: None) -> None:
+        """Naive ISO datetimes are rejected at the ``created_at`` boundary.
+
+        ``make_dataset_wandb_run_id`` downstream needs tz-aware UTC; without this check
+        an invalid ``created_at`` would surface as a run_id derivation crash with the
+        wrong error attribution.
+        """
+        payload = {**_valid_spec_kwargs(), "created_at": "2026-03-28T12:00:00"}
+        with pytest.raises(ValidationError, match="created_at must be timezone-aware UTC"):
+            DatasetSpec(**payload)
+
+    def test_non_utc_created_at_string_raises(self, patch_runtime_io: None) -> None:
+        """Non-UTC ISO offsets are rejected so run_id derivation produces correct timestamps."""
+        payload = {**_valid_spec_kwargs(), "created_at": "2026-03-28T12:00:00+05:00"}
+        with pytest.raises(ValidationError, match="created_at must be UTC"):
+            DatasetSpec(**payload)
+
+    def test_train_val_test_sizes_stored_as_immutable_tuple(self, patch_runtime_io: None) -> None:
+        """Splits stored as ``tuple`` so in-place mutation can't invalidate cached ``shards``.
+
+        ``frozen=True`` only blocks attribute reassignment, not in-place mutation of
+        contained-types. Tuple makes in-place mutation a ``TypeError``, preserving the
+        frozen contract end-to-end.
+        """
+        spec = DatasetSpec(**_valid_spec_kwargs())
+        assert isinstance(spec.train_val_test_sizes, tuple)
+        assert isinstance(spec.train_val_test_seeds, tuple)
+        with pytest.raises(TypeError):
+            spec.train_val_test_sizes[0] = 999  # type: ignore[index]
+
+    def test_train_val_test_sizes_accepts_json_list(self, patch_runtime_io: None) -> None:
+        """JSON-loaded specs deliver lists (no native tuple type); they coerce to tuples on
+        input."""
+        payload = {**_valid_spec_kwargs(), "train_val_test_sizes": [300, 0, 0]}
+        spec = DatasetSpec(**payload)
+        assert spec.train_val_test_sizes == (300, 0, 0)
+        assert isinstance(spec.train_val_test_sizes, tuple)
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — computed fields
@@ -427,7 +465,7 @@ class TestLoadDatasetSpecYaml:
         spec = load_dataset_spec_yaml(legacy_yaml)
         assert spec.task_name == "ci-smoke-test"
         assert spec.output_format == "hdf5"
-        assert spec.train_val_test_sizes == [300, 0, 0]
+        assert spec.train_val_test_sizes == (300, 0, 0)
         assert spec.render.plugin_path == "plugins/Surge XT.vst3"
         assert spec.render.batch_per_shard == 100
         assert spec.num_shards == 3

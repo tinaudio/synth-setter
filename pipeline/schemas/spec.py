@@ -13,7 +13,7 @@ layout + render fields.
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -171,13 +171,14 @@ class DatasetSpec(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    # Layout fields. Splits use ``list[int]`` (not tuple) so JSON round-trip
-    # in strict mode survives without coercion (JSON has no tuple type).
+    # Layout fields. Splits are stored as immutable tuples so the frozen-model
+    # guarantee carries through to the contents; JSON-loaded values arrive as
+    # lists and get coerced via ``_splits_list_to_tuple`` below.
     task_name: str
     output_format: Literal["hdf5"]
-    train_val_test_sizes: list[int] = Field(min_length=3, max_length=3)
+    train_val_test_sizes: tuple[int, int, int]
     # Reserved for per-sample seeding (#884); not consumed yet.
-    train_val_test_seeds: list[int] = Field(min_length=3, max_length=3)
+    train_val_test_seeds: tuple[int, int, int]
     base_seed: int
     r2_bucket: str
     r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
@@ -211,20 +212,51 @@ class DatasetSpec(BaseModel):
                 data.pop(computed_key, None)
         return data
 
+    @field_validator("train_val_test_sizes", "train_val_test_seeds", mode="before")
+    @classmethod
+    def _splits_list_to_tuple(cls, value: Any) -> Any:
+        """Coerce JSON-loaded ``list[int]`` into ``tuple[int, int, int]``.
+
+        Tuples are immutable, so the frozen-model guarantee carries through to
+        the contents (a mutable list would let ``spec.train_val_test_sizes[0] =
+        x`` silently invalidate the cached ``shards`` / ``num_shards``). JSON
+        has no native tuple, so model_dump_json emits a list and the worker
+        round-trip lands here on validation; in-process construction can pass
+        either form.
+        """
+        if isinstance(value, list):
+            if len(value) != 3:
+                raise ValueError(f"must have exactly 3 entries, got {len(value)}")
+            return tuple(value)
+        return value
+
     @field_validator("created_at", mode="before")
     @classmethod
     def _parse_iso_datetime(cls, value: Any) -> Any:
-        """Parse an ISO 8601 string into a ``datetime`` so strict mode accepts it.
+        """Parse an ISO 8601 string into a tz-aware UTC ``datetime``.
 
         Strict-mode Python validation rejects str → datetime coercion, so JSON inputs (where
         datetime is a string) need pre-conversion here. Also normalizes the trailing ``Z``
         offset that ``model_dump_json`` emits for UTC, which Python 3.10's ``fromisoformat``
         does not accept (3.11+ does).
+
+        Rejects naive datetimes and non-UTC offsets so error attribution stays at the
+        ``created_at`` boundary rather than surfacing later as a ``run_id`` derivation crash
+        (``make_dataset_wandb_run_id`` requires tz-aware UTC).
         """
         if isinstance(value, str):
             if value.endswith("Z"):
                 value = value[:-1] + "+00:00"
-            return datetime.fromisoformat(value)
+            value = datetime.fromisoformat(value)
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                raise ValueError(
+                    f"created_at must be timezone-aware UTC; got naive datetime {value!r}"
+                )
+            if value.utcoffset() != timedelta(0):
+                raise ValueError(
+                    f"created_at must be UTC (offset 0); got offset {value.utcoffset()}"
+                )
         return value
 
     @field_validator("r2_prefix")
