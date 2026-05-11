@@ -207,6 +207,23 @@ Pure documentation edits (`.md` files, `docs/`) are exempt. There are no other e
 - In chat responses, use full markdown hyperlinks for PR/issue references: `[#N](https://github.com/tinaudio/synth-setter/issues/N)`. In PR/issue bodies, use bare `Fixes #N` / `Closes #N` / `Refs #N` so GitHub auto-close works.
 - Never add "Generated with Claude Code" or similar attribution footers to PRs, commits, issues, or comments.
 
+### PR Readiness
+
+A PR is **not ready** — for review, merge, or hand-off — until **both** of these hold:
+
+- **All CI checks pass.** Required and optional. A failing, errored, or still-pending check means not ready.
+- **No merge conflicts with the base branch.** `gh pr view <N> --json mergeable -q .mergeable` must report `MERGEABLE`. `CONFLICTING` means not ready.
+
+"I pushed the fix" is not the same as "the PR is ready." After pushing, iterate until both conditions are satisfied — use `/loop` (e.g. `/loop 2m gh pr checks <N>`) or repeated polling, do not stop at the first push:
+
+1. Push the change.
+2. Wait for CI to finish: `gh pr checks <N> --watch` or `/loop` the checks command.
+3. If any check fails, diagnose, fix, push again, return to step 2.
+4. If `gh pr view <N> --json mergeable -q .mergeable` reports `CONFLICTING`, rebase or merge the base branch, resolve the conflict, push, return to step 2.
+5. Only when checks are all green AND `mergeable=MERGEABLE` is the PR ready.
+
+This applies whether the PR is yours or one you were asked to drive across the finish line.
+
 ### PR Verification
 
 - `/pr-checkbox` is verification-only — look for existing branches/PRs and run checks, never plan implementation.
