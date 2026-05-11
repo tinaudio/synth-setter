@@ -117,7 +117,9 @@ build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
 the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
 Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
-`dev` user, and a `/commandhistory` directory (owned by `dev`) that
+`dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
+`uv pip install` and editable installs work without sudo, and adds a
+`/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
 history survives container rebuilds. The same devcontainer configs also
 overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
