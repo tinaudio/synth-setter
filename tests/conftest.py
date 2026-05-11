@@ -389,7 +389,7 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.
     :param param_spec_name: Param spec name (key into :data:`src.data.vst.param_specs`
-        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param_spec``
+        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
         and ``--preset_path`` for ``generate_vst_dataset``.
 
     :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
