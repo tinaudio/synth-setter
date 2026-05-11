@@ -26,7 +26,7 @@ from pydantic import (
     model_validator,
 )
 
-from pipeline.schemas.prefix import (
+from src.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
     make_dataset_wandb_run_id,
@@ -167,8 +167,10 @@ class DatasetSpec(BaseModel):
     task_name: str
     output_format: Literal["hdf5"]
     train_val_test_sizes: tuple[int, int, int]
-    # Reserved for per-sample seeding (#884); not consumed yet.
-    train_val_test_seeds: tuple[int, int, int]
+    # Reserved for per-sample seeding (#884); not implemented. Accepts only
+    # ``None`` — any non-None value (yaml, JSON, or in-process) raises
+    # ``NotImplementedError`` at construction. See ``_reject_train_val_test_seeds``.
+    train_val_test_seeds: tuple[int, int, int] | None = None
     base_seed: int
     r2_bucket: str
     r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
@@ -188,6 +190,22 @@ class DatasetSpec(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
+    def _reject_train_val_test_seeds(cls, data: Any) -> Any:
+        """Reject any non-None ``train_val_test_seeds`` — reserved for #884, not implemented.
+
+        Runs in ``mode="before"`` so ``NotImplementedError`` propagates as-is
+        instead of being wrapped in a ``ValidationError`` (which is what
+        pydantic does for ``ValueError`` raised inside field validators).
+        """
+        if isinstance(data, dict) and data.get("train_val_test_seeds") is not None:
+            raise NotImplementedError(
+                "train_val_test_seeds is reserved for per-sample seeding (#884) "
+                "and is not yet implemented; omit the field"
+            )
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
     def _strip_computed_field_keys(cls, data: Any) -> Any:
         """Strip ``shards`` / ``num_shards`` / ``num_params`` from input.
 
@@ -202,7 +220,7 @@ class DatasetSpec(BaseModel):
                 data.pop(computed_key, None)
         return data
 
-    @field_validator("train_val_test_sizes", "train_val_test_seeds", mode="before")
+    @field_validator("train_val_test_sizes", mode="before")
     @classmethod
     def _splits_list_to_tuple(cls, value: Any) -> Any:
         """Coerce JSON-loaded ``list[int]`` into ``tuple[int, int, int]``.

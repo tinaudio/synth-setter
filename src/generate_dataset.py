@@ -1,7 +1,7 @@
 """Spec-driven generate_dataset runner.
 
 ``main(cfg)`` is the Hydra-composed CLI entry, invoked via
-``python -m pipeline.entrypoints.generate_dataset experiment=<id>``.
+``python -m src.generate_dataset experiment=<id>``.
 
 The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker entry that reads a
 pre-materialized spec from R2 via ``load_spec_from_uri``.
@@ -22,15 +22,15 @@ from omegaconf import DictConfig, OmegaConf
 
 # Set PROJECT_ROOT env var and add the repo root to sys.path so
 # ``configs/paths/default.yaml``'s ``root_dir: ${oc.env:PROJECT_ROOT}`` interpolation
-# resolves under ``python -m pipeline.entrypoints.generate_dataset``. Mirrors
+# resolves under ``python -m src.generate_dataset``. Mirrors
 # ``src/train.py`` / ``src/eval.py``.
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from pipeline import r2_io  # noqa: E402
-from pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
-from pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
-from pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
 from src.data.vst.core import extract_renderer_version  # noqa: E402
+from src.pipeline import r2_io  # noqa: E402
+from src.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
+from src.pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
+from src.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
 
 # Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
 # sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``
@@ -98,7 +98,11 @@ def _rclone_copy(src: str, dest: str) -> None:
 
 
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
-    """Build CLI args for generate_vst_dataset.py from a spec and shard.
+    """Build CLI args for ``generate_vst_dataset.py`` from a spec and shard.
+
+    The flag set is derived from ``RenderConfig.model_fields`` so every renderer
+    config field surfaces as a ``--<field>`` option automatically; adding a
+    field on the model auto-extends the CLI invocation.
 
     HDF5-only: ``DatasetSpec.output_format`` is currently restricted to
     ``"hdf5"`` and ``generate_vst_dataset.py`` writes HDF5 regardless of the
@@ -106,26 +110,12 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     is introduced (PR-12/13/14 in the dataset-pipeline chain).
     """
     output_path = output_dir / shard.filename
-    render = spec.render
-    options = {
-        "plugin_path": render.plugin_path,
-        "preset_path": render.preset_path,
-        "sample_rate": render.sample_rate,
-        "channels": render.channels,
-        "velocity": render.velocity,
-        "signal_duration_seconds": render.signal_duration_seconds,
-        "min_loudness": render.min_loudness,
-        "param_spec": render.param_spec_name,
-        "sample_batch_size": render.sample_batch_size,
-    }
-
     args = [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
         str(output_path),
-        str(render.batch_per_shard),
     ]
-    for key, value in options.items():
+    for key, value in spec.render.model_dump().items():
         args.extend([f"--{key}", str(value)])
 
     return args
@@ -257,9 +247,9 @@ def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     return DatasetSpec(**raw)
 
 
-@hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
+@hydra.main(version_base="1.3", config_path="../configs", config_name="dataset")
 def main(cfg: DictConfig) -> None:
-    """Hydra-composed CLI entry: ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``."""
+    """Hydra-composed CLI entry: ``python -m src.generate_dataset experiment=<id>``."""
     run(spec_from_cfg(cfg))
 
 

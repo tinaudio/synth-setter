@@ -11,11 +11,11 @@ import h5py
 import numpy as np
 import pytest
 
-from pipeline.ci.validate_shard import (
+from src.pipeline.ci.validate_shard import (
     validate_all_shards_from_r2,
     validate_shard,
 )
-from pipeline.schemas.spec import DatasetSpec
+from src.pipeline.schemas.spec import DatasetSpec
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -46,9 +46,9 @@ def _create_shard(
 def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
     """Build a real DatasetSpec with mocked git/timestamp factories."""
     fixed_now = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr("pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
-    monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: False)
-    monkeypatch.setattr("pipeline.schemas.spec._utc_now", lambda: fixed_now)
+    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "a" * 40)
+    monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: fixed_now)
 
     contents = tmp_path / "FakePlugin.vst3" / "Contents"
     contents.mkdir(parents=True)
@@ -58,7 +58,6 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
         task_name="test-dataset",
         output_format="hdf5",
         train_val_test_sizes=(10, 0, 0),
-        train_val_test_seeds=(42, 43, 44),
         base_seed=42,
         r2_bucket="intermediate-data",
         render={
@@ -186,7 +185,7 @@ class TestValidateAllShardsFromR2:
             # Simulate rclone copyto: write a valid shard to dest path
             _create_shard(Path(args[-1]), shard_size=spec.render.batch_per_shard)
 
-        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+        with patch("src.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
             errors = validate_all_shards_from_r2(spec)
 
         assert errors == []
@@ -201,7 +200,7 @@ class TestValidateAllShardsFromR2:
             # Write garbage so shard fails HDF5 open
             Path(args[-1]).write_bytes(b"garbage")
 
-        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+        with patch("src.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
             errors = validate_all_shards_from_r2(spec)
 
         assert errors  # at least one error
@@ -216,7 +215,7 @@ class TestMain:
         self, real_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The legacy 2-arg shape (spec + shard) is rejected."""
-        from pipeline.ci.validate_shard import main
+        from src.pipeline.ci.validate_shard import main
 
         spec_json_path = tmp_path / "spec.json"
         spec_json_path.write_text(real_spec.model_dump_json())
@@ -232,7 +231,7 @@ class TestMain:
         self, real_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Valid spec + R2-served valid shards → exit 0."""
-        from pipeline.ci.validate_shard import main
+        from src.pipeline.ci.validate_shard import main
 
         spec = real_spec
         spec_json_path = tmp_path / "spec.json"
@@ -242,7 +241,7 @@ class TestMain:
             _create_shard(Path(args[-1]), shard_size=spec.render.batch_per_shard)
 
         monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
-        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+        with patch("src.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
             with pytest.raises(SystemExit) as exc_info:
                 main()
 
@@ -252,7 +251,7 @@ class TestMain:
         self, real_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """If any shard in spec.shards fails validation, exit 1."""
-        from pipeline.ci.validate_shard import main
+        from src.pipeline.ci.validate_shard import main
 
         spec = real_spec
         spec_json_path = tmp_path / "spec.json"
@@ -262,7 +261,7 @@ class TestMain:
             Path(args[-1]).write_bytes(b"garbage")
 
         monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
-        with patch("pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+        with patch("src.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
             with pytest.raises(SystemExit) as exc_info:
                 main()
 

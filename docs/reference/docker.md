@@ -26,8 +26,8 @@ ______________________________________________________________________
   - `WANDB_API_KEY` (W&B credential)
 
 The target R2 bucket is **not** an env var — it is a required field on
-`DatasetConfig` / `DatasetPipelineSpec` and flows into the container via
-the materialized spec passed to `generate_dataset --spec`.
+`DatasetSpec.r2_bucket` and flows into the container via the materialized
+spec passed to `generate_dataset --spec`.
 
 ```bash
 # Source credentials into current shell
@@ -57,7 +57,7 @@ that callers may override are listed under
 rclone's native env-var config automatically builds the `r2` remote
 inside the container from the `RCLONE_CONFIG_R2_*` variables — no
 `rclone.conf` file is read or written. The bucket name is **not** part
-of the rclone remote config: it lives in `DatasetPipelineSpec.r2_bucket`
+of the rclone remote config: it lives in `DatasetSpec.r2_bucket`
 and `generate_dataset.py` interpolates it into upload paths
 (`r2:${spec.r2_bucket}/...`).
 
@@ -168,13 +168,12 @@ base_image_tag: ubuntu22_04
 build_mode: prebuilt
 target_platform: linux/amd64
 torch_backend: "cu128"
-r2_bucket: "intermediate-data"
 ```
 
 Runtime inputs (`github_sha`, `issue_number`) are provided by the caller, not
 stored in the YAML. The schema is tested in
-[test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) (22 tests
-covering validation, defaults, and drift detection against the real YAML).
+[test_image_config.py](../../tests/pipeline/test_schemas/test_image_config.py) — covers
+validation, defaults, and drift detection against the real YAML.
 
 ______________________________________________________________________
 
@@ -243,7 +242,7 @@ audio-rendering boundary, wrapping only the generator subprocess — so
 
 Pass the materialized spec via `--spec <path>`. All dataset-run
 configuration, including the target R2 bucket, lives in that spec
-(`DatasetPipelineSpec.r2_bucket`).
+(`DatasetSpec.r2_bucket`).
 
 **Required env vars:** See § Runtime environment variables above. For
 this subcommand you need the 5 `RCLONE_CONFIG_R2_*` vars (for rclone
@@ -269,10 +268,10 @@ When the test workflow runs, it uploads one artifact bundle per provider:
 `test-run-metadata-runpod` and `test-run-metadata-oci`. Each bundle
 contains two files:
 
-| File              | Contents                                                                         |
-| ----------------- | -------------------------------------------------------------------------------- |
-| `input_spec.json` | DatasetPipelineSpec written by the workflow to the bind-mounted run-metadata dir |
-| `generate.log`    | Full container stdout/stderr from generation                                     |
+| File              | Contents                                                                 |
+| ----------------- | ------------------------------------------------------------------------ |
+| `input_spec.json` | DatasetSpec written by the workflow to the bind-mounted run-metadata dir |
+| `generate.log`    | Full container stdout/stderr from generation                             |
 
 **Download:**
 
@@ -442,13 +441,13 @@ To clear the remote registry cache, delete the `buildcache` tag from Docker Hub
 
 ### Entrypoint errors
 
-| Error                                    | Cause                               | Fix                                                                          |
-| ---------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------- |
-| `Missing subcommand`                     | Ran the image with no subcommand    | Append one of: `idle`, `passthrough <cmd>`, `generate_dataset --spec <path>` |
-| `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train` |
-| `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                          |
-| `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)         |
-| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `pipeline.schemas.spec.materialize_spec`        |
+| Error                                    | Cause                               | Fix                                                                               |
+| ---------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------- |
+| `Missing subcommand`                     | Ran the image with no subcommand    | Append one of: `idle`, `passthrough <cmd>`, `generate_dataset --spec <path>`      |
+| `No such command 'X'`                    | Typo in subcommand name             | Use one of `idle`, `passthrough`, `generate_dataset`, `render_eval`, `train`      |
+| `passthrough requires a command to exec` | Ran `passthrough` with no argv      | Append the command and its args after `passthrough`                               |
+| `Unable to read spec at ...`             | `--spec` path is missing/unreadable | Confirm the path exists inside the container (bind mount + filename)              |
+| `Invalid spec at ...`                    | Spec JSON fails pydantic validation | Re-materialize the spec; see `pipeline.ci.materialize_spec` (CI bootstrap script) |
 
 ______________________________________________________________________
 

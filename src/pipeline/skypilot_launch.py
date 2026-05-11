@@ -46,9 +46,9 @@ from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
 
-from pipeline.entrypoints.generate_dataset import spec_from_cfg
-from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from pipeline.schemas.spec import DatasetSpec
+from src.generate_dataset import spec_from_cfg
+from src.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from src.pipeline.schemas.spec import DatasetSpec
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
@@ -401,7 +401,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
         "backend does not support num_nodes>1, so we synthesize multi-worker partitioning by "
         "launching N independent clusters and injecting SYNTH_SETTER_WORKER_RANK / "
         "SYNTH_SETTER_NUM_WORKERS per rank. Each cluster downloads the same materialized spec "
-        "and uses pipeline.partitioning.get_my_shards to slice its share."
+        "and uses src.pipeline.partitioning.get_my_shards to slice its share."
     ),
 )
 @click.option(

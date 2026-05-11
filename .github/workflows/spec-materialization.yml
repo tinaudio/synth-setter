@@ -62,7 +62,7 @@ jobs:
               bash scripts/ensure_plugin_symlinks.sh
               # Headless X11 needed because importing pedalboard (via param_specs) requires it
               scripts/run-linux-vst-headless.sh \
-                python -m pipeline.ci.materialize_spec "$EXPERIMENT" /spec-output
+                python -m src.pipeline.ci.materialize_spec "$EXPERIMENT" /spec-output
             '
 
       - name: Validate spec structure
@@ -71,7 +71,7 @@ jobs:
           cat /tmp/spec-output/input_spec.json
           echo ""
           echo "=== Structural Validation ==="
-          python3 -m pipeline.ci.validate_spec /tmp/spec-output/input_spec.json
+          python3 -m src.pipeline.ci.validate_spec /tmp/spec-output/input_spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@v4
