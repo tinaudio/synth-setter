@@ -146,11 +146,11 @@ ______________________________________________________________________
 
 ## 6. W&B Metadata Convention
 
-| Location            | What Goes Here                                   | Examples                                                |
-| ------------------- | ------------------------------------------------ | ------------------------------------------------------- |
-| `wandb.config`      | Hyperparams — things you SET before the run      | `lr`, `epochs`, `batch_size`, `github_sha`              |
-| `wandb.summary`     | Final metrics — things you MEASURE after the run | `mse`, `spectral_convergence`, `param_accuracy`         |
-| `artifact.metadata` | Properties of the artifact itself                | `n_samples`, `mel_shape`, `shard_count`, `code_version` |
+| Location            | What Goes Here                                   | Examples                                           |
+| ------------------- | ------------------------------------------------ | -------------------------------------------------- |
+| `wandb.config`      | Hyperparams — things you SET before the run      | `lr`, `epochs`, `batch_size`, `github_sha`         |
+| `wandb.summary`     | Final metrics — things you MEASURE after the run | `mse`, `spectral_convergence`, `param_accuracy`    |
+| `artifact.metadata` | Properties of the artifact itself                | `n_samples`, `mel_shape`, `shard_count`, `git_sha` |
 
 - Dataset properties belong on the dataset artifact, not on training runs that consume it
 

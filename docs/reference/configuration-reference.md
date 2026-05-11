@@ -7,13 +7,12 @@ ______________________________________________________________________
 
 ## 1. Configuration Layers
 
-| Layer                 | Tool                                           | Validation                                                   | Stored In                          | Example                                      |
-| --------------------- | ---------------------------------------------- | ------------------------------------------------------------ | ---------------------------------- | -------------------------------------------- |
-| Experiment config     | Hydra YAML composition                         | Deferred — class constructors at `hydra.utils.instantiate()` | git (`configs/experiment/`)        | `configs/experiment/surge/flow_simple.yaml`  |
-| Pipeline input config | Pydantic `BaseModel(strict=True)`              | Parse-time — `load_dataset_config()`                         | git (`configs/dataset/`)           | `configs/dataset/surge-simple-480k-10k.yaml` |
-| Frozen runtime spec   | Pydantic `BaseModel(strict=True, frozen=True)` | Materialization — `materialize_spec()`                       | R2 (`{r2_prefix}/input_spec.json`) | `DatasetPipelineSpec`                        |
-| Cloud infrastructure  | SkyPilot Task YAML                             | Launcher script (not Hydra)                                  | git (`configs/compute/`)           | `configs/compute/runpod-template.yaml`       |
-| Secrets / credentials | Environment variables                          | Runtime                                                      | `.env` (local), CI secrets         | `WANDB_API_KEY`                              |
+| Layer                         | Tool                                                                                                                                                                                                                                                                                 | Validation                                                   | Stored In                                                                                         | Example                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Experiment config             | Hydra YAML composition                                                                                                                                                                                                                                                               | Deferred — class constructors at `hydra.utils.instantiate()` | git (`configs/experiment/`)                                                                       | `configs/experiment/surge/flow_simple.yaml`  |
+| Pipeline input + runtime spec | Pydantic `BaseModel(frozen=True, extra="forbid")` — `DatasetSpec` unifies the prior config + materialized-spec split. Sub-models (`RenderConfig`, `ShardSpec`) are strict; the top-level model is intentionally non-strict so JSON round-trips coerce `list→tuple` / `str→datetime`. | Construction-time — `DatasetSpec(**hydra_dict)`              | git (`configs/dataset/`, migrating to `configs/experiment/`) → R2 (`{r2_prefix}/input_spec.json`) | `configs/dataset/surge-simple-480k-10k.yaml` |
+| Cloud infrastructure          | SkyPilot Task YAML                                                                                                                                                                                                                                                                   | Launcher script (not Hydra)                                  | git (`configs/compute/`)                                                                          | `configs/compute/runpod-template.yaml`       |
+| Secrets / credentials         | Environment variables                                                                                                                                                                                                                                                                | Runtime                                                      | `.env` (local), CI secrets                                                                        | `WANDB_API_KEY`                              |
 
 ### Why These Boundaries
 
@@ -31,13 +30,19 @@ ______________________________________________________________________
 ### 2.1 Data Generation
 
 ```
-Config YAML → load_dataset_config() → DatasetConfig (Pydantic, validated)
-  → materialize_spec() → DatasetPipelineSpec (frozen, immutable)
-    → uploaded to R2 as {r2_prefix}/input_spec.json
+configs/dataset/{id}.yaml (legacy flat shape, current default)
+  → load_dataset_spec_yaml() reshapes into DatasetSpec kwargs
+    → DatasetSpec(**kwargs) — frozen Pydantic validation
+      git_sha / is_repo_dirty / created_at auto-fill via default_factory
+      run_id / r2_prefix fill via _populate_derived_runtime_fields validator
+  → uploaded to R2 as {r2_prefix}/input_spec.json
 ```
 
-- Config is mutable, human-authored YAML in `configs/dataset/`
-- Spec is immutable, machine-generated JSON capturing runtime state (git SHA, renderer version, per-shard seeds)
+The Hydra-composed layout (`configs/dataset.yaml` + `configs/experiment/<id>` + `data/<group>` + `render/<spec>` + `r2/<group>`) lands incrementally: the new groups arrive in [#907](https://github.com/tinaudio/synth-setter/pull/907) and the launcher's `@hydra.main` migration (with `load_dataset_spec_yaml`'s removal) follows in PR-3.
+
+- Config is mutable, human-authored YAML (currently `configs/dataset/*.yaml`; migrating to a Hydra-composed `configs/dataset.yaml` + `configs/experiment/` shape)
+- `DatasetSpec` is the unified model: the same frozen Pydantic instance is both the validated input and the materialized artifact (no separate `DatasetConfig` / `DatasetPipelineSpec` types anymore)
+- The serialized JSON captures runtime state (git SHA, renderer version, per-shard seeds) via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`) that auto-fill when missing, plus a `_populate_derived_runtime_fields` `@model_validator` that fills `run_id` / `r2_prefix` from `task_name` + `created_at` when blank
 - Spec is the reproducibility unit and reconciliation target
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2_prefix}/input_spec.json` (no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
@@ -84,8 +89,8 @@ configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
 ```
 
 - Separate from Hydra — different consumer (SkyPilot's `Task.from_yaml`), different time (before worker starts)
-- Launcher takes the task template + a `DatasetConfig`, materializes a
-  `DatasetPipelineSpec`, uploads it to R2 (under `skypilot-launcher-specs/<cluster>.json`),
+- Launcher takes the task template + a `DatasetSpec`, uploads it to R2
+  (under `skypilot-launcher-specs/<cluster>.json`),
   and forwards the `r2://` URI to the worker via `task.update_envs(WORKER_SPEC_URI=...)`.
   R2 is used instead of `task.update_file_mounts` because the SkyPilot RunPod backend
   rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
