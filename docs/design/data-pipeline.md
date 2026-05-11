@@ -1238,9 +1238,9 @@ class RenderConfig(BaseModel):
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""
-    # ``strict`` is intentionally off on this top-level model so JSON round-trips
-    # coerce list→tuple and str→datetime (JSON has no native tuple or datetime).
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # Strict everywhere; JSON round-trip coercions (list→tuple, str→datetime) happen via
+    # explicit per-field validators, not by relaxing strict mode at the trust boundary.
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     # Layout
     task_name: str
@@ -1254,16 +1254,15 @@ class DatasetSpec(BaseModel):
     # Sub-model
     render: RenderConfig
 
-    # Runtime fields. ``git_sha`` / ``is_repo_dirty`` / ``created_at`` auto-fill
-    # via ``default_factory`` when missing on input. ``run_id`` / ``r2_prefix``
-    # default to ``""`` and are filled by ``_populate_derived_runtime_fields``
-    # (mode="after") from ``task_name`` + ``created_at`` when blank — non-blank
-    # JSON-loaded values pass through unchanged.
+    # Runtime fields. All five auto-fill via ``default_factory`` when missing on
+    # input; ``run_id`` / ``r2_prefix`` use the data-aware factories that derive
+    # from already-validated ``task_name`` + ``created_at``. JSON-loaded values
+    # pass through unchanged (workers reuse materialization-time values).
     git_sha: str = Field(default_factory=lambda: _get_git_sha())
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
-    run_id: str = ""
-    r2_prefix: str = ""
+    run_id: str = Field(default_factory=_default_run_id)
+    r2_prefix: str = Field(default_factory=_default_r2_prefix)
 
     # Computed: @computed_field + @cached_property — emitted by model_dump and
     # stripped on input (see _strip_computed_field_keys) so JSON round-trip works.
@@ -1273,7 +1272,7 @@ class DatasetSpec(BaseModel):
     # num_shards / num_params follow the same @computed_field / @cached_property pattern.
 ```
 
-`ShardSpec` and `RenderConfig` use Pydantic strict mode at the sub-model boundary. The top-level `DatasetSpec` is intentionally non-strict so JSON-mode round-trips can coerce `list→tuple` and `str→datetime`; `extra="forbid"` plus the per-field validators keep the trust boundary tight. `frozen=True` makes specs immutable at the type level.
+All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
 
 **Seed derivation:** Per-shard seeds are computed deterministically during spec materialization: `seed = base_seed + shard_id`, where `base_seed` is derived from the run config. This means the same config always produces the same spec (and therefore the same seeds). Reproducibility comes from re-running with the same frozen spec — the spec is the reproducibility unit, not the config.
 
@@ -1526,21 +1525,21 @@ configs/
 
 ## Appendix B: Tech Stack
 
-| Component       | Technology                                                                                                                                              | Role                                             |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| Build           | Docker (BuildKit)                                                                                                                                       | Reproducible compute environments                |
-| Storage         | Cloudflare R2                                                                                                                                           | Data + coordination, free egress                 |
-| Execution       | RunPod                                                                                                                                                  | Cheap on-demand cloud workers                    |
-| Tracking        | Weights & Biases                                                                                                                                        | Pipeline metrics, dataset artifact registry      |
-| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                                                                                                       | Shard generation + local training format         |
-| Training format | [WebDataset](https://github.com/webdataset/webdataset)                                                                                                  | Streaming `.tar` shards for multi-GPU training   |
-| CLI             | [Click](https://click.palletsprojects.com/)                                                                                                             | Typed arguments, validation, `--help`            |
-| Validation      | [Pydantic](https://docs.pydantic.dev/) (frozen models; `strict=True` on `RenderConfig` / `ShardSpec`, non-strict on `DatasetSpec` for JSON round-trips) | DatasetSpec, report, and config validation       |
-| Logging         | [structlog](https://www.structlog.org/)                                                                                                                 | Structured JSON debug logging                    |
-| Retry           | [tenacity](https://tenacity.readthedocs.io/)                                                                                                            | Centralized retry policy                         |
-| Upload/download | [rclone](https://rclone.org/)                                                                                                                           | R2 file transfer; all transfers use `--checksum` |
-| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)                                                                                            | Reproducible environments                        |
-| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb)                                                                                       | VST synthesis                                    |
+| Component       | Technology                                                                                                                                                                  | Role                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Build           | Docker (BuildKit)                                                                                                                                                           | Reproducible compute environments                |
+| Storage         | Cloudflare R2                                                                                                                                                               | Data + coordination, free egress                 |
+| Execution       | RunPod                                                                                                                                                                      | Cheap on-demand cloud workers                    |
+| Tracking        | Weights & Biases                                                                                                                                                            | Pipeline metrics, dataset artifact registry      |
+| Data format     | [HDF5](https://www.h5py.org/) (h5py + hdf5plugin)                                                                                                                           | Shard generation + local training format         |
+| Training format | [WebDataset](https://github.com/webdataset/webdataset)                                                                                                                      | Streaming `.tar` shards for multi-GPU training   |
+| CLI             | [Click](https://click.palletsprojects.com/)                                                                                                                                 | Typed arguments, validation, `--help`            |
+| Validation      | [Pydantic](https://docs.pydantic.dev/) (frozen models; `strict=True` on `DatasetSpec`, `RenderConfig`, and `ShardSpec`; JSON round-trip coercions via per-field validators) | DatasetSpec, report, and config validation       |
+| Logging         | [structlog](https://www.structlog.org/)                                                                                                                                     | Structured JSON debug logging                    |
+| Retry           | [tenacity](https://tenacity.readthedocs.io/)                                                                                                                                | Centralized retry policy                         |
+| Upload/download | [rclone](https://rclone.org/)                                                                                                                                               | R2 file transfer; all transfers use `--checksum` |
+| Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)                                                                                                                | Reproducible environments                        |
+| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb)                                                                                                           | VST synthesis                                    |
 
 ## Appendix C: References
 
