@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-03-27
+> **Last verified:** 2026-05-11
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -39,8 +39,11 @@ set -a && source .env && set +a
 The image contains no baked credentials and is safe to publish on public
 registries. All credentials flow in at runtime via environment variables;
 dispatch and dataset-run configuration flow via CLI args (subcommand +
-`--spec`). This is the **single source of truth** for what the image
-expects at `docker run` time.
+`--spec`). This table enumerates the credentials and required overrides
+callers **must** supply at `docker run` time — the **single source of
+truth** for that contract. Baked defaults (e.g. `SYNTH_SETTER_PLUGIN_PATH`)
+that callers may override are listed under
+[docker-spec.md § Baked ENV vars](docker-spec.md#baked-env-vars-available-at-runtime).
 
 | Env var                              | Consumer  | Required for       | Notes                                       |
 | ------------------------------------ | --------- | ------------------ | ------------------------------------------- |
