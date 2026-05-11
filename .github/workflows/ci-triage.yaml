@@ -1,0 +1,158 @@
+name: CI Triage Agent
+
+# Autonomous triage on failed workflow runs. Design: #923.
+# Gated on the CLAUDE_CODE_OAUTH_TOKEN secret — no-op without it.
+
+on:
+  workflow_run:
+    workflows:
+      - "Tests"
+      - "Code Quality PR"
+      - "GPU Tests"
+      - "MPS Tests"
+      - "CPU Slow Tests"
+      - "Test Dataset Generation"
+      - "Validate Dataset Shards"
+      - "Test SkyPilot Local"
+      - "Test SkyPilot Debug"
+      - "VST Slow Tests"
+      - "Docker Image Build and Push"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Failed workflow run ID to triage"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+concurrency:
+  group: ci-triage-${{ github.event.workflow_run.id || github.event.inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    # Skip success runs and skip forks (write perms must not run against
+    # untrusted code).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verify CLAUDE_CODE_OAUTH_TOKEN is configured
+        id: token-check
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_TOKEN}" != "true" ]; then
+            echo "::notice::CLAUDE_CODE_OAUTH_TOKEN is not configured — triage skipped."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve failing run ID
+        if: steps.token-check.outputs.configured == 'true'
+        id: run
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "id=${{ github.event.inputs.run_id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Cooldown: one triage run per failing run ID. Prevents re-triage when
+      # multiple matrix jobs in the same workflow all fail.
+      - name: Check for existing triage branch (cooldown)
+        if: steps.token-check.outputs.configured == 'true'
+        id: cooldown
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="ci-triage/run-${{ steps.run.outputs.id }}"
+          if gh api "repos/${{ github.repository }}/branches/${BRANCH}" >/dev/null 2>&1; then
+            echo "::notice::Triage branch ${BRANCH} already exists — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install nektos/act
+        if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh \
+            | sudo bash -s -- -b /usr/local/bin
+          act --version
+
+      - name: Install Claude Code CLI
+        if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      # Write run metadata to a JSON sidecar so the agent can jq it instead
+      # of inheriting potentially-unsafe strings via shell interpolation.
+      - name: Write triage context sidecar
+        if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ steps.run.outputs.id }}
+          TRIAGE_BRANCH: ${{ steps.cooldown.outputs.branch }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/triage
+          gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}" \
+            --jq '{run_id: .id, name, head_branch, head_sha, conclusion, html_url, event, workflow_id}' \
+            > /tmp/triage/run.json
+          jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg branch "${TRIAGE_BRANCH}" \
+            --slurpfile run /tmp/triage/run.json \
+            '{repo: $repo, triage_branch: $branch, run: $run[0]}' \
+            > /tmp/triage/context.json
+          echo "::group::Triage context"
+          cat /tmp/triage/context.json
+          echo "::endgroup::"
+
+      - name: Run triage agent (claude -p headless)
+        if: steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          claude -p "$(cat .github/triage/triage-prompt.md)" \
+            --output-format stream-json \
+            --verbose \
+            --max-turns 30 \
+            --permission-mode acceptEdits \
+            --add-dir "${GITHUB_WORKSPACE}" \
+            --add-dir /tmp/triage \
+            | tee /tmp/triage/transcript.jsonl
+
+      - name: Upload triage transcript
+        if: always() && steps.token-check.outputs.configured == 'true' && steps.cooldown.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-triage-transcript-${{ steps.run.outputs.id }}
+          path: /tmp/triage/
+          retention-days: 14
