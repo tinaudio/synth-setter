@@ -71,13 +71,22 @@ def _get_git_sha() -> str:
 
 
 def _is_repo_dirty() -> bool:
-    """Check if the git working tree has uncommitted changes (False if no git)."""
+    """Check if the git working tree has uncommitted changes (False if no git).
+
+    ``git diff --quiet`` exits 0 (clean) or 1 (dirty) inside a repo, and 128
+    when run outside one (``fatal: not a git repository``). Treat exit codes
+    outside {0, 1} as "no usable git" — same contract as ``_get_git_sha``'s
+    sentinel: a worker on a tarball-extracted host gets a benign default
+    rather than a confusing ``is_repo_dirty=True``.
+    """
     try:
         result = subprocess.run(  # noqa: S603
             ["git", "diff", "--quiet"],  # noqa: S607
             capture_output=True,
         )
     except FileNotFoundError:
+        return False
+    if result.returncode not in (0, 1):
         return False
     return result.returncode != 0
 

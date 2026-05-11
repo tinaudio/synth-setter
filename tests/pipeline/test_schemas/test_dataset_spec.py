@@ -466,6 +466,21 @@ class TestGitHelpersGraceful:
         monkeypatch.setattr(spec_mod.subprocess, "run", _raise)
         assert spec_mod._is_repo_dirty() is False
 
+    def test_is_repo_dirty_returns_false_when_outside_git_worktree(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``git diff --quiet`` exits 128 outside a worktree — treat as "no git", not "dirty"."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        class _FakeCompleted:
+            returncode = 128
+
+        def _fake(*args: object, **kwargs: object) -> _FakeCompleted:
+            return _FakeCompleted()
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _fake)
+        assert spec_mod._is_repo_dirty() is False
+
 
 # ---------------------------------------------------------------------------
 # Bare import is launcher-pure — no pedalboard / src.data.vst.core load
@@ -479,10 +494,11 @@ class TestSpecImportStaysLauncherPure:
         """`import src.pipeline.schemas.spec` alone must not transitively load
         ``src.data.vst.core`` or ``pedalboard``.
 
-        spec.py's two lazy imports (``_param_spec_name_must_be_registered``,
-        ``num_params``) point at ``src.data.vst`` lazily. If either is re-promoted
-        to module level — or repointed at a heavier module — this test fails
-        immediately, preserving the launcher's interpreter-only contract.
+        ``spec.py``'s only ``src.data.vst`` import is inside
+        ``DatasetSpec.num_params`` and runs lazily. If it is re-promoted to
+        module level — or another heavy import is added at module load — this
+        test fails immediately, preserving the launcher's interpreter-only
+        contract.
         """
         script = (
             "import sys\n"
