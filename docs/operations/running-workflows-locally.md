@@ -33,10 +33,15 @@ prompt by writing the mappings once:
 mkdir -p ~/.config/act
 cat > ~/.config/act/actrc <<'EOF'
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
+-P ubuntu-latest-4core=catthehacker/ubuntu:act-latest
 -P ubuntu-22.04=catthehacker/ubuntu:act-22.04
 -P ubuntu-20.04=catthehacker/ubuntu:act-20.04
 EOF
 ```
+
+`ubuntu-latest-4core` is used by `cpu-slow`, `docker-build-validation`, and
+`test-vst-slow`; mapping it to the same image keeps act from prompting (or
+failing) on first run of those workflows.
 
 The medium [`catthehacker/ubuntu:act-*`](https://github.com/catthehacker/docker_images)
 images are ~2.3 GB and cover the bulk of our workflows. The full GitHub-runner
@@ -63,17 +68,21 @@ PEM values (`OCI_API_KEY_PEM`):
 act <event> --secret-file .env -W .github/workflows/<file>
 ```
 
-### `GITHUB_TOKEN` rename
+### Supplying `GITHUB_TOKEN`
 
-Workflows reference `secrets.GITHUB_TOKEN`. The matching value in `.env` is
-named `GIT_PAT`. Map it once into a derived secrets file (the rename keeps the
-PAT out of your shell history and the new file readable only by you):
+Workflows reference `secrets.GITHUB_TOKEN`. `.env.example` doesn't define that
+name — the closest tokens it documents are `RESTRICTED_AGENT_GIT_PAT` (a
+narrow-scope PAT for the dev container's agent) and any personal PAT a
+developer keeps locally.
+
+For local `act` runs, prefer the host's live `gh` auth — always current,
+no `.env` rename, no copy/paste:
 
 ```bash
-# Strip the host's stale tokens out of the .env passthrough, then append a
-# fresh GITHUB_TOKEN from the local gh auth.
+# Build a derived secrets file with whatever the .env contributes,
+# plus a live GITHUB_TOKEN from the host's gh auth.
 {
-  grep -vE '^(GITHUB_TOKEN|GIT_PAT)=' .env
+  grep -vE '^GITHUB_TOKEN=' .env
   printf 'GITHUB_TOKEN=%s\n' "$(gh auth token)"
 } > /tmp/act.secrets
 chmod 600 /tmp/act.secrets
@@ -81,10 +90,19 @@ chmod 600 /tmp/act.secrets
 act <event> --secret-file /tmp/act.secrets -W .github/workflows/<file>
 ```
 
-The `.env`'s `GIT_PAT` may be stale (rotated, expired, or set for the wrong
-account); `gh auth token` is always live and matches the identity in
-`gh auth status`. Use either, but expect a `gh: Bad credentials (HTTP 401)`
-from the workflow if the token is expired.
+If you prefer a PAT from `.env` (for example, `RESTRICTED_AGENT_GIT_PAT`), map
+it by name into the derived file instead:
+
+```bash
+{
+  grep -vE '^GITHUB_TOKEN=' .env
+  sed -n 's/^RESTRICTED_AGENT_GIT_PAT=/GITHUB_TOKEN=/p' .env
+} > /tmp/act.secrets
+chmod 600 /tmp/act.secrets
+```
+
+Either way, expect `gh: Bad credentials (HTTP 401)` from the workflow if the
+token is expired or doesn't grant access to the repo you're querying.
 
 ### Gotcha: bash evaluation order with `-s KEY=$VAR`
 
