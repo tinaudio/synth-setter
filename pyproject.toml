@@ -93,7 +93,6 @@ ignore = ["E501", "S101"]
 "src/train.py" = ["E402"]
 "src/utils/__init__.py" = ["F401"]
 "src/utils/callbacks.py" = ["F821", "T201", "ANN001"]
-"src/utils/math.py" = ["ANN001"]
 
 [tool.interrogate]
 verbose = 2
