@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778540045216,
+  "lastUpdate": 1778540048149,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2752,6 +2752,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 13.901310724300004,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4dcb827f87e64b15a95f479416b85698acaa8ff5",
+          "message": "refactor(pipeline): relocate pipeline/ → src/pipeline/ (#948)\n\nMirror src/data/, src/models/, etc. by moving the pipeline package\nunder src/. Hoist the dataset generation entrypoint to\nsrc/generate_dataset.py — the entrypoints/ subnamespace dissolves;\nskypilot_launch lives at src/pipeline/skypilot_launch.py.\n\nAll `from pipeline.*` imports rewritten to `from src.pipeline.*`;\n`pipeline.entrypoints.generate_dataset` references rewired to\n`src.generate_dataset`. Workflow YAMLs, compute YAMLs, pyproject.toml\npydoclint excludes, scripts, and doc-map.yaml updated mechanically.\nThe @hydra.main config_path on src/generate_dataset.py drops one level\n(`../configs`) since the file moved closer to repo root.\n\nRefs #882, refs #883.\nCloses #947.",
+          "timestamp": "2026-05-11T18:42:50-04:00",
+          "tree_id": "0abc2b31c53cf81a8aba2fde58612a36c221a61e",
+          "url": "https://github.com/tinaudio/synth-setter/commit/4dcb827f87e64b15a95f479416b85698acaa8ff5"
+        },
+        "date": 1778540047480,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.2058448791503906,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.790688357651234,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.010479730553925037,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.003342926502227783,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.1365809440612793,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.461853984399976,
             "unit": "seconds"
           }
         ]
