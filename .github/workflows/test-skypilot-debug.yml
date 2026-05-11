@@ -66,7 +66,7 @@ name: Test SkyPilot Debug
 #                    saw the same pod IP across multiple production-smoke
 #                    failures while matrix succeeded.
 #
-#   launcher         Invokes the actual `pipeline.entrypoints.skypilot_launch`
+#   launcher         Invokes the actual `src.pipeline.skypilot_launch`
 #                    launcher CLI from the GH-actions runner directly (no
 #                    docker), against a minimal template that no-ops on the
 #                    worker. PASS = launcher works on RunPod from a bare
@@ -193,25 +193,25 @@ jobs:
             template: configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher
-            config: configs/dataset/runpod-smoke-shard.yaml
+            config: runpod-smoke-shard
           - variant: launcher-in-docker
             mode: launcher-docker
             template: configs/compute/runpod-debug-launcher-minimal-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: launcher-docker
-            config: configs/dataset/runpod-smoke-shard.yaml
+            config: runpod-smoke-shard
           - variant: generate-tiny
             mode: launcher-runner
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny
-            config: configs/dataset/runpod-smoke-shard.yaml
+            config: runpod-smoke-shard
           - variant: generate-tiny-in-docker
             mode: launcher-docker
             template: configs/compute/runpod-template.yaml
             cluster_prefix: synth-setter-debug
             cluster_suffix: generate-tiny-docker
-            config: configs/dataset/runpod-smoke-shard.yaml
+            config: runpod-smoke-shard
 
     steps:
       - name: Checkout
@@ -376,8 +376,8 @@ jobs:
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -euo pipefail
-          python -m pipeline.entrypoints.skypilot_launch \
-            --config "$CONFIG_PATH" \
+          python -m src.pipeline.skypilot_launch \
+            --experiment "$CONFIG_PATH" \
             --template "$TEMPLATE" \
             --cluster-name "$CLUSTER_NAME" \
             --tail \
@@ -419,8 +419,8 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              python -m pipeline.entrypoints.skypilot_launch \
-                --config "$CONFIG_PATH" \
+              python -m src.pipeline.skypilot_launch \
+                --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
                 --cluster-name "$CLUSTER_NAME" \
                 --tail

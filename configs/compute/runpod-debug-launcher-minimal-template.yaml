@@ -2,17 +2,19 @@
 # minimal worker.
 #
 # Used by the `launcher` and `launcher-in-docker` matrix variants. Identical
-# resources / image / file_mounts contract to the production
-# runpod-template.yaml so the launcher's `task.update_file_mounts(...)`
-# round-trips a real materialized spec; the only difference is the `run:`
-# block — a one-line `echo done` — so the worker doesn't actually render.
-# This isolates "the launcher's launch flow on RunPod" from "the worker's
-# render flow."
+# resources / image / spec-shipping contract to the production
+# runpod-template.yaml: the launcher composes the DatasetSpec, uploads it
+# to R2, and injects `WORKER_SPEC_URI` into the task env so the worker
+# fetches the spec on boot (programmatic `file_mounts` is blocked on
+# RunPod — see `src/pipeline/skypilot_launch.py` and #749). The only
+# difference is the `run:` block — a one-line `echo done` — so the worker
+# doesn't actually render. This isolates "the launcher's launch flow on
+# RunPod" from "the worker's render flow."
 #
-# PASS = launcher's materialize_spec, task.update_envs, task.update_file_mounts,
-#        sky.launch + stream_and_get, sky.tail_logs, sky.down all work on RunPod.
+# PASS = launcher's _compose_dataset_spec + R2 spec upload + task.update_envs +
+#        sky.launch + stream_and_get + sky.tail_logs + sky.down all work on RunPod.
 # FAIL = the launcher itself has a bug, or the launcher's specific provisioning
-#        shape (cluster name pattern, mount upload, env injection) is what
+#        shape (cluster name pattern, env injection, R2 round-trip) is what
 #        triggers RunPod failures the matrix's other variants don't see.
 
 resources:

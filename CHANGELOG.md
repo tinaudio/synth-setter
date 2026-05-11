@@ -1,6 +1,359 @@
 # CHANGELOG
 
 
+## v1.0.0 (2026-05-11)
+
+### Chores
+
+- **devcontainer**: Bake main branch into baked image clone
+  ([#913](https://github.com/tinaudio/synth-setter/pull/913),
+  [`448b9b7`](https://github.com/tinaudio/synth-setter/commit/448b9b7fbd2b73c70cf582cff0a303dc1bfa6e3e))
+
+* fix(devcontainer): move detached HEAD onto main on post-create
+
+The dev-base stage of docker/ubuntu22_04/Dockerfile pins the in-image repo with `git checkout
+  --detach ${SYNTH_PERMUTATIONS_GIT_REF}`. The bind-mounted `gpu` devcontainer overlays this with
+  the host workspace, but the isolated `root_gpu` flavor has no `workspaceMount` override and lands
+  users in the baked-in detached clone — breaking `git pull` and similar workflows until they
+  manually move onto a branch.
+
+post-create.sh now checks `git symbolic-ref -q HEAD` and, when HEAD is detached, runs `git fetch
+  origin main && git checkout -B main origin/main`. The bind-mounted flavor lands on a real host
+  branch, so the guard makes this a no-op there. Fetch failure (no network, no egress) emits a
+  warning instead of aborting post-create, matching the existing fail-soft style around `gh auth
+  login`.
+
+Fixes #910
+
+* fix(devcontainer): bake main branch into baked image clone
+
+Replaces the runtime post-create.sh guard from the previous commit on this branch with a one-line
+  Dockerfile fix at the source of the detached state.
+
+The dev-base stage of docker/ubuntu22_04/Dockerfile previously did:
+
+git checkout --detach "${SYNTH_PERMUTATIONS_GIT_REF}"
+
+leaving the baked image — and every devcontainer that lands in its WORKDIR — in detached HEAD. The
+  fix:
+
+git checkout -B main "${SYNTH_PERMUTATIONS_GIT_REF}" git branch --set-upstream-to=origin/main main
+
+pins the same SHA but gives it a branch name and upstream tracking. `-B` is safe here because git
+  init two lines earlier produced an empty repo, so no existing branches can be clobbered.
+
+This supersedes the post-create.sh guard because:
+
+1. Bind-mounted devcontainers (the `gpu` flavor) never run the new logic — the host workspace
+  overlays the image WORKDIR, so the image's git state is irrelevant. Copilot's review comment on
+  #913 specifically flagged the regression risk of moving an intentional bind-mount detach onto
+  main; baking the branch at image-build time avoids the runtime check entirely.
+
+2. Every consumer of dev-base (the published devcontainer-tools image, freeze-deps, dev-snapshot)
+  inherits the fix without an extra stage.
+
+3. There's no fail-soft branch to maintain at runtime — the image build either succeeds with main on
+  the pinned SHA or fails loudly during publish.
+
+The post-create.sh guard added in the previous commit is reverted in this commit; the PR will land
+  as a single Dockerfile change after squash.
+
+### Documentation
+
+- **claude-md**: Prs not ready until CI green + no conflicts; /loop until both hold
+  ([#919](https://github.com/tinaudio/synth-setter/pull/919),
+  [`cc42936`](https://github.com/tinaudio/synth-setter/commit/cc429365087075269157812cd1771281c410d5c7))
+
+* docs(claude-md): add PR Readiness rule — CI green + no conflicts, /loop until both hold
+
+A PR is not "ready" until all CI checks pass AND the branch is mergeable. Codify this and require
+  agents to iterate via /loop or polling until both conditions are satisfied, rather than declaring
+  a PR ready after a push.
+
+Refs #918
+
+* docs(claude-md): expand PR Readiness — UNKNOWN, inline replies, Copilot re-review
+
+Address Copilot review on #919 and extend the loop:
+
+- mergeable can also return UNKNOWN while GitHub is still computing; clarify that only MERGEABLE
+  clears the gate and UNKNOWN requires continued polling. - Replace the sentence fragment "Required
+  and optional." with a complete clause. - Add two new readiness conditions: every open review
+  comment has an inline reply (commit SHA or justification), and Copilot has produced no new
+  comments since the last push. Both are now explicit steps in the loop.
+
+### Features
+
+- **pipeline**: Complete dataset_spec Hydra migration; remove load_dataset_spec_yaml
+  ([#917](https://github.com/tinaudio/synth-setter/pull/917),
+  [`c6a8ee1`](https://github.com/tinaudio/synth-setter/commit/c6a8ee12090588fb0a713deeea234fd641ceb485))
+
+* feat(pipeline)!: complete Hydra migration; remove load_dataset_spec_yaml
+
+PR-3b of the data-pipeline @hydra.main chain. Builds on #912 (PR-3a) which added the Hydra entry to
+  generate_dataset.py.
+
+CLI changes (breaking): - skypilot_launch.py: `--config <path>` replaced with `--experiment <name>`
+  (+ trailing positional args for ad-hoc Hydra overrides, e.g.
+  `render.plugin_path=/path/to/Plugin.vst3`) - pipeline.ci.materialize_spec: same module, new arg
+  shape — takes an experiment name instead of a YAML path
+
+Removed: - pipeline.schemas.spec.load_dataset_spec_yaml + _resolve_legacy_extends +
+  _legacy_dict_to_dataset_spec_kwargs + dataset_config_id_from_path (legacy bridge; replaced by
+  Hydra compose) - configs/dataset/{10-1k-shards,ci-materialize-test,runpod-smoke-shard,
+  surge-simple-480k-10k}.yaml (legacy flat-shape configs; superseded by
+  configs/experiment/<name>.yaml under the Hydra compose tree) - _LEGACY_EXTENDS_KEY,
+  _LEGACY_PINNED_RENDERER_VERSION constants - 8 legacy-bridge tests in
+  tests/pipeline/test_schemas/test_dataset_spec.py - LEGACY_VALID_YAML + write_legacy_config_yaml
+  fixture in conftest
+
+Renamed: - generate_dataset._spec_from_cfg → spec_from_cfg (now public; two callers: the @hydra.main
+  entry and the launcher's _compose_dataset_spec helper)
+
+CI workflows updated to pass experiment names instead of YAML paths: - generate-dataset-shards.yaml
+  - test-dataset-generation.yml - test-skypilot-debug.yml - test-spec-materialization.yml -
+  spec-materialization.yml - validate-dataset-shards.yaml (comment-only)
+
+Refs #911
+
+* docs: update configs/dataset references for PR-3b removal
+
+Replaces all `configs/dataset/<name>.yaml` references with `configs/experiment/<name>.yaml` (the new
+  Hydra-composable shape from #907), updates the launcher CLI examples to use `--experiment <name>`
+  instead of `--config <path>`, and points doc-map.yaml's coverage at the new directories.
+
+Covers architecture.md, configuration-reference.md, data-pipeline.md,
+  data-pipeline-implementation-plan.md, skypilot-compute-integration.md, storage-provenance-spec.md,
+  and doc-map.yaml.
+
+* docs: address doc-drift on PR #917 — DatasetSpec unification + launcher CLI
+
+doc-drift advisory swept configuration-reference.md and flagged stale references to the pre-#887
+  architecture: - Lines 13-14: config-types table referenced `DatasetConfig` + `DatasetPipelineSpec`
+  as separate types; #887 unified them into the single `DatasetSpec` model and PR-3a/3b moved
+  validation to Hydra compose + `spec_from_cfg`. - Line 35: data-generation flow used the old
+  `load_dataset_config` → `materialize_spec` shape. - Line 87: §2.4 launcher description still
+  talked about `DatasetConfig` / `DatasetPipelineSpec` and listed a stale `--config <yaml>`
+  invocation.
+
+All rewritten to describe the post-#887 / post-#917 unified model + the Hydra-composed CLI surfaces.
+
+Refs #916
+
+* fix(launcher): address Copilot review on PR #917
+
+skypilot_launch.py - wrap Hydra compose in try/except HydraException → click.ClickException so a
+  misspelled --experiment surfaces as a one-line CLI error instead of a Hydra traceback - drop
+  context_settings={"ignore_unknown_options": True} from @click.command — Hydra overrides are
+  positional key=value args (the variadic argument captures them), so removing this restores strict
+  validation of --flag typos without breaking override forwarding
+
+tests - test_default_cluster_name_uses_task_name_prefix now pins --spec-out, reads back the
+  materialized spec, and asserts cluster_name endswith spec.task_name[:8]; the prior experiment[:8]
+  assertion only passed because runpod-smoke-shard happens to set task_name == experiment id - new
+  test_unknown_experiment_surfaces_as_click_error pins the Hydra wrap behavior; new
+  test_unknown_launcher_flag_is_rejected pins the strict --flag validation
+
+docs - docs/design/data-pipeline.md: drop the stale "legacy launcher path (--config)" comment now
+  that the launcher uses --experiment - docs/doc-map.yaml: merge the duplicated
+  configs/experiment/** entry; drop the pipeline/schemas/config.py row (deleted in this PR); refresh
+  the pipeline/schemas/spec.py covers text from DatasetPipelineSpec/materialize_spec to
+  DatasetSpec/spec_from_cfg
+
+workflow rename - .github/workflows/spec-materialization.yml: rename input config_path → experiment
+  and env var CONFIG_PATH → EXPERIMENT to match the materialize_spec CLI's new <experiment>
+  <output_dir> interface - .github/workflows/test-spec-materialization.yml: update caller
+
+488 tests pass locally (+2 new from baseline 486).
+
+* ci(test-dataset-generation): derive r2_bucket via Hydra compose, not YAML open
+
+Post-Hydra migration in #917, $DATASET_CONFIG holds an experiment id (e.g. `runpod-smoke-shard`),
+  not a YAML path. The setup job's bucket step still tried
+  `yaml.safe_load(open("runpod-smoke-shard"))`, which raised FileNotFoundError and left
+  `needs.setup.outputs.r2_bucket` empty.
+
+The empty bucket cascaded into the validate jobs, producing a `r2:///skypilot-launcher-specs/...`
+  URI (triple-slash → empty bucket) which rclone then failed to read with "directory not found",
+  surfacing as failures in: * Compute provider list + R2 bucket * Validate skypilot-local dataset /
+  Validate spec structure * Validate skypilot-local dataset / Validate shards
+
+Fix: install hydra-core and read `r2_bucket` from a composed config (`compose(config_name="dataset",
+  overrides=[f"experiment={experiment}"])`) instead of opening the experiment id as a file. This
+  mirrors the materialize_spec CLI path and keeps the bucket source-of-truth aligned with what the
+  launcher resolves at spec-construction time.
+
+Also refreshes the rationale comment to reference the new compose path rather than the legacy
+  YAML-load assumption.
+
+* ci(validate-shards): trim validate_spec deps; fix stale rationale comment
+
+Probing imports shows pipeline.ci.validate_spec transitively loads only pydantic — pyyaml and
+  omegaconf were never used. The accompanying rationale comment also drifted (claimed DatasetSpec +
+  hydra-core, while the install listed pyyaml). Update both to match: install only pydantic and
+  rewrite the comment to describe the actual import chain (OUTPUT_FORMAT_TO_EXTENSION from
+  pipeline.schemas.spec).
+
+Addresses Copilot's suppressed low-confidence review comment on validate-dataset-shards.yaml in PR
+  #917.
+
+* docs,ci: address Copilot review nits on PR #917
+
+- docs/reference/configuration-reference.md: reword "validators" → "factories" for `_default_run_id`
+  / `_default_r2_prefix`, which are used as `Field(default_factory=...)` helpers in
+  pipeline/schemas/spec.py, not Pydantic validators (Copilot comment 3220968225). -
+  .github/workflows/test-dataset-generation.yml: pin `pip install hydra-core` to `==1.3.2` to match
+  the repo-wide pin in requirements-app.txt and the `version_base="1.3"` used at compose time
+  (Copilot comment 3220968297).
+
+* ci(test-dataset-generation): add hydra-colorlog to Hydra compose install
+
+Run 25687139710 still failed in the bucket-derivation step:
+
+hydra.errors.MissingConfigException: In 'hydra/config': Could not find 'hydra/job_logging/colorlog'
+
+Cause: configs/hydra/default.yaml's defaults block does
+
+- override hydra_logging: colorlog - override job_logging: colorlog which requires the
+  hydra-colorlog plugin to be importable on the runner. The previous fix only installed hydra-core,
+  so the colorlog config nodes couldn't be resolved during compose.
+
+Adds hydra-colorlog to the install pinned to ==1.2.0 (matching the repo-wide pin in
+  requirements-app.txt, same way hydra-core is pinned).
+
+* fix(pipeline,docs): translate materialize_spec Hydra errors; refresh data-pipeline §14.5/§14.7
+
+- pipeline/ci/materialize_spec.py: catch `HydraException` from `compose()` and exit 2 with a
+  one-line stderr message instead of bubbling the Hydra traceback. Mirrors
+  `skypilot_launch._compose_dataset_spec`'s error-translation contract; uses `sys.exit(2)` because
+  this script is invoked via `python -m` (no click runtime around `main`). -
+  tests/pipeline/test_ci/test_materialize_spec.py: new — pins happy-path JSON output, the new
+  concise-error path on a misspelled experiment, and the existing usage-line path on missing argv. -
+  docs/design/data-pipeline.md: rewrite §14.5 example/steps to show the nested Hydra experiment YAML
+  + `spec_from_cfg` → `DatasetSpec` flow (the legacy flat `DatasetConfig`/`DatasetPipelineSpec`
+  snippet predates the unification in #887 and the migration in #917). Refresh §14.7 directory tree:
+  drop deleted `pipeline/schemas/config.py`, rename `DatasetPipelineSpec`→`DatasetSpec`, add
+  `skypilot_launch.py` + `load_image_config.py`, and replace the deleted `configs/dataset/` subdir
+  with the current `configs/dataset.yaml` + group layout.
+
+* docs(data-pipeline): mark §14.5 "Dirty repo" + "Config drift protection" as planned
+
+Copilot review on PR #917 flagged that both bullets describe behavior that isn't implemented in the
+  current `generate_dataset` runner: - nothing uploads `git diff` to `metadata/run_diff.patch` (the
+  `is_repo_dirty` field is captured in the spec, but the auto-upload step isn't wired up) - `run()`
+  unconditionally writes/uploads `input_spec.json` without an R2 pre-existence check on
+  `r2_prefix`/`run_id` (#386 already tracks this as a bug — the design says the spec should be
+  authoritative after creation)
+
+Reworded both bullets to label them as planned/intended behavior rather than current behavior, and
+  linked #386 on the config-drift one. Avoids implying the runner enforces guarantees it doesn't
+  (Copilot comment 3221275225).
+
+### Internal-Feat
+
+- **entrypoint**: Add @hydra.main CLI to generate_dataset
+  ([#912](https://github.com/tinaudio/synth-setter/pull/912),
+  [`76631e7`](https://github.com/tinaudio/synth-setter/commit/76631e787fb8af5a50a8ca2021bf6586daa6ff02))
+
+* internal-feat(entrypoint): add @hydra.main CLI to generate_dataset
+
+Adds a Hydra-composed entry path (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`)
+  alongside the existing click CLI in scripts/docker_entrypoint.py.
+
+The new `_spec_from_cfg(cfg)` helper resolves interpolations, drops the four non-DatasetSpec
+  sub-trees (data, r2, paths, hydra), and constructs a DatasetSpec. `main()` lazy-imports hydra so
+  SkyPilot worker startup via docker_entrypoint.py (which only needs load_spec_from_uri / run)
+  doesn't pay the hydra import cost.
+
+Test helper _compose_dataset_spec in tests/pipeline/test_configs/test_experiment_yamls.py now
+  consumes the production helper instead of duplicating the drop logic.
+
+No changes to launcher, CI workflows, scripts/docker_entrypoint.py, or load_dataset_spec_yaml —
+  those callers keep working unchanged. PR-3b removes the legacy bridge after the launcher migrates.
+
+Refs #911
+
+* docs: address doc-drift on PR #912 — Hydra CLI entry
+
+- data-pipeline.md §2 'Typical Workflow' — replace stale DATASET_CONFIG env-var invocation (which
+  generate_dataset.py never read) with the new `python -m pipeline.entrypoints.generate_dataset
+  experiment=<id>` form - data-pipeline.md directory tree — note the Hydra CLI entry alongside the
+  sequential-MVP description - doc-map.yaml — tighten the generate_dataset.py 'covers' string to
+  name the @hydra.main CLI explicitly (the click subcommand in scripts/docker_entrypoint.py is
+  covered under skypilot-compute-integration.md's mapping)
+
+* internal-fix(entrypoint): bootstrap PROJECT_ROOT in Hydra CLI
+
+Addresses Copilot review on PR #912:
+
+- main() now calls rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True) before
+  importing hydra, so configs/paths/default.yaml's ${oc.env:PROJECT_ROOT} resolves on a fresh shell
+  (matches the train/eval bootstrap pattern). Placed inside main() rather than module top so the
+  worker import path via scripts/docker_entrypoint.py doesn't pay the cost.
+
+- Module docstring: ``main(cfg)`` -> ``main()`` (the cfg is consumed by the nested decorated _main;
+  the public callable takes no args).
+
+Added TestMain::test_main_sets_project_root_before_invoking_hydra to pin the bootstrap order
+  (rootutils setup precedes the lazy hydra import).
+
+* fix(entrypoint): bootstrap PROJECT_ROOT + add run_name default for Hydra dispatch
+
+Copilot flagged two real bugs in the new Hydra CLI:
+
+1. `python -m pipeline.entrypoints.generate_dataset experiment=<id>` failed in a fresh shell because
+  `configs/paths/default.yaml`'s `root_dir: ${oc.env:PROJECT_ROOT}` interpolation has no fallback.
+  Fix: call `rootutils.setup_root(__file__, indicator='.project-root', pythonpath=True)` at
+  module-import time (mirrors src/train.py / src/eval.py).
+
+2. `configs/hydra/default.yaml`'s `hydra.run.dir` interpolates `${run_name}`, which dataset
+  experiments don't set (only train/eval experiments do). Fix: add `run_name: ${task_name}` to
+  configs/dataset.yaml as a derived default, and drop it (alongside data/r2/paths/hydra) in
+  _NON_SPEC_KEYS before DatasetSpec construction.
+
+Also clarified the module docstring per Copilot's other comment: `main()` takes no params on its
+  public signature (the lazy hydra import wraps an inner `@hydra.main` callable that receives the
+  composed cfg).
+
+* internal-fix(entrypoint): move PROJECT_ROOT bootstrap to main() only
+
+Addresses Copilot review comments on PR #912:
+
+- Drop module-level `rootutils` + `setup_root()` and `omegaconf` imports so importing
+  `pipeline.entrypoints.generate_dataset` from `scripts/docker_entrypoint.py` (which only needs
+  `load_spec_from_uri` / `run`) no longer triggers `sys.path` mutation, PROJECT_ROOT env-write, or
+  `.env` loading at worker startup. The single `setup_root()` call now lives only inside `main()`
+  where Hydra config interpolation needs it (comments #3219988448, #3219988491). - Move `OmegaConf`
+  import inside `_spec_from_cfg` to keep the worker import path free of omegaconf-resolve plumbing
+  it never uses. - docs/design/data-pipeline.md: step 1 of the typical workflow now references
+  `configs/experiment/<id>.yaml` (consumed by step 2's `experiment=<id>` Hydra arg).
+  `configs/dataset/*.yaml` is called out as the legacy launcher path so the two snippets no longer
+  mix surfaces (comment #3219988522).
+
+Verified locally: - Importing the entrypoint with PROJECT_ROOT unset: hydra/rootutils not loaded,
+  PROJECT_ROOT not set. - `python -m pipeline.entrypoints.generate_dataset` still produces the
+  missing-`experiment` Hydra error with the 5 available options. - `make test-fast` — 494 passed. -
+  Entrypoint + experiment-yaml tests — 41 passed.
+
+* internal-fix(entrypoint): hoist hydra/rootutils imports to module top
+
+Per review feedback on #912 (comment 3220148243): the lazy-import dance inside main() was
+  over-engineering. Hoisting hydra/rootutils to module top restores the natural Hydra entrypoint
+  shape that mirrors src/train.py and src/eval.py. The ~50ms hydra import on docker_entrypoint.py
+  startup is negligible vs. the existing pedalboard/numpy/h5py bootstrap.
+
+Also drops the TestMain change-detector test that pinned the lazy-bootstrap ordering; the
+  PROJECT_ROOT-resolution contract is exercised end-to-end by
+  tests/pipeline/test_configs/test_experiment_yamls.py (those tests fail with
+  InterpolationResolutionError if setup_root ever stops setting PROJECT_ROOT).
+
+* docs(configs): clarify run_id derivation timing in dataset.yaml comment
+
+Copilot caught a documentation inaccuracy (PR #912 comment 3220245711): the inline comment said
+  run_id is derived 'at validate-time', but DatasetSpec actually computes it via default_factory at
+  construction-time. One-word fix.
+
+
 ## v0.15.0 (2026-05-11)
 
 ### Documentation

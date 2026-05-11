@@ -1,7 +1,7 @@
 """Spec-driven generate_dataset runner.
 
 ``main(cfg)`` is the Hydra-composed CLI entry, invoked via
-``python -m pipeline.entrypoints.generate_dataset experiment=<id>``.
+``python -m src.generate_dataset experiment=<id>``.
 
 The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker entry that reads a
 pre-materialized spec from R2 via ``load_spec_from_uri``.
@@ -22,15 +22,15 @@ from omegaconf import DictConfig, OmegaConf
 
 # Set PROJECT_ROOT env var and add the repo root to sys.path so
 # ``configs/paths/default.yaml``'s ``root_dir: ${oc.env:PROJECT_ROOT}`` interpolation
-# resolves under ``python -m pipeline.entrypoints.generate_dataset``. Mirrors
+# resolves under ``python -m src.generate_dataset``. Mirrors
 # ``src/train.py`` / ``src/eval.py``.
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from pipeline import r2_io  # noqa: E402
-from pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
-from pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
-from pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
 from src.data.vst.core import extract_renderer_version  # noqa: E402
+from src.pipeline import r2_io  # noqa: E402
+from src.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
+from src.pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
+from src.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
 
 # Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
 # sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``
@@ -98,7 +98,11 @@ def _rclone_copy(src: str, dest: str) -> None:
 
 
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
-    """Build CLI args for generate_vst_dataset.py from a spec and shard.
+    """Build CLI args for ``generate_vst_dataset.py`` from a spec and shard.
+
+    The flag set is derived from ``RenderConfig.model_fields`` so every renderer
+    config field surfaces as a ``--<field>`` option automatically; adding a
+    field on the model auto-extends the CLI invocation.
 
     HDF5-only: ``DatasetSpec.output_format`` is currently restricted to
     ``"hdf5"`` and ``generate_vst_dataset.py`` writes HDF5 regardless of the
@@ -106,56 +110,39 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     is introduced (PR-12/13/14 in the dataset-pipeline chain).
     """
     output_path = output_dir / shard.filename
-    render = spec.render
-    options = {
-        "plugin_path": render.plugin_path,
-        "preset_path": render.preset_path,
-        "sample_rate": render.sample_rate,
-        "channels": render.channels,
-        "velocity": render.velocity,
-        "signal_duration_seconds": render.signal_duration_seconds,
-        "min_loudness": render.min_loudness,
-        "param_spec": render.param_spec_name,
-        "sample_batch_size": render.sample_batch_size,
-    }
-
     args = [
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
         str(output_path),
-        str(render.batch_per_shard),
     ]
-    for key, value in options.items():
+    for key, value in spec.render.model_dump().items():
         args.extend([f"--{key}", str(value)])
 
     return args
 
 
 def run(spec: DatasetSpec) -> None:
-    """Materialized-spec driven run: upload spec to R2 once, then render+upload each shard.
+    """Upload the spec to R2 once, then render+upload each owned shard in turn.
 
     Spec serialization, spec upload, and the renderer-version constraint check
-    happen once per run (pre-loop). Each shard is then rendered, uploaded, and
-    its local file unlinked before moving on — so local disk usage is bounded
-    to one shard at a time. Subprocess failures propagate immediately
-    (fail-fast); later shards are not attempted.
+    happen once pre-loop. Each shard is rendered, uploaded, and unlinked before
+    moving on — bounding local disk to one shard at a time. Subprocesses
+    fail-fast: later shards are not attempted on subprocess error.
 
     Before each render, R2 is probed for the shard's destination object: if it already exists with
     non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
     ``check=True``, so a non-zero rclone exit (auth, network) propagates as a hard failure rather
     than degrading silently into a re-render.
 
-    HDF5-only for now: ``spec.output_format`` is restricted to ``"hdf5"``.
+    The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
+    ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
+    — verifies the plugin and pinned ``renderer_version`` agree. HDF5-only for now:
+    ``spec.output_format`` is restricted to ``"hdf5"``.
 
     Raises:
         RuntimeError: If the worker's plugin version disagrees with
-            ``spec.renderer_version``.
+            ``spec.render.renderer_version``.
     """
-    # The launcher builds the spec interpreter-only (no pedalboard / X11)
-    # trusting the ``render.renderer_version`` value from its dataset config;
-    # the worker has pedalboard, so this is where we verify against the actual
-    # plugin bundle. Bump renderer_version in the dataset config alongside the
-    # SURGE_GIT_REF baked into the worker image.
     render = spec.render
     actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
     if actual_renderer_version != render.renderer_version:
@@ -169,7 +156,6 @@ def run(spec: DatasetSpec) -> None:
         f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"
     )
 
-    # Read rank/world before any tmpdir / R2 work — fail loudly on missing env.
     rank, world = read_rank_world_from_env()
     my_range = get_my_shards(spec.num_shards, rank=rank, world=world)
     logger.info(
@@ -182,12 +168,9 @@ def run(spec: DatasetSpec) -> None:
 
     with tempfile.TemporaryDirectory() as work_dir_str:
         work_dir = Path(work_dir_str)
-
-        # `rclone copy` treats the destination as a directory and preserves
-        # the source's basename. The local spec file is already named
-        # INPUT_SPEC_FILENAME, so uploading to the prefix directory lands
-        # the object at `{prefix}{INPUT_SPEC_FILENAME}` without the
-        # double-name issue a full object-key destination would cause.
+        # rclone copy preserves the source basename, and the local file is already
+        # named INPUT_SPEC_FILENAME — so the prefix-directory destination lands at
+        # `{prefix}{INPUT_SPEC_FILENAME}` without a double-name.
         spec_path = work_dir / INPUT_SPEC_FILENAME
         spec_path.write_text(spec.model_dump_json(indent=2))
         logger.info(f"spec written: {spec_path}")
@@ -222,16 +205,16 @@ def _render_and_upload_shard(
 ) -> None:
     """Render a single shard, upload it to R2, then unlink the local file.
 
-    Unlinking after upload bounds local disk to one shard at a time — necessary for multi-shard
-    runs on disk-constrained workers.
+    Unlinking after upload bounds local disk to one shard at a time — necessary on disk-constrained
+    workers running multi-shard partitions.
     """
     args = [VST_HEADLESS_WRAPPER] if sys.platform == "linux" else []
     args += build_generate_args(spec, shard, work_dir)
     logger.info(f"rendering shard {shard.shard_id} -> {shard.filename}")
     subprocess.check_call(args)  # noqa: S603 — args built from validated spec
     shard_path = work_dir / shard.filename
-    # Catches a generator that exits 0 without writing output — surfaces a clear error
-    # at the rendering boundary rather than a downstream rclone "source not found".
+    # Surface a generator that exited 0 without writing output here, not as a
+    # downstream rclone "source not found".
     if not shard_path.is_file():
         raise RuntimeError(
             f"generate_vst_dataset.py exited 0 but did not write expected shard file: {shard_path}"
@@ -243,24 +226,25 @@ def _render_and_upload_shard(
     logger.info(f"shard removed locally: {shard_path}")
 
 
-def _spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
+def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     """Build a DatasetSpec from a Hydra-composed cfg.
 
     Resolves all interpolations, drops the non-DatasetSpec sub-trees, and constructs the model.
     Raises if the composed config is not a mapping.
     """
-    raw: Any = OmegaConf.to_container(cfg, resolve=True)
+    raw: object = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
-    for key in _NON_SPEC_KEYS:
-        raw.pop(key, None)
-    return DatasetSpec(**raw)
+    spec_kwargs: dict[str, Any] = {
+        k: v for k, v in raw.items() if isinstance(k, str) and k not in _NON_SPEC_KEYS
+    }
+    return DatasetSpec(**spec_kwargs)
 
 
-@hydra.main(version_base="1.3", config_path="../../configs", config_name="dataset")
+@hydra.main(version_base="1.3", config_path="../configs", config_name="dataset")
 def main(cfg: DictConfig) -> None:
-    """Hydra-composed CLI entry: ``python -m pipeline.entrypoints.generate_dataset experiment=<id>``."""
-    run(_spec_from_cfg(cfg))
+    """Hydra-composed CLI entry: ``python -m src.generate_dataset experiment=<id>``."""
+    run(spec_from_cfg(cfg))
 
 
 if __name__ == "__main__":

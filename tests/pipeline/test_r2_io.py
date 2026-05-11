@@ -1,4 +1,4 @@
-"""Tests for pipeline.r2_io — rclone-backed R2 I/O helpers."""
+"""Tests for src.pipeline.r2_io — rclone-backed R2 I/O helpers."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline import r2_io
+from src.pipeline import r2_io
 
 
 class TestIsR2Uri:

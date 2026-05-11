@@ -1,5 +1,6 @@
 """This file prepares config fixtures for other tests."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -19,12 +20,19 @@ from src.data.vst import param_specs, preset_paths
 from src.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
-# Defaults baked into `src/data/vst/generate_vst_dataset.py` (channels=2,
-# sample_rate=44100, signal_duration_seconds=4.0, mel shape (2, 128, 401)).
-# The fixture invokes the script with these defaults, so the generated H5
-# file must match.
-_SURGE_AUDIO_SAMPLES_PER_CLIP = int(44100 * 4.0)
-_SURGE_AUDIO_CHANNELS = 2
+# Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
+# ``src.pipeline.schemas.spec`` declares no field defaults — the fixture passes
+# explicit values for every flag below, so these constants must match the values
+# the subprocess is invoked with.
+_SURGE_FIXTURE_SAMPLE_RATE = 44100
+_SURGE_FIXTURE_CHANNELS = 2
+_SURGE_FIXTURE_DURATION_SECONDS = 4.0
+_SURGE_FIXTURE_VELOCITY = 100
+_SURGE_FIXTURE_MIN_LOUDNESS = -55.0
+_SURGE_FIXTURE_RENDERER_VERSION = "1.3.4"
+_SURGE_FIXTURE_PLUGIN_PATH = os.environ.get("SYNTH_SETTER_PLUGIN_PATH", "plugins/Surge XT.vst3")
+_SURGE_AUDIO_SAMPLES_PER_CLIP = int(_SURGE_FIXTURE_SAMPLE_RATE * _SURGE_FIXTURE_DURATION_SECONDS)
+_SURGE_AUDIO_CHANNELS = _SURGE_FIXTURE_CHANNELS
 _SURGE_MEL_SHAPE = (2, 128, 401)
 # ~-80 dBFS — same threshold used by `test_train_eval_surge_xt` to catch
 # silent renders that would later poison metric computation.
@@ -381,7 +389,7 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.
     :param param_spec_name: Param spec name (key into :data:`src.data.vst.param_specs`
-        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param_spec``
+        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
         and ``--preset_path`` for ``generate_vst_dataset``.
 
     :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
@@ -399,9 +407,17 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         sys.executable,
         "src/data/vst/generate_vst_dataset.py",
         str(smoke_dataset_dir / "train.h5"),
-        str(NUM_FIXTURE_SAMPLES),
+        f"--plugin_path={_SURGE_FIXTURE_PLUGIN_PATH}",
         f"--preset_path={preset_paths[param_spec_name]}",
-        f"--param_spec={param_spec_name}",
+        f"--param_spec_name={param_spec_name}",
+        f"--renderer_version={_SURGE_FIXTURE_RENDERER_VERSION}",
+        f"--sample_rate={_SURGE_FIXTURE_SAMPLE_RATE}",
+        f"--channels={_SURGE_FIXTURE_CHANNELS}",
+        f"--velocity={_SURGE_FIXTURE_VELOCITY}",
+        f"--signal_duration_seconds={_SURGE_FIXTURE_DURATION_SECONDS}",
+        f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
+        f"--sample_batch_size={NUM_FIXTURE_SAMPLES}",
+        f"--batch_per_shard={NUM_FIXTURE_SAMPLES}",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is

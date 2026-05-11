@@ -13,7 +13,7 @@ jobs:
     uses: ./.github/workflows/spec-materialization.yml
     with:
       image_tag: ${{ inputs.image_tag }}
-      config_path: configs/dataset/ci-materialize-test.yaml
+      experiment: ci-materialize-test
       artifact_name: test-materialized-spec
     secrets: inherit
 
@@ -31,4 +31,4 @@ jobs:
           name: test-materialized-spec
 
       - name: Assert test-specific values
-        run: python3 -m pipeline.ci.validate_spec input_spec.json --test-values
+        run: python3 -m src.pipeline.ci.validate_spec input_spec.json --test-values

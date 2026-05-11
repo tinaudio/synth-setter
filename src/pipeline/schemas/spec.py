@@ -1,13 +1,12 @@
 """Unified dataset specification: a single Pydantic model is the spec on R2.
 
-``DatasetSpec`` replaces the prior split between ``DatasetConfig`` (the YAML-
-shaped config) and ``DatasetPipelineSpec`` (the runtime-materialized artifact).
-Hydra composes a dict from groups; the entrypoint constructs ``DatasetSpec``
-directly from that dict on line 1 of ``main``. Runtime fields (``git_sha``,
-``created_at``, ``run_id``, ``r2_prefix``) auto-fill via ``default_factory``
-when missing and pass through when present (worker reconstruction from JSON).
-``shards``/``num_shards``/``num_params`` are computed deterministically from
-layout + render fields.
+``DatasetSpec`` is the only spec model — there is no separate YAML-shaped
+config or runtime-materialized artifact. Hydra composes a dict from groups;
+the entrypoint constructs ``DatasetSpec`` directly from that dict on line 1
+of ``main``. Runtime fields (``git_sha``, ``created_at``, ``run_id``,
+``r2_prefix``) auto-fill via ``default_factory`` when missing and pass through
+when present (worker reconstruction from JSON). ``shards``/``num_shards``/
+``num_params`` are computed deterministically from layout + render fields.
 """
 
 from __future__ import annotations
@@ -15,11 +14,8 @@ from __future__ import annotations
 import subprocess
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
-from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-import yaml
-from omegaconf import OmegaConf
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -29,7 +25,7 @@ from pydantic import (
     model_validator,
 )
 
-from pipeline.schemas.prefix import (
+from src.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
     make_dataset_wandb_run_id,
@@ -41,8 +37,6 @@ __all__ = [
     "DatasetSpec",
     "RenderConfig",
     "ShardSpec",
-    "dataset_config_id_from_path",
-    "load_dataset_spec_yaml",
 ]
 
 # Source-of-truth mapping from ``output_format`` to shard filename suffix.
@@ -50,26 +44,49 @@ __all__ = [
 # at construction rather than producing a silently-wrong filename.
 OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5"}
 
-# YAML key in legacy ``configs/dataset/*.yaml`` files that names a base config
-# whose keys are merged under the override. Removed in Phase A.3 once Hydra
-# defaults inheritance handles composition.
-_LEGACY_EXTENDS_KEY = "_extends"
+
+# Sentinel returned by ``_get_git_sha`` when called outside a git working
+# tree (worker host without ``.git/``, fresh tarball extract, etc.). Workers
+# normally receive ``git_sha`` populated in the JSON spec from R2, so the
+# default_factory only fires when something has gone off-script — returning
+# a sentinel rather than raising lets the failure surface as a clear
+# "git_sha=git-unavailable" in the spec JSON rather than a CalledProcessError
+# deep in pydantic's default_factory.
+_GIT_UNAVAILABLE_SENTINEL = "git-unavailable"
 
 
 def _get_git_sha() -> str:
-    """Get the current git commit SHA."""
-    result = subprocess.run(  # noqa: S603
-        ["git", "rev-parse", "HEAD"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    """Get the current git commit SHA, or a sentinel if unavailable."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "rev-parse", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return _GIT_UNAVAILABLE_SENTINEL
     return result.stdout.strip()
 
 
 def _is_repo_dirty() -> bool:
-    """Check if the git working tree has uncommitted changes."""
-    result = subprocess.run(["git", "diff", "--quiet"], capture_output=True)  # noqa: S603, S607
+    """Check if the git working tree has uncommitted changes (False if no git).
+
+    ``git diff --quiet`` exits 0 (clean) or 1 (dirty) inside a repo, and 128
+    when run outside one (``fatal: not a git repository``). Treat exit codes
+    outside {0, 1} as "no usable git" — same contract as ``_get_git_sha``'s
+    sentinel: a worker on a tarball-extracted host gets a benign default
+    rather than a confusing ``is_repo_dirty=True``.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "diff", "--quiet"],  # noqa: S607
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        return False
+    if result.returncode not in (0, 1):
+        return False
     return result.returncode != 0
 
 
@@ -177,8 +194,10 @@ class DatasetSpec(BaseModel):
     task_name: str
     output_format: Literal["hdf5"]
     train_val_test_sizes: tuple[int, int, int]
-    # Reserved for per-sample seeding (#884); not consumed yet.
-    train_val_test_seeds: tuple[int, int, int]
+    # Reserved for per-sample seeding (#884); not implemented. Accepts only
+    # ``None`` — any non-None value (yaml, JSON, or in-process) raises
+    # ``NotImplementedError`` at construction. See ``_reject_train_val_test_seeds``.
+    train_val_test_seeds: tuple[int, int, int] | None = None
     base_seed: int
     r2_bucket: str
     r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
@@ -186,15 +205,32 @@ class DatasetSpec(BaseModel):
     # Sub-model
     render: RenderConfig
 
-    # Auto-filled runtime fields. ``default_factory`` runs only when the field
-    # is missing on input — JSON-loaded specs preserve the materialization-time
-    # values that workers must reuse for consistency. Lambdas wrap the
-    # module-level helpers so test monkeypatches take effect.
+    # Auto-filled runtime fields. The factory runs only when the field is
+    # missing on input — JSON-loaded specs preserve the materialization-time
+    # values workers must reuse. The lambdas around ``_get_git_sha`` etc.
+    # defer the lookup to call time so tests that ``monkeypatch.setattr`` on
+    # the module attribute reach this resolution path.
     git_sha: str = Field(default_factory=lambda: _get_git_sha())
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
     run_id: str = Field(default_factory=_default_run_id)
     r2_prefix: str = Field(default_factory=_default_r2_prefix)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_train_val_test_seeds(cls, data: Any) -> Any:
+        """Reject any non-None ``train_val_test_seeds`` — reserved for #884, not implemented.
+
+        Runs in ``mode="before"`` so ``NotImplementedError`` propagates as-is
+        instead of being wrapped in a ``ValidationError`` (which is what
+        pydantic does for ``ValueError`` raised inside field validators).
+        """
+        if isinstance(data, dict) and data.get("train_val_test_seeds") is not None:
+            raise NotImplementedError(
+                "train_val_test_seeds is reserved for per-sample seeding (#884) "
+                "and is not yet implemented; omit the field"
+            )
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -208,11 +244,11 @@ class DatasetSpec(BaseModel):
         """
         if isinstance(data, dict):
             data = dict(data)
-            for computed_key in ("shards", "num_shards", "num_params"):
+            for computed_key in cls.model_computed_fields:
                 data.pop(computed_key, None)
         return data
 
-    @field_validator("train_val_test_sizes", "train_val_test_seeds", mode="before")
+    @field_validator("train_val_test_sizes", mode="before")
     @classmethod
     def _splits_list_to_tuple(cls, value: Any) -> Any:
         """Coerce JSON-loaded ``list[int]`` into ``tuple[int, int, int]``.
@@ -273,6 +309,14 @@ class DatasetSpec(BaseModel):
         """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
         if not value.strip():
             raise ValueError("r2_bucket must not be blank")
+        return value
+
+    @field_validator("r2_prefix_root")
+    @classmethod
+    def _r2_prefix_root_must_not_be_blank(cls, value: str) -> str:
+        """Reject blank prefix roots so derived ``r2_prefix`` doesn't start with a stray ``/``."""
+        if not value.strip():
+            raise ValueError("r2_prefix_root must not be blank")
         return value
 
     @field_validator("task_name")
@@ -352,112 +396,3 @@ class DatasetSpec(BaseModel):
         from src.data.vst import param_specs
 
         return len(param_specs[self.render.param_spec_name])
-
-
-def dataset_config_id_from_path(config_path: Path) -> DatasetConfigId:
-    """Extract the dataset config ID (filename stem) from a config path."""
-    return DatasetConfigId(config_path.stem)
-
-
-def _resolve_legacy_extends(config_path: Path, raw: dict[str, Any]) -> dict[str, Any]:
-    """Merge a base config into ``raw`` if it declares ``_extends:``.
-
-    Bridges the old flat ``configs/dataset/*.yaml`` shape until Phase A.3
-    migrates the entrypoint to ``@hydra.main`` and Hydra's defaults
-    inheritance replaces this loader.
-    """
-    if _LEGACY_EXTENDS_KEY not in raw:
-        return raw
-    base_name = raw[_LEGACY_EXTENDS_KEY]
-    if not isinstance(base_name, str):
-        raise TypeError(
-            f"{_LEGACY_EXTENDS_KEY} must name a base config (string), "
-            f"got {type(base_name).__name__}"
-        )
-    base_path = config_path.parent / f"{base_name}.yaml"
-    if not base_path.is_file():
-        raise FileNotFoundError(
-            f"_extends target not found: {base_path} (referenced from {config_path})"
-        )
-    with open(base_path) as f:
-        base_raw = yaml.safe_load(f)
-    if not isinstance(base_raw, dict):
-        raise TypeError(f"Expected a YAML mapping in {base_path}, got {type(base_raw).__name__}")
-    base_resolved = _resolve_legacy_extends(base_path, base_raw)
-    override = {k: v for k, v in raw.items() if k != _LEGACY_EXTENDS_KEY}
-    merged = OmegaConf.merge(OmegaConf.create(base_resolved), OmegaConf.create(override))
-    return cast(dict[str, Any], OmegaConf.to_container(merged, resolve=True))
-
-
-# Pinned plugin version baked into ``tinaudio/synth-setter:dev-snapshot``;
-# legacy YAML files predate ``render.renderer_version`` so the loader injects
-# this default. Phase A.2 surfaces it as a Hydra-composed config field.
-_LEGACY_PINNED_RENDERER_VERSION = "1.3.4"
-
-
-def _legacy_dict_to_dataset_spec_kwargs(raw: dict[str, Any], task_name: str) -> dict[str, Any]:
-    """Reshape a legacy flat dataset YAML dict into ``DatasetSpec`` kwargs.
-
-    Maps ``shard_size``/``num_shards``/``splits`` onto ``train_val_test_sizes``
-    and lifts renderer fields under ``render``. Removed in Phase A.3 with the
-    rest of the legacy YAML loader.
-    """
-    splits = raw["splits"]
-    shard_size = raw["shard_size"]
-    declared_num_shards = raw.get("num_shards")
-    splits_total_shards = splits["train"] + splits["val"] + splits["test"]
-    if declared_num_shards is not None and declared_num_shards != splits_total_shards:
-        raise ValueError(
-            f"legacy YAML num_shards={declared_num_shards} disagrees with "
-            f"sum(splits)={splits_total_shards} (train={splits['train']}, "
-            f"val={splits['val']}, test={splits['test']}); update one or the other"
-        )
-    train_val_test_sizes = [
-        splits["train"] * shard_size,
-        splits["val"] * shard_size,
-        splits["test"] * shard_size,
-    ]
-    train_val_test_seeds = [
-        raw["base_seed"],
-        raw["base_seed"] + 1,
-        raw["base_seed"] + 2,
-    ]
-    render = {
-        "plugin_path": raw["plugin_path"],
-        "preset_path": raw["preset_path"],
-        "param_spec_name": raw["param_spec"],
-        "renderer_version": raw.get("renderer_version", _LEGACY_PINNED_RENDERER_VERSION),
-        "sample_rate": raw["sample_rate"],
-        "channels": raw["channels"],
-        "velocity": raw["velocity"],
-        "signal_duration_seconds": raw["signal_duration_seconds"],
-        "min_loudness": raw["min_loudness"],
-        "sample_batch_size": raw["sample_batch_size"],
-        "batch_per_shard": shard_size,
-    }
-    return {
-        "task_name": task_name,
-        "output_format": raw.get("output_format", "hdf5"),
-        "train_val_test_sizes": train_val_test_sizes,
-        "train_val_test_seeds": train_val_test_seeds,
-        "base_seed": raw["base_seed"],
-        "r2_bucket": raw["r2_bucket"],
-        "render": render,
-    }
-
-
-def load_dataset_spec_yaml(config_path: Path) -> DatasetSpec:
-    """Load a legacy flat dataset YAML and construct a ``DatasetSpec``.
-
-    Bridge for callers that haven't migrated to ``@hydra.main``. Removed in
-    Phase A.3 once the entrypoint composes the spec dict via Hydra defaults.
-    """
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    with open(config_path) as f:
-        raw = yaml.safe_load(f)
-    if not isinstance(raw, dict):
-        raise TypeError(f"Expected a YAML mapping in {config_path}, got {type(raw).__name__}")
-    merged = _resolve_legacy_extends(config_path, raw)
-    kwargs = _legacy_dict_to_dataset_spec_kwargs(merged, task_name=config_path.stem)
-    return DatasetSpec(**kwargs)

@@ -41,8 +41,10 @@ original parameters.
 
 ## Data Flow
 
-1. **Configure** -- Define a dataset in `configs/dataset/*.yaml` (synth, sample
-   count, shard size, parameter spec).
+1. **Configure** -- Define a dataset in `configs/experiment/*.yaml` (synth, sample
+   count, shard size, parameter spec). Hydra composes the experiment against
+   `configs/dataset.yaml` and `spec_from_cfg(cfg)` builds the unified
+   `DatasetSpec` (post-#887 unification, post-#917 Hydra-only construction).
 
 2. **Generate** -- Workers render audio samples through Surge XT, producing HDF5
    shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
@@ -72,34 +74,35 @@ original parameters.
 
 ```
 synth-setter/
-├── src/                    # ML code
+├── src/                    # ML code + entrypoints
 │   ├── train.py            #   Training entry point (Hydra)
 │   ├── eval.py             #   Evaluation entry point (Hydra)
+│   ├── generate_dataset.py #   Dataset-generation entry point (Hydra)
 │   ├── metrics.py          #   Metric definitions
 │   ├── data/               #   DataModules (Surge, K-Sin, K-Osc, etc.)
 │   ├── models/             #   LightningModules (flow matching, FF, FlowVAE)
 │   │   └── components/     #   Model building blocks (VAE, networks)
-│   └── utils/              #   Logging, config helpers
-│
-├── pipeline/               # Distributed data pipeline
-│   ├── schemas/            #   Pydantic models (see directory)
-│   ├── entrypoints/        #   Pipeline entry points (see directory)
-│   ├── ci/                 #   CI validation scripts (see directory)
-│   └── constants.py        #   Shared constants (R2 bucket, spec filename)
+│   ├── utils/              #   Logging, config helpers
+│   └── pipeline/           #   Distributed data pipeline
+│       ├── schemas/        #     Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
+│       ├── ci/             #     CI validation scripts (materialize_spec, validate_shard, validate_spec)
+│       ├── skypilot_launch.py  # SkyPilot launcher CLI
+│       └── constants.py    #     Shared constants (R2 bucket, spec filename)
 │
 ├── configs/                # Hydra YAML configs (and SkyPilot Task templates under compute/)
-│   ├── dataset/            #   Pipeline dataset configs (synth, shard count, sample count)
+│   ├── dataset.yaml        #   Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)
+│   ├── render/             #   Renderer configs (RenderConfig sub-model)
+│   ├── experiment/         #   Experiment configs — training (compose data + model + trainer) and datagen (composes dataset.yaml)
 │   ├── compute/            #   SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
 │   ├── data/               #   DataModule configs (paths, splits, batch size)
 │   ├── model/              #   Model architecture configs
 │   ├── trainer/            #   Lightning Trainer configs
-│   ├── experiment/         #   Experiment configs (compose data + model + trainer)
 │   ├── callbacks/          #   Callback configs (checkpointing, early stopping)
 │   ├── logger/             #   Logger configs (W&B, CSV, TensorBoard)
 │   └── train.yaml          #   Root training config
 │
 ├── scripts/                # Standalone utility scripts
-├── tests/                  # Test suite (mirrors src/ and pipeline/ structure)
+├── tests/                  # Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)
 ├── docs/                   # Documentation
 │   └── design/             #   Design documents
 └── docker/                 # Dockerfiles and entrypoints

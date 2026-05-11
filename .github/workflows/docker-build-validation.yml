@@ -14,7 +14,7 @@ name: Docker Image Build and Push
 # via the SYNTH_PERMUTATIONS_GIT_REF build-arg. The build ALWAYS pins to
 # the resolved commit SHA — the original input form is discarded.
 # The resolved SHA is validated as 40-char lowercase hex by load_image_config
-# (pipeline/schemas/image_config.py) in the "Load image config" step.
+# (src/pipeline/schemas/image_config.py) in the "Load image config" step.
 
 on:
   workflow_dispatch:
@@ -33,8 +33,8 @@ on:
     paths:
       - "docker/**"
       - "configs/image/**"
-      - "pipeline/schemas/image_config.py"
-      - "pipeline/ci/load_image_config.py"
+      - "src/pipeline/schemas/image_config.py"
+      - "src/pipeline/ci/load_image_config.py"
       - ".github/workflows/docker-build-validation.yml"
       - "requirements*.txt"
       - "tests/docker/**"
@@ -158,7 +158,7 @@ jobs:
       - name: Load image config
         id: config
         run: |
-          python -m pipeline.ci.load_image_config \
+          python -m src.pipeline.ci.load_image_config \
             --config configs/image/dev-snapshot.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
             --issue-number '${{ github.event.pull_request.number || github.event.inputs.issue_number || 311 }}'

@@ -43,9 +43,12 @@ import sky
 import sky.check  # accessed conditionally on the kubernetes path; see provider == "local" branch in main()
 import yaml
 from dotenv import dotenv_values
+from hydra import compose, initialize_config_dir
+from hydra.errors import HydraException
 
-from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from pipeline.schemas.spec import DatasetSpec, load_dataset_spec_yaml
+from src.generate_dataset import spec_from_cfg
+from src.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from src.pipeline.schemas.spec import DatasetSpec
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
@@ -91,13 +94,52 @@ _CRED_BOOTSTRAP_SCRIPT = (
 _TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "dataset" / "runpod-smoke-shard.yaml"
+CONFIG_DIR = REPO_ROOT / "configs"
+DEFAULT_EXPERIMENT = "runpod-smoke-shard"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
+
+
+def _compose_dataset_spec(experiment: str, overrides: list[str]) -> DatasetSpec:
+    """Build DatasetSpec via Hydra compose for the named experiment + ad-hoc overrides.
+
+    Uses programmatic ``initialize_config_dir`` + ``compose`` rather than ``@hydra.main`` so
+    the launcher's click CLI keeps owning argv parsing. ``cfg.paths.*`` are pinned to the repo
+    root because programmatic ``compose()`` doesn't populate ``hydra.runtime.output_dir`` (only
+    ``@hydra.main`` does), and ``paths.output_dir = ${hydra:runtime.output_dir}`` would
+    otherwise fail to resolve.
+    """
+    try:
+        with initialize_config_dir(version_base="1.3", config_dir=str(CONFIG_DIR)):
+            cfg = compose(
+                config_name="dataset",
+                overrides=[f"experiment={experiment}", *overrides],
+            )
+    except HydraException as exc:
+        # Unknown experiment or malformed override surfaces here; convert the Hydra
+        # traceback into a one-line CLI error so the launcher reads as a normal click failure.
+        raise click.ClickException(
+            f"Hydra compose failed for experiment {experiment!r}: {exc}"
+        ) from exc
+    cfg.paths.root_dir = str(REPO_ROOT)
+    cfg.paths.output_dir = str(REPO_ROOT)
+    cfg.paths.work_dir = str(REPO_ROOT)
+    return spec_from_cfg(cfg)
+
 
 # Local directory for the materialized spec written before R2 upload. Tempdir
 # so concurrent launches on the same host don't collide.
 LOCAL_SPEC_DIR = Path(tempfile.gettempdir())
+
+# `sky local up` uses the kubernetes backend; map both spellings.
+_CLOUD_TO_PROVIDER: dict[str, str] = {
+    "runpod": "runpod",
+    "oci": "oci",
+    "kubernetes": "local",
+    "k8s": "local",
+}
+
+_SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
 
 
 def load_worker_env(path: Path) -> dict[str, str]:
@@ -141,14 +183,6 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
             f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
         )
     return resolved
-
-
-_CLOUD_TO_PROVIDER: dict[str, str] = {
-    "runpod": "runpod",
-    "oci": "oci",
-    "kubernetes": "local",
-    "k8s": "local",  # SkyPilot accepts both
-}
 
 
 def _detect_provider(template_path: Path) -> str:
@@ -200,9 +234,6 @@ def _detect_provider(template_path: Path) -> str:
             "supports runpod, oci, and local (kubernetes) only"
         )
     return provider
-
-
-_SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
 
 
 def _apply_dispatch_mode(api_server: str | None, local: bool) -> None:
@@ -308,13 +339,19 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
 
 @click.command()
 @click.option(
-    "--config",
-    "config_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=DEFAULT_CONFIG,
+    "--experiment",
+    "experiment",
+    type=str,
+    default=DEFAULT_EXPERIMENT,
     show_default=True,
-    help="Path to a DatasetConfig YAML.",
+    help=(
+        "Datagen experiment name (e.g. `runpod-smoke-shard`). Resolved as Hydra "
+        "`compose(config_name='dataset', overrides=[f'experiment={name}'])` against "
+        "`configs/dataset.yaml`. Use trailing positional args for ad-hoc Hydra overrides, "
+        "e.g. `--experiment ci-materialize-test render.plugin_path=/path/to/Plugin.vst3`."
+    ),
 )
+@click.argument("hydra_overrides", nargs=-1, type=click.UNPROCESSED)
 @click.option(
     "--template",
     "template_path",
@@ -363,7 +400,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
         "backend does not support num_nodes>1, so we synthesize multi-worker partitioning by "
         "launching N independent clusters and injecting SYNTH_SETTER_WORKER_RANK / "
         "SYNTH_SETTER_NUM_WORKERS per rank. Each cluster downloads the same materialized spec "
-        "and uses pipeline.partitioning.get_my_shards to slice its share."
+        "and uses src.pipeline.partitioning.get_my_shards to slice its share."
     ),
 )
 @click.option(
@@ -418,7 +455,8 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     ),
 )
 def main(
-    config_path: Path,
+    experiment: str,
+    hydra_overrides: tuple[str, ...],
     template_path: Path,
     env_file_path: Path,
     cluster_name: str | None,
@@ -452,18 +490,12 @@ def main(
             f"Expected at least one of: {', '.join(secret_keys)}."
         )
 
-    # `upload_spec_to_r2` shells out to rclone, which inherits os.environ.
-    # `worker_env` already reflects the launcher's resolved precedence
-    # (env-file > process env, per `resolve_worker_env`), so write through to
-    # `os.environ` to make the rclone subprocess see the same effective
-    # values the launcher resolved — not whatever happened to be exported
-    # in the launcher process. CI sets these in the workflow `env:` block
-    # directly, so the assignment is a no-op there.
+    # rclone subprocess inherits os.environ; mirror launcher-resolved values so .env wins.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value
 
-    spec = load_dataset_spec_yaml(config_path)
+    spec = _compose_dataset_spec(experiment, list(hydra_overrides))
 
     # `--num-workers` overrides the launcher default of 1. Worker count is a
     # launcher concern, no longer baked into the dataset spec.

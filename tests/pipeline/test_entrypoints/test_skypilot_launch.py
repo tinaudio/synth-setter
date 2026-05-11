@@ -1,4 +1,4 @@
-"""Tests for pipeline/entrypoints/skypilot_launch.py — SkyPilot launcher (RunPod / OCI / kind).
+"""Tests for src/pipeline/skypilot_launch.py — SkyPilot launcher (RunPod / OCI / kind).
 
 Mock-based: no real SkyPilot or RunPod calls. The `mock_sky` fixture replaces the launcher's
 module-level `sky` reference with a MagicMock, and `local_spec_dir` redirects the on-disk spec
@@ -18,7 +18,8 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from pipeline.entrypoints.skypilot_launch import (
+from src.pipeline.schemas.spec import DatasetSpec
+from src.pipeline.skypilot_launch import (
     _WORKER_ENV_KEYS,
     _WORKER_SPEC_URI_ENV,
     _override_image_id,
@@ -26,41 +27,23 @@ from pipeline.entrypoints.skypilot_launch import (
     main,
     resolve_worker_env,
 )
-from pipeline.entrypoints.skypilot_launch import (
+from src.pipeline.skypilot_launch import (
     _detect_provider as _real_detect_provider,
 )
-from pipeline.entrypoints.skypilot_launch import (
+from src.pipeline.skypilot_launch import (
     _run_cred_bootstrap as _real_run_cred_bootstrap,
 )
-from pipeline.schemas.spec import DatasetSpec, dataset_config_id_from_path
 
 FIXED_NOW = datetime(2026, 4, 30, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _make_legacy_config(plugin: Path) -> dict[str, Any]:
-    """Return a fresh legacy-shape dataset YAML dict pointed at the given fake plugin path."""
-    return {
-        "param_spec": "surge_simple",
-        "plugin_path": str(plugin),
-        "output_format": "hdf5",
-        "sample_rate": 16000,
-        "shard_size": 32,
-        "num_shards": 1,
-        "base_seed": 42,
-        "r2_bucket": "intermediate-data",
-        "splits": {"train": 1, "val": 0, "test": 0},
-        "preset_path": "presets/surge-base.vstpreset",
-        "channels": 2,
-        "velocity": 100,
-        "signal_duration_seconds": 4.0,
-        "min_loudness": -55.0,
-        "sample_batch_size": 32,
-    }
-
-
 @pytest.fixture()
 def fake_plugin(tmp_path: Path) -> Path:
-    """Build a minimal VST3 bundle with a moduleinfo.json the renderer can read."""
+    """Build a minimal VST3 bundle with a moduleinfo.json the renderer can read.
+
+    Version pinned to ``1.3.4`` to match ``configs/render/surge_xt.yaml``'s
+    ``renderer_version``, which the surge_simple group inherits.
+    """
     contents = tmp_path / "FakePlugin.vst3" / "Contents"
     contents.mkdir(parents=True)
     (contents / "moduleinfo.json").write_text('{"Version": "1.3.4"}')
@@ -70,17 +53,23 @@ def fake_plugin(tmp_path: Path) -> Path:
 @pytest.fixture()
 def patch_materialize_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub out git/timestamp I/O so DatasetSpec construction is deterministic."""
-    monkeypatch.setattr("pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
-    monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: False)
-    monkeypatch.setattr("pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
+    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
+    monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
 
 
 @pytest.fixture()
-def config_yaml(tmp_path: Path, fake_plugin: Path) -> Path:
-    """Write a valid legacy-shape dataset YAML pointed at the fake plugin."""
-    path = tmp_path / "runpod-smoke-shard.yaml"
-    path.write_text(yaml.safe_dump(_make_legacy_config(fake_plugin), sort_keys=False))
-    return path
+def experiment(fake_plugin: Path) -> str:
+    """Name a Hydra experiment under ``configs/experiment/``. Tests pass this verbatim to the
+    launcher's ``--experiment`` flag; ad-hoc Hydra overrides (e.g. ``render.plugin_path=...``) flow
+    through ``_invoke``'s positional trailing args.
+
+    Uses ``runpod-smoke-shard`` (12 samples, 3 shards at batch_per_shard=4) for fast CI.
+    """
+    # fake_plugin is a fixture dep so the path is built before tests use it via
+    # the plugin_path override threaded through _invoke.
+    _ = fake_plugin
+    return "runpod-smoke-shard"
 
 
 @pytest.fixture()
@@ -113,7 +102,7 @@ def local_spec_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect the launcher's default spec-write directory under tmp_path."""
     spec_dir = tmp_path / "spec-out"
     spec_dir.mkdir()
-    monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.LOCAL_SPEC_DIR", spec_dir)
+    monkeypatch.setattr("src.pipeline.skypilot_launch.LOCAL_SPEC_DIR", spec_dir)
     return spec_dir
 
 
@@ -137,7 +126,7 @@ def mock_rclone_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     by setting their own side_effect on `subprocess.check_call`.
     """
     monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch.subprocess.check_call",
+        "src.pipeline.skypilot_launch.subprocess.check_call",
         lambda args: None,
     )
 
@@ -150,11 +139,11 @@ def mock_cred_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     provider, exception, or call assertion.
     """
     monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch._run_cred_bootstrap",
+        "src.pipeline.skypilot_launch._run_cred_bootstrap",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
-        "pipeline.entrypoints.skypilot_launch._detect_provider",
+        "src.pipeline.skypilot_launch._detect_provider",
         lambda _task: "runpod",
     )
 
@@ -186,7 +175,7 @@ def mock_sky(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     `mock_sky.tail_logs.side_effect = ...` for a transport raise).
     """
     fake = MagicMock()
-    monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.sky", fake)
+    monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake)
     _succeeded_run(fake)
     return fake
 
@@ -302,25 +291,32 @@ class TestResolveWorkerEnvR2RemoteConstants:
 
 
 def _invoke(
-    config_yaml: Path,
+    experiment: str,
     template_yaml: Path,
     env_file: Path,
     *extra: str,
+    fake_plugin: Path | None = None,
 ) -> Any:
-    """Invoke the launcher CLI with the standard required options + any `extra` args."""
+    """Invoke the launcher CLI with the standard required options + any ``extra`` args.
+
+    Threads ``fake_plugin`` (a fixture-built VST3 bundle path) as a trailing Hydra override
+    on ``render.plugin_path`` so the composed DatasetSpec points at a path that exists in
+    the test environment rather than the real Surge XT install location baked into
+    ``configs/render/surge_xt.yaml``.
+    """
     runner = CliRunner()
-    return runner.invoke(
-        main,
-        [
-            "--config",
-            str(config_yaml),
-            "--template",
-            str(template_yaml),
-            "--env-file",
-            str(env_file),
-            *extra,
-        ],
-    )
+    args = [
+        "--experiment",
+        experiment,
+        "--template",
+        str(template_yaml),
+        "--env-file",
+        str(env_file),
+        *extra,
+    ]
+    if fake_plugin is not None:
+        args.append(f"render.plugin_path={fake_plugin}")
+    return runner.invoke(main, args)
 
 
 class TestMainCli:
@@ -329,7 +325,8 @@ class TestMainCli:
     def test_no_env_anywhere_fails_with_clear_error(
         self,
         tmp_path: Path,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
@@ -338,16 +335,75 @@ class TestMainCli:
         """With no .env on disk and no rclone-R2 keys in process env, the launcher fails fast and
         never calls sky.*."""
         missing = tmp_path / "does-not-exist.env"
-        result = _invoke(config_yaml, template_yaml, missing)
+        result = _invoke(experiment, template_yaml, missing, fake_plugin=fake_plugin)
         assert result.exit_code != 0
         assert "No worker env vars resolved" in result.output
         mock_sky.Task.from_yaml.assert_not_called()
         mock_sky.launch.assert_not_called()
 
+    def test_unknown_experiment_surfaces_as_click_error(
+        self,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A missing experiment fails as a click error (not a Hydra traceback) and never launches.
+
+        Hydra raises ``HydraException`` from ``compose`` when the named experiment file isn't
+        on the config-search path; the launcher wraps that as a ``click.ClickException`` so the
+        user sees a one-line CLI error.
+        """
+        result = _invoke(
+            "this-experiment-does-not-exist",
+            template_yaml,
+            env_file,
+            fake_plugin=fake_plugin,
+        )
+        assert result.exit_code != 0
+        assert "Hydra compose failed for experiment 'this-experiment-does-not-exist'" in (
+            result.output
+        )
+        mock_sky.launch.assert_not_called()
+
+    def test_unknown_launcher_flag_is_rejected(
+        self,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Typos of `--`-style launcher options are rejected by Click instead of being silently
+        forwarded as Hydra overrides — Hydra overrides are positional ``key=value`` args, not
+        flags, so strict option validation catches misspellings of real launcher flags."""
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "--experiment",
+                "runpod-smoke-shard",
+                "--template",
+                str(template_yaml),
+                "--env-file",
+                str(env_file),
+                "--not-a-real-flag",
+                "oops",
+                f"render.plugin_path={fake_plugin}",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "no such option" in result.output.lower()
+        mock_sky.launch.assert_not_called()
+
     def test_empty_env_file_with_no_process_env_fails(
         self,
         tmp_path: Path,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
@@ -357,7 +413,7 @@ class TestMainCli:
         equivalent to no .env."""
         empty_env = tmp_path / "empty.env"
         empty_env.write_text("# only comments\n\n")
-        result = _invoke(config_yaml, template_yaml, empty_env)
+        result = _invoke(experiment, template_yaml, empty_env, fake_plugin=fake_plugin)
         assert result.exit_code != 0
         assert "No worker env vars resolved" in result.output
         mock_sky.Task.from_yaml.assert_not_called()
@@ -366,7 +422,8 @@ class TestMainCli:
     def test_process_env_resolves_when_env_file_absent(
         self,
         tmp_path: Path,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
@@ -378,7 +435,14 @@ class TestMainCli:
         missing = tmp_path / "does-not-exist.env"
         monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "s3")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "process-env-key")
-        result = _invoke(config_yaml, template_yaml, missing, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            missing,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
 
         task = mock_sky.Task.from_yaml.return_value
@@ -391,7 +455,8 @@ class TestMainCli:
 
     def test_materialized_spec_round_trips_as_pipeline_spec(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -399,7 +464,14 @@ class TestMainCli:
         mock_sky: MagicMock,
     ) -> None:
         """The on-disk spec validates as DatasetSpec with the patched git/now values."""
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
 
         spec_files = list(local_spec_dir.glob("*.json"))
@@ -407,12 +479,14 @@ class TestMainCli:
         spec = DatasetSpec.model_validate_json(spec_files[0].read_text())
         assert spec.git_sha == "abc123def456"
         assert spec.is_repo_dirty is False
-        assert spec.num_shards == 1
+        # ``runpod-smoke-shard``: 12 samples / batch_per_shard=4 = 3 shards.
+        assert spec.num_shards == 3
         assert spec.r2_bucket == "intermediate-data"
 
     def test_worker_env_is_forwarded_to_task(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -420,7 +494,14 @@ class TestMainCli:
         mock_sky: MagicMock,
     ) -> None:
         """`task.update_envs` receives the parsed dotenv values."""
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
 
         task = mock_sky.Task.from_yaml.return_value
@@ -432,7 +513,8 @@ class TestMainCli:
 
     def test_spec_uri_forwarded_to_worker_env_after_r2_upload(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -449,11 +531,18 @@ class TestMainCli:
         """
         rclone_invocations: list[list[str]] = []
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.check_call",
+            "src.pipeline.skypilot_launch.subprocess.check_call",
             lambda args: rclone_invocations.append(args),
         )
 
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
 
         task = mock_sky.Task.from_yaml.return_value
@@ -473,7 +562,8 @@ class TestMainCli:
 
     def test_launch_uses_autostop_window_and_down_true(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -482,7 +572,14 @@ class TestMainCli:
     ) -> None:
         """`sky.launch` keeps `down=True` for cleanup and an autostop window as a backstop in case
         the explicit `sky.down` in `finally` is skipped by an unexpected exit path."""
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
 
         mock_sky.launch.assert_called_once()
@@ -493,7 +590,8 @@ class TestMainCli:
 
     def test_tail_logs_invoked_with_follow_true_under_tail(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -502,7 +600,13 @@ class TestMainCli:
     ) -> None:
         """`--tail` streams logs with follow=True — real-time logs instead of a buffered tail."""
         result = _invoke(
-            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--tail"
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--tail",
+            fake_plugin=fake_plugin,
         )
         assert result.exit_code == 0, result.output
         mock_sky.tail_logs.assert_called_once_with(
@@ -511,7 +615,8 @@ class TestMainCli:
 
     def test_teardown_runs_on_success_under_tail(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -520,37 +625,57 @@ class TestMainCli:
     ) -> None:
         """Under `--tail`, `sky.down` is called once on the success path."""
         result = _invoke(
-            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--tail"
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--tail",
+            fake_plugin=fake_plugin,
         )
         assert result.exit_code == 0, result.output
         mock_sky.down.assert_called_once_with("smoke-job-1")
 
     # --- Cluster-name / spec-out / failure paths -----------------------------
 
-    def test_default_cluster_name_uses_config_id_prefix(
+    def test_default_cluster_name_uses_task_name_prefix(
         self,
-        config_yaml: Path,
+        tmp_path: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Without --cluster-name the launcher derives the name from `config_id[:8]`."""
-        result = _invoke(config_yaml, template_yaml, env_file)
+        """Without --cluster-name the launcher derives the name from ``spec.task_name[:8]``."""
+        # Pin --spec-out so the test reads back the same spec the launcher composed,
+        # rather than assuming spec.task_name equals the experiment id (an experiment
+        # YAML may override `task_name`).
+        spec_out = tmp_path / "input_spec.json"
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--spec-out",
+            str(spec_out),
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
+        spec = DatasetSpec.model_validate_json(spec_out.read_text())
 
-        config_id = dataset_config_id_from_path(config_yaml)
         kwargs: dict[str, Any] = mock_sky.launch.call_args.kwargs
         assert kwargs["cluster_name"].startswith("synth-setter-smoke-")
-        assert kwargs["cluster_name"].endswith(config_id[:8])
+        assert kwargs["cluster_name"].endswith(spec.task_name[:8])
         assert kwargs["idle_minutes_to_autostop"] >= 2
         assert kwargs["down"] is True
 
     def test_spec_out_overrides_default_path(
         self,
         tmp_path: Path,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -559,13 +684,21 @@ class TestMainCli:
     ) -> None:
         """--spec-out forces an explicit local path (used by CI to find the spec for upload)."""
         explicit = tmp_path / "explicit-out" / "input_spec.json"
-        result = _invoke(config_yaml, template_yaml, env_file, "--spec-out", str(explicit))
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--spec-out",
+            str(explicit),
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
         assert explicit.is_file()
 
     def test_worker_failed_rc_fails_launcher_under_tail(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -577,7 +710,7 @@ class TestMainCli:
         cluster."""
         mock_sky.tail_logs.return_value = 100
 
-        result = _invoke(config_yaml, template_yaml, env_file, "--tail")
+        result = _invoke(experiment, template_yaml, env_file, "--tail", fake_plugin=fake_plugin)
         assert result.exit_code != 0
         # Aggregate fan-out failure message names every failed rank with its rc.
         assert "rc=100" in result.output
@@ -587,7 +720,8 @@ class TestMainCli:
 
     def test_launch_returning_none_job_id_aborts(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -603,14 +737,15 @@ class TestMainCli:
         }
         mock_sky.stream_and_get.side_effect = lambda req: responses[req]
 
-        result = _invoke(config_yaml, template_yaml, env_file)
+        result = _invoke(experiment, template_yaml, env_file, fake_plugin=fake_plugin)
         assert result.exit_code != 0
         assert "no job_id" in result.output.lower()
         mock_sky.tail_logs.assert_not_called()
 
     def test_teardown_runs_when_tail_logs_raises_under_tail(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -621,13 +756,14 @@ class TestMainCli:
         cluster always comes down even if the log-stream side raised."""
         mock_sky.tail_logs.side_effect = RuntimeError("boom")
 
-        result = _invoke(config_yaml, template_yaml, env_file, "--tail")
+        result = _invoke(experiment, template_yaml, env_file, "--tail", fake_plugin=fake_plugin)
         assert result.exit_code != 0
         mock_sky.down.assert_called_once()
 
     def test_local_spec_persists_for_artifact_upload_even_on_launch_exception(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -638,12 +774,12 @@ class TestMainCli:
         """If sky.launch raises after the launcher materialized + R2-uploaded the spec, the local
         spec file under LOCAL_SPEC_DIR is still around for downstream artifact upload."""
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.check_call",
+            "src.pipeline.skypilot_launch.subprocess.check_call",
             lambda args: None,
         )
         mock_sky.launch.side_effect = RuntimeError("boom")
 
-        result = _invoke(config_yaml, template_yaml, env_file)
+        result = _invoke(experiment, template_yaml, env_file, fake_plugin=fake_plugin)
         assert result.exit_code != 0
 
         spec_files = list(local_spec_dir.glob("*.json"))
@@ -664,7 +800,8 @@ class TestNoTailMode:
 
     def test_no_tail_is_default_and_skips_tail_logs(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -672,13 +809,21 @@ class TestNoTailMode:
         mock_sky: MagicMock,
     ) -> None:
         """Without an explicit flag the launcher detaches: `sky.tail_logs` is never invoked."""
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
         assert result.exit_code == 0, result.output
         mock_sky.tail_logs.assert_not_called()
 
     def test_no_tail_does_not_tear_down_cluster_on_success(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -688,14 +833,21 @@ class TestNoTailMode:
         """A successful detach leaves the cluster up — autostop is the safety net, not the
         launcher's `finally` teardown."""
         result = _invoke(
-            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--no-tail"
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--no-tail",
+            fake_plugin=fake_plugin,
         )
         assert result.exit_code == 0, result.output
         mock_sky.down.assert_not_called()
 
     def test_no_tail_prints_sky_logs_and_sky_down_commands_per_cluster(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -705,7 +857,13 @@ class TestNoTailMode:
         """For each launched cluster the operator gets the exact `sky logs <cluster> <job_id>` and
         `sky down <cluster>` commands they can copy-paste."""
         result = _invoke(
-            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--no-tail"
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--no-tail",
+            fake_plugin=fake_plugin,
         )
         assert result.exit_code == 0, result.output
         assert "sky logs smoke-job-1 1" in result.output
@@ -713,7 +871,8 @@ class TestNoTailMode:
 
     def test_no_tail_multi_worker_prints_per_cluster_block_for_each_rank(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -725,7 +884,7 @@ class TestNoTailMode:
         TestNumWorkersFanOut._setup_n_workers_mock(mock_sky, n=3)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
@@ -733,6 +892,7 @@ class TestNoTailMode:
             "--num-workers",
             "3",
             "--no-tail",
+            fake_plugin=fake_plugin,
         )
         assert result.exit_code == 0, result.output
         for i in range(3):
@@ -743,7 +903,8 @@ class TestNoTailMode:
 
     def test_no_tail_partial_launch_failure_only_tears_down_failed_cluster(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -771,7 +932,7 @@ class TestNoTailMode:
         mock_sky.stream_and_get.side_effect = lambda req: stream_responses[req]
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
@@ -779,6 +940,7 @@ class TestNoTailMode:
             "--num-workers",
             "3",
             "--no-tail",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code != 0
@@ -789,7 +951,8 @@ class TestNoTailMode:
 
     def test_no_tail_single_worker_launch_failure_tears_down_that_cluster(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -801,7 +964,13 @@ class TestNoTailMode:
         mock_sky.launch.side_effect = RuntimeError("boom")
 
         result = _invoke(
-            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--no-tail"
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--no-tail",
+            fake_plugin=fake_plugin,
         )
         assert result.exit_code != 0
         mock_sky.down.assert_called_once_with("smoke-job-1")
@@ -813,7 +982,7 @@ class TestNumWorkersFanOut:
     RunPod's backend doesn't support num_nodes>1, so the launcher synthesizes multi-worker
     partitioning by launching N clusters in parallel and injecting SYNTH_SETTER_WORKER_RANK /
     SYNTH_SETTER_NUM_WORKERS per cluster. Each cluster downloads the same materialized spec;
-    pipeline.partitioning.get_my_shards slices each worker's shard ownership.
+    src.pipeline.partitioning.get_my_shards slices each worker's shard ownership.
     """
 
     @staticmethod
@@ -858,7 +1027,8 @@ class TestNumWorkersFanOut:
 
     def test_three_workers_launches_three_clusters_under_tail(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -870,7 +1040,7 @@ class TestNumWorkersFanOut:
         self._setup_n_workers_mock(mock_sky, n=3)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
@@ -878,6 +1048,7 @@ class TestNumWorkersFanOut:
             "--num-workers",
             "3",
             "--tail",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -887,7 +1058,8 @@ class TestNumWorkersFanOut:
 
     def test_three_workers_use_rank_suffixed_cluster_names(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -899,13 +1071,14 @@ class TestNumWorkersFanOut:
         self._setup_n_workers_mock(mock_sky, n=3)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--num-workers",
             "3",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -916,7 +1089,8 @@ class TestNumWorkersFanOut:
 
     def test_one_worker_keeps_unsuffixed_cluster_name(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -926,11 +1100,12 @@ class TestNumWorkersFanOut:
         """`--num-workers 1` (default) keeps the unsuffixed cluster name for backward-compat with
         debug workflows / dashboards that key off it."""
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -939,7 +1114,8 @@ class TestNumWorkersFanOut:
 
     def test_three_workers_inject_distinct_rank_world_per_cluster(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -955,13 +1131,14 @@ class TestNumWorkersFanOut:
         tasks = self._setup_n_workers_mock(mock_sky, n=3)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--num-workers",
             "3",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -977,7 +1154,8 @@ class TestNumWorkersFanOut:
 
     def test_three_workers_upload_spec_only_once(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -990,18 +1168,19 @@ class TestNumWorkersFanOut:
         self._setup_n_workers_mock(mock_sky, n=3)
         rclone_invocations: list[list[str]] = []
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.check_call",
+            "src.pipeline.skypilot_launch.subprocess.check_call",
             lambda args: rclone_invocations.append(args),
         )
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--num-workers",
             "3",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -1012,7 +1191,8 @@ class TestNumWorkersFanOut:
 
     def test_one_worker_failure_among_three_fails_launcher_after_full_teardown_under_tail(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1025,7 +1205,7 @@ class TestNumWorkersFanOut:
         self._setup_n_workers_mock(mock_sky, n=3, tail_rcs_by_cluster={"smoke-job-1-r1": 100})
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
@@ -1033,6 +1213,7 @@ class TestNumWorkersFanOut:
             "--num-workers",
             "3",
             "--tail",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code != 0
@@ -1042,7 +1223,8 @@ class TestNumWorkersFanOut:
 
     def test_worker_git_ref_forwarded_to_every_rank(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1060,13 +1242,14 @@ class TestNumWorkersFanOut:
         monkeypatch.setenv("WORKER_GIT_REF", "abc1234deadbeef")
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--num-workers",
             "3",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -1076,7 +1259,8 @@ class TestNumWorkersFanOut:
 
     def test_zero_or_negative_num_workers_rejected(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1085,13 +1269,14 @@ class TestNumWorkersFanOut:
     ) -> None:
         """`--num-workers 0` (or negative) is a CLI usage error — never reach sky.*."""
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--num-workers",
             "0",
+            fake_plugin=fake_plugin,
         )
         assert result.exit_code != 0
         assert "must be >= 1" in result.output
@@ -1110,7 +1295,8 @@ class TestNumWorkersFanOut:
     )
     def test_invalid_worker_image_tag_rejected(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1122,13 +1308,14 @@ class TestNumWorkersFanOut:
         sky.* is touched, not produce surprising image refs like `tinaudio/synth-
         setter:foo:bar`."""
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--worker-image-tag",
             bad_tag,
+            fake_plugin=fake_plugin,
         )
         assert result.exit_code != 0
         assert "--worker-image-tag" in result.output
@@ -1315,7 +1502,7 @@ class TestRunCredBootstrap:
         monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://api:pw@server/")
         called: list[str] = []
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.run",
+            "src.pipeline.skypilot_launch.subprocess.run",
             lambda *args, **kwargs: called.append("invoked"),  # type: ignore[misc]
         )
         # bypass the autouse no-op fixture
@@ -1347,7 +1534,7 @@ class TestRunCredBootstrap:
             result.returncode = 0
             return result
 
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         _real_run_cred_bootstrap(provider="runpod", env_file_path=env_file)
 
@@ -1368,7 +1555,7 @@ class TestRunCredBootstrap:
                 returncode=1, cmd=args, stderr="::error::missing var"
             )
 
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         with pytest.raises(click.ClickException, match="(?i)cred bootstrap failed"):
             _real_run_cred_bootstrap(provider="runpod")
@@ -1392,7 +1579,7 @@ class TestRunCredBootstrap:
             return result
 
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         # If the launcher were echoing stdout, click.testing.CliRunner would surface it.
         # Here we just assert the call shape: capture_output=True, env supplied.
@@ -1415,7 +1602,8 @@ class TestNumWorkersConfigPrecedence:
 
     def test_cli_num_workers_drives_fan_out(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1426,13 +1614,14 @@ class TestNumWorkersConfigPrecedence:
         TestNumWorkersFanOut._setup_n_workers_mock(mock_sky, n=2)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--num-workers",
             "2",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -1440,16 +1629,24 @@ class TestNumWorkersConfigPrecedence:
 
     def test_default_when_cli_omitted(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """The fixture's config_yaml has no `num_workers`, and no `--num-workers` is passed — the
+        """The fixture's experiment has no `num_workers`, and no `--num-workers` is passed — the
         schema default (1) drives a single-cluster fan-out."""
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
 
         assert result.exit_code == 0, result.output
         assert mock_sky.launch.call_count == 1
@@ -1465,7 +1662,8 @@ class TestDispatchMode:
 
     def test_local_flag_clears_inherited_api_server_endpoint(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1478,7 +1676,13 @@ class TestDispatchMode:
         monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://stale.example.com")
 
         result = _invoke(
-            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--local"
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--local",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -1486,7 +1690,8 @@ class TestDispatchMode:
 
     def test_api_server_flag_sets_endpoint_in_os_environ(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1499,13 +1704,14 @@ class TestDispatchMode:
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--api-server",
             "https://api.example.com",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -1513,7 +1719,8 @@ class TestDispatchMode:
 
     def test_api_server_flag_strips_surrounding_whitespace(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1525,13 +1732,14 @@ class TestDispatchMode:
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--api-server",
             "  https://api.example.com  ",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -1539,7 +1747,8 @@ class TestDispatchMode:
 
     def test_api_server_flag_rejects_blank_value(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1552,13 +1761,14 @@ class TestDispatchMode:
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--api-server",
             "   ",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code != 0
@@ -1567,7 +1777,8 @@ class TestDispatchMode:
 
     def test_api_server_flag_skips_cred_bootstrap(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1592,19 +1803,20 @@ class TestDispatchMode:
             return result
 
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch._run_cred_bootstrap",
+            "src.pipeline.skypilot_launch._run_cred_bootstrap",
             _real_run_cred_bootstrap,
         )
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
             "smoke-job-1",
             "--api-server",
             "https://api.example.com",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -1612,7 +1824,8 @@ class TestDispatchMode:
 
     def test_local_flag_runs_cred_bootstrap_even_with_inherited_endpoint(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1634,13 +1847,19 @@ class TestDispatchMode:
             return result
 
         monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch._run_cred_bootstrap",
+            "src.pipeline.skypilot_launch._run_cred_bootstrap",
             _real_run_cred_bootstrap,
         )
-        monkeypatch.setattr("pipeline.entrypoints.skypilot_launch.subprocess.run", fake_run)
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.run", fake_run)
 
         result = _invoke(
-            config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1", "--local"
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--local",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code == 0, result.output
@@ -1648,7 +1867,8 @@ class TestDispatchMode:
 
     def test_both_flags_passed_is_rejected(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1658,7 +1878,7 @@ class TestDispatchMode:
         """`--api-server` and `--local` are mutually exclusive — a usage error before sky.* is
         touched."""
         result = _invoke(
-            config_yaml,
+            experiment,
             template_yaml,
             env_file,
             "--cluster-name",
@@ -1666,6 +1886,7 @@ class TestDispatchMode:
             "--api-server",
             "https://api.example.com",
             "--local",
+            fake_plugin=fake_plugin,
         )
 
         assert result.exit_code != 0
@@ -1674,7 +1895,8 @@ class TestDispatchMode:
 
     def test_neither_flag_preserves_inherited_endpoint(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1686,14 +1908,22 @@ class TestDispatchMode:
         backward-compat with workflows that already rely on env-var passthrough."""
         monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://inherited.example.com")
 
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
 
         assert result.exit_code == 0, result.output
         assert os.environ.get("SKYPILOT_API_SERVER_ENDPOINT") == "https://inherited.example.com"
 
     def test_neither_flag_with_unset_endpoint_leaves_it_unset(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         env_file: Path,
         patch_materialize_io: None,
@@ -1704,7 +1934,14 @@ class TestDispatchMode:
         """No flag and no inherited env var → still no env var (no surprise default)."""
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
 
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
 
         assert result.exit_code == 0, result.output
         assert "SKYPILOT_API_SERVER_ENDPOINT" not in os.environ
@@ -1720,7 +1957,8 @@ class TestWorkerEnvToOsEnvironBridge:
 
     def test_env_file_prefixed_keys_bridge_to_os_environ(
         self,
-        config_yaml: Path,
+        experiment: str,
+        fake_plugin: Path,
         template_yaml: Path,
         tmp_path: Path,
         patch_materialize_io: None,
@@ -1746,11 +1984,16 @@ class TestWorkerEnvToOsEnvironBridge:
             ):
                 captured[key] = os.environ.get(key, "<unset>")
 
-        monkeypatch.setattr(
-            "pipeline.entrypoints.skypilot_launch.subprocess.check_call", fake_rclone
-        )
+        monkeypatch.setattr("src.pipeline.skypilot_launch.subprocess.check_call", fake_rclone)
 
-        result = _invoke(config_yaml, template_yaml, env_file, "--cluster-name", "smoke-job-1")
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
 
         assert result.exit_code == 0, result.output
         assert captured["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "ak-from-env"
