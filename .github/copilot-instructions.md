@@ -31,11 +31,14 @@ assigned issue matches one of these workflows, follow the runbook step by
 step:
 
 - [`.github/agents/lint-cleanup.md`](agents/lint-cleanup.md) — clean up
-  pre-existing lint violations in one legacy file from the exclusion lists in
-  `.pre-commit-config.yaml`. Tracked in
-  [#25](https://github.com/tinaudio/synth-setter/issues/25). **Trigger:** any
-  issue that references #25 as its parent, or whose body says "apply
-  `.github/agents/lint-cleanup.md` to `<file>`".
+  pre-existing lint violations in one legacy file from the lint-exclusion
+  lists tracked in [#25](https://github.com/tinaudio/synth-setter/issues/25).
+  Those lists live in `.pre-commit-config.yaml`'s `exclude:` blocks **and** in
+  `pyproject.toml`'s `[tool.pydoclint].exclude` and
+  `[tool.ruff.lint.per-file-ignores]` — graduating a file means clearing it
+  from every list it appears in. **Trigger:** any issue that references #25
+  as its parent, or whose body says "apply `.github/agents/lint-cleanup.md`
+  to `<file>`".
 
 When in doubt, if an issue does not match a known runbook, follow the general
 contributor flow from `CLAUDE.md` — branch, commit, run `make test-fast`,

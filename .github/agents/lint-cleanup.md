@@ -22,14 +22,14 @@ Only formatting, docstrings, and lint fixes. **No functional changes.**
 
 ## Workflow
 
-For each file listed in the `exclude` blocks of `pyright`, `interrogate`, `pydoclint`, `shellcheck`, `codespell`, and other hooks in `.pre-commit-config.yaml` (ruff per-file-ignores and `[tool.pydoclint].exclude` live in `pyproject.toml`):
+For each file listed in any `exclude:` block in `.pre-commit-config.yaml` (e.g. `pyright`, `interrogate`, `shellcheck`, `codespell`) **or** under `[tool.pydoclint].exclude` or `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` (pydoclint and ruff configure their path-excludes there, not in the pre-commit config):
 
 1. **Create a branch**: `chore/lint-cleanup/<module-name>` (e.g., `chore/lint-cleanup/surge-datamodule`)
 2. **Run hooks on the file**, e.g. `interrogate`
 3. **Auto-fix what you can**: `ruff check --fix` and `docformatter --in-place` handle most formatting issues automatically
 4. **Manually fix remaining violations**:
    - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`) — and must pass `pydoclint` DOC1xx/DOC2xx/DOC5xx (signature ↔ docstring consistency)
-5. **Remove the file from all `exclude` blocks** in `.pre-commit-config.yaml` **and from `[tool.pydoclint].exclude` in `pyproject.toml`** (pydoclint's path-exclude list lives there, not in the pre-commit config)
+5. **Remove the file from every exclusion list it appears in.** Check `.pre-commit-config.yaml`'s `exclude:` blocks **and** `pyproject.toml`'s `[tool.pydoclint].exclude` and `[tool.ruff.lint.per-file-ignores]`. A single file may appear in more than one list (e.g. excluded by `interrogate` in pre-commit *and* by `ANN001` per-file-ignore in ruff) — graduating the file means clearing every entry.
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
 7. **Run tests**: `make test-fast` — the quick CPU suite (excludes `slow`, `gpu`, `mps`, `requires_vst`) must still pass as a smoke check; lint-only changes shouldn't affect behavior
 8. **Commit**: Use conventional commits format: `chore(lint): clean up <filename>`

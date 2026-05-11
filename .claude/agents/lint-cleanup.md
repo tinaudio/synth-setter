@@ -1,6 +1,6 @@
 ---
 name: lint-cleanup
-description: "Use this agent to clean up pre-existing lint violations in one legacy file from the synth-setter exclusion lists tracked in issue #25. Trigger when the user asks to clean up lint for a specific file, work the #25 checklist, remove a file from `.pre-commit-config.yaml`'s `exclude` blocks, or add docstrings to a legacy module. Follows the canonical workflow in `.github/agents/lint-cleanup.md` — one file per PR, no functional changes, branch `chore/lint-cleanup/<name>`, conventional `chore(lint):` commit, `Refs #25` in the PR body."
+description: "Use this agent to clean up pre-existing lint violations in one legacy file from the synth-setter exclusion lists tracked in issue #25. Trigger when the user asks to clean up lint for a specific file, work the #25 checklist, remove a file from the lint-exclusion lists in `.pre-commit-config.yaml` or `pyproject.toml` (`[tool.pydoclint].exclude`, `[tool.ruff.lint.per-file-ignores]`), or add docstrings to a legacy module. Follows the canonical workflow in `.github/agents/lint-cleanup.md` — one file per PR, no functional changes, branch `chore/lint-cleanup/<name>`, conventional `chore(lint):` commit, `Refs #25` in the PR body."
 tools: Read, Edit, Bash, Grep, Glob
 ---
 
