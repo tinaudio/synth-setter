@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778482078002,
+  "lastUpdate": 1778482080050,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2323,6 +2323,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 13.562267545599997,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b4830f755d99be27f99869c4cb7067cbe5296864",
+          "message": "fix(evaluation): clamp compute_rms denominator to defuse MPS pred.wav silence flake (#899)\n\n* fix(testing): clamp compute_rms denominator to defuse MPS pred.wav silence flake\n\n`test_train_eval_surge_xt[mps]` intermittently failed with `pred.wav is silent`\nbecause MPS has non-deterministic ops and a 1-step-trained model occasionally\npredicted params Surge XT renders below -120 dBFS. The silence assertion\nexisted only as a defensive proxy for `compute_rms`'s `0/0 → NaN` when\n`pred_norm = 0`.\n\nMove the protection into `compute_rms` itself (matches the epsilon-clip\npattern already used in `compute_sot`), so silent pred yields\n`cosine_sim = 0` rather than NaN. Drop the pred.wav silence assertion; keep\nthe target.wav check (target silence would be a real bug).\n\nReturning 0 is within the natural [0, 1] range of cosine similarity for\nnon-negative vectors and correctly penalizes silent predictions; it cannot\nbe gamed upward. No consumer relies on NaN-as-marker.\n\nCloses #898\n\n* fix(testing): short-circuit compute_rms underflow to actually return 0\n\nPer Copilot review on PR #899: the prior commit logged \"returning 0\" on\ndenominator underflow but still computed ``dot/np.clip(denom, 1e-12, None)``,\nwhich only collapsed to 0 when the numerator was exactly 0 (bit-silent pred).\nFor quiet-but-non-zero inputs the clamped division returned an unbounded\nsmall value, contradicting the warning text and the PR's documented intent.\n\nMove the clamp branch to an explicit ``return 0.0`` and add a regression test\nwith ``target = pred = uniform 1e-7`` that would have returned ~0.4 pre-fix.",
+          "timestamp": "2026-05-11T02:33:58-04:00",
+          "tree_id": "87433cbbb9491ed60b0129b4d29bc731c66dc02a",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b4830f755d99be27f99869c4cb7067cbe5296864"
+        },
+        "date": 1778482079792,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.944422721862793,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.720653077214956,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.012544241733849049,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.003511965274810791,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.2369418144226074,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 20.105641074799998,
             "unit": "seconds"
           }
         ]
