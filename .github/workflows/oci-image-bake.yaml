@@ -68,7 +68,11 @@ jobs:
   bake:
     name: Bake OCI image
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Worst-case budget: launch_deadline (20m) + SOFTSTOP wait (20m) +
+    # image_create timeout (30m) + checkout/install/teardown overhead (~8m) ≈
+    # 78m. 120m leaves headroom in case an operator bumps any of the input
+    # timeouts.
+    timeout-minutes: 120
     env:
       SOURCE_TEMPLATE: ${{ inputs.source_template }}
       WORKER_IMAGE: tinaudio/synth-setter:${{ inputs.worker_image_tag }}
