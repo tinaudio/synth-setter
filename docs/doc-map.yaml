@@ -274,6 +274,8 @@ docs:
         scope: "testing"
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless X11/Xvfb wrapper bootstrapped by test-full-* / test-vst-cpu on Linux"
+      - pattern: "tests/infra/**"
+        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, act --list parse"
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md
