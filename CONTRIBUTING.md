@@ -230,7 +230,12 @@ Every PR must:
 ### PR title
 
 Use the same conventional commit format as your commit message (e.g.,
-`feat: add parameter search`, `fix: correct shard validation`).
+`feat(search): add random preset parameter sweep`,
+`fix(pipeline): correct shard checksum validation`). The title must stand
+on its own — a reader who has not opened the linked issue should be able
+to tell from the title alone what part of the system the PR touches and
+what concrete change it makes. See `CLAUDE.md` § "PR Titles" for the full
+rule and worked examples.
 
 ## Code of conduct
 
