@@ -237,20 +237,39 @@ fragment = os.environ.pop("SYNTH_UPSERT_FRAGMENT")
 path = Path(path_str)
 existing = {}
 if path.is_file() and path.stat().st_size > 0:
-    existing = yaml.safe_load(path.read_text()) or {}
+    try:
+        raw = path.read_text()
+    except UnicodeDecodeError as exc:
+        sys.exit(
+            f"upsert_sky_config_key[{key}]: {path} is not valid UTF-8 ({exc}); "
+            f"refusing to upsert. Fix or remove the file."
+        )
+    try:
+        existing = yaml.safe_load(raw) or {}
+    except yaml.YAMLError as exc:
+        sys.exit(
+            f"upsert_sky_config_key[{key}]: {path} is not valid YAML ({exc.__class__.__name__}); "
+            f"refusing to upsert. Fix or remove the file."
+        )
 if not isinstance(existing, dict):
     sys.exit(
-        f"upsert_sky_config_key: {path} is not a YAML mapping at the top level "
+        f"upsert_sky_config_key[{key}]: {path} is not a YAML mapping at the top level "
         f"(got {type(existing).__name__}); refusing to upsert. Fix or remove the file."
     )
-fragment_doc = yaml.safe_load(fragment) or {}
+try:
+    fragment_doc = yaml.safe_load(fragment) or {}
+except yaml.YAMLError as exc:
+    sys.exit(
+        f"upsert_sky_config_key[{key}]: caller-supplied fragment is not valid YAML "
+        f"({exc.__class__.__name__})"
+    )
 if not isinstance(fragment_doc, dict):
     sys.exit(
-        f"upsert_sky_config_key: fragment is not a YAML mapping "
+        f"upsert_sky_config_key[{key}]: fragment is not a YAML mapping "
         f"(got {type(fragment_doc).__name__})"
     )
 if key not in fragment_doc:
-    sys.exit(f"upsert_sky_config_key: fragment missing top-level {key!r}")
+    sys.exit(f"upsert_sky_config_key[{key}]: fragment missing top-level {key!r}")
 existing[key] = fragment_doc[key]
 path.write_text(yaml.safe_dump(existing, sort_keys=False))
 os.chmod(path, 0o600)

@@ -349,6 +349,37 @@ class TestProviderGating:
         assert str(sky_config) in result.stderr
         assert "Traceback" not in result.stderr
 
+    def test_unparseable_sky_config_fails_with_clear_yaml_error(self, tmp_path: Path) -> None:
+        """A pre-existing ``~/.sky/config.yaml`` whose contents aren't valid YAML must fail the
+        upsert with a clear, named error citing the YAMLError class — not a bare PyYAML
+        traceback."""
+        sky_dir = tmp_path / ".sky"
+        sky_dir.mkdir()
+        sky_config = sky_dir / "config.yaml"
+        # Unbalanced flow sequence — yaml.safe_load raises ScannerError.
+        sky_config.write_text("oci: [unterminated\n")
+
+        result = _run(tmp_path, R2_ENV, "--provider", "local", expect_success=False)
+        assert result.returncode != 0
+        assert "not valid YAML" in result.stderr
+        assert str(sky_config) in result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_non_utf8_sky_config_fails_with_clear_decode_error(self, tmp_path: Path) -> None:
+        """A pre-existing ``~/.sky/config.yaml`` that's not valid UTF-8 must fail the upsert with a
+        clear, named UnicodeDecodeError-style message — not a bare Python traceback."""
+        sky_dir = tmp_path / ".sky"
+        sky_dir.mkdir()
+        sky_config = sky_dir / "config.yaml"
+        # Latin-1 encoded byte that's invalid as the start of a UTF-8 sequence.
+        sky_config.write_bytes(b"\xff\xfe oci: foo\n")
+
+        result = _run(tmp_path, R2_ENV, "--provider", "local", expect_success=False)
+        assert result.returncode != 0
+        assert "not valid UTF-8" in result.stderr
+        assert str(sky_config) in result.stderr
+        assert "Traceback" not in result.stderr
+
     def test_unknown_provider_fails(self, tmp_path: Path) -> None:
         """An unknown --provider value (e.g. aws) is rejected with a clear error."""
         result = _run(tmp_path, R2_ENV, "--provider", "aws", expect_success=False)

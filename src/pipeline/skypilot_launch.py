@@ -564,8 +564,9 @@ def main(
     if provider == "local":
         sky.check.check(clouds=["kubernetes"], quiet=False)
 
-    # Single-worker keeps the unsuffixed cluster name for backward compatibility with debug
-    # workflows / CI dashboards that key off it; multi-worker uses -rN suffixes.
+    # Single-worker keeps the unsuffixed managed-job name (the value passed to
+    # `sky.jobs.launch(name=...)`) for backward compatibility with debug workflows / CI
+    # dashboards that key off it; multi-worker appends -rN per rank.
     job_names = (
         [base_cluster_name]
         if resolved_num_workers == 1
