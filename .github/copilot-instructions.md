@@ -16,8 +16,9 @@ architecture. A few rules that PRs most often violate:
 
 - Run `make format` before committing.
 - Every PR body must link a taxonomy-compliant issue via `Refs #N` /
-  `Fixes #N` / `Closes #N`. The `pr-metadata-gate.yaml` CI check enforces
-  this.
+  `Fixes #N` / `Closes #N` / `Part of #N`. The `pr-metadata-gate.yaml` CI
+  check enforces this; see `CLAUDE.md` for the authoritative list and the
+  semantics of each keyword.
 - PR titles and commit messages must follow conventional commits — gitlint
   will reject otherwise.
 - Never add "Generated with Claude Code", "Generated with Copilot", or

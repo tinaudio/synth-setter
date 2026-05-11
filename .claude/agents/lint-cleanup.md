@@ -21,7 +21,7 @@ single-sourced so edits land in one place and reach every entry point.
 - A reviewer asks for a file to be removed from `.pre-commit-config.yaml`'s
   `exclude` blocks (or `pyproject.toml`'s `per-file-ignores`).
 
-## Hard rules (cross-reference, not duplicate)
+## Quick reminders
 
 These are the rules most often forgotten. Full list is in the runbook.
 
