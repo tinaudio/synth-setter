@@ -1,81 +1,99 @@
-# CI Triage Agent — Operator Notes
+# CI Triage Agent — Local Operator Notes
 
-Autonomous Claude Code agent that triages failed workflow runs. Design and
-rationale: [#923](https://github.com/tinaudio/synth-setter/issues/923).
+A locally-invoked Claude Code agent that triages a failing GitHub Actions
+run. Design and rationale: [#923](https://github.com/tinaudio/synth-setter/issues/923).
 
-## How it fires
+> **Local-only.** Claude Code agents must run on the developer's machine —
+> there is no CI-side invocation. The helper script + prompt template are
+> designed for direct local use against `claude -p`.
 
-`.github/workflows/ci-triage.yaml` listens for `workflow_run` completion on
-the workflows in its `on.workflow_run.workflows` list (see the workflow
-file for the authoritative list). On `conclusion: failure`, the job:
+## What it does
 
-1. Skips if the failing run was on a fork (head_repository != this repo) —
-   write perms must not run against untrusted code.
-2. Skips if `CLAUDE_CODE_OAUTH_TOKEN` is unset.
-3. Skips if a `ci-triage/run-<id>` branch already exists (cooldown).
-4. Installs `act` + Claude Code CLI, writes `/tmp/triage/context.json`, then
-   invokes `claude -p` with `.github/triage/triage-prompt.md`.
+Given a failing workflow run ID, the agent:
 
-The agent's transcript is uploaded as the
-`ci-triage-transcript-<run-id>` artifact with 14-day retention.
+1. Fetches the run's failed-job logs via `gh run view --log-failed`.
+2. Classifies the failure: `flake`, `resource_starvation`, `auth`, or
+   `real_bug`.
+3. Optionally reproduces locally with `nektos/act` (for the deterministic
+   buckets).
+4. Routes to one of:
+   - **Path A** — opens a draft PR with telemetry additions (mirroring
+     [PR #876](https://github.com/tinaudio/synth-setter/pull/876)'s
+     `Snapshot sky logs` step).
+   - **Path B** — files a taxonomy-compliant tracking issue.
+   - **Path C** — re-runs a single flake.
 
-## One-time setup
+The full agent playbook lives in `triage-prompt.md`.
 
-The workflow is a no-op until you add the OAuth secret:
+## Prerequisites
+
+One-time, on your local machine:
 
 ```bash
-gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo tinaudio/synth-setter
-# paste the token when prompted
+# Claude Code CLI (local-only)
+npm install -g @anthropic-ai/claude-code
+claude --version
+
+# gh authenticated with repo write scope
+gh auth login --scopes repo
+
+# nektos/act for local reproduction (optional but recommended)
+curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh \
+  | sudo bash -s -- -b /usr/local/bin
+act --version
 ```
 
-Generate the token from a local Claude Code session:
+## Usage
+
+Given a failing run ID — copy it from the GitHub Actions UI or
+`gh run list --status failure`:
 
 ```bash
-claude setup-token
+./scripts/triage-ci.sh 25687139710
 ```
 
-(One token per repo. Rotate by re-running `setup-token` and overwriting the
-secret — old tokens stop working after rotation.)
+The helper script writes `/tmp/triage/context.json`, then pipes the prompt
+template into `claude -p`. Watch the agent's output; the final response is
+the contents of `/tmp/triage/REPORT.md` summarizing what it did.
 
-## Approving a fix PR
+To run the agent by hand without the wrapper:
+
+```bash
+# Write the context sidecar yourself:
+RUN_ID=25687139710
+REPO=tinaudio/synth-setter
+mkdir -p /tmp/triage
+gh api "repos/${REPO}/actions/runs/${RUN_ID}" \
+  --jq '{run_id: .id, name, head_branch, head_sha, conclusion, html_url, event, workflow_id}' \
+  > /tmp/triage/run.json
+jq -n \
+  --arg repo "${REPO}" \
+  --arg branch "ci-triage/run-${RUN_ID}" \
+  --slurpfile run /tmp/triage/run.json \
+  '{repo: $repo, triage_branch: $branch, run: $run[0]}' \
+  > /tmp/triage/context.json
+
+# Then invoke the agent:
+claude -p "$(cat .github/triage/triage-prompt.md)" \
+  --max-turns 30 \
+  --permission-mode acceptEdits
+```
+
+## Reviewing what the agent produced
 
 The agent only opens **draft** PRs. To merge:
 
 1. Open the PR and read the body — the agent records its classification,
-   reproduction outcome (did `act` repro?), and links to the transcript
-   artifact.
-2. Download the transcript artifact and skim `REPORT.md`. If the agent's
-   reasoning is sound, mark the PR ready for review and follow the normal
-   review flow.
-3. If the agent's reasoning is wrong, close the PR and `gh issue create` a
-   bug against this triage workflow with a link to the transcript.
+   reproduction outcome (did `act` repro?), and a link to the failing run.
+2. Skim `/tmp/triage/REPORT.md` from your local triage session.
+3. If the agent's reasoning is sound, mark the PR ready for review and
+   follow the normal review flow.
+4. If the agent's reasoning is wrong, close the PR (and the branch) and
+   file a bug against the prompt template with a link to what the agent
+   actually did vs. what was correct.
 
 The agent will never auto-merge. The `Auto-approve PR` workflow does not
 approve `ci-triage/*` PRs because they're drafts.
-
-## Disabling the agent
-
-Disable the workflow without removing files:
-
-```bash
-gh workflow disable "CI Triage Agent" --repo tinaudio/synth-setter
-```
-
-Or delete the `CLAUDE_CODE_OAUTH_TOKEN` secret — same effect, but the job
-will still spin up and bail out in the token-check step.
-
-## Manual re-trigger
-
-If a failure slipped through (or the agent crashed mid-run), re-trigger
-against a specific run ID:
-
-```bash
-gh workflow run ci-triage.yaml --repo tinaudio/synth-setter \
-  -f run_id=<failing-run-id>
-```
-
-Delete the existing `ci-triage/run-<id>` branch first if you want to bypass
-the cooldown.
 
 ## What the agent will and will not do
 
@@ -92,6 +110,7 @@ It **will**:
 
 It **will not**:
 
+- Run in GitHub Actions or any CI environment (Claude Code is local-only).
 - Push to `main`, `release/*`, or `dev`.
 - Edit application code, test code, or production configs in a PR. Only
   telemetry/logging changes go in via the agent — anything else gets an
@@ -99,12 +118,3 @@ It **will not**:
 - Modify dependency versions.
 - Rotate or read secrets.
 - Mark its own PRs ready for review or apply auto-merge labels.
-
-## Cost notes
-
-Every failed run on the watched workflows fires this job. The job is
-~5 minutes (mostly the agent), so cost ~= (failure rate) × (token cost per
-session, capped by `--max-turns` in `.github/workflows/ci-triage.yaml`).
-Watch the `Actions` minutes budget; if it gets noisy, trim the `workflows:`
-list in `ci-triage.yaml` to the high-value ones and let small flakes go
-untriaged.

@@ -296,14 +296,14 @@ docs:
         covers: "fixed_synth_params_list / fixed_note_params_list optional path used to render captured patches; mel_spec shape (2,128,401), audio dtype float16"
         scope: "interactive"
 
-  # ── CI triage agent operator notes ──────────────────────────────
+  # ── CI triage agent operator notes (local-only invocation) ──────
   - doc: .github/triage/README.md
-    description: CI triage agent operator notes — watched workflows, OAuth secret, fix-PR review flow
+    description: Local CI triage agent operator notes — prerequisites, scripts/triage-ci.sh usage, fix-PR review flow
     sources:
-      - pattern: ".github/workflows/ci-triage.yaml"
-        covers: "workflow_run watched-workflow list, cooldown branch scheme, OAuth token gate, claude -p invocation, transcript artifact"
+      - pattern: "scripts/triage-ci.sh"
+        covers: "Helper wrapper — context.json sidecar build, claude -p invocation, --add-dir scope"
       - pattern: ".github/triage/triage-prompt.md"
-        covers: "Headless agent playbook — classification buckets, act reproduction, Path A/B/C routing, hard rules"
+        covers: "Local agent playbook — classification buckets, act reproduction, Path A/B/C routing, hard rules"
 
   # ── rclone reference (placeholder — doc does not exist yet) ─────
   # - doc: docs/reference/rclone.md
