@@ -348,6 +348,7 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     model_config = SettingsConfigDict(
         cli_parse_args=True,
         cli_prog_name="generate_vst_dataset",
+        cli_kebab_case=False,
         strict=True,
         extra="forbid",
     )
