@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778551704043,
+  "lastUpdate": 1778551706249,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3038,6 +3038,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.595799098500004,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a4427d4aad89ad22a2a68b010defd7fb68f1c94",
+          "message": "docs: convert remaining Google-style docstring sections to Sphinx (#952)\n\n* docs: convert remaining Google-style docstring sections to Sphinx\n\nThe repo's configured docstring style is Sphinx (`[tool.docformatter]` and\n`[tool.pydoclint]` both set to sphinx) and the bulk of the codebase\nalready uses `:param:` / `:return:` / `:raises:`. A handful of files in\n`src/` and `pipeline/` still had Google-style `Args:` / `Returns:` /\n`Raises:` / `Example:` section headers, showing up as DOC003 violations\nin pydoclint's audit (#938).\n\nThis converts them in place, matching the rest of the codebase:\n- `Args:` blocks → one `:param <name>: ...` line per arg\n- `Returns:` blocks → `:return: ...` (dominant form, 7 vs 2 over `:returns:`)\n- `Raises:` blocks → one `:raises <Exc>: ...` line per exception\n- `Example:` block in `src/utils/utils.py` → `.. code-block:: python` directive\n\nNo behavior changes; only docstring text. `scripts/` and `tests/` are out\nof scope per #938's chunked remediation plan.\n\nRefs #938.\n\n* docs(wandb-integration): shift line refs after src/utils/utils.py docstring conversion\n\nThe Google-→-Sphinx conversion in src/utils/utils.py shrank the\ntask_wrapper docstring by one line, shifting code below it up by one.\nTwo line-range refs in wandb-integration.md were now off by one:\n\n- task_wrapper wandb.finish() finally block: 102-107 → 101-106\n- watch_gradients source range: 138-149 → 137-148\n\nCaught by the doc-drift advisory on PR #952. Refs #938.\n\n* docs(skypilot-launch): clarify _run_workers :return: is a list\n\nThe Sphinx-style :return: introduced in the prior commit kept the\noriginal Google-style wording, which read like a scalar even though\nthe function returns list[int]. Spelled out that it's a list with one\nentry per rank, in cluster_names order, and called out the ``-1``\nsentinel and tail-mode behavior referenced elsewhere in the docstring.\n\nRefs #938.",
+          "timestamp": "2026-05-11T21:55:39-04:00",
+          "tree_id": "5eb292e7917966ef9dd341cb37fe3f84722833df",
+          "url": "https://github.com/tinaudio/synth-setter/commit/6a4427d4aad89ad22a2a68b010defd7fb68f1c94"
+        },
+        "date": 1778551705653,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.572906255722046,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.044670149385929,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.010026505216956139,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.037553608417510986,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.8529987335205078,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 15.484668838300001,
             "unit": "seconds"
           }
         ]
