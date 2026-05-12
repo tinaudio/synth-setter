@@ -829,7 +829,7 @@ class TestJobNameAlias:
     using it emits a one-line deprecation notice on stderr so callers know to migrate.
     """
 
-    def test_job_name_sets_cluster_name_kwarg(
+    def test_job_name_sets_managed_job_name_kwarg(
         self,
         experiment: str,
         fake_plugin: Path,
@@ -839,7 +839,7 @@ class TestJobNameAlias:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`--job-name foo` flows through to ``sky.launch(cluster_name='foo', ...)``."""
+        """`--job-name foo` flows through to ``sky.jobs.launch(name='foo', ...)``."""
         result = _invoke(
             experiment,
             template_yaml,
@@ -849,9 +849,9 @@ class TestJobNameAlias:
             fake_plugin=fake_plugin,
         )
         assert result.exit_code == 0, result.output
-        assert mock_sky.launch.call_args.kwargs["cluster_name"] == "smoke-job-1"
+        assert mock_sky.jobs.launch.call_args.kwargs["name"] == "smoke-job-1"
 
-    def test_cluster_name_alias_still_sets_cluster_name_kwarg(
+    def test_cluster_name_alias_still_sets_managed_job_name_kwarg(
         self,
         experiment: str,
         fake_plugin: Path,
@@ -872,7 +872,7 @@ class TestJobNameAlias:
             fake_plugin=fake_plugin,
         )
         assert result.exit_code == 0, result.output
-        assert mock_sky.launch.call_args.kwargs["cluster_name"] == "smoke-job-1"
+        assert mock_sky.jobs.launch.call_args.kwargs["name"] == "smoke-job-1"
 
     def test_cluster_name_alias_emits_deprecation_warning_on_stderr(
         self,
@@ -984,7 +984,7 @@ class TestJobNameValidation:
         assert result.exit_code != 0
         assert "--job-name" in result.output
         assert list(local_spec_dir.glob("*.json")) == []
-        mock_sky.launch.assert_not_called()
+        mock_sky.jobs.launch.assert_not_called()
 
     @pytest.mark.parametrize(
         "good_name",
@@ -1007,7 +1007,8 @@ class TestJobNameValidation:
         mock_sky: MagicMock,
         good_name: str,
     ) -> None:
-        """Names matching [A-Za-z0-9][A-Za-z0-9_-]{0,62} pass through to sky.launch unchanged."""
+        """Names matching [A-Za-z0-9][A-Za-z0-9_-]{0,62} pass through to sky.jobs.launch
+        unchanged."""
         result = _invoke(
             experiment,
             template_yaml,
@@ -1017,7 +1018,7 @@ class TestJobNameValidation:
             fake_plugin=fake_plugin,
         )
         assert result.exit_code == 0, result.output
-        assert mock_sky.launch.call_args.kwargs["cluster_name"] == good_name
+        assert mock_sky.jobs.launch.call_args.kwargs["name"] == good_name
 
 
 class TestNoTailMode:
