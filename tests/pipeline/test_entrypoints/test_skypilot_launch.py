@@ -821,6 +821,126 @@ class TestMainCli:
         )
 
 
+class TestJobNameAlias:
+    """`--job-name` is the primary launcher flag; `--cluster-name` is a deprecated alias.
+
+    Both spellings bind to the same ``job_name`` Python parameter. The legacy ``--cluster-name``
+    is preserved so out-of-tree callers (developer scripts, ad-hoc commands) keep working, but
+    using it emits a one-line deprecation notice on stderr so callers know to migrate.
+    """
+
+    def test_job_name_sets_cluster_name_kwarg(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """`--job-name foo` flows through to ``sky.launch(cluster_name='foo', ...)``."""
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--job-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
+        assert result.exit_code == 0, result.output
+        assert mock_sky.launch.call_args.kwargs["cluster_name"] == "smoke-job-1"
+
+    def test_cluster_name_alias_still_sets_cluster_name_kwarg(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """The deprecated ``--cluster-name`` alias binds to the same parameter as ``--job-
+        name``."""
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
+        assert result.exit_code == 0, result.output
+        assert mock_sky.launch.call_args.kwargs["cluster_name"] == "smoke-job-1"
+
+    def test_cluster_name_alias_emits_deprecation_warning_on_stderr(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Using ``--cluster-name`` writes a one-line deprecation notice to stderr.
+
+        The detection scans ``sys.argv`` (Click does not record which alias
+        the caller used). ``CliRunner.invoke`` does not replace ``sys.argv``,
+        so the test sets it via monkeypatch to mirror what production sees
+        when invoked as ``python -m src.pipeline.skypilot_launch --cluster-name ...``.
+        """
+        runner = CliRunner(mix_stderr=False)
+        args = [
+            "--experiment",
+            experiment,
+            "--template",
+            str(template_yaml),
+            "--env-file",
+            str(env_file),
+            "--cluster-name",
+            "smoke-job-1",
+            f"render.plugin_path={fake_plugin}",
+        ]
+        monkeypatch.setattr("sys.argv", ["skypilot_launch", *args])
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, (result.stdout, result.stderr)
+        assert "DEPRECATION" in result.stderr
+        assert "--cluster-name" in result.stderr
+        assert "--job-name" in result.stderr
+
+    def test_job_name_does_not_emit_deprecation_warning(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The primary ``--job-name`` flag is quiet — no deprecation noise for the new name."""
+        runner = CliRunner(mix_stderr=False)
+        args = [
+            "--experiment",
+            experiment,
+            "--template",
+            str(template_yaml),
+            "--env-file",
+            str(env_file),
+            "--job-name",
+            "smoke-job-1",
+            f"render.plugin_path={fake_plugin}",
+        ]
+        monkeypatch.setattr("sys.argv", ["skypilot_launch", *args])
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, (result.stdout, result.stderr)
+        assert "DEPRECATION" not in result.stderr
+
+
 class TestNoTailMode:
     """Default `--no-tail` mode: submit each rank, print job_id + the `sky jobs logs` / `sky jobs
     cancel` commands the operator can run, then exit 0 without tailing or cancelling.
@@ -845,7 +965,7 @@ class TestNoTailMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -1116,7 +1236,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
