@@ -53,6 +53,11 @@ test-full-mps: ## MPS + CPU tests (gpu excluded). Runs serially for exclusive MP
 test-vst-cpu: ## VST tests only (slow included; gpu/mps excluded). Linux: bootstraps Xvfb.
 	$(HEADLESS_WRAPPER) pytest -m "requires_vst and not gpu and not mps"
 
+# --confcutdir avoids loading tests/conftest.py (torch/h5py/Hydra imports),
+# so this target works on a minimal host with only the stdlib + pytest.
+test-infra: ## Devcontainer + GHA invariant tests — stdlib-only, no torch/Hydra.
+	pytest tests/infra/ --confcutdir=tests/infra
+
 test-bats: ## Run BATS shell tests
 	bats --recursive tests/
 
