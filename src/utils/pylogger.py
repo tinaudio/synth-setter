@@ -32,8 +32,9 @@ class RankedLogger(logging.LoggerAdapter):
         :param level: The level to log at. Look at `logging.__init__.py` for more information.
         :param msg: The message to log.
         :param rank: The rank to log at.
-        :param args: Additional args to pass to the underlying logging function.
-        :param kwargs: Any additional keyword args to pass to the underlying logging function.
+        :param \\*args: Additional args to pass to the underlying logging function.
+        :param \\*\\*kwargs: Any additional keyword args to pass to the underlying logging function.
+        :raises RuntimeError: If ``rank_zero_only.rank`` has not been set before this call.
         """
         if self.isEnabledFor(level):
             msg, kwargs = self.process(msg, kwargs)
