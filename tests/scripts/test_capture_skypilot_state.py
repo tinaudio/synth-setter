@@ -48,7 +48,9 @@ def _run(
     :param home: Value for ``HOME`` — keeps the test hermetic so the script never
         reads the developer's real home dir even if a future change adds ~ lookups.
     :param expect_success: If True, fail the test when the script returns non-zero.
+    :raises AssertionError: If ``expect_success`` is True and the script exits non-zero.
     :returns: The completed subprocess.
+    :rtype: subprocess.CompletedProcess[str]
     """
     env: dict[str, str] = {
         "PATH": f"{shim_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
@@ -79,7 +81,10 @@ class TestRunMetadataDirRequired:
     """``RUN_METADATA_DIR`` is required — script must fail fast if missing."""
 
     def test_unset_run_metadata_dir_fails(self, tmp_path: Path) -> None:
-        """Script exits non-zero with a clear error when ``RUN_METADATA_DIR`` is unset."""
+        """Script exits non-zero with a clear error when ``RUN_METADATA_DIR`` is unset.
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and HOME.
+        """
         shim_dir = tmp_path / "shims"
         shim_dir.mkdir()
         _write_kubectl_shim(shim_dir / "kubectl", "exit 0")
@@ -88,7 +93,10 @@ class TestRunMetadataDirRequired:
         assert "RUN_METADATA_DIR" in result.stderr
 
     def test_empty_run_metadata_dir_fails(self, tmp_path: Path) -> None:
-        """Script exits non-zero when ``RUN_METADATA_DIR`` is set to the empty string."""
+        """Script exits non-zero when ``RUN_METADATA_DIR`` is set to the empty string.
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and HOME.
+        """
         shim_dir = tmp_path / "shims"
         shim_dir.mkdir()
         _write_kubectl_shim(shim_dir / "kubectl", "exit 0")
@@ -118,7 +126,11 @@ class TestBaseCaptureFiles:
 
     def test_creates_out_dir_and_base_files(self, tmp_path: Path) -> None:
         """With a no-op kubectl shim, the script still creates ``k8s_state/`` and the four cluster-
-        overview files (pods, events, nodes, pods-yaml)."""
+        overview files (pods, events, nodes, pods-yaml).
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
+            RUN_METADATA_DIR.
+        """
         shim_dir = tmp_path / "shims"
         shim_dir.mkdir()
         _write_kubectl_shim(shim_dir / "kubectl", "exit 0")
@@ -132,7 +144,11 @@ class TestBaseCaptureFiles:
             assert (out_dir / expected).exists(), f"missing {expected}"
 
     def test_tolerates_kubectl_failures(self, tmp_path: Path) -> None:
-        """If kubectl exits non-zero on every call, the script still succeeds (best-effort)."""
+        """If kubectl exits non-zero on every call, the script still succeeds (best-effort).
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
+            RUN_METADATA_DIR.
+        """
         shim_dir = tmp_path / "shims"
         shim_dir.mkdir()
         _write_kubectl_shim(shim_dir / "kubectl", "echo 'kubectl failed' >&2; exit 1")
@@ -168,7 +184,11 @@ class TestWorkerPodCapture:
     """Worker pods (non-controller pods in default namespace) get per-pod describe files."""
 
     def test_workers_present_creates_describe_files(self, tmp_path: Path) -> None:
-        """Two worker pods → two describe-worker-<name>.txt files; controller is filtered out."""
+        """Two worker pods → two describe-worker-<name>.txt files; controller is filtered out.
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
+            RUN_METADATA_DIR.
+        """
         shim_dir = tmp_path / "shims"
         shim_dir.mkdir()
         _write_kubectl_shim(shim_dir / "kubectl", _WORKER_LISTING_SHIM)
@@ -184,7 +204,11 @@ class TestWorkerPodCapture:
         assert not (out_dir / "describe-worker-none.txt").exists()
 
     def test_no_workers_writes_sentinel(self, tmp_path: Path) -> None:
-        """Empty `kubectl get pods -n default` → describe-worker-none.txt sentinel."""
+        """Empty `kubectl get pods -n default` → describe-worker-none.txt sentinel.
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
+            RUN_METADATA_DIR.
+        """
         shim_dir = tmp_path / "shims"
         shim_dir.mkdir()
         _write_kubectl_shim(shim_dir / "kubectl", _NO_WORKERS_SHIM)
@@ -234,7 +258,11 @@ class TestControllerPodCapture:
     """The sky-jobs-controller pod gets describe + logs + on-pod provision.log capture."""
 
     def test_controller_present_creates_describe_and_logs(self, tmp_path: Path) -> None:
-        """Controller pod found → describe + logs + previous-logs + provision-log files exist."""
+        """Controller pod found → describe + logs + previous-logs + provision-log files exist.
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
+            RUN_METADATA_DIR.
+        """
         shim_dir = tmp_path / "shims"
         shim_dir.mkdir()
         _write_kubectl_shim(shim_dir / "kubectl", _CONTROLLER_PRESENT_SHIM)
@@ -258,7 +286,11 @@ class TestControllerPodCapture:
         )
 
     def test_controller_absent_writes_sentinel(self, tmp_path: Path) -> None:
-        """No sky-jobs-controller pod → describe-controller.txt with sentinel message."""
+        """No sky-jobs-controller pod → describe-controller.txt with sentinel message.
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
+            RUN_METADATA_DIR.
+        """
         shim_dir = tmp_path / "shims"
         shim_dir.mkdir()
         _write_kubectl_shim(shim_dir / "kubectl", _CONTROLLER_ABSENT_SHIM)
@@ -290,7 +322,10 @@ exit 0
 def test_worker_name_with_unsafe_chars_is_sanitized(tmp_path: Path) -> None:
     """Worker pod names with `.` or `/` are sanitized to `_` for the filename, so the describe file
     path is always a single safe basename — no accidental directory traversal from a pod name
-    containing `/`."""
+    containing `/`.
+
+    :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and RUN_METADATA_DIR.
+    """
     shim_dir = tmp_path / "shims"
     shim_dir.mkdir()
     _write_kubectl_shim(shim_dir / "kubectl", _WORKER_WEIRD_NAME_SHIM)
@@ -322,7 +357,11 @@ def test_script_exits_zero_under_various_kubectl_behaviors(
     shim_body: str,
 ) -> None:
     """Whatever kubectl does (success, success-with-output, failure), the script completes
-    successfully — best-effort tolerance is a contract."""
+    successfully — best-effort tolerance is a contract.
+
+    :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and RUN_METADATA_DIR.
+    :param shim_body: Parametrized bash body installed as the kubectl shim.
+    """
     shim_dir = tmp_path / "shims"
     shim_dir.mkdir()
     _write_kubectl_shim(shim_dir / "kubectl", shim_body)
