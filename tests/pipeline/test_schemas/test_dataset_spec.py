@@ -10,12 +10,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from src.data.vst import param_specs
 from src.pipeline.schemas.spec import (
     DatasetSpec,
     RenderConfig,
     ShardSpec,
 )
+from synth_setter.data.vst import param_specs
 
 FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -483,7 +483,7 @@ class TestGitHelpersGraceful:
 
 
 # ---------------------------------------------------------------------------
-# Bare import is launcher-pure — no pedalboard / src.data.vst.core load
+# Bare import is launcher-pure — no pedalboard / synth_setter.data.vst.core load
 # ---------------------------------------------------------------------------
 
 
@@ -492,9 +492,9 @@ class TestSpecImportStaysLauncherPure:
 
     def test_bare_spec_import_does_not_pull_data_vst_core(self) -> None:
         """`import src.pipeline.schemas.spec` alone must not transitively load
-        ``src.data.vst.core`` or ``pedalboard``.
+        ``synth_setter.data.vst.core`` or ``pedalboard``.
 
-        ``spec.py``'s only ``src.data.vst`` import is inside
+        ``spec.py``'s only ``synth_setter.data.vst`` import is inside
         ``DatasetSpec.num_params`` and runs lazily. If it is re-promoted to
         module level — or another heavy import is added at module load — this
         test fails immediately, preserving the launcher's interpreter-only
@@ -503,7 +503,7 @@ class TestSpecImportStaysLauncherPure:
         script = (
             "import sys\n"
             "import src.pipeline.schemas.spec  # noqa: F401\n"
-            "for name in ('src.data.vst.core', 'src.data.vst', 'pedalboard'):\n"
+            "for name in ('synth_setter.data.vst.core', 'synth_setter.data.vst', 'pedalboard'):\n"
             "    assert name not in sys.modules, (\n"
             "        f'{name!r} leaked into spec module import; '\n"
             "        f'this breaks the launcher-pure invariant'\n"
@@ -533,7 +533,7 @@ class TestSpecConstructionStaysPedalboardFree:
     """Importing schemas + building/serializing a DatasetSpec must not load pedalboard.
 
     Run in a fresh subprocess so the parent test session — where earlier tests
-    import ``src.data.vst.core`` (and other modules that pull pedalboard
+    import ``synth_setter.data.vst.core`` (and other modules that pull pedalboard
     transitively) — does not poison the check.
     """
 

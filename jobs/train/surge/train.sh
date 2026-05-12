@@ -24,5 +24,5 @@ EXPERIMENT=$(sed -n "${SGE_TASK_ID}p" jobs/train/surge/experiments.txt)
 rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
-python src/train.py experiment=$EXPERIMENT \
+python -m synth_setter.cli.train experiment=$EXPERIMENT \
   seed=999

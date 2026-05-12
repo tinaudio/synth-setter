@@ -18,6 +18,6 @@ tags:
 
 callbacks:
   log_per_param_mse:
-    _target_: src.utils.callbacks.LogPerParamMSE
+    _target_: synth_setter.utils.callbacks.LogPerParamMSE
     param_spec: surge_xt
   plot_proj_ii: null

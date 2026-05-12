@@ -4,7 +4,7 @@ from typing import Literal, Optional, Tuple, Union
 import torch
 from lightning import LightningDataModule
 
-from src.data.ot import ot_collate_fn, regular_collate_fn
+from synth_setter.data.ot import ot_collate_fn, regular_collate_fn
 
 
 def _sample_freqs(

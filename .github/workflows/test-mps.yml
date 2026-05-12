@@ -66,7 +66,7 @@ jobs:
       # the cask install or symlink is broken before the full pytest run.
       - name: Smoke-test Surge XT plugin load
         run: |
-          python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
+          python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
 
       # Confirm MPS is actually visible to PyTorch — without this, the parametrized
       # `accelerator` fixture in tests/conftest.py would hardfail every collected

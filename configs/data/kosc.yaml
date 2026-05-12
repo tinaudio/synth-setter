@@ -1,4 +1,4 @@
-_target_: src.data.kosc_datamodule.KOscDataModule
+_target_: synth_setter.data.kosc_datamodule.KOscDataModule
 k: 1
 signal_length: 1024
 sort_frequencies: false

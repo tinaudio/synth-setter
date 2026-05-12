@@ -15,9 +15,9 @@ from tqdm import trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from src.pipeline.schemas.spec import RenderConfig  # noqa: E402
-from src.data.vst import param_specs  # noqa
-from src.data.vst.core import render_params  # noqa
-from src.data.vst.param_spec import ParamSpec  # noqa
+from synth_setter.data.vst import param_specs  # noqa
+from synth_setter.data.vst.core import render_params  # noqa
+from synth_setter.data.vst.param_spec import ParamSpec  # noqa
 
 
 @dataclass

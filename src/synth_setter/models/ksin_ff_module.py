@@ -3,8 +3,8 @@ from typing import Any
 import torch
 from lightning import LightningModule
 
-from src.metrics import ChamferDistance, LinearAssignmentDistance, LogSpectralDistance
-from src.models.components.loss import ChamferLoss
+from synth_setter.metrics import ChamferDistance, LinearAssignmentDistance, LogSpectralDistance
+from synth_setter.models.components.loss import ChamferLoss
 
 
 class KSinFeedForwardModule(LightningModule):

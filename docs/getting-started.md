@@ -157,14 +157,14 @@ do not need any external datasets, VST plugins, or cloud storage.
 ### 3a. Train a model
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse trainer.max_steps=5000 trainer.min_steps=null
+python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer.max_steps=5000 trainer.min_steps=null
 ```
 
 > **No CUDA GPU?** The default trainer is `gpu` (CUDA). On CPU-only machines use
 > `trainer=cpu`; on Apple Silicon use `trainer=mps`:
 >
 > ```bash
-> python src/train.py experiment=kosc/ffn_mse trainer=cpu trainer.max_steps=5000 trainer.min_steps=null
+> python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu trainer.max_steps=5000 trainer.min_steps=null
 > ```
 
 This runs a feed-forward network with MSE loss on the k-osc task for 5,000
@@ -198,7 +198,7 @@ The `configs/experiment/kosc/` directory contains several variants:
 Run any of them with:
 
 ```bash
-python src/train.py experiment=kosc/<variant>
+python -m synth_setter.cli.train experiment=kosc/<variant>
 ```
 
 ______________________________________________________________________
@@ -321,7 +321,7 @@ in the codebase.
 4. Run training as usual — metrics flow to W&B + CSV + TensorBoard:
 
    ```bash
-   python src/train.py experiment=kosc/ffn_mse
+   python -m synth_setter.cli.train experiment=kosc/ffn_mse
    ```
 
 **Disabled — drop W&B from the default compose:** comment out `- wandb` in
@@ -329,7 +329,7 @@ in the codebase.
 or `logger=tensorboard`:
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse logger=csv
+python -m synth_setter.cli.train experiment=kosc/ffn_mse logger=csv
 ```
 
 Without `wandb login` (or `WANDB_API_KEY`), the W&B logger will prompt for
@@ -445,22 +445,22 @@ Override any config value from the command line:
 
 ```bash
 # Change batch size
-python src/train.py experiment=kosc/ffn_mse data.batch_size=32
+python -m synth_setter.cli.train experiment=kosc/ffn_mse data.batch_size=32
 
 # Change learning rate
-python src/train.py experiment=kosc/ffn_mse model.optimizer.lr=1e-4
+python -m synth_setter.cli.train experiment=kosc/ffn_mse model.optimizer.lr=1e-4
 
 # Use CPU trainer instead of GPU
-python src/train.py experiment=kosc/ffn_mse trainer=cpu
+python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu
 
 # Override default logger compose (default is W&B + CSV + TensorBoard)
-python src/train.py experiment=kosc/ffn_mse logger=csv
+python -m synth_setter.cli.train experiment=kosc/ffn_mse logger=csv
 
 # Limit training steps
-python src/train.py experiment=kosc/ffn_mse trainer.max_steps=10000
+python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer.max_steps=10000
 
 # Run in debug mode (1 batch per epoch, no logging)
-python src/train.py experiment=kosc/ffn_mse debug=default
+python -m synth_setter.cli.train experiment=kosc/ffn_mse debug=default
 ```
 
 For the full configuration reference, see
@@ -474,7 +474,7 @@ After training, evaluate the model on the test set. You must provide the
 checkpoint path (`ckpt_path` is required):
 
 ```bash
-python src/eval.py ckpt_path=/path/to/checkpoint.ckpt
+python -m synth_setter.cli.eval ckpt_path=/path/to/checkpoint.ckpt
 ```
 
 Use the checkpoint saved during training (see the checkpoint path in
@@ -543,13 +543,13 @@ make format
 Reduce the batch size:
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse data.batch_size=8
+python -m synth_setter.cli.train experiment=kosc/ffn_mse data.batch_size=8
 ```
 
 Or switch to CPU for debugging:
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse trainer=cpu
+python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu
 ```
 
 ### W&B login issues
@@ -574,8 +574,9 @@ ______________________________________________________________________
 
 - **Experiment configs:** Browse `configs/experiment/` for pre-configured
   experiments across different models and datasets.
-- **Data generation:** See `src/generate_dataset.py` for the dataset
-  generation entry point (Hydra; `configs/dataset.yaml` is the root config).
+- **Data generation:** See `src/synth_setter/cli/generate_dataset.py` for the dataset
+  generation entry point (Hydra; `configs/dataset.yaml` is the root config). The
+  `synth-setter-generate-dataset` console script is the canonical surface.
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.
 - **Configuration reference:**

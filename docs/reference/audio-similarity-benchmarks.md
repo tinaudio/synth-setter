@@ -32,7 +32,7 @@ of the kind of regressions the chart is designed to surface:
 - **`librosa` / `pedalboard` upgrade** changing mel-spectrogram
   computation or VST host behavior, even with identical params.
 - **Regression in the renderer's determinism** in
-  `src/data/vst/core.py` § `render_params()` — bug
+  `src/synth_setter/data/vst/core.py` § `render_params()` — bug
   [#489](https://github.com/tinaudio/synth-setter/issues/489) was the
   every-other-render variance, closed by
   [#713](https://github.com/tinaudio/synth-setter/pull/713) via per-render

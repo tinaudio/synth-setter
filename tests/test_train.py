@@ -10,9 +10,9 @@ import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from src.data.vst import param_specs, preset_paths
-from src.eval import evaluate
-from src.train import train
+from synth_setter.cli.eval import evaluate
+from synth_setter.cli.train import train
+from synth_setter.data.vst import param_specs, preset_paths
 from tests.conftest import (
     _VST_SUBPROCESS_TIMEOUT_SECONDS,
     NUM_FIXTURE_SAMPLES,
@@ -258,7 +258,7 @@ def test_train_eval_surge_xt(
     HydraConfig().set_config(cfg_surge_xt_eval)
     evaluate(cfg_surge_xt_eval)
 
-    # `PredictionWriter` (in `src/utils/callbacks.py`) with `write_interval=batch` saves three
+    # `PredictionWriter` (in `src/synth_setter/utils/callbacks.py`) with `write_interval=batch` saves three
     # tensors per predict batch: `pred-{i}.pt`, `target-audio-{i}.pt`, `target-params-{i}.pt`.
     predictions_dir = tmp_path / "predictions"
     assert predictions_dir.is_dir()

@@ -388,10 +388,10 @@ class DatasetSpec(BaseModel):
     def num_params(self) -> int:
         """Total encoded parameter count looked up by name in the param-spec registry.
 
-        Imported from ``param_spec_registry`` (not ``src.data.vst``) so that
+        Imported from ``param_spec_registry`` (not ``synth_setter.data.vst``) so that
         ``model_dump_json`` — which evaluates this computed field — does not
         transitively pull ``pedalboard`` into the launcher.
         """
-        from src.data.vst.param_spec_registry import param_specs
+        from synth_setter.data.vst.param_spec_registry import param_specs
 
         return len(param_specs[self.render.param_spec_name])

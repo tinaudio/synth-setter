@@ -4,14 +4,14 @@ Importing this module pulls only ``param_spec`` and ``surge_xt_param_spec`` —
 both of which are pure-Python and free of pedalboard / VST3 native deps. This
 is the canonical pedalboard-free entrypoint for interpreter-only contexts
 (the SkyPilot launcher, spec construction in ``src.pipeline.schemas.spec``);
-``src.data.vst`` re-exports the same names for backward compat, but importing
-``src.data.vst.core`` directly is what pulls pedalboard.
+``synth_setter.data.vst`` re-exports the same names for backward compat, but importing
+``synth_setter.data.vst.core`` directly is what pulls pedalboard.
 """
 
 from __future__ import annotations
 
-from src.data.vst.param_spec import ParamSpec
-from src.data.vst.surge_xt_param_spec import (
+from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
     SURGE_SIMPLE_PARAM_SPEC,
     SURGE_XT_PARAM_SPEC,

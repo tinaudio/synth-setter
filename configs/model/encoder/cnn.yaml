@@ -1,4 +1,4 @@
-_target_: src.models.components.cnn.ResidualEncoder
+_target_: synth_setter.models.components.cnn.ResidualEncoder
 in_dim: ${data.signal_length}
 hidden_dim: 24
 out_dim: 128

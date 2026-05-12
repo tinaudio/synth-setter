@@ -2,7 +2,7 @@ defaults:
   - encoder: ast_for_mlp
   - _self_
 
-_target_: src.models.surge_flow_matching_module.SurgeFlowMatchingModule
+_target_: synth_setter.models.surge_flow_matching_module.SurgeFlowMatchingModule
 
 warmup_steps: 0
 scheduler:
@@ -18,7 +18,7 @@ optimizer:
   weight_decay: 0.0
 
 vector_field:
-  _target_: src.models.components.residual_mlp.ConditionalResidualMLP
+  _target_: synth_setter.models.components.residual_mlp.ConditionalResidualMLP
   n_params: ${model.num_params}
   d_model: 768
   d_enc: 256

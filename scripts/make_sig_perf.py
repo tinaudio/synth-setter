@@ -7,8 +7,8 @@ import rootutils
 import torch
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from src.data.kosc_datamodule import make_sig
-from src.data.ksin_datamodule import make_sin
+from synth_setter.data.kosc_datamodule import make_sig
+from synth_setter.data.ksin_datamodule import make_sin
 
 
 def test_fn_performance(fn: Callable):

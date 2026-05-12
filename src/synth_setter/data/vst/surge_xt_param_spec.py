@@ -1,4 +1,4 @@
-from src.data.vst.param_spec import (
+from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
     DiscreteLiteralParameter,

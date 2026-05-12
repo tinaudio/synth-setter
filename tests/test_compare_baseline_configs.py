@@ -53,9 +53,9 @@ EXPECTED_KOSC_TASKS = 44
 EXPECTED_SURGE_TASKS = 8
 
 # Predict scripts under ``jobs/predict/``. These are single-shot (no SGE_TASK_ID
-# fan-out); each script invokes ``python src/eval.py`` once with a fixed set of
-# Hydra overrides. ``get-ckpt-from-wandb.sh`` is intentionally excluded — it's a
-# helper sourced by the others, not a standalone entrypoint.
+# fan-out); each script invokes ``python -m synth_setter.cli.eval`` once with a
+# fixed set of Hydra overrides. ``get-ckpt-from-wandb.sh`` is intentionally
+# excluded — it's a helper sourced by the others, not a standalone entrypoint.
 PREDICT_SCRIPTS: tuple[str, ...] = (
     "jobs/predict/ffn-fsd50k.sh",
     "jobs/predict/ffn-full.sh",

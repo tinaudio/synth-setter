@@ -9,12 +9,12 @@ from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 from scipy.optimize import linear_sum_assignment
 
-from src.metrics import (
+from synth_setter.metrics import (
     ChamferDistance,
     LinearAssignmentDistance,
     LogSpectralDistance,
 )
-from src.utils.math import divmod
+from synth_setter.utils.math import divmod
 
 
 def late_curve(x, a):

@@ -51,7 +51,7 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 ### Distributed Pipeline
 
 > **Implementation status:** Single-machine sequential multi-shard generation is
-> implemented today (`src/generate_dataset.py` loops over
+> implemented today (`src/synth_setter/cli/generate_dataset.py` loops over
 > `spec.shards`, skipping shards already present in R2 — worker-side
 > resumability MVP per #750; the launcher-side reconciliation engine described
 > in §7.4 / §7.7 is not yet built). The distributed/parallel pipeline described
@@ -82,7 +82,7 @@ cat configs/experiment/surge-simple-480k-10k.yaml
 # → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 
 # 2. Run sequential multi-shard generation on a single worker.
-python -m src.generate_dataset experiment=surge-simple-480k-10k
+python -m synth_setter.cli.generate_dataset experiment=surge-simple-480k-10k
 # → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
 # **Planned CLI** — the distributed pipeline CLI (`python -m src.pipeline generate/status/finalize`)
 # is not yet implemented; `generate_dataset` is the current MVP, deprecated when
@@ -1392,7 +1392,7 @@ render:
 
 `configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
 
-On first `generate` (`python -m src.generate_dataset experiment=<id>`):
+On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id>`):
 
 1. Hydra composes the experiment against `configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.

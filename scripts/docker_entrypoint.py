@@ -16,7 +16,7 @@ Subcommands:
 
   generate_dataset --spec <path>
     Parse <path> as a DatasetSpec and call
-    ``src.generate_dataset.run(spec)`` in-process.
+    ``synth_setter.cli.generate_dataset.run(spec)`` in-process.
 
   render_eval --spec <path>
     Placeholder — raises ``click.ClickException`` with a clean error
@@ -41,8 +41,8 @@ import click
 from pydantic import VERSION as _PYDANTIC_VERSION
 from pydantic import ValidationError
 
-from src.generate_dataset import load_spec_from_uri, run
 from src.pipeline.schemas.spec import DatasetSpec
+from synth_setter.cli.generate_dataset import load_spec_from_uri, run
 
 if not _PYDANTIC_VERSION.startswith("2."):
     raise RuntimeError(f"docker_entrypoint requires pydantic v2, got {_PYDANTIC_VERSION}")

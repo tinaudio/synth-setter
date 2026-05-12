@@ -8,7 +8,7 @@ from lightning import LightningModule
 from lightning.pytorch.loggers import Logger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
-from src.utils import pylogger, rich_utils
+from synth_setter.utils import pylogger, rich_utils
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 

@@ -13,8 +13,8 @@ import pytest
 import torch
 from pedalboard.io import AudioFile
 
-from src.data.vst import param_specs
-from src.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst import param_specs
+from synth_setter.data.vst.param_spec import ParamSpec
 
 SURGE_SIMPLE = "surge_simple"
 
@@ -964,7 +964,8 @@ class _RecordingSubprocessRunner:
 
 
 class TestRunPredict:
-    """``_run_predict`` builds the ``src/eval.py`` invocation with the right Hydra overrides."""
+    """``_run_predict`` builds the ``src/synth_setter/cli/eval.py`` invocation with the right Hydra
+    overrides."""
 
     def test_passes_d_out_override_and_absolute_paths(self, surge_xt_interactive) -> None:
         """``_run_predict`` overrides ``model.net.d_out`` with the encoded width of
@@ -1481,7 +1482,7 @@ class TestPlayAudioRecordedE2E:
     ) -> None:
         """``play_audio_recorded`` against the real Surge XT VST + ``surge-simple.vstpreset``
         writes a WAV with the expected frame count and audible peak amplitude."""
-        from src.data.vst.core import load_plugin, load_preset
+        from synth_setter.data.vst.core import load_plugin, load_preset
 
         plugin_path = "plugins/Surge XT.vst3"
         preset_path = "presets/surge-simple.vstpreset"
@@ -1602,7 +1603,7 @@ class TestKeyboardLoopE2E:
         """``["p", "q"]`` against the real Surge XT + ``surge-simple.vstpreset`` records one
         patch whose synth-param values are finite floats matching the post-preset-load state.
         """
-        from src.data.vst.core import load_plugin, load_preset
+        from synth_setter.data.vst.core import load_plugin, load_preset
 
         plugin_path = "plugins/Surge XT.vst3"
         preset_path = "presets/surge-simple.vstpreset"

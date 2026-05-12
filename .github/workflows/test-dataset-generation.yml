@@ -76,14 +76,14 @@ on:
           - oci
   pull_request:
     paths:
-      - "src/data/vst/**"
+      - "src/synth_setter/data/vst/**"
       - "src/pipeline/schemas/**"
       - "configs/experiment/**"
       - "configs/dataset.yaml"
       - "configs/render/**"
       - "configs/r2/**"
       - "configs/compute/**"
-      - "src/generate_dataset.py"
+      - "src/synth_setter/cli/generate_dataset.py"
       - "src/pipeline/ci/**"
       - "src/pipeline/r2_io.py"
       - "scripts/docker_entrypoint.py"

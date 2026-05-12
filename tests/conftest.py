@@ -16,8 +16,8 @@ from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
-from src.data.vst import param_specs, preset_paths
-from src.utils.utils import register_resolvers
+from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
 # Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
@@ -107,7 +107,7 @@ def _validate_surge_dataset(path: Path, num_samples: int) -> None:
 
 
 # Register custom OmegaConf resolvers (mul, div) needed to parse Hydra configs.
-# This import pulls in torch/lightning transitively via src.utils.utils, but every
+# This import pulls in torch/lightning transitively via synth_setter.utils.utils, but every
 # test in this suite already requires those dependencies, so there is no benefit to
 # isolating resolver registration into a lighter module.
 register_resolvers()
@@ -282,7 +282,7 @@ def param_spec_name(request: pytest.FixtureRequest) -> str:
     :param request: Pytest fixture request — when parametrized indirectly, ``request.param``
         carries the spec name; otherwise the default ``"surge_4"`` is used.
 
-    :return: A key into :data:`src.data.vst.param_specs` and :data:`src.data.vst.preset_paths`.
+    :return: A key into :data:`synth_setter.data.vst.param_specs` and :data:`synth_setter.data.vst.preset_paths`.
     """
     return getattr(request, "param", "surge_4")
 
@@ -298,7 +298,7 @@ def _build_surge_xt_smoke_cfg(accelerator: str, param_spec_name: str) -> DictCon
     on any host so the YAML never silently drifts from this builder).
 
     :param accelerator: Lightning ``trainer.accelerator`` — ``"cpu"``, ``"mps"``, or ``"gpu"``.
-    :param param_spec_name: Key into :data:`src.data.vst.param_specs`; drives
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs`; drives
         ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``.
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
@@ -374,7 +374,7 @@ def cfg_surge_xt_global(accelerator: str, param_spec_name: str) -> DictConfig:
 
     :param accelerator: Parametrized accelerator (``"cpu"`` / ``"mps"`` / ``"gpu"``) — drives
         Lightning's ``trainer.accelerator`` and applies device-specific config tweaks.
-    :param param_spec_name: Name of the :mod:`src.data.vst` param spec the cfg is wired for —
+    :param param_spec_name: Name of the :mod:`synth_setter.data.vst` param spec the cfg is wired for —
         drives ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``.
 
     :return: A DictConfig object configured for a one-step Surge XT smoke train.
@@ -388,8 +388,8 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.
-    :param param_spec_name: Param spec name (key into :data:`src.data.vst.param_specs`
-        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
+    :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
+        and :data:`synth_setter.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
         and ``--preset_path`` for ``generate_vst_dataset``.
 
     :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
@@ -405,7 +405,7 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
     generate_dataset_args += [
         sys.executable,
-        "src/data/vst/generate_vst_dataset.py",
+        "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(smoke_dataset_dir / "train.h5"),
         f"--plugin_path={_SURGE_FIXTURE_PLUGIN_PATH}",
         f"--preset_path={preset_paths[param_spec_name]}",

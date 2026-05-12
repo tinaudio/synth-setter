@@ -4,7 +4,7 @@ import torch
 from scipy.optimize import linear_sum_assignment
 from torchmetrics import Metric
 
-from src.models.components.loss import chamfer_loss, params_to_tokens
+from synth_setter.models.components.loss import chamfer_loss, params_to_tokens
 
 
 def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):

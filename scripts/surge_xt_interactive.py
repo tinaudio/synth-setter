@@ -32,17 +32,17 @@ from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.logging import RichHandler  # noqa: E402
 
-from src.data.vst import param_specs, preset_paths  # noqa: E402
-from src.data.vst.core import (  # noqa: E402
+from src.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.data.vst import param_specs, preset_paths  # noqa: E402
+from synth_setter.data.vst.core import (  # noqa: E402
     extract_renderer_version,  # noqa: E402
     load_plugin,
     load_preset,
     make_midi_events,
     set_params,
 )
-from src.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
-from src.data.vst.param_spec import ParamSpec  # noqa: E402
-from src.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
+from synth_setter.data.vst.param_spec import ParamSpec  # noqa: E402
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 
@@ -96,11 +96,11 @@ SESSION_RECORDING_VELOCITY = 100
 SESSION_RECORDING_NOTE_START_SECONDS = 2.0
 SESSION_RECORDING_NOTE_END_SECONDS = 4.0
 # Buffer size used for the offline ``plugin.process(...)`` render. Mirrors
-# the value used in ``src.data.vst.core.render_params``.
+# the value used in ``synth_setter.data.vst.core.render_params``.
 _SESSION_RECORDING_BUFFER_SIZE = 2048
 
 # Plugin-flush parameters used by the post-load / pre-render flush pattern; see
-# ``_flush_plugin``. Mirror of the values used in ``src.data.vst.core.render_params``.
+# ``_flush_plugin``. Mirror of the values used in ``synth_setter.data.vst.core.render_params``.
 _PLUGIN_FLUSH_DURATION_SECONDS = 32.0
 _PLUGIN_FLUSH_BUFFER_SIZE = 2048
 
@@ -403,7 +403,7 @@ def _flush_plugin(plugin: VST3Plugin) -> None:
     """Process an empty buffer and reset the plugin to flush internal state.
 
     Mirrors the post-load / pre-render flush pattern in
-    ``src.data.vst.core.render_params``.
+    ``synth_setter.data.vst.core.render_params``.
     """
     plugin.process(
         [],
@@ -454,7 +454,7 @@ def play_audio(
                     except queue.Empty:
                         break
             # ``reset`` passed positionally for consistency with ``_flush_plugin`` /
-            # ``play_audio_recorded`` / ``src/data/vst/core.py`` and to avoid relying on
+            # ``play_audio_recorded`` / ``src/synth_setter/data/vst/core.py`` and to avoid relying on
             # pedalboard's C-extension keyword-arg support across unpinned versions.
             synth_output = plugin.process(
                 messages, buffer_duration_seconds, SAMPLE_RATE, CHANNELS, BUFFER_SIZE, False
@@ -483,7 +483,7 @@ def midi_listener(
     message types (e.g. ``polytouch``, ``sysex``, ``clock``) are dropped. Each forwarded
     message is converted to ``(msg.bytes(), 0.0)`` so ``plugin.process`` schedules it at the
     start of the next audio buffer — the format used elsewhere in the repo (see
-    :func:`src.data.vst.core.make_midi_events`). ``mido.Message.bytes()`` returns
+    :func:`synth_setter.data.vst.core.make_midi_events`). ``mido.Message.bytes()`` returns
     ``list[int]`` (a sequence of MIDI status bytes), matching the ``List[int]`` form
     accepted by pedalboard's ``plugin.process(...)``.
 
@@ -679,9 +679,9 @@ def _run_predict(
     *,
     subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
-    """Run model prediction via ``src/eval.py`` with ``mode=predict``.
+    """Run model prediction via ``src/synth_setter/cli/eval.py`` with ``mode=predict``.
 
-    Paths are passed as absolute (``.resolve()``) because ``src/eval.py`` runs under Hydra, which
+    Paths are passed as absolute (``.resolve()``) because ``src/synth_setter/cli/eval.py`` runs under Hydra, which
     chdirs into its own output dir before the job starts; relative paths would otherwise resolve
     against the wrong cwd. ``model.net.d_out`` is overridden from ``len(param_specs[...])`` to
     satisfy the mandatory-override sentinel in ``configs/experiment/surge/test.yaml``.
@@ -709,9 +709,9 @@ def _run_predict(
 
 
 def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> None:
-    """Verify ``PredictionWriter`` (``src/utils/callbacks.py``) wrote the expected per-sample
-    ``pred-{i}.pt``, ``target-audio-{i}.pt``, and ``target-params-{i}.pt`` files, and that
-    prediction tensors are finite.
+    """Verify ``PredictionWriter`` (``src/synth_setter/utils/callbacks.py``) wrote the expected
+    per-sample ``pred-{i}.pt``, ``target-audio-{i}.pt``, and ``target-params-{i}.pt`` files, and
+    that prediction tensors are finite.
 
     Tensors are loaded onto CPU regardless of the device they were saved from so this works across
     mps/cuda/cpu predict runs.
@@ -913,7 +913,7 @@ def eval_patches(
 
     Pipeline (each step gated on the previous one's success):
 
-    1. Predict params via ``src/eval.py mode=predict`` (``_run_predict``).
+    1. Predict params via ``src/synth_setter/cli/eval.py mode=predict`` (``_run_predict``).
     2. Verify the per-sample ``pred-{i}.pt`` / ``target-audio-{i}.pt`` / ``target-params-{i}.pt``
        files were written and that prediction tensors are finite (``_validate_predictions``).
     3. Render predicted vs. target audio via ``scripts/predict_vst_audio.py`` and verify the
@@ -1026,7 +1026,7 @@ def eval_patches(
         "append to existing files. After the editor is closed, patches captured via the "
         "keyboard loop (press 'p' to record, 'q' to quit) are rendered through the plugin "
         "and written to ``train.h5`` inside this directory via "
-        "``src.data.vst.generate_vst_dataset.make_dataset`` (plus ``val.h5``/``test.h5``/"
+        "``synth_setter.data.vst.generate_vst_dataset.make_dataset`` (plus ``val.h5``/``test.h5``/"
         "``predict.h5`` siblings when ``--checkpoint-path`` is set)."
     ),
 )
@@ -1089,7 +1089,7 @@ def main(
        ``make_dataset``.
     5. If ``--checkpoint-path`` is also set, copy ``train.h5`` to ``val.h5``/``test.h5``/
        ``predict.h5`` siblings (rolled back if any copy fails) and call ``eval_patches`` to
-       run ``src/eval.py mode=predict`` followed by audio rendering
+       run ``src/synth_setter/cli/eval.py mode=predict`` followed by audio rendering
        (``predict_vst_audio.py``) and metric computation (``compute_audio_metrics.py``) on
        the captured patches.
     """

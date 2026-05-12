@@ -433,18 +433,18 @@ def test_main_dry_run_quotes_command_arg_to_preserve_argv_boundaries(tmp_path: P
     """The user command (last positional after ``--``) is a SINGLE shlex-quoted token.
 
     Without ``shlex.join``, ``" ".join(args)`` would print
-    ``pueue add ... -- python src/train.py experiment=surge/full_ffn`` which
+    ``pueue add ... -- python src/synth_setter/cli/train.py experiment=surge/full_ffn`` which
     reads as four separate trailing args; with ``shlex.join`` the command is
     quoted so the dry-run line is faithful to the real argv.
 
     :param tmp_path: pytest tmp dir fixture.
     """
     file = tmp_path / "cmds.txt"
-    file.write_text("python src/train.py experiment=surge/full_ffn\n")
+    file.write_text("python src/synth_setter/cli/train.py experiment=surge/full_ffn\n")
     result = CliRunner().invoke(main, [str(file), "--dry-run", "--group", "train"])
     assert result.exit_code == 0, result.output
     # shlex.join quotes whenever the arg contains shell-significant chars (incl. space).
-    assert "'python src/train.py experiment=surge/full_ffn'" in result.output
+    assert "'python src/synth_setter/cli/train.py experiment=surge/full_ffn'" in result.output
 
 
 def test_main_dry_run_does_not_invoke_subprocess(

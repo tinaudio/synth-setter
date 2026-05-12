@@ -14,8 +14,8 @@ the current backend's behavior.
 Example file::
 
     # train sweeps
-    python src/train.py experiment=surge/full_ffn
-    python src/train.py experiment=surge/full_ffn data.batch_size=64
+    python src/synth_setter/cli/train.py experiment=surge/full_ffn
+    python src/synth_setter/cli/train.py experiment=surge/full_ffn data.batch_size=64
 
 Example invocation::
 

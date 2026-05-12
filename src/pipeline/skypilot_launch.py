@@ -46,9 +46,9 @@ from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
 
-from src.generate_dataset import spec_from_cfg
 from src.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from src.pipeline.schemas.spec import DatasetSpec
+from synth_setter.cli.generate_dataset import spec_from_cfg
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"

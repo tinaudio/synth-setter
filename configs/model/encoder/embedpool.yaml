@@ -1,4 +1,4 @@
-_target_: src.models.components.embed_pool.EmbeddingPool
+_target_: synth_setter.models.components.embed_pool.EmbeddingPool
 embed_dim: 128
 d_model: ${model.vector_field.d_model}
 num_heads: ${model.vector_field.num_heads}

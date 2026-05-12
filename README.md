@@ -120,32 +120,37 @@ See the project documentation for a full walkthrough.
 ## Project Structure
 
 ```
-src/           ML code (models, data modules, training, evaluation, and entrypoints)
-  generate_dataset.py  Dataset-generation entrypoint (Hydra)
-  train.py             Training entrypoint (Hydra)
-  eval.py              Evaluation entrypoint (Hydra)
-  pipeline/            Distributed data pipeline
-    schemas/             Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
-    ci/                  CI validation scripts (materialize_spec, validate_shard, validate_spec)
-    skypilot_launch.py   SkyPilot launcher CLI
-configs/       Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
-scripts/       Standalone scripts
-tests/         Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)
-docs/design/   Design documents
+src/synth_setter/   ML code (PEP src-layout package)
+  cli/                 Hydra entrypoints (also published as synth-setter-* console scripts):
+    train.py             Training entrypoint
+    eval.py              Evaluation entrypoint
+    generate_dataset.py  Dataset-generation entrypoint
+  data/                Datamodules and dataset construction
+  models/              LightningModules and components
+  utils/               Logging, callbacks, instantiators, math
+  metrics.py           Audio + parameter-space metrics
+src/pipeline/   Distributed data pipeline (moves under synth_setter/ in Phase 3, #784)
+  schemas/             Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
+  ci/                  CI validation scripts (materialize_spec, validate_shard, validate_spec)
+  skypilot_launch.py   SkyPilot launcher CLI
+configs/        Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
+scripts/        Standalone scripts
+tests/          Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)
+docs/design/    Design documents
 ```
 
 ## Key Files
 
 ```
-src/models/components/transformer.py       DiT and AST implementations
-src/models/components/residual_mlp.py      Residual MLP implementations
-src/models/components/cnn.py               CNN encoder implementations
-src/models/components/vae.py               VAE+RealNVP baseline implementation
-src/models/*_module.py                     LightningModule implementations
-src/data/vst/*                             Dataset generation
-src/data/vst/surge_xt_param_spec.py        Surge XT dataset sampling distributions
-src/data/ot.py                             Optimal transport minibatch coupling
-src/data/kosc_datamodule.py                k-osc task data module
+src/synth_setter/models/components/transformer.py       DiT and AST implementations
+src/synth_setter/models/components/residual_mlp.py      Residual MLP implementations
+src/synth_setter/models/components/cnn.py               CNN encoder implementations
+src/synth_setter/models/components/vae.py               VAE+RealNVP baseline implementation
+src/synth_setter/models/*_module.py                     LightningModule implementations
+src/synth_setter/data/vst/*                             Dataset generation
+src/synth_setter/data/vst/surge_xt_param_spec.py        Surge XT dataset sampling distributions
+src/synth_setter/data/ot.py                             Optimal transport minibatch coupling
+src/synth_setter/data/kosc_datamodule.py                k-osc task data module
 configs/experiment/kosc                    k-osc experiment configs
 configs/experiment/surge                   Surge XT experiment configs
 ```

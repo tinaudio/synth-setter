@@ -4,7 +4,7 @@ import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
-from src.models.components.vae import compute_flowvae_loss
+from synth_setter.models.components.vae import compute_flowvae_loss
 
 
 class SurgeFlowVAEModule(LightningModule):

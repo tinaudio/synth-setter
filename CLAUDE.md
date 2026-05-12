@@ -112,8 +112,9 @@ The block-scalar should contain only commands. The reader who wants to know *why
 
 ### Architecture
 
-- `src/` — ML code (models, data modules, training, evaluation) and the dataset-generation entrypoint (`src/generate_dataset.py`)
-- `src/synth_setter/` — PEP src-layout package; empty scaffold in Phase 1 of [#784](https://github.com/tinaudio/synth-setter/issues/784), receives moved modules across Phases 2–5.
+- `src/synth_setter/` — ML code (models, data modules, training, evaluation, dataset-generation entrypoint, utilities). PEP src-layout package; populated across Phases 2–5 of the layout migration ([#784](https://github.com/tinaudio/synth-setter/issues/784)).
+  - `cli/` — `@hydra.main` entrypoints (`train`, `eval`, `generate_dataset`), each exposed as a `synth-setter-*` console script via `[project.scripts]`.
+  - `data/`, `models/`, `utils/`, `metrics.py` — ML code moved out of `src/` in Phase 2 ([#989](https://github.com/tinaudio/synth-setter/issues/989)).
 - `src/pipeline/` — distributed data pipeline (`python -m src.pipeline` planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
   - `schemas/` — Pydantic models (`DatasetSpec` + `RenderConfig` in `spec.py`, `prefix`, `image_config`; planned: report, card, sample — [#74](https://github.com/tinaudio/synth-setter/issues/74))
   - `ci/` — CI validation scripts (materialize_spec, validate_shard, validate_spec, load_image_config)

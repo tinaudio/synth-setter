@@ -9,8 +9,8 @@ from dask.distributed import Client, progress
 from loguru import logger
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from src.data.audio_datamodule import AudioFolderDataset
-from src.data.surge_datamodule import SurgeXTDataset
+from synth_setter.data.audio_datamodule import AudioFolderDataset
+from synth_setter.data.surge_datamodule import SurgeXTDataset
 
 
 def get_stats_hdf5(filename):

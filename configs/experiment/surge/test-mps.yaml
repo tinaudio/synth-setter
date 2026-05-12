@@ -53,7 +53,7 @@ trainer:
 
 callbacks:
   log_per_param_mse:
-    _target_: src.utils.callbacks.LogPerParamMSE
+    _target_: synth_setter.utils.callbacks.LogPerParamMSE
     param_spec: surge_4
   plot_proj_ii: null
   model_checkpoint:

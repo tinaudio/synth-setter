@@ -13,7 +13,7 @@ W&B runs are created via Lightning's `WandbLogger` — there are no direct
 Hydra config and passed to the `Trainer`. Metric logging goes through
 Lightning's `self.log()` / `self.log_dict()` API; visualization callbacks
 route matplotlib figures through a small logger-dispatch helper
-(`_log_figure` in `src/utils/callbacks.py`) that calls
+(`_log_figure` in `src/synth_setter/utils/callbacks.py`) that calls
 `WandbLogger.log_image` or `TensorBoardLogger.experiment.add_figure`
 depending on which loggers are attached.
 
@@ -21,17 +21,17 @@ ______________________________________________________________________
 
 ## 1. Initialization
 
-| Concern           | How it works                                                                                             | File                               |
-| ----------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)    | `configs/logger/wandb.yaml`        |
-| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"` | `configs/logger/wandb.yaml:10,13`  |
-| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                             | `configs/logger/many_loggers.yaml` |
-| Run ID            | `null` (W&B auto-generates)                                                                              | `configs/logger/wandb.yaml:8`      |
-| Checkpoint upload | `log_model: "all"`                                                                                       | `configs/logger/wandb.yaml:11`     |
-| Code saving       | `wandb.Settings(code_dir=".")`                                                                           | `configs/logger/wandb.yaml:17-19`  |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                         | `src/utils/utils.py:101-106`       |
+| Concern           | How it works                                                                                             | File                                      |
+| ----------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| W&B run creation  | `WandbLogger` instantiated by Hydra — included in the default `many_loggers` compose (W&B + CSV + TB)    | `configs/logger/wandb.yaml`               |
+| Entity / project  | Env-var driven: `entity: ${oc.env:WANDB_ENTITY,null}`, `project: "${oc.env:WANDB_PROJECT,synth-setter}"` | `configs/logger/wandb.yaml:10,13`         |
+| Default compose   | `many_loggers` composes `csv + tensorboard + wandb` (W&B enabled by default)                             | `configs/logger/many_loggers.yaml`        |
+| Run ID            | `null` (W&B auto-generates)                                                                              | `configs/logger/wandb.yaml:8`             |
+| Checkpoint upload | `log_model: "all"`                                                                                       | `configs/logger/wandb.yaml:11`            |
+| Code saving       | `wandb.Settings(code_dir=".")`                                                                           | `configs/logger/wandb.yaml:17-19`         |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                         | `src/synth_setter/utils/utils.py:101-106` |
 
-**No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
+**No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 
 ______________________________________________________________________
 
@@ -39,7 +39,7 @@ ______________________________________________________________________
 
 ### 2a. Hyperparameters (logged once at run start)
 
-`log_hyperparameters()` in `src/utils/logging_utils.py` sends a single dict
+`log_hyperparameters()` in `src/synth_setter/utils/logging_utils.py` sends a single dict
 to all loggers via `logger.log_hyperparams()`:
 
 | Key                          | Source                                       |
@@ -90,28 +90,28 @@ Logged via `self.log()` in each LightningModule:
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
 Image-producing callbacks route figures through `_log_figure` in
-`src/utils/callbacks.py`, which dispatches to `WandbLogger.log_image` and/or
+`src/synth_setter/utils/callbacks.py`, which dispatches to `WandbLogger.log_image` and/or
 `TensorBoardLogger.experiment.add_figure` depending on the attached loggers.
 Under the default `many_loggers` composition (W&B + CSV + TB), plots land in
 both W&B and TensorBoard; with `logger=tensorboard` they go to TensorBoard
 only; with `logger=wandb` they go to W&B only.
 
-| Callback                           | Logged key                       | Trigger                                         | Symbol                                                               |
-| ---------------------------------- | -------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------- |
-| `PlotLossPerTimestep`              | `plot` (image)                   | `on_validation_epoch_end`                       | `src/utils/callbacks.py::PlotLossPerTimestep._log_plot`              |
-| `PlotPositionalEncodingSimilarity` | `pos_enc_similarity` (image)     | `on_validation_epoch_end`                       | `src/utils/callbacks.py::PlotPositionalEncodingSimilarity._log_plot` |
-| `PlotLearntProjection`             | `assignment`, `value` (images)   | `on_validation_epoch_end` or every N steps      | `src/utils/callbacks.py::PlotLearntProjection._log_plots`            |
-| `LogPerParamMSE`                   | `per_param_mse/{name}` per param | `on_validation_epoch_end` (via `self.log_dict`) | `src/utils/callbacks.py::LogPerParamMSE`                             |
+| Callback                           | Logged key                       | Trigger                                         | Symbol                                                                            |
+| ---------------------------------- | -------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------- |
+| `PlotLossPerTimestep`              | `plot` (image)                   | `on_validation_epoch_end`                       | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`              |
+| `PlotPositionalEncodingSimilarity` | `pos_enc_similarity` (image)     | `on_validation_epoch_end`                       | `src/synth_setter/utils/callbacks.py::PlotPositionalEncodingSimilarity._log_plot` |
+| `PlotLearntProjection`             | `assignment`, `value` (images)   | `on_validation_epoch_end` or every N steps      | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`            |
+| `LogPerParamMSE`                   | `per_param_mse/{name}` per param | `on_validation_epoch_end` (via `self.log_dict`) | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                             |
 
 ### 2d. Callbacks — Non-W&B
 
-| Callback              | What it does                                           | Config                                     |
-| --------------------- | ------------------------------------------------------ | ------------------------------------------ |
-| `ModelCheckpoint`     | Saves `.ckpt` locally (uploaded by `log_model: "all"`) | `configs/callbacks/model_checkpoint.yaml`  |
-| `LearningRateMonitor` | Logs LR to Lightning logger                            | `configs/callbacks/lr_monitor.yaml`        |
-| `RichProgressBar`     | Terminal display only                                  | `configs/callbacks/rich_progress_bar.yaml` |
-| `ModelSummary`        | Prints param summary to console                        | `configs/callbacks/model_summary.yaml`     |
-| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/utils/callbacks.py::PredictionWriter` |
+| Callback              | What it does                                           | Config                                                  |
+| --------------------- | ------------------------------------------------------ | ------------------------------------------------------- |
+| `ModelCheckpoint`     | Saves `.ckpt` locally (uploaded by `log_model: "all"`) | `configs/callbacks/model_checkpoint.yaml`               |
+| `LearningRateMonitor` | Logs LR to Lightning logger                            | `configs/callbacks/lr_monitor.yaml`                     |
+| `RichProgressBar`     | Terminal display only                                  | `configs/callbacks/rich_progress_bar.yaml`              |
+| `ModelSummary`        | Prints param summary to console                        | `configs/callbacks/model_summary.yaml`                  |
+| `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/synth_setter/utils/callbacks.py::PredictionWriter` |
 
 ### 2e. Gradient Watching
 
@@ -119,18 +119,18 @@ If `cfg.watch_gradients` is set, `watch_gradients()` calls
 `WandbLogger.watch(model, log="gradients")` — logs gradient histograms per
 layer according to the WandbLogger / W&B logging defaults.
 
-Source: `src/utils/utils.py:137-148`, called from `src/train.py:91-93`.
+Source: `src/synth_setter/utils/utils.py:137-148`, called from `src/synth_setter/cli/train.py:91-93`.
 
 ### 2g. Provenance metadata (logged once at run start)
 
-`log_wandb_provenance()` (`src/utils/logging_utils.py:64-98`) is called in both
-`src/train.py:89` and `src/eval.py:82`, after `log_hyperparameters()`.
+`log_wandb_provenance()` (`src/synth_setter/utils/logging_utils.py:64-98`) is called in both
+`src/synth_setter/cli/train.py:89` and `src/synth_setter/cli/eval.py:82`, after `log_hyperparameters()`.
 
-| Key          | Source               | Example                                |
-| ------------ | -------------------- | -------------------------------------- |
-| `github_sha` | `git rev-parse HEAD` | `3e60c47c6131...`                      |
-| `image_tag`  | `IMAGE_TAG` env var  | `dev-snapshot-abc123`                  |
-| `command`    | `" ".join(sys.argv)` | `"src/train.py experiment=surge/flow"` |
+| Key          | Source               | Example                                                 |
+| ------------ | -------------------- | ------------------------------------------------------- |
+| `github_sha` | `git rev-parse HEAD` | `3e60c47c6131...`                                       |
+| `image_tag`  | `IMAGE_TAG` env var  | `dev-snapshot-abc123`                                   |
+| `command`    | `" ".join(sys.argv)` | `"src/synth_setter/cli/train.py experiment=surge/flow"` |
 
 Written via `wandb.config.update(..., allow_val_change=True)`.
 
@@ -156,10 +156,10 @@ ______________________________________________________________________
 
 ## 4. Entry Points
 
-| Entry point    | W&B usage                                                                                       | File           |
-| -------------- | ----------------------------------------------------------------------------------------------- | -------------- |
-| `src/train.py` | Full: logger init → hparams → provenance → train metrics → test metrics → teardown              | `src/train.py` |
-| `src/eval.py`  | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → teardown | `src/eval.py`  |
+| Entry point                     | W&B usage                                                                                       | File                            |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------- |
+| `src/synth_setter/cli/train.py` | Full: logger init → hparams → provenance → train metrics → test metrics → teardown              | `src/synth_setter/cli/train.py` |
+| `src/synth_setter/cli/eval.py`  | Full: logger init → hparams → provenance → test/val metrics (+ optional predictions) → teardown | `src/synth_setter/cli/eval.py`  |
 
 Both use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
 

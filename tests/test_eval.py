@@ -6,8 +6,8 @@ import pytest
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from src.eval import evaluate
-from src.train import train
+from synth_setter.cli.eval import evaluate
+from synth_setter.cli.train import train
 from tests.helpers.run_if import RunIf
 
 

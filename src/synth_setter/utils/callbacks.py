@@ -8,13 +8,13 @@ from lightning.pytorch.callbacks import BasePredictionWriter, Callback
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
 
-from src.data.vst import param_specs
-from src.models.components.transformer import (
+from synth_setter.data.vst import param_specs
+from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
 )
-from src.models.ksin_flow_matching_module import KSinFlowMatchingModule
-from src.models.surge_flow_matching_module import SurgeFlowMatchingModule
+from synth_setter.models.ksin_flow_matching_module import KSinFlowMatchingModule
+from synth_setter.models.surge_flow_matching_module import SurgeFlowMatchingModule
 
 
 def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:

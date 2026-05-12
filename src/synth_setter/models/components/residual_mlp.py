@@ -3,8 +3,8 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-from src.models.components.cnn import ResidualEncoder
-from src.models.components.transformer import SinusoidalEncoding
+from synth_setter.models.components.cnn import ResidualEncoder
+from synth_setter.models.components.transformer import SinusoidalEncoding
 
 
 class ResidualMLPBlock(nn.Module):

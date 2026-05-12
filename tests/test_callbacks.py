@@ -1,4 +1,4 @@
-"""Tests for ``src.utils.callbacks._log_figure`` logger dispatch.
+"""Tests for ``synth_setter.utils.callbacks._log_figure`` logger dispatch.
 
 Uses ``MagicMock(spec=...)`` so ``isinstance`` checks against the real Lightning
 logger classes pass, without instantiating any backends (no W&B auth prompt,
@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from matplotlib.figure import Figure
 
-from src.utils.callbacks import _log_figure
+from synth_setter.utils.callbacks import _log_figure
 
 
 def _make_trainer(

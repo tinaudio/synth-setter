@@ -236,7 +236,7 @@ docker run --rm synth-setter:dev-snapshot \
 Generates one or more VST dataset shards (looping over `spec.shards`) via `generate_vst_dataset.py` under
 headless X11 (Xvfb). The click entrypoint itself is X11-agnostic; the
 headless bootstrap (`scripts/run-linux-vst-headless.sh`) is applied
-inside `src.generate_dataset.run()` at the
+inside `synth_setter.cli.generate_dataset.run()` at the
 audio-rendering boundary, wrapping only the generator subprocess — so
 `idle` and `passthrough` don't pay the Xvfb startup cost.
 
@@ -462,7 +462,7 @@ ______________________________________________________________________
 - **MODE=finalize-shards** ([#408](https://github.com/tinaudio/synth-setter/issues/408)) — download shards from R2,
   reshard into train/val/test, compute normalization stats, upload.
 - **MODE=train** ([#409](https://github.com/tinaudio/synth-setter/issues/409)) — download dataset from R2, run
-  `src/train.py` via Hydra, upload checkpoints. Currently handled manually.
+  `src/synth_setter/cli/train.py` via Hydra, upload checkpoints. Currently handled manually.
 
 ### Planned — not yet implemented
 

@@ -16,27 +16,24 @@ docs = [
 ]
 
 [tool.setuptools]
-# Phase 1 scaffold: enumerate packages explicitly so that the new
-# `synth_setter` package (physically at src/synth_setter/) is importable as
-# both `synth_setter` (the future canonical PEP src-layout name) AND as
-# `src.synth_setter` (the legacy name used during migration). The legacy
-# `src*` packages are listed here too because they're consumed via
-# `from src.X` at ~52 import sites today. Phases 2–5 rewrite those imports
-# and this list collapses to a `[tool.setuptools.packages.find]` with
-# `where = ["src"]`.
+# Phase 2 of the PEP src-layout migration (#989). The data/models/utils/metrics
+# trees and the CLI entrypoints now live under `synth_setter`; only
+# `src/pipeline/` remains as `src.pipeline` (moves in Phase 3, #784).
+# Enumerated rather than discovered so the dual `synth_setter` / `src.pipeline`
+# layout stays explicit until Phase 3 collapses to a single `find` directive.
 packages = [
   "synth_setter",
+  "synth_setter.cli",
+  "synth_setter.data",
+  "synth_setter.data.components",
+  "synth_setter.data.vst",
+  "synth_setter.models",
+  "synth_setter.models.components",
+  "synth_setter.utils",
   "src",
-  "src.data",
-  "src.data.components",
-  "src.data.vst",
-  "src.models",
-  "src.models.components",
   "src.pipeline",
   "src.pipeline.ci",
   "src.pipeline.schemas",
-  "src.synth_setter",
-  "src.utils",
 ]
 
 [tool.setuptools.package-dir]
@@ -44,6 +41,11 @@ packages = [
 # src/synth_setter/, so it is importable as `synth_setter` (PEP src-layout).
 # Other packages use the implicit root mapping (`src` lives at ./src, etc.).
 "synth_setter" = "src/synth_setter"
+
+[project.scripts]
+synth-setter-train             = "synth_setter.cli.train:main"
+synth-setter-eval              = "synth_setter.cli.eval:main"
+synth-setter-generate-dataset  = "synth_setter.cli.generate_dataset:main"
 
 
 [tool.pytest.ini_options]
@@ -122,18 +124,18 @@ ignore = ["E501", "S101"]
 "tests/pipeline/test_schemas/test_prefix.py" = ["ANN001"]
 "tests/test_benchmarks.py" = ["ANN001"]
 "tests/test_configs.py" = ["ANN001"]
-"src/eval.py" = ["E402", "F841"]
-# ANN001: directory-wide ignore for legacy untyped function args under src/models/.
-# New code under src/models/ should still annotate; remove this entry once legacy
+"src/synth_setter/cli/eval.py" = ["E402", "F841"]
+# ANN001: directory-wide ignore for legacy untyped function args under synth_setter/models/.
+# New code under synth_setter/models/ should still annotate; remove this entry once legacy
 # callsites are cleaned up.
-"src/models/**" = ["ANN001"]
-"src/models/components/transformer.py" = ["F841"]
-"src/models/components/vae.py" = ["E402", "T201"]
-"src/models/ksin_ff_module.py" = ["F821"]
-"src/models/surge_ff_module.py" = ["F821"]
-"src/train.py" = ["E402"]
-"src/utils/__init__.py" = ["F401"]
-"src/utils/callbacks.py" = ["F821", "T201", "ANN001"]
+"src/synth_setter/models/**" = ["ANN001"]
+"src/synth_setter/models/components/transformer.py" = ["F841"]
+"src/synth_setter/models/components/vae.py" = ["E402", "T201"]
+"src/synth_setter/models/ksin_ff_module.py" = ["F821"]
+"src/synth_setter/models/surge_ff_module.py" = ["F821"]
+"src/synth_setter/cli/train.py" = ["E402"]
+"src/synth_setter/utils/__init__.py" = ["F401"]
+"src/synth_setter/utils/callbacks.py" = ["F821", "T201", "ANN001"]
 
 [tool.interrogate]
 verbose = 2
@@ -179,7 +181,7 @@ exclude = '''(?x)
   | ^src/pipeline/ci/load_image_config\.py$
   | ^src/pipeline/ci/validate_shard\.py$
   | ^src/pipeline/ci/validate_spec\.py$
-  | ^src/generate_dataset\.py$
+  | ^src/synth_setter/cli/generate_dataset\.py$
   | ^src/pipeline/skypilot_launch\.py$
   | ^src/pipeline/partitioning\.py$
   | ^src/pipeline/r2_io\.py$
@@ -194,25 +196,25 @@ exclude = '''(?x)
   | ^scripts/rewrite_dataset_to_latest\.py$
   | ^scripts/subdir_funtime\.py$
   | ^scripts/surge_xt_interactive\.py$
-  | ^src/data/audio_datamodule\.py$
-  | ^src/data/fm_datamodule\.py$
-  | ^src/data/kosc_datamodule\.py$
-  | ^src/data/ksin_datamodule\.py$
-  | ^src/data/surge_datamodule\.py$
-  | ^src/data/vst/core\.py$
-  | ^src/data/vst/generate_vst_dataset\.py$
-  | ^src/data/vst/param_spec\.py$
-  | ^src/eval\.py$
-  | ^src/models/components/loss\.py$
-  | ^src/models/components/sinkhorn\.py$
-  | ^src/models/components/transformer\.py$
-  | ^src/models/components/vae\.py$
-  | ^src/models/ksin_flow_matching_module\.py$
-  | ^src/train\.py$
-  | ^src/utils/callbacks\.py$
-  | ^src/utils/instantiators\.py$
-  | ^src/utils/rich_utils\.py$
-  | ^src/utils/utils\.py$
+  | ^src/synth_setter/data/audio_datamodule\.py$
+  | ^src/synth_setter/data/fm_datamodule\.py$
+  | ^src/synth_setter/data/kosc_datamodule\.py$
+  | ^src/synth_setter/data/ksin_datamodule\.py$
+  | ^src/synth_setter/data/surge_datamodule\.py$
+  | ^src/synth_setter/data/vst/core\.py$
+  | ^src/synth_setter/data/vst/generate_vst_dataset\.py$
+  | ^src/synth_setter/data/vst/param_spec\.py$
+  | ^src/synth_setter/cli/eval\.py$
+  | ^src/synth_setter/models/components/loss\.py$
+  | ^src/synth_setter/models/components/sinkhorn\.py$
+  | ^src/synth_setter/models/components/transformer\.py$
+  | ^src/synth_setter/models/components/vae\.py$
+  | ^src/synth_setter/models/ksin_flow_matching_module\.py$
+  | ^src/synth_setter/cli/train\.py$
+  | ^src/synth_setter/utils/callbacks\.py$
+  | ^src/synth_setter/utils/instantiators\.py$
+  | ^src/synth_setter/utils/rich_utils\.py$
+  | ^src/synth_setter/utils/utils\.py$
   | ^tests/_baseline_worktree\.py$
   | ^tests/conftest\.py$
   | ^tests/data/vst/test_core\.py$

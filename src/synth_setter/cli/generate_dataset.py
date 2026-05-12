@@ -1,7 +1,8 @@
 """Spec-driven generate_dataset runner.
 
 ``main(cfg)`` is the Hydra-composed CLI entry, invoked via
-``python -m src.generate_dataset experiment=<id>``.
+``python -m synth_setter.cli.generate_dataset experiment=<id>`` (or the
+``synth-setter-generate-dataset`` console script).
 
 The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker entry that reads a
 pre-materialized spec from R2 via ``load_spec_from_uri``.
@@ -22,15 +23,15 @@ from omegaconf import DictConfig, OmegaConf
 
 # Set PROJECT_ROOT env var and add the repo root to sys.path so
 # ``configs/paths/default.yaml``'s ``root_dir: ${oc.env:PROJECT_ROOT}`` interpolation
-# resolves under ``python -m src.generate_dataset``. Mirrors
-# ``src/train.py`` / ``src/eval.py``.
+# resolves under ``python -m synth_setter.cli.generate_dataset``. Mirrors
+# ``synth_setter/cli/train.py`` / ``synth_setter/cli/eval.py``.
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from src.data.vst.core import extract_renderer_version  # noqa: E402
 from src.pipeline import r2_io  # noqa: E402
 from src.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
 from src.pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
 from src.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
+from synth_setter.data.vst.core import extract_renderer_version  # noqa: E402
 
 # Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
 # sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``
@@ -112,7 +113,7 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
     output_path = output_dir / shard.filename
     args = [
         sys.executable,
-        "src/data/vst/generate_vst_dataset.py",
+        "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
     ]
     for key, value in spec.render.model_dump().items():
@@ -240,9 +241,9 @@ def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     return DatasetSpec(**spec_kwargs)
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="dataset")
+@hydra.main(version_base="1.3", config_path="../../../configs", config_name="dataset")
 def main(cfg: DictConfig) -> None:
-    """Hydra-composed CLI entry: ``python -m src.generate_dataset experiment=<id>``."""
+    """Hydra-composed CLI entry: ``python -m synth_setter.cli.generate_dataset experiment=<id>``."""
     run(spec_from_cfg(cfg))
 
 

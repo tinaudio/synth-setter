@@ -339,7 +339,7 @@ jobs:
 
       # Full requirements-app.txt install (skypilot + python-dotenv + loguru +
       # pedalboard + mido + numpy + pydantic + click + ...). The launcher's
-      # import chain (skypilot_launch -> spec.py -> src.data.vst ->
+      # import chain (skypilot_launch -> spec.py -> synth_setter.data.vst ->
       # core.py) pulls in the whole runtime, so a targeted install is
       # whack-a-mole — full requirements-app keeps the launcher-runner mode
       # honestly mirroring what a developer would have on their laptop.

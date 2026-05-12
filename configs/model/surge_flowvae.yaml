@@ -1,16 +1,16 @@
 defaults:
   - _self_
 
-_target_: src.models.surge_flowvae_module.SurgeFlowVAEModule
+_target_: synth_setter.models.surge_flowvae_module.SurgeFlowVAEModule
 
 net:
-  _target_: src.models.components.vae.FlowVAE
+  _target_: synth_setter.models.components.vae.FlowVAE
   latent_dim: 92
   encoder:
-    _target_: src.models.components.vae.Encoder
+    _target_: synth_setter.models.components.vae.Encoder
     latent_dim: ${model.net.latent_dim}
   decoder:
-    _target_: src.models.components.vae.Decoder
+    _target_: synth_setter.models.components.vae.Decoder
     latent_dim: ${model.net.latent_dim}
     num_channels: 2
 

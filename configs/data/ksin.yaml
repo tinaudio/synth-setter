@@ -1,4 +1,4 @@
-_target_: src.data.ksin_datamodule.KSinDataModule
+_target_: synth_setter.data.ksin_datamodule.KSinDataModule
 k: 1
 signal_length: 1024
 sort_frequencies: false

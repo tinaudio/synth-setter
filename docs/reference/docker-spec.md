@@ -18,13 +18,13 @@ group with five subcommands. Each spec-taking subcommand deserializes its
 `--spec` into a mode-specific pydantic model at the container boundary
 (parse-don't-validate), then hands off to the downstream.
 
-| Subcommand         | Args                     | Behavior                                                                                                                             |
-| ------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `idle`             | none                     | `exec sleep infinity`                                                                                                                |
-| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                                                         |
-| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetSpec`, call `src.generate_dataset.run(spec)`, then `os._exit(0)` (defensive #735 workaround — bypasses atexit) |
-| `render_eval`      | `--spec PATH`            | `click.ClickException` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410)                                      |
-| `train`            | `--spec PATH`            | `click.ClickException` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409)                                      |
+| Subcommand         | Args                     | Behavior                                                                                                                                          |
+| ------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `idle`             | none                     | `exec sleep infinity`                                                                                                                             |
+| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                                                                      |
+| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetSpec`, call `synth_setter.cli.generate_dataset.run(spec)`, then `os._exit(0)` (defensive #735 workaround — bypasses atexit) |
+| `render_eval`      | `--spec PATH`            | `click.ClickException` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410)                                                   |
+| `train`            | `--spec PATH`            | `click.ClickException` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409)                                                   |
 
 `generate_dataset` does **not** consume any env vars for its dispatch
 inputs. All dataset-run configuration — including the R2 bucket

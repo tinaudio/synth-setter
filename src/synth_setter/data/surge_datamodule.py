@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from lightning import LightningDataModule
 
-from src.data.ot import _hungarian_match
+from synth_setter.data.ot import _hungarian_match
 
 
 class SurgeXTDataset(torch.utils.data.Dataset):

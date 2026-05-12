@@ -21,8 +21,8 @@ from pathlib import Path
 import pytest
 from hydra import compose, initialize_config_dir
 
-from src.generate_dataset import spec_from_cfg
 from src.pipeline.schemas.spec import DatasetSpec
+from synth_setter.cli.generate_dataset import spec_from_cfg
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
 

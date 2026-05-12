@@ -23,8 +23,8 @@ from hydra.errors import HydraException
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from src.generate_dataset import spec_from_cfg  # noqa: E402
 from src.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
+from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
 REPO_ROOT = CONFIG_DIR.parent

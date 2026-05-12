@@ -52,13 +52,13 @@ docs:
         covers: "Entity, project, log_model setting, offline mode"
       - pattern: "configs/logger/many_loggers.yaml"
         covers: "Default logger compose — which loggers are enabled out of the box"
-      - pattern: "src/train.py"
+      - pattern: "src/synth_setter/cli/train.py"
         covers: "WandbLogger instantiation, trainer integration, run lifecycle"
-      - pattern: "src/eval.py"
+      - pattern: "src/synth_setter/cli/eval.py"
         covers: "Checkpoint resolution from W&B, evaluation logging"
-      - pattern: "src/utils/logging_utils.py"
+      - pattern: "src/synth_setter/utils/logging_utils.py"
         covers: "Metric logging helpers, hyperparameter logging, log_hyperparameters"
-      - pattern: "src/utils/callbacks.py"
+      - pattern: "src/synth_setter/utils/callbacks.py"
         covers: "W&B callback integrations, visualization uploads"
       - pattern: "scripts/get-ckpt-from-wandb.sh"
         covers: "CLI checkpoint download from W&B, artifact resolution"
@@ -71,8 +71,8 @@ docs:
         covers: "Run ID prefix generation, shard ID scheme, deterministic naming"
       - pattern: "configs/experiment/**"
         covers: "Dataset generation configs, shard counts, sample counts, synth params"
-      - pattern: "src/generate_dataset.py"
-        covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m src.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
+      - pattern: "src/synth_setter/cli/generate_dataset.py"
+        covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m synth_setter.cli.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
         covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (deterministic from `cluster_name` + the materialized spec's `r2_bucket`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
@@ -128,7 +128,7 @@ docs:
         covers: "R2 listing commands, shard status reporting, path parsing"
       - pattern: "configs/dataset/*.yaml"
         covers: "r2_bucket value, storage configuration"
-      - pattern: "src/generate_dataset.py"
+      - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "rclone upload of spec and shard files, R2 path construction"
         scope: "rclone"
       - pattern: "src/pipeline/constants.py"
@@ -138,11 +138,11 @@ docs:
   - doc: docs/design/training-pipeline.md
     description: Training pipeline design — Hydra configs, Lightning training, RunPod portability
     sources:
-      - pattern: "src/train.py"
+      - pattern: "src/synth_setter/cli/train.py"
         covers: "Training entry point, Hydra config composition, rootutils setup"
-      - pattern: "src/models/**"
+      - pattern: "src/synth_setter/models/**"
         covers: "Lightning module definitions, forward pass, loss computation, optimizer config"
-      - pattern: "src/data/**"
+      - pattern: "src/synth_setter/data/**"
         covers: "Data modules, dataset classes, VST rendering, data loading"
       - pattern: "configs/train.yaml"
         covers: "Top-level training config, Hydra defaults list, config groups"
@@ -166,7 +166,7 @@ docs:
   - doc: docs/design/eval-pipeline.md
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
     sources:
-      - pattern: "src/eval.py"
+      - pattern: "src/synth_setter/cli/eval.py"
         covers: "Evaluation entry point, checkpoint loading, Hydra config composition"
       - pattern: "scripts/predict_vst_audio.py"
         covers: "Audio prediction script, VST rendering, parameter-to-audio pipeline"
@@ -180,9 +180,9 @@ docs:
         covers: "Eval-specific callback config, prediction writer setup"
       - pattern: "configs/callbacks/prediction_writer.yaml"
         covers: "Prediction writer callback, output format, batch handling"
-      - pattern: "src/metrics.py"
+      - pattern: "src/synth_setter/metrics.py"
         covers: "Metric definitions, evaluation scoring functions"
-      - pattern: "src/data/vst/**"
+      - pattern: "src/synth_setter/data/vst/**"
         covers: "VST plugin loading, parameter specs, audio generation for eval"
       - pattern: "scripts/get-ckpt-from-wandb.sh"
         covers: "Checkpoint download from W&B, artifact resolution for eval"
@@ -244,7 +244,7 @@ docs:
         covers: "Eval entry point, Hydra defaults"
       - pattern: "src/pipeline/schemas/spec.py"
         covers: "DatasetSpec / RenderConfig / ShardSpec Pydantic models, spec_from_cfg() flow"
-      - pattern: "src/train.py"
+      - pattern: "src/synth_setter/cli/train.py"
         covers: "Training entry point, Hydra composition, instantiation flow"
       - pattern: "configs/logger/wandb.yaml"
         covers: "W&B logger config, log_model, entity/project"
@@ -297,11 +297,11 @@ docs:
     description: Interactive Surge XT prediction audition and patch-recording guide
     sources:
       - pattern: "scripts/surge_xt_interactive.py"
-        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch HDF5 output, append-vs-fresh directory semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants, optional --checkpoint-path eval pipeline (eval_patches: src/eval.py mode=predict + predict_vst_audio.py + compute_audio_metrics.py), directory-of-splits output"
-      - pattern: "src/data/vst/core.py"
+        covers: "CLI flags, interactive session lifecycle (audio + editor + keyboard threads, stop_event), p/q keybindings, recorded-patch HDF5 output, append-vs-fresh directory semantics, PLAYBACK_SAMPLE_RATE / SAMPLE_RATE / BUFFER_SIZE / MAKE_DATASET_* constants, optional --checkpoint-path eval pipeline (eval_patches: src/synth_setter/cli/eval.py mode=predict + predict_vst_audio.py + compute_audio_metrics.py), directory-of-splits output"
+      - pattern: "src/synth_setter/data/vst/core.py"
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"
-      - pattern: "src/data/vst/generate_vst_dataset.py"
+      - pattern: "src/synth_setter/data/vst/generate_vst_dataset.py"
         covers: "fixed_synth_params_list / fixed_note_params_list optional path used to render captured patches; mel_spec shape (2,128,401), audio dtype float16"
         scope: "interactive"
 
@@ -318,7 +318,7 @@ docs:
   # - doc: docs/reference/rclone.md
   #   description: rclone R2 operations reference
   #   sources:
-  #     - pattern: "src/generate_dataset.py"
+  #     - pattern: "src/synth_setter/cli/generate_dataset.py"
   #       covers: "rclone copy --checksum for spec + shard uploads"
   #       scope: "rclone"
   #     - pattern: "scripts/r2_shard_report.py"
