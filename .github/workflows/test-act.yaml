@@ -35,15 +35,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # Pin the act release so this job doesn't break when nektos/act cuts a new tag.
-      # Bump the version here intentionally when adopting new act features.
+      # Pin act to a specific tagged release + verify the tarball checksum,
+      # rather than piping nektos/act `master`'s install.sh into sudo bash
+      # (supply-chain risk: master can change/be tampered with under us, and
+      # the script's own behavior can drift). Bump ACT_VERSION + ACT_SHA256
+      # together when adopting new act features.
       - name: Install act
         env:
           ACT_VERSION: v0.2.88
+          ACT_SHA256: 1eb9996682dfcc053ac8f3f90f2ec50376f0cdfc229712d82da03d673c63a2b3
         run: |
           set -euo pipefail
-          curl -fsSL https://raw.githubusercontent.com/nektos/act/master/install.sh \
-            | sudo bash -s -- -b /usr/local/bin "${ACT_VERSION}"
+          tarball="act_Linux_x86_64.tar.gz"
+          curl -fsSL -o "${tarball}" \
+            "https://github.com/nektos/act/releases/download/${ACT_VERSION}/${tarball}"
+          echo "${ACT_SHA256}  ${tarball}" | sha256sum -c -
+          sudo tar -xzf "${tarball}" -C /usr/local/bin act
+          rm -f "${tarball}"
           act --version
 
       # `act -l` parses every workflow file under .github/workflows/ and applies
