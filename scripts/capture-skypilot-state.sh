@@ -63,8 +63,12 @@ _capture_cluster_overview() {
 # Filters workers in the `default` namespace; sky-jobs-controller may live in
 # the `skypilot` namespace and is captured separately by _capture_controller_pod.
 _capture_worker_pods() {
-  local worker_pods
-  readarray -t worker_pods < <(kubectl get pods -n default --no-headers 2>/dev/null \
+  # Portable to bash 3.2 (macOS /bin/bash) — `readarray` is bash 4+ only.
+  local worker_pods=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] && worker_pods+=("${line}")
+  done < <(kubectl get pods -n default --no-headers 2>/dev/null \
     | awk '$1 !~ /^sky-jobs-controller/ {print $1}')
   if [[ ${#worker_pods[@]} -eq 0 ]]; then
     echo "no non-controller pods in default namespace at capture time" \
