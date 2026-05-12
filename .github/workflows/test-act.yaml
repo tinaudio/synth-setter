@@ -104,10 +104,21 @@ jobs:
       # Real-run the data-pipeline chain via act with provider=local —
       # dropping `-n` lets `setup` populate `$GITHUB_OUTPUT` so the dynamic
       # matrix resolves. Fork PRs skip (R2 secrets unavailable to forks).
-      # `PIP_BREAK_SYSTEM_PACKAGES=1` is injected because catthehacker's
-      # python3.12 ships with PEP 668's externally-managed marker, so a
-      # workflow `pip install` that works on real GHA fails inside act
-      # without the override.
+      # Three act-only knobs paper over real act-vs-GHA divergences without
+      # touching the production workflow:
+      #   * `--env PIP_BREAK_SYSTEM_PACKAGES=1` — catthehacker's python3.12
+      #     ships PEP 668's externally-managed marker; the workflow's
+      #     `pip install hydra-core ...` works on real GHA but fails under
+      #     act without the override.
+      #   * `--container-options "-v /tmp:/tmp"` — `generate-local` mkdir's
+      #     /tmp/run-metadata-local inside the act runner and then does a
+      #     host-daemon `docker run -v /tmp/run-metadata-local:/run-metadata`.
+      #     Without /tmp shared host↔runner, the spec lands on the host but
+      #     the in-runner `Validate spec exists` step (which reads from the
+      #     runner namespace) can't see it.
+      #   * `--artifact-server-path` — `actions/upload-artifact@v4` needs
+      #     `ACTIONS_RUNTIME_TOKEN`; act issues one only when its local
+      #     artifact server is enabled via this flag.
       - name: Real-run test-dataset-generation chain via act (provider=local)
         if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         env:
@@ -118,7 +129,8 @@ jobs:
           set -euo pipefail
           umask 077
           secrets_file="$(mktemp)"
-          trap 'rm -f "${secrets_file}"' EXIT
+          artifact_dir="$(mktemp -d)"
+          trap 'rm -rf "${secrets_file}" "${artifact_dir}"' EXIT
           {
             printf 'RCLONE_CONFIG_R2_ACCESS_KEY_ID=%s\n' "${RCLONE_CONFIG_R2_ACCESS_KEY_ID}"
             printf 'RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=%s\n' "${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY}"
@@ -128,4 +140,6 @@ jobs:
             -W .github/workflows/test-dataset-generation.yml \
             --input provider=local \
             --secret-file "${secrets_file}" \
-            --env PIP_BREAK_SYSTEM_PACKAGES=1
+            --env PIP_BREAK_SYSTEM_PACKAGES=1 \
+            --container-options "-v /tmp:/tmp" \
+            --artifact-server-path "${artifact_dir}"
