@@ -1,13 +1,12 @@
 """Unified dataset specification: a single Pydantic model is the spec on R2.
 
-``DatasetSpec`` replaces the prior split between ``DatasetConfig`` (the YAML-
-shaped config) and ``DatasetPipelineSpec`` (the runtime-materialized artifact).
-Hydra composes a dict from groups; the entrypoint constructs ``DatasetSpec``
-directly from that dict on line 1 of ``main``. Runtime fields (``git_sha``,
-``created_at``, ``run_id``, ``r2_prefix``) auto-fill via ``default_factory``
-when missing and pass through when present (worker reconstruction from JSON).
-``shards``/``num_shards``/``num_params`` are computed deterministically from
-layout + render fields.
+``DatasetSpec`` is the only spec model — there is no separate YAML-shaped
+config or runtime-materialized artifact. Hydra composes a dict from groups;
+the entrypoint constructs ``DatasetSpec`` directly from that dict on line 1
+of ``main``. Runtime fields (``git_sha``, ``created_at``, ``run_id``,
+``r2_prefix``) auto-fill via ``default_factory`` when missing and pass through
+when present (worker reconstruction from JSON). ``shards``/``num_shards``/
+``num_params`` are computed deterministically from layout + render fields.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from pydantic import (
     model_validator,
 )
 
-from pipeline.schemas.prefix import (
+from src.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
     make_dataset_wandb_run_id,
@@ -46,20 +45,48 @@ __all__ = [
 OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5"}
 
 
+# Sentinel returned by ``_get_git_sha`` when called outside a git working
+# tree (worker host without ``.git/``, fresh tarball extract, etc.). Workers
+# normally receive ``git_sha`` populated in the JSON spec from R2, so the
+# default_factory only fires when something has gone off-script — returning
+# a sentinel rather than raising lets the failure surface as a clear
+# "git_sha=git-unavailable" in the spec JSON rather than a CalledProcessError
+# deep in pydantic's default_factory.
+_GIT_UNAVAILABLE_SENTINEL = "git-unavailable"
+
+
 def _get_git_sha() -> str:
-    """Get the current git commit SHA."""
-    result = subprocess.run(  # noqa: S603
-        ["git", "rev-parse", "HEAD"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    """Get the current git commit SHA, or a sentinel if unavailable."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "rev-parse", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return _GIT_UNAVAILABLE_SENTINEL
     return result.stdout.strip()
 
 
 def _is_repo_dirty() -> bool:
-    """Check if the git working tree has uncommitted changes."""
-    result = subprocess.run(["git", "diff", "--quiet"], capture_output=True)  # noqa: S603, S607
+    """Check if the git working tree has uncommitted changes (False if no git).
+
+    ``git diff --quiet`` exits 0 (clean) or 1 (dirty) inside a repo, and 128
+    when run outside one (``fatal: not a git repository``). Treat exit codes
+    outside {0, 1} as "no usable git" — same contract as ``_get_git_sha``'s
+    sentinel: a worker on a tarball-extracted host gets a benign default
+    rather than a confusing ``is_repo_dirty=True``.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "diff", "--quiet"],  # noqa: S607
+            capture_output=True,
+        )
+    except FileNotFoundError:
+        return False
+    if result.returncode not in (0, 1):
+        return False
     return result.returncode != 0
 
 
@@ -178,10 +205,11 @@ class DatasetSpec(BaseModel):
     # Sub-model
     render: RenderConfig
 
-    # Auto-filled runtime fields. ``default_factory`` runs only when the field
-    # is missing on input — JSON-loaded specs preserve the materialization-time
-    # values that workers must reuse for consistency. Lambdas wrap the
-    # module-level helpers so test monkeypatches take effect.
+    # Auto-filled runtime fields. The factory runs only when the field is
+    # missing on input — JSON-loaded specs preserve the materialization-time
+    # values workers must reuse. The lambdas around ``_get_git_sha`` etc.
+    # defer the lookup to call time so tests that ``monkeypatch.setattr`` on
+    # the module attribute reach this resolution path.
     git_sha: str = Field(default_factory=lambda: _get_git_sha())
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
@@ -216,7 +244,7 @@ class DatasetSpec(BaseModel):
         """
         if isinstance(data, dict):
             data = dict(data)
-            for computed_key in ("shards", "num_shards", "num_params"):
+            for computed_key in cls.model_computed_fields:
                 data.pop(computed_key, None)
         return data
 
@@ -281,6 +309,14 @@ class DatasetSpec(BaseModel):
         """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
         if not value.strip():
             raise ValueError("r2_bucket must not be blank")
+        return value
+
+    @field_validator("r2_prefix_root")
+    @classmethod
+    def _r2_prefix_root_must_not_be_blank(cls, value: str) -> str:
+        """Reject blank prefix roots so derived ``r2_prefix`` doesn't start with a stray ``/``."""
+        if not value.strip():
+            raise ValueError("r2_prefix_root must not be blank")
         return value
 
     @field_validator("task_name")

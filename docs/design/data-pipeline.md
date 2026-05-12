@@ -51,7 +51,7 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 ### Distributed Pipeline
 
 > **Implementation status:** Single-machine sequential multi-shard generation is
-> implemented today (`pipeline/entrypoints/generate_dataset.py` loops over
+> implemented today (`src/generate_dataset.py` loops over
 > `spec.shards`, skipping shards already present in R2 — worker-side
 > resumability MVP per #750; the launcher-side reconciliation engine described
 > in §7.4 / §7.7 is not yet built). The distributed/parallel pipeline described
@@ -82,9 +82,9 @@ cat configs/experiment/surge-simple-480k-10k.yaml
 # → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 
 # 2. Run sequential multi-shard generation on a single worker.
-python -m pipeline.entrypoints.generate_dataset experiment=surge-simple-480k-10k
+python -m src.generate_dataset experiment=surge-simple-480k-10k
 # → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
-# **Planned CLI** — the distributed pipeline CLI (`python -m pipeline generate/status/finalize`)
+# **Planned CLI** — the distributed pipeline CLI (`python -m src.pipeline generate/status/finalize`)
 # is not yet implemented; `generate_dataset` is the current MVP, deprecated when
 # `generate-shards` lands on main (#411).
 
@@ -786,11 +786,11 @@ def _render_shard(shard_spec, shard_path):
     The import happens here, in the child, so the VST plugin loads cleanly.
     """
     import numpy as np
-    from pipeline.vst import make_dataset
+    from src.data.vst.generate_vst_dataset import make_hdf5_dataset
     # P3 (post-launch): seed both RNGs for reproducibility — see #100
     # random.seed(shard_spec.seed)
     # np.random.seed(shard_spec.seed)
-    make_dataset(shard_path, shard_spec)
+    make_hdf5_dataset(shard_path, shard_spec)
 
 # In the parent worker:
 p = _spawn_ctx.Process(
@@ -1209,7 +1209,7 @@ This section covers how the design is realized — specific libraries, configura
 
 Schema for the frozen input specification described in [§7.1](#71-storage-as-the-source-of-truth) and [§6 artifact taxonomy](#artifact-taxonomy).
 
-See `pipeline/schemas/spec.py` for the authoritative definition. The model is `DatasetSpec` (unifies the previous `DatasetConfig` + `DatasetPipelineSpec` split; the constructed Pydantic instance **is** the artifact on R2 — `model.model_dump_json()` is the JSON).
+See `src/pipeline/schemas/spec.py` for the authoritative definition. The model is `DatasetSpec` (unifies the previous `DatasetConfig` + `DatasetPipelineSpec` split; the constructed Pydantic instance **is** the artifact on R2 — `model.model_dump_json()` is the JSON).
 
 ```python
 class ShardSpec(BaseModel):
@@ -1392,7 +1392,7 @@ render:
 
 `configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
 
-On first `generate` (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`):
+On first `generate` (`python -m src.generate_dataset experiment=<id>`):
 
 1. Hydra composes the experiment against `configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
@@ -1420,28 +1420,27 @@ Config filenames live in `configs/experiment/`. Production training configs foll
 ### 14.7 CLI & Directory Structure
 
 ```
-pipeline/
-  __init__.py
+src/
+  generate_dataset.py   # Sequential multi-shard dataset-generation entrypoint (Hydra; MVP). Deprecated when generate-shards lands (#411).
 
-  schemas/              # Pydantic models (implemented)
+  pipeline/             # Distributed-pipeline package
     __init__.py
-    spec.py             # DatasetSpec (unified config + runtime), RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, spec_from_cfg flow
-    prefix.py           # DatasetConfigId, DatasetRunId, R2Prefix helpers
-    image_config.py     # Docker image configuration
 
-  entrypoints/          # Pipeline entry points (implemented)
-    __init__.py
-    generate_dataset.py # Sequential multi-shard dataset generation (MVP) + Hydra CLI entry (`python -m pipeline.entrypoints.generate_dataset experiment=<id>`); deprecated when generate-shards lands (#411)
+    schemas/            # Pydantic models (implemented)
+      __init__.py
+      spec.py           # DatasetSpec (unified config + runtime), RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, spec_from_cfg flow
+      prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix helpers
+      image_config.py   # Docker image configuration
+
+    ci/                 # CI validation scripts (implemented)
+      materialize_spec.py # Compose a DatasetSpec from a Hydra experiment and write it to disk as JSON
+      validate_spec.py  # Spec structural validation (required fields, git_sha format, etc.)
+      validate_shard.py # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
+      load_image_config.py # Resolve Docker image configuration for the launcher
+
+    constants.py        # Well-known filenames and paths (R2_BUCKET, etc.)
+    r2_io.py            # rclone-backed R2 helpers (URI handling, download, upload, size probe)
     skypilot_launch.py  # Click CLI wrapping SkyPilot launch; composes a DatasetSpec via `--experiment <id>` + ad-hoc Hydra overrides
-
-  ci/                   # CI validation scripts (implemented)
-    materialize_spec.py # Compose a DatasetSpec from a Hydra experiment and write it to disk as JSON
-    validate_spec.py    # Spec structural validation (required fields, git_sha format, etc.)
-    validate_shard.py   # Shard validation (valid HDF5, expected datasets, row count); iterates spec.shards via R2
-    load_image_config.py # Resolve Docker image configuration for the launcher
-
-  constants.py          # Well-known filenames and paths (R2_BUCKET, etc.)
-  r2_io.py              # rclone-backed R2 helpers (URI handling, download, upload, size probe)
 
   # --- Planned (not yet implemented) ---
   # cli.py              # Click entry point: generate, status, finalize

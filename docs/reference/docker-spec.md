@@ -18,13 +18,13 @@ group with five subcommands. Each spec-taking subcommand deserializes its
 `--spec` into a mode-specific pydantic model at the container boundary
 (parse-don't-validate), then hands off to the downstream.
 
-| Subcommand         | Args                     | Behavior                                                                                                                                              |
-| ------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `idle`             | none                     | `exec sleep infinity`                                                                                                                                 |
-| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                                                                          |
-| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetSpec`, call `pipeline.entrypoints.generate_dataset.run(spec)`, then `os._exit(0)` (defensive #735 workaround — bypasses atexit) |
-| `render_eval`      | `--spec PATH`            | `click.ClickException` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410)                                                       |
-| `train`            | `--spec PATH`            | `click.ClickException` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409)                                                       |
+| Subcommand         | Args                     | Behavior                                                                                                                             |
+| ------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `idle`             | none                     | `exec sleep infinity`                                                                                                                |
+| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                                                         |
+| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetSpec`, call `src.generate_dataset.run(spec)`, then `os._exit(0)` (defensive #735 workaround — bypasses atexit) |
+| `render_eval`      | `--spec PATH`            | `click.ClickException` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410)                                      |
+| `train`            | `--spec PATH`            | `click.ClickException` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409)                                      |
 
 `generate_dataset` does **not** consume any env vars for its dispatch
 inputs. All dataset-run configuration — including the R2 bucket
@@ -133,7 +133,7 @@ Dispatch and dataset-run configuration flow via CLI, not env vars: the
 subcommand (`generate_dataset`, `idle`, `passthrough`, …) is a positional
 arg; the pipeline spec — including the R2 bucket — is read from the JSON
 file passed via `--spec`. `input_spec.json` is written by the caller (the
-`pipeline.ci.materialize_spec` bootstrap step in CI) to a bind-mounted
+`src.pipeline.ci.materialize_spec` bootstrap step in CI) to a bind-mounted
 directory. Multi-shard generation runs sequentially on a single worker;
 distributed parallelism is tracked in [#407](https://github.com/tinaudio/synth-setter/issues/407).
 

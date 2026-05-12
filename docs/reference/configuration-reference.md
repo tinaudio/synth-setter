@@ -77,7 +77,7 @@ Reference: `eval-pipeline.md` §4–5
 
 ```
 configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
-  → launcher script (pipeline.entrypoints.skypilot_launch)
+  → launcher script (src.pipeline.skypilot_launch)
     reads YAML, materializes spec, mounts spec into worker
     → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
       → pod runs: python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
@@ -85,7 +85,7 @@ configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
 
 - Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — the launcher itself uses Hydra's `compose()` to build the `DatasetSpec` from `configs/dataset.yaml` + the named experiment.
 - Launcher takes the task template + an `--experiment <name>`, composes the `DatasetSpec` via Hydra, uploads its JSON to R2 (under `skypilot-launcher-specs/<cluster>.json`), and forwards the `r2://` URI to the worker via `task.update_envs(WORKER_SPEC_URI=...)`. R2 is used instead of `task.update_file_mounts` because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
-- Invoked via: `python -m pipeline.entrypoints.skypilot_launch --experiment <name> --template <yaml>` (trailing positional args, e.g. `render.plugin_path=...`, are forwarded to Hydra `compose` as overrides).
+- Invoked via: `python -m src.pipeline.skypilot_launch --experiment <name> --template <yaml>` (trailing positional args, e.g. `render.plugin_path=...`, are forwarded to Hydra `compose` as overrides).
 
 Reference: `training-pipeline.md` Appendix D
 

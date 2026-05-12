@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from pipeline.schemas.image_config import load_image_config
+from src.pipeline.schemas.image_config import load_image_config
 
 
 def main() -> None:

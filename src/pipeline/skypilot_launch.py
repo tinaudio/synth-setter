@@ -46,9 +46,9 @@ from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
 
-from pipeline.entrypoints.generate_dataset import spec_from_cfg
-from pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from pipeline.schemas.spec import DatasetSpec
+from src.generate_dataset import spec_from_cfg
+from src.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from src.pipeline.schemas.spec import DatasetSpec
 
 # Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
@@ -131,6 +131,16 @@ def _compose_dataset_spec(experiment: str, overrides: list[str]) -> DatasetSpec:
 # so concurrent launches on the same host don't collide.
 LOCAL_SPEC_DIR = Path(tempfile.gettempdir())
 
+# `sky local up` uses the kubernetes backend; map both spellings.
+_CLOUD_TO_PROVIDER: dict[str, str] = {
+    "runpod": "runpod",
+    "oci": "oci",
+    "kubernetes": "local",
+    "k8s": "local",
+}
+
+_SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
+
 
 def load_worker_env(path: Path) -> dict[str, str]:
     """Read worker-side env from a dotenv file using python-dotenv.
@@ -173,14 +183,6 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
             f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
         )
     return resolved
-
-
-_CLOUD_TO_PROVIDER: dict[str, str] = {
-    "runpod": "runpod",
-    "oci": "oci",
-    "kubernetes": "local",
-    "k8s": "local",  # SkyPilot accepts both
-}
 
 
 def _detect_provider(template_path: Path) -> str:
@@ -232,9 +234,6 @@ def _detect_provider(template_path: Path) -> str:
             "supports runpod, oci, and local (kubernetes) only"
         )
     return provider
-
-
-_SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
 
 
 def _apply_dispatch_mode(api_server: str | None, local: bool) -> None:
@@ -401,7 +400,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
         "backend does not support num_nodes>1, so we synthesize multi-worker partitioning by "
         "launching N independent clusters and injecting SYNTH_SETTER_WORKER_RANK / "
         "SYNTH_SETTER_NUM_WORKERS per rank. Each cluster downloads the same materialized spec "
-        "and uses pipeline.partitioning.get_my_shards to slice its share."
+        "and uses src.pipeline.partitioning.get_my_shards to slice its share."
     ),
 )
 @click.option(
@@ -491,13 +490,7 @@ def main(
             f"Expected at least one of: {', '.join(secret_keys)}."
         )
 
-    # `upload_spec_to_r2` shells out to rclone, which inherits os.environ.
-    # `worker_env` already reflects the launcher's resolved precedence
-    # (env-file > process env, per `resolve_worker_env`), so write through to
-    # `os.environ` to make the rclone subprocess see the same effective
-    # values the launcher resolved — not whatever happened to be exported
-    # in the launcher process. CI sets these in the workflow `env:` block
-    # directly, so the assignment is a no-op there.
+    # rclone subprocess inherits os.environ; mirror launcher-resolved values so .env wins.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value

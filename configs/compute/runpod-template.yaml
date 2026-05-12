@@ -1,6 +1,6 @@
 # SkyPilot task template for RunPod.
 #
-# Loaded by pipeline/entrypoints/skypilot_launch.py via sky.Task.from_yaml(...).
+# Loaded by src/pipeline/skypilot_launch.py via sky.Task.from_yaml(...).
 # The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`)
 # and injects credentials + the spec URI via task.update_envs(...) before
 # calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
@@ -44,7 +44,7 @@ envs:
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WORKER_SPEC_URI: ""
   WORKER_GIT_REF: ""
-  # Per-rank partition env. Source of truth: pipeline/partitioning.py.
+  # Per-rank partition env. Source of truth: src/pipeline/partitioning.py.
   SYNTH_SETTER_WORKER_RANK: ""
   SYNTH_SETTER_NUM_WORKERS: ""
 

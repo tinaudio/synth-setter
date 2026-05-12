@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
-from pipeline.schemas.spec import (
+from src.data.vst import param_specs
+from src.pipeline.schemas.spec import (
     DatasetSpec,
     RenderConfig,
     ShardSpec,
 )
-from src.data.vst import param_specs
 
 FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -51,9 +53,9 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
 @pytest.fixture()
 def patch_runtime_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub git/timestamp factories so DatasetSpec construction is deterministic."""
-    monkeypatch.setattr("pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
-    monkeypatch.setattr("pipeline.schemas.spec._is_repo_dirty", lambda: False)
-    monkeypatch.setattr("pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
+    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
+    monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +187,13 @@ class TestDatasetSpecValidators:
         """Blank task_name raises (derived run_id / r2_prefix would be empty-prefixed)."""
         with pytest.raises(ValidationError, match="task_name must not be blank"):
             DatasetSpec(**_valid_spec_kwargs(task_name="   "))
+
+    def test_r2_prefix_root_blank_raises(self, patch_runtime_io: None) -> None:
+        """Blank or whitespace-only r2_prefix_root raises so derived r2_prefix doesn't start with a
+        stray ``/``."""
+        for blank in ("", "   ", "\t\n"):
+            with pytest.raises(ValidationError, match="r2_prefix_root must not be blank"):
+                DatasetSpec(**_valid_spec_kwargs(r2_prefix_root=blank))
 
     def test_explicit_r2_prefix_missing_trailing_slash_raises(
         self, patch_runtime_io: None
@@ -401,7 +410,7 @@ class TestDatasetSpecRoundTrip:
             return "f" * 40
 
         # Patch the factory; if pass-through works the factory shouldn't be called.
-        import pipeline.schemas.spec as spec_mod
+        import src.pipeline.schemas.spec as spec_mod
 
         original = spec_mod._get_git_sha
         spec_mod._get_git_sha = _drift_sha
@@ -411,3 +420,102 @@ class TestDatasetSpecRoundTrip:
             spec_mod._get_git_sha = original
 
         assert restored.git_sha == "abc123def456"
+
+
+# ---------------------------------------------------------------------------
+# Graceful git helpers — _get_git_sha / _is_repo_dirty under missing .git/
+# ---------------------------------------------------------------------------
+
+
+class TestGitHelpersGraceful:
+    """``_get_git_sha`` and ``_is_repo_dirty`` must not crash when ``.git/`` is unavailable."""
+
+    def test_get_git_sha_returns_sentinel_on_called_process_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-zero ``git rev-parse`` exit returns the sentinel rather than raising."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        def _raise(*args: object, **kwargs: object) -> object:
+            raise subprocess.CalledProcessError(returncode=128, cmd=["git", "rev-parse", "HEAD"])
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _raise)
+        assert spec_mod._get_git_sha() == spec_mod._GIT_UNAVAILABLE_SENTINEL
+
+    def test_get_git_sha_returns_sentinel_when_git_binary_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing ``git`` binary yields the sentinel — worker hosts without git survive."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        def _raise(*args: object, **kwargs: object) -> object:
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _raise)
+        assert spec_mod._get_git_sha() == spec_mod._GIT_UNAVAILABLE_SENTINEL
+
+    def test_is_repo_dirty_returns_false_when_git_binary_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing ``git`` binary makes ``_is_repo_dirty`` return False rather than raise."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        def _raise(*args: object, **kwargs: object) -> object:
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _raise)
+        assert spec_mod._is_repo_dirty() is False
+
+    def test_is_repo_dirty_returns_false_when_outside_git_worktree(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``git diff --quiet`` exits 128 outside a worktree — treat as "no git", not "dirty"."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        class _FakeCompleted:
+            returncode = 128
+
+        def _fake(*args: object, **kwargs: object) -> _FakeCompleted:
+            return _FakeCompleted()
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _fake)
+        assert spec_mod._is_repo_dirty() is False
+
+
+# ---------------------------------------------------------------------------
+# Bare import is launcher-pure — no pedalboard / src.data.vst.core load
+# ---------------------------------------------------------------------------
+
+
+class TestSpecImportStaysLauncherPure:
+    """``import src.pipeline.schemas.spec`` alone must not pull heavy modules."""
+
+    def test_bare_spec_import_does_not_pull_data_vst_core(self) -> None:
+        """`import src.pipeline.schemas.spec` alone must not transitively load
+        ``src.data.vst.core`` or ``pedalboard``.
+
+        ``spec.py``'s only ``src.data.vst`` import is inside
+        ``DatasetSpec.num_params`` and runs lazily. If it is re-promoted to
+        module level — or another heavy import is added at module load — this
+        test fails immediately, preserving the launcher's interpreter-only
+        contract.
+        """
+        script = (
+            "import sys\n"
+            "import src.pipeline.schemas.spec  # noqa: F401\n"
+            "for name in ('src.data.vst.core', 'src.data.vst', 'pedalboard'):\n"
+            "    assert name not in sys.modules, (\n"
+            "        f'{name!r} leaked into spec module import; '\n"
+            "        f'this breaks the launcher-pure invariant'\n"
+            "    )\n"
+        )
+        result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"bare spec import is no longer launcher-pure:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
