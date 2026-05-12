@@ -210,6 +210,77 @@ class TestExistingFileErrors:
         with pytest.raises(UpsertError, match=str(path)):
             upsert_sky_config_key("oci", "oci: {}\n", path)
 
+    def test_utf8_existing_file_with_non_ascii_succeeds_under_c_locale(
+        self, tmp_path: Path
+    ) -> None:
+        """A pre-existing UTF-8 file with non-ASCII bytes parses correctly even when the OS locale
+        would otherwise default to ASCII. Pins the explicit ``encoding="utf-8"`` on the read path
+        so UTF-8 validation behaves the same on a ``LANG=C`` runner as on a ``LANG=C.UTF-8`` one.
+
+        :param tmp_path: pytest tmp dir fixture.
+        """
+        path = tmp_path / "config.yaml"
+        path.write_text("oci:\n  default:\n    label: éclair\n", encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("LC_", "LANG"))}
+        env["LC_ALL"] = "C"
+        env["LANG"] = "C"
+        env["SYNTH_UPSERT_FRAGMENT"] = "oci:\n  default:\n    label: new\n"
+        result = subprocess.run(  # noqa: S603 — controlled args
+            [sys.executable, str(MODULE_PATH), "oci", str(path)],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Error paths — filesystem errors on the write path
+# ---------------------------------------------------------------------------
+
+
+class TestWritePathErrors:
+    """``write_text`` / ``chmod`` failures surface as UpsertError, never a raw traceback."""
+
+    def test_write_to_missing_parent_dir_raises_upsert_error(self, tmp_path: Path) -> None:
+        """If the target's parent directory does not exist, write fails as UpsertError.
+
+        :param tmp_path: pytest tmp dir fixture.
+        """
+        path = tmp_path / "does_not_exist" / "config.yaml"
+        with pytest.raises(UpsertError, match="could not write"):
+            upsert_sky_config_key("oci", "oci: {}\n", path)
+
+    def test_write_error_message_includes_key_prefix_and_path(self, tmp_path: Path) -> None:
+        """The OSError-derived UpsertError keeps the grep-able ``[<key>]:`` prefix and names the
+        path so operators can locate the failed write.
+
+        :param tmp_path: pytest tmp dir fixture.
+        """
+        path = tmp_path / "does_not_exist" / "config.yaml"
+        with pytest.raises(UpsertError, match=r"^upsert_sky_config_key\[oci\]:") as exc_info:
+            upsert_sky_config_key("oci", "oci: {}\n", path)
+        assert str(path) in str(exc_info.value)
+
+    def test_cli_write_error_emits_single_line_no_traceback(self, tmp_path: Path) -> None:
+        """End-to-end via the CLI: an OSError on write surfaces as a single-line stderr
+        message with no Python traceback (mirrors the malformed-input contract).
+
+        :param tmp_path: pytest tmp dir fixture.
+        """
+        path = tmp_path / "does_not_exist" / "config.yaml"
+        env = {**os.environ, "SYNTH_UPSERT_FRAGMENT": "oci: {}\n"}
+        result = subprocess.run(  # noqa: S603 — controlled args
+            [sys.executable, str(MODULE_PATH), "oci", str(path)],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
+        assert "Traceback" not in result.stderr
+        assert "upsert_sky_config_key[oci]:" in result.stderr
+        assert str(path) in result.stderr
+
 
 # ---------------------------------------------------------------------------
 # Error paths — fragment is malformed

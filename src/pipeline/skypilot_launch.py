@@ -428,9 +428,9 @@ def _warn_if_deprecated_cluster_name() -> None:
     default=None,
     help=(
         "Managed-job name (used both as the SkyPilot job identifier and as the R2 key "
-        "prefix for the per-launch spec upload). Default: synth-setter-smoke-<config_id[:8]>. "
-        "Multi-worker fan-out appends `-r{i}` per rank. Must match "
-        "[A-Za-z0-9][A-Za-z0-9_-]{0,62}. Alias: --cluster-name (deprecated)."
+        "prefix for the per-launch spec upload). Default: "
+        "synth-setter-smoke-<spec.task_name[:8]>. Multi-worker fan-out appends `-r{i}` per "
+        "rank. Must match [A-Za-z0-9][A-Za-z0-9_-]{0,62}. Alias: --cluster-name (deprecated)."
     ),
 )
 @click.option(
@@ -448,10 +448,10 @@ def _warn_if_deprecated_cluster_name() -> None:
     type=int,
     default=None,
     help=(
-        "Number of independent managed jobs to fan out in parallel. Overrides the dataset "
-        "config's `num_workers` field; if neither is set, the schema default applies. RunPod "
-        "and OCI don't support num_nodes>1 for this workload, so we synthesize multi-worker "
-        "partitioning by launching N independent managed jobs and injecting "
+        "Number of independent managed jobs to fan out in parallel. Defaults to 1 when "
+        "omitted; worker count is a launcher concern and is not read from the dataset spec. "
+        "RunPod and OCI don't support num_nodes>1 for this workload, so we synthesize "
+        "multi-worker partitioning by launching N independent managed jobs and injecting "
         "SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS per rank. Each rank downloads "
         "the same materialized spec and uses src.pipeline.partitioning.get_my_shards to slice "
         "its share."

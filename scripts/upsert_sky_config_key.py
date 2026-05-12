@@ -52,19 +52,26 @@ def upsert_sky_config_key(key: str, fragment_text: str, path: Path) -> None:
 
     Reads ``path`` if it exists, replaces the top-level ``key`` mapping wholesale
     with the one in ``fragment_text``, preserves every other top-level key,
-    writes back, and chmods to ``0o600``. Raises :class:`UpsertError` (propagated
-    from :func:`_load_existing_config` or :func:`_parse_fragment`) on any malformed
-    input — see those helpers' ``:raises:`` sections for the full failure taxonomy.
+    writes back, and chmods to ``0o600``.
 
     :param key: Top-level YAML key to manage (e.g. ``"oci"``, ``"jobs"``).
     :param fragment_text: YAML text — must parse to a mapping with ``key`` at the top level.
     :param path: Path to the config file. Created if it doesn't exist.
+    :raises UpsertError: If ``path`` or ``fragment_text`` is malformed (propagated from
+        :func:`_load_existing_config` / :func:`_parse_fragment` — see their ``:raises:``
+        sections for the full taxonomy), or if writing/chmod-ing the output fails (OSError).
     """
     existing = _load_existing_config(key, path)
     fragment_doc = _parse_fragment(key, fragment_text)
     existing[key] = fragment_doc[key]
-    path.write_text(yaml.safe_dump(existing, sort_keys=False))
-    os.chmod(path, _OUTPUT_FILE_MODE)
+    try:
+        path.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
+        os.chmod(path, _OUTPUT_FILE_MODE)
+    except OSError as exc:
+        raise UpsertError(
+            f"upsert_sky_config_key[{key}]: could not write {path} "
+            f"({exc.__class__.__name__}: {exc})"
+        ) from exc
 
 
 def _load_existing_config(key: str, path: Path) -> dict[str, object]:
@@ -79,7 +86,7 @@ def _load_existing_config(key: str, path: Path) -> dict[str, object]:
     if not path.is_file() or path.stat().st_size == 0:
         return {}
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise UpsertError(
             f"upsert_sky_config_key[{key}]: {path} is not valid UTF-8 ({exc}); "
