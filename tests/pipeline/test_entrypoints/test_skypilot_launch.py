@@ -1022,7 +1022,7 @@ class TestNumWorkersFanOut:
         mock_sky: MagicMock,
         n: int,
         *,
-        tail_rcs_by_name: dict[str, int] | None = None,
+        tail_rcs_by_name: dict[str, int | None] | None = None,
         base_job_name: str = "smoke-job-1",
     ) -> dict[str, MagicMock]:
         """Configure `mock_sky` for an N-job run with deterministic per-rank routing.
@@ -1033,7 +1033,9 @@ class TestNumWorkersFanOut:
         their ``name`` kwarg; ``jobs.tail_logs`` routes by ``job_id`` (the launcher passes
         only ``job_id`` because the SDK rejects ``name + job_id`` together). Either way
         an rc=100 for the rank-1 job deterministically attaches to rank 1 regardless of
-        which thread ran first.
+        which thread ran first. Pass ``rc=None`` for a job to simulate the SDK contract
+        violation where ``tail_logs(follow=True)`` returns ``None`` (the launcher must
+        surface that as a failure rather than mask it as success).
         """
         rcs = tail_rcs_by_name if tail_rcs_by_name is not None else {}
         job_names = [f"{base_job_name}-r{i}" for i in range(n)]
@@ -1258,6 +1260,43 @@ class TestNumWorkersFanOut:
 
         assert result.exit_code != 0
         assert "rc=100" in result.output
+        assert "smoke-job-1-r1" in result.output
+        assert mock_sky.jobs.cancel.call_count == 3
+
+    def test_one_worker_tail_logs_returning_none_fails_launcher_after_full_cancel_under_tail(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """Fan-out variant of
+        `test_tail_logs_returning_none_with_follow_true_is_treated_as_failure`.
+
+        One rank's `sky.jobs.tail_logs(follow=True)` returns ``None`` (SDK contract violation: the
+        SDK only returns None when follow=False). The launcher must surface that as failure rather
+        than mask it as success, and every peer job — successes and the None-returner alike — must
+        still be cancelled.
+        """
+        self._setup_n_workers_mock(mock_sky, n=3, tail_rcs_by_name={"smoke-job-1-r1": None})
+
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--cluster-name",
+            "smoke-job-1",
+            "--num-workers",
+            "3",
+            "--tail",
+            fake_plugin=fake_plugin,
+        )
+
+        assert result.exit_code != 0
+        assert "tail_logs returned None" in result.output
         assert "smoke-job-1-r1" in result.output
         assert mock_sky.jobs.cancel.call_count == 3
 
@@ -2112,19 +2151,41 @@ class TestLaunchOneRank:
 
         assert job_id == 42
 
-    def test_raises_when_stream_and_get_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "stream_and_get_return,expected_match",
+        [
+            # `launch_result is None` guard — different message than the empty/null job_ids path.
+            (None, r"returned None \(no submission handle\)"),
+            # The three "no job_id" shapes all hit the empty/null job_ids guard.
+            ((None, None), "returned no job_id"),
+            (([], None), "returned no job_id"),
+            (([None], None), "returned no job_id"),
+        ],
+        ids=["launch_result_none", "job_ids_none", "job_ids_empty", "job_ids_first_none"],
+    )
+    def test_raises_when_stream_and_get_yields_no_job_id(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stream_and_get_return: object,
+        expected_match: str,
     ) -> None:
-        """If stream_and_get yields ``None``, the helper raises ``ClickException``."""
+        """`sky.jobs.launch` + `sky.stream_and_get` together yield ``(Optional[List[int]],
+        handle)`` (or ``None`` if the whole submission was dropped).
+
+        All four "no job_id" shapes — entire
+        result is ``None``, ``(None, None)``, ``([], None)``, ``([None], None)`` — must raise
+        ``ClickException``. The ``None`` result hits the submission-handle guard; the other three
+        hit the empty/null job_ids guard with a distinct message.
+        """
         from src.pipeline.skypilot_launch import _launch_one_rank
 
         fake_sky = MagicMock()
         fake_sky.Task.from_yaml.return_value = MagicMock()
         fake_sky.jobs.launch.return_value = "req-1"
-        fake_sky.stream_and_get.return_value = None
+        fake_sky.stream_and_get.return_value = stream_and_get_return
         monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake_sky)
 
-        with pytest.raises(click.ClickException, match="returned None"):
+        with pytest.raises(click.ClickException, match=expected_match):
             _launch_one_rank(
                 0,
                 job_names=["job-0"],
@@ -2133,28 +2194,35 @@ class TestLaunchOneRank:
                 template_path=Path("template.yaml"),
             )
 
-    def test_raises_when_stream_and_get_returns_none_tuple(
+    def test_returned_job_id_comes_from_stream_and_get_not_from_rank(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``sky.jobs.launch`` is documented to yield ``(Optional[List[int]], handle)``; an empty
-        list (or ``None``) for the job_ids slot means the controller didn't accept the job and the
-        helper raises ``ClickException``."""
+        """Pins the contract that the returned job_id is ``stream_and_get_result[0][0]`` — i.e.
+        sourced from the SDK's response — not derived from ``rank`` (e.g. ``rank + 1``) or any
+        other positional convention.
+
+        The `TestNumWorkersFanOut` helper happens to map rank ``i`` to
+        job_id ``i + 1`` for routing simplicity; this test makes sure that convention can't be
+        baked into the production helper by accident.
+        """
         from src.pipeline.skypilot_launch import _launch_one_rank
 
         fake_sky = MagicMock()
         fake_sky.Task.from_yaml.return_value = MagicMock()
         fake_sky.jobs.launch.return_value = "req-1"
-        fake_sky.stream_and_get.return_value = (None, None)
+        # A job_id deliberately unrelated to any rank-derived value: not rank, not rank+1, not 0.
+        fake_sky.stream_and_get.return_value = ([424242], None)
         monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake_sky)
 
-        with pytest.raises(click.ClickException, match="returned no job_id"):
-            _launch_one_rank(
-                0,
-                job_names=["job-0"],
-                worker_env_base={},
-                worker_image="repo:tag",
-                template_path=Path("template.yaml"),
-            )
+        job_id = _launch_one_rank(
+            0,
+            job_names=["job-rank-0"],
+            worker_env_base={},
+            worker_image="repo:tag",
+            template_path=Path("template.yaml"),
+        )
+
+        assert job_id == 424242
 
     def test_injects_rank_and_num_workers_into_task_env(
         self, monkeypatch: pytest.MonkeyPatch
