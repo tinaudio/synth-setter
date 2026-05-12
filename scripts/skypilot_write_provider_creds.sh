@@ -198,6 +198,10 @@ write_oci_creds() {
     chmod 600 "${oci_config}"
   fi
 
+  # NOTE: OCI compartment_ocid still appears in this script's argv (via printf
+  # expansion). The downstream python3 heredoc receives it via env var, not argv,
+  # so the secret doesn't leak to other users via /proc/<pid>/cmdline on the
+  # python3 process — but the parent bash process still has it in cmdline. See #876.
   upsert_sky_config_key oci "$(printf 'oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n' \
     "${compartment_ocid}" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}")"
 }
@@ -208,11 +212,13 @@ write_oci_creds() {
 # one provider after another would silently leave the second provider without its
 # section. Upsert by top-level key instead: replace exactly the key we manage,
 # preserve the *data* under any other top-level keys the user (or another
-# provider's run) already populated. NB: the file is re-serialized via PyYAML
-# `safe_dump`, so comments and original key ordering / formatting are dropped —
-# only mapping data round-trips. This is acceptable because `~/.sky/config.yaml`
-# is bootstrap-owned in CI; hand-managed local-dev configs that rely on comments
-# should be edited outside this script.
+# provider's run) already populated. Within the managed top-level key, the entire
+# mapping is replaced wholesale on each call — hand-added nested keys under the
+# managed top-level (e.g. extra fields under `oci.default.*`) are NOT preserved.
+# NB: the file is re-serialized via PyYAML `safe_dump`, so comments and original
+# key ordering / formatting are dropped — only mapping data round-trips. This is
+# acceptable because `~/.sky/config.yaml` is bootstrap-owned in CI; hand-managed
+# local-dev configs that rely on comments should be edited outside this script.
 #
 # Secret-borne fragments (e.g. `oci:` carrying OCI_COMPARTMENT_OCID) are passed
 # to python3 via an env var rather than argv — `/proc/<pid>/cmdline` is
@@ -230,7 +236,13 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
+try:
+    import yaml
+except ImportError as exc:
+    sys.exit(
+        f"upsert_sky_config_key[{sys.argv[1]}]: PyYAML not installed in current "
+        f"interpreter ({exc}); install PyYAML to bootstrap the local provider."
+    )
 
 key, path_str = sys.argv[1], sys.argv[2]
 fragment = os.environ.pop("SYNTH_UPSERT_FRAGMENT")
@@ -283,14 +295,15 @@ write_local_sky_config() {
   # Shrink the controller request so the controller pod schedules on kind and
   # the worker job can run. Omit disk_size — k8s "doesn't support" it; the
   # controller uses the pod's ephemeral storage / a PVC instead.
-  upsert_sky_config_key jobs "$(cat <<'YAML'
+  local jobs_fragment
+  read -r -d '' jobs_fragment <<'YAML' || true
 jobs:
   controller:
     resources:
       cpus: 1+
       memory: 1+
 YAML
-)"
+  upsert_sky_config_key jobs "${jobs_fragment}"
 }
 
 main() {
@@ -305,9 +318,15 @@ main() {
   write_r2_creds
 
   case "${PROVIDER}" in
-    runpod) write_runpod_creds ;;
-    oci)    write_oci_creds ;;
-    local)  write_local_sky_config ;;
+    runpod)
+      write_runpod_creds
+      ;;
+    oci)
+      write_oci_creds
+      ;;
+    local)
+      write_local_sky_config
+      ;;
     *)
       echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci | local)" >&2
       exit 1

@@ -27,8 +27,8 @@ Managed jobs differ from cluster-level launches:
   upload.
 
 Per-backend image handling (driven by `--worker-image-tag`):
-- RunPod: `docker:<image>` is set on each Resources entry's `image_id`, so SkyPilot
-  pulls the image at provision time.
+- RunPod: each Resources entry's `image_id` is pinned to `docker:<image>` before the
+  managed-job submission, so the controller's worker provisions from that image.
 - OCI: SkyPilot's OCI backend rejects `docker:<image>` for `image_id`, so the
   YAML's `run:` block performs a sub-docker invocation that consumes
   `WORKER_IMAGE` from env. The launcher always injects `WORKER_IMAGE`.
@@ -61,7 +61,7 @@ from src.generate_dataset import spec_from_cfg
 from src.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from src.pipeline.schemas.spec import DatasetSpec
 
-# Per-cluster R2 key for the materialized spec (file_mounts blocked by #749).
+# Per-launch R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
 _WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
@@ -321,11 +321,12 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
         click.echo(result.stderr, err=True)
 
 
-def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
-    """Upload `spec` to R2 under a per-cluster key; return the `r2://bucket/key` URI.
+def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
+    """Upload `spec` to R2 under a per-launch key (one per managed-job name).
 
-    Uses `rclone copyto` (configured via `RCLONE_CONFIG_R2_*` in process env)
-    to put the spec at `r2:{spec.r2_bucket}/skypilot-launcher-specs/{cluster_name}.json`.
+    Returns the `r2://bucket/key` URI. Uses `rclone copyto` (configured via
+    `RCLONE_CONFIG_R2_*` in process env) to put the spec at
+    `r2:{spec.r2_bucket}/skypilot-launcher-specs/{job_name}.json`.
     The worker pod's env will get `WORKER_SPEC_URI` pointing at the same URI;
     the worker downloads via `load_spec_from_uri` before parsing.
 
@@ -333,7 +334,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     `task.update_file_mounts(...)` with a pubkey-overflow at pod-create time,
     so the launcher ships the spec via R2 instead.
     """
-    spec_key = f"{_LAUNCHER_SPEC_R2_PREFIX}/{cluster_name}.json"
+    spec_key = f"{_LAUNCHER_SPEC_R2_PREFIX}/{job_name}.json"
     rclone_dest = f"r2:{spec.r2_bucket}/{spec_key}"
     spec_uri = f"r2://{spec.r2_bucket}/{spec_key}"
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
@@ -342,7 +343,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     try:
         # `copyto` (vs `copy`) treats the destination as a file path, not a
         # directory — the source-basename-preservation behavior of `copy` would
-        # land us at `r2:bucket/skypilot-launcher-specs/<cluster>.json/<tmpname>`
+        # land us at `r2:bucket/skypilot-launcher-specs/<job>.json/<tmpname>`
         # which the worker can't address by URI.
         args = [  # noqa: S607 — rclone resolved by host's PATH
             "rclone",
@@ -351,7 +352,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
             local_path,
             rclone_dest,
         ]
-        subprocess.check_call(args)  # noqa: S603 — args from validated spec/cluster_name
+        subprocess.check_call(args)  # noqa: S603 — args from validated spec/job_name
     finally:
         Path(local_path).unlink(missing_ok=True)
     return spec_uri
@@ -548,10 +549,10 @@ def main(
     provider = _detect_provider(template_path)
     _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
-    # One spec upload, shared across all ranks. Spec is keyed by base cluster name (no -rN
+    # One spec upload, shared across all ranks. Spec is keyed by base job name (no -rN
     # suffix) so all workers in a fan-out group download from the same R2 object and see the
     # same r2_prefix — this is what makes the partition cohere as one logical dataset.
-    spec_uri = upload_spec_to_r2(spec, base_cluster_name)
+    spec_uri = upload_spec_to_r2(spec, job_name=base_cluster_name)
     click.echo(f"Spec uploaded to {spec_uri}")
     worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
 
@@ -624,18 +625,7 @@ def _run_workers(
     worker_image_tag: str,
     tail: bool,
 ) -> list[int]:
-    """Launch len(job_names) managed jobs in parallel; return per-rank result code.
-
-    Each rank's task gets SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS injected. A rank's
-    slot in the result is ``-1`` if launch/stream raised before the rank's per-mode work
-    finished.
-
-    With ``tail=True``, every job is cancelled in the ``finally`` block regardless of
-    rank outcome and the rc reflects ``sky.jobs.tail_logs``. With ``tail=False`` the launcher
-    detaches after `sky.jobs.launch` + `sky.stream_and_get` return a job_id, prints the
-    `sky jobs logs` / `sky jobs cancel` commands the operator can run, and only cancels
-    half-submitted jobs — those whose `sky.jobs.launch`/`sky.stream_and_get` raised or
-    yielded no job_id.
+    """Dispatch to the tail- or detach-mode runner; return one rc per rank.
 
     :param worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
     :param template_path: SkyPilot Task YAML to instantiate per rank.
@@ -643,7 +633,7 @@ def _run_workers(
     :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
     :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
     :return: List with one entry per rank in ``job_names`` order. ``0`` = success;
-        ``-1`` = launch/stream raised before the rank's work finished (see above);
+        ``-1`` = launch/stream raised before the rank's work finished;
         any other non-zero = job failure (with ``tail=True``, the value comes from
         ``sky.jobs.tail_logs``).
     """
@@ -691,18 +681,20 @@ def _launch_one_rank(
     click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
     launch_request_id = sky.jobs.launch(task, name=job_name)
     launch_result = sky.stream_and_get(launch_request_id)
-    # sky.jobs.launch returns (job_ids: Optional[List[int]], handle); a single-Task launch
-    # yields a list of length 1. Empty / None means the controller didn't accept the job.
     if launch_result is None:
-        raise click.ClickException(f"[{job_name}] launch yielded no job_id")
+        raise click.ClickException(
+            f"[{job_name}] sky.jobs.launch returned None (no submission handle)"
+        )
     job_ids = launch_result[0]
     if not job_ids or job_ids[0] is None:
-        raise click.ClickException(f"[{job_name}] launch yielded no job_id")
+        raise click.ClickException(
+            f"[{job_name}] sky.jobs.launch returned no job_id (empty/null job_ids list)"
+        )
     return job_ids[0]
 
 
 def _run_workers_tail(job_names: list[str], launch_get_job_id: Callable[[int], int]) -> list[int]:
-    """Tail-mode runner: tail managed-job logs per rank and cancel every job in the finally block."""
+    """Tail-mode runner: tail logs per rank, cancel every job in finally."""
     num_workers = len(job_names)
     rcs: list[int] = [-1] * num_workers
 
@@ -710,18 +702,10 @@ def _run_workers_tail(job_names: list[str], launch_get_job_id: Callable[[int], i
         job_name = job_names[rank]
         job_id = launch_get_job_id(rank)
         click.echo(f"[{job_name}] streaming logs for job {job_id}")
-        # sky.jobs.tail_logs returns the rc int directly (None only when follow=False) — no
-        # request_id wrapping. 0 = SUCCEEDED; non-zero = non-SUCCEEDED terminal.
-        # The SDK rejects passing both `name` and `job_id` ("Cannot specify both name and
-        # job_id"); pass only `job_id` since the controller's int return value is the most
-        # precise reference for the job we just submitted.
         rc = sky.jobs.tail_logs(job_id=job_id, follow=True)
         click.echo(f"[{job_name}] tail_logs rc={rc}")
+        # SDK contract: tail_logs returns None only for follow=False; we pass follow=True.
         if rc is None:
-            # SDK contract violation: follow=True must yield an int rc. Treat None as a
-            # job whose status the launcher couldn't confirm rather than masking it as
-            # success — the executor's except-Exception block converts this into rc=-1
-            # for the rank, which the aggregate-failure check surfaces as a non-zero exit.
             raise click.ClickException(
                 f"[{job_name}] tail_logs returned None with follow=True; job status unknown"
             )
@@ -749,15 +733,7 @@ def _run_workers_tail(job_names: list[str], launch_get_job_id: Callable[[int], i
 def _run_workers_detached(
     job_names: list[str], launch_get_job_id: Callable[[int], int]
 ) -> list[int]:
-    """Detach-mode runner.
-
-    Successful managed jobs are intentionally left running — the controller's terminal-status
-    lifecycle releases compute on success/fail, so a clean launcher exit doesn't kill
-    in-flight work.  Half-submitted jobs — those whose `sky.jobs.launch`/`sky.stream_and_get`
-    raised or yielded no job_id (the latter surfaces as a `ClickException` from
-    ``launch_get_job_id``) — still get cancelled here so the controller doesn't accumulate
-    orphan state.
-    """
+    """Detach-mode runner: leave successful jobs running; cancel only half-submitted ones."""
     num_workers = len(job_names)
     rcs: list[int] = [-1] * num_workers
     failed_jobs: list[str] = []
@@ -773,7 +749,9 @@ def _run_workers_detached(
                 click.echo(f"[{job_name}] launch raised: {exc}")
                 failed_jobs.append(job_name)
                 continue
-            _print_detached_block(job_name, job_id)
+            click.echo(f"[{job_name}] launched job {job_id} (detached)")
+            click.echo(f"  sky jobs logs --name {job_name}")
+            click.echo(f"  sky jobs cancel --name {job_name}")
             rcs[rank] = 0
 
     if failed_jobs:
@@ -783,21 +761,15 @@ def _run_workers_detached(
     return rcs
 
 
-def _print_detached_block(job_name: str, job_id: int) -> None:
-    """Print the per-rank detached-launch block: identifiers + copy-paste ops commands."""
-    click.echo(f"[{job_name}] launched job {job_id} (detached)")
-    click.echo(f"  sky jobs logs --name {job_name}")
-    click.echo(f"  sky jobs cancel --name {job_name}")
-
-
 def _cancel_job(job_name: str) -> None:
-    """Cancel a single managed job by name, swallowing exceptions so other cancels aren't
-    skipped."""
+    """Cancel one managed job by name; swallow exceptions so peer cancels keep running."""
     try:
         click.echo(f"[{job_name}] cancelling")
         cancel_request_id = sky.jobs.cancel(name=job_name)
         sky.stream_and_get(cancel_request_id)
-    except Exception as exc:  # noqa: BLE001 — best-effort, every job gets its turn
+    # Managed-jobs cancel can raise multiple specific types (network, controller-state,
+    # SDK-internal); blanket except keeps teardown robust across all of them.
+    except Exception as exc:  # noqa: BLE001
         click.echo(f"[{job_name}] cancel failed: {exc}")
 
 

@@ -220,6 +220,9 @@ jobs:
       # 20-min step cap: if the launcher (sky.jobs SDK) hangs, fail-fast and
       # let the `if: always()` `Snapshot sky logs` step run, instead of
       # burning the full 60-min job timeout before logs are uploaded.
+      # NOTE: step-level timeout sends SIGKILL — Python `finally` blocks in the
+      # launcher are bypassed. Operators may need `sky jobs cancel --name <cluster>`
+      # manually after a timeout. See #876.
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 20
@@ -267,12 +270,15 @@ jobs:
       # surface symptom in CI is silent dead-air after `streaming logs for
       # job N`, and only the controller's provision.log reveals why).
       # Worker-pod describes catch transient Pending state.
-      # Best-effort (`set +e`, each call `|| true`) so a missing pod, rename,
-      # or unprivileged exec never fails the step. See PR #876.
+      # Best-effort (each call `|| true`) so a missing pod, rename, or
+      # unprivileged exec never fails the step. See PR #876.
+      # Filters workers in the `default` namespace; sky-jobs-controller may live in
+      # `skypilot` and is intentionally excluded from this pass (captured separately).
+      # `ray-node` is the SkyPilot 0.12 managed-jobs-controller pod's container name.
       - name: Capture kind cluster state (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
         run: |
-          set +e
+          set -uo pipefail
           out_dir="${RUN_METADATA_DIR}/k8s_state"
           mkdir -p "${out_dir}"
           kubectl get pods -A -o wide > "${out_dir}/pods.txt" 2>&1 || true
@@ -280,10 +286,11 @@ jobs:
             > "${out_dir}/events.txt" 2>&1 || true
           kubectl describe nodes > "${out_dir}/nodes.txt" 2>&1 || true
           kubectl get pods -A -o yaml > "${out_dir}/pods-yaml.txt" 2>&1 || true
-          worker_pods="$(kubectl get pods -n default --no-headers 2>/dev/null \
-            | awk '$1 !~ /^sky-jobs-controller/ {print $1}')"
-          if [[ -n "${worker_pods}" ]]; then
-            for p in ${worker_pods}; do
+          # Best-effort capture: tolerate kubectl/awk failures (CI runner may already be torn down).
+          readarray -t worker_pods_arr < <(kubectl get pods -n default --no-headers 2>/dev/null \
+            | awk '$1 !~ /^sky-jobs-controller/ {print $1}')
+          if [[ ${#worker_pods_arr[@]} -gt 0 ]]; then
+            for p in "${worker_pods_arr[@]}"; do
               safe="$(printf %s "${p}" | tr -c 'A-Za-z0-9_-' '_')"
               kubectl describe pod -n default "${p}" \
                 > "${out_dir}/describe-worker-${safe}.txt" 2>&1 || true
@@ -292,6 +299,7 @@ jobs:
             echo "no non-controller pods in default namespace at capture time" \
               > "${out_dir}/describe-worker-none.txt"
           fi
+          # Best-effort: silent on kubectl failure (handled by the empty-check below).
           controller_line="$(kubectl get pods -A --no-headers 2>/dev/null \
             | grep sky-jobs-controller | head -n1)"
           if [[ -n "${controller_line}" ]]; then
@@ -304,7 +312,7 @@ jobs:
             kubectl logs -n "${controller_ns}" "${controller_pod}" --previous \
               > "${out_dir}/logs-controller-previous.txt" 2>&1 || true
             kubectl exec -n "${controller_ns}" "${controller_pod}" -c ray-node -- \
-              bash -lc 'latest="$(ls -td "${HOME}/sky_logs/sky-"*/ 2>/dev/null | head -n1)"; if [[ -n "${latest}" ]]; then echo "=== ${latest}provision.log ==="; tail -400 "${latest}provision.log" 2>/dev/null; fi' \
+              bash -lc 'set -euo pipefail; latest="$(ls -td "${HOME}/sky_logs/sky-"*/ 2>/dev/null | head -n1)"; if [[ -n "${latest}" ]]; then echo "=== ${latest}provision.log ==="; tail -400 "${latest}provision.log" 2>/dev/null; fi' \
               > "${out_dir}/controller-provision-log.txt" 2>&1 || true
           else
             echo "no sky-jobs-controller pod found" \

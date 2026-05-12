@@ -95,6 +95,10 @@ jobs:
           set -euo pipefail
           bash scripts/skypilot_write_provider_creds.sh --provider "${PROVIDER}"
 
+      # For --provider local: kind needs no compute provider auth, but the
+      # bootstrap does write a ~/.sky/config.yaml that shrinks the managed-jobs
+      # controller's resource request so the controller pod schedules on kind
+      # (defaults are too big).
       - name: Verify cred files exist with restrictive mode
         if: ${{ env.SKIP_CRED_CHECK != '1' }}
         env:
@@ -122,9 +126,6 @@ jobs:
               check_mode_600 "${HOME}/.sky/config.yaml"
               ;;
             local)
-              # kind needs no compute provider auth, but the bootstrap does write a
-              # ~/.sky/config.yaml that shrinks the managed-jobs controller's resource
-              # request so the controller pod schedules on kind (defaults are too big).
               check_mode_600 "${HOME}/.sky/config.yaml"
               test ! -e "${HOME}/.runpod/config.toml" \
                 || { echo "::error::~/.runpod/config.toml unexpectedly written for --provider local"; exit 1; }

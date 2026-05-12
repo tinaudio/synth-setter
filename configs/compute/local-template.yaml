@@ -23,19 +23,11 @@
 
 resources:
   cloud: kubernetes
-  # Managed-jobs on single-node kind (CI's `sky local up --no-gpus`): the kind
-  # node has ~4 vCPU allocatable, kube-system + ingress-nginx + the
-  # `sky-jobs-controller` pod consume ~2050m, leaving ~1950m. A `cpus: 2+`
-  # worker request rounded up past that headroom and pinned the worker pod in
-  # `FailedScheduling/Insufficient cpu`, which silently hangs
-  # `sky.jobs.tail_logs`. Smoke shard needs little CPU; `1+` fits with room.
+  # Resource floor: shrunk from `cpus: 2+` to fit kind's allocatable headroom
+  # after kube-system + sky-jobs-controller — see PR #876.
   cpus: 1+
   memory: 4+
-  # NB: `disk_size` deliberately omitted — Kubernetes rejects it ("Disk size is
-  # not supported by Kubernetes. To add additional disk, use volumes."), and
-  # under managed jobs the controller doesn't transparently skip the field the
-  # way cluster-launch did. Specifying it here used to be a silent no-op; with
-  # `sky.jobs.launch` it kept the worker pod Pending until the GHA timeout.
+  # disk_size omitted: kind/k8s backend rejects the field — see PR #876.
 
 # Placeholders. Real values are injected by the launcher via update_envs.
 # WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the
@@ -65,4 +57,4 @@ run: |
   cd /home/build/synth-setter
   echo "skypilot-run-cwd: $(pwd)"
   bash scripts/sync_worker_checkout.sh
-  exec python scripts/docker_entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
+  exec python scripts/docker_entrypoint.py generate_dataset --spec "${WORKER_SPEC_URI}"

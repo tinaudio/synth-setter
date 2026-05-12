@@ -151,7 +151,7 @@ def mock_cred_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
 def _succeeded_run(mock_sky: MagicMock) -> None:
     """Configure `mock_sky` so jobs.launch + jobs.tail_logs + jobs.cancel all succeed.
 
-    `sky.jobs.tail_logs` returns an int rc directly (per sky.jobs.client.sdk) — 0 means the
+    `sky.jobs.tail_logs` returns an int rc directly — 0 means the
     managed job ended in SUCCEEDED, anything else means it ended in a non-SUCCEEDED terminal
     status. `sky.jobs.launch` returns a request_id whose `stream_and_get` yields
     `(job_ids: List[int], handle)` — a list of length 1 for single-Task launches.
@@ -218,7 +218,7 @@ class TestResolveWorkerEnvGitRefValidation:
 
     The validation lives at the env-resolution seam (host-side) instead of in the worker template's
     bash because the SHA is rendered into a `git fetch + checkout` invocation; rejecting a
-    malformed value at the launcher gives a clear error before the cluster is ever provisioned.
+    malformed value at the launcher gives a clear error before the job is ever submitted.
     """
 
     def test_unset_git_ref_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,7 +367,7 @@ class TestMainCli:
         assert "Hydra compose failed for experiment 'this-experiment-does-not-exist'" in (
             result.output
         )
-        mock_sky.launch.assert_not_called()
+        mock_sky.jobs.launch.assert_not_called()
 
     def test_unknown_launcher_flag_is_rejected(
         self,
@@ -398,7 +398,7 @@ class TestMainCli:
         )
         assert result.exit_code != 0
         assert "no such option" in result.output.lower()
-        mock_sky.launch.assert_not_called()
+        mock_sky.jobs.launch.assert_not_called()
 
     def test_empty_env_file_with_no_process_env_fails(
         self,
@@ -621,6 +621,7 @@ class TestMainCli:
         )
         assert result.exit_code == 0, result.output
         mock_sky.jobs.tail_logs.assert_called_once_with(job_id=1, follow=True)
+        assert "name" not in mock_sky.jobs.tail_logs.call_args.kwargs
 
     def test_cancel_runs_on_success_under_tail(
         self,
@@ -745,7 +746,7 @@ class TestMainCli:
 
         result = _invoke(experiment, template_yaml, env_file, "--tail", fake_plugin=fake_plugin)
         assert result.exit_code != 0
-        assert "tail_logs returned None with follow=True" in result.output
+        assert "tail_logs returned None" in result.output
         mock_sky.jobs.cancel.assert_called_once()
 
     # --- Edge cases ----------------------------------------------------------
@@ -1095,7 +1096,7 @@ class TestNumWorkersFanOut:
         assert mock_sky.jobs.tail_logs.call_count == 3
         assert mock_sky.jobs.cancel.call_count == 3
 
-    def test_three_workers_use_rank_suffixed_cluster_names(
+    def test_three_workers_use_rank_suffixed_job_names(
         self,
         experiment: str,
         fake_plugin: Path,
@@ -1151,7 +1152,7 @@ class TestNumWorkersFanOut:
         mock_sky.jobs.launch.assert_called_once()
         assert mock_sky.jobs.launch.call_args.kwargs["name"] == "smoke-job-1"
 
-    def test_three_workers_inject_distinct_rank_world_per_cluster(
+    def test_three_workers_inject_distinct_rank_world_per_job(
         self,
         experiment: str,
         fake_plugin: Path,
@@ -2123,7 +2124,7 @@ class TestLaunchOneRank:
         fake_sky.stream_and_get.return_value = None
         monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake_sky)
 
-        with pytest.raises(click.ClickException, match="launch yielded no job_id"):
+        with pytest.raises(click.ClickException, match="returned None"):
             _launch_one_rank(
                 0,
                 job_names=["job-0"],
@@ -2132,7 +2133,7 @@ class TestLaunchOneRank:
                 template_path=Path("template.yaml"),
             )
 
-    def test_raises_when_stream_and_get_returns_empty_job_ids(
+    def test_raises_when_stream_and_get_returns_none_tuple(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``sky.jobs.launch`` is documented to yield ``(Optional[List[int]], handle)``; an empty
@@ -2146,7 +2147,7 @@ class TestLaunchOneRank:
         fake_sky.stream_and_get.return_value = (None, None)
         monkeypatch.setattr("src.pipeline.skypilot_launch.sky", fake_sky)
 
-        with pytest.raises(click.ClickException, match="launch yielded no job_id"):
+        with pytest.raises(click.ClickException, match="returned no job_id"):
             _launch_one_rank(
                 0,
                 job_names=["job-0"],
