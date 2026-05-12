@@ -68,6 +68,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_NAME: ${{ steps.compute_name.outputs.name }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           before=$(gh run list --workflow oci-image-bake.yaml --branch "$BRANCH" \
@@ -76,17 +77,26 @@ jobs:
             --ref "$BRANCH" \
             --field "image_display_name=$IMAGE_NAME"
           run_id=""
+          dispatched_sha=""
           for _ in $(seq 1 30); do
-            current=$(gh run list --workflow oci-image-bake.yaml --branch "$BRANCH" \
-              --limit 1 --json databaseId --jq '.[0].databaseId // ""')
+            row=$(gh run list --workflow oci-image-bake.yaml --branch "$BRANCH" \
+              --limit 1 --json databaseId,headSha --jq '.[0]')
+            current=$(echo "$row" | jq -r '.databaseId // ""')
             if [ -n "$current" ] && [ "$current" != "$before" ]; then
               run_id="$current"
+              dispatched_sha=$(echo "$row" | jq -r '.headSha // ""')
               break
             fi
             sleep 2
           done
           if [ -z "$run_id" ]; then
             echo "ERROR: dispatched bake run did not appear within 60s" >&2
+            exit 1
+          fi
+          if [ "$dispatched_sha" != "$EXPECTED_SHA" ]; then
+            echo "ERROR: dispatched bake run $run_id is at $dispatched_sha, expected $EXPECTED_SHA" >&2
+            echo "  Branch $BRANCH advanced between gate-trigger and bake-dispatch — re-push to re-run." >&2
+            gh run cancel "$run_id" || true
             exit 1
           fi
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
@@ -107,9 +117,9 @@ jobs:
           RUN_ID: ${{ steps.dispatch.outputs.run_id }}
         run: |
           set -euo pipefail
-          status=$(gh run view "$RUN_ID" --json status --jq .status 2>/dev/null || echo "unknown")
-          if [ "$status" != "completed" ]; then
-            echo "Cancelling orphan bake run $RUN_ID (gate is $status)"
+          bake_status=$(gh run view "$RUN_ID" --json status --jq .status 2>/dev/null || echo "unknown")
+          if [ "$bake_status" != "completed" ]; then
+            echo "Cancelling orphan bake run $RUN_ID (bake status: $bake_status)"
             gh run cancel "$RUN_ID" || echo "cancel failed (non-fatal)"
           fi
 
