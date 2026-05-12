@@ -76,7 +76,7 @@ ______________________________________________________________________
 
 ### On `main` already (no porting needed)
 
-- `src/data/vst/generate_vst_dataset.py` — VST audio generation (worker calls this)
+- `src/synth_setter/data/vst/generate_vst_dataset.py` — VST audio generation (worker calls this)
 - `scripts/reshard_data.py` — HDF5 virtual dataset resharding
 - Basic `Makefile` (help/clean targets only)
 - All model/training code, configs, notebooks
@@ -181,11 +181,11 @@ ______________________________________________________________________
 
 **Files to port from `experiment`:**
 
-- `src/data/uploader.py` (new) — `DatasetUploader` protocol, `RcloneUploader`, `LocalFakeUploader`
-- `src/train.py` — minor fixes (resolver registration)
-- `src/utils/utils.py` — minor fixes
-- `src/data/ksin_datamodule.py` — pin_memory fix
-- `src/data/surge_datamodule.py` — fix
+- `src/synth_setter/data/uploader.py` (new) — `DatasetUploader` protocol, `RcloneUploader`, `LocalFakeUploader`
+- `src/synth_setter/cli/train.py` — minor fixes (resolver registration)
+- `src/synth_setter/utils/utils.py` — minor fixes
+- `src/synth_setter/data/ksin_datamodule.py` — pin_memory fix
+- `src/synth_setter/data/surge_datamodule.py` — fix
 - `tests/conftest.py` — register resolvers, lr_monitor fix
 - `tests/helpers/package_available.py` — importlib.metadata migration
 - `tests/helpers/run_if.py` — fix
@@ -334,7 +334,7 @@ ______________________________________________________________________
 
 ### Task 2.2: Storage Layer ([#102](https://github.com/tinaudio/synth-setter/issues/102))
 
-**Goal:** Abstract R2/local filesystem with design doc's path layout. Wraps `src/data/uploader.py`.
+**Goal:** Abstract R2/local filesystem with design doc's path layout. Wraps `src/synth_setter/data/uploader.py`.
 
 **Files to create:**
 
@@ -939,7 +939,7 @@ ______________________________________________________________________
 09. Tests in `tests/pipeline/` with own conftest
 10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling
     `reshard_data.py` — it hardcodes 10k shard size)
-11. `R2StorageBackend` wraps `src/data/uploader.RcloneUploader` (already has `--checksum`)
+11. `R2StorageBackend` wraps `src/synth_setter/data/uploader.RcloneUploader` (already has `--checksum`)
 12. `shard_id` is `int` in schema, formatted to string for paths/filenames
 13. Config splits use `{train: N, val: N, test: N}` matching design doc §14.4
 

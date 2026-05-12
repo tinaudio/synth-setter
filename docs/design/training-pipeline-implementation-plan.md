@@ -64,7 +64,7 @@ ______________________________________________________________________
 configs/data/*.yaml
 configs/logger/wandb.yaml
 Makefile
-src/train.py
+src/synth_setter/cli/train.py
 ```
 
 ### Files to create
@@ -96,14 +96,14 @@ ______________________________________________________________________
 
 ```
 configs/logger/wandb.yaml
-src/train.py
+src/synth_setter/cli/train.py
 Makefile
 ```
 
 ### Files to create
 
 ```
-src/utils/wandb_checkpoint.py
+src/synth_setter/utils/wandb_checkpoint.py
 tests/test_wandb_checkpoint.py
 ```
 

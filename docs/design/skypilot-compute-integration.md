@@ -71,7 +71,7 @@ defaults:
 compute_config: null  # Path to SkyPilot YAML. null = local execution
 ```
 
-The training entrypoint (`src/train.py`) reads `cfg.get("compute_config")` and either trains locally or launches via SkyPilot SDK.
+The training entrypoint (`src/synth_setter/cli/train.py`) reads `cfg.get("compute_config")` and either trains locally or launches via SkyPilot SDK.
 
 ### 3.3 Eval config (Hydra — `configs/eval.yaml`)
 
@@ -304,8 +304,8 @@ else:
 
 - `configs/train.yaml` — add `compute_config: null`
 - `configs/eval.yaml` — add `compute_config: null`
-- `src/train.py` — check `cfg.get("compute_config")`, launch via SkyPilot if set
-- `src/eval.py` — same
+- `src/synth_setter/cli/train.py` — check `cfg.get("compute_config")`, launch via SkyPilot if set
+- `src/synth_setter/cli/eval.py` — same
 
 Training/eval SkyPilot integration is architecturally simpler than the pipeline — it's a single job (not N parallel workers). The entrypoint wraps the existing `train(cfg)` call in a SkyPilot task.
 
