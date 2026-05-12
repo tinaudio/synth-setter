@@ -30,6 +30,7 @@ the remaining commands are not enqueued.
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -62,8 +63,9 @@ def parse_command_file(path: Path) -> list[str]:
     (e.g. ``  python x.py``) and we want the queued task to run as
     ``python x.py``, not ``  python x.py``.
 
-    Raises:
-        FileNotFoundError: If ``path`` does not exist.
+    :param path: filesystem path to the command file (UTF-8).
+    :returns: each non-comment, non-blank line stripped of surrounding whitespace.
+    :rtype: list[str]
     """
     text = path.read_text(encoding="utf-8")
     commands: list[str] = []
@@ -88,6 +90,15 @@ def build_pueue_add_args(
     The command line is passed as a single positional after ``--`` so pueue
     runs it through its own shell wrapper and arbitrary shell syntax (``=``,
     ``&&``, ``$VAR``) is preserved without us having to shlex-split.
+
+    :param command: shell command line to enqueue (passed verbatim to pueue).
+    :param group: pueue group the task will be added to.
+    :param working_dir: directory the task runs in; falls back to the backend
+        default when ``None``.
+    :param label: optional pueue label for the task; omitted when ``None`` or
+        the empty string.
+    :returns: argv suitable for ``subprocess.run`` to invoke ``pueue add``.
+    :rtype: list[str]
     """
     args = ["pueue", "add", "--group", group]
     if working_dir is not None:
@@ -100,7 +111,17 @@ def build_pueue_add_args(
 
 
 def _run(runner: RunnerFn, args: list[str], *, check: bool) -> subprocess.CompletedProcess[str]:
-    """Wrap ``runner`` to set capture/text defaults consistently across callsites."""
+    """Wrap ``runner`` to set capture/text defaults consistently across callsites.
+
+    :param runner: the underlying subprocess runner (``subprocess.run`` in
+        production, a fake in tests).
+    :param args: argv to invoke.
+    :param check: when ``True``, the runner raises ``CalledProcessError`` on
+        non-zero exit; when ``False``, the returncode is returned in the
+        ``CompletedProcess``.
+    :returns: the ``CompletedProcess`` from the runner.
+    :rtype: subprocess.CompletedProcess[str]
+    """
     return runner(args, check=check, capture_output=True, text=True)
 
 
@@ -116,9 +137,11 @@ def ensure_daemon_running(
     race where the daemon has been forked but hasn't bound its socket yet —
     the next ``pueue group`` would otherwise fail intermittently.
 
-    Raises:
-        RuntimeError: If the daemon never becomes reachable inside the retry
-            budget after a fresh start.
+    :param runner: subprocess runner used for both the probe and the daemonize.
+    :param sleeper: blocking sleep function (defaults to ``time.sleep``); tests
+        inject a stub so the retry loop runs without real delay.
+    :raises RuntimeError: if the daemon never becomes reachable inside the
+        retry budget after a fresh start.
     """
     probe = runner(["pueue", "status"], check=False, capture_output=True, text=True)
     if probe.returncode == 0:
@@ -136,7 +159,12 @@ def ensure_daemon_running(
 
 
 def ensure_group(group: str, parallel: int, runner: RunnerFn) -> None:
-    """Create ``group`` if absent and set its parallel-slot count to ``parallel``."""
+    """Create ``group`` if absent and set its parallel-slot count to ``parallel``.
+
+    :param group: pueue group name.
+    :param parallel: concurrent task slot count for the group.
+    :param runner: subprocess runner used to list and mutate group state.
+    """
     listing = _run(runner, ["pueue", "group"], check=True)
     if f"'{group}'" not in listing.stdout:
         _run(runner, ["pueue", "group", "add", group], check=True)
@@ -155,6 +183,14 @@ def enqueue_all(
     When ``label_prefix`` is non-empty, each task gets a label of the form
     ``{prefix}-{index}`` so the resulting queue is easy to filter (``pueue
     status -g GROUP``) and clean up (``pueue clean -g GROUP``).
+
+    :param commands: shell command lines to enqueue, in order.
+    :param group: pueue group the tasks will be added to.
+    :param working_dir: directory each task runs in; falls back to the backend
+        default when ``None``.
+    :param label_prefix: prefix for per-task labels; empty string means no
+        labels are applied.
+    :param runner: subprocess runner used to invoke ``pueue add``.
     """
     for idx, command in enumerate(commands):
         label = f"{label_prefix}-{idx}" if label_prefix else None
@@ -212,7 +248,23 @@ def main(
     start_daemon: bool,
     dry_run: bool,
 ) -> None:
-    """Queue each line of COMMAND_FILE as a separate background job."""
+    """Queue each line of COMMAND_FILE as a separate background job.
+
+    :param command_file: path to a UTF-8 text file with one command per line.
+    :param group: pueue group to enqueue into.
+    :param parallel: concurrent task slots for the group.
+    :param working_dir: directory each job runs in; ``None`` keeps the
+        backend default.
+    :param label_prefix: prefix for per-task labels; empty string disables
+        labelling.
+    :param start_daemon: when ``True``, start ``pueued -d`` if the daemon is
+        not already reachable.
+    :param dry_run: when ``True``, print the backend argv that would run
+        (one ``pueue add`` per line) and exit without invoking the backend.
+    :raises click.UsageError: if the file contains no non-blank, non-comment
+        lines.
+    :raises click.ClickException: if a ``pueue add`` subprocess fails.
+    """
     commands = parse_command_file(command_file)
     if not commands:
         raise click.UsageError(f"no commands found in {command_file} (only blanks/comments?)")
@@ -224,7 +276,11 @@ def main(
         for idx, command in enumerate(commands):
             label = f"{label_prefix}-{idx}" if label_prefix else None
             args = build_pueue_add_args(command, group, working_dir, label)
-            click.echo(" ".join(args))
+            # shlex.join preserves argv boundaries so the printed line is a
+            # copy-pasteable, faithful shell representation of what would
+            # actually be exec'd — `" ".join(args)` lost the boundary on the
+            # final positional (the user's command, which contains spaces).
+            click.echo(shlex.join(args))
         return
 
     runner: RunnerFn = subprocess.run  # noqa: S603 — argv built from validated CLI inputs
