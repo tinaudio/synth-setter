@@ -32,7 +32,7 @@ markers = [
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
 ]
 minversion = "6.0"
-testpaths = "tests/"
+testpaths = ["tests/", ".claude/skills/handoff/tests/"]
 
 [tool.ruff]
 target-version = "py310"

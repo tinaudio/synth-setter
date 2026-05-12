@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -481,3 +482,93 @@ def test_render_prompt_honors_linked_issue_parent_issue_over_phase() -> None:
     out = wh.render(ctx, "prompt.md.j2")
     assert "create a new Task under #874" in out
     assert "under Phase #72" not in out
+
+
+def test_compute_level_detects_cycle_with_descriptive_error() -> None:
+    """A `chain.yaml` cycle raises ValueError naming the offending path."""
+    rows = [
+        ds.ChainPR(id="PR-A", title="t", depends_on=["PR-B"]),
+        ds.ChainPR(id="PR-B", title="t", depends_on=["PR-A"]),
+    ]
+    with pytest.raises(ValueError, match=r"Cycle detected.*PR-A.*PR-B|Cycle detected.*PR-B.*PR-A"):
+        wh.render_ascii_graph(rows)
+
+
+def test_main_skips_chain_save_when_issue_override_in_play(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--issue` in play => chain.yaml MUST NOT be rewritten with reconciled rows."""
+    chain_path = tmp_path / "chain.yaml"
+    original_chain = ds.Chain(
+        tracking_issue=882,
+        repo="org/repo",
+        parent_phase=72,
+        task_prefix="Task 5",
+        plan_prs=[ds.ChainPR(id="PR-5", title="refactor(pipeline): relocate")],
+    )
+    ds.save_chain(chain_path, original_chain)
+    before_bytes = chain_path.read_bytes()
+
+    # Build a derived state that differs from the manifest (a new pr_number).
+    reconciled = ds.Chain(
+        tracking_issue=882,
+        repo="org/repo",
+        parent_phase=72,
+        task_prefix="Task 5",
+        plan_prs=[
+            ds.ChainPR(
+                id="PR-5",
+                title="refactor(pipeline): relocate",
+                status="merged",
+                pr_number=12345,
+            )
+        ],
+    )
+    fake_state = ds.DerivedState(
+        repo="org/repo",
+        tracking_issue=999,
+        chain=reconciled,
+        prior_handoffs=[],
+        done_since=[],
+        in_flight=[],
+        phase_numbering=ds.PhaseTaskNumbering(72, "Task 5", []),
+        worktrees=[],
+        now_utc="2026-05-12 00:00 UTC",
+    )
+    monkeypatch.setattr(ds, "derive_state", lambda *a, **kw: fake_state)
+    exit_code = wh.main(["--chain", str(chain_path), "--issue", "999", "--dry-run"])
+    assert exit_code == 0
+    # --dry-run skips save unconditionally; verify the override path also skips
+    # without --dry-run.
+    posted_url: list[str] = []
+    monkeypatch.setattr(wh, "post_comment", lambda *a, **kw: posted_url.append("u") or "u")
+    monkeypatch.setattr(wh, "save_prompt_locally", lambda *a, **kw: tmp_path / "prompt.md")
+    exit_code2 = wh.main(["--chain", str(chain_path), "--issue", "999"])
+    assert exit_code2 == 0
+    assert chain_path.read_bytes() == before_bytes
+
+
+def test_main_catches_calledprocesserror_cleanly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Gh failure surfaces as a one-line stderr message, not a stack trace."""
+    chain_path = tmp_path / "chain.yaml"
+    ds.save_chain(
+        chain_path,
+        ds.Chain(
+            tracking_issue=882,
+            repo="org/repo",
+            parent_phase=72,
+            task_prefix="Task 5",
+            plan_prs=[],
+        ),
+    )
+
+    def boom(*args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ARG001
+        raise subprocess.CalledProcessError(
+            returncode=7, cmd=["gh", "api", "..."], stderr="HTTP 401: auth required"
+        )
+
+    monkeypatch.setattr(ds, "derive_state", boom)
+    exit_code = wh.main(["--chain", str(chain_path), "--dry-run"])
+    assert exit_code == 7

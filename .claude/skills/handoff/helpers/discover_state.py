@@ -14,7 +14,7 @@ import json
 import re
 import subprocess
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -424,34 +424,43 @@ def _fetch_unresolved_threads(repo: str, pr_number: int) -> int:
     """Count unresolved review threads via GraphQL (not exposed on `pr view`)."""
     owner, name = repo.split("/", 1)
     query = """
-      query($owner: String!, $name: String!, $number: Int!) {
+      query($owner: String!, $name: String!, $number: Int!, $after: String) {
         repository(owner: $owner, name: $name) {
           pullRequest(number: $number) {
-            reviewThreads(first: 100) { nodes { isResolved } }
+            reviewThreads(first: 100, after: $after) {
+              nodes { isResolved }
+              pageInfo { hasNextPage endCursor }
+            }
           }
         }
       }
     """
-    try:
-        raw = json.loads(
-            run_gh(
-                [
-                    "api",
-                    "graphql",
-                    "-f",
-                    f"query={query}",
-                    "-f",
-                    f"owner={owner}",
-                    "-f",
-                    f"name={name}",
-                    "-F",
-                    f"number={pr_number}",
-                ]
-            )
-        )
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
-        return 0
-    nodes = raw["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    after: str | None = None
+    nodes: list[dict] = []
+    while True:
+        args = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={query}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={pr_number}",
+        ]
+        if after is not None:
+            args += ["-f", f"after={after}"]
+        try:
+            raw = json.loads(run_gh(args))
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            return 0
+        page = raw["data"]["repository"]["pullRequest"]["reviewThreads"]
+        nodes.extend(page["nodes"])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        after = page["pageInfo"]["endCursor"]
     return count_unresolved_threads(nodes)
 
 
@@ -541,36 +550,47 @@ def count_unresolved_threads(threads: list[dict]) -> int:
 
 
 def fetch_phase_numbering(repo: str, phase_number: int, task_prefix: str) -> PhaseTaskNumbering:
-    """Walk Phase N's sub-issues, regex-extract task numbers from titles."""
+    """Walk Phase N's sub-issues, regex-extract task numbers from titles.
+
+    Paginates GraphQL with `after`/`pageInfo.endCursor` so phases with >100
+    sub-issues don't silently truncate the used-numbers list.
+    """
     owner, name = repo.split("/", 1)
     query = """
-      query($owner: String!, $name: String!, $number: Int!) {
+      query($owner: String!, $name: String!, $number: Int!, $after: String) {
         repository(owner: $owner, name: $name) {
           issue(number: $number) {
-            subIssues(first: 100) {
+            subIssues(first: 100, after: $after) {
               nodes { number title }
+              pageInfo { hasNextPage endCursor }
             }
           }
         }
       }
     """
-    raw = json.loads(
-        run_gh(
-            [
-                "api",
-                "graphql",
-                "-f",
-                f"query={query}",
-                "-f",
-                f"owner={owner}",
-                "-f",
-                f"name={name}",
-                "-F",
-                f"number={phase_number}",
-            ]
-        )
-    )
-    nodes = raw["data"]["repository"]["issue"]["subIssues"]["nodes"]
+    after: str | None = None
+    nodes: list[dict] = []
+    while True:
+        args = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={query}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-F",
+            f"number={phase_number}",
+        ]
+        if after is not None:
+            args += ["-f", f"after={after}"]
+        raw = json.loads(run_gh(args))
+        page = raw["data"]["repository"]["issue"]["subIssues"]
+        nodes.extend(page["nodes"])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        after = page["pageInfo"]["endCursor"]
     titles = [str(node.get("title") or "") for node in nodes]
     used = extract_task_numbers(titles, task_prefix)
     return PhaseTaskNumbering(
@@ -700,15 +720,12 @@ def update_chain_from_state(
         chain_prefix = _title_prefix(row.title)
         merged_pr = merged_by_prefix.get(chain_prefix)
         open_pr = open_by_prefix.get(chain_prefix)
-        new_row = ChainPR(**asdict(row))
-        new_row.linked_issue = LinkedIssue(**asdict(row.linked_issue))
         if merged_pr is not None:
-            new_row.status = "merged"
-            new_row.pr_number = merged_pr.number
+            new_rows.append(replace(row, status="merged", pr_number=merged_pr.number))
         elif open_pr is not None:
-            new_row.status = "in_flight"
-            new_row.pr_number = open_pr.number
-        new_rows.append(new_row)
+            new_rows.append(replace(row, status="in_flight", pr_number=open_pr.number))
+        else:
+            new_rows.append(replace(row))
     return Chain(
         tracking_issue=chain.tracking_issue,
         repo=chain.repo,

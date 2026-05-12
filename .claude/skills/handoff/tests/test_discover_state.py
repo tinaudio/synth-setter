@@ -350,3 +350,108 @@ def test_load_chain_reads_the_shipped_chain_yaml() -> None:
     ]
     pr7 = next(pr for pr in chain.plan_prs if pr.id == "PR-7")
     assert any("b516b67" in note for note in pr7.notes)
+
+
+def test_update_chain_from_state_keeps_linked_issue_as_dataclass() -> None:
+    """`linked_issue` survives reconciliation as a LinkedIssue, not a dict."""
+    chain = ds.Chain(
+        tracking_issue=882,
+        repo="org/repo",
+        parent_phase=72,
+        task_prefix="Task 5",
+        plan_prs=[
+            ds.ChainPR(
+                id="PR-5",
+                title="t",
+                linked_issue=ds.LinkedIssue(strategy="existing", existing=874),
+            )
+        ],
+    )
+    out = ds.update_chain_from_state(chain, done_since=[], in_flight=[])
+    assert isinstance(out.plan_prs[0].linked_issue, ds.LinkedIssue)
+    assert out.plan_prs[0].linked_issue.existing == 874
+
+
+def test_fetch_phase_numbering_paginates_subissues(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase numbering walks the GraphQL pageInfo loop and merges all pages."""
+    import json as _json
+
+    pages = [
+        {
+            "data": {
+                "repository": {
+                    "issue": {
+                        "subIssues": {
+                            "nodes": [{"number": 1, "title": "Task 5.1: a"}],
+                            "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "data": {
+                "repository": {
+                    "issue": {
+                        "subIssues": {
+                            "nodes": [{"number": 2, "title": "Task 5.2: b"}],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                }
+            }
+        },
+    ]
+    calls: list[list[str]] = []
+
+    def fake_run_gh(args: list[str]) -> str:
+        calls.append(args)
+        return _json.dumps(pages[len(calls) - 1])
+
+    monkeypatch.setattr(ds, "run_gh", fake_run_gh)
+    out = ds.fetch_phase_numbering("org/repo", phase_number=72, task_prefix="Task 5")
+    assert out.used_numbers == [1, 2]
+    assert len(calls) == 2
+    second_call_has_cursor = any("after=c1" in s for s in calls[1])
+    assert second_call_has_cursor
+
+
+def test_fetch_unresolved_threads_paginates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review-thread fetcher walks the pageInfo loop and counts across pages."""
+    import json as _json
+
+    pages = [
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [{"isResolved": False}, {"isResolved": True}],
+                            "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "nodes": [{"isResolved": False}],
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        }
+                    }
+                }
+            }
+        },
+    ]
+    calls: list[list[str]] = []
+
+    def fake_run_gh(args: list[str]) -> str:
+        calls.append(args)
+        return _json.dumps(pages[len(calls) - 1])
+
+    monkeypatch.setattr(ds, "run_gh", fake_run_gh)
+    assert ds._fetch_unresolved_threads("org/repo", 42) == 2
+    assert len(calls) == 2

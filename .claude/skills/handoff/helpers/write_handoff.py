@@ -18,6 +18,7 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -113,7 +114,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """End-to-end: derive state, render, post comment, print + save prompt."""
+    """End-to-end: derive state, render, post comment, print + save prompt.
+
+    Catches `subprocess.CalledProcessError` and `json.JSONDecodeError` at the
+    top level so `gh`/`git` failures surface as one-line stderr messages
+    instead of stack traces (per SKILL.md's Step 4 contract).
+    """
+    try:
+        return _main(argv)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip() if isinstance(exc.stderr, str) else ""
+        cmd = " ".join(map(str, exc.cmd)) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd)
+        sys.stderr.write(f"command failed (exit {exc.returncode}): {cmd}\n")
+        if stderr:
+            sys.stderr.write(stderr + "\n")
+        return exc.returncode or 1
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(f"could not parse JSON from gh: {exc}\n")
+        return 1
+
+
+def _main(argv: list[str] | None) -> int:
+    """Inner main — exception handling is owned by `main()`."""
     args = parse_args(argv)
 
     chain_path = args.chain.resolve()
@@ -136,9 +158,18 @@ def main(argv: list[str] | None = None) -> int:
     surprises = [parse_surprise(raw) for raw in args.surprise]
     anti_patterns = list(args.anti_pattern)
 
-    if not args.dry_run and not ds.chains_equivalent(chain, state.chain):
+    # Don't persist status/pr_number changes back to chain.yaml when a CLI
+    # override is in play — the reconciliation was computed against a
+    # different issue/repo than the manifest's canonical pair.
+    overrides_in_play = args.issue is not None or args.repo is not None
+    if not args.dry_run and not overrides_in_play and not ds.chains_equivalent(chain, state.chain):
         ds.save_chain(chain_path, state.chain)
         sys.stderr.write("chain.yaml updated with new status/pr_number values\n")
+    elif not args.dry_run and overrides_in_play:
+        sys.stderr.write(
+            "chain.yaml not updated: --issue/--repo override in play; "
+            "status/pr_number reconciliation kept session-local.\n"
+        )
 
     context = HandoffContext(
         repo=state.repo,
@@ -235,13 +266,26 @@ def render_ascii_graph(rows: list[ds.ChainPR]) -> str:
     return "\n".join(out_lines)
 
 
-def _compute_level(row_id: str, by_id: dict[str, ds.ChainPR], cache: dict[str, int]) -> int:
-    """Topological level = 1 + max level of dependencies that are in `by_id`."""
+def _compute_level(
+    row_id: str,
+    by_id: dict[str, ds.ChainPR],
+    cache: dict[str, int],
+    visiting: tuple[str, ...] = (),
+) -> int:
+    """Topological level = 1 + max level of dependencies that are in `by_id`.
+
+    Tracks the current DFS path in `visiting` so cycles surface as a
+    descriptive ValueError instead of a Python RecursionError.
+    """
     if row_id in cache:
         return cache[row_id]
+    if row_id in visiting:
+        cycle_path = " → ".join([*visiting, row_id])
+        raise ValueError(f"Cycle detected in chain.yaml dependencies: {cycle_path}")
     row = by_id[row_id]
     deps_in = [d for d in row.depends_on if d in by_id]
-    lvl = 1 + max((_compute_level(d, by_id, cache) for d in deps_in), default=0)
+    next_visiting = (*visiting, row_id)
+    lvl = 1 + max((_compute_level(d, by_id, cache, next_visiting) for d in deps_in), default=0)
     cache[row_id] = lvl
     return lvl
 
