@@ -27,6 +27,9 @@ einops
 h5py
 hypothesis
 hdf5plugin
+# Used by .claude/skills/handoff/ to render comment + prompt templates. Listed
+# explicitly because CI's pytest imports the skill module during test collection.
+jinja2
 librosa
 loguru==0.7.3
 matplotlib

@@ -107,7 +107,7 @@ If the writer exited non-zero, surface the stderr verbatim and stop. Common fail
 - **Never auto-merge a PR.** The chain ends at `gh pr merge` — the user runs that. Handoffs are reversible (delete the comment); merges are not.
 - **No new env vars.** The skill must run with whatever the repo already requires (`gh` auth, `git`).
 - **No absolute paths in templates or imports.** `SKILL_DIR = Path(__file__).resolve().parent.parent` anchors everything.
-- **No new dependencies.** `jinja2` and `pyyaml` are already in the environment (jinja2 transitively via pytorch-lightning; pyyaml in `requirements-app.txt`). Don't add `ruamel.yaml` or other.
+- **Minimal dependency surface.** The skill needs `jinja2` (templating) and `pyyaml` (manifest I/O), both explicitly declared in `requirements-app.txt`. Don't add `ruamel.yaml` or other heavy YAML libs without a strong reason.
 - **One tracking issue per invocation.** Multi-issue chains are out of scope — copy `chain.yaml` to `chain.wds.yaml` and pass `--chain` for a parallel chain.
 - **Skill files (`.claude/handoffs/handoff-*.md`) MUST NOT be committed.** The `.claude/` tree is already `.gitignore`d; the explicit override line in `.gitignore` documents the intent for any future contributor who adds a `!.claude/` allow-list.
 
