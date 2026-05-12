@@ -157,6 +157,7 @@ exclude = '''(?x)
   | ^scripts/add_music2latent\.py$
   | ^scripts/compute_audio_metrics\.py$
   | ^scripts/docker_entrypoint\.py$
+  | ^scripts/job_queue\.py$
   | ^scripts/predict_vst_audio\.py$
   | ^scripts/r2_shard_report\.py$
   | ^scripts/rewrite_dataset_to_latest\.py$
@@ -206,6 +207,7 @@ exclude = '''(?x)
   | ^tests/pipeline/test_schemas/test_image_config\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
   | ^tests/scripts/test_compute_audio_metrics\.py$
+  | ^tests/scripts/test_job_queue\.py$
   | ^tests/scripts/test_r2_shard_report\.py$
   | ^tests/scripts/test_skypilot_write_provider_creds\.py$
   | ^tests/scripts/test_surge_xt_interactive\.py$

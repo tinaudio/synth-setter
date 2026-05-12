@@ -29,11 +29,6 @@ on:
 permissions:
   contents: read
 
-env:
-  PUEUE_VERSION: v4.0.4
-  PUEUE_SHA256: c1b10d7e4e62211075ddd0e1dc3e8cbfc5a43d662cb3be7402a28504e23fcb51
-  PUEUED_SHA256: 5afeff6adbafb909e8d54e2caff158e6966c2adffa2c09e60fd631cc51b60390
-
 jobs:
   validate:
     name: Validate job-queue CLI against live pueue
@@ -51,14 +46,17 @@ jobs:
       - name: Install CLI runtime deps
         run: pip install "click<8.2"
 
+      # Pinned to the same version + SHA256 the Dockerfile install uses
+      # (docker/ubuntu22_04/Dockerfile). Bump both in lockstep — verified
+      # against `sha256sum` of the upstream release assets.
       - name: Install pueue (pinned + sha256-verified)
         run: |
           set -euo pipefail
-          base="https://github.com/Nukesor/pueue/releases/download/${PUEUE_VERSION}"
+          base="https://github.com/Nukesor/pueue/releases/download/v4.0.4"
           sudo wget -q -O /usr/local/bin/pueue  "${base}/pueue-x86_64-unknown-linux-musl"
           sudo wget -q -O /usr/local/bin/pueued "${base}/pueued-x86_64-unknown-linux-musl"
-          echo "${PUEUE_SHA256}  /usr/local/bin/pueue"   | sha256sum -c -
-          echo "${PUEUED_SHA256}  /usr/local/bin/pueued" | sha256sum -c -
+          echo "c1b10d7e4e62211075ddd0e1dc3e8cbfc5a43d662cb3be7402a28504e23fcb51  /usr/local/bin/pueue"  | sha256sum -c -
+          echo "5afeff6adbafb909e8d54e2caff158e6966c2adffa2c09e60fd631cc51b60390  /usr/local/bin/pueued" | sha256sum -c -
           sudo chmod +x /usr/local/bin/pueue /usr/local/bin/pueued
           pueue --version
           pueued --version
