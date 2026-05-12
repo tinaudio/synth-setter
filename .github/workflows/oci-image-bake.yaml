@@ -26,8 +26,11 @@ name: Bake OCI Custom Image
 #
 # Required secrets:
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
-#   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID                          — R2 (placeholders in the
+#   RCLONE_CONFIG_R2_ENDPOINT                                         — R2 (placeholders in the
 #                                                                       template's `envs:` block).
+#   R2_ACCOUNT_ID                                                     — required by
+#                                                                       `scripts/skypilot_write_provider_creds.sh`
+#                                                                       when materializing R2 creds.
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
 #   OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM                             — OCI (both for SkyPilot
 #                                                                       provisioning and the
@@ -88,11 +91,14 @@ jobs:
           python-version: "3.10"
           cache: pip
 
+      # Both deps pinned for reproducibility — later steps parse `oci` JSON
+      # output (`data.items[].identifier`, `data.id`), and an upstream CLI
+      # bump could shift those field names without warning.
       - name: Install SkyPilot + OCI CLI
         run: |
           set -euo pipefail
           pip install "skypilot[oci]==0.12.0"
-          pip install oci-cli
+          pip install "oci-cli==3.81.1"
 
       # Bootstrap ~/.oci/config + ~/.oci/oci_api_key.pem + ~/.sky/config.yaml
       # from repo secrets, same as test-skypilot-debug.yml. Both SkyPilot and
@@ -217,6 +223,21 @@ jobs:
           if final is None:
               raise SystemExit(f"[bake] job did not reach a terminal state within {deadline_seconds}s")
 
+          # Fail fast on setup/driver/cancelled — the boot volume is missing the
+          # things we want baked. SUCCEEDED is the happy path; FAILED is allowed
+          # because it means the task `run:` phase failed but `setup:` (which
+          # actually populates the image) completed.
+          fatal = {
+              sky.JobStatus.FAILED_SETUP,
+              sky.JobStatus.FAILED_DRIVER,
+              sky.JobStatus.CANCELLED,
+          }
+          if final in fatal:
+              raise SystemExit(
+                  f"[bake] refusing to image: SkyPilot job ended {final.name}; "
+                  "setup did not complete so the boot volume is not bake-ready"
+              )
+
           records = sky.stream_and_get(sky.status([cluster], refresh=False))
           if not records:
               raise SystemExit(f"[bake] sky.status returned no record for cluster {cluster}")
@@ -242,11 +263,17 @@ jobs:
       # query SkyPilot's own OCI provisioner uses to look up instances. Single
       # source of truth — if SkyPilot's tagging convention ever changes, the
       # internal helper and this CLI call move together (or both break, loudly).
+      #
+      # Single-node only: this workflow snapshots one boot volume per bake, so
+      # the resolution requires exactly one RUNNING instance under the cluster
+      # tag. Multi-node templates fail fast here with an explicit error rather
+      # than silently picking a node — see #921 follow-up if multi-node bakes
+      # become a need.
       - name: Resolve OCI instance OCID
         id: instance
         env:
           NAME_ON_CLOUD: ${{ steps.launch.outputs.name_on_cloud }}
-          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          SOURCE_TEMPLATE: ${{ env.SOURCE_TEMPLATE }}
         run: |
           set -euo pipefail
           QUERY="query instance resources where (freeformTags.key = 'ray-cluster-name' && freeformTags.value = '${NAME_ON_CLOUD}')"
@@ -254,14 +281,20 @@ jobs:
           RESULT="$(oci search resource structured-search --query-text "${QUERY}")"
           echo "${RESULT}" | python -m json.tool
           INSTANCE_OCID="$(echo "${RESULT}" | python -c "
-          import json, sys
+          import json, os, sys
+          template = os.environ.get('SOURCE_TEMPLATE', '<unknown>')
           data = json.load(sys.stdin).get('data', {}).get('items') or []
           running = [i for i in data if i.get('lifecycle-state') == 'RUNNING']
           if not running:
               print('::error::no RUNNING instance matched ray-cluster-name', file=sys.stderr)
               sys.exit(1)
           if len(running) != 1:
-              print(f'::error::expected exactly 1 RUNNING instance, got {len(running)}', file=sys.stderr)
+              print(
+                  f'::error::expected exactly 1 RUNNING instance for single-node bake, '
+                  f'got {len(running)} from template {template!r}; multi-node templates '
+                  'are not supported by this workflow',
+                  file=sys.stderr,
+              )
               sys.exit(1)
           print(running[0]['identifier'])
           ")"
