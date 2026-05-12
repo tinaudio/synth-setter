@@ -83,11 +83,12 @@ synth-setter/
 │   ├── models/             #   LightningModules (flow matching, FF, FlowVAE)
 │   │   └── components/     #   Model building blocks (VAE, networks)
 │   ├── utils/              #   Logging, config helpers
-│   └── pipeline/           #   Distributed data pipeline
-│       ├── schemas/        #     Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
-│       ├── ci/             #     CI validation scripts (materialize_spec, validate_shard, validate_spec)
-│       ├── skypilot_launch.py  # SkyPilot launcher CLI
-│       └── constants.py    #     Shared constants (R2 bucket, spec filename)
+│   ├── pipeline/           #   Distributed data pipeline
+│   │   ├── schemas/        #     Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
+│   │   ├── ci/             #     CI validation scripts (materialize_spec, validate_shard, validate_spec)
+│   │   ├── skypilot_launch.py  # SkyPilot launcher CLI
+│   │   └── constants.py    #     Shared constants (R2 bucket, spec filename)
+│   └── synth_setter/       #   PEP src-layout package — empty scaffold; receives moved modules across Phases 2–5 of the layout migration ([#784](https://github.com/tinaudio/synth-setter/issues/784))
 │
 ├── configs/                # Hydra YAML configs (and SkyPilot Task templates under compute/)
 │   ├── dataset.yaml        #   Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)

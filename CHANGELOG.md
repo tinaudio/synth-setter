@@ -1,6 +1,1176 @@
 # CHANGELOG
 
 
+## v1.1.0 (2026-05-12)
+
+### Continuous Integration
+
+- **ci-automation**: Local CI failure triage agent (claude -p, no CI invocation)
+  ([#924](https://github.com/tinaudio/synth-setter/pull/924),
+  [`ba1c57e`](https://github.com/tinaudio/synth-setter/commit/ba1c57e609e0d2f5e7457776e30cbf4dd18636c4))
+
+* ci(ci-automation): add autonomous CI triage agent (claude -p headless)
+
+Adds .github/workflows/ci-triage.yaml that fires on `workflow_run` completion for the project's CI
+  workflows. When the conclusion is `failure` and the run was not on a fork, the job installs
+  `nektos/act` + the Claude Code CLI and invokes `claude -p` with the prompt at
+  .github/triage/triage-prompt.md.
+
+The agent fetches failing logs via `gh run view --log-failed`, classifies the failure (flake /
+  resource_starvation / auth / real_bug), optionally reproduces locally with `act`, and routes to
+  one of:
+
+- Path A: open a draft PR with telemetry additions (PR #876 pattern). - Path B: file a
+  taxonomy-compliant tracking issue (default route). - Path C: re-run a single flake.
+
+Guardrails baked into the workflow and the prompt:
+
+- No-op unless CLAUDE_CODE_OAUTH_TOKEN secret is set. - Skips runs on forks (write perms must not
+  run against untrusted code). - Cooldown: one triage per failing run ID via `ci-triage/run-<id>`
+  branch. - Agent works in a `git worktree` off `ci-triage/*`, never pushes main / release/* / dev.
+  - Any PR is `--draft` — human approves the merge. - 30-minute job timeout; 30-turn agent budget.
+
+.github/triage/README.md covers one-time setup (`claude setup-token` + `gh secret set`), approving
+  fix PRs, manual re-trigger, and disabling.
+
+Refs #923
+
+* docs(ci-automation): fix triage agent drift caught by doc-drift on #924
+
+- Image registry: ghcr.io/tinaudio/synth-setter-dev → tinaudio/synth-setter (the dev-snapshot image
+  is published to DockerHub, not ghcr.io; act would have failed to pull). Confirmed against
+  push-to-ocir.yml and configs/compute/runpod-template.yaml.
+
+- Phase-parenting rule: prompt previously said new tracking issues should be sub-issues of Epic #148
+  directly. docs/design/github-taxonomy.md §3 requires Task/Bug/Feature MUST be sub-issues of a
+  Phase. Updated Path B to instruct the agent to find the active ci-automation Phase and parent
+  there.
+
+- Worktree creation: `git worktree add ../triage-work <triage_branch>` fails because the branch
+  doesn't pre-exist. Added `-b "${TRIAGE_BRANCH}"` to match the working example later in the prompt.
+
+- Skill path: dropped the stale local `.claude/skills/github-taxonomy/` reference (skill lives in
+  the tinaudio-synth-setter-skills plugin).
+
+- Turn budget: prompt said ~25 turns, workflow flag is --max-turns 30. Rewrote to reference the
+  workflow flag instead of restating the number.
+
+- README: replaced the inline (mixed display-name / filename-fragment) watched-workflow enumeration
+  with a pointer to the workflow's on.workflow_run.workflows list. Replaced "30-turn session" with
+  reference to --max-turns.
+
+- docs/doc-map.yaml: added structural mapping for .github/triage/README.md ←
+  .github/workflows/ci-triage.yaml + .github/triage/triage-prompt.md so future code changes there
+  are caught by doc-drift.
+
+* ci(ci-automation): address Copilot review on #924 (6 fixes)
+
+Pinned + verified the act and Claude Code CLI installs, provisioned the pre-commit toolchain Path A
+  needs for `make format`, and tightened the header and prompt comments flagged by Copilot.
+
+- workflow header now enumerates required secrets (CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN) to match
+  the `check-auth.yml` convention. - act install now pulls a pinned release tarball (v0.2.88) and
+  verifies it against the upstream `checksums.txt` SHA-256, replacing the `curl | sudo bash` of
+  `master/install.sh` flagged as a supply-chain risk. - `@anthropic-ai/claude-code` is pinned to
+  2.1.105 (matches the documented devcontainer baseline) so triage runs are reproducible across
+  days. - Cooldown comment now describes what the branch-existence check actually guards against
+  (manual re-dispatch / re-run from the UI) — `workflow_run` fires once per workflow run, not per
+  matrix job. - New `actions/setup-python@v6` + `pip install pre-commit` steps so Path A's `make
+  format` has the toolchain on PATH; previously relied on undefined runner state. - Triage prompt no
+  longer references the `github-taxonomy` plugin skill (unavailable in headless CI). Points
+  exclusively at the in-repo `docs/design/github-taxonomy.md` and §3/§4 references the agent can
+  actually read.
+
+* ci(ci-automation): pivot triage agent to local-only invocation
+
+Claude Code agents are local-only — CLAUDE_CODE_OAUTH_TOKEN-based headless CI invocation is
+  deprecated. The original design (workflow_run trigger → install claude CLI in GHA → run `claude
+  -p`) cannot work and is removed.
+
+Replaces the GHA workflow with a local helper:
+
+- Deleted .github/workflows/ci-triage.yaml. No CI side. - Added scripts/triage-ci.sh —
+  developer-side wrapper that takes a failing run ID, writes /tmp/triage/context.json, and pipes the
+  prompt template into local `claude -p` (--add-dir scoped to repo + context dir). - Rewrote
+  .github/triage/triage-prompt.md to describe a local context (developer's machine, gh CLI with full
+  creds, `act` optional). Hard rules unchanged: no main/release/dev pushes, draft PRs only, worktree
+  isolation, no --no-verify. - Rewrote .github/triage/README.md as a local operator guide:
+  prerequisites (claude CLI + gh + act), `./scripts/triage-ci.sh <run-id>` usage, manual invocation
+  path, fix-PR review flow. - Updated docs/doc-map.yaml: README now points at scripts/triage-ci.sh +
+  triage-prompt.md (workflow source removed from the mapping).
+
+Confirmed via parallel audit: no other Claude-in-CI workflows existed in the repo, so no separate
+  cleanup PR is needed. The Dockerfile / devcontainer references to the `claude` CLI are intentional
+  local-dev tooling and remain.
+
+* ci(ci-automation): address Copilot Round 2 review on #924
+
+scripts/triage-ci.sh: - Add `git` to the required-command check and run the check before any `$(git
+  ...)` expansion, so a missing `git` produces the explicit setup-pointer error instead of an opaque
+  shell failure. - Drop the `TRIAGE_DIR` env override. The agent reads `/tmp/triage/...` directly
+  per the prompt template; an override would silently desync the launcher from the agent.
+
+.github/triage/triage-prompt.md: - Replace the stdin-pipe invocation example with the positional-arg
+  form actually used by the wrapper and README (`claude -p "$(cat ...)"`). - Add an explicit
+  substitution-variable preamble at the top of Path A (`RUN_ID`, `REPO`, `RUN_URL`, `TRIAGE_BRANCH`,
+  `BUCKET`) sourced from `/tmp/triage/context.json`, and a `TRACKING_ISSUE` capture step between
+  filing the Path-B issue and opening the draft PR. The agent following the playbook verbatim now
+  has every variable defined before it is interpolated.
+
+.github/triage/README.md: - Replace the `curl .../master/install.sh | sudo bash` act install with a
+  pinned release tarball (`ACT_VERSION=v0.2.88`) verified against the upstream `checksums.txt`,
+  mirroring the supply-chain approach used by the prior workflow before the local-only pivot.
+
+### Documentation
+
+- Convert remaining Google-style docstring sections to Sphinx
+  ([#952](https://github.com/tinaudio/synth-setter/pull/952),
+  [`6a4427d`](https://github.com/tinaudio/synth-setter/commit/6a4427d4aad89ad22a2a68b010defd7fb68f1c94))
+
+* docs: convert remaining Google-style docstring sections to Sphinx
+
+The repo's configured docstring style is Sphinx (`[tool.docformatter]` and `[tool.pydoclint]` both
+  set to sphinx) and the bulk of the codebase already uses `:param:` / `:return:` / `:raises:`. A
+  handful of files in `src/` and `pipeline/` still had Google-style `Args:` / `Returns:` / `Raises:`
+  / `Example:` section headers, showing up as DOC003 violations in pydoclint's audit (#938).
+
+This converts them in place, matching the rest of the codebase: - `Args:` blocks → one `:param
+  <name>: ...` line per arg - `Returns:` blocks → `:return: ...` (dominant form, 7 vs 2 over
+  `:returns:`) - `Raises:` blocks → one `:raises <Exc>: ...` line per exception - `Example:` block
+  in `src/utils/utils.py` → `.. code-block:: python` directive
+
+No behavior changes; only docstring text. `scripts/` and `tests/` are out of scope per #938's
+  chunked remediation plan.
+
+Refs #938.
+
+* docs(wandb-integration): shift line refs after src/utils/utils.py docstring conversion
+
+The Google-→-Sphinx conversion in src/utils/utils.py shrank the task_wrapper docstring by one line,
+  shifting code below it up by one. Two line-range refs in wandb-integration.md were now off by one:
+
+- task_wrapper wandb.finish() finally block: 102-107 → 101-106 - watch_gradients source range:
+  138-149 → 137-148
+
+Caught by the doc-drift advisory on PR #952. Refs #938.
+
+* docs(skypilot-launch): clarify _run_workers :return: is a list
+
+The Sphinx-style :return: introduced in the prior commit kept the original Google-style wording,
+  which read like a scalar even though the function returns list[int]. Spelled out that it's a list
+  with one entry per rank, in cluster_names order, and called out the ``-1`` sentinel and tail-mode
+  behavior referenced elsewhere in the docstring.
+
+### Features
+
+- **training**: Job queue CLI for line-separated command sweeps
+  ([#929](https://github.com/tinaudio/synth-setter/pull/929),
+  [`aae002d`](https://github.com/tinaudio/synth-setter/commit/aae002d63c701333b7364081019b418a672f1fb4))
+
+* feat(training): queue commands via pueue with line-separated CLI
+
+Adds a thin pueue (https://github.com/Nukesor/pueue) wrapper for queueing training/sweep commands
+  from a single text file. Each non-blank, non-comment line of the file becomes one `pueue add` task
+  in a configurable group, with optional parallelism, working directory, and label prefix.
+
+- docker/ubuntu22_04/Dockerfile: install pueue + pueued static musl binaries (v4.0.4) for amd64 and
+  arm64 in builder-install-synth-setter-deps so the binaries land in dev-base and devcontainer-tools
+  alike. - scripts/pueue_queue.py: click CLI with --group, --parallel, --working-dir,
+  --label-prefix, --start-daemon, --dry-run. Public typed helpers (parse_command_file,
+  build_pueue_add_args, ensure_group, enqueue_all) are injected with a subprocess runner so tests
+  don't spawn a real pueue. - tests/scripts/test_pueue_queue.py: 20 tests pinning the public API and
+  click entry behavior with a FakeRunner. - .github/workflows/pueue-queue.yaml: workflow_dispatch
+  entry that runs the CLI inside the dev-snapshot image with the repo mounted, with optional dry-run
+  mode and a `pueue wait` step bounded by a timeout.
+
+Refs #928
+
+* address Copilot review feedback on #929
+
+scripts/pueue_queue.py: - parse_command_file: rewrite docstring to match implementation; the
+  function strips both leading AND trailing whitespace (the old prose said leading whitespace was
+  "preserved", which contradicted the code). Add an explicit test pinning the strip-leading behavior
+  for indented commands inside grouped sections (comment #3221306120).
+
+tests/scripts/test_pueue_queue.py: - Add two FakeRunner tests for ensure_daemon_running: no-op when
+  `pueue status` exits 0; runs `pueued -d` when it fails (#3221306239).
+
+docker/ubuntu22_04/Dockerfile: - Verify pueue/pueued downloads against pinned per-arch SHA256
+  checksums before chmod. Build now fails closed if upstream replaces the asset or the wget transfer
+  is corrupted (#3221306180).
+
+.github/workflows/pueue-queue.yaml: - Rewrite the header comment so it reflects that `pueue wait` is
+  opt-in via wait_timeout_seconds (default 0 returns immediately after enqueue), not unconditional
+  (#3221306275). - Mount the persisted pueue state via XDG_DATA_HOME=/pueue-state instead of the
+  root-only /root/.local/share/pueue path, so the artifact upload still captures state if image_tag
+  points at a non-root variant like devcontainer-tools (#3221306210).
+
+* refactor(job-queue): rename pueue-queue → job-queue; add PR validate workflow
+
+The user-facing CLI/workflow are now backend-neutral — pueue is treated as an implementation detail
+  that may be swapped later. The Python module, test module, and dispatchable workflow all use the
+  `job_queue` / `job-queue` name. References to pueue inside the code are kept where they describe
+  the current backend's behavior (e.g. `pueue add`, `pueue wait`, the Dockerfile install).
+
+- scripts/pueue_queue.py → scripts/job_queue.py: rename + docstring + --help text now refer to
+  "jobs" and "the backend" instead of pueue directly. Function names that describe pueue argv
+  (build_pueue_add_args) stay as-is — they describe the exact action they perform. -
+  tests/scripts/test_pueue_queue.py → tests/scripts/test_job_queue.py: import path + module
+  docstring updated. - .github/workflows/pueue-queue.yaml → .github/workflows/job-queue.yaml:
+  workflow name "Job Queue Dispatch"; env vars PUEUE_* → JOB_*; mount path /pueue-state →
+  /queue-state; artifact name queue-state-<run_id>. - docker/ubuntu22_04/Dockerfile: comment
+  reference updated to point at the new script path. The pueue install itself is unchanged.
+
+Adds .github/workflows/job-queue-validate.yaml — a PR-time validation workflow that runs on changes
+  to scripts/job_queue.py, tests/scripts/test_job_queue.py, or either job-queue workflow file. It
+  installs the same pinned pueue v4.0.4 musl binaries (sha256-verified) that the Dockerfile uses,
+  starts a daemon, and asserts:
+
+1. --dry-run prints one backend `add` per line and does not invoke the backend (3 add lines +
+  correct labels for a 3-line fixture). 2. An empty / comment-only file is rejected as a usage
+  error. 3. A real run enqueues 3 jobs into the requested group, all complete with status=Success,
+  labels match the prefix-N pattern. 4. Each task's captured stdout contains the expected echo
+  output.
+
+* fix(job-queue): inline pueue version + sha; rebase onto main
+
+- .github/workflows/job-queue-validate.yaml: drop the workflow-level `env:` block holding
+  PUEUE_VERSION / PUEUE_SHA256 / PUEUED_SHA256 and inline the literal values in the install step.
+  Three constants used in one place, in one file — no other step references them. - pyproject.toml:
+  add scripts/job_queue.py and tests/scripts/test_job_queue.py to the pydoclint exclude regex,
+  matching the precedent set by every other test in tests/scripts/. Tracked alongside #938 for
+  eventual sphinx-docstring cleanup.
+
+The branch is also rebased onto current main so the CI merge-commit run sees the post-relocation
+  `src/pipeline/` layout that landed in #965.
+
+* address Copilot post-rebase review feedback on #929
+
+scripts/job_queue.py: - ensure_daemon_running: after spawning `pueued -d`, re-probe `pueue status`
+  with bounded retries (DAEMON_READY_RETRIES x DAEMON_READY_SLEEP_SECONDS). Fixes the race where the
+  daemon has been forked but not yet bound its socket, causing the next `pueue group` to fail
+  intermittently. Raises RuntimeError with a clear message if the daemon never becomes reachable
+  inside the budget (#3222732938).
+
+tests/scripts/test_job_queue.py: - Add `_StatefulPueueStatusRunner` modeling the pre-/post-daemonize
+  race, plus two new tests pinning the retry-until-bound and budget-exhausted behaviors. Existing
+  daemon tests keep using the simpler FakeRunner.
+
+.github/workflows/job-queue.yaml: - Rewrite the header CAVEAT about `wait_timeout_seconds=0`. The
+  previous text said in-flight jobs "keep running inside the container", which is wrong: the worker
+  step uses `docker run --rm`, so when the in-container shell exits, any still-Running or Queued
+  tasks are killed by Docker. The new text spells this out and points readers at setting a non-zero
+  timeout when jobs need to actually complete (#3222732972).
+
+The third comment (#3222732979) flagged stale `pueue_queue` references in the PR description, but
+  the PR body was edited at the rename and no longer contains those names — replied inline.
+
+* address second Copilot round on #929 — dry-run boundary + docstrings
+
+scripts/job_queue.py: - main: use shlex.join(args) instead of " ".join(args) in --dry-run output.
+  The user's command (last positional after `--`) is a single argv element containing spaces; the
+  old form printed it as if it were many trailing args, so the dry-run line wasn't a faithful
+  copy-pasteable representation of what would actually be exec'd (#3222937280). - Add
+  :param/:returns/:rtype sphinx-style sections to every function so the file no longer needs a
+  pydoclint exclude. Implicit :raises directives removed where there was no explicit raise statement
+  (parse_command_file reraises through pathlib; pydoclint doesn't track that and the directive was
+  firing DOC502).
+
+tests/scripts/test_job_queue.py: - Same sphinx-style cleanup across all test functions, FakeRunner
+  methods, the _StatefulPueueStatusRunner methods, and the explode trip-wire. -
+  _StatefulPueueStatusRunner: rewrite the __call__ docstring so it no longer claims to "honor only
+  `check`" — the runner discards kwargs and that's fine because nothing it sees passes check=True in
+  a way that needs to raise (#3222937358). - Add
+  test_main_dry_run_quotes_command_arg_to_preserve_argv_boundaries pinning shlex.join behavior so a
+  future revert to " ".join can't silently regress the boundary.
+
+pyproject.toml: - Remove scripts/job_queue.py and tests/scripts/test_job_queue.py from the
+  [tool.pydoclint] exclude regex. Adding new files to a list whose docstring literally says "shrinks
+  as files are cleaned up" was a regression (#3222937320, #3222937341).
+
+
+## v1.0.1 (2026-05-12)
+
+### Bug Fixes
+
+- **ci**: Re-evaluate auto-approve on check_run completions and hourly schedule
+  ([#972](https://github.com/tinaudio/synth-setter/pull/972),
+  [`b90abb4`](https://github.com/tinaudio/synth-setter/commit/b90abb4e30dc9ffeb5bfded040e7ab17b0b340b3))
+
+* fix(ci): re-evaluate auto-approve on check_run + hourly schedule
+
+The auto-approve workflow re-evaluated only on completion of the two "Tests" / "Code Quality PR"
+  workflows, on submitted reviews, and on draft → ready transitions. It ran once per trigger and
+  exited.
+
+Two real-world conditions cleared blockers without firing those triggers:
+
+- A non-listed CI workflow (cpu-slow, test-conda, pr-metadata-gate, …) was the last to finish —
+  auto-approve already evaluated against the snapshot where it was pending and stayed on "Waiting".
+  - A Copilot review thread was resolved without a new push — GitHub does not expose
+  pull_request_review_thread as a workflow trigger.
+
+Both left "Auto-approve status" frozen on "Waiting" until a manual workflow_dispatch.
+
+Changes to .github/workflows/auto-approve.yml:
+
+- Add `check_run: [completed]` trigger plus a job-level `if:` guard so our own "Auto-approve status"
+  check_run does not self-loop. Covers every CI workflow on the commit, including ones added later.
+  - Add `schedule: "0 * * * *"` hourly safety-net sweep that enumerates open eligible PRs and
+  re-evaluates each. - Split into a `discover` job (returns JSON array of PR numbers) and an
+  `auto-approve` matrix job over those PRs — same per-PR logic as before, just dispatched from a
+  single PR list. - Set explicit `timeout-minutes` on both jobs.
+
+Refs #970
+
+* fix(ci): paginate auto-approve schedule sweep, centralize author allowlist
+
+Address Copilot review feedback on PR #972:
+
+- Schedule branch now uses `gh api --paginate` + `jq -cs` to cover all open eligible PRs, not just
+  the first 100 page. - Hoist the `ktinubu` author allowlist to a workflow-level `ALLOWED_AUTHOR`
+  env var, referenced by both the scheduled discover query and the eligibility check in the matrix
+  job. - Doc tweak: note that the discover job paginates the open-PR list.
+
+### Chores
+
+- Add pydoclint with deep signature/docstring checks
+  ([#939](https://github.com/tinaudio/synth-setter/pull/939),
+  [`995046a`](https://github.com/tinaudio/synth-setter/commit/995046ac67ac209c1dbf3dd2ace77ed1b26678eb))
+
+* chore(pre-commit): add pydoclint with deep signature/docstring checks
+
+Adds pydoclint 0.8.3 as a pre-commit hook with the strictest sphinx-style checks enabled: signature
+  vs docstring args, return/yield types, raise sections, and class attribute matching. Config lives
+  in pyproject.toml under [tool.pydoclint].
+
+Sphinx style was chosen to match the existing :param:/:return: docstrings across the repo and the
+  [tool.docformatter] style = "sphinx" setting.
+
+Every file currently in violation is listed by name in the exclude regex; the lint passes green at
+  zero cost to existing docstrings. Excluded paths are tracked for incremental remediation in the
+  audit issue.
+
+* docs(pydoclint): add to contributor docs and lint-cleanup agent guide
+
+Apply doc-drift findings: - CONTRIBUTING.md: add pydoclint to the pre-commit tool list and to the
+  "common failure modes" table so contributors know what to fix when a DOC1xx/DOC2xx/DOC5xx error
+  fires. - .github/agents/lint-cleanup.md: extend the agent workflow to include pydoclint exclude
+  clean-ups, point at [tool.pydoclint].exclude in pyproject.toml, and note that Sphinx docstrings
+  now also need to satisfy signature/return/raises consistency. - .pre-commit-config.yaml +
+  pyproject.toml: replace the placeholder "audit issue" reference in the pydoclint exclude comments
+  with the concrete tracker number, #938, per the CLAUDE.md hard rule that long inline comments be
+  one-line pointers with an explicit issue ID.
+
+* docs(pydoclint): correct rule-family comments in config
+
+The summary line listed in pyproject.toml and .pre-commit-config.yaml was inaccurate: it labelled
+  DOC3xx as "class/style", DOC4xx as "misc", and omitted DOC003 (style mismatch) and DOC6xx (class
+  attributes) — both of which are load-bearing here since check-style-mismatch and
+  check-class-attributes are enabled.
+
+Per repo comment-hygiene rules, drop the in-prose rule-family enumeration (which drifts as pydoclint
+  evolves) and point at the upstream docs instead.
+
+Addresses Copilot review comments on PR #939.
+
+Refs #938
+
+* chore(pydoclint): anchor dir excludes and sync lint-cleanup doc
+
+Address Copilot review feedback on PR #939:
+
+- pyproject.toml: anchor `\.git`, `\.tox`, `\.venv` in `[tool.pydoclint].exclude` with `(^|/)X(/|$)`
+  so the regex no longer over-matches `.github/` (it would have silently excluded any future `.py`
+  file under `.github/`). - .github/agents/lint-cleanup.md: step 5 now instructs removal from
+  `[tool.pydoclint].exclude` in `pyproject.toml` as well as `.pre-commit-config.yaml`, since
+  pydoclint's path-exclude list lives in pyproject.toml (otherwise pydoclint would keep skipping
+  cleaned-up files and hide regressions).
+
+- Rename pyproject.toml package name to synth-setter
+  ([#954](https://github.com/tinaudio/synth-setter/pull/954),
+  [`276a095`](https://github.com/tinaudio/synth-setter/commit/276a0951fa473e4db4ee20ba8957c8ffc85d86d2))
+
+The repo and project have been called `synth-setter` since the migration from the upstream
+  `ben-hayes/synth-permutations` fork, but the `[project]` table in `pyproject.toml` still declared
+  `name = "synth-permutations"`. Update it (and refresh `uv.lock`, which was also out of sync) to
+  match the current project identity.
+
+Closes #134
+
+- **ci-automation**: Format-on-save for Python, Markdown, YAML in editor and Claude hook
+  ([#946](https://github.com/tinaudio/synth-setter/pull/946),
+  [`a276794`](https://github.com/tinaudio/synth-setter/commit/a27679430f967813ead25d937c42d66d317cb2e1))
+
+* chore(ci-automation): format-on-save for Python, Markdown, YAML in editor and Claude hook
+
+Wire the fast pre-commit formatters into the on-save feedback loop so contributors and Claude Code
+  see formatting fixes immediately, not at commit time.
+
+What this PR adds:
+
+- .editorconfig — cross-editor indent, EOL, trim-trailing-ws, final-newline; [*.py] indent_size=4;
+  [Makefile] indent_style=tab. Covers the trailing-whitespace and end-of-file-fixer pre-commit hooks
+  for any editor that respects EditorConfig. - .vscode/settings.json + .vscode/extensions.json —
+  format-on-save with ruff for Python (default formatter + source.fixAll.ruff +
+  source.organizeImports.ruff on save), prettier for YAML, and emeraldwalk.runonsave invoking
+  `pre-commit run mdformat --files ${file}` for Markdown. - .claude/settings.json — extend the
+  existing PostToolUse Edit|Write auto-format hook so its case-statement now dispatches .md to
+  `pre-commit run mdformat` and .yaml|.yml to `pre-commit run prettier`, alongside the existing .py
+  → ruff branch. - .gitignore — drop the `**/.vscode` line that shadowed the negations above it,
+  preventing .vscode/settings.json and .vscode/extensions.json from being tracked.
+
+Why route Markdown and YAML through `pre-commit run <hook> --files <path>` instead of calling
+  mdformat/prettier directly: the on-save invocation then inherits the exact versions, plugins
+  (mdformat-gfm, mdformat_frontmatter), and excludes (CHANGELOG.md, README.md, .claude/*) pinned in
+  .pre-commit-config.yaml. No version drift between save-time and commit-time.
+
+What is deliberately out of scope: the Edit|Write hooks share a fragile grep|head|sed file-path
+  parser that should be replaced with `jq -r '.tool_input.file_path // empty'` and extracted into a
+  shared script. That cleanup touches two pre-existing hooks and is tracked separately in #941.
+
+Closes #945
+
+* docs(contributing): note editor and Claude hook format-on-save layers
+
+The "Formatting and linting" section claimed pre-commit was the only enforcement mechanism. The
+  format-on-save wiring added in this PR introduces two more (editor and Claude Edit/Write hook), so
+  add a short "Editor integration" sub-section pointing at the artefact files without restating
+  their contents.
+
+Refs #945
+
+- **image-config**: Drop unused r2_bucket field
+  ([#933](https://github.com/tinaudio/synth-setter/pull/933),
+  [`1fade47`](https://github.com/tinaudio/synth-setter/commit/1fade473bf8612c8454534f457a4f09325d3f7b8))
+
+* chore(image-config): drop unused r2_bucket field
+
+The only consumer of ImageConfig is .github/workflows/docker-build-validation.yml (via
+  pipeline/ci/load_image_config.py). That workflow reads dockerfile, image, build_mode, base_image,
+  target_platform, and torch_backend from steps.config.outputs, but never r2_bucket. The active R2
+  bucket flows through DatasetPipelineSpec.r2_bucket in the dataset config — see CHANGELOG entries
+  for "fix(workflows): read r2_bucket from dataset config, not image config" and
+  "docker-build-validation.yml: drop R2_BUCKET from build-args".
+
+This removes: - ImageConfig.r2_bucket field + validator - r2_bucket entry from
+  configs/image/dev-snapshot.yaml - r2_bucket assertions and TestR2BucketValidation from the schema
+  tests - r2_bucket from the GITHUB_OUTPUT expected lines
+
+Also updates docs/doc-map.yaml: the source pointer for r2_bucket coverage moves from
+  configs/image/dev-snapshot.yaml to configs/dataset/*.yaml.
+
+Refs #932
+
+* docs(docker): drop stale r2_bucket example and baked test count
+
+Doc-drift surfaced two stale references in docs/reference/docker.md after the r2_bucket removal:
+
+- Line 171: example YAML still listed r2_bucket: "intermediate-data"; the schema is extra="forbid"
+  so copy-pasting that example would now fail. - Line 176: pinned "22 tests" — count drifts on every
+  test add/remove. Replaced with a drift-resistant pointer.
+
+- **lint**: Clean up src/utils/math.py ([#955](https://github.com/tinaudio/synth-setter/pull/955),
+  [`f455f69`](https://github.com/tinaudio/synth-setter/commit/f455f69f4230847a59c375e6686087ee9a4c2be7))
+
+* chore(lint): clean up src/utils/math.py
+
+Added torch.Tensor type annotations to divmod's parameters and return type, resolving the ANN001
+  suppression previously listed in [tool.ruff.lint.per-file-ignores]. Added a Sphinx-style docstring
+  with :param:, :returns:, and :rtype: that satisfies interrogate (docstring coverage) and pydoclint
+  (signature/docstring consistency, including DOC203's return-type check). Removed src/utils/math.py
+  from both the interrogate exclude block in .pre-commit-config.yaml and the per-file-ignores entry
+  in pyproject.toml. No functional changes - divmod returns the same (floor_quotient, remainder)
+  tuple for the same inputs.
+
+Refs #25
+
+* chore(lint): widen divmod b parameter to int | torch.Tensor
+
+The only real callsite (src/models/ksin_flow_matching_module.py:179) passes a Python int (batch_size
+  = z.shape[0]) for `b`, not a Tensor. torch.div/torch.remainder support scalar divisors, so the
+  runtime behavior is unchanged — this just makes the annotation match actual usage. Docstring
+  updated to describe the int-or-Tensor contract.
+
+Addresses Copilot review comment on PR #955.
+
+- **lint-cleanup**: Wire Claude+Copilot entry points to runbook
+  ([#951](https://github.com/tinaudio/synth-setter/pull/951),
+  [`0419cdb`](https://github.com/tinaudio/synth-setter/commit/0419cdb12ac61f16a9d278aa1ff526f3166937de))
+
+* chore(lint-cleanup): wire Claude+Copilot entry points to runbook
+
+`.github/agents/lint-cleanup.md` was a free-form runbook with no harness wiring. Make it invocable
+  by adding three thin entry points that delegate to the canonical workflow:
+
+- `.claude/agents/lint-cleanup.md` — Claude Code subagent (spawnable via `Agent(subagent_type:
+  "lint-cleanup", ...)`). - `.claude/commands/lint-cleanup.md` — Claude Code slash command
+  (`/lint-cleanup <path>`). - `.github/copilot-instructions.md` — Copilot Coding Agent repo-wide
+  context, with a routing entry that points at the runbook when a #25 sub-issue is assigned to
+  Copilot.
+
+Each stub is a pointer, not a copy — the workflow stays single-sourced in
+  `.github/agents/lint-cleanup.md`. Added a "How this is invoked" header section to the canonical
+  runbook so contributors discover the entry points from the source-of-truth doc.
+
+Refs #25
+
+* chore(lint-cleanup): quote frontmatter descriptions; resolve self-contradiction
+
+Two issues caught by /pr-checkbox and /doc-drift on PR #951:
+
+1. Quote the `description` field in both `.claude/agents/lint-cleanup.md` and
+  `.claude/commands/lint-cleanup.md`. The unquoted `#` in `issue #25` was being parsed as a YAML
+  comment, truncating the description visible to Claude Code's subagent and slash-command discovery
+  (the trigger conditions after the `#` were silently dropped).
+
+2. Resolve the self-contradiction the doc-drift skill flagged in `.github/agents/lint-cleanup.md`:
+  the new "How this is invoked" section said stubs must not paraphrase steps, but the stubs do carry
+  a short cross-reference of the most-often-forgotten rules. Soften the line to permit that
+  cross-reference (single-sourced workflow steps, allowed brief rule restatement) so the framing
+  matches authorial intent.
+
+3. Surface `Refs #25` (not `Fixes`/`Closes`) as a load-bearing rule in canonical step 9, where it
+  belongs — previously it lived only in the stubs.
+
+* chore(lint-cleanup): address Copilot review nits on entry-point stubs
+
+- copilot-instructions.md: list `Part of #N` alongside other accepted taxonomy keywords so Copilot's
+  allowlist matches CLAUDE.md. - .claude/agents/lint-cleanup.md: rename "Hard rules
+  (cross-reference, not duplicate)" to "Quick reminders" so the section header no longer contradicts
+  the restated-rules bullets it owns.
+
+* chore(lint-cleanup): broaden runbook scope to pyproject.toml exclusion lists
+
+PR #955 (the first real Phase B end-to-end run, cleaning up `src/utils/math.py`) surfaced a gap the
+  `/doc-drift` skill also flagged: the canonical runbook treated `.pre-commit-config.yaml`'s
+  `exclude:` blocks as the only place exclusions live, but legacy files also live in
+  `pyproject.toml`'s `[tool.pydoclint].exclude` and `[tool.ruff.lint.per-file-ignores]`. Math.py
+  needed cleanup in BOTH `.pre-commit-config.yaml` (interrogate) and `pyproject.toml` (ruff ANN001
+  per-file-ignore) — and the runbook only mentioned the former explicitly.
+
+Also fix a self-contradiction in the workflow header: it listed `pydoclint` alongside
+  `pyright`/`interrogate`/etc. as a hook with a pre-commit `exclude:` block, but pydoclint's
+  path-exclude lives in `pyproject.toml`. The parenthetical was correct but the inline list misled.
+  Rephrased to make the two-locations reality explicit.
+
+- `.github/agents/lint-cleanup.md`: rewrite workflow opening line + step 5 to cover all four
+  exclusion locations. - `.claude/agents/lint-cleanup.md`: broaden the subagent description field so
+  the trigger reads "lint-exclusion lists in `.pre-commit-config.yaml` or `pyproject.toml`" instead
+  of pre-commit only. - `.github/copilot-instructions.md`: same broadening for the Copilot Coding
+  Agent trigger description.
+
+* chore(lint-cleanup): address Copilot review nits on runbook invocation table
+
+- Add isolation: "worktree" to the programmatic Agent(...) example so copy/paste use matches
+  CLAUDE.md's git-workflow requirement (comment #3222677290). - Clarify that
+  [tool.ruff.lint.per-file-ignores] is not a path-exclude list — ruff still runs on the file but
+  suppresses specific rules (comment #3222677315).
+
+### Continuous Integration
+
+- **docs**: Deploy mkdocs site to GitHub Pages on merge to main (Phase 2)
+  ([#973](https://github.com/tinaudio/synth-setter/pull/973),
+  [`03db291`](https://github.com/tinaudio/synth-setter/commit/03db291910301ffd16c85c280e12f87ac984c69a))
+
+Replaces Phase 1's pull_request-triggered artifact upload with a push-to-main GitHub Pages deploy.
+  Reviewer previews are still available via local 'mkdocs serve' (and via the artifact uploaded by
+  prior Phase 1 builds while they remain in retention).
+
+Changes to .github/workflows/docs.yml: - on: pull_request -> on: push (branches: [main]); same paths
+  filter so unrelated commits to main don't redeploy. Adds workflow_dispatch for manual re-runs
+  without a fresh commit. - permissions: adds pages: write and id-token: write (required by
+  actions/deploy-pages OIDC). contents: read retained. - Replaces actions/upload-artifact with the
+  canonical Pages trio: actions/configure-pages, actions/upload-pages-artifact,
+  actions/deploy-pages. - Job renamed build-docs -> deploy-docs and bound to the github-pages
+  environment with the deployed URL surfaced as the environment URL. - Adds a 'pages' concurrency
+  group with cancel-in-progress: false so in-flight deploys finish (avoids a half-published site)
+  while still queuing the next push or manual dispatch.
+
+Closes #967 Part of #351
+
+- **docs**: Gha workflow to build mkdocs site on PR (Phase 1)
+  ([#968](https://github.com/tinaudio/synth-setter/pull/968),
+  [`9993ddd`](https://github.com/tinaudio/synth-setter/commit/9993dddc3e678477c399dfaf22922330855f56bd))
+
+* internal-feat(docs): scaffold mkdocs site for config schema reference
+
+Stand up MkDocs Material + mkdocstrings infrastructure so Pydantic config schemas can be browsed in
+  a rendered HTML site. Initial scope is one model — the dataset spec
+  (`pipeline.schemas.spec.DatasetSpec`) — but the layout is structured so additional models are a
+  one-line `nav` entry plus a new `.md` file with a `:::` directive.
+
+- pyproject.toml: add a `docs` optional-dependencies group with mkdocs, mkdocs-material,
+  mkdocstrings[python], griffe-pydantic. - mkdocs.yml: Material theme with light/dark toggle and
+  navigation tabs; mkdocstrings Python handler with project-standard options (show_root_heading,
+  members_order: source, docstring_style: google, separate_signature, show_signature_annotations,
+  show_if_no_docstring); paths: [.] since `pipeline/` lives at repo root, not under src/.
+
+- docs/index.md + docs/config_reference/dataset_spec.md: one-paragraph intro and a single `:::
+  pipeline.schemas.spec.DatasetSpec` directive. - Existing engineering docs under docs/
+  (architecture, design, guides, operations, reference, …) stay untouched and out of the build via
+  exclude_docs — they can be folded in later if desired.
+
+Verified: `pip install -e '.[docs]' && mkdocs build --strict` exits 0 with no warnings; the rendered
+  site lists every DatasetSpec field with its type annotation.
+
+Refs #936
+
+* docs(reference): apply doc-drift fixes to dataset_spec intro and exclude list
+
+- Drop `data-pipeline-implementation-plan.md` from `exclude_docs` — the file lives under
+  `docs/design/` and is already covered by the `design/` pattern, so the bare entry was misleading.
+  - Drop the parenthetical enumeration of auto-filled runtime fields from the dataset-spec intro
+  prose. The list was incomplete (missing `is_repo_dirty`) and would have drifted every time a new
+  `default_factory` field was added. The mkdocstrings render below is now the single source of truth
+  for the field list.
+
+* docs(mkdocs): rename docs site from synth-permutations to synth-setter
+
+Addresses Copilot review comments on PR #937: the new MkDocs scaffold's site_name and homepage H1
+  used the legacy `synth-permutations` name, but the repo, README, design docs, and CLAUDE.md all
+  use `synth-setter`. Since these are net-new files in this PR, align them with the current project
+  name rather than propagating the legacy mismatch into the first rendered HTML surface.
+
+`pyproject.toml`'s package name (`synth-permutations`) is intentionally left as-is — that is a
+  separate, larger rename (distribution name, W&B project default) and out of scope here.
+
+* ci(docs): add mkdocs build workflow on pull_request
+
+Phase 1: build the mkdocs site on PRs whose diff touches docs sources and upload site/ as a
+  downloadable artifact for reviewer preview. Path-filtered to docs/**, mkdocs.yml, pyproject.toml,
+  the currently-documented module (src/pipeline/schemas/spec.py), and this workflow. Uses --strict
+  so any mkdocs warning fails the build.
+
+Phase 2 (#967) will switch the trigger to push to main, add pages: write + id-token: write, and
+  chain configure-pages / upload-pages-artifact / deploy-pages.
+
+Closes #966 Refs #967
+
+* docs(reference): update DatasetSpec import path to src.pipeline.* after #948
+
+The #948 relocation moved pipeline/ to src/pipeline/, making the canonical import
+  `src.pipeline.schemas.spec.DatasetSpec`. The previous `::: ` directive pointed at the old import
+  path which mkdocstrings would fail to resolve on post-#948 main.
+
+`paths: [.]` in mkdocs.yml is unchanged — the repo root already contains the src/ tree, so
+  mkdocstrings can find the src package with no additional configuration.
+
+Verified: `mkdocs build --strict` exits 0; all 17 DatasetSpec members (13 declared + 3 computed +
+  model_config) still render with type annotations.
+
+### Documentation
+
+- Address Buckets A+B of post-#887 doc drift
+  ([#909](https://github.com/tinaudio/synth-setter/pull/909),
+  [`f5a0b5e`](https://github.com/tinaudio/synth-setter/commit/f5a0b5e8e469d6af7423a549857f82ac82ff278d))
+
+* docs: address Buckets A+B of post-#887 doc drift
+
+The DatasetPipelineSpec → DatasetSpec rename (and removal of pipeline/schemas/config.py +
+  DatasetConfig + SplitsConfig + load_dataset_config + materialize_spec as a model-producing
+  function) landed in #887 without a doc sweep. This PR closes Buckets A+B of #908:
+
+- **Bucket A — rename drift across 7 doc files:** - docs/reference/configuration-reference.md —
+  collapse the two-row config/spec table into the unified DatasetSpec row; rewrite the "Config
+  Architecture Per Stage" Data Generation block to describe Hydra → DatasetSpec(**dict); update
+  launcher description. - docs/design/data-pipeline.md — replace the inline DatasetPipelineSpec +
+  SplitsConfig class block (§14.1) with the current DatasetSpec + RenderConfig + ShardSpec shape;
+  update §14.5 "first generate" steps to describe Hydra composition + default_factory auto-fill;
+  update §14.7 directory tree; switch `shard_size` to `render.batch_per_shard` in validation/test
+  description and dataset_config_id naming convention; update tech-stack validation row; replace
+  `code_version` with `git_sha` in DatasetCard provenance. - docs/design/storage-provenance-spec.md
+  — point dataset_config_id at `configs/experiment/{id}.yaml`. -
+  docs/design/skypilot-compute-integration.md — collapse §3.1 + §3.2 into a single DatasetSpec
+  section that adds num_workers + compute_config to the unified model; renumber subsequent
+  sub-sections; update §7 Phase A file list; align validation bullets with DatasetSpec. -
+  docs/architecture.md — point Configure step at the Hydra config tree with a note about the legacy
+  bridge. - docs/reference/docker.md — DatasetPipelineSpec → DatasetSpec across 4 refs;
+  pipeline.schemas.spec.materialize_spec → pipeline.ci.materialize_spec. -
+  docs/reference/docker-spec.md — same rename (5 refs) + pipeline.ci. materialize_spec bootstrap
+  pointer. - docs/reference/github-actions.md — DatasetPipelineSpec → DatasetSpec in the
+  spec-materialization workflow row.
+
+- **Bucket B — docs/doc-map.yaml updates:** - Update both `pipeline/schemas/spec.py` `covers:` lines
+  (lines 89 and 239) from `DatasetPipelineSpec, ShardSpec, materialize_spec() flow` to `DatasetSpec,
+  RenderConfig, ShardSpec, load_dataset_spec_yaml (legacy bridge)`. - Add coverage entries for the
+  new Hydra config groups under both the data-pipeline doc mapping and the configuration-reference
+  doc mapping: configs/dataset.yaml, configs/experiment/**, configs/render/**, configs/r2/**,
+  tests/pipeline/test_configs/test_experiment_yamls.py. - Update docker_entrypoint.py `covers:`
+  (line 102) to reference DatasetSpec.
+
+Bucket C (path references that still resolve through the load_dataset_spec_yaml bridge in #907) is
+  intentionally deferred to PR-3, which removes the bridge alongside the launcher's @hydra.main
+  migration.
+
+Docs-only PR — the mandatory /tdd-implementation, /code-health, /simplify chain doesn't apply
+  (CLAUDE.md exempts pure documentation edits).
+
+Closes #908
+
+* docs: address Copilot review on PR #909 — align future-Hydra refs with current state
+
+Five remaining review comments on PR #909 all surfaced the same drift: doc sections describe the
+  future Hydra-composed config layout (configs/dataset.yaml, configs/render/, configs/r2/,
+  num_workers/compute_config DatasetSpec fields) that doesn't exist on this branch yet. Today the
+  launcher loads configs/dataset/*.yaml via load_dataset_spec_yaml(); the Hydra layout lands
+  incrementally with #907 (PR-2) and the launcher's @hydra.main migration in PR-3.
+
+- docs/design/data-pipeline.md - §14.5 step 1: replace "Hydra composes a dict from
+  configs/dataset.yaml + groups" with the actual load_dataset_spec_yaml(config_path) loader path;
+  reframe the Hydra composition as the PR-3 future state. (comment 3217209348) - §14.6 paragraph:
+  "Config filenames live in configs/experiment/" → live in configs/dataset/ today; production naming
+  uses {shard_size} (the YAML key), not {batch_per_shard} (the DatasetSpec field name). (comment
+  3217209373) - §14.7 directory tree: replace the current-form Hydra-composed layout with the actual
+  configs/dataset/ tree, demoting the dataset.yaml + experiment/ + render/ + r2/ groups to a
+  clearly-marked planned-future block. (comment 3217209398) - Glossary: dataset_config_id naming
+  uses {shard_size} (matches §14.6) and notes the loader maps it onto render.batch_per_shard.
+  (comment 3217209431)
+
+- docs/design/skypilot-compute-integration.md - §3.1: drop num_workers from the proposed DatasetSpec
+  additions (already declared a launcher-CLI concern in §2's "Shard parallelism" row), keep
+  compute_config but add an explicit "proposed, not yet implemented" header; propagate "(proposed)"
+  qualifiers to the §2 decisions table; update §7 Phase A and §9 Verification to drop num_workers
+  from the in-spec test surface. (comment 3217209274) - §7 Phase A note: replace "constructed
+  directly from a Hydra-composed dict" with the current load_dataset_spec_yaml bridge framing.
+
+Refs #908
+
+* docs: address Copilot round 2 on PR #909
+
+- configuration-reference.md:41 — frame Hydra layout as planned/not-on-main - doc-map.yaml — remove
+  commented Hydra stubs (re-add in PR-2 with the files) - skypilot-compute-integration.md §2 —
+  reconcile compute_config row with §3.1 embedded-dict approach (was: path to YAML / None -> local,
+  path -> SkyPilot; now: embedded dict / None -> local, dict -> SkyPilot)
+
+- data-pipeline.md:1535 — Pydantic tech-stack row reflects frozen + strict-where -
+  architecture.md:48 — configs/dataset/*.yaml uses shard_size (mapped to render.batch_per_shard by
+  load_dataset_spec_yaml)
+
+* docs: address Copilot round 3 on PR #909
+
+- docs/reference/configuration-reference.md: rename `DatasetSpec(**hydra_dict)` →
+  `DatasetSpec(**spec_dict)` and add a parenthetical naming the actual current construction path
+  (`load_dataset_spec_yaml()`) and the planned Hydra-compose path (lands in PR-3 / #917). Avoids
+  implying Hydra is already the construction source on main (Copilot comment 3220772436).
+
+- docs/architecture.md: rewrite the "Configure" step's parenthetical. The previous text said
+  `configs/dataset.yaml` and `configs/experiment/*.yaml` "neither exists on main yet" — but
+  `configs/experiment/` has long existed for training Hydra experiments, and #907 (now merged) added
+  both `configs/dataset.yaml` and the dataset-generation experiment files. The rewrite specifies
+  *dataset-generation* overrides under `configs/experiment/` (alongside the existing training-side
+  configs that share the directory) and notes that PR-2 (#907) landed the layout while PR-3 (#917)
+  removes the legacy `load_dataset_spec_yaml()` bridge (Copilot comment 3220772496).
+
+* docs: address Copilot round 4 on PR #909
+
+Post-#917 merge drift surfaced by Copilot's re-review:
+
+- doc-map.yaml: pipeline/schemas/spec.py `covers:` no longer mentions removed
+  `load_dataset_spec_yaml`; points at the current `spec_from_cfg` flow. - configuration-reference.md
+  §1: `DatasetSpec` row reads `BaseModel(strict=True, frozen=True, extra="forbid")`; all three
+  models are strict, JSON coercions via per-field validators. - data-pipeline.md §14.1: embedded
+  `DatasetSpec` excerpt now uses `ConfigDict(strict=True, frozen=True, extra="forbid")`; `run_id` /
+  `r2_prefix` use `default_factory=_default_run_id` / `_default_r2_prefix` (the prior `""` defaults
+  plus a `_populate_derived_runtime_fields` validator no longer exist on main). - data-pipeline.md
+  §14.1 narrative and Appendix B tech-stack row: reworded to match — strict on all three models, not
+  "intentionally non-strict on DatasetSpec".
+
+- **claude-md**: Re-request Copilot review after 15-min silence post-push
+  ([#931](https://github.com/tinaudio/synth-setter/pull/931),
+  [`43f3539`](https://github.com/tinaudio/synth-setter/commit/43f3539f2208229376493d58ccc380150709d238))
+
+* docs(claude-md): re-request Copilot review after 15-min silence post-push
+
+Extend the PR Readiness procedure so Claude doesn't treat Copilot's silence as readiness. Step 6 now
+  allows up to 15 minutes for the post-push review, and a new step 6a documents two re-request
+  mechanisms (reviewers API call and empty-commit fallback) when the auto-review fails to trigger.
+
+Refs #930
+
+* docs(claude-md): bold 6a label so it renders as a sub-step, not a paragraph
+
+* docs(claude-md): also list top-level Copilot reviews in PR readiness step 6
+
+Step 6 referenced a "top-level review note" from Copilot as a signal that the review fired without
+  findings, but the only listing command shown queried /pulls/<N>/comments (inline comments only).
+  Top-level review summaries live at /pulls/<N>/reviews, so a no-findings summary would not surface
+  — risking a false "Copilot is silent → re-request" loop.
+
+Add a paired listing command for /pulls/<N>/reviews alongside the existing /pulls/<N>/comments
+  query, and tighten the surrounding prose to say "inline comment" where it means inline.
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- **claude-md**: Require PR titles to stand on their own without the linked issue
+  ([#935](https://github.com/tinaudio/synth-setter/pull/935),
+  [`bde811e`](https://github.com/tinaudio/synth-setter/commit/bde811ed6ebc8994b66871bd9e8faff16de3a011))
+
+* docs(claude-md): require PR titles to stand on their own without the linked issue
+
+Adds a "PR Titles" subsection to CLAUDE.md (between "PR & Issue References" and "PR Readiness"),
+  with a worked dataset_spec Hydra migration example, capturing the rule that a reader familiar with
+  the project but not the linked issue should be able to tell what the PR does from the title alone.
+
+Closes #934
+
+* docs(contributing): mirror CLAUDE.md PR-title rule so external contributors see the same bar
+
+CLAUDE.md now requires PR titles to stand on their own without the linked issue, with worked
+  examples. CONTRIBUTING.md still showed the older loose examples (`feat: add parameter search`)
+  that the new rule explicitly rejects, so external contributors would be taught a looser standard
+  than Claude-driven PRs are held to.
+
+Tighten CONTRIBUTING.md § "PR title" to state the same rule and point to CLAUDE.md as the canonical
+  source rather than duplicating it.
+
+Refs #934
+
+* docs(claude-md): resolve Copilot review nits on the PR Titles subsection
+
+Two Copilot comments on the new ### PR Titles section:
+
+1. "conventional-commit" → "conventional commit" for consistency with the existing "Conventional
+  commits" wording at CLAUDE.md:21.
+
+2. Bullets 3 and 4 read as contradictory — bullet 3 says keep the prefix/scope and put context after
+  the colon, but bullet 4 mentioned "compress the scope" to fit the title length. Rewrote bullet 4
+  to "tighten the subject's phrasing" so the only lever for length is the verb or the subject text,
+  never the scope. Also clarified bullet 3 that the scope is a stable component identifier.
+
+### Internal-Feat
+
+- **vst**: Renderer signatures take RenderConfig + migrate CLI to pydantic-settings
+  ([#942](https://github.com/tinaudio/synth-setter/pull/942),
+  [`1f6eb7a`](https://github.com/tinaudio/synth-setter/commit/1f6eb7a34e4320b73ed5d42fd72c6a2b86b41167))
+
+* internal-feat(vst): renderer signatures take RenderConfig + migrate CLI to pydantic-settings
+
+`make_dataset` now takes a single `render_cfg: RenderConfig` arg in place of nine separate kwargs.
+  `param_spec_name` is resolved against the in-process registry inside `make_dataset` (previously
+  the launcher did the lookup); `num_samples` comes from `render_cfg.batch_per_shard`. The
+  `fixed_*_params_list` kwarg-only args remain for `surge_xt_interactive` and the fixed-params
+  tests.
+
+The CLI on `generate_vst_dataset.py` is rewritten using pydantic-settings:
+  `_GenerateCliArgs(RenderConfig, BaseSettings)` inherits every `RenderConfig` field so the CLI flag
+  set tracks the model automatically. Adding/removing a field on `RenderConfig` extends/shrinks the
+  CLI without a parallel update. A new test in `tests/data/vst/test_generate_vst_dataset_cli.py`
+  pins the parity invariant.
+
+`pipeline/entrypoints/generate_dataset.py::build_generate_args` derives the flag set from
+  `RenderConfig.model_fields` for the same reason — single source of truth for the renderer config
+  surface.
+
+`scripts/surge_xt_interactive.py` constructs a `RenderConfig` for its captured-patches dataset
+  write, with `batch_per_shard` set to the patch count and `renderer_version` pulled from the
+  plugin's static metadata.
+
+Closes #885 Closes #940
+
+* fix(vst): pin CLI flag style + harden round-trip + repair smoke fixture
+
+Address PR #942 review round 1.
+
+- Pin `cli_kebab_case=False` on `_GenerateCliArgs.model_config` so a future pydantic-settings minor
+  flipping the default to kebab-case can't silently desync the CLI from `build_generate_args`'s
+  underscore output. (Copilot comments on the producer + consumer sides.) - Add
+  `test_build_generate_args_roundtrips_through_cli_parser`: builds args with `build_generate_args`,
+  parses them with `CliApp.run`, asserts the reconstructed `RenderConfig` equals the original.
+  Catches flag-spelling and value-coercion drift the field-set parity tests miss. (Copilot
+  round-trip suggestion.) - Repair `tests/conftest.py::surge_xt_smoke_datasets`: the subprocess call
+  passed the old positional `num_samples` and `--param_spec`. The new pydantic-settings CLI takes
+  only `data_file` positional and the flag is `--param_spec_name`, plus all other RenderConfig
+  fields are required (no model defaults). The fixture now passes every required flag. (doc-drift
+  follow-up flagging a likely VST-tier CI failure.)
+
+Refs #940
+
+* internal-fix(spec): gate unused train_val_test_seeds with NotImplementedError
+
+train_val_test_seeds was a required DatasetSpec field reserved for per-sample seeding (#884) but
+  never consumed — yamls, fixtures, and worker payloads were forced to carry a dead `[42, 43, 44]`
+  triple. Made it optional (default None) with a model_validator(mode="before") that raises
+  NotImplementedError if any non-None value is set, so the field can't quietly accumulate stale
+  values between now and #884. Removed the boilerplate from configs/dataset.yaml, validate_spec's
+  required-keys list, and all eight test fixtures that were plumbing the dead value through.
+
+Addresses ktinubu's self-comment on PR #942
+  (https://github.com/tinaudio/synth-setter/pull/942#discussion_r3221956327).
+
+Refs #884
+
+* docs(conftest): align surge_xt_smoke_datasets docstring with new CLI flag
+
+The docstring referenced the old `--param_spec` flag while the subprocess invocation uses
+  `--param_spec_name` (renamed in e73e0f4).
+
+### Internal-Fix
+
+- **pipeline**: Code-health pass on skypilot_launch + pedalboard-free spec import
+  ([#963](https://github.com/tinaudio/synth-setter/pull/963),
+  [`94371d6`](https://github.com/tinaudio/synth-setter/commit/94371d6751e61fc27162b18a99f53177d793a376))
+
+* internal-fix(pipeline): code-health pass on skypilot_launch + pedalboard-free spec import
+
+- Defer sky.check import (avoids paying SkyPilot's import cost at module load). - Extract
+  _SECRET_WORKER_ENV_KEYS to a module-level constant. - Lift _launch_one_rank to module scope for
+  testability. - Make src.pipeline.schemas.spec importable in pedalboard-free environments (deferred
+  param_specs import via param_spec_registry). - Migrate three call sites to import load_plugin /
+  load_preset / render_params directly from src.data.vst.core.
+
+Refs #882, refs #883. Closes #962.
+
+* internal-fix(pipeline): clarify pedalboard-free test class docstring
+
+Copilot review feedback: the original docstring blamed `tests/conftest.py` for the in-session
+  pedalboard load, but after this PR conftest only pulls the pedalboard-free registry. The
+  transitive load actually comes from earlier tests that import `src.data.vst.core`. Reword to
+  match.
+
+Refs #962.
+
+* internal-fix(pipeline): tighten docstrings on registry + _SECRET_WORKER_ENV_KEYS
+
+Copilot review feedback: - param_spec_registry.py: the docstring still described pedalboard being
+  pulled via `src.data.vst.__init__`'s `from src.data.vst.core import ...`, but `__init__` no longer
+  imports `core` after this PR. Reword to describe the registry as the canonical pedalboard-free
+  entrypoint and call out `src.data.vst.core` (not `__init__`) as the pedalboard pull point. -
+  skypilot_launch.py: the comment called the residual subset "real secrets," but `WORKER_GIT_REF` is
+  not a secret. Reword to describe the set by what it actually is — keys not defaulted by
+  `_R2_RCLONE_CONSTANTS`.
+
+- **pipeline**: Post-relocation doc + comment sweep
+  ([#965](https://github.com/tinaudio/synth-setter/pull/965),
+  [`8ee7f44`](https://github.com/tinaudio/synth-setter/commit/8ee7f4499d699452bb00206d62e52eaa03952715))
+
+* internal-fix(pipeline): post-relocation doc + comment sweep
+
+Sweep stale pipeline.* / pipeline.entrypoints.* references that survived the pipeline/ →
+  src/pipeline/ relocation (#948). Also a round of comment hygiene on skypilot_launch.py and
+  src/generate_dataset.py (constant grouping + docstring/comment dedup).
+
+Refs #882, refs #883. Closes #959.
+
+* internal-fix(pipeline): address PR #965 round-1 Copilot review
+
+- src/generate_dataset.py: fix docstring Raises section to reference spec.render.renderer_version
+  (matches the code's actual lookup). - configs/compute/runpod-debug-spec-mount-template.yaml:
+  correct the header comment — production ships specs via R2 + WORKER_SPEC_URI, not
+  task.update_file_mounts() (programmatic file_mounts blocked on RunPod per #749). Clarify this
+  debug template independently exercises mounts. -
+  configs/compute/runpod-debug-launcher-minimal-template.yaml: same correction, plus a PASS/FAIL
+  refresh that drops the stale update_file_mounts step and names the actual R2 round-trip. -
+  CLAUDE.md: stop enumerating dataset.yaml composition groups inline (was wrong — listed trainer/,
+  actual groups are data/render/r2/paths/hydra/experiment). Point to the file instead. -
+  docs/design/data-pipeline.md: refresh the inline pseudocode import to
+  src.data.vst.generate_vst_dataset.make_hdf5_dataset (post-#948).
+
+Refs #882, refs #883.
+
+- **pipeline**: Tighten validate_spec — derive required fields from model
+  ([#960](https://github.com/tinaudio/synth-setter/pull/960),
+  [`443eb89`](https://github.com/tinaudio/synth-setter/commit/443eb89d1e047873ebc11bf3f391402129567e18))
+
+Derive the required-field set in validate_spec from DatasetSpec.model_fields |
+  DatasetSpec.model_computed_fields instead of maintaining a parallel list. Adding a field to
+  DatasetSpec now automatically tightens the CI gate.
+
+Refs #882, refs #883. Closes #957.
+
+- **schemas**: Tighten DatasetSpec validators + graceful runtime fields
+  ([#961](https://github.com/tinaudio/synth-setter/pull/961),
+  [`31cf7ef`](https://github.com/tinaudio/synth-setter/commit/31cf7ef68d504684e593a660acb06da66c79c7ea))
+
+* internal-fix(schemas): tighten DatasetSpec validators + graceful runtime fields
+
+- Derive DatasetSpec's computed-field set from the model itself, validate r2_prefix_root, sharpen
+  the lambda comment. - _get_git_sha graceful — worker default_factory won't crash if the subprocess
+  fails. - Narrow spec_from_cfg's raw → object type at the Hydra→Pydantic trust boundary. - Pin the
+  bare-import-pure invariant with a test (no pedalboard / src.data.vst.core in sys.modules after
+  importing spec).
+
+Refs #882, refs #883. Closes #958.
+
+* internal-fix(schemas): treat git-diff exit 128 as "no git" in _is_repo_dirty
+
+Copilot review on PR #961 — ``_is_repo_dirty`` previously treated any non-zero ``git diff --quiet``
+  return code as "dirty", but ``git diff`` exits 128 when run outside a git worktree (``fatal: not a
+  git repository``). That would incorrectly report ``is_repo_dirty=True`` on worker hosts where
+  ``.git/`` is missing, contradicting ``_get_git_sha``'s sentinel and the docstring's "False if no
+  git" contract.
+
+Treat exit codes outside {0, 1} as "no usable git" — return False. Pin the new branch with a
+  behavioural test.
+
+Also fix the launcher-pure test docstring to stop referencing the non-existent
+  ``_param_spec_name_must_be_registered`` symbol.
+
+Refs #882, refs #883. Refs #958.
+
+- **spec**: Gate unused train_val_test_seeds with NotImplementedError
+  ([#944](https://github.com/tinaudio/synth-setter/pull/944),
+  [`18be4d6`](https://github.com/tinaudio/synth-setter/commit/18be4d60087fc75982793db578b10c7167ba5473))
+
+`train_val_test_seeds` was a required `DatasetSpec` field reserved for per-sample seeding (#884) but
+  never consumed — yamls, fixtures, and worker payloads were forced to carry a dead `[42, 43, 44]`
+  triple. Make it optional (default `None`) with a `model_validator(mode="before")` that raises
+  `NotImplementedError` if any non-None value is set, so the field can't quietly accumulate stale
+  values between now and #884.
+
+Drops the field from `configs/dataset.yaml`, `validate_spec`'s required-keys list, and seven test
+  fixtures.
+
+`configs/data/*.yaml` (Lightning datamodule configs) are out of scope — those drive train/val/test
+  split RNG inside the datamodule, not the `DatasetSpec` per-sample seeding this PR gates.
+
+Lands in parallel with PR #942 (the renderer-signature refactor); does not block the foundation
+  chain.
+
+Closes #943 Refs #884
+
+### Refactoring
+
+- **pipeline**: Relocate pipeline/ → src/pipeline/
+  ([#948](https://github.com/tinaudio/synth-setter/pull/948),
+  [`4dcb827`](https://github.com/tinaudio/synth-setter/commit/4dcb827f87e64b15a95f479416b85698acaa8ff5))
+
+Mirror src/data/, src/models/, etc. by moving the pipeline package under src/. Hoist the dataset
+  generation entrypoint to src/generate_dataset.py — the entrypoints/ subnamespace dissolves;
+  skypilot_launch lives at src/pipeline/skypilot_launch.py.
+
+All `from pipeline.*` imports rewritten to `from src.pipeline.*`;
+  `pipeline.entrypoints.generate_dataset` references rewired to `src.generate_dataset`. Workflow
+  YAMLs, compute YAMLs, pyproject.toml pydoclint excludes, scripts, and doc-map.yaml updated
+  mechanically. The @hydra.main config_path on src/generate_dataset.py drops one level
+  (`../configs`) since the file moved closer to repo root.
+
+Refs #882, refs #883. Closes #947.
+
+### Testing
+
+- **infra**: Add test-driven infrastructure suite for devcontainer + workflows
+  ([#926](https://github.com/tinaudio/synth-setter/pull/926),
+  [`ecaa8ad`](https://github.com/tinaudio/synth-setter/commit/ecaa8add26e21f73fd4d118c303a2d7afeb70f2b))
+
+* internal-feat(tests/infra): add test-driven infrastructure suite
+
+Adds five executable invariants under tests/infra/ that capture the devcontainer + GitHub Actions
+  contracts as deterministic pytest specs. Future infra refactors iterate against `pytest
+  tests/infra/ -v` instead of debugging YAML ad-hoc.
+
+Invariants (one test file each):
+
+1. test_devcontainer_attached_mode.py — every devcontainer.json sets containerEnv.MODE=idle (so
+  scripts/docker_entrypoint.py execs sleep infinity and PID 1 stays alive for Attach-to-Container),
+  has postCreateCommand / remoteUser / workspaceFolder, and includes --env-file in runArgs. Also
+  asserts docker_entrypoint.py's idle subcommand execs `sleep infinity`.
+
+2. test_gh_auth_flow.py — post-create.sh references the env-passed RESTRICTED_AGENT_GIT_PAT, does
+  NOT source .env (which would clobber the fresh token with a stale value), strips surrounding
+  quotes (--env-file does not), and pipes the token to `gh auth login --with-token` followed by `gh
+  auth setup-git`. initialize.sh only touches .env, never writes or overwrites.
+
+3. test_workflows_under_act.py — runs `act --list` against three representative workflows (test.yml,
+  code-quality-pr.yaml, stale.yml) to validate YAML structure under act's parser. Skips cleanly when
+  `act` is not on PATH.
+
+4. test_post_create_performance.py — static check that post-create.sh contains no
+  apt-get/pip/conda/curl|sh install commands (those belong in the Dockerfile, not per-container
+  post-create). Opt-in integration sub-test times the script and asserts <30s; skips outside the
+  devcontainer and when the script already ran (detects pre-commit hook via `git rev-parse
+  --git-path hooks` so worktree pointer-file .git layouts are handled).
+
+5. test_no_secrets_in_image.py — regex-scans Dockerfile, post-create.sh, and initialize.sh for `KEY
+  = "literal..."` assignments matching secret keywords. Env-var references are allowlisted. Optional
+  docker-history sub-test skips when docker is missing or the base image isn't pulled locally.
+
+Adds an `infra` pytest marker to pyproject.toml; all tests are tagged @pytest.mark.infra. The marker
+  is NOT excluded from `make test-fast` — the static checks are fast and deterministic, and
+  integration sub-tests skip when prerequisites are missing.
+
+tests/infra/conftest.py is self-contained — it does not import from tests/conftest.py (which pulls
+  in torch/Hydra/h5py/VST fixtures that have no place in infra static checks).
+
+Iteration log: - hypothesis: each invariant maps directly to a pattern already present in the
+  .devcontainer/ scripts → action: wrote tests against actual config files → result: 16 passed, 4
+  skipped on first run. - hypothesis: the opt-in post-create timing test would skip on this host →
+  action: ran the suite → result: it ran, because the worktree is inside a devcontainer (/.dockerenv
+  present, REMOTE_CONTAINERS set). Test completed in 0.52s, well under the 30s budget. The
+  skip-when-already-ran guard missed because `project_root / .git / hooks` does not resolve for
+  worktrees (pointer-file .git). - hypothesis: use `git rev-parse --git-path hooks` to resolve the
+  effective hooks dir under worktrees → action: added _resolve_git_hooks_dir helper → result:
+  integration sub-test now skips cleanly when the pre-commit hook is already installed. -
+  hypothesis: ruff S105/S603/S607 would fire on the env-var name constant and the subprocess calls →
+  action: added inline noqa suppressions matching the convention in pipeline/r2_io.py and
+  tests/_baseline_worktree.py → result: `make format` green. - hypothesis: interrogate would flag
+  the unused skip-helpers in conftest.py → action: removed dead helpers and added docstrings to the
+  fixtures → result: interrogate hook green.
+
+* docs(testing): document tests/infra/ suite in testing primer + doc-map
+
+Adds the new tests/infra/ category to docs/reference/testing.md (test-layout table, conftest
+  enumeration, and the 'which shape fits your test?' shape selector). Adds tests/infra/** to
+  docs/doc-map.yaml so future drift in the infra suite triggers doc-drift detection for testing.md.
+
+Drift surfaced by the doc-drift hook on PR #926.
+
+* internal-fix(tests/infra): tighten invariants per Copilot review on #926
+
+Six review comments, six narrow fixes:
+
+1. test_workflows_under_act.py — module docstring said `act -n`, helper actually runs `act --list`.
+  Aligned the docstring to the implementation. 2. test_post_create_performance.py —
+  `_iter_script_lines_without_comments` used `re.sub(r"(?<!\\)#.*$", "", raw)`, which truncates
+  lines containing bash parameter expansions like `${VAR#prefix}`. post-create.sh's
+  `${RESTRICTED_AGENT_GIT_PAT#\"}` quote-strip block was being truncated, so a future regression
+  hiding `pip install` after a `#` expansion would slip past. Switched to dropping only full-line
+  comments (`^\s*#`). 3. test_devcontainer_attached_mode.py — substring check for `sleep` +
+  `infinity` could pass against the module docstring even if idle()'s body stopped exec'ing sleep
+  infinity. Now AST-parses scripts/docker_entrypoint.py, locates `def idle`, and asserts both
+  `"sleep"` and `"infinity"` appear as string constants inside that function's body. 4.
+  test_gh_auth_flow.py — forbidden `source .env` patterns missed `. ./.env`, `source ./.env`, and
+  quoted variants. Broadened the regex to allow optional `./` prefix and optional surrounding
+  quotes. 5. tests/infra/conftest.py — `devcontainer_json_paths` hard-coded the three current
+  flavors (cpu, gpu, root_gpu). Now globs `.devcontainer/*/devcontainer.json` so a new flavor is
+  picked up automatically and the "every devcontainer..." invariant stays true. 6.
+  test_no_secrets_in_image.py — `BASE_IMAGE_REFERENCE` constant duplicated the Dockerfile's `FROM`
+  line; the two could drift apart. Replaced with `_read_base_image_from_dockerfile(dockerfile_path)`
+  which parses the first FROM at test time.
+
+Refs #925.
+
+* test(infra): tighten secret + pip-install regexes per Copilot review
+
+- SECRET_KEYWORD_PATTERN: make surrounding quotes optional and add (?!\$) lookahead so unquoted
+  ENV/ARG TOKEN=literal in Dockerfile and docker-history output is still caught, while $VAR / ${VAR}
+  references remain excluded. - FORBIDDEN_SLOW_OPERATIONS: prefix the bare "pip install" regex with
+  (?<!uv\s) negative lookbehind so the "uv pip install" entry is the sole matcher for that line —
+  eliminates double-reporting.
+
+Refs #925, #372.
+
+* test(infra): add make test-infra (--confcutdir) — parent tests/conftest.py imports torch
+
+Copilot review on PR #926 flagged that tests/infra/conftest.py being self-contained is not enough —
+  pytest still walks up to tests/conftest.py during collection, which imports
+  torch/h5py/Hydra/rootutils at module level. So `pytest tests/infra/` on a minimal host (just
+  stdlib + pytest) fails before any infra test runs.
+
+Fix: - Add `make test-infra` invoking `pytest tests/infra/ --confcutdir=tests/infra`. `--confcutdir`
+  stops pytest from walking above the infra dir, so the parent conftest is never loaded. - Update
+  docs/reference/testing.md to retract the misleading "host-portable" framing and point at the new
+  make target.
+
+The implicit `pytest tests/infra/` invocation (no --confcutdir) still works in environments that
+  already have torch installed (CI, local devcontainer), so test.yml's broad pytest run is
+  unaffected.
+
+
 ## v1.0.0 (2026-05-11)
 
 ### Chores

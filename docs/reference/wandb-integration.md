@@ -29,7 +29,7 @@ ______________________________________________________________________
 | Run ID            | `null` (W&B auto-generates)                                                                              | `configs/logger/wandb.yaml:8`      |
 | Checkpoint upload | `log_model: "all"`                                                                                       | `configs/logger/wandb.yaml:11`     |
 | Code saving       | `wandb.Settings(code_dir=".")`                                                                           | `configs/logger/wandb.yaml:17-19`  |
-| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                         | `src/utils/utils.py:102-107`       |
+| Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                         | `src/utils/utils.py:101-106`       |
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 
@@ -119,7 +119,7 @@ If `cfg.watch_gradients` is set, `watch_gradients()` calls
 `WandbLogger.watch(model, log="gradients")` — logs gradient histograms per
 layer according to the WandbLogger / W&B logging defaults.
 
-Source: `src/utils/utils.py:138-149`, called from `src/train.py:91-93`.
+Source: `src/utils/utils.py:137-148`, called from `src/train.py:91-93`.
 
 ### 2g. Provenance metadata (logged once at run start)
 
