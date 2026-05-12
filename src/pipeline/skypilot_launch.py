@@ -34,6 +34,7 @@ import functools
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -310,11 +311,11 @@ def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> 
         click.echo(result.stderr, err=True)
 
 
-def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
-    """Upload `spec` to R2 under a per-cluster key; return the `r2://bucket/key` URI.
+def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
+    """Upload `spec` to R2 under a per-job key; return the `r2://bucket/key` URI.
 
     Uses `rclone copyto` (configured via `RCLONE_CONFIG_R2_*` in process env)
-    to put the spec at `r2:{spec.r2_bucket}/skypilot-launcher-specs/{cluster_name}.json`.
+    to put the spec at `r2:{spec.r2_bucket}/skypilot-launcher-specs/{job_name}.json`.
     The worker pod's env will get `WORKER_SPEC_URI` pointing at the same URI;
     the worker downloads via `load_spec_from_uri` before parsing.
 
@@ -322,7 +323,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     `task.update_file_mounts(...)` with a pubkey-overflow at pod-create time,
     so the launcher ships the spec via R2 instead.
     """
-    spec_key = f"{_LAUNCHER_SPEC_R2_PREFIX}/{cluster_name}.json"
+    spec_key = f"{_LAUNCHER_SPEC_R2_PREFIX}/{job_name}.json"
     rclone_dest = f"r2:{spec.r2_bucket}/{spec_key}"
     spec_uri = f"r2://{spec.r2_bucket}/{spec_key}"
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
@@ -331,7 +332,7 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     try:
         # `copyto` (vs `copy`) treats the destination as a file path, not a
         # directory — the source-basename-preservation behavior of `copy` would
-        # land us at `r2:bucket/skypilot-launcher-specs/<cluster>.json/<tmpname>`
+        # land us at `r2:bucket/skypilot-launcher-specs/<job>.json/<tmpname>`
         # which the worker can't address by URI.
         args = [  # noqa: S607 — rclone resolved by host's PATH
             "rclone",
@@ -340,10 +341,27 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
             local_path,
             rclone_dest,
         ]
-        subprocess.check_call(args)  # noqa: S603 — args from validated spec/cluster_name
+        subprocess.check_call(args)  # noqa: S603 — args from validated spec/job_name
     finally:
         Path(local_path).unlink(missing_ok=True)
     return spec_uri
+
+
+def _warn_if_deprecated_cluster_name() -> None:
+    """Warn to stderr if the deprecated ``--cluster-name`` alias was used in argv.
+
+    Click accepts both ``--job-name`` and ``--cluster-name`` (the latter as a
+    legacy alias). The two names share a Python parameter, so Click itself
+    can't tell us which spelling the caller used — inspect ``sys.argv`` to
+    detect the alias and emit a one-line deprecation notice. Cheap, contained,
+    and easy to unit-test by manipulating argv via Click's ``CliRunner``.
+    """
+    if any(a == "--cluster-name" or a.startswith("--cluster-name=") for a in sys.argv[1:]):
+        click.echo(
+            "DEPRECATION: --cluster-name is deprecated and will be removed in a "
+            "future release; use --job-name instead.",
+            err=True,
+        )
 
 
 @click.command()
@@ -384,10 +402,16 @@ def upload_spec_to_r2(spec: DatasetSpec, cluster_name: str) -> str:
     ),
 )
 @click.option(
+    "--job-name",
     "--cluster-name",
+    "job_name",
     type=str,
     default=None,
-    help="SkyPilot cluster name (default: synth-setter-smoke-<config_id[:8]>).",
+    help=(
+        "Managed-job name (used both as the SkyPilot job identifier and as the R2 key "
+        "prefix for the per-launch spec upload). Default: synth-setter-smoke-<config_id[:8]>. "
+        "Alias: --cluster-name (deprecated)."
+    ),
 )
 @click.option(
     "--spec-out",
@@ -468,7 +492,7 @@ def main(
     hydra_overrides: tuple[str, ...],
     template_path: Path,
     env_file_path: Path,
-    cluster_name: str | None,
+    job_name: str | None,
     spec_out: Path | None,
     num_workers: int | None,
     worker_image_tag: str,
@@ -477,6 +501,7 @@ def main(
     local: bool,
 ) -> None:
     """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
+    _warn_if_deprecated_cluster_name()
     _apply_dispatch_mode(api_server=api_server, local=local)
 
     if num_workers is not None and num_workers < 1:
@@ -507,13 +532,11 @@ def main(
     # launcher concern, no longer baked into the dataset spec.
     resolved_num_workers = num_workers if num_workers is not None else 1
 
-    base_cluster_name = cluster_name or f"synth-setter-smoke-{spec.task_name[:8]}"
+    base_job_name = job_name or f"synth-setter-smoke-{spec.task_name[:8]}"
 
-    # Per-cluster filename so parallel launches (CI matrix, local dev concurrent with CI on
+    # Per-job filename so parallel launches (CI matrix, local dev concurrent with CI on
     # the same host) don't clobber one another's spec.
-    local_spec_path = (
-        spec_out or LOCAL_SPEC_DIR / f"skypilot-launch-smoke-{base_cluster_name}.json"
-    )
+    local_spec_path = spec_out or LOCAL_SPEC_DIR / f"skypilot-launch-smoke-{base_job_name}.json"
     local_spec_path.parent.mkdir(parents=True, exist_ok=True)
     # Pin encoding so JSON output is locale-independent (workers/CI run with varied locales).
     local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
@@ -531,10 +554,10 @@ def main(
     provider = _detect_provider(template_path)
     _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
-    # One spec upload, shared across all ranks. Spec is keyed by base cluster name (no -rN
+    # One spec upload, shared across all ranks. Spec is keyed by base job name (no -rN
     # suffix) so all workers in a fan-out group download from the same R2 object and see the
     # same r2_prefix — this is what makes the partition cohere as one logical dataset.
-    spec_uri = upload_spec_to_r2(spec, base_cluster_name)
+    spec_uri = upload_spec_to_r2(spec, base_job_name)
     click.echo(f"Spec uploaded to {spec_uri}")
     worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
 
@@ -552,9 +575,9 @@ def main(
     # Single-worker keeps the unsuffixed cluster name for backward compatibility with debug
     # workflows / CI dashboards that key off it; multi-worker uses -rN suffixes.
     cluster_names = (
-        [base_cluster_name]
+        [base_job_name]
         if resolved_num_workers == 1
-        else [f"{base_cluster_name}-r{i}" for i in range(resolved_num_workers)]
+        else [f"{base_job_name}-r{i}" for i in range(resolved_num_workers)]
     )
 
     rcs = _run_workers(

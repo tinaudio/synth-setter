@@ -235,7 +235,7 @@ jobs:
           ARGS=(
             --experiment "$CONFIG_PATH"
             --template configs/compute/local-template.yaml
-            --cluster-name "$CLUSTER_NAME"
+            --job-name "$CLUSTER_NAME"
             --worker-image-tag "$IMAGE_TAG"
             --spec-out "${RUN_METADATA_DIR}/input_spec.json"
           )
@@ -324,7 +324,7 @@ jobs:
               python -m src.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
-                --cluster-name "$CLUSTER_NAME" \
+                --job-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \
                 --spec-out /tmp/input_spec.json \
                 $LOCAL_FLAG $NUM_WORKERS_FLAG $TAIL_FLAG
