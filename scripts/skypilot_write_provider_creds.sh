@@ -1,44 +1,11 @@
 #!/bin/bash
-# Bootstrap SkyPilot credentials before `sky check` / `sky.launch`.
+# Bootstrap SkyPilot R2 + per-provider creds to disk before `sky check` /
+# `sky.launch`. No stdout output by design (safe for tee'd contexts).
 #
-# Writes cred files to disk only. Emits NO secrets to stdout — every caller
-# can safely run this in a tee'd context without leaking secrets to public
-# logs. (Status/notice messages go to stderr; errors go to stderr.)
-#
-# Always (R2 is shared across compute providers):
-#   - ~/.cloudflare/r2.credentials  (mode 600, [r2] AWS-style profile) —
-#     consumed by SkyPilot's R2 storage adaptor (sky/adaptors/cloudflare.py)
-#     once #749 is unblocked.
-#   - ~/.cloudflare/accountid       (mode 600, plain text)
-#
-# Per-provider (gated on --provider runpod | oci | local):
-#   - runpod: ~/.runpod/config.toml
-#   - oci:    ~/.oci/config + ~/.oci/oci_api_key.pem + upserts the `oci:`
-#             top-level key into ~/.sky/config.yaml.
-#   - local:  upserts the `jobs:` top-level key (managed-jobs controller
-#             resources, shrunken so the controller pod schedules on the kind
-#             cluster `sky local up` provisions) into ~/.sky/config.yaml. No
-#             compute provider auth is needed; R2 creds are still required.
-#
-# ~/.sky/config.yaml is shared between OCI and local: writes are per-key
-# upserts (replace the top-level key we manage, preserve everything else),
-# so a multi-provider local-dev flow (e.g. running --provider oci then
-# --provider local) ends with both keys present in the file.
-#
-# Idempotency: if a target file already exists with non-empty content the
-# bootstrap leaves it alone — local-dev operators who hand-manage cred files
-# must not be silently clobbered. Pass --force to overwrite. (Mode is still
-# tightened to 0600 on the skip path so a hand-managed loose-perms file
-# doesn't stay world-readable.) Exception: ~/.sky/config.yaml is always
-# upserted at the top-level-key granularity (see upsert_sky_config_key) — the
-# skip-existing / --force semantics don't apply, since the operation only
-# touches the keys this script owns and preserves everything else.
-#
-# R2 env-var resolution: callers must supply the rclone-prefixed names
-# (`RCLONE_CONFIG_R2_*`), matching `.env.example` and the GitHub Actions
-# secrets table. `R2_ACCOUNT_ID` has no rclone-prefixed alias — it must be
-# set by that name (it's written to ~/.cloudflare/accountid for SkyPilot's
-# R2 storage adaptor).
+# Providers (gated on --provider runpod | oci | local): local needs no
+# compute auth — `sky local up` (kind cluster) only needs R2. The oci and
+# local providers each upsert their own top-level key into ~/.sky/config.yaml
+# (see upsert_sky_config_key); other keys in that file are preserved.
 #
 # Required env:
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID
@@ -46,6 +13,8 @@
 #   RCLONE_CONFIG_R2_ENDPOINT
 #   R2_ACCOUNT_ID
 # Provider-specific required env: see write_runpod_creds / write_oci_creds.
+#
+# Idempotency + skip semantics: see should_skip_existing / notice_skip_existing.
 set -euo pipefail
 
 umask 077
