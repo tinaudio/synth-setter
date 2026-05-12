@@ -6,14 +6,14 @@ The script writes per-provider SkyPilot credentials before `sky check` /
 - R2 (always, regardless of provider): writes ``~/.cloudflare/r2.credentials``
   + ``~/.cloudflare/accountid`` for SkyPilot's R2 storage adaptor.
 - RunPod (when --provider runpod): ``~/.runpod/config.toml``.
-- OCI (when --provider oci): ``~/.oci/config`` + ``~/.oci/oci_api_key.pem`` +
-  upserts the ``oci:`` block into ``~/.sky/config.yaml``.
-- Local (when --provider local): upserts the ``jobs:`` (controller resources)
-  block into ``~/.sky/config.yaml`` so the managed-jobs controller pod fits
-  on the kind cluster ``sky local up`` provisions in CI.
+- OCI (when --provider oci): ``~/.oci/config`` + ``~/.oci/oci_api_key.pem``.
+  SkyPilot's OCI backend defaults to the root compartment when
+  ``oci.default.compartment_ocid`` is unset, so this script no longer manages
+  ``~/.sky/config.yaml`` — see PR #876.
 
-``~/.sky/config.yaml`` is shared by both OCI and local: writes are per-key
-upserts so running for one provider after another preserves the other's keys.
+The kind / kubernetes ("local") provider is handled directly in the CI
+workflow (the launcher skips this script for that case) — no `--provider
+local` branch exists here.
 
 Tests run the script in a tmp ``HOME`` so they exercise the real bash without
 touching the developer's actual cred files. **Critical no-leak invariant**:
@@ -24,11 +24,8 @@ can't reintroduce a leak surface.
 from __future__ import annotations
 
 import os
-import shutil
 import stat
 import subprocess
-import sys
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -56,7 +53,6 @@ OCI_ENV: dict[str, str] = {
     "OCI_TENANCY_OCID": "ocid1.tenancy.oc1..yyyy",
     "OCI_FINGERPRINT": "aa:bb:cc:dd",
     "OCI_REGION": "us-ashburn-1",
-    "OCI_COMPARTMENT_OCID": "ocid1.compartment.oc1..zzzz",
     "OCI_API_KEY_PEM": _FAKE_PEM,
 }
 
@@ -113,11 +109,6 @@ class TestNoStdoutLeak:
         result = _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
         assert result.stdout == ""
 
-    def test_local_emits_zero_stdout_bytes(self, tmp_path: Path) -> None:
-        """Local-mode invocation emits zero bytes on stdout (no leak surface)."""
-        result = _run(tmp_path, R2_ENV, "--provider", "local")
-        assert result.stdout == ""
-
     def test_no_secret_byte_appears_on_stderr_either(self, tmp_path: Path) -> None:
         """Stderr is for status/notice messages only — never for cred values."""
         result = _run(tmp_path, {**R2_ENV, **RUNPOD_ENV}, "--provider", "runpod")
@@ -129,69 +120,6 @@ class TestNoStdoutLeak:
             assert value not in result.stderr, (
                 f"secret value {value!r} leaked to stderr: {result.stderr!r}"
             )
-
-    def test_oci_secrets_never_passed_as_subprocess_argv(self, tmp_path: Path) -> None:
-        """The `upsert_sky_config_key` helper must NOT pass a secret-bearing YAML fragment to
-        ``python3`` via argv. ``/proc/<pid>/cmdline`` is world-readable on Linux, so a secret
-        carried in argv can be observed by any other user on the runner via ``ps``. Stdin/env-var
-        carriage is required.
-
-        Test approach: shim ``python3`` with a wrapper that logs its argv AND the
-        ``SYNTH_UPSERT_FRAGMENT`` env var to a file before exec'ing the real interpreter; run
-        ``--provider oci``; assert that every OCI secret never appears in argv, AND that at least
-        one OCI secret (``OCI_COMPARTMENT_OCID``) DID appear in the env capture. The positive env
-        side prevents the trivial future regression "switched carriage from env to stdin and the
-        argv-absence test silently kept passing" — the env assertion forces the carriage to be
-        observably the env var the test pins.
-        """
-        real_python = shutil.which("python3") or sys.executable
-        argv_log = tmp_path / "argv.log"
-        env_log = tmp_path / "env.log"
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        shim = bin_dir / "python3"
-        shim.write_text(
-            "#!/usr/bin/env bash\n"
-            f'{{ printf "argv:\\n"; printf "  %s\\n" "$@"; echo "---"; }} >> "{argv_log}"\n'
-            f'{{ printf "SYNTH_UPSERT_FRAGMENT=%s\\n" "${{SYNTH_UPSERT_FRAGMENT-<unset>}}"; '
-            f'echo "---"; }} >> "{env_log}"\n'
-            f'exec "{real_python}" "$@"\n'
-        )
-        shim.chmod(0o755)
-
-        env_overrides = {
-            **R2_ENV,
-            **OCI_ENV,
-            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
-        }
-        _run(tmp_path, env_overrides, "--provider", "oci")
-
-        argv_logged = argv_log.read_text() if argv_log.exists() else ""
-        env_logged = env_log.read_text() if env_log.exists() else ""
-        # Sanity: shim was actually invoked (otherwise the test would pass vacuously).
-        assert "argv:" in argv_logged, f"python3 shim was not invoked: log={argv_logged!r}"
-
-        # Argv-absence: no OCI secret may leak into any python3 invocation's argv.
-        argv_leak_secrets = [
-            "OCI_USER_OCID",
-            "OCI_TENANCY_OCID",
-            "OCI_FINGERPRINT",
-            "OCI_API_KEY_PEM",
-            "OCI_COMPARTMENT_OCID",
-        ]
-        for key in argv_leak_secrets:
-            assert OCI_ENV[key] not in argv_logged, (
-                f"{key} leaked into a subprocess argv: {argv_logged!r}"
-            )
-
-        # Env-presence: the compartment_ocid carriage must be observable as the env var the
-        # `upsert_sky_config_key` python3 heredoc reads — defends against a future refactor that
-        # silently switches carriage path (e.g. to stdin) and leaves the argv-absence test
-        # vacuously passing.
-        assert OCI_ENV["OCI_COMPARTMENT_OCID"] in env_logged, (
-            f"OCI_COMPARTMENT_OCID was not carried via SYNTH_UPSERT_FRAGMENT env var "
-            f"(expected for argv-leak protection): {env_logged!r}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -287,134 +215,32 @@ class TestProviderGating:
         assert _file_mode(config) == 0o600
 
     def test_oci_writes_oci_config_and_key(self, tmp_path: Path) -> None:
-        """OCI provider writes the three OCI cred files (config, oci_api_key.pem, sky/config.yaml)
-        all mode 600."""
+        """OCI provider writes ~/.oci/config and ~/.oci/oci_api_key.pem (mode 600)."""
         _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
         assert (tmp_path / ".oci" / "config").is_file()
         assert (tmp_path / ".oci" / "oci_api_key.pem").is_file()
-        assert (tmp_path / ".sky" / "config.yaml").is_file()
         assert _file_mode(tmp_path / ".oci" / "config") == 0o600
         assert _file_mode(tmp_path / ".oci" / "oci_api_key.pem") == 0o600
-        assert _file_mode(tmp_path / ".sky" / "config.yaml") == 0o600
 
-    def test_local_writes_r2_files_and_shrunken_sky_jobs_controller_config(
-        self, tmp_path: Path
-    ) -> None:
-        """Local provider writes the R2 cred files plus a `~/.sky/config.yaml` that shrinks the
-        managed-jobs controller's default resource request so the controller pod schedules on the
-        kind cluster `sky local up` provisions in CI.
-
-        The default `cpus=4+, mem=4x, disk_size=50` does not fit on kind (k8s rejects
-        `disk_size`; CPU/memory floor exceeds the runner's pod-level capacity).
-        """
-        _run(tmp_path, R2_ENV, "--provider", "local")
-        assert (tmp_path / ".cloudflare" / "r2.credentials").is_file()
-        assert (tmp_path / ".cloudflare" / "accountid").is_file()
-        assert not (tmp_path / ".runpod").exists()
-        assert not (tmp_path / ".oci").exists()
-
-        sky_config = tmp_path / ".sky" / "config.yaml"
-        assert sky_config.is_file()
-        assert _file_mode(sky_config) == 0o600
-        config_text = sky_config.read_text()
-        assert "jobs:" in config_text
-        assert "controller:" in config_text
-        # Resource floor must be lower than the kind cluster's per-pod ceiling — the values
-        # don't matter precisely, but `4+` (the SkyPilot default) must NOT appear, and
-        # `disk_size` must not be set (k8s rejects it).
-        assert "4+" not in config_text
-        assert "disk_size" not in config_text
-
-    def test_local_does_not_require_compute_provider_env(self, tmp_path: Path) -> None:
-        """Local provider succeeds with R2 vars alone — no RUNPOD_API_KEY, no OCI_*."""
-        result = _run(tmp_path, R2_ENV, "--provider", "local")
-        assert result.returncode == 0
-
-    def test_oci_then_local_preserves_both_keys_in_sky_config(self, tmp_path: Path) -> None:
-        """`~/.sky/config.yaml` is shared by OCI (`oci:` block) and local (`jobs:` block).
-
-        Running `--provider oci` then `--provider local` must end with both top-level keys
-        present — neither write may clobber the other. Defends the multi-provider local-dev
-        flow from regressing back to "first writer wins, second is silently skipped".
-        """
-        import yaml as _yaml
-
+    def test_oci_does_not_touch_sky_config(self, tmp_path: Path) -> None:
+        """OCI provider must not write to ``~/.sky/config.yaml`` — SkyPilot's OCI backend defaults
+        to the root compartment when ``oci.default.compartment_ocid`` is unset, so the script has
+        nothing to upsert (see PR #876)."""
         _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
-        _run(tmp_path, R2_ENV, "--provider", "local")
-
-        sky_config = tmp_path / ".sky" / "config.yaml"
-        assert sky_config.is_file()
-        assert _file_mode(sky_config) == 0o600
-        config_text = sky_config.read_text()
-        doc = _yaml.safe_load(config_text)
-        assert "oci" in doc, f"OCI key clobbered by local write: {doc!r}"
-        assert "jobs" in doc, f"local key missing after OCI write: {doc!r}"
-        assert doc["oci"]["default"]["compartment_ocid"] == OCI_ENV["OCI_COMPARTMENT_OCID"]
-        # Property-style assertion (mirrors test_local_writes_r2_files_and_shrunken_sky_jobs...):
-        # the controller's cpus field must exist and the SkyPilot default `4+` must be absent
-        # (the shrinkage policy applied), but the specific shrunken value isn't pinned — the
-        # policy may legitimately tune that value (1+, 0.5+, etc.) over time.
-        assert doc["jobs"]["controller"]["resources"]["cpus"], (
-            f"cpus field missing under jobs.controller.resources: {doc!r}"
-        )
-        assert "4+" not in config_text, (
-            f"SkyPilot default cpus=4+ still present — shrinkage policy not applied: "
-            f"{config_text!r}"
+        assert not (tmp_path / ".sky" / "config.yaml").exists(), (
+            "OCI bootstrap should no longer touch ~/.sky/config.yaml"
         )
 
-    def test_local_then_oci_preserves_both_keys_in_sky_config(self, tmp_path: Path) -> None:
-        """Symmetric to test_oci_then_local: order doesn't matter — both keys must coexist."""
-        import yaml as _yaml
+    def test_local_provider_is_rejected(self, tmp_path: Path) -> None:
+        """The script no longer supports ``--provider local`` — the launcher skips this script for
+        that case and the CI workflow writes the controller-resource shrink directly.
 
-        _run(tmp_path, R2_ENV, "--provider", "local")
-        _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
-
-        sky_config = tmp_path / ".sky" / "config.yaml"
-        doc = _yaml.safe_load(sky_config.read_text())
-        assert "oci" in doc and "jobs" in doc, f"local→oci write order dropped a key: {doc!r}"
-
-    @pytest.mark.parametrize(
-        "bad_content_writer,expected_reason",
-        [
-            # Top level is a YAML list, not a mapping — caught by the `isinstance(existing, dict)`
-            # guard (would otherwise hit `TypeError` from `existing[key] = ...`).
-            (lambda p: p.write_text("- accidentally\n- a list\n"), "not a YAML mapping"),
-            # Unbalanced flow sequence → ScannerError — caught by the `yaml.YAMLError` guard.
-            (lambda p: p.write_text("oci: [unterminated\n"), "not valid YAML"),
-            # Invalid UTF-8 start byte — caught by the `UnicodeDecodeError` guard.
-            (lambda p: p.write_bytes(b"\xff\xfe oci: foo\n"), "not valid UTF-8"),
-        ],
-        ids=["not_a_mapping", "unparsable_yaml", "non_utf8"],
-    )
-    @pytest.mark.parametrize("provider", ["local", "oci"])
-    def test_malformed_sky_config_fails_with_clear_error(
-        self,
-        tmp_path: Path,
-        provider: str,
-        bad_content_writer: Callable[[Path], object],
-        expected_reason: str,
-    ) -> None:
-        """A pre-existing ``~/.sky/config.yaml`` whose contents are malformed (non-mapping top
-        level, unparsable YAML, or non-UTF-8 bytes) must fail the upsert with a clear, named error
-        — never a bare Python traceback from inside the heredoc.
-
-        Both providers
-        (``local`` writes ``jobs:``; ``oci`` writes ``oci:``) go through ``upsert_sky_config_key``
-        and must surface the same error class.
+        Passing ``local`` must fail loudly so a stale caller doesn't silently
+        no-op.
         """
-        sky_dir = tmp_path / ".sky"
-        sky_dir.mkdir()
-        sky_config = sky_dir / "config.yaml"
-        bad_content_writer(sky_config)
-
-        env: dict[str, str] = {**R2_ENV}
-        if provider == "oci":
-            env.update(OCI_ENV)
-        result = _run(tmp_path, env, "--provider", provider, expect_success=False)
+        result = _run(tmp_path, R2_ENV, "--provider", "local", expect_success=False)
         assert result.returncode != 0
-        assert expected_reason in result.stderr
-        assert str(sky_config) in result.stderr
-        assert "Traceback" not in result.stderr
+        assert "local" in result.stderr.lower() or "unknown" in result.stderr.lower()
 
     def test_unknown_provider_fails(self, tmp_path: Path) -> None:
         """An unknown --provider value (e.g. aws) is rejected with a clear error."""

@@ -1716,8 +1716,9 @@ class TestDetectProvider:
         assert _real_detect_provider(path) == "oci"
 
     def test_kubernetes_cloud_detected_as_local(self, tmp_path: Path) -> None:
-        """`sky local up`-provisioned kind clusters surface as `cloud: kubernetes`; the cred
-        bootstrap maps that to `--provider local` (R2-only — no compute provider auth)."""
+        """`sky local up`-provisioned kind clusters surface as `cloud: kubernetes`; the launcher
+        maps that to the internal ``local`` provider tag, used to gate skipping the cred bootstrap
+        (kind needs no compute creds — see PR #876)."""
         path = tmp_path / "local.yaml"
         path.write_text(yaml.dump({"resources": {"cloud": "kubernetes"}}))
 
@@ -2150,6 +2151,51 @@ class TestDispatchMode:
 
         assert result.exit_code == 0, result.output
         assert called == ["invoked"], "cred bootstrap must run under --local"
+
+    def test_local_provider_template_skips_cred_bootstrap(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When the template's cloud detects as ``local`` (kubernetes / kind), ``main()`` must NOT
+        invoke ``_run_cred_bootstrap`` — kind needs no compute creds and the CI workflow writes the
+        controller-resource shrink directly to ``~/.sky/config.yaml``.
+
+        See PR #876.
+        """
+        bootstrap_calls: list[str] = []
+
+        def tracking_bootstrap(**_kwargs: Any) -> None:
+            bootstrap_calls.append("invoked")
+
+        monkeypatch.setattr(
+            "src.pipeline.skypilot_launch._run_cred_bootstrap",
+            tracking_bootstrap,
+        )
+        monkeypatch.setattr(
+            "src.pipeline.skypilot_launch._detect_provider",
+            lambda _task: "local",
+        )
+
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--job-name",
+            "smoke-job-1",
+            fake_plugin=fake_plugin,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert bootstrap_calls == [], (
+            "cred bootstrap should be skipped for kubernetes/local templates"
+        )
 
     def test_both_flags_passed_is_rejected(
         self,

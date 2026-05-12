@@ -8,14 +8,13 @@ name: Check Auth
 #
 # Per provider the workflow:
 #   1. Runs scripts/skypilot_write_provider_creds.sh, which materializes
-#      ~/.cloudflare/, ~/.runpod/ or ~/.oci/+~/.sky/. The script emits no
-#      stdout by design so this workflow can run it without a leak surface.
+#      ~/.cloudflare/ and ~/.runpod/ or ~/.oci/. The script emits no stdout
+#      by design so this workflow can run it without a leak surface.
 #   2. Verifies the cred files exist with mode 600.
 #   3. R2 auth probe: `rclone lsd r2:` lists buckets at the account level —
 #      lightest call that exercises the access key + endpoint together.
-#   4. Provider auth probe (runpod / oci only): `sky check <provider>`
-#      exercises the SkyPilot adapter against the freshly-written cred files.
-#      `local` skips this — kind has no compute provider to check.
+#   4. Provider auth probe: `sky check <provider>` exercises the SkyPilot
+#      adapter against the freshly-written cred files.
 #
 # When SKYPILOT_API_SERVER_ENDPOINT is set the bootstrap is skipped entirely
 # (the remote API server holds creds; nothing to validate locally) and the
@@ -26,7 +25,7 @@ name: Check Auth
 #   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID                          — always.
 #   RUNPOD_API_KEY                                                    — runpod row.
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
-#   OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM                             — oci row.
+#   OCI_API_KEY_PEM                                                   — oci row.
 
 on:
   workflow_dispatch:
@@ -46,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        provider: [runpod, oci, local]
+        provider: [runpod, oci]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -88,17 +87,12 @@ jobs:
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
           OCI_REGION: ${{ secrets.OCI_REGION }}
-          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
           OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
           PROVIDER: ${{ matrix.provider }}
         run: |
           set -euo pipefail
           bash scripts/skypilot_write_provider_creds.sh --provider "${PROVIDER}"
 
-      # For --provider local: kind needs no compute provider auth, but the
-      # bootstrap does write a ~/.sky/config.yaml that shrinks the managed-jobs
-      # controller's resource request so the controller pod schedules on kind
-      # (defaults are too big).
       - name: Verify cred files exist with restrictive mode
         if: ${{ env.SKIP_CRED_CHECK != '1' }}
         env:
@@ -123,14 +117,6 @@ jobs:
             oci)
               check_mode_600 "${HOME}/.oci/config"
               check_mode_600 "${HOME}/.oci/oci_api_key.pem"
-              check_mode_600 "${HOME}/.sky/config.yaml"
-              ;;
-            local)
-              check_mode_600 "${HOME}/.sky/config.yaml"
-              test ! -e "${HOME}/.runpod/config.toml" \
-                || { echo "::error::~/.runpod/config.toml unexpectedly written for --provider local"; exit 1; }
-              test ! -d "${HOME}/.oci" \
-                || { echo "::error::~/.oci unexpectedly written for --provider local"; exit 1; }
               ;;
           esac
 
@@ -147,7 +133,7 @@ jobs:
           rclone lsd r2:
 
       - name: Verify provider auth (sky check)
-        if: ${{ env.SKIP_CRED_CHECK != '1' && matrix.provider != 'local' }}
+        if: ${{ env.SKIP_CRED_CHECK != '1' }}
         env:
           PROVIDER: ${{ matrix.provider }}
         run: |

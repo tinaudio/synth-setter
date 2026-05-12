@@ -6,12 +6,12 @@
 # expects a `sky local up`-managed kind cluster ("skypilot" kubectl context)
 # already running.
 #
-# The launcher detects `cloud: kubernetes` and runs the cred bootstrap with
-# `--provider local`, which writes the R2 cred files (kind itself needs no
-# compute provider auth) AND upserts a shrunken `jobs.controller.resources`
-# block into `~/.sky/config.yaml` so the managed-jobs controller pod fits on
-# the kind cluster `sky local up` provisions in CI (the SkyPilot defaults
-# of cpus=4+/mem=4x/disk_size=50 don't fit, and k8s rejects disk_size).
+# The launcher detects `cloud: kubernetes` and SKIPS its cred bootstrap —
+# kind needs no compute creds (R2 env vars are forwarded into the pod via
+# task.update_envs) and the CI workflow writes the managed-jobs controller-
+# resource shrink directly to ~/.sky/config.yaml before launch (the SkyPilot
+# defaults of cpus=4+/mem=4x/disk_size=50 don't fit on GHA's kind cluster,
+# and k8s rejects disk_size). See PR #876.
 # R2 still ships the materialized spec
 # (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`).
 #

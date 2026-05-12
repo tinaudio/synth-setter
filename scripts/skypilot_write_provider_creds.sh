@@ -2,10 +2,10 @@
 # Bootstrap SkyPilot R2 + per-provider creds to disk before `sky check` /
 # `sky.launch`. No stdout output by design (safe for tee'd contexts).
 #
-# Providers (gated on --provider runpod | oci | local): local needs no
-# compute auth — `sky local up` (kind cluster) only needs R2. The oci and
-# local providers each upsert their own top-level key into ~/.sky/config.yaml
-# (see upsert_sky_config_key); other keys in that file are preserved.
+# Providers (gated on --provider runpod | oci): the local (kubernetes / kind)
+# provider needs no compute auth — the launcher skips this script for that
+# case, and the CI workflow writes the managed-jobs controller-resource
+# shrink to ~/.sky/config.yaml directly.
 #
 # Required env:
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID
@@ -24,7 +24,7 @@ FORCE=0
 
 usage() {
   cat >&2 <<'EOF'
-Usage: skypilot_write_provider_creds.sh --provider <runpod|oci|local> [--force]
+Usage: skypilot_write_provider_creds.sh --provider <runpod|oci> [--force]
 
 Writes R2 + per-provider compute creds to disk. No stdout output by design
 so callers can run this in a tee'd context without leaking secrets.
@@ -36,7 +36,7 @@ parse_args() {
     case "$1" in
       --provider)
         if [[ $# -lt 2 || -z "${2:-}" ]]; then
-          echo "::error::--provider requires a value (runpod | oci | local)" >&2
+          echo "::error::--provider requires a value (runpod | oci)" >&2
           usage
           exit 1
         fi
@@ -137,19 +137,17 @@ write_runpod_creds() {
 }
 
 write_oci_creds() {
-  local user_ocid tenancy_ocid fingerprint region compartment_ocid api_key_pem
+  local user_ocid tenancy_ocid fingerprint region api_key_pem
   user_ocid="$(resolve_var OCI_USER_OCID)"
   tenancy_ocid="$(resolve_var OCI_TENANCY_OCID)"
   fingerprint="$(resolve_var OCI_FINGERPRINT)"
   region="$(resolve_var OCI_REGION)"
-  compartment_ocid="$(resolve_var OCI_COMPARTMENT_OCID)"
   api_key_pem="$(resolve_var OCI_API_KEY_PEM)"
 
   local oci_config="$HOME/.oci/config"
   local oci_key="$HOME/.oci/oci_api_key.pem"
-  local sky_config="$HOME/.sky/config.yaml"
 
-  mkdir -p "$HOME/.oci" "$HOME/.sky"
+  mkdir -p "$HOME/.oci"
 
   if should_skip_existing "${oci_key}"; then
     notice_skip_existing "${oci_key}"
@@ -166,62 +164,13 @@ write_oci_creds() {
       > "${oci_config}"
     chmod 600 "${oci_config}"
   fi
-
-  # NOTE: the compartment_ocid lives in this bash process's memory (variable
-  # expansion into a function-local positional arg) but NOT in any process's
-  # argv — `printf` here is a bash builtin (no fork) and the downstream python3
-  # heredoc receives the fragment via the SYNTH_UPSERT_FRAGMENT env var, not
-  # argv. So `/proc/<pid>/cmdline` exposes nothing for either process; only
-  # the owner-readable `/proc/<bash-pid>/environ` and in-process memory carry
-  # the OCID. See #876.
-  upsert_sky_config_key oci "$(printf 'oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n' \
-    "${compartment_ocid}" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}")"
-}
-
-# Per-key upsert into ~/.sky/config.yaml. Thin bash wrapper around the sibling
-# scripts/upsert_sky_config_key.py module — the Python module owns the YAML
-# parsing, error messages, and file-write semantics so the parser branches are
-# pytest-unit-testable directly (see tests/scripts/test_upsert_sky_config_key.py).
-# The wrapper's responsibilities: ensure ~/.sky/ exists, carry the
-# (potentially secret-bearing) fragment via the SYNTH_UPSERT_FRAGMENT env var
-# so it never reaches /proc/<pid>/cmdline, invoke the module, and propagate
-# its exit code via set -e. Full contract docs (per-key upsert semantics,
-# wholesale-replace within the managed key, secret-carriage rationale) live
-# in the Python module's docstring.
-upsert_sky_config_key() {
-  local key="$1"
-  local fragment="$2"
-  local sky_config="$HOME/.sky/config.yaml"
-
-  mkdir -p "$HOME/.sky"
-
-  SYNTH_UPSERT_FRAGMENT="${fragment}" python3 "${BASH_SOURCE%/*}/upsert_sky_config_key.py" \
-    "${key}" "${sky_config}"
-}
-
-write_local_sky_config() {
-  # SkyPilot's managed-jobs controller defaults to cpus=4+, mem=4x, disk_size=50.
-  # Those defaults don't fit on the kind cluster `sky local up` provisions in CI
-  # (no node satisfies the CPU/memory floor; k8s rejects disk_size altogether).
-  # Shrink the controller request so the controller pod schedules on kind and
-  # the worker job can run. Omit disk_size — k8s "doesn't support" it; the
-  # controller uses the pod's ephemeral storage / a PVC instead.
-  local jobs_fragment
-  read -r -d '' jobs_fragment <<'YAML' || true
-jobs:
-  controller:
-    resources:
-      cpus: 1+
-      memory: 1+
-YAML
-  upsert_sky_config_key jobs "${jobs_fragment}"
 }
 
 main() {
   parse_args "$@"
 
   if [[ -z "${PROVIDER}" ]]; then
-    echo "::error::--provider is required (runpod | oci | local)" >&2
+    echo "::error::--provider is required (runpod | oci)" >&2
     usage
     exit 1
   fi
@@ -235,11 +184,8 @@ main() {
     oci)
       write_oci_creds
       ;;
-    local)
-      write_local_sky_config
-      ;;
     *)
-      echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci | local)" >&2
+      echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci)" >&2
       exit 1
       ;;
   esac

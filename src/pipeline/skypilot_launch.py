@@ -579,8 +579,12 @@ def main(
     # Runs BEFORE `upload_spec_to_r2` so a bootstrap failure (e.g. missing
     # provider env) fails the launcher fast without polluting R2 with a spec
     # that no worker will ever consume.
+    #
+    # Local provider (kind) needs no compute creds and the CI workflow writes
+    # the managed-jobs controller-resource shrink directly — skip the bootstrap.
     provider = _detect_provider(template_path)
-    _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
+    if provider != "local":
+        _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
     # One spec upload, shared across all ranks. Spec is keyed by base job name (no -rN
     # suffix) so all workers in a fan-out group download from the same R2 object and see the
