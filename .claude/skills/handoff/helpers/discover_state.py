@@ -24,6 +24,10 @@ HANDOFF_HEADER_PREFIX = "## Handoff update"
 TASK_TITLE_RE_TEMPLATE = r"^{prefix}\.(\d+)\b"
 COPILOT_LOGIN_RE = re.compile(r"copilot", re.IGNORECASE)
 
+# Repo root anchor for `git -C` so worktree/branch queries succeed regardless
+# of the caller's CWD. Layout: <repo>/.claude/skills/handoff/helpers/<this file>
+REPO_ROOT = Path(__file__).resolve().parents[4]
+
 
 @dataclass
 class LinkedIssue:
@@ -157,12 +161,12 @@ def run_gh(args: list[str], *, input_text: str | None = None) -> str:
 
 
 def run_git(args: list[str]) -> str:
-    """Invoke git and return stdout.
+    """Invoke git anchored at REPO_ROOT and return stdout.
 
     Raises CalledProcessError on failure.
     """
     result = subprocess.run(  # noqa: S603 — argv list, no shell
-        ["git", *args],
+        ["git", "-C", str(REPO_ROOT), *args],
         capture_output=True,
         text=True,
         check=True,

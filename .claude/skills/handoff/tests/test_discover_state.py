@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -110,6 +111,24 @@ def test_parse_worktree_porcelain_parses_typical_output() -> None:
 def test_parse_worktree_porcelain_empty_returns_empty() -> None:
     """Parse worktree porcelain empty returns empty."""
     assert ds.parse_worktree_porcelain("") == []
+
+
+def test_run_git_is_anchored_to_repo_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """`run_git` must prepend `-C <REPO_ROOT>` so it works from any CWD."""
+    captured: dict = {}
+
+    def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ds.subprocess, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    ds.run_git(["worktree", "list", "--porcelain"])
+    assert captured["argv"][0:3] == ["git", "-C", str(ds.REPO_ROOT)]
+    assert captured["argv"][3:] == ["worktree", "list", "--porcelain"]
 
 
 def test_annotate_worktrees_marks_merged_safe_to_remove() -> None:
