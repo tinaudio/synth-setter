@@ -182,7 +182,7 @@ def test_find_new_defs_ignores_deleted_def() -> None:
 
 
 def test_find_new_defs_ignores_addition_in_test_diff_artifact() -> None:
-    """`+++ b/file.py` and `+-+` headers must not look like additions."""
+    """``+++ b/file.py`` and ``--- a/file.py`` headers must not look like additions."""
     diff = "diff --git a/src/eval.py b/src/eval.py\n--- a/src/eval.py\n+++ b/src/eval.py\n"
     import re
 
