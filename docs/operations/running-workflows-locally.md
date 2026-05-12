@@ -42,9 +42,11 @@ section below shows how to layer `gh` on top, which is the only common gap.
 
 The [`test-act.yaml`](../../.github/workflows/test-act.yaml) workflow guards
 this setup: any PR that touches `.actrc`, the runner Dockerfile, or the
-test-act workflow itself runs `act -l` and an `act -n` dry-run against a
-known workflow on a GitHub runner, so config rot is caught at PR time
-instead of on someone's laptop.
+test-act workflow itself runs `act -l`, an `act -n` dry-run, and a real
+`act` run of `test-dataset-generation.yml` with `--input provider=local`
+on a GitHub runner — catching config rot, dynamic-matrix breakage, and
+docker-in-runner failures at PR time instead of on someone's laptop.
+Fork PRs skip the real-run step (R2 secrets unavailable to forks).
 
 ## Listing what's available
 

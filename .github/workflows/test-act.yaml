@@ -14,9 +14,6 @@ on:
       - ".actrc"
       - "docs/operations/act-runner.Dockerfile"
       - ".github/workflows/test-act.yaml"
-      - ".github/workflows/test-dataset-generation.yml"
-      - ".github/workflows/generate-dataset-shards.yaml"
-      - ".github/workflows/validate-dataset-shards.yaml"
   workflow_dispatch:
 
 permissions:
@@ -30,7 +27,7 @@ jobs:
   verify-act:
     name: Verify act parses repo + builds runner image
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -90,13 +87,37 @@ jobs:
 
       # Dry-run the data-pipeline workflow chain. test-dataset-generation has
       # a dynamic matrix (`fromJSON(needs.setup.outputs.providers)`) that act
-      # cannot evaluate at dry-run, so target the `setup` orchestrator job
-      # specifically — it's the entry point and where new bash/python lands.
-      # Then dry-run each `workflow_call` reusable directly so the full
-      # parse-chain stays covered.
+      # cannot evaluate at dry-run because `-n` skips setup's bash and leaves
+      # `needs.setup.outputs.*` empty — so target `setup` specifically, then
+      # dry-run each `workflow_call` reusable directly so the parse-chain stays
+      # covered. The real-run step below closes the matrix-evaluation gap.
       - name: Dry-run test-dataset-generation chain
         run: |
           set -euo pipefail
           act pull_request -W .github/workflows/test-dataset-generation.yml -j setup -n
           act workflow_dispatch -W .github/workflows/generate-dataset-shards.yaml -n
           act workflow_dispatch -W .github/workflows/validate-dataset-shards.yaml -n
+
+      # Real-run the data-pipeline chain via act with provider=local —
+      # dropping `-n` lets `setup` populate `$GITHUB_OUTPUT` so the dynamic
+      # matrix resolves. Fork PRs skip (R2 secrets unavailable to forks).
+      - name: Real-run test-dataset-generation chain via act (provider=local)
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secrets_file="$(mktemp)"
+          trap 'rm -f "${secrets_file}"' EXIT
+          {
+            printf 'RCLONE_CONFIG_R2_ACCESS_KEY_ID=%s\n' "${RCLONE_CONFIG_R2_ACCESS_KEY_ID}"
+            printf 'RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=%s\n' "${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY}"
+            printf 'RCLONE_CONFIG_R2_ENDPOINT=%s\n' "${RCLONE_CONFIG_R2_ENDPOINT}"
+          } > "${secrets_file}"
+          act workflow_dispatch \
+            -W .github/workflows/test-dataset-generation.yml \
+            --input provider=local \
+            --secret-file "${secrets_file}"
