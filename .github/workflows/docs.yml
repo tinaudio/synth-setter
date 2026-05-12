@@ -68,19 +68,27 @@ jobs:
       # gh-pages is the benchmark-action's persistence layer; only its
       # dev/bench/ subtree is republished by the next step. The probe lets a
       # fresh repo (no gh-pages branch yet) deploy docs without bench while
-      # still failing the workflow loudly on transient checkout errors —
-      # `continue-on-error: true` on the checkout itself would also swallow
-      # network / auth failures, not just a missing branch.
+      # still failing the workflow loudly on transient errors — explicitly
+      # discriminating HTTP 404 (branch absent, intended soft-skip) from
+      # 5xx / network / auth failures (fail loud). A blanket
+      # `continue-on-error: true` on the checkout, or a `2>&1`-swallowing
+      # probe, would deploy without the chart on a transient blip.
       - name: Probe gh-pages branch existence
         id: probe_ghpages
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh api "repos/${{ github.repository }}/branches/gh-pages" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          http_code=$(curl -sS --retry 3 --retry-delay 2 \
+            -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/branches/gh-pages")
+          case "$http_code" in
+            200) echo "gh-pages branch exists"; echo "exists=true" >> "$GITHUB_OUTPUT" ;;
+            404) echo "gh-pages branch absent - bench merge will be skipped"; echo "exists=false" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "Unexpected HTTP $http_code from branches/gh-pages" >&2; exit 1 ;;
+          esac
 
       - name: Fetch benchmark history from gh-pages data branch
         if: steps.probe_ghpages.outputs.exists == 'true'
