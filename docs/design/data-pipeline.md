@@ -881,6 +881,8 @@ HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequ
 
 Workers generate HDF5 because it is the right format for atomic writes, random-access validation, and debugging. The staging/canonical split is unaffected by output format. WebDataset is a training distribution format, not a generation format. Finalize handles the transcoding — it already downloads, validates, and reshards, so adding a format conversion step is a natural extension.
 
+> **Note — design in transition.** PR-12 widens `DatasetSpec.output_format` to `Literal["hdf5", "wds"]` and computes the shard filename extension from that field via `OUTPUT_FORMAT_TO_EXTENSION` (see §14.1). With the original design above, that would only affect finalize's training-output transcoding. PR-13 then lands a direct wds writer in `make_dataset` and dispatches the worker on the shard's filename suffix — so `output_format="wds"` will result in workers emitting `.tar` shards directly rather than HDF5-then-transcode. This section will be rewritten when PR-13 lands; until then, the schema admits `wds` but no wds writer is wired.
+
 **WebDataset shard structure:**
 
 Each `.tar` shard contains samples as individual files:
