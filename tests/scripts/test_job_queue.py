@@ -168,17 +168,81 @@ class FakeRunner:
 def test_ensure_daemon_running_noop_when_status_succeeds() -> None:
     """If `pueue status` returns 0, the daemon is already up — don't run `pueued -d`."""
     runner = FakeRunner(results={("pueue", "status"): (0, "")})
-    ensure_daemon_running(runner)
+    ensure_daemon_running(runner, sleeper=_no_sleep)
     cmds = [tuple(c) for c in runner.calls]
     assert ("pueued", "-d") not in cmds
 
 
+def _no_sleep(seconds: float) -> None:
+    """Sleep stub for tests — drops the requested duration."""
+    del seconds
+
+
+class _StatefulPueueStatusRunner:
+    """FakeRunner variant where `pueue status` flips from failing → succeeding after `pueued -d`.
+
+    Models the real race: status fails before the daemon binds its socket, succeeds after.
+    """
+
+    def __init__(self, succeeds_after_calls: int) -> None:
+        """Track when post-daemonize status probes start succeeding.
+
+        :param succeeds_after_calls: number of post-`pueued -d` ``pueue status`` calls that
+            must elapse before status starts returning 0.
+        """
+        self._post_daemon_status_calls = 0
+        self._daemon_started = False
+        self._succeeds_after = succeeds_after_calls
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Capture argv, then return a CompletedProcess whose rc reflects daemon state.
+
+        :param args: argv passed to subprocess.run.
+        :param kwargs: subprocess.run kwargs (check, capture_output, text); honored only
+            for ``check``.
+        :return: CompletedProcess with rc=0 once the daemon is "bound", else rc=1.
+        """
+        del kwargs
+        self.calls.append(list(args))
+        if args == ["pueued", "-d"]:
+            self._daemon_started = True
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+        if args == ["pueue", "status"]:
+            if not self._daemon_started:
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="")
+            self._post_daemon_status_calls += 1
+            rc = 0 if self._post_daemon_status_calls > self._succeeds_after else 1
+            return subprocess.CompletedProcess(args=args, returncode=rc, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+
 def test_ensure_daemon_running_starts_daemon_when_status_fails() -> None:
     """If `pueue status` returns non-zero, run `pueued -d` to daemonize before continuing."""
-    runner = FakeRunner(results={("pueue", "status"): (1, "")})
-    ensure_daemon_running(runner)
+    runner = _StatefulPueueStatusRunner(succeeds_after_calls=0)
+    ensure_daemon_running(runner, sleeper=_no_sleep)
     cmds = [tuple(c) for c in runner.calls]
     assert ("pueued", "-d") in cmds
+
+
+def test_ensure_daemon_running_retries_until_daemon_binds_socket() -> None:
+    """Status fails for the first few post-daemonize probes, then succeeds — must not raise."""
+    runner = _StatefulPueueStatusRunner(succeeds_after_calls=3)
+    sleeps: list[float] = []
+    ensure_daemon_running(runner, sleeper=sleeps.append)
+    cmds = [tuple(c) for c in runner.calls]
+    # 1 pre-daemon status probe + 1 pueued -d + 4 post-daemon status probes (3 fail, 1 ok)
+    assert cmds.count(("pueue", "status")) == 5
+    assert cmds.count(("pueued", "-d")) == 1
+    # Slept exactly 3 times (once after each failed post-daemonize probe).
+    assert len(sleeps) == 3
+
+
+def test_ensure_daemon_running_raises_when_daemon_never_binds() -> None:
+    """If `pueue status` keeps failing past the budget, raise instead of silently continuing."""
+    runner = _StatefulPueueStatusRunner(succeeds_after_calls=10_000)
+    with pytest.raises(RuntimeError, match="never became reachable"):
+        ensure_daemon_running(runner, sleeper=_no_sleep)
 
 
 def test_ensure_group_creates_missing_group_and_sets_parallel() -> None:

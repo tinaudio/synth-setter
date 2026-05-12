@@ -31,6 +31,7 @@ the remaining commands are not enqueued.
 from __future__ import annotations
 
 import subprocess
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -38,6 +39,14 @@ import click
 
 DEFAULT_GROUP = "default"
 DEFAULT_PARALLEL = 1
+
+# pueued -d returns as soon as the daemon is forked, but the daemon needs a
+# moment to bind its socket. The next `pueue` call then races with that bind.
+# We re-probe `pueue status` with linear backoff until either it succeeds or
+# the budget is exhausted — same approach as the validate workflow's readiness
+# loop, kept here so callers don't need to wrap.
+DAEMON_READY_RETRIES = 20
+DAEMON_READY_SLEEP_SECONDS = 0.25
 
 # Type alias for the subprocess-runner the orchestration helpers depend on.
 # Tests inject a fake; production passes ``subprocess.run``.
@@ -95,17 +104,35 @@ def _run(runner: RunnerFn, args: list[str], *, check: bool) -> subprocess.Comple
     return runner(args, check=check, capture_output=True, text=True)
 
 
-def ensure_daemon_running(runner: RunnerFn) -> None:
-    """Start ``pueued -d`` if no daemon is reachable.
+def ensure_daemon_running(
+    runner: RunnerFn,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> None:
+    """Start ``pueued -d`` if no daemon is reachable, then wait for it to bind.
 
     Detection uses ``pueue status``: a non-zero exit means the daemon is not
-    listening (or not installed correctly), and we attempt a daemonize. If the
-    daemon is already running, this is a no-op.
+    listening (or not installed correctly), and we attempt a daemonize. After
+    spawning we re-probe ``pueue status`` with bounded retries to avoid the
+    race where the daemon has been forked but hasn't bound its socket yet —
+    the next ``pueue group`` would otherwise fail intermittently.
+
+    Raises:
+        RuntimeError: If the daemon never becomes reachable inside the retry
+            budget after a fresh start.
     """
     probe = runner(["pueue", "status"], check=False, capture_output=True, text=True)
     if probe.returncode == 0:
         return
     _run(runner, ["pueued", "-d"], check=True)
+    for _ in range(DAEMON_READY_RETRIES):
+        probe = runner(["pueue", "status"], check=False, capture_output=True, text=True)
+        if probe.returncode == 0:
+            return
+        sleeper(DAEMON_READY_SLEEP_SECONDS)
+    raise RuntimeError(
+        f"pueued was started but never became reachable within "
+        f"{DAEMON_READY_RETRIES * DAEMON_READY_SLEEP_SECONDS:.1f}s"
+    )
 
 
 def ensure_group(group: str, parallel: int, runner: RunnerFn) -> None:

@@ -12,9 +12,18 @@ name: Job Queue Dispatch
 #
 # Waiting for the queue to drain is opt-in: set `wait_timeout_seconds` > 0 to
 # block on `pueue wait` (bounded by that timeout) before the container exits.
-# The default of 0 returns immediately after submission — the jobs keep
-# running inside the container, so the artifact upload still captures their
-# in-flight state, but the workflow does not gate on completion.
+# The default of 0 returns immediately after submission.
+#
+# CAVEAT: because the worker step uses `docker run --rm` (foreground), as soon
+# as the in-container shell exits the container is torn down and any
+# still-running pueue tasks are killed. So with the default
+# `wait_timeout_seconds=0`, only jobs that complete during the brief
+# `pueue add` window will actually finish — anything still in `Running` or
+# `Queued` state at shell exit is lost. The artifact upload captures the
+# state.json snapshot from that moment, which is useful for inspecting what
+# *was* enqueued, not what eventually ran. Set `wait_timeout_seconds` to a
+# value larger than the longest expected job runtime when you need jobs to
+# actually complete inside the workflow.
 #
 # Use cases:
 #   - smoke-test a sweep file from the repo (e.g. sweeps/quick.txt) without
