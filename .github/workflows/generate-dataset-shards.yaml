@@ -171,14 +171,14 @@ jobs:
       # ----- skypilot-local row: kind setup + launcher
       - name: Install kind (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           install_only: true
           version: v0.24.0
 
       - name: Install kubectl (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
 
       - name: Install socat (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
@@ -192,7 +192,7 @@ jobs:
 
       - name: Install uv (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements-app.txt"
@@ -217,8 +217,12 @@ jobs:
       # because the kind cluster can't host parallel workers (#843). The
       # argument array is built conditionally so optional flags don't expand
       # to empty strings.
+      # 20-min step cap: if the launcher hangs, fail-fast and let the
+      # `if: always()` `Snapshot sky logs` step run, instead of burning the
+      # full 60-min job timeout before logs are uploaded.
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
+        timeout-minutes: 20
         env:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
@@ -252,9 +256,43 @@ jobs:
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
 
+      # Capture controller-side state (apiserver + on-pod provision.log) before
+      # `sky local down` reaps the kind cluster. See scripts/capture-skypilot-state.sh
+      # for what's captured and why. Best-effort — never fails the workflow.
+      - name: Capture kind cluster state (skypilot-local row)
+        if: ${{ always() && inputs.provider == 'skypilot-local' }}
+        run: scripts/capture-skypilot-state.sh
+
       - name: sky local down (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
         run: sky local down || true
+
+      # Snapshot SkyPilot's two on-disk log roots into the run-metadata dir so
+      # the existing `Upload run metadata` step picks them up. Without this,
+      # a launcher hang/cancel leaves the operator with only the bare
+      # `View logs: sky api logs -l <id>/file_mounts.log` pointer the SDK
+      # printed to stdout — the actual log file is destroyed with the runner.
+      #   * `~/sky_logs/`                       — CLI invocations (sky local up/down).
+      #   * `~/.sky/api_server/clients/<hash>/sky_logs/` — SDK client logs that
+      #     `sky api logs -l <id>` resolves to (file_mounts.log, provision.log,
+      #     setup.log, etc.). Local API server in 0.12 stores them here.
+      # Placed AFTER `sky local down` so local_down.log is captured too.
+      - name: Snapshot sky logs (skypilot-local row)
+        if: ${{ always() && inputs.provider == 'skypilot-local' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs"
+          cp -r "${HOME}/sky_logs/." "${RUN_METADATA_DIR}/sky_logs/" 2>/dev/null || true
+          shopt -s nullglob
+          for client_dir in "${HOME}"/.sky/api_server/clients/*/; do
+            [[ -d "${client_dir}sky_logs" ]] || continue
+            client_hash="$(basename "${client_dir}")"
+            mkdir -p "${RUN_METADATA_DIR}/sky_api_server_logs/${client_hash}"
+            cp -r "${client_dir}sky_logs/." \
+              "${RUN_METADATA_DIR}/sky_api_server_logs/${client_hash}/" 2>/dev/null || true
+          done
+          echo "=== snapshot sizes ==="
+          du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
 
       # ----- runpod / oci row: in-container launcher
       # Optional launcher flags are pre-rendered into env-var strings on the
