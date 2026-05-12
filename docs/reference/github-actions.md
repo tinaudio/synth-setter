@@ -74,7 +74,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 **Scheduled triggers (`schedule`):**
 
-- `auto-approve` runs hourly (`0 * * * *`) as a safety net. Catches blockers that clear without firing any workflow event — most notably, Copilot review threads being resolved (GitHub does not expose `pull_request_review_thread` as a workflow trigger). On a scheduled run the `discover` job enumerates every open eligible PR and the `auto-approve` matrix re-evaluates each.
+- `auto-approve` runs hourly (`0 * * * *`) as a safety net. Catches blockers that clear without firing any workflow event — most notably, Copilot review threads being resolved (GitHub does not expose `pull_request_review_thread` as a workflow trigger). On a scheduled run the `discover` job paginates the open-PR list and enumerates every eligible PR; the `auto-approve` matrix re-evaluates each.
 
 **Artifact chains (`upload-artifact` → `download-artifact`):**
 

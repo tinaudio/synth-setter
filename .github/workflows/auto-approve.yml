@@ -28,6 +28,12 @@ on:
   schedule:
     - cron: "0 * * * *"
 
+# Single source of truth for the author allowlist — referenced by both the
+# scheduled discover query (jobs.discover) and the eligibility check in
+# jobs.auto-approve.conditions.
+env:
+  ALLOWED_AUTHOR: ktinubu
+
 jobs:
   discover:
     # Skip the check_run we create ourselves — otherwise the workflow loops
@@ -49,7 +55,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          REPO="${{ github.repository }}"
+          export REPO="${{ github.repository }}"
           EVENT="${{ github.event_name }}"
           PRS="[]"
 
@@ -64,13 +70,13 @@ jobs:
           elif [ "$EVENT" = "workflow_dispatch" ]; then
             PRS="[${{ github.event.inputs.pr_number }}]"
           elif [ "$EVENT" = "schedule" ]; then
-            PRS=$(gh api "repos/${REPO}/pulls?state=open&base=main&per_page=100" \
-              --jq '[.[]
-                | select(.user.login == "ktinubu")
+            PRS=$(gh api --paginate "repos/${REPO}/pulls?state=open&base=main&per_page=100" \
+              --jq '.[]
+                | select(.user.login == env.ALLOWED_AUTHOR)
                 | select(.draft == false)
-                | select(.head.repo.full_name == "'"$REPO"'")
+                | select(.head.repo.full_name == env.REPO)
                 | .number
-              ]')
+              ' | jq -cs '.')
           else
             PRS="[${{ github.event.pull_request.number }}]"
           fi
@@ -119,8 +125,8 @@ jobs:
 
           PR_AUTHOR=$(echo "$PR_DATA" | jq -r '.author')
 
-          # --- Condition: Only approve PRs by ktinubu ---
-          if [ "$PR_AUTHOR" != "ktinubu" ]; then
+          # --- Condition: Only approve PRs by the allowlisted author ---
+          if [ "$PR_AUTHOR" != "$ALLOWED_AUTHOR" ]; then
             echo "result=failure" >> "$GITHUB_OUTPUT"
             echo "reason=PR author ${PR_AUTHOR} is not eligible for auto-approve" >> "$GITHUB_OUTPUT"
             exit 0
