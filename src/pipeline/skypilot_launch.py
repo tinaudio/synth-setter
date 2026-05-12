@@ -412,7 +412,7 @@ def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help=(
-        "Where to write the materialized spec JSON. Default: a per-cluster path under "
+        "Where to write the materialized spec JSON. Default: a per-launch path under "
         "$TMPDIR (avoids parallel-run collisions on a shared host)."
     ),
 )
