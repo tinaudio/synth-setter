@@ -41,16 +41,19 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   trigger-bake:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      BAKE_WORKFLOW_NAME: Bake OCI Custom Image
     outputs:
       image_display_name: ${{ steps.compute_name.outputs.name }}
     steps:
@@ -67,22 +70,31 @@ jobs:
       - name: Dispatch oci-image-bake on PR branch
         id: dispatch
         env:
-          GH_TOKEN: ${{ github.token }}
           IMAGE_NAME: ${{ steps.compute_name.outputs.name }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          before=$(gh run list --workflow oci-image-bake.yaml --branch "$BRANCH" \
-            --limit 1 --json databaseId --jq '.[0].databaseId // ""')
-          gh workflow run oci-image-bake.yaml \
-            --ref "$BRANCH" \
-            --field "image_display_name=$IMAGE_NAME"
+          # Filter by `name:` rather than `--workflow` because the workflow
+          # file isn't on the default branch (it's in this same PR), so
+          # `gh run list --workflow oci-image-bake.yaml` 404s on the default-
+          # branch lookup. Same reason `gh workflow run` is replaced with a
+          # direct dispatch via `gh api` — `gh workflow run` does the same
+          # default-branch resolution.
+          latest_bake_id() {
+            gh run list --branch "$BRANCH" --event workflow_dispatch --limit 10 \
+              --json databaseId,name,headSha \
+              --jq "[.[] | select(.name == \"$BAKE_WORKFLOW_NAME\")] | .[0]"
+          }
+          before=$(latest_bake_id | jq -r '.databaseId // ""')
+          gh api --method POST \
+            "/repos/$GH_REPO/actions/workflows/oci-image-bake.yaml/dispatches" \
+            -f "ref=$BRANCH" \
+            -f "inputs[image_display_name]=$IMAGE_NAME"
           run_id=""
           dispatched_sha=""
           for _ in $(seq 1 30); do
-            row=$(gh run list --workflow oci-image-bake.yaml --branch "$BRANCH" \
-              --limit 1 --json databaseId,headSha --jq '.[0]')
+            row=$(latest_bake_id)
             current=$(echo "$row" | jq -r '.databaseId // ""')
             if [ -n "$current" ] && [ "$current" != "$before" ]; then
               run_id="$current"
