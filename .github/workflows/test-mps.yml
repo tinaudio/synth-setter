@@ -51,6 +51,7 @@ jobs:
         run: |
           uv pip install --system -r requirements.txt
           uv pip install --system sh
+          uv pip install --system -e .
 
       # Install the Surge XT VST3 cask and symlink it into the repo-relative
       # `plugins/Surge XT.vst3` path that configs, CLI `--plugin_path` defaults,
@@ -64,11 +65,7 @@ jobs:
 
       # Mirrors the Tart-VM smoke check in `tart/macos.pkr.hcl` — fails fast if
       # the cask install or symlink is broken before the full pytest run.
-      # `PYTHONPATH=src` exposes the `synth_setter` package without an editable
-      # install (mirrors pytest's `pythonpath = ["src"]` from pyproject.toml).
       - name: Smoke-test Surge XT plugin load
-        env:
-          PYTHONPATH: src
         run: |
           python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
 

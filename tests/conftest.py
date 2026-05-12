@@ -46,24 +46,6 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 # no per-call tuning, no stack-distant default.
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
-# Repo root: passed as PYTHONPATH to VST subprocess so `from synth_setter.*` resolves
-# without an editable install. Mirrors pytest's `pythonpath = ["src"]` from
-# pyproject.toml. The MPS CI workflow does not run `pip install -e .` before pytest,
-# so the in-process pytest-path doesn't propagate to spawned children.
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _subprocess_env() -> dict[str, str]:
-    """Return ``os.environ`` with ``PYTHONPATH`` set to include repo root and ``src/``."""
-    env = os.environ.copy()
-    pythonpath_parts = [str(_REPO_ROOT), str(_REPO_ROOT / "src")]
-    existing = env.get("PYTHONPATH", "")
-    if existing:
-        pythonpath_parts.append(existing)
-    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
-    return env
-
-
 NUM_FIXTURE_SAMPLES = 5
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
 # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
@@ -450,7 +432,6 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
             text=True,
             check=False,
             timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
-            env=_subprocess_env(),
         )
     except subprocess.TimeoutExpired:
         pytest.fail(

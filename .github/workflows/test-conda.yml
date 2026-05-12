@@ -52,6 +52,9 @@ jobs:
           cache-environment-key: env-${{ hashFiles('environment.yaml', 'requirements-app.txt') }}
           init-shell: bash
 
+      - name: Install package as editable
+        run: pip install -e .
+
       - name: List dependencies
         run: |
           micromamba list

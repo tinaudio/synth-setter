@@ -57,6 +57,7 @@ jobs:
         run: |
           uv pip install --system -r requirements.txt
           uv pip install --system sh
+          uv pip install --system -e .
 
       - name: List dependencies
         run: uv pip list --system
@@ -96,6 +97,7 @@ jobs:
         run: |
           uv pip install --system -r requirements.txt
           uv pip install --system sh
+          uv pip install --system -e .
 
       - name: List dependencies
         run: uv pip list --system
@@ -128,6 +130,7 @@ jobs:
           uv pip install --system -r requirements.txt
           uv pip install --system pytest-cov[toml]
           uv pip install --system sh
+          uv pip install --system -e .
 
       - name: Run tests and collect coverage
         env:

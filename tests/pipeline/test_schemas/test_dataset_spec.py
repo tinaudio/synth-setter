@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -18,25 +16,6 @@ from src.pipeline.schemas.spec import (
     ShardSpec,
 )
 from synth_setter.data.vst import param_specs
-
-# Repo root, used to pass `PYTHONPATH=<repo>:<repo>/src` to subprocess.run so
-# the spawned interpreter can resolve both `src.pipeline.*` AND `synth_setter.*`
-# without requiring an editable install. Mirrors pytest's `pythonpath = ["src"]`
-# from pyproject.toml; needed for tests that exercise launcher-pure / pedalboard-
-# free invariants in a fresh interpreter.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-def _subprocess_env() -> dict[str, str]:
-    """Return os.environ with PYTHONPATH set to include repo root and src/."""
-    env = os.environ.copy()
-    pythonpath_parts = [str(_REPO_ROOT), str(_REPO_ROOT / "src")]
-    existing = env.get("PYTHONPATH", "")
-    if existing:
-        pythonpath_parts.append(existing)
-    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
-    return env
-
 
 FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -535,7 +514,6 @@ class TestSpecImportStaysLauncherPure:
             capture_output=True,
             text=True,
             check=False,
-            env=_subprocess_env(),
         )
         assert result.returncode == 0, (
             f"bare spec import is no longer launcher-pure:\n"
@@ -590,7 +568,6 @@ class TestSpecConstructionStaysPedalboardFree:
             capture_output=True,
             text=True,
             check=False,
-            env=_subprocess_env(),
         )
         assert result.returncode == 0, (
             f"pedalboard leaked into spec serialization:\n"
