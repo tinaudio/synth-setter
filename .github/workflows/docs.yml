@@ -1,26 +1,41 @@
 name: Docs
 
-# Phase 1 (this file): build the mkdocs site on PRs and upload site/ as an
-# artifact for reviewer preview. Phase 2 (#967) flips this to on: push to main
-# with pages: write + id-token: write and chains configure-pages /
-# upload-pages-artifact / deploy-pages to deploy on merge.
+# Phase 2 (this file): on merge to main (or manual dispatch), build the mkdocs
+# site and deploy it to GitHub Pages. Phase 1 (#966) built the site on PRs and
+# uploaded site/ as a downloadable artifact; that behavior is intentionally
+# replaced here so the same workflow file owns one job — deploy — and reviewers
+# preview locally via `mkdocs serve`. See #967.
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - "docs/**"
       - "mkdocs.yml"
       - "pyproject.toml"
       - "src/pipeline/schemas/spec.py"
       - ".github/workflows/docs.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+# Serialize Pages deploys: cancel-in-progress: false lets an in-flight deploy
+# finish (avoids a half-published site) while still queuing the next one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  build-docs:
+  deploy-docs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout
@@ -38,10 +53,14 @@ jobs:
       - name: Build site
         run: mkdocs build --strict
 
-      - name: Upload site artifact
-        uses: actions/upload-artifact@v4
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: mkdocs-site-${{ github.event.pull_request.number }}
           path: site/
-          retention-days: 14
-          if-no-files-found: error
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
