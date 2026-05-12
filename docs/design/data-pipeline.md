@@ -641,8 +641,6 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 
 ### 7.6 Finalize Workflow
 
-Staged shards are always HDF5 (`.h5`) regardless of `spec.output_format` — only step 08 below diverges per format. See "Why generation stays HDF5 regardless of output format" in §8 for the rationale.
-
 01. **Check for `dataset.complete`** — if present and all canonical outputs exist, print "already finalized" and exit 0
 02. **Read spec** from R2
 03. **Check completeness** — list staged shards, check for `.h5` + `.valid` marker per shard. If any missing, report which ones and exit 1
