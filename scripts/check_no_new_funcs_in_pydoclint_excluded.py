@@ -9,9 +9,10 @@ until someone wants to clean it up; nobody can grow it.
 
 Wired into the PR-time ``code-quality-pr`` workflow. Fails the job with a
 non-zero exit if the PR diff adds any ``+def``/``+class`` line whose file
-matches the pydoclint exclude regex. Nested closures (six or more leading
-spaces) are ignored — only the top-level / method indents (zero or four
-spaces) count as a new declaration the gate is meant to catch.
+matches the pydoclint exclude regex. Only top-level (zero-indent) and
+method-level (four-space indent) declarations count — anything more
+deeply indented is a nested closure and ignored. The threshold lives in
+``DEF_OR_CLASS_PATTERN`` (``{0,4}`` spaces).
 
 See PR for the test suite and #938 for the audit context.
 """

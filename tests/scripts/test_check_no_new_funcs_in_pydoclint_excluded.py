@@ -11,16 +11,33 @@ See PR for the adversarial probe; the audit issue is #938.
 
 from __future__ import annotations
 
-import sys
+import importlib.util
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 GUARD_PATH = (
     Path(__file__).resolve().parents[2] / "scripts" / "check_no_new_funcs_in_pydoclint_excluded.py"
 )
-sys.path.insert(0, str(GUARD_PATH.parent))
-import check_no_new_funcs_in_pydoclint_excluded as guard  # noqa: E402
+
+
+def _load_guard() -> ModuleType:
+    """Import the guard via importlib without mutating ``sys.path``.
+
+    :returns: The loaded module.
+    :rtype: ModuleType
+    """
+    spec = importlib.util.spec_from_file_location(
+        "check_no_new_funcs_in_pydoclint_excluded", GUARD_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+guard = _load_guard()
 
 PYDOCLINT_EXCLUDE_REGEX = r"""(?x)
     ^src/eval\.py$
