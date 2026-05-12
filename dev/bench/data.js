@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778545443802,
+  "lastUpdate": 1778545445744,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2895,6 +2895,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 12.461853984399976,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "94371d6751e61fc27162b18a99f53177d793a376",
+          "message": "internal-fix(pipeline): code-health pass on skypilot_launch + pedalboard-free spec import (#963)\n\n* internal-fix(pipeline): code-health pass on skypilot_launch + pedalboard-free spec import\n\n- Defer sky.check import (avoids paying SkyPilot's import cost at module\n  load).\n- Extract _SECRET_WORKER_ENV_KEYS to a module-level constant.\n- Lift _launch_one_rank to module scope for testability.\n- Make src.pipeline.schemas.spec importable in pedalboard-free\n  environments (deferred param_specs import via param_spec_registry).\n- Migrate three call sites to import load_plugin / load_preset /\n  render_params directly from src.data.vst.core.\n\nRefs #882, refs #883.\nCloses #962.\n\n* internal-fix(pipeline): clarify pedalboard-free test class docstring\n\nCopilot review feedback: the original docstring blamed `tests/conftest.py`\nfor the in-session pedalboard load, but after this PR conftest only pulls\nthe pedalboard-free registry. The transitive load actually comes from\nearlier tests that import `src.data.vst.core`. Reword to match.\n\nRefs #962.\n\n* internal-fix(pipeline): tighten docstrings on registry + _SECRET_WORKER_ENV_KEYS\n\nCopilot review feedback:\n- param_spec_registry.py: the docstring still described pedalboard being\n  pulled via `src.data.vst.__init__`'s `from src.data.vst.core import ...`,\n  but `__init__` no longer imports `core` after this PR. Reword to describe\n  the registry as the canonical pedalboard-free entrypoint and call out\n  `src.data.vst.core` (not `__init__`) as the pedalboard pull point.\n- skypilot_launch.py: the comment called the residual subset \"real secrets,\"\n  but `WORKER_GIT_REF` is not a secret. Reword to describe the set by what\n  it actually is — keys not defaulted by `_R2_RCLONE_CONSTANTS`.\n\nRefs #962.",
+          "timestamp": "2026-05-12T00:13:13Z",
+          "tree_id": "ed0ac5099b6a7b1a776c1b632e367a3b7104bd7e",
+          "url": "https://github.com/tinaudio/synth-setter/commit/94371d6751e61fc27162b18a99f53177d793a376"
+        },
+        "date": 1778545445379,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.277176856994629,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.047481337040663,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.01836586557328701,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.007077038288116455,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.2923903465270996,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 10.595799098500004,
             "unit": "seconds"
           }
         ]
