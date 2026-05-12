@@ -206,6 +206,7 @@ exclude = '''(?x)
   | ^tests/pipeline/test_r2_io\.py$
   | ^tests/pipeline/test_schemas/test_dataset_spec\.py$
   | ^tests/pipeline/test_schemas/test_image_config\.py$
+  | ^tests/pipeline/test_schemas/test_shard_metadata\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
   | ^tests/infra/
   | ^tests/scripts/test_compute_audio_metrics\.py$

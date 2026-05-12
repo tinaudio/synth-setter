@@ -83,20 +83,49 @@ class TestShardMetadataStrictness:
             ShardMetadata.model_validate_json(payload)
 
 
+class TestShardMetadataRangeValidators:
+    """Tests for the ``_ranges_must_be_sane`` model_validator (trust-boundary defense)."""
+
+    @pytest.mark.parametrize("bad_velocity", [-1, 128, 200])
+    def test_velocity_outside_midi_range_raises(self, bad_velocity: int) -> None:
+        """Velocity outside [0, 127] is rejected — mirrors RenderConfig."""
+        with pytest.raises(ValidationError, match="velocity must be in"):
+            ShardMetadata(**_valid_kwargs(velocity=bad_velocity))
+
+    @pytest.mark.parametrize("bad_duration", [0.0, -1.0])
+    def test_non_positive_signal_duration_raises(self, bad_duration: float) -> None:
+        """signal_duration_seconds must be > 0."""
+        with pytest.raises(ValidationError, match="signal_duration_seconds must be positive"):
+            ShardMetadata(**_valid_kwargs(signal_duration_seconds=bad_duration))
+
+    @pytest.mark.parametrize("bad_sample_rate", [0, -16000])
+    def test_non_positive_sample_rate_raises(self, bad_sample_rate: int) -> None:
+        """sample_rate must be > 0."""
+        with pytest.raises(ValidationError, match="sample_rate must be positive"):
+            ShardMetadata(**_valid_kwargs(sample_rate=bad_sample_rate))
+
+    @pytest.mark.parametrize("bad_channels", [0, -1])
+    def test_channels_less_than_one_raises(self, bad_channels: int) -> None:
+        """Channels must be >= 1."""
+        with pytest.raises(ValidationError, match="channels must be >= 1"):
+            ShardMetadata(**_valid_kwargs(channels=bad_channels))
+
+
 class TestShardMetadataLeafImport:
     """The model lives in a leaf module so consumers can import it without cycles."""
 
     def test_module_has_no_project_imports(self) -> None:
         """Parse the module's AST and assert it has no project-internal imports.
 
-        The leaf-module guarantee matters because ``generate_vst_dataset`` (a
-        src→pipeline consumer) imports this; if the module pulled in
-        ``src.pipeline.schemas.spec`` or another non-leaf, the import graph
-        would form a cycle through ``param_specs`` / pedalboard. The check
-        flags every form Python supports for reaching project code: ``import
-        src``/``import src.x.y``, ``from src import x`` (module == "src"),
-        ``from src.x.y import z`` (module starts with "src."), and any
-        relative ``from .x import y`` (``node.level > 0``).
+        The leaf-module guarantee matters because the wds writer side
+        (``src.data.vst.generate_vst_dataset``, to be wired in PR-13) will
+        import this model; if the module pulled in ``src.pipeline.schemas.spec``
+        or another non-leaf, the import graph would form a cycle through
+        ``param_specs`` / pedalboard. The check flags every form Python
+        supports for reaching project code: ``import src``/``import
+        src.x.y``, ``from src import x`` (module == "src"), ``from src.x.y
+        import z`` (module starts with "src."), and any relative ``from .x
+        import y`` (``node.level > 0``).
         """
         import ast
         from pathlib import Path
