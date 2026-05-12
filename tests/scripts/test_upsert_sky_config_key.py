@@ -263,7 +263,7 @@ class TestCliEntryPoint:
     ) -> subprocess.CompletedProcess[str]:
         """Invoke the module as a script with SYNTH_UPSERT_FRAGMENT set.
 
-        :param args: CLI positional arguments forwarded to the module.
+        :param \\*args: CLI positional arguments forwarded to the module.
         :param fragment: YAML text passed through the ``SYNTH_UPSERT_FRAGMENT`` env var.
         :param env_extra: Optional extra env vars merged on top of the parent env + fragment.
         :returns: ``subprocess.CompletedProcess`` with ``stdout`` / ``stderr`` captured as text.

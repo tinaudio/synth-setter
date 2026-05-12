@@ -213,7 +213,6 @@ exclude = '''(?x)
   | ^tests/scripts/test_r2_shard_report\.py$
   | ^tests/scripts/test_skypilot_write_provider_creds\.py$
   | ^tests/scripts/test_surge_xt_interactive\.py$
-  | ^tests/scripts/test_upsert_sky_config_key\.py$
   | ^tests/test_benchmarks\.py$
   | ^tests/test_callbacks\.py$
   | ^tests/test_compare_baseline_configs\.py$
