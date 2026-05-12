@@ -28,6 +28,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -129,25 +130,32 @@ class TestNoStdoutLeak:
                 f"secret value {value!r} leaked to stderr: {result.stderr!r}"
             )
 
-    def test_oci_compartment_ocid_never_passed_as_subprocess_argv(self, tmp_path: Path) -> None:
+    def test_oci_secrets_never_passed_as_subprocess_argv(self, tmp_path: Path) -> None:
         """The `upsert_sky_config_key` helper must NOT pass a secret-bearing YAML fragment to
         ``python3`` via argv. ``/proc/<pid>/cmdline`` is world-readable on Linux, so a secret
         carried in argv can be observed by any other user on the runner via ``ps``. Stdin/env-var
         carriage is required.
 
-        Test approach: shim ``python3`` with a wrapper that logs its argv to a
-        file before exec'ing the real interpreter; run ``--provider oci``; assert
-        the OCI_COMPARTMENT_OCID value never appears anywhere in the logged argv.
+        Test approach: shim ``python3`` with a wrapper that logs its argv AND the
+        ``SYNTH_UPSERT_FRAGMENT`` env var to a file before exec'ing the real interpreter; run
+        ``--provider oci``; assert that every OCI secret never appears in argv, AND that at least
+        one OCI secret (``OCI_COMPARTMENT_OCID``) DID appear in the env capture. The positive env
+        side prevents the trivial future regression "switched carriage from env to stdin and the
+        argv-absence test silently kept passing" — the env assertion forces the carriage to be
+        observably the env var the test pins.
         """
         real_python = shutil.which("python3") or sys.executable
-        log_path = tmp_path / "argv.log"
+        argv_log = tmp_path / "argv.log"
+        env_log = tmp_path / "env.log"
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         shim = bin_dir / "python3"
         shim.write_text(
             "#!/usr/bin/env bash\n"
-            f'{{ printf "argv:\\n"; printf "  %s\\n" "$@"; echo "---"; }} >> {log_path}\n'
-            f'exec {real_python} "$@"\n'
+            f'{{ printf "argv:\\n"; printf "  %s\\n" "$@"; echo "---"; }} >> "{argv_log}"\n'
+            f'{{ printf "SYNTH_UPSERT_FRAGMENT=%s\\n" "${{SYNTH_UPSERT_FRAGMENT-<unset>}}"; '
+            f'echo "---"; }} >> "{env_log}"\n'
+            f'exec "{real_python}" "$@"\n'
         )
         shim.chmod(0o755)
 
@@ -158,11 +166,31 @@ class TestNoStdoutLeak:
         }
         _run(tmp_path, env_overrides, "--provider", "oci")
 
-        logged = log_path.read_text() if log_path.exists() else ""
+        argv_logged = argv_log.read_text() if argv_log.exists() else ""
+        env_logged = env_log.read_text() if env_log.exists() else ""
         # Sanity: shim was actually invoked (otherwise the test would pass vacuously).
-        assert "argv:" in logged, f"python3 shim was not invoked: log={logged!r}"
-        assert OCI_ENV["OCI_COMPARTMENT_OCID"] not in logged, (
-            f"OCI_COMPARTMENT_OCID leaked into a subprocess argv: {logged!r}"
+        assert "argv:" in argv_logged, f"python3 shim was not invoked: log={argv_logged!r}"
+
+        # Argv-absence: no OCI secret may leak into any python3 invocation's argv.
+        argv_leak_secrets = [
+            "OCI_USER_OCID",
+            "OCI_TENANCY_OCID",
+            "OCI_FINGERPRINT",
+            "OCI_API_KEY_PEM",
+            "OCI_COMPARTMENT_OCID",
+        ]
+        for key in argv_leak_secrets:
+            assert OCI_ENV[key] not in argv_logged, (
+                f"{key} leaked into a subprocess argv: {argv_logged!r}"
+            )
+
+        # Env-presence: the compartment_ocid carriage must be observable as the env var the
+        # `upsert_sky_config_key` python3 heredoc reads — defends against a future refactor that
+        # silently switches carriage path (e.g. to stdin) and leaves the argv-absence test
+        # vacuously passing.
+        assert OCI_ENV["OCI_COMPARTMENT_OCID"] in env_logged, (
+            f"OCI_COMPARTMENT_OCID was not carried via SYNTH_UPSERT_FRAGMENT env var "
+            f"(expected for argv-leak protection): {env_logged!r}"
         )
 
 
@@ -317,11 +345,22 @@ class TestProviderGating:
         sky_config = tmp_path / ".sky" / "config.yaml"
         assert sky_config.is_file()
         assert _file_mode(sky_config) == 0o600
-        doc = _yaml.safe_load(sky_config.read_text())
+        config_text = sky_config.read_text()
+        doc = _yaml.safe_load(config_text)
         assert "oci" in doc, f"OCI key clobbered by local write: {doc!r}"
         assert "jobs" in doc, f"local key missing after OCI write: {doc!r}"
         assert doc["oci"]["default"]["compartment_ocid"] == OCI_ENV["OCI_COMPARTMENT_OCID"]
-        assert doc["jobs"]["controller"]["resources"]["cpus"] == "1+"
+        # Property-style assertion (mirrors test_local_writes_r2_files_and_shrunken_sky_jobs...):
+        # the controller's cpus field must exist and the SkyPilot default `4+` must be absent
+        # (the shrinkage policy applied), but the specific shrunken value isn't pinned — the
+        # policy may legitimately tune that value (1+, 0.5+, etc.) over time.
+        assert doc["jobs"]["controller"]["resources"]["cpus"], (
+            f"cpus field missing under jobs.controller.resources: {doc!r}"
+        )
+        assert "4+" not in config_text, (
+            f"SkyPilot default cpus=4+ still present — shrinkage policy not applied: "
+            f"{config_text!r}"
+        )
 
     def test_local_then_oci_preserves_both_keys_in_sky_config(self, tmp_path: Path) -> None:
         """Symmetric to test_oci_then_local: order doesn't matter — both keys must coexist."""
@@ -334,49 +373,49 @@ class TestProviderGating:
         doc = _yaml.safe_load(sky_config.read_text())
         assert "oci" in doc and "jobs" in doc, f"local→oci write order dropped a key: {doc!r}"
 
-    def test_malformed_sky_config_fails_with_clear_error(self, tmp_path: Path) -> None:
-        """A pre-existing ``~/.sky/config.yaml`` whose top level is not a mapping (e.g. a list,
-        left over from a hand-edit gone wrong) must fail the upsert with a clear, named error — not
-        a bare ``TypeError`` traceback from ``existing[key] = ...``."""
+    @pytest.mark.parametrize(
+        "bad_content_writer,expected_reason",
+        [
+            # Top level isn't a mapping (e.g. a YAML list from a hand-edit gone wrong) — the
+            # `isinstance(existing, dict)` guard must catch this with a clear named error rather
+            # than a bare `TypeError` from `existing[key] = ...`.
+            (lambda p: p.write_text("- accidentally\n- a list\n"), "not a YAML mapping"),
+            # Unparsable YAML (unbalanced flow sequence → ScannerError) — caught by the
+            # `yaml.YAMLError` guard around `yaml.safe_load`.
+            (lambda p: p.write_text("oci: [unterminated\n"), "not valid YAML"),
+            # Latin-1 byte that's invalid as the start of a UTF-8 sequence — caught by the
+            # `UnicodeDecodeError` guard around `Path.read_text`.
+            (lambda p: p.write_bytes(b"\xff\xfe oci: foo\n"), "not valid UTF-8"),
+        ],
+        ids=["not_a_mapping", "unparsable_yaml", "non_utf8"],
+    )
+    @pytest.mark.parametrize("provider", ["local", "oci"])
+    def test_malformed_sky_config_fails_with_clear_error(
+        self,
+        tmp_path: Path,
+        provider: str,
+        bad_content_writer: Callable[[Path], object],
+        expected_reason: str,
+    ) -> None:
+        """A pre-existing ``~/.sky/config.yaml`` whose contents are malformed (non-mapping top
+        level, unparsable YAML, or non-UTF-8 bytes) must fail the upsert with a clear, named error
+        — never a bare Python traceback from inside the heredoc.
+
+        Both providers
+        (``local`` writes ``jobs:``; ``oci`` writes ``oci:``) go through ``upsert_sky_config_key``
+        and must surface the same error class.
+        """
         sky_dir = tmp_path / ".sky"
         sky_dir.mkdir()
         sky_config = sky_dir / "config.yaml"
-        sky_config.write_text("- accidentally\n- a list\n")
+        bad_content_writer(sky_config)
 
-        result = _run(tmp_path, R2_ENV, "--provider", "local", expect_success=False)
+        env: dict[str, str] = {**R2_ENV}
+        if provider == "oci":
+            env.update(OCI_ENV)
+        result = _run(tmp_path, env, "--provider", provider, expect_success=False)
         assert result.returncode != 0
-        assert "not a YAML mapping" in result.stderr
-        assert str(sky_config) in result.stderr
-        assert "Traceback" not in result.stderr
-
-    def test_unparseable_sky_config_fails_with_clear_yaml_error(self, tmp_path: Path) -> None:
-        """A pre-existing ``~/.sky/config.yaml`` whose contents aren't valid YAML must fail the
-        upsert with a clear, named error citing the YAMLError class — not a bare PyYAML
-        traceback."""
-        sky_dir = tmp_path / ".sky"
-        sky_dir.mkdir()
-        sky_config = sky_dir / "config.yaml"
-        # Unbalanced flow sequence — yaml.safe_load raises ScannerError.
-        sky_config.write_text("oci: [unterminated\n")
-
-        result = _run(tmp_path, R2_ENV, "--provider", "local", expect_success=False)
-        assert result.returncode != 0
-        assert "not valid YAML" in result.stderr
-        assert str(sky_config) in result.stderr
-        assert "Traceback" not in result.stderr
-
-    def test_non_utf8_sky_config_fails_with_clear_decode_error(self, tmp_path: Path) -> None:
-        """A pre-existing ``~/.sky/config.yaml`` that's not valid UTF-8 must fail the upsert with a
-        clear, named UnicodeDecodeError-style message — not a bare Python traceback."""
-        sky_dir = tmp_path / ".sky"
-        sky_dir.mkdir()
-        sky_config = sky_dir / "config.yaml"
-        # Latin-1 encoded byte that's invalid as the start of a UTF-8 sequence.
-        sky_config.write_bytes(b"\xff\xfe oci: foo\n")
-
-        result = _run(tmp_path, R2_ENV, "--provider", "local", expect_success=False)
-        assert result.returncode != 0
-        assert "not valid UTF-8" in result.stderr
+        assert expected_reason in result.stderr
         assert str(sky_config) in result.stderr
         assert "Traceback" not in result.stderr
 

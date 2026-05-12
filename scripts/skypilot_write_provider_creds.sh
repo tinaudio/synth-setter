@@ -198,10 +198,13 @@ write_oci_creds() {
     chmod 600 "${oci_config}"
   fi
 
-  # NOTE: OCI compartment_ocid still appears in this script's argv (via printf
-  # expansion). The downstream python3 heredoc receives it via env var, not argv,
-  # so the secret doesn't leak to other users via /proc/<pid>/cmdline on the
-  # python3 process — but the parent bash process still has it in cmdline. See #876.
+  # NOTE: the compartment_ocid lives in this bash process's memory (variable
+  # expansion into a function-local positional arg) but NOT in any process's
+  # argv — `printf` here is a bash builtin (no fork) and the downstream python3
+  # heredoc receives the fragment via the SYNTH_UPSERT_FRAGMENT env var, not
+  # argv. So `/proc/<pid>/cmdline` exposes nothing for either process; only
+  # the owner-readable `/proc/<bash-pid>/environ` and in-process memory carry
+  # the OCID. See #876.
   upsert_sky_config_key oci "$(printf 'oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n' \
     "${compartment_ocid}" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}")"
 }
@@ -241,7 +244,8 @@ try:
 except ImportError as exc:
     sys.exit(
         f"upsert_sky_config_key[{sys.argv[1]}]: PyYAML not installed in current "
-        f"interpreter ({exc}); install PyYAML to bootstrap the local provider."
+        f"interpreter ({exc}); install PyYAML to bootstrap the OCI / local "
+        f"provider (both upsert into ~/.sky/config.yaml via this helper)."
     )
 
 key, path_str = sys.argv[1], sys.argv[2]
