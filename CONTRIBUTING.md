@@ -61,9 +61,9 @@ All formatting and linting is enforced automatically by **pre-commit hooks** on
 every commit. The key tools are:
 
 - **[Ruff](https://docs.astral.sh/ruff/)** for linting (rules: E, F, I, S, T,
-  UP, W, plus D102/D103/D107 for "must have a docstring" on public functions,
-  methods, and `__init__` — closes pydoclint's missing-docstring blind spot)
-  and formatting (line length 99)
+  UP, W, ANN001, plus D102/D103/D107 for "must have a docstring" on public
+  functions, methods, and `__init__` — closes pydoclint's missing-docstring
+  blind spot) and formatting (line length 99)
 - **[Pyright](https://microsoft.github.io/pyright/)** for static type checking
 - **[interrogate](https://interrogate.readthedocs.io/)** for docstring coverage
   (minimum 80%)

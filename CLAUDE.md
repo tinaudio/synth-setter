@@ -13,7 +13,10 @@ synth-setter: Synth inversion, sound matching and preset exploration tools
 ### Formatting & Linting (enforced by pre-commit)
 
 - **Ruff format** (line-length=99)
-- **Ruff** (rules: E, F, I, S, T, UP, W, ANN001)
+- **Ruff** — rule set in `pyproject.toml` under `[tool.ruff.lint].select` (currently
+  pycodestyle E/W, pyflakes F, isort I, bandit S, T-series, pyupgrade UP, `ANN001`, and
+  pydocstyle `D102`/`D103`/`D107` for must-have-docstring on public methods, functions,
+  and `__init__` — closes pydoclint's missing-docstring blind spot)
 - Run `make format` before committing
 
 ### Commit Messages
