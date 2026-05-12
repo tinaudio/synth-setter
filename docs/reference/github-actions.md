@@ -42,6 +42,12 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 | `release`         | Semantic release on push to main: bumps version from conventional commits, tags, publishes release and changelog. | Concurrency group serializes releases (`cancel-in-progress: false`); skips commits titled `chore(release)`. See [Concurrency](#concurrency). |
 | `release-drafter` | Maintains a rolling draft release from merged PR labels.                                                          |                                                                                                                                              |
 
+### Docs
+
+| Workflow | Purpose                                                                                                                                                                                                                                                                                                                             | Gotcha                                                                                                                                                                                                                                                                                                                                                             |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `docs`   | Builds the mkdocs site, merges the benchmark chart from the `gh-pages` data branch into `site/dev/bench/`, and deploys the combined site to GitHub Pages via `actions/deploy-pages@v4`. Triggers on push to main (doc paths), `workflow_dispatch`, and `workflow_run` completion of `test-vst-slow` so bench-only updates redeploy. | Only workflow using `environment:` (`github-pages`, required by `deploy-pages`). Serialized via `concurrency: pages, cancel-in-progress: false` so in-flight deploys finish (avoids half-published sites). The `gh-pages` branch is now a data store for benchmark history, not a served branch — repo Pages source must be set to "GitHub Actions" for this work. |
+
 ### Scheduled
 
 | Workflow  | Purpose                                                                        | Gotcha |
@@ -67,6 +73,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 **Workflow-run triggers (`workflow_run`):**
 
 - `auto-approve` triggers on completion of: `Tests`, `Code Quality PR`
+- `docs` triggers on completion of: `VST Slow Tests` (so a bench-only push to the `gh-pages` data branch re-deploys the merged site)
 
 **Check-run triggers (`check_run`):**
 
@@ -84,7 +91,7 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 ## Secrets & variables
 
-All secrets are repo-scoped (no workflow uses an `environment:` block). No custom variables (`${{ vars.* }}`) are in use.
+All secrets are repo-scoped. The `docs` workflow binds its deploy job to `environment: github-pages` (required by `actions/deploy-pages@v4`), but that environment has no environment-scoped secrets — auth uses OIDC via `id-token: write`. No custom variables (`${{ vars.* }}`) are in use.
 
 | Name                                      | Used by                                                                                                                                                             | Purpose                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

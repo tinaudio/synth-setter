@@ -1,10 +1,10 @@
 name: Docs
 
 # Phase 2 (this file): on merge to main (or manual dispatch), build the mkdocs
-# site and deploy it to GitHub Pages. Phase 1 (#966) built the site on PRs and
-# uploaded site/ as a downloadable artifact; that behavior is intentionally
-# replaced here so the same workflow file owns one job — deploy — and reviewers
-# preview locally via `mkdocs serve`. See #967.
+# site, merge the benchmark chart from the gh-pages data branch, and deploy
+# the combined site to GitHub Pages via actions/deploy-pages@v4. Phase 1 (#966)
+# uploaded site/ as a downloadable PR artifact; that behavior is intentionally
+# replaced here — reviewers preview locally via `mkdocs serve`. See #967.
 
 on:
   push:
@@ -16,6 +16,15 @@ on:
       - "src/pipeline/schemas/spec.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
+  # Redeploy after the benchmark workflow pushes new chart data to gh-pages.
+  # gh-pages is the benchmark-action's persistence layer (see
+  # docs/reference/audio-similarity-benchmarks.md); this workflow merges its
+  # dev/bench/ content into the deployed site, so a bench-only update must
+  # also trigger a deploy.
+  workflow_run:
+    workflows: ["VST Slow Tests"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -32,13 +41,16 @@ jobs:
   deploy-docs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Skip on workflow_run when the upstream run didn't succeed — otherwise
+    # we'd republish stale chart data after a failed bench run.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
 
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Checkout
+      - name: Checkout docs source
         uses: actions/checkout@v6
 
       - name: Set up Python
@@ -52,6 +64,26 @@ jobs:
 
       - name: Build site
         run: mkdocs build --strict
+
+      # gh-pages is the benchmark-action's persistence layer; only its
+      # dev/bench/ subtree is republished by the next step. continue-on-error
+      # so a fresh repo (no gh-pages branch yet) deploys docs without bench.
+      - name: Fetch benchmark history from gh-pages data branch
+        uses: actions/checkout@v6
+        with:
+          ref: gh-pages
+          path: gh-pages-data
+        continue-on-error: true
+
+      - name: Merge benchmark chart into site
+        run: |
+          if [ -d gh-pages-data/dev/bench ]; then
+            mkdir -p site/dev
+            cp -R gh-pages-data/dev/bench site/dev/bench
+            echo "Merged benchmark chart into site/dev/bench"
+          else
+            echo "No gh-pages-data/dev/bench/ found — skipping bench merge"
+          fi
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
