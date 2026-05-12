@@ -9,9 +9,12 @@ name: Generate Dataset Shards
 #
 # Provider-specific behavior:
 #   * `skypilot-local` — provisions a kind cluster on the runner via
-#     `sky local up`, loads the dev-snapshot image into kind, and invokes the
-#     launcher against `configs/compute/local-template.yaml` (cloud:
-#     kubernetes). Always tears down kind in `if: always()`.
+#     `sky local up`, loads the dev-snapshot image into kind, writes the
+#     managed-jobs controller-resource shrink into ~/.sky/config.yaml so the
+#     controller pod fits on kind, and invokes the launcher against
+#     `configs/compute/local-template.yaml` (cloud: kubernetes). The launcher
+#     skips its cred bootstrap for the local provider. Always tears down kind
+#     in `if: always()`.
 #   * `runpod` / `oci` — in-container launcher invocation against the matching
 #     `configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
 #     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
@@ -236,9 +239,12 @@ jobs:
       # because the kind cluster can't host parallel workers (#843). The
       # argument array is built conditionally so optional flags don't expand
       # to empty strings.
-      # 20-min step cap: if the launcher hangs, fail-fast and let the
-      # `if: always()` `Snapshot sky logs` step run, instead of burning the
-      # full 60-min job timeout before logs are uploaded.
+      # 20-min step cap: if the launcher (sky.jobs SDK) hangs, fail-fast and
+      # let the `if: always()` `Snapshot sky logs` step run, instead of
+      # burning the full 60-min job timeout before logs are uploaded.
+      # NOTE: step-level timeout sends SIGKILL — Python `finally` blocks in the
+      # launcher are bypassed. Operators may need `sky jobs cancel --name <job-name>`
+      # manually after a timeout. See #876.
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 20
@@ -258,7 +264,7 @@ jobs:
           ARGS=(
             --experiment "$CONFIG_PATH"
             --template configs/compute/local-template.yaml
-            --cluster-name "$CLUSTER_NAME"
+            --job-name "$CLUSTER_NAME"
             --worker-image-tag "$IMAGE_TAG"
             --spec-out "${RUN_METADATA_DIR}/input_spec.json"
           )
@@ -326,13 +332,11 @@ jobs:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           TEMPLATE: configs/compute/${{ inputs.provider == 'oci' && 'oci-cpu' || inputs.provider }}-template.yaml
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
-          OCI_IMAGE_TAG: ${{ inputs.provider == 'oci' && 'skypilot:cpu-ubuntu-2204' || '' }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
           OCI_REGION: ${{ secrets.OCI_REGION }}
-          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
           OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
@@ -353,13 +357,11 @@ jobs:
             -e TEMPLATE \
             -e CLUSTER_NAME \
             -e IMAGE_TAG \
-            -e OCI_IMAGE_TAG \
             -e RUNPOD_API_KEY \
             -e OCI_USER_OCID \
             -e OCI_TENANCY_OCID \
             -e OCI_FINGERPRINT \
             -e OCI_REGION \
-            -e OCI_COMPARTMENT_OCID \
             -e OCI_API_KEY_PEM \
             -e CONFIG_PATH \
             -e WORKER_GIT_REF \
@@ -381,7 +383,7 @@ jobs:
               python -m src.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
-                --cluster-name "$CLUSTER_NAME" \
+                --job-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \
                 --spec-out /tmp/input_spec.json \
                 $LOCAL_FLAG $NUM_WORKERS_FLAG $TAIL_FLAG

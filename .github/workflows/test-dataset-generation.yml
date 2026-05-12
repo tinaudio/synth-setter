@@ -47,8 +47,10 @@ name: Test Dataset Generation
 #   RUNPOD_API_KEY — written to ~/.runpod/config.toml so SkyPilot's RunPod
 #     backend can `sky check runpod` (env var alone is insufficient).
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
-#     OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — written to ~/.oci/config +
-#     ~/.sky/config.yaml so SkyPilot's OCI backend can `sky check oci`.
+#     OCI_API_KEY_PEM — written to ~/.oci/config + ~/.oci/oci_api_key.pem
+#     so SkyPilot's OCI backend can `sky check oci`. SkyPilot defaults to
+#     the root compartment when oci.default.compartment_ocid is unset, so
+#     ~/.sky/config.yaml is no longer managed here — see #876.
 #   SKYPILOT_API_SERVER_ENDPOINT (optional) — when set, the launcher skips
 #     the cred-bootstrap because the remote API server (#785) holds creds.
 

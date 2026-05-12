@@ -74,7 +74,7 @@ docs:
       - pattern: "src/generate_dataset.py"
         covers: "Dataset generation entrypoint, sequential multi-shard MVP with R2 skip-existing probe (worker-side resumability MVP, #750), and the @hydra.main CLI (`python -m src.generate_dataset experiment=<id>`) composed from configs/dataset.yaml"
       - pattern: ".github/workflows/generate-dataset-shards.yaml"
-        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (deterministic from `cluster_name` + the materialized spec's `r2_bucket`) consumed by validate-dataset-shards"
+        covers: "Reusable launcher fan-out across providers (skypilot-local kind, runpod, oci); per-provider artifact upload; emits a `spec_uri` workflow output (deterministic from the workflow's `cluster_name` input (forwarded to the launcher as `--job-name`) + the materialized spec's `r2_bucket`) consumed by validate-dataset-shards"
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: "src/pipeline/ci/**"
@@ -91,7 +91,7 @@ docs:
     description: SkyPilot launcher for the data pipeline (RunPod + OCI smoke)
     sources:
       - pattern: "src/pipeline/skypilot_launch.py"
-        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → launch flow, sky.launch (unmanaged) + down=True, --tail/--no-tail mode split (default --no-tail: _run_workers_detached waits for job_id per rank then prints sky logs/sky down commands and exits; --tail: _run_workers_tail invokes sky.tail_logs(follow=True) and tears down clusters in finally) with idle_minutes_to_autostop=5, down=True as the detached-mode safety net, per-cluster R2 spec key (skypilot-launcher-specs/<cluster>.json) — file_mounts deliberately avoided, see #749"
+        covers: "SkyPilot launcher CLI, materialize → upload-spec-to-R2 → sky.jobs.launch (managed-jobs SDK) flow, --tail/--no-tail mode split (default --no-tail: _run_workers_detached waits for the controller to return a job_id per rank then prints `sky jobs logs --name` / `sky jobs cancel --name` commands and exits, leaving the controller's terminal-status lifecycle as the safety net; --tail: _run_workers_tail invokes sky.jobs.tail_logs(follow=True) and cancels every job in finally), per-launch R2 spec key keyed by the base (unsuffixed) job name — multi-worker fan-out shares one spec object across ranks (skypilot-launcher-specs/<base_job_name>.json) rather than uploading once per -rN — file_mounts deliberately avoided, see #749"
       - pattern: "configs/compute/runpod-template.yaml"
         covers: "SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`--worker-image-tag`, default `dev-snapshot`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "configs/compute/oci-cpu-template.yaml"
@@ -103,7 +103,7 @@ docs:
       - pattern: "scripts/sync_worker_checkout.sh"
         covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install -r requirements.txt` helper called by both runpod-template.yaml and oci-cpu-template.yaml run: blocks. No-op when WORKER_GIT_REF is unset (operators); when set, full transitive resolve handles PRs that add new top-level packages."
       - pattern: "scripts/skypilot_write_provider_creds.sh"
-        covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem + ~/.sky/config.yaml (compartment_ocid, image_tag_general). Mode 600 via umask 077; require_var fails closed on missing secrets."
+        covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless wrapper cleanup contract on RunPod (drop exec on dbus-run-session, </dev/null detach on backgrounded daemons, wait + pkill -P $$ to reap orphan grandchildren); load-bearing for SkyPilot's job-status reporter to observe SSH-pipe EOF"
       - pattern: ".github/workflows/test-dataset-generation.yml"
@@ -222,17 +222,6 @@ docs:
         covers: "Issue templates, required fields, type-specific forms"
       - pattern: ".github/PULL_REQUEST_TEMPLATE.md"
         covers: "PR template structure, required sections"
-
-  # ── GitHub Actions reference (workflow catalog + secrets) ───────
-  - doc: docs/reference/github-actions.md
-    description: Workflow catalog, secrets table, dependency map, gotchas
-    sources:
-      - pattern: ".github/workflows/**"
-        covers: "Workflow catalog rows (purpose + gotcha), dependency map (workflow_call / workflow_run / artifact chains), secrets table. Per-workflow source-to-design-doc mappings live in their own doc entries (docker.md, training-pipeline.md, etc.); this entry catches drift when a workflow is added/removed/renamed and the reference doc forgets to update."
-      - pattern: ".github/workflows/docs.yml"
-        covers: "Phase 2 docs deploy: mkdocs build --strict on push to main + workflow_run completion of VST Slow Tests; GitHub Pages deploy via actions/deploy-pages@v4; environment: github-pages binding (only workflow using one); concurrency: pages serialization; gh-pages branch as benchmark-action data store (merged into site/dev/bench/ pre-deploy)."
-      - pattern: ".github/workflows/test-vst-slow.yml"
-        covers: "VST slow tests + benchmark-action publish to gh-pages branch (data store for the chart, served via the docs workflow's deploy step)."
 
   # ── Configuration reference ────────────────────────────────────
   - doc: docs/reference/configuration-reference.md
