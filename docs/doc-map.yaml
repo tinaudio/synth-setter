@@ -114,6 +114,8 @@ docs:
         covers: "kind/local-Kubernetes smoke for the launcher's env-forwarding contract. Triggers on workflow_dispatch and on pull_request events that touch the workflow file or the local-debug template (path-filtered). sky local up + sky launch on the kubernetes backend with no billable cloud capacity — verifies RCLONE_CONFIG_R2_* flow through task.update_envs into the worker pod."
       - pattern: "configs/compute/local-debug-rclone-template.yaml"
         covers: "SkyPilot Task YAML for the kubernetes backend (no `image_id`, defers to SkyPilot's stock kube image). Setup installs rclone; run uploads a sentinel file to R2 with the same flags the production worker uses. Used by test-skypilot-local.yml."
+      - pattern: "scripts/capture-skypilot-state.sh"
+        covers: "Best-effort kube-apiserver + controller on-pod sky_logs snapshot called from generate-dataset-shards.yaml (skypilot-local row) before `sky local down` reaps the kind cluster. Captures pod describes, events, controller logs, and the controller's provision.log so scheduling-side hangs are diagnosable post-mortem (#876). Bash-3.2 portable so the same script runs on macOS CI."
       - pattern: "requirements-app.txt"
         covers: "skypilot[runpod,oci]==0.12.0 required dependency (decision: not optional — see §8.2)"
         scope: "skypilot"
