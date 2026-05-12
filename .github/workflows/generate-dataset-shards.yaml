@@ -171,14 +171,14 @@ jobs:
       # ----- skypilot-local row: kind setup + launcher
       - name: Install kind (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           install_only: true
           version: v0.24.0
 
       - name: Install kubectl (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
 
       - name: Install socat (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
@@ -192,7 +192,7 @@ jobs:
 
       - name: Install uv (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements-app.txt"
