@@ -259,67 +259,12 @@ jobs:
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
 
-      # Capture controller-side state from the kind cluster BEFORE `sky local
-      # down` tears it down. SkyPilot's on-disk sky_logs don't include
-      # controller pod status, scheduler events, or worker-pod RBAC errors —
-      # all of which live in the kube apiserver and vanish with the cluster.
-      # In addition to apiserver state we also `kubectl exec` into the
-      # controller pod to tail its on-pod `~/sky_logs/sky-*/provision.log` —
-      # that file contains the per-retry "Insufficient cpu / memory" +
-      # `terminate_instances` loop that pinpoints scheduling-side hangs (the
-      # surface symptom in CI is silent dead-air after `streaming logs for
-      # job N`, and only the controller's provision.log reveals why).
-      # Worker-pod describes catch transient Pending state.
-      # Best-effort (each call `|| true`) so a missing pod, rename, or
-      # unprivileged exec never fails the step. See PR #876.
-      # Filters workers in the `default` namespace; sky-jobs-controller may live in
-      # `skypilot` and is intentionally excluded from this pass (captured separately).
-      # `ray-node` is the SkyPilot 0.12 managed-jobs-controller pod's container name.
+      # Capture controller-side state (apiserver + on-pod provision.log) before
+      # `sky local down` reaps the kind cluster. See scripts/capture-skypilot-state.sh
+      # for what's captured and why. Best-effort — never fails the workflow.
       - name: Capture kind cluster state (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
-        run: |
-          set -uo pipefail
-          out_dir="${RUN_METADATA_DIR}/k8s_state"
-          mkdir -p "${out_dir}"
-          kubectl get pods -A -o wide > "${out_dir}/pods.txt" 2>&1 || true
-          kubectl get events -A --sort-by=.lastTimestamp \
-            > "${out_dir}/events.txt" 2>&1 || true
-          kubectl describe nodes > "${out_dir}/nodes.txt" 2>&1 || true
-          kubectl get pods -A -o yaml > "${out_dir}/pods-yaml.txt" 2>&1 || true
-          # Best-effort capture: tolerate kubectl/awk failures (CI runner may already be torn down).
-          readarray -t worker_pods_arr < <(kubectl get pods -n default --no-headers 2>/dev/null \
-            | awk '$1 !~ /^sky-jobs-controller/ {print $1}')
-          if [[ ${#worker_pods_arr[@]} -gt 0 ]]; then
-            for p in "${worker_pods_arr[@]}"; do
-              safe="$(printf %s "${p}" | tr -c 'A-Za-z0-9_-' '_')"
-              kubectl describe pod -n default "${p}" \
-                > "${out_dir}/describe-worker-${safe}.txt" 2>&1 || true
-            done
-          else
-            echo "no non-controller pods in default namespace at capture time" \
-              > "${out_dir}/describe-worker-none.txt"
-          fi
-          # Best-effort: silent on kubectl failure (handled by the empty-check below).
-          controller_line="$(kubectl get pods -A --no-headers 2>/dev/null \
-            | grep sky-jobs-controller | head -n1)"
-          if [[ -n "${controller_line}" ]]; then
-            controller_ns="$(awk '{print $1}' <<<"${controller_line}")"
-            controller_pod="$(awk '{print $2}' <<<"${controller_line}")"
-            kubectl describe pod -n "${controller_ns}" "${controller_pod}" \
-              > "${out_dir}/describe-controller.txt" 2>&1 || true
-            kubectl logs -n "${controller_ns}" "${controller_pod}" \
-              > "${out_dir}/logs-controller.txt" 2>&1 || true
-            kubectl logs -n "${controller_ns}" "${controller_pod}" --previous \
-              > "${out_dir}/logs-controller-previous.txt" 2>&1 || true
-            kubectl exec -n "${controller_ns}" "${controller_pod}" -c ray-node -- \
-              bash -lc 'set -euo pipefail; latest="$(ls -td "${HOME}/sky_logs/sky-"*/ 2>/dev/null | head -n1)"; if [[ -n "${latest}" ]]; then echo "=== ${latest}provision.log ==="; tail -400 "${latest}provision.log" 2>/dev/null; fi' \
-              > "${out_dir}/controller-provision-log.txt" 2>&1 || true
-          else
-            echo "no sky-jobs-controller pod found" \
-              > "${out_dir}/describe-controller.txt"
-          fi
-          echo "=== k8s_state sizes ==="
-          du -sh "${out_dir}" 2>/dev/null || true
+        run: scripts/capture-skypilot-state.sh
 
       - name: sky local down (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}

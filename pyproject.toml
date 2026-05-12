@@ -208,6 +208,7 @@ exclude = '''(?x)
   | ^tests/pipeline/test_schemas/test_image_config\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
   | ^tests/infra/
+  | ^tests/scripts/test_capture_skypilot_state\.py$
   | ^tests/scripts/test_compute_audio_metrics\.py$
   | ^tests/scripts/test_r2_shard_report\.py$
   | ^tests/scripts/test_skypilot_write_provider_creds\.py$
