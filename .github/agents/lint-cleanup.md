@@ -28,7 +28,7 @@ For each file listed in any `exclude:` block in `.pre-commit-config.yaml` (e.g. 
 2. **Run hooks on the file**, e.g. `interrogate`
 3. **Auto-fix what you can**: `ruff check --fix` and `docformatter --in-place` handle most formatting issues automatically
 4. **Manually fix remaining violations**:
-   - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`) — and must pass `pydoclint` DOC1xx/DOC2xx/DOC5xx (signature ↔ docstring consistency)
+   - `interrogate` missing docstrings: add Sphinx-style docstrings (`:param:`, `:returns:`, `:raises:`) to public functions/classes — matches the `docformatter` config (`style = "sphinx"` in `pyproject.toml`) — and must pass `pydoclint` DOC1xx/DOC2xx/DOC5xx (signature ↔ docstring consistency) **and** ruff `D102`/`D103`/`D107` (must-have-docstring on public methods, functions, and `__init__`).
 5. **Remove the file from every exclusion list it appears in.** Check `.pre-commit-config.yaml`'s `exclude:` blocks **and** `pyproject.toml`'s `[tool.pydoclint].exclude` and `[tool.ruff.lint.per-file-ignores]`. A single file may appear in more than one list (e.g. excluded by `interrogate` in pre-commit *and* by `ANN001` per-file-ignore in ruff) — graduating the file means clearing every entry.
 6. **Verify**: `pre-commit run --files <file>` passes all hooks
 7. **Run tests**: `make test-fast` — the quick CPU suite (excludes `slow`, `gpu`, `mps`, `requires_vst`) must still pass as a smoke check; lint-only changes shouldn't affect behavior

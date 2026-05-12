@@ -53,8 +53,10 @@ extend-exclude = []
 [tool.ruff.lint]
 # E=pycodestyle errors, F=pyflakes, I=isort, S=bandit security,
 # T=T10 (print) + T20 (debugger), UP=pyupgrade, W=pycodestyle warnings,
-# ANN001=missing-type-function-argument
-select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001"]
+# ANN001=missing-type-function-argument,
+# D102/D103/D107=pydocstyle missing-docstring-on-{method,function,__init__}
+# (closes pydoclint's "no docstring → skip checks" blind spot — see #938).
+select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001", "D102", "D103", "D107"]
 # E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
 
@@ -94,15 +96,25 @@ ignore = ["E501", "S101"]
 # ANN001: directory-wide ignore for legacy untyped function args under src/models/.
 # New code under src/models/ should still annotate; remove this entry once legacy
 # callsites are cleaned up.
-"src/models/**" = ["ANN001"]
+# D102/D103/D107: directory-wide ignore for missing docstrings on the same legacy
+# files that pydoclint's [tool.pydoclint].exclude already lists. Shrinks as files
+# are cleaned up — tracked by #938.
+"src/models/**" = ["ANN001", "D102", "D103", "D107"]
+"src/data/**" = ["D102", "D103", "D107"]
+"scripts/**" = ["D102", "D103", "D107"]
+"src/metrics.py" = ["D102", "D103", "D107"]
+"src/utils/callbacks.py" = ["F821", "T201", "ANN001", "D102", "D103", "D107"]
+"src/utils/math.py" = ["ANN001", "D102", "D103", "D107"]
+"src/utils/utils.py" = ["D102", "D103", "D107"]
+"tests/pipeline/test_ci/test_load_image_config.py" = ["D102", "D103", "D107"]
+"tests/test_docker_entrypoint.py" = ["D102", "D103", "D107"]
+"tests/test_logging_utils.py" = ["D102", "D103", "D107"]
 "src/models/components/transformer.py" = ["F841"]
 "src/models/components/vae.py" = ["E402", "T201"]
 "src/models/ksin_ff_module.py" = ["F821"]
 "src/models/surge_ff_module.py" = ["F821"]
 "src/train.py" = ["E402"]
 "src/utils/__init__.py" = ["F401"]
-"src/utils/callbacks.py" = ["F821", "T201", "ANN001"]
-"src/utils/math.py" = ["ANN001"]
 
 [tool.interrogate]
 verbose = 2
@@ -133,6 +145,12 @@ skip-checking-raises = false
 skip-checking-short-docstrings = false
 allow-init-docstring = true
 check-class-attributes = true
+# Read `# noqa: DOCxxx` from the def line (flake8/ruff convention) rather
+# than from the closing-`"""` line. The pydoclint CLI default is
+# "docstring"; flipping to "definition" aligns suppressions with the rest
+# of this repo's lint stack so contributors don't get a silently inert
+# suppression. See the adversarial probe summary on #939 and #938.
+native-mode-noqa-location = "definition"
 # Path-level exclude regex (verbose). Default infra paths plus files that
 # currently violate the rules — shrinks as files are cleaned up. See #938.
 exclude = '''(?x)
@@ -207,6 +225,7 @@ exclude = '''(?x)
   | ^tests/pipeline/test_schemas/test_image_config\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
   | ^tests/infra/
+  | ^tests/scripts/test_check_no_new_funcs_in_pydoclint_excluded\.py$
   | ^tests/scripts/test_compute_audio_metrics\.py$
   | ^tests/scripts/test_r2_shard_report\.py$
   | ^tests/scripts/test_skypilot_write_provider_creds\.py$

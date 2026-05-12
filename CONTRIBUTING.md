@@ -61,7 +61,9 @@ All formatting and linting is enforced automatically by **pre-commit hooks** on
 every commit. The key tools are:
 
 - **[Ruff](https://docs.astral.sh/ruff/)** for linting (rules: E, F, I, S, T,
-  UP, W) and formatting (line length 99)
+  UP, W, plus D102/D103/D107 for "must have a docstring" on public functions,
+  methods, and `__init__` — closes pydoclint's missing-docstring blind spot)
+  and formatting (line length 99)
 - **[Pyright](https://microsoft.github.io/pyright/)** for static type checking
 - **[interrogate](https://interrogate.readthedocs.io/)** for docstring coverage
   (minimum 80%)
@@ -218,14 +220,15 @@ These prefixes do not trigger a release:
 This project runs a comprehensive suite of pre-commit hooks. Common failure
 modes and how to fix them:
 
-| Hook                  | Failure reason                                      | Fix                                                                |
-| --------------------- | --------------------------------------------------- | ------------------------------------------------------------------ |
-| `interrogate`         | Docstring coverage below 80%                        | Add docstrings to new public functions/classes                     |
-| `pydoclint`           | Docstring args/returns/raises don't match signature | Update the docstring (Sphinx style) or the signature so they agree |
-| `pyright`             | Type errors in touched files                        | Fix type annotations                                               |
-| `gitlint`             | Commit message doesn't follow conventional commits  | Rewrite the commit message (see prefix table above)                |
-| `ruff`                | Lint violations                                     | Ruff auto-fixes formatting; security/import issues need manual fix |
-| `no-commit-to-branch` | Attempted commit to `main`                          | Create a feature branch first                                      |
+| Hook                    | Failure reason                                      | Fix                                                                                                                                                                                |
+| ----------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interrogate`           | Docstring coverage below 80%                        | Add docstrings to new public functions/classes                                                                                                                                     |
+| `pydoclint`             | Docstring args/returns/raises don't match signature | Update the docstring (Sphinx style) or the signature so they agree. To suppress a specific check, add `# noqa: DOCxxx` on the `def`/`class` line (matches flake8/ruff convention). |
+| `ruff` (D102/D103/D107) | Public function/method/`__init__` has no docstring  | Add a Sphinx-style docstring. Pydoclint defers "must exist" to ruff's D rules, so this is the gate that catches missing docstrings.                                                |
+| `pyright`               | Type errors in touched files                        | Fix type annotations                                                                                                                                                               |
+| `gitlint`               | Commit message doesn't follow conventional commits  | Rewrite the commit message (see prefix table above)                                                                                                                                |
+| `ruff`                  | Lint violations                                     | Ruff auto-fixes formatting; security/import issues need manual fix                                                                                                                 |
+| `no-commit-to-branch`   | Attempted commit to `main`                          | Create a feature branch first                                                                                                                                                      |
 
 If a hook auto-fixes files (ruff, trailing-whitespace, etc.), stage the fixes
 and commit again.

@@ -15,8 +15,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # fetch-depth: 0 is required by the pydoclint-exclude-ratchet step below,
+      # which diffs against the PR base SHA — see #938 (P6 blind spot).
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -44,3 +48,11 @@ jobs:
         uses: pre-commit/action@v3.0.1
         with:
           extra_args: --files ${{ steps.changed_files.outputs.all_changed_files }}
+
+      # Closes pydoclint's P6 blind spot: a new function/class added to a file
+      # listed in [tool.pydoclint].exclude would otherwise enter main without
+      # ever being linted. The guard fails the PR if it finds one, forcing the
+      # author to either clean the file (preferred) or revert the addition.
+      # See #938.
+      - name: Guard against new defs in pydoclint-excluded files
+        run: python scripts/check_no_new_funcs_in_pydoclint_excluded.py --base ${{ github.event.pull_request.base.sha }}
