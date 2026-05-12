@@ -650,7 +650,7 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 07. **Compute normalization statistics** (mean, std across training set)
 08. **Produce training outputs** — format depends on `output_format` in the spec:
     - `hdf5`: Reshard into `train.h5`, `val.h5`, `test.h5` (HDF5 virtual datasets). Good for local single-GPU training.
-    - `wds`: Transcode into `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives). Each `.tar` shard contains samples as `{sample_id}.audio.npy` + `{sample_id}.params.npy` + `{sample_id}.mel.npy`. Good for multi-GPU streaming from R2.
+    - `wds`: Transcode into `train-{shard}.tar`, `val-{shard}.tar`, `test-{shard}.tar` (WebDataset archives). Each `.tar` shard contains samples as `{sample_id}.audio.npy` + `{sample_id}.params.npy` + `{sample_id}.mel.npy`, plus a single `metadata.json` sidecar per shard (see the `ShardMetadata` model in `src/pipeline/schemas/shard_metadata.py`). Good for multi-GPU streaming from R2.
 09. **Write `dataset.json`** — self-describing dataset card (includes content hashes, output format, shard manifest)
 10. **Register dataset in W&B** — log as artifact with spec, card, and metrics (§8)
 11. **Upload finalized dataset** to R2
@@ -893,7 +893,8 @@ train-000000.tar
 ├── 000001.audio.npy
 ├── 000001.params.npy
 ├── 000001.mel.npy
-└── ...
+├── ...
+└── metadata.json          # ShardMetadata sidecar — see src/pipeline/schemas/shard_metadata.py
 ```
 
 Shard count is tuned for GPU worker count — one shard per GPU worker per epoch is ideal; exact sizing depends on batch size and network bandwidth.
@@ -1244,7 +1245,7 @@ class DatasetSpec(BaseModel):
 
     # Layout
     task_name: str
-    output_format: Literal["hdf5"]                                 # wds in a later PR
+    output_format: Literal["hdf5", "wds"]
     train_val_test_sizes: tuple[int, int, int]
     train_val_test_seeds: tuple[int, int, int]
     base_seed: int
@@ -1429,6 +1430,7 @@ src/
     schemas/            # Pydantic models (implemented)
       __init__.py
       spec.py           # DatasetSpec (unified config + runtime), RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, spec_from_cfg flow
+      shard_metadata.py # ShardMetadata — wds tar metadata.json sidecar (leaf module, no project imports)
       prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix helpers
       image_config.py   # Docker image configuration
 

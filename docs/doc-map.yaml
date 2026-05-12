@@ -85,6 +85,8 @@ docs:
         covers: "R2 bucket name constant, input spec filename"
       - pattern: "src/pipeline/schemas/spec.py"
         covers: "DatasetSpec, RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION (Hydra-composed cfg → spec_from_cfg → DatasetSpec)"
+      - pattern: "src/pipeline/schemas/shard_metadata.py"
+        covers: "ShardMetadata — strict pydantic sidecar payload written to wds tar metadata.json; mirrors HDF5 audio attrs; validated on read by validate_shard"
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
