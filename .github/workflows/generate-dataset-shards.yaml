@@ -261,12 +261,12 @@ jobs:
       # controller pod status, scheduler events, or worker-pod RBAC errors —
       # all of which live in the kube apiserver and vanish with the cluster.
       # In addition to apiserver state we also `kubectl exec` into the
-      # controller pod to capture its on-pod `~/sky_logs/sky-*/provision.log`
-      # and `~/.sky/jobs.db` — those contain the per-retry "Insufficient cpu /
-      # memory" + `terminate_instances` loop that pinpoints scheduling-side
-      # hangs (the surface symptom in CI is silent dead-air after
-      # `streaming logs for job N`, and only the controller's provision.log
-      # reveals why). Worker-pod describes catch transient Pending state.
+      # controller pod to tail its on-pod `~/sky_logs/sky-*/provision.log` —
+      # that file contains the per-retry "Insufficient cpu / memory" +
+      # `terminate_instances` loop that pinpoints scheduling-side hangs (the
+      # surface symptom in CI is silent dead-air after `streaming logs for
+      # job N`, and only the controller's provision.log reveals why).
+      # Worker-pod describes catch transient Pending state.
       # Best-effort (`set +e`, each call `|| true`) so a missing pod, rename,
       # or unprivileged exec never fails the step. See PR #876.
       - name: Capture kind cluster state (skypilot-local row)
