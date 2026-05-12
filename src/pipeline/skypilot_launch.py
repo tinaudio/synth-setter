@@ -605,6 +605,9 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
     """
     from sky.clouds import OCI
 
+    if not task.resources:
+        return
+
     docker_ref = f"docker:{worker_image}"
     new_resources: list[sky.Resources] = []
     for res in task.resources:
@@ -612,8 +615,7 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
             new_resources.append(res)
             continue
         new_resources.append(res.copy(image_id=docker_ref))
-    if new_resources:
-        task.set_resources(type(task.resources)(new_resources))
+    task.set_resources(type(task.resources)(new_resources))
 
 
 def _run_workers(

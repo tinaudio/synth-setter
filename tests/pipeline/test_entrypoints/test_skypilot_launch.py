@@ -1482,7 +1482,8 @@ class TestOverrideImageId:
         oci_res.copy.assert_not_called()
         if task.set_resources.called:
             new_resources = list(task.set_resources.call_args.args[0])
-            assert new_resources == [oci_res]
+            assert len(new_resources) == 1
+            assert new_resources[0] is oci_res
 
 
 # ---------------------------------------------------------------------------
