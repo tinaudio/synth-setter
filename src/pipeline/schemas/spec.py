@@ -42,7 +42,7 @@ __all__ = [
 # Source-of-truth mapping from ``output_format`` to shard filename suffix.
 # Adding a format means adding a row here; missing entries surface as KeyError
 # at construction rather than producing a silently-wrong filename.
-OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5"}
+OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5", "wds": ".tar"}
 
 
 # Sentinel returned by ``_get_git_sha`` when called outside a git working
@@ -192,7 +192,7 @@ class DatasetSpec(BaseModel):
     # guarantee carries through to the contents; JSON-loaded values arrive as
     # lists and get coerced via ``_splits_list_to_tuple`` below.
     task_name: str
-    output_format: Literal["hdf5"]
+    output_format: Literal["hdf5", "wds"]
     train_val_test_sizes: tuple[int, int, int]
     # Reserved for per-sample seeding (#884); not implemented. Accepts only
     # ``None`` — any non-None value (yaml, JSON, or in-process) raises

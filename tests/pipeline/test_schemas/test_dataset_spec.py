@@ -220,9 +220,18 @@ class TestDatasetSpecValidators:
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[0, 0, 0]))
 
     def test_invalid_output_format_literal_raises(self, patch_runtime_io: None) -> None:
-        """An output_format outside ``Literal['hdf5']`` is rejected by Pydantic literal check."""
+        """An output_format outside the supported Literal set is rejected.
+
+        ``parquet`` stays outside the Literal even as new formats (wds) join — pinning
+        the rejection here prevents a typo (``parquet`` vs. ``wds``) from sneaking in.
+        """
         with pytest.raises(ValidationError):
             DatasetSpec(**_valid_spec_kwargs(output_format="parquet"))
+
+    def test_wds_output_format_constructs(self, patch_runtime_io: None) -> None:
+        """``output_format='wds'`` is accepted (unblocks the wds writer landing in PR-13)."""
+        spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
+        assert spec.output_format == "wds"
 
     def test_strict_mode_rejects_int_for_string_field(self, patch_runtime_io: None) -> None:
         """Strict mode rejects silent int→str coercion at the trust boundary."""
@@ -350,8 +359,10 @@ class TestDatasetSpecComputedFields:
 
     def test_shard_filename_extension_matches_output_format(self, patch_runtime_io: None) -> None:
         """Shard filenames carry the extension implied by ``output_format``."""
-        spec = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
-        assert all(s.filename.endswith(".h5") for s in spec.shards)
+        hdf5_spec = DatasetSpec(**_valid_spec_kwargs(output_format="hdf5"))
+        assert all(s.filename.endswith(".h5") for s in hdf5_spec.shards)
+        wds_spec = DatasetSpec(**_valid_spec_kwargs(output_format="wds"))
+        assert all(s.filename.endswith(".tar") for s in wds_spec.shards)
 
     def test_num_params_resolved_from_registry(self, patch_runtime_io: None) -> None:
         """``num_params`` matches the registry's length for the spec's ``param_spec_name``."""

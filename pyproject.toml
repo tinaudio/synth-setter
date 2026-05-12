@@ -154,6 +154,7 @@ exclude = '''(?x)
   | ^src/pipeline/r2_io\.py$
   | ^src/pipeline/schemas/image_config\.py$
   | ^src/pipeline/schemas/prefix\.py$
+  | ^src/pipeline/schemas/shard_metadata\.py$
   | ^src/pipeline/schemas/spec\.py$
   | ^scripts/add_music2latent\.py$
   | ^scripts/compute_audio_metrics\.py$
