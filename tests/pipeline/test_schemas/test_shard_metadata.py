@@ -87,15 +87,16 @@ class TestShardMetadataLeafImport:
     """The model lives in a leaf module so consumers can import it without cycles."""
 
     def test_module_has_no_project_imports(self) -> None:
-        """Parse the module's AST and assert no ``src.*`` imports exist.
+        """Parse the module's AST and assert it has no project-internal imports.
 
         The leaf-module guarantee matters because ``generate_vst_dataset`` (a
         src→pipeline consumer) imports this; if the module pulled in
         ``src.pipeline.schemas.spec`` or another non-leaf, the import graph
-        would form a cycle through ``param_specs`` / pedalboard. Parsing the
-        AST rather than substring-matching the source defends against
-        false negatives (a docstring mentioning ``from src.``) and false
-        positives (alternative import phrasings).
+        would form a cycle through ``param_specs`` / pedalboard. The check
+        flags every form Python supports for reaching project code: ``import
+        src``/``import src.x.y``, ``from src import x`` (module == "src"),
+        ``from src.x.y import z`` (module starts with "src."), and any
+        relative ``from .x import y`` (``node.level > 0``).
         """
         import ast
         from pathlib import Path
@@ -108,9 +109,13 @@ class TestShardMetadataLeafImport:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 project_imports.extend(
-                    alias.name for alias in node.names if alias.name.startswith("src.")
+                    alias.name
+                    for alias in node.names
+                    if alias.name == "src" or alias.name.startswith("src.")
                 )
             elif isinstance(node, ast.ImportFrom):
-                if node.module and node.module.startswith("src."):
-                    project_imports.append(node.module)
+                if node.level > 0:
+                    project_imports.append(f"<relative-level-{node.level}>")
+                elif node.module == "src" or (node.module or "").startswith("src."):
+                    project_imports.append(node.module or "")
         assert project_imports == [], f"leaf module pulled project imports: {project_imports}"
