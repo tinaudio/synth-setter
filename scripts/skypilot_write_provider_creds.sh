@@ -209,24 +209,16 @@ write_oci_creds() {
     "${compartment_ocid}" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}")"
 }
 
-# Per-key upsert into ~/.sky/config.yaml. The file is shared by multiple providers
-# (OCI writes `oci:`; local writes `jobs:` for the managed-jobs controller resource
-# floor), and an earlier "skip if file exists" guard meant running the script for
-# one provider after another would silently leave the second provider without its
-# section. Upsert by top-level key instead: replace exactly the key we manage,
-# preserve the *data* under any other top-level keys the user (or another
-# provider's run) already populated. Within the managed top-level key, the entire
-# mapping is replaced wholesale on each call — hand-added nested keys under the
-# managed top-level (e.g. extra fields under `oci.default.*`) are NOT preserved.
-# NB: the file is re-serialized via PyYAML `safe_dump`, so comments and original
-# key ordering / formatting are dropped — only mapping data round-trips. This is
-# acceptable because `~/.sky/config.yaml` is bootstrap-owned in CI; hand-managed
-# local-dev configs that rely on comments should be edited outside this script.
-#
-# Secret-borne fragments (e.g. `oci:` carrying OCI_COMPARTMENT_OCID) are passed
-# to python3 via an env var rather than argv — `/proc/<pid>/cmdline` is
-# world-readable on Linux but `/proc/<pid>/environ` is owner-readable, so an
-# env-borne secret can't be observed by other users on the runner via ps.
+# Per-key upsert into ~/.sky/config.yaml. Thin bash wrapper around the sibling
+# scripts/upsert_sky_config_key.py module — the Python module owns the YAML
+# parsing, error messages, and file-write semantics so the parser branches are
+# pytest-unit-testable directly (see tests/scripts/test_upsert_sky_config_key.py).
+# The wrapper's responsibilities: ensure ~/.sky/ exists, carry the
+# (potentially secret-bearing) fragment via the SYNTH_UPSERT_FRAGMENT env var
+# so it never reaches /proc/<pid>/cmdline, invoke the module, and propagate
+# its exit code via set -e. Full contract docs (per-key upsert semantics,
+# wholesale-replace within the managed key, secret-carriage rationale) live
+# in the Python module's docstring.
 upsert_sky_config_key() {
   local key="$1"
   local fragment="$2"
@@ -234,62 +226,8 @@ upsert_sky_config_key() {
 
   mkdir -p "$HOME/.sky"
 
-  SYNTH_UPSERT_FRAGMENT="${fragment}" python3 - "${key}" "${sky_config}" <<'PY'
-import os
-import sys
-from pathlib import Path
-
-try:
-    import yaml
-except ImportError as exc:
-    sys.exit(
-        f"upsert_sky_config_key[{sys.argv[1]}]: PyYAML not installed in current "
-        f"interpreter ({exc}); install PyYAML to bootstrap the OCI / local "
-        f"provider (both upsert into ~/.sky/config.yaml via this helper)."
-    )
-
-key, path_str = sys.argv[1], sys.argv[2]
-fragment = os.environ.pop("SYNTH_UPSERT_FRAGMENT")
-path = Path(path_str)
-existing = {}
-if path.is_file() and path.stat().st_size > 0:
-    try:
-        raw = path.read_text()
-    except UnicodeDecodeError as exc:
-        sys.exit(
-            f"upsert_sky_config_key[{key}]: {path} is not valid UTF-8 ({exc}); "
-            f"refusing to upsert. Fix or remove the file."
-        )
-    try:
-        existing = yaml.safe_load(raw) or {}
-    except yaml.YAMLError as exc:
-        sys.exit(
-            f"upsert_sky_config_key[{key}]: {path} is not valid YAML ({exc.__class__.__name__}); "
-            f"refusing to upsert. Fix or remove the file."
-        )
-if not isinstance(existing, dict):
-    sys.exit(
-        f"upsert_sky_config_key[{key}]: {path} is not a YAML mapping at the top level "
-        f"(got {type(existing).__name__}); refusing to upsert. Fix or remove the file."
-    )
-try:
-    fragment_doc = yaml.safe_load(fragment) or {}
-except yaml.YAMLError as exc:
-    sys.exit(
-        f"upsert_sky_config_key[{key}]: caller-supplied fragment is not valid YAML "
-        f"({exc.__class__.__name__})"
-    )
-if not isinstance(fragment_doc, dict):
-    sys.exit(
-        f"upsert_sky_config_key[{key}]: fragment is not a YAML mapping "
-        f"(got {type(fragment_doc).__name__})"
-    )
-if key not in fragment_doc:
-    sys.exit(f"upsert_sky_config_key[{key}]: fragment missing top-level {key!r}")
-existing[key] = fragment_doc[key]
-path.write_text(yaml.safe_dump(existing, sort_keys=False))
-os.chmod(path, 0o600)
-PY
+  SYNTH_UPSERT_FRAGMENT="${fragment}" python3 "${BASH_SOURCE%/*}/upsert_sky_config_key.py" \
+    "${key}" "${sky_config}"
 }
 
 write_local_sky_config() {
