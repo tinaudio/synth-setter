@@ -1,29 +1,32 @@
 name: Test OCI Image Bake
 
-# PR-triggered gate for changes to the OCI bake workflow. Calls the bake
-# workflow with a PR-scoped tag so production tags (dev-snapshot, etc.)
-# are never overwritten by a PR run, then verifies the produced image is
-# pullable from the registry.
+# PR-triggered gate for changes to the OCI bake workflow / its source
+# template. Dispatches the (yet-to-land) oci-image-bake.yaml on the PR
+# branch with a PR-scoped display name, waits for it to finish, then
+# verifies the resulting OCI custom image is registered in the target
+# compartment. Always cleans up the PR-scoped image at the end so PR
+# pushes don't accumulate billable boot-image artifacts.
 #
-# The bake workflow (.github/workflows/oci-image-bake.yaml) is expected to
-# expose a workflow_call interface accepting an `image_tag` string input
-# and to publish the image at tinaudio/synth-setter:<image_tag> — the same
-# repository convention used by spec-materialization.yml and push-to-ocir.yml.
-# This file ships as a contract-first gate: edits to either this workflow
-# or the bake workflow trigger it. Until #921 lands oci-image-bake.yaml the
-# `bake` job will fail at workflow resolution; that's the intended signal.
+# Cost: each run dispatches a real bake — billable OCI VM time
+# (~30–90 min per run) plus a transient OCI custom image. Concurrency
+# cancels in-progress runs on rapid pushes. Fork PRs are skipped because
+# OCI secrets aren't exposed to them.
 #
-# The image_tag includes the PR head SHA so each commit's bake produces a
-# distinct tag — without it, verify-pullable could pass against a stale
-# image left over from a previous bake on the same PR. Fork PRs are
-# skipped via job-level `if:` (same pattern as test-skypilot-local.yml)
-# since `secrets: inherit` can't deliver registry creds to a fork.
+# Inert until #927 lands oci-image-bake.yaml. The bake workflow it
+# dispatches is workflow_dispatch-only and produces an OCI custom image
+# (not a Docker registry image), so verification is a `oci compute image
+# list` lookup rather than a `docker pull`.
+#
+# The image display name embeds the PR head SHA so each commit's bake
+# produces a distinct image — without it, verify could pass against a
+# stale image left over from a previous bake on the same PR.
 
 on:
   pull_request:
     paths:
       - .github/workflows/oci-image-bake.yaml
       - .github/workflows/test-oci-image-bake.yml
+      - configs/compute/oci-cpu-template.yaml
 
 concurrency:
   group: test-oci-image-bake-${{ github.event.pull_request.number }}
@@ -31,25 +34,91 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
-  bake:
+  trigger-bake:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-    uses: ./.github/workflows/oci-image-bake.yaml
-    with:
-      image_tag: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-    secrets: inherit
-
-  verify-pullable:
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-    needs: bake
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 120
+    outputs:
+      image_display_name: ${{ steps.compute_name.outputs.name }}
     steps:
-      - name: Pull baked image
+      - name: Compute PR-scoped image display name
+        id: compute_name
         env:
-          IMAGE_REF: tinaudio/synth-setter:pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          docker pull "$IMAGE_REF"
-          docker image inspect "$IMAGE_REF" --format '{{.Id}} {{.RepoTags}}'
+          short_sha="${HEAD_SHA:0:7}"
+          echo "name=synth-setter-pr${PR_NUMBER}-${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch oci-image-bake on PR branch and wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_NAME: ${{ steps.compute_name.outputs.name }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          before=$(gh run list --workflow oci-image-bake.yaml --branch "$BRANCH" \
+            --limit 1 --json databaseId --jq '.[0].databaseId // ""')
+          gh workflow run oci-image-bake.yaml \
+            --ref "$BRANCH" \
+            --field "image_display_name=$IMAGE_NAME"
+          run_id=""
+          for _ in $(seq 1 30); do
+            current=$(gh run list --workflow oci-image-bake.yaml --branch "$BRANCH" \
+              --limit 1 --json databaseId --jq '.[0].databaseId // ""')
+            if [ -n "$current" ] && [ "$current" != "$before" ]; then
+              run_id="$current"
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$run_id" ]; then
+            echo "ERROR: dispatched bake run did not appear within 60s" >&2
+            exit 1
+          fi
+          echo "Watching bake run $run_id ..."
+          gh run watch "$run_id" --exit-status
+
+  verify-image-exists:
+    needs: trigger-bake
+    if: ${{ needs.trigger-bake.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      IMAGE_NAME: ${{ needs.trigger-bake.outputs.image_display_name }}
+      COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
+      OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_API_KEY_PEM }}
+    steps:
+      - name: Install OCI CLI
+        run: pip install --quiet oci-cli
+
+      - name: Look up baked image OCID by display name
+        id: lookup
+        run: |
+          set -euo pipefail
+          ocid=$(oci compute image list \
+            --compartment-id "$COMPARTMENT_OCID" \
+            --display-name "$IMAGE_NAME" \
+            --query 'data[0].id' --raw-output)
+          if [ -z "$ocid" ] || [ "$ocid" = "null" ]; then
+            echo "ERROR: no OCI custom image found with display-name $IMAGE_NAME" >&2
+            exit 1
+          fi
+          echo "Found baked image: $ocid"
+          echo "ocid=$ocid" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup PR-scoped image
+        if: ${{ always() && steps.lookup.outputs.ocid != '' }}
+        env:
+          IMAGE_OCID: ${{ steps.lookup.outputs.ocid }}
+        run: |
+          set -euo pipefail
+          oci compute image delete --image-id "$IMAGE_OCID" --force
