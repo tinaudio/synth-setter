@@ -315,6 +315,33 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
+# Install pueue task queue manager (https://github.com/Nukesor/pueue). Static
+# musl binaries from the upstream release page — no apt repo and no rust
+# toolchain pulled into the image. Used by `scripts/job_queue.py` as the
+# job-queue backend.
+#
+# Integrity: each binary is verified against a pinned SHA256 (per arch) before
+# chmod. Bump these alongside PUEUE_VERSION — values come from running
+# `sha256sum pueue-* pueued-*` against the upstream release assets.
+ARG PUEUE_VERSION=v4.0.4
+ARG PUEUE_SHA256_X86_64=c1b10d7e4e62211075ddd0e1dc3e8cbfc5a43d662cb3be7402a28504e23fcb51
+ARG PUEUED_SHA256_X86_64=5afeff6adbafb909e8d54e2caff158e6966c2adffa2c09e60fd631cc51b60390
+ARG PUEUE_SHA256_AARCH64=759bf5100a51024997111c6913aaf3330a0cdfd893ff552dcf429ae9b5e01e09
+ARG PUEUED_SHA256_AARCH64=332c5ef74270b64aeaf04894c8c04826f3422eb7d50dbd1a8e0706d74a42f653
+RUN case "${TARGETARCH:-}" in \
+      amd64) pueue_arch=x86_64;  pueue_sha=${PUEUE_SHA256_X86_64};  pueued_sha=${PUEUED_SHA256_X86_64}  ;; \
+      arm64) pueue_arch=aarch64; pueue_sha=${PUEUE_SHA256_AARCH64}; pueued_sha=${PUEUED_SHA256_AARCH64} ;; \
+      *) echo "ERROR: unsupported TARGETARCH for pueue: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
+    esac && \
+    base="https://github.com/Nukesor/pueue/releases/download/${PUEUE_VERSION}" && \
+    wget -q -O /usr/local/bin/pueue  "${base}/pueue-${pueue_arch}-unknown-linux-musl"  && \
+    wget -q -O /usr/local/bin/pueued "${base}/pueued-${pueue_arch}-unknown-linux-musl" && \
+    echo "${pueue_sha}  /usr/local/bin/pueue"   | sha256sum -c - && \
+    echo "${pueued_sha}  /usr/local/bin/pueued" | sha256sum -c - && \
+    chmod +x /usr/local/bin/pueue /usr/local/bin/pueued && \
+    pueue --version && \
+    pueued --version
+
 WORKDIR /artifacts
 COPY --from=synth-setter-src /home/build/synth-setter/scripts/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/data/vst/core.py /artifacts/

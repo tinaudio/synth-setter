@@ -139,9 +139,8 @@ def run(spec: DatasetSpec) -> None:
     — verifies the plugin and pinned ``renderer_version`` agree. HDF5-only for now:
     ``spec.output_format`` is restricted to ``"hdf5"``.
 
-    Raises:
-        RuntimeError: If the worker's plugin version disagrees with
-            ``spec.render.renderer_version``.
+    :raises RuntimeError: If the worker's plugin version disagrees with
+        ``spec.render.renderer_version``.
     """
     render = spec.render
     actual_renderer_version = extract_renderer_version(Path(render.plugin_path))

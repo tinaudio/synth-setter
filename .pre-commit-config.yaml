@@ -156,8 +156,7 @@ repos:
             src/models/surge_ff_module\.py|
             src/models/surge_flow_matching_module\.py|
             src/models/surge_flowvae_module\.py|
-            src/utils/callbacks\.py|
-            src/utils/math\.py
+            src/utils/callbacks\.py
           )$
 
   # pydoclint: signature ↔ docstring consistency. Config lives in pyproject.toml

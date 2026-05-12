@@ -1,6 +1,6 @@
 [project]
 name = "synth-setter"
-version = "1.0.0"
+version = "1.1.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -44,6 +44,7 @@ packages = [
 # src/synth_setter/, so it is importable as `synth_setter` (PEP src-layout).
 # Other packages use the implicit root mapping (`src` lives at ./src, etc.).
 "synth_setter" = "src/synth_setter"
+
 
 [tool.pytest.ini_options]
 addopts = [
@@ -133,7 +134,6 @@ ignore = ["E501", "S101"]
 "src/train.py" = ["E402"]
 "src/utils/__init__.py" = ["F401"]
 "src/utils/callbacks.py" = ["F821", "T201", "ANN001"]
-"src/utils/math.py" = ["ANN001"]
 
 [tool.interrogate]
 verbose = 2
