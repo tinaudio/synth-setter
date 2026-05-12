@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Bootstrap SkyPilot credentials before `sky check` / `sky.launch`.
 #
 # Writes cred files to disk only. Emits NO secrets to stdout — every caller
