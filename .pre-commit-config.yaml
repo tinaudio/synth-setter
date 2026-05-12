@@ -76,7 +76,6 @@ repos:
             src/utils/callbacks\.py|
             src/utils/logging_utils\.py|
             tests/conftest\.py|
-            tests/helpers/package_available\.py|
             tests/helpers/run_sh_command\.py
           )$
 
