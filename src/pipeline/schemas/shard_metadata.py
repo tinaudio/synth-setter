@@ -23,6 +23,6 @@ class ShardMetadata(BaseModel):
 
     velocity: int
     signal_duration_seconds: float
-    sample_rate: float
+    sample_rate: int
     channels: int
     min_loudness: float

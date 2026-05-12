@@ -23,7 +23,7 @@ def _valid_kwargs(**overrides: Any) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "velocity": 100,
         "signal_duration_seconds": 4.0,
-        "sample_rate": 16000.0,
+        "sample_rate": 16000,
         "channels": 2,
         "min_loudness": -55.0,
     }
@@ -39,7 +39,7 @@ class TestShardMetadataConstruction:
         meta = ShardMetadata(**_valid_kwargs())
         assert meta.velocity == 100
         assert meta.signal_duration_seconds == 4.0
-        assert meta.sample_rate == 16000.0
+        assert meta.sample_rate == 16000
         assert meta.channels == 2
         assert meta.min_loudness == -55.0
 
@@ -87,18 +87,29 @@ class TestShardMetadataLeafImport:
     """The model lives in a leaf module so consumers can import it without cycles."""
 
     def test_module_has_no_project_imports(self) -> None:
-        """Importing ``shard_metadata`` does not transitively pull in heavy deps.
+        """Parse the module's AST and assert no ``src.*`` imports exist.
 
         The leaf-module guarantee matters because ``generate_vst_dataset`` (a
         src→pipeline consumer) imports this; if the module pulled in
         ``src.pipeline.schemas.spec`` or another non-leaf, the import graph
-        would form a cycle through ``param_specs`` / pedalboard.
+        would form a cycle through ``param_specs`` / pedalboard. Parsing the
+        AST rather than substring-matching the source defends against
+        false negatives (a docstring mentioning ``from src.``) and false
+        positives (alternative import phrasings).
         """
+        import ast
+
         module = importlib.import_module("src.pipeline.schemas.shard_metadata")
         source = module.__file__
         assert source is not None
-        with open(source) as f:
-            text = f.read()
-        # No `from src.` or `import src.` imports — leaf module discipline.
-        assert "from src." not in text
-        assert "import src." not in text
+        tree = ast.parse(open(source).read())
+        project_imports: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                project_imports.extend(
+                    alias.name for alias in node.names if alias.name.startswith("src.")
+                )
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and node.module.startswith("src."):
+                    project_imports.append(node.module)
+        assert project_imports == [], f"leaf module pulled project imports: {project_imports}"
