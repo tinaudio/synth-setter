@@ -1,19 +1,25 @@
-from src.data.vst.core import load_plugin, load_preset, render_params
+"""Public re-exports for the ``src.data.vst`` package.
+
+Importing this package is intentionally pedalboard-free: callers that need
+``load_plugin`` / ``load_preset`` / ``render_params`` import from
+``src.data.vst.core`` directly. The registry dicts (``param_specs``,
+``preset_paths``) live in ``src.data.vst.param_spec_registry`` and are
+re-exported here for backward compat.
+"""
+
 from src.data.vst.param_spec import ParamSpec
+from src.data.vst.param_spec_registry import param_specs, preset_paths
 from src.data.vst.surge_xt_param_spec import (
+    SURGE_4_PARAM_SPEC,
     SURGE_SIMPLE_PARAM_SPEC,
     SURGE_XT_PARAM_SPEC,
-    SURGE_4_PARAM_SPEC,
 )
 
-param_specs: dict[str, ParamSpec] = {
-    "surge_xt": SURGE_XT_PARAM_SPEC,
-    "surge_simple": SURGE_SIMPLE_PARAM_SPEC,
-    "surge_4": SURGE_4_PARAM_SPEC,
-}
-
-preset_paths: dict[str, str] = {
-    "surge_xt": "presets/surge-base.vstpreset",
-    "surge_simple": "presets/surge-simple.vstpreset",
-    "surge_4": "presets/surge-mini.vstpreset",
-}
+__all__ = [
+    "ParamSpec",
+    "SURGE_4_PARAM_SPEC",
+    "SURGE_SIMPLE_PARAM_SPEC",
+    "SURGE_XT_PARAM_SPEC",
+    "param_specs",
+    "preset_paths",
+]

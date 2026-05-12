@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from datetime import datetime, timezone
 from typing import Any
 
@@ -185,6 +187,13 @@ class TestDatasetSpecValidators:
         """Blank task_name raises (derived run_id / r2_prefix would be empty-prefixed)."""
         with pytest.raises(ValidationError, match="task_name must not be blank"):
             DatasetSpec(**_valid_spec_kwargs(task_name="   "))
+
+    def test_r2_prefix_root_blank_raises(self, patch_runtime_io: None) -> None:
+        """Blank or whitespace-only r2_prefix_root raises so derived r2_prefix doesn't start with a
+        stray ``/``."""
+        for blank in ("", "   ", "\t\n"):
+            with pytest.raises(ValidationError, match="r2_prefix_root must not be blank"):
+                DatasetSpec(**_valid_spec_kwargs(r2_prefix_root=blank))
 
     def test_explicit_r2_prefix_missing_trailing_slash_raises(
         self, patch_runtime_io: None
@@ -411,3 +420,156 @@ class TestDatasetSpecRoundTrip:
             spec_mod._get_git_sha = original
 
         assert restored.git_sha == "abc123def456"
+
+
+# ---------------------------------------------------------------------------
+# Graceful git helpers — _get_git_sha / _is_repo_dirty under missing .git/
+# ---------------------------------------------------------------------------
+
+
+class TestGitHelpersGraceful:
+    """``_get_git_sha`` and ``_is_repo_dirty`` must not crash when ``.git/`` is unavailable."""
+
+    def test_get_git_sha_returns_sentinel_on_called_process_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-zero ``git rev-parse`` exit returns the sentinel rather than raising."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        def _raise(*args: object, **kwargs: object) -> object:
+            raise subprocess.CalledProcessError(returncode=128, cmd=["git", "rev-parse", "HEAD"])
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _raise)
+        assert spec_mod._get_git_sha() == spec_mod._GIT_UNAVAILABLE_SENTINEL
+
+    def test_get_git_sha_returns_sentinel_when_git_binary_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing ``git`` binary yields the sentinel — worker hosts without git survive."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        def _raise(*args: object, **kwargs: object) -> object:
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _raise)
+        assert spec_mod._get_git_sha() == spec_mod._GIT_UNAVAILABLE_SENTINEL
+
+    def test_is_repo_dirty_returns_false_when_git_binary_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing ``git`` binary makes ``_is_repo_dirty`` return False rather than raise."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        def _raise(*args: object, **kwargs: object) -> object:
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _raise)
+        assert spec_mod._is_repo_dirty() is False
+
+    def test_is_repo_dirty_returns_false_when_outside_git_worktree(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``git diff --quiet`` exits 128 outside a worktree — treat as "no git", not "dirty"."""
+        import src.pipeline.schemas.spec as spec_mod
+
+        class _FakeCompleted:
+            returncode = 128
+
+        def _fake(*args: object, **kwargs: object) -> _FakeCompleted:
+            return _FakeCompleted()
+
+        monkeypatch.setattr(spec_mod.subprocess, "run", _fake)
+        assert spec_mod._is_repo_dirty() is False
+
+
+# ---------------------------------------------------------------------------
+# Bare import is launcher-pure — no pedalboard / src.data.vst.core load
+# ---------------------------------------------------------------------------
+
+
+class TestSpecImportStaysLauncherPure:
+    """``import src.pipeline.schemas.spec`` alone must not pull heavy modules."""
+
+    def test_bare_spec_import_does_not_pull_data_vst_core(self) -> None:
+        """`import src.pipeline.schemas.spec` alone must not transitively load
+        ``src.data.vst.core`` or ``pedalboard``.
+
+        ``spec.py``'s only ``src.data.vst`` import is inside
+        ``DatasetSpec.num_params`` and runs lazily. If it is re-promoted to
+        module level — or another heavy import is added at module load — this
+        test fails immediately, preserving the launcher's interpreter-only
+        contract.
+        """
+        script = (
+            "import sys\n"
+            "import src.pipeline.schemas.spec  # noqa: F401\n"
+            "for name in ('src.data.vst.core', 'src.data.vst', 'pedalboard'):\n"
+            "    assert name not in sys.modules, (\n"
+            "        f'{name!r} leaked into spec module import; '\n"
+            "        f'this breaks the launcher-pure invariant'\n"
+            "    )\n"
+        )
+        result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"bare spec import is no longer launcher-pure:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Stronger pedalboard-free invariant — construction + serialization must not
+# pull pedalboard either. Catches regressions where the lazy import path
+# inside ``num_params`` (or its callers via ``model_dump_json``) silently
+# starts loading native deps.
+# ---------------------------------------------------------------------------
+
+
+class TestSpecConstructionStaysPedalboardFree:
+    """Importing schemas + building/serializing a DatasetSpec must not load pedalboard.
+
+    Run in a fresh subprocess so the parent test session — where earlier tests
+    import ``src.data.vst.core`` (and other modules that pull pedalboard
+    transitively) — does not poison the check.
+    """
+
+    def test_dataset_spec_num_params_does_not_import_pedalboard(self) -> None:
+        """``num_params`` is emitted by ``model_dump_json`` so its lazy import path runs in every
+        serialize.
+
+        It must remain interpreter-only.
+        """
+        script = (
+            "import sys\n"
+            "from src.pipeline.schemas.spec import DatasetSpec\n"
+            "spec = DatasetSpec(\n"
+            "    task_name='ci', output_format='hdf5', train_val_test_sizes=[1, 0, 0],\n"
+            "    base_seed=0, r2_bucket='b',\n"
+            "    render={\n"
+            "        'plugin_path': '/tmp/x.vst3', 'preset_path': '/tmp/x.vstpreset',\n"
+            "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
+            "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
+            "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
+            "        'sample_batch_size': 1, 'batch_per_shard': 1,\n"
+            "    },\n"
+            ")\n"
+            "_ = spec.num_params\n"
+            "_ = spec.model_dump_json()\n"
+            "assert 'pedalboard' not in sys.modules, sorted(\n"
+            "    m for m in sys.modules if m.startswith('pedalboard')\n"
+            ")\n"
+        )
+        result = subprocess.run(  # noqa: S603 — sys.executable + literal script
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"pedalboard leaked into spec serialization:\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )

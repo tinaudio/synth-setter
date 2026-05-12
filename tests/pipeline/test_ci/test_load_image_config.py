@@ -1,4 +1,4 @@
-"""Tests for pipeline/ci/load_image_config.py — GITHUB_OUTPUT writer for image config.
+"""Tests for src/pipeline/ci/load_image_config.py — GITHUB_OUTPUT writer for image config.
 
 Tests are organized around the PUBLIC API:
 - main(): parses CLI args, loads config, writes key=value lines to GITHUB_OUTPUT or stdout
@@ -307,7 +307,7 @@ torch_backend: "cu128"
 
 
 class TestModuleInvocable:
-    """Python -m pipeline.ci.load_image_config should work as a CLI."""
+    """Python -m src.pipeline.ci.load_image_config should work as a CLI."""
 
     def test_module_help_exits_zero(self) -> None:
         result = subprocess.run(  # noqa: S603

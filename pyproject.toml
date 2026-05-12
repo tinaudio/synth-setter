@@ -1,11 +1,21 @@
 [project]
 name = "synth-setter"
-version = "1.0.0"
+version = "1.1.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
+
+[project.optional-dependencies]
+docs = [
+  "mkdocs",
+  "mkdocs-material",
+  "mkdocstrings[python]",
+  "griffe-pydantic",
+]
+
+
 
 [tool.pytest.ini_options]
 addopts = [
@@ -30,6 +40,7 @@ markers = [
   "r2: tests requiring R2/rclone access",
   "docker_smoke: smoke tests that run inside the built Docker image",
   "network: tests that may make outbound network calls (e.g. `git fetch`)",
+  "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
 ]
 minversion = "6.0"
 testpaths = "tests/"
@@ -77,7 +88,7 @@ ignore = ["E501", "S101"]
 "tests/scripts/test_r2_shard_report.py" = ["S603", "S607"]
 # ANN001: pytest fixture-injected args left un-annotated on legacy callsites.
 "tests/scripts/test_surge_xt_interactive.py" = ["ANN001"]
-"tests/pipeline/test_schemas/test_config.py" = ["ANN001"]
+"tests/pipeline/test_schemas/test_dataset_spec.py" = ["ANN001"]
 "tests/pipeline/test_schemas/test_prefix.py" = ["ANN001"]
 "tests/test_benchmarks.py" = ["ANN001"]
 "tests/test_configs.py" = ["ANN001"]
@@ -93,7 +104,6 @@ ignore = ["E501", "S101"]
 "src/train.py" = ["E402"]
 "src/utils/__init__.py" = ["F401"]
 "src/utils/callbacks.py" = ["F821", "T201", "ANN001"]
-"src/utils/math.py" = ["ANN001"]
 
 [tool.interrogate]
 verbose = 2
@@ -197,6 +207,7 @@ exclude = '''(?x)
   | ^tests/pipeline/test_schemas/test_dataset_spec\.py$
   | ^tests/pipeline/test_schemas/test_image_config\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
+  | ^tests/infra/
   | ^tests/scripts/test_compute_audio_metrics\.py$
   | ^tests/scripts/test_r2_shard_report\.py$
   | ^tests/scripts/test_skypilot_write_provider_creds\.py$

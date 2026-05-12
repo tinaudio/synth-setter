@@ -40,6 +40,7 @@ SYNTH_SETTER_NUM_WORKERS injected; one shared spec → one r2_prefix.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import subprocess
@@ -50,7 +51,6 @@ from pathlib import Path
 
 import click
 import sky
-import sky.check  # accessed conditionally on the kubernetes path; see provider == "local" branch in main()
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
 import yaml
 from dotenv import dotenv_values
@@ -97,6 +97,15 @@ _R2_RCLONE_CONSTANTS: dict[str, str] = {
     "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
 }
 
+# Residual `_WORKER_ENV_KEYS` that are not defaulted by `_R2_RCLONE_CONSTANTS`.
+# Used to detect the unconfigured-creds case: the rclone TYPE/PROVIDER constants
+# default in, so an "empty" worker_env still has those keys — only this residual
+# subset (R2 access creds, WANDB_API_KEY, WORKER_GIT_REF) signals whether
+# anything was actually resolved from .env / process env.
+_SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
+    k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS
+)
+
 _CRED_BOOTSTRAP_SCRIPT = (
     Path(__file__).resolve().parent.parent.parent / "scripts" / "skypilot_write_provider_creds.sh"
 )
@@ -142,6 +151,16 @@ def _compose_dataset_spec(experiment: str, overrides: list[str]) -> DatasetSpec:
 # so concurrent launches on the same host don't collide.
 LOCAL_SPEC_DIR = Path(tempfile.gettempdir())
 
+# `sky local up` uses the kubernetes backend; map both spellings.
+_CLOUD_TO_PROVIDER: dict[str, str] = {
+    "runpod": "runpod",
+    "oci": "oci",
+    "kubernetes": "local",
+    "k8s": "local",
+}
+
+_SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
+
 
 def load_worker_env(path: Path) -> dict[str, str]:
     """Read worker-side env from a dotenv file using python-dotenv.
@@ -184,14 +203,6 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
             f"WORKER_GIT_REF must be a 7-40 char hex git SHA, got {git_ref!r}"
         )
     return resolved
-
-
-_CLOUD_TO_PROVIDER: dict[str, str] = {
-    "runpod": "runpod",
-    "oci": "oci",
-    "kubernetes": "local",
-    "k8s": "local",  # SkyPilot accepts both
-}
 
 
 def _detect_provider(template_path: Path) -> str:
@@ -243,9 +254,6 @@ def _detect_provider(template_path: Path) -> str:
             "supports runpod, oci, and local (kubernetes) only"
         )
     return provider
-
-
-_SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
 
 
 def _apply_dispatch_mode(api_server: str | None, local: bool) -> None:
@@ -498,23 +506,14 @@ def main(
         )
 
     worker_env = resolve_worker_env(env_file_path)
-    # `_R2_RCLONE_CONSTANTS` defaults TYPE/PROVIDER, so an "empty" worker_env still has those.
-    # Check the actual secret keys to detect the unconfigured-creds case.
-    secret_keys = tuple(k for k in _WORKER_ENV_KEYS if k not in _R2_RCLONE_CONSTANTS)
-    if not any(k in worker_env for k in secret_keys):
+    if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
         raise click.ClickException(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
             f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate {env_file_path}. "
-            f"Expected at least one of: {', '.join(secret_keys)}."
+            f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
 
-    # `upload_spec_to_r2` shells out to rclone, which inherits os.environ.
-    # `worker_env` already reflects the launcher's resolved precedence
-    # (env-file > process env, per `resolve_worker_env`), so write through to
-    # `os.environ` to make the rclone subprocess see the same effective
-    # values the launcher resolved — not whatever happened to be exported
-    # in the launcher process. CI sets these in the workflow `env:` block
-    # directly, so the assignment is a no-op there.
+    # rclone subprocess inherits os.environ; mirror launcher-resolved values so .env wins.
     for key, value in worker_env.items():
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value
@@ -562,6 +561,9 @@ def main(
     # runner. Calling `sky.check.check` in-process before launch is the documented
     # workaround (test-skypilot-local.yml). RunPod/OCI source creds from disk on every launch.
     if provider == "local":
+        # Deferred so non-kubernetes runs (RunPod / OCI) skip the submodule import entirely.
+        import sky.check
+
         sky.check.check(clouds=["kubernetes"], quiet=False)
 
     # Single-worker keeps the unsuffixed managed-job name (the value passed to
@@ -635,45 +637,68 @@ def _run_workers(
     half-submitted jobs — those whose `sky.jobs.launch`/`sky.stream_and_get` raised or
     yielded no job_id.
 
-    Args:
-        worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
-        template_path: SkyPilot Task YAML to instantiate per rank.
-        job_names: One managed-job name per rank; ``len()`` defines the world size.
-        worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
-        tail: If True, tail logs and cancel all jobs. If False, detach after launch.
+    :param worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
+    :param template_path: SkyPilot Task YAML to instantiate per rank.
+    :param job_names: One managed-job name per rank; ``len()`` defines the world size.
+    :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
+    :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
+    :return: List with one entry per rank in ``job_names`` order. ``0`` = success;
+        ``-1`` = launch/stream raised before the rank's work finished (see above);
+        any other non-zero = job failure (with ``tail=True``, the value comes from
+        ``sky.jobs.tail_logs``).
+    """
+    worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
+    launch_get_job_id = functools.partial(
+        _launch_one_rank,
+        job_names=job_names,
+        worker_env_base=worker_env_base,
+        worker_image=worker_image,
+        template_path=template_path,
+    )
+    if tail:
+        return _run_workers_tail(job_names, launch_get_job_id)
+    return _run_workers_detached(job_names, launch_get_job_id)
 
-    Returns:
-        Per-rank result code (``0`` = success, anything else = failure).
+
+def _launch_one_rank(
+    rank: int,
+    *,
+    job_names: list[str],
+    worker_env_base: dict[str, str],
+    worker_image: str,
+    template_path: Path,
+) -> int:
+    """Submit rank ``rank``'s managed job and return its ``job_id``.
+
+    Used by ``_run_workers`` to fan out per-rank launches; lives at module level
+    rather than as a closure so it can be tested directly without re-running
+    the parent ``_run_workers`` setup.
+
+    Raises ``click.ClickException`` if ``sky.jobs.launch`` / ``sky.stream_and_get``
+    yields no ``job_id``.
     """
     num_workers = len(job_names)
-    worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
-
-    def _launch_get_job_id(rank: int) -> int:
-        job_name = job_names[rank]
-        env_for_rank = {
-            **worker_env_base,
-            WORKER_RANK_ENV_VAR: str(rank),
-            NUM_WORKERS_ENV_VAR: str(num_workers),
-            _WORKER_IMAGE_ENV: worker_image,
-        }
-        task = sky.Task.from_yaml(str(template_path))
-        _override_image_id(task, worker_image)
-        task.update_envs(env_for_rank)
-        click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
-        launch_request_id = sky.jobs.launch(task, name=job_name)
-        launch_result = sky.stream_and_get(launch_request_id)
-        # sky.jobs.launch returns (job_ids: Optional[List[int]], handle); a single-Task launch
-        # yields a list of length 1. Empty / None means the controller didn't accept the job.
-        if launch_result is None:
-            raise click.ClickException(f"[{job_name}] launch yielded no job_id")
-        job_ids = launch_result[0]
-        if not job_ids or job_ids[0] is None:
-            raise click.ClickException(f"[{job_name}] launch yielded no job_id")
-        return job_ids[0]
-
-    if tail:
-        return _run_workers_tail(job_names, _launch_get_job_id)
-    return _run_workers_detached(job_names, _launch_get_job_id)
+    job_name = job_names[rank]
+    env_for_rank = {
+        **worker_env_base,
+        WORKER_RANK_ENV_VAR: str(rank),
+        NUM_WORKERS_ENV_VAR: str(num_workers),
+        _WORKER_IMAGE_ENV: worker_image,
+    }
+    task = sky.Task.from_yaml(str(template_path))
+    _override_image_id(task, worker_image)
+    task.update_envs(env_for_rank)
+    click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
+    launch_request_id = sky.jobs.launch(task, name=job_name)
+    launch_result = sky.stream_and_get(launch_request_id)
+    # sky.jobs.launch returns (job_ids: Optional[List[int]], handle); a single-Task launch
+    # yields a list of length 1. Empty / None means the controller didn't accept the job.
+    if launch_result is None:
+        raise click.ClickException(f"[{job_name}] launch yielded no job_id")
+    job_ids = launch_result[0]
+    if not job_ids or job_ids[0] is None:
+        raise click.ClickException(f"[{job_name}] launch yielded no job_id")
+    return job_ids[0]
 
 
 def _run_workers_tail(job_names: list[str], launch_get_job_id: Callable[[int], int]) -> list[int]:

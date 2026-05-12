@@ -62,22 +62,16 @@ def load_image_config(
 ) -> ImageConfig:
     """Load image config from YAML and merge with runtime inputs.
 
-    Reads static fields from the YAML config file, merges with runtime
-    inputs, validates via Pydantic, and derives image_config_id from
-    the config filename stem.
+    Reads static fields from the YAML config file, merges with runtime inputs, validates via
+    Pydantic, and derives image_config_id from the config filename stem.
 
-    Args:
-        config_path: Path to YAML config under configs/image/.
-        github_sha: 40-char lowercase hex commit SHA.
-        issue_number: Positive GitHub issue number.
-
-    Returns:
-        Validated ImageConfig with all fields populated.
-
-    Raises:
-        FileNotFoundError: config_path doesn't exist or isn't a file.
-        ValueError: top-level YAML is not a mapping.
-        pydantic.ValidationError: invalid field values.
+    :param config_path: Path to YAML config under configs/image/.
+    :param github_sha: 40-char lowercase hex commit SHA.
+    :param issue_number: Positive GitHub issue number.
+    :return: Validated ImageConfig with all fields populated.
+    :raises FileNotFoundError: config_path doesn't exist or isn't a file.
+    :raises ValueError: top-level YAML is not a mapping.
+    :raises pydantic.ValidationError: invalid field values.
     """
     if not config_path.is_file():
         raise FileNotFoundError(config_path)

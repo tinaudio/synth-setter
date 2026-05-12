@@ -1,0 +1,181 @@
+name: Job Queue Validate
+
+# PR-time validation for the job-queue CLI and its dispatchable workflow.
+#
+# Triggers on PRs that touch the job-queue surface so a regression in
+# scripts/job_queue.py (or the workflow plumbing) is caught before merge.
+# The Dockerfile pueue install is intentionally NOT in the path filter:
+# `docker-build-validation.yml` already exercises the image build end-to-end.
+#
+# The job runs without Docker: it installs the same pinned pueue v4.0.4 musl
+# binaries the Dockerfile uses, starts a daemon, drives the CLI against a
+# 3-command test queue, and asserts that:
+#   1. `--dry-run` prints one `pueue add` per non-comment line and does NOT
+#      invoke the backend.
+#   2. A real run enqueues the right number of jobs into the right group with
+#      the expected labels.
+#   3. All jobs run to completion (Success) and their stdout is captured.
+#   4. An empty / comment-only file errors cleanly instead of silently
+#      enqueueing nothing.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/job_queue.py"
+      - "tests/scripts/test_job_queue.py"
+      - ".github/workflows/job-queue.yaml"
+      - ".github/workflows/job-queue-validate.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate job-queue CLI against live pueue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install CLI runtime deps
+        run: pip install "click<8.2"
+
+      # Pinned to the same version + SHA256 the Dockerfile install uses
+      # (docker/ubuntu22_04/Dockerfile). Bump both in lockstep — verified
+      # against `sha256sum` of the upstream release assets.
+      - name: Install pueue (pinned + sha256-verified)
+        run: |
+          set -euo pipefail
+          base="https://github.com/Nukesor/pueue/releases/download/v4.0.4"
+          sudo wget -q -O /usr/local/bin/pueue  "${base}/pueue-x86_64-unknown-linux-musl"
+          sudo wget -q -O /usr/local/bin/pueued "${base}/pueued-x86_64-unknown-linux-musl"
+          echo "c1b10d7e4e62211075ddd0e1dc3e8cbfc5a43d662cb3be7402a28504e23fcb51  /usr/local/bin/pueue"  | sha256sum -c -
+          echo "5afeff6adbafb909e8d54e2caff158e6966c2adffa2c09e60fd631cc51b60390  /usr/local/bin/pueued" | sha256sum -c -
+          sudo chmod +x /usr/local/bin/pueue /usr/local/bin/pueued
+          pueue --version
+          pueued --version
+
+      - name: Write fixture command file
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/jq-fixtures
+          cat > /tmp/jq-fixtures/sample.txt <<'EOF'
+          # validate fixture — every line is a self-contained echo so we can
+          # cross-check captured stdout deterministically
+          echo job-output-zero
+          echo job-output-one
+          echo job-output-two
+          EOF
+          cat > /tmp/jq-fixtures/empty.txt <<'EOF'
+          # only-comments file — must error cleanly
+          # nothing else here
+          EOF
+
+      - name: --dry-run prints one backend add per line, no daemon
+        run: |
+          set -euo pipefail
+          dry_out=$(python scripts/job_queue.py /tmp/jq-fixtures/sample.txt \
+            --dry-run --group validate --parallel 2 --label-prefix gha)
+          echo "$dry_out"
+          add_count=$(printf '%s\n' "$dry_out" | grep -c "^pueue add ")
+          if [ "$add_count" -ne 3 ]; then
+            echo "ERROR: expected 3 'pueue add' lines, got ${add_count}" >&2
+            exit 1
+          fi
+          for label in gha-0 gha-1 gha-2; do
+            printf '%s\n' "$dry_out" | grep -q -- "--label $label" \
+              || { echo "ERROR: missing label '$label' in dry-run output" >&2; exit 1; }
+          done
+
+      - name: Empty / comment-only file errors cleanly
+        run: |
+          set -euo pipefail
+          if python scripts/job_queue.py /tmp/jq-fixtures/empty.txt --dry-run --no-start-daemon; then
+            echo "ERROR: CLI accepted a comments-only file" >&2
+            exit 1
+          fi
+          err=$(python scripts/job_queue.py /tmp/jq-fixtures/empty.txt --dry-run --no-start-daemon 2>&1 || true)
+          echo "$err" | grep -qi "no commands" \
+            || { echo "ERROR: expected 'no commands' in stderr; got: $err" >&2; exit 1; }
+
+      - name: Start pueued daemon
+        run: |
+          set -euo pipefail
+          pueued -d
+          # give the daemon a moment to open its socket; `pueue status` is the
+          # readiness probe used by the CLI itself.
+          for _ in $(seq 1 10); do
+            if pueue status >/dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          pueue status
+
+      - name: Live run — enqueue 3 jobs, wait for completion
+        run: |
+          set -euo pipefail
+          python scripts/job_queue.py /tmp/jq-fixtures/sample.txt \
+            --group validate --parallel 2 --label-prefix gha
+          pueue wait --group validate
+
+      # Pueue v4.0.4 reports a successful task as
+      #   {"status": {"Done": {"enqueued_at": ..., "start": ..., "end": ...,
+      #                        "result": "Success"}}}
+      # — i.e. `status` is a single-entry dict keyed by the lifecycle state, and
+      # for `Done` the nested `result` field carries Success / Failed / Killed.
+      - name: Assert all jobs succeeded
+        run: |
+          set -euo pipefail
+          pueue status --group validate
+          pueue status --json > /tmp/jq-status.json
+          python3 - /tmp/jq-status.json <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          status = json.loads(open(path).read())
+          tasks = [t for t in status["tasks"].values() if t.get("group") == "validate"]
+          if len(tasks) != 3:
+              sys.exit(f"FAIL: expected 3 tasks in 'validate', got {len(tasks)}")
+          labels = sorted(t.get("label") for t in tasks)
+          if labels != ["gha-0", "gha-1", "gha-2"]:
+              sys.exit(f"FAIL: labels mismatch: {labels}")
+          for t in tasks:
+              s = t.get("status")
+              done = s.get("Done") if isinstance(s, dict) else None
+              result = done.get("result") if isinstance(done, dict) else done
+              if result != "Success":
+                  sys.exit(f"FAIL: task {t.get('id')} status={s!r}")
+          print(f"OK: {len(tasks)} tasks, labels={labels}, all Success")
+          PY
+
+      - name: Assert captured stdout for each job
+        run: |
+          set -euo pipefail
+          for idx in 0 1 2; do
+            expected_word=$(printf 'job-output-%s' "$(echo zero one two | cut -d' ' -f$((idx + 1)))")
+            log=$(pueue log "$idx" --full 2>&1)
+            if ! printf '%s' "$log" | grep -q "$expected_word"; then
+              echo "FAIL: task $idx log missing '$expected_word'" >&2
+              printf '%s\n' "$log" >&2
+              exit 1
+            fi
+            echo "task $idx: stdout contains '$expected_word'  OK"
+          done
+
+      - name: Dump full queue log on failure
+        if: failure()
+        run: |
+          set +e
+          pueue status --group validate || true
+          for idx in 0 1 2; do
+            echo "=== log $idx ==="
+            pueue log "$idx" --full || true
+          done
+
+      - name: Shutdown pueued
+        if: always()
+        run: pueue shutdown || true

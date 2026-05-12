@@ -270,6 +270,8 @@ docs:
         scope: "testing"
       - pattern: "scripts/run-linux-vst-headless.sh"
         covers: "Headless X11/Xvfb wrapper bootstrapped by test-full-* / test-vst-cpu on Linux"
+      - pattern: "tests/infra/**"
+        covers: "Devcontainer + GHA invariant tests — attached-mode MODE=idle, gh-auth flow, no baked secrets, post-create budget, act --list parse"
 
   # ── macOS VM provisioning (Tart) ────────────────────────────────
   - doc: docs/getting-started.md
@@ -291,6 +293,15 @@ docs:
       - pattern: "src/data/vst/generate_vst_dataset.py"
         covers: "fixed_synth_params_list / fixed_note_params_list optional path used to render captured patches; mel_spec shape (2,128,401), audio dtype float16"
         scope: "interactive"
+
+  # ── CI triage agent operator notes (local-only invocation) ──────
+  - doc: .github/triage/README.md
+    description: Local CI triage agent operator notes — prerequisites, scripts/triage-ci.sh usage, fix-PR review flow
+    sources:
+      - pattern: "scripts/triage-ci.sh"
+        covers: "Helper wrapper — context.json sidecar build, claude -p invocation, --add-dir scope"
+      - pattern: ".github/triage/triage-prompt.md"
+        covers: "Local agent playbook — classification buckets, act reproduction, Path A/B/C routing, hard rules"
 
   # ── rclone reference (placeholder — doc does not exist yet) ─────
   # - doc: docs/reference/rclone.md
