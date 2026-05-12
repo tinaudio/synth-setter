@@ -101,6 +101,10 @@ jobs:
       # Real-run the data-pipeline chain via act with provider=local —
       # dropping `-n` lets `setup` populate `$GITHUB_OUTPUT` so the dynamic
       # matrix resolves. Fork PRs skip (R2 secrets unavailable to forks).
+      # `PIP_BREAK_SYSTEM_PACKAGES=1` is injected because catthehacker's
+      # python3.12 ships with PEP 668's externally-managed marker, so a
+      # workflow `pip install` that works on real GHA fails inside act
+      # without the override.
       - name: Real-run test-dataset-generation chain via act (provider=local)
         if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         env:
@@ -120,4 +124,5 @@ jobs:
           act workflow_dispatch \
             -W .github/workflows/test-dataset-generation.yml \
             --input provider=local \
-            --secret-file "${secrets_file}"
+            --secret-file "${secrets_file}" \
+            --env PIP_BREAK_SYSTEM_PACKAGES=1
