@@ -15,8 +15,10 @@ class ShardMetadata(BaseModel):
     """Sidecar JSON written into wds tar shards (member ``metadata.json``).
 
     Mirrors the ``audio`` HDF5 dataset attrs that the wds layout doesn't have
-    a natural home for. Validated on read by ``validate_shard`` so a malformed
-    sidecar fails loudly instead of silently shipping a half-described shard.
+    a natural home for. The wds writer (PR-13) and the wds branch of
+    ``validate_shard`` (also PR-13) will consume this model directly so a
+    malformed sidecar fails loudly at write or read time instead of silently
+    shipping a half-described shard.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")

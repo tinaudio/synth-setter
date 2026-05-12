@@ -86,7 +86,7 @@ docs:
       - pattern: "src/pipeline/schemas/spec.py"
         covers: "DatasetSpec, RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION (Hydra-composed cfg → spec_from_cfg → DatasetSpec)"
       - pattern: "src/pipeline/schemas/shard_metadata.py"
-        covers: "ShardMetadata — strict pydantic sidecar payload written to wds tar metadata.json; mirrors HDF5 audio attrs; validated on read by validate_shard"
+        covers: "ShardMetadata — strict pydantic sidecar payload destined for the wds tar's metadata.json member; mirrors HDF5 audio attrs. Writer + validate_shard wds branch land in PR-13."
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md

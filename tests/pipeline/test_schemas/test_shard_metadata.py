@@ -98,11 +98,12 @@ class TestShardMetadataLeafImport:
         positives (alternative import phrasings).
         """
         import ast
+        from pathlib import Path
 
         module = importlib.import_module("src.pipeline.schemas.shard_metadata")
         source = module.__file__
         assert source is not None
-        tree = ast.parse(open(source).read())
+        tree = ast.parse(Path(source).read_text(encoding="utf-8"))
         project_imports: list[str] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
