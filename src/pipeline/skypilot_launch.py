@@ -75,6 +75,14 @@ _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 # templates pass this verbatim into `git fetch + checkout` inside the container.
 _WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
+# Validates --job-name. The value is interpolated into a local filename under
+# $TMPDIR and into an R2 object key before SkyPilot itself ever sees it, so it
+# has to be path-separator-free and short. The pattern matches a kubernetes-
+# style label (alphanumeric start, alphanumerics/underscore/dash, ≤63 chars),
+# which is also a strict subset of what SkyPilot's own cluster-name validation
+# accepts.
+_JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
+
 # Forwarded via task.update_envs; each resolved from .env then process env.
 # Keep in sync with the envs: block in configs/compute/runpod-template.yaml.
 # WORKER_GIT_REF: pod fetches+checks out this ref before generate_dataset, to
@@ -352,7 +360,7 @@ def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
             local_path,
             rclone_dest,
         ]
-        subprocess.check_call(args)  # noqa: S603 — args from validated spec/job_name
+        subprocess.check_call(args)  # noqa: S603 — local tempfile path + R2 dest from job_name validated against _JOB_NAME_RE in main()
     finally:
         Path(local_path).unlink(missing_ok=True)
     return spec_uri
@@ -421,7 +429,8 @@ def _warn_if_deprecated_cluster_name() -> None:
     help=(
         "Managed-job name (used both as the SkyPilot job identifier and as the R2 key "
         "prefix for the per-launch spec upload). Default: synth-setter-smoke-<config_id[:8]>. "
-        "Multi-worker fan-out appends `-r{i}` per rank. Alias: --cluster-name (deprecated)."
+        "Multi-worker fan-out appends `-r{i}` per rank. Must match "
+        "[A-Za-z0-9][A-Za-z0-9_-]{0,62}. Alias: --cluster-name (deprecated)."
     ),
 )
 @click.option(
@@ -515,6 +524,13 @@ def main(
     """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
     _warn_if_deprecated_cluster_name()
     _apply_dispatch_mode(api_server=api_server, local=local)
+
+    if job_name is not None and not _JOB_NAME_RE.fullmatch(job_name):
+        raise click.ClickException(
+            "--job-name must match [A-Za-z0-9][A-Za-z0-9_-]{0,62} "
+            "(alphanumerics, underscore, dash; ≤63 chars; no path separators); "
+            f"got {job_name!r}"
+        )
 
     if num_workers is not None and num_workers < 1:
         raise click.ClickException(f"--num-workers must be >= 1, got {num_workers}")

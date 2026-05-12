@@ -440,7 +440,7 @@ class TestMainCli:
             experiment,
             template_yaml,
             missing,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -469,7 +469,7 @@ class TestMainCli:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -499,7 +499,7 @@ class TestMainCli:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -540,7 +540,7 @@ class TestMainCli:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -580,7 +580,7 @@ class TestMainCli:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -614,7 +614,7 @@ class TestMainCli:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--tail",
             fake_plugin=fake_plugin,
@@ -638,7 +638,7 @@ class TestMainCli:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--tail",
             fake_plugin=fake_plugin,
@@ -646,9 +646,9 @@ class TestMainCli:
         assert result.exit_code == 0, result.output
         mock_sky.jobs.cancel.assert_called_once_with(name="smoke-job-1")
 
-    # --- Cluster-name / spec-out / failure paths -----------------------------
+    # --- Job-name / spec-out / failure paths ---------------------------------
 
-    def test_default_cluster_name_uses_task_name_prefix(
+    def test_default_job_name_uses_task_name_prefix(
         self,
         tmp_path: Path,
         experiment: str,
@@ -659,7 +659,7 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Without --cluster-name the launcher derives the managed-job name from
+        """Without --job-name the launcher derives the managed-job name from
         ``spec.task_name[:8]``."""
         # Pin --spec-out so the test reads back the same spec the launcher composed,
         # rather than assuming spec.task_name equals the experiment id (an experiment
@@ -941,6 +941,85 @@ class TestJobNameAlias:
         assert "DEPRECATION" not in result.stderr
 
 
+class TestJobNameValidation:
+    """`--job-name` is interpolated into a local filename under ``$TMPDIR`` and into an R2 object
+    key before SkyPilot itself ever sees it, so the launcher validates the value against a strict
+    kubernetes-style label pattern up-front and rejects anything containing path separators,
+    whitespace, or other shell-meaningful characters."""
+
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            "../escape",  # parent-directory traversal
+            "foo/bar",  # path separator
+            "foo bar",  # whitespace
+            "-leading-dash",  # must start alnum
+            "_leading-underscore",  # must start alnum
+            "foo;rm",  # shell metacharacter
+            "a" * 64,  # > 63 chars
+            "",  # empty string
+        ],
+    )
+    def test_invalid_job_name_is_rejected_before_any_io(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        bad_name: str,
+    ) -> None:
+        """Bad names fail with a ClickException citing --job-name; no spec is materialized and
+        sky.* is never called."""
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--job-name",
+            bad_name,
+            fake_plugin=fake_plugin,
+        )
+        assert result.exit_code != 0
+        assert "--job-name" in result.output
+        assert list(local_spec_dir.glob("*.json")) == []
+        mock_sky.launch.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "good_name",
+        [
+            "smoke-job-1",
+            "abc",
+            "A_b-1",
+            "a" * 63,  # exactly the max length
+            "0starts-with-digit",
+        ],
+    )
+    def test_valid_job_name_is_accepted(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        good_name: str,
+    ) -> None:
+        """Names matching [A-Za-z0-9][A-Za-z0-9_-]{0,62} pass through to sky.launch unchanged."""
+        result = _invoke(
+            experiment,
+            template_yaml,
+            env_file,
+            "--job-name",
+            good_name,
+            fake_plugin=fake_plugin,
+        )
+        assert result.exit_code == 0, result.output
+        assert mock_sky.launch.call_args.kwargs["cluster_name"] == good_name
+
+
 class TestNoTailMode:
     """Default `--no-tail` mode: submit each rank, print job_id + the `sky jobs logs` / `sky jobs
     cancel` commands the operator can run, then exit 0 without tailing or cancelling.
@@ -988,7 +1067,7 @@ class TestNoTailMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--no-tail",
             fake_plugin=fake_plugin,
@@ -1012,7 +1091,7 @@ class TestNoTailMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--no-tail",
             fake_plugin=fake_plugin,
@@ -1039,7 +1118,7 @@ class TestNoTailMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
@@ -1087,7 +1166,7 @@ class TestNoTailMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
@@ -1119,7 +1198,7 @@ class TestNoTailMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--no-tail",
             fake_plugin=fake_plugin,
@@ -1205,7 +1284,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
@@ -1265,7 +1344,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -1296,7 +1375,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
@@ -1338,7 +1417,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
@@ -1370,7 +1449,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
@@ -1444,7 +1523,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
@@ -1471,7 +1550,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "0",
@@ -1510,7 +1589,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--worker-image-tag",
             bad_tag,
@@ -1823,7 +1902,7 @@ class TestNumWorkersConfigPrecedence:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "2",
@@ -1849,7 +1928,7 @@ class TestNumWorkersConfigPrecedence:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -1885,7 +1964,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--local",
             fake_plugin=fake_plugin,
@@ -1913,7 +1992,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--api-server",
             "https://api.example.com",
@@ -1941,7 +2020,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--api-server",
             "  https://api.example.com  ",
@@ -1970,7 +2049,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--api-server",
             "   ",
@@ -2018,7 +2097,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--api-server",
             "https://api.example.com",
@@ -2062,7 +2141,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--local",
             fake_plugin=fake_plugin,
@@ -2087,7 +2166,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--api-server",
             "https://api.example.com",
@@ -2118,7 +2197,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -2144,7 +2223,7 @@ class TestDispatchMode:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
@@ -2196,7 +2275,7 @@ class TestWorkerEnvToOsEnvironBridge:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             fake_plugin=fake_plugin,
         )
