@@ -1,33 +1,11 @@
-#!/usr/bin/env bash
-# Bootstrap SkyPilot credentials before `sky check` / `sky.launch`.
+#!/bin/bash
+# Bootstrap SkyPilot R2 + per-provider creds to disk before `sky check` /
+# `sky.jobs.launch`. No stdout output by design (safe for tee'd contexts).
 #
-# Writes cred files to disk only. Emits NO secrets to stdout — every caller
-# can safely run this in a tee'd context without leaking secrets to public
-# logs. (Status/notice messages go to stderr; errors go to stderr.)
-#
-# Always (R2 is shared across compute providers):
-#   - ~/.cloudflare/r2.credentials  (mode 600, [r2] AWS-style profile) —
-#     consumed by SkyPilot's R2 storage adaptor (sky/adaptors/cloudflare.py)
-#     once #749 is unblocked.
-#   - ~/.cloudflare/accountid       (mode 600, plain text)
-#
-# Per-provider (gated on --provider runpod | oci | local):
-#   - runpod: ~/.runpod/config.toml
-#   - oci:    ~/.oci/config + ~/.oci/oci_api_key.pem + ~/.sky/config.yaml
-#   - local:  no per-provider files — `sky local up` (kind cluster) needs
-#             no compute provider auth. R2 creds are still required.
-#
-# Idempotency: if a target file already exists with non-empty content the
-# bootstrap leaves it alone — local-dev operators who hand-manage cred files
-# must not be silently clobbered. Pass --force to overwrite. (Mode is still
-# tightened to 0600 on the skip path so a hand-managed loose-perms file
-# doesn't stay world-readable.)
-#
-# R2 env-var resolution: callers must supply the rclone-prefixed names
-# (`RCLONE_CONFIG_R2_*`), matching `.env.example` and the GitHub Actions
-# secrets table. `R2_ACCOUNT_ID` has no rclone-prefixed alias — it must be
-# set by that name (it's written to ~/.cloudflare/accountid for SkyPilot's
-# R2 storage adaptor).
+# Providers (gated on --provider runpod | oci): the local (kubernetes / kind)
+# provider needs no compute auth — the launcher skips this script for that
+# case, and the CI workflow writes the managed-jobs controller-resource
+# shrink to ~/.sky/config.yaml directly.
 #
 # Required env:
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID
@@ -35,6 +13,8 @@
 #   RCLONE_CONFIG_R2_ENDPOINT
 #   R2_ACCOUNT_ID
 # Provider-specific required env: see write_runpod_creds / write_oci_creds.
+#
+# Idempotency + skip semantics: see should_skip_existing / notice_skip_existing.
 set -euo pipefail
 
 umask 077
@@ -44,7 +24,7 @@ FORCE=0
 
 usage() {
   cat >&2 <<'EOF'
-Usage: skypilot_write_provider_creds.sh --provider <runpod|oci|local> [--force]
+Usage: skypilot_write_provider_creds.sh --provider <runpod|oci> [--force]
 
 Writes R2 + per-provider compute creds to disk. No stdout output by design
 so callers can run this in a tee'd context without leaking secrets.
@@ -56,7 +36,7 @@ parse_args() {
     case "$1" in
       --provider)
         if [[ $# -lt 2 || -z "${2:-}" ]]; then
-          echo "::error::--provider requires a value (runpod | oci | local)" >&2
+          echo "::error::--provider requires a value (runpod | oci)" >&2
           usage
           exit 1
         fi
@@ -157,19 +137,17 @@ write_runpod_creds() {
 }
 
 write_oci_creds() {
-  local user_ocid tenancy_ocid fingerprint region compartment_ocid api_key_pem
+  local user_ocid tenancy_ocid fingerprint region api_key_pem
   user_ocid="$(resolve_var OCI_USER_OCID)"
   tenancy_ocid="$(resolve_var OCI_TENANCY_OCID)"
   fingerprint="$(resolve_var OCI_FINGERPRINT)"
   region="$(resolve_var OCI_REGION)"
-  compartment_ocid="$(resolve_var OCI_COMPARTMENT_OCID)"
   api_key_pem="$(resolve_var OCI_API_KEY_PEM)"
 
   local oci_config="$HOME/.oci/config"
   local oci_key="$HOME/.oci/oci_api_key.pem"
-  local sky_config="$HOME/.sky/config.yaml"
 
-  mkdir -p "$HOME/.oci" "$HOME/.sky"
+  mkdir -p "$HOME/.oci"
 
   if should_skip_existing "${oci_key}"; then
     notice_skip_existing "${oci_key}"
@@ -186,22 +164,13 @@ write_oci_creds() {
       > "${oci_config}"
     chmod 600 "${oci_config}"
   fi
-
-  if should_skip_existing "${sky_config}"; then
-    notice_skip_existing "${sky_config}"
-  else
-    printf 'oci:\n  default:\n    compartment_ocid: %s\n    image_tag_general: %s\n' \
-      "${compartment_ocid}" "${OCI_IMAGE_TAG:-skypilot:cpu-ubuntu-2204}" \
-      > "${sky_config}"
-    chmod 600 "${sky_config}"
-  fi
 }
 
 main() {
   parse_args "$@"
 
   if [[ -z "${PROVIDER}" ]]; then
-    echo "::error::--provider is required (runpod | oci | local)" >&2
+    echo "::error::--provider is required (runpod | oci)" >&2
     usage
     exit 1
   fi
@@ -209,11 +178,14 @@ main() {
   write_r2_creds
 
   case "${PROVIDER}" in
-    runpod) write_runpod_creds ;;
-    oci)    write_oci_creds ;;
-    local)  : ;; # kind cluster needs no compute provider auth
+    runpod)
+      write_runpod_creds
+      ;;
+    oci)
+      write_oci_creds
+      ;;
     *)
-      echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci | local)" >&2
+      echo "::error::unknown provider: ${PROVIDER} (expected runpod | oci)" >&2
       exit 1
       ;;
   esac

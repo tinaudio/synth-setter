@@ -22,7 +22,7 @@ name: Generate Dataset Shards
 #   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — every provider.
 #   RUNPOD_API_KEY — runpod row.
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
-#     OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — oci row.
+#     OCI_API_KEY_PEM — oci row.
 #   SKYPILOT_API_SERVER_ENDPOINT (optional) — when set, launcher skips local
 #     cred bootstrap.
 #   WANDB_API_KEY (optional) — forwarded to the worker.
@@ -210,6 +210,25 @@ jobs:
       - name: Load dev-snapshot image into kind (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: kind load docker-image "${IMAGE}" --name skypilot
+
+      # Shrink the managed-jobs controller pod's resource floor to fit on the
+      # GHA-kind cluster. SkyPilot's default (cpus: 4+, memory: 4x) doesn't
+      # fit in the ~1950m allocatable CPU after kube-system + sky-jobs-controller.
+      # This is a CI-only workaround; dev machines running `sky local up` against
+      # a real-sized kind don't need it. See PR #876.
+      - name: Shrink managed-jobs controller resources for kind (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.sky"
+          cat > "${HOME}/.sky/config.yaml" <<'YAML'
+          jobs:
+            controller:
+              resources:
+                cpus: 1+
+                memory: 1+
+          YAML
+          chmod 600 "${HOME}/.sky/config.yaml"
 
       # `--local` flips the launcher's local-vs-remote dispatch (#841); today's
       # skypilot-local caller passes it `true` to clear any inherited

@@ -19,9 +19,11 @@
 
 resources:
   cloud: kubernetes
-  cpus: 2+
+  # Resource floor: shrunk from `cpus: 2+` to fit kind's allocatable headroom
+  # after kube-system + sky-jobs-controller — see PR #876.
+  cpus: 1+
   memory: 4+
-  disk_size: 20
+  # disk_size omitted: kind/k8s backend rejects the field — see PR #876.
 
 # Placeholders. Real values are injected by the launcher via update_envs.
 # WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the

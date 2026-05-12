@@ -6,9 +6,14 @@ The script writes per-provider SkyPilot credentials before `sky check` /
 - R2 (always, regardless of provider): writes ``~/.cloudflare/r2.credentials``
   + ``~/.cloudflare/accountid`` for SkyPilot's R2 storage adaptor.
 - RunPod (when --provider runpod): ``~/.runpod/config.toml``.
-- OCI (when --provider oci): ``~/.oci/config`` + ``~/.oci/oci_api_key.pem`` +
-  ``~/.sky/config.yaml``.
-- Local (when --provider local): R2 only — kind cluster needs no compute auth.
+- OCI (when --provider oci): ``~/.oci/config`` + ``~/.oci/oci_api_key.pem``.
+  SkyPilot's OCI backend defaults to the root compartment when
+  ``oci.default.compartment_ocid`` is unset, so this script no longer manages
+  ``~/.sky/config.yaml`` — see PR #876.
+
+The kind / kubernetes ("local") provider is handled directly in the CI
+workflow (the launcher skips this script for that case) — no `--provider
+local` branch exists here.
 
 Tests run the script in a tmp ``HOME`` so they exercise the real bash without
 touching the developer's actual cred files. **Critical no-leak invariant**:
@@ -48,7 +53,6 @@ OCI_ENV: dict[str, str] = {
     "OCI_TENANCY_OCID": "ocid1.tenancy.oc1..yyyy",
     "OCI_FINGERPRINT": "aa:bb:cc:dd",
     "OCI_REGION": "us-ashburn-1",
-    "OCI_COMPARTMENT_OCID": "ocid1.compartment.oc1..zzzz",
     "OCI_API_KEY_PEM": _FAKE_PEM,
 }
 
@@ -103,11 +107,6 @@ class TestNoStdoutLeak:
     def test_oci_emits_zero_stdout_bytes(self, tmp_path: Path) -> None:
         """OCI-mode invocation emits zero bytes on stdout (no leak surface)."""
         result = _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
-        assert result.stdout == ""
-
-    def test_local_emits_zero_stdout_bytes(self, tmp_path: Path) -> None:
-        """Local-mode invocation emits zero bytes on stdout (no leak surface)."""
-        result = _run(tmp_path, R2_ENV, "--provider", "local")
         assert result.stdout == ""
 
     def test_no_secret_byte_appears_on_stderr_either(self, tmp_path: Path) -> None:
@@ -216,29 +215,32 @@ class TestProviderGating:
         assert _file_mode(config) == 0o600
 
     def test_oci_writes_oci_config_and_key(self, tmp_path: Path) -> None:
-        """OCI provider writes the three OCI cred files (config, oci_api_key.pem, sky/config.yaml)
-        all mode 600."""
+        """OCI provider writes ~/.oci/config and ~/.oci/oci_api_key.pem (mode 600)."""
         _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
         assert (tmp_path / ".oci" / "config").is_file()
         assert (tmp_path / ".oci" / "oci_api_key.pem").is_file()
-        assert (tmp_path / ".sky" / "config.yaml").is_file()
         assert _file_mode(tmp_path / ".oci" / "config") == 0o600
         assert _file_mode(tmp_path / ".oci" / "oci_api_key.pem") == 0o600
-        assert _file_mode(tmp_path / ".sky" / "config.yaml") == 0o600
 
-    def test_local_writes_only_r2_files(self, tmp_path: Path) -> None:
-        """Local provider writes only the R2 cred files; no ~/.runpod, ~/.oci, or ~/.sky."""
-        _run(tmp_path, R2_ENV, "--provider", "local")
-        assert (tmp_path / ".cloudflare" / "r2.credentials").is_file()
-        assert (tmp_path / ".cloudflare" / "accountid").is_file()
-        assert not (tmp_path / ".runpod").exists()
-        assert not (tmp_path / ".oci").exists()
-        assert not (tmp_path / ".sky").exists()
+    def test_oci_does_not_touch_sky_config(self, tmp_path: Path) -> None:
+        """OCI provider must not write to ``~/.sky/config.yaml`` — SkyPilot's OCI backend defaults
+        to the root compartment when ``oci.default.compartment_ocid`` is unset, so the script has
+        nothing to upsert (see PR #876)."""
+        _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
+        assert not (tmp_path / ".sky" / "config.yaml").exists(), (
+            "OCI bootstrap should no longer touch ~/.sky/config.yaml"
+        )
 
-    def test_local_does_not_require_compute_provider_env(self, tmp_path: Path) -> None:
-        """Local provider succeeds with R2 vars alone — no RUNPOD_API_KEY, no OCI_*."""
-        result = _run(tmp_path, R2_ENV, "--provider", "local")
-        assert result.returncode == 0
+    def test_local_provider_is_rejected(self, tmp_path: Path) -> None:
+        """The script no longer supports ``--provider local`` — the launcher skips this script for
+        that case and the CI workflow writes the controller-resource shrink directly.
+
+        Passing ``local`` must fail loudly so a stale caller doesn't silently
+        no-op.
+        """
+        result = _run(tmp_path, R2_ENV, "--provider", "local", expect_success=False)
+        assert result.returncode != 0
+        assert "local" in result.stderr.lower() or "unknown" in result.stderr.lower()
 
     def test_unknown_provider_fails(self, tmp_path: Path) -> None:
         """An unknown --provider value (e.g. aws) is rejected with a clear error."""
