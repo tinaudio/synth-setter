@@ -105,20 +105,20 @@ token is expired or doesn't grant access to the repo you're querying.
 
 ### Gotcha: bash evaluation order with `-s KEY=$VAR`
 
-`act -s KEY=value` and `act --secret-file …` work equivalently — *as long as
+`act -s KEY=value` and `act --secret-file ...` work equivalently — *as long as
 the shell evaluates `value` correctly at the call site*. The trap is the bash
 assignment-on-command-line form:
 
 ```bash
 # WRONG — $TOKEN expands to empty in the parent shell, so act gets -s GITHUB_TOKEN=
-TOKEN="$(gh auth token)" act … -s "GITHUB_TOKEN=$TOKEN"
+TOKEN="$(gh auth token)" act pull_request -W .github/workflows/pr-metadata-gate.yaml -s "GITHUB_TOKEN=$TOKEN"
 
 # OK — assign first, then reference
 TOKEN="$(gh auth token)"
-act … -s "GITHUB_TOKEN=$TOKEN"
+act pull_request -W .github/workflows/pr-metadata-gate.yaml -s "GITHUB_TOKEN=$TOKEN"
 
 # OK — substitute inline so the value is captured before act sees the flag
-act … -s "GITHUB_TOKEN=$(gh auth token)"
+act pull_request -W .github/workflows/pr-metadata-gate.yaml -s "GITHUB_TOKEN=$(gh auth token)"
 ```
 
 If `secrets.GITHUB_TOKEN` ends up empty inside the workflow, `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable` fires from any step that calls `gh`. Check your shell invocation
@@ -225,7 +225,7 @@ You can also hard-code the override in `~/.config/act/actrc` if `gh`-using
 workflows are the common case for you.
 
 If the build fails with `containerd.sock: timeout` against the BuildKit
-backend, fall back to the classic builder: `DOCKER_BUILDKIT=0 docker build …`.
+backend, fall back to the classic builder: `DOCKER_BUILDKIT=0 docker build ...`.
 
 ## Examples
 
@@ -303,7 +303,7 @@ act <event> -W .github/workflows/<file> -n
 1. Re-run with `-v` (verbose) — surfaces the docker commands `act` issues and
    the per-step env it builds.
 2. Re-run with `--reuse` — keeps the container around after the job ends so
-   you can `docker exec -it <act-…> bash` and poke at filesystem / installed
+   you can `docker exec -it <act-...> bash` and poke at filesystem / installed
    tools.
 3. Compare to the real CI run on github.com. If a step passes there and fails
    under `act`, the diff is usually one of: image contents (gh, gcc, etc.),

@@ -2,9 +2,11 @@ name: Verify act setup
 
 # Regression guard for the local `act` setup documented in
 # docs/operations/running-workflows-locally.md. The runbook is the contract
-# the rest of the team relies on; if `.actrc`, the runner Dockerfile, or any
-# workflow YAML drifts in a way that breaks `act`, this job fails before the
-# next contributor wastes 20 minutes discovering it locally.
+# the rest of the team relies on; if any file listed in `paths:` below drifts
+# in a way that breaks `act` (the `.actrc` mappings, the runner Dockerfile,
+# this guard itself, or the data-pipeline workflows the guard dry-runs),
+# this job fails before the next contributor wastes 20 minutes discovering
+# it locally.
 
 on:
   pull_request:
