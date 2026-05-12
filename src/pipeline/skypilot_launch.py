@@ -75,12 +75,8 @@ _DOCKER_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 # templates pass this verbatim into `git fetch + checkout` inside the container.
 _WORKER_GIT_REF_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
-# Validates --job-name. The value is interpolated into a local filename under
-# $TMPDIR and into an R2 object key before SkyPilot itself ever sees it, so it
-# has to be path-separator-free and short. The pattern matches a kubernetes-
-# style label (alphanumeric start, alphanumerics/underscore/dash, ≤63 chars),
-# which is also a strict subset of what SkyPilot's own cluster-name validation
-# accepts.
+# Validates --job-name (and the derived fallback): k8s-label subset — interpolated into a
+# tempfile path and an R2 key, so path-separator-free and ≤63 chars. See #876.
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 
 # Forwarded via task.update_envs; each resolved from .env then process env.
@@ -360,7 +356,9 @@ def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
             local_path,
             rclone_dest,
         ]
-        subprocess.check_call(args)  # noqa: S603 — local tempfile path + R2 dest from job_name validated against _JOB_NAME_RE in main()
+        # S603 safe: local tempfile path + R2 dest whose job_name is _JOB_NAME_RE-validated
+        # in main() before this function is ever called.
+        subprocess.check_call(args)  # noqa: S603
     finally:
         Path(local_path).unlink(missing_ok=True)
     return spec_uri
@@ -429,8 +427,9 @@ def _warn_if_deprecated_cluster_name() -> None:
     help=(
         "Managed-job name (used both as the SkyPilot job identifier and as the R2 key "
         "prefix for the per-launch spec upload). Default: "
-        "synth-setter-smoke-<spec.task_name[:8]>. Multi-worker fan-out appends `-r{i}` per "
-        "rank. Must match [A-Za-z0-9][A-Za-z0-9_-]{0,62}. Alias: --cluster-name (deprecated)."
+        "synth-setter-smoke-<first 8 chars of spec.task_name>. Multi-worker fan-out appends "
+        "`-r{i}` per rank. Must match [A-Za-z0-9][A-Za-z0-9_-]{0,62}. "
+        "Alias: --cluster-name (deprecated)."
     ),
 )
 @click.option(
@@ -561,6 +560,15 @@ def main(
     resolved_num_workers = num_workers if num_workers is not None else 1
 
     base_job_name = job_name or f"synth-setter-smoke-{spec.task_name[:8]}"
+    # Re-validate the derived default: spec.task_name is only checked for non-blank, so a
+    # value containing `/` or `..` would otherwise propagate into the local tempfile path
+    # and the R2 object key (path-traversal hardening).
+    if not _JOB_NAME_RE.fullmatch(base_job_name):
+        raise click.ClickException(
+            f"derived job name {base_job_name!r} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,62}} "
+            "(spec.task_name contains characters not allowed in a job name; "
+            "pass --job-name explicitly or fix spec.task_name)"
+        )
 
     # Per-job filename so parallel launches (CI matrix, local dev concurrent with CI on
     # the same host) don't clobber one another's spec.
@@ -570,18 +578,7 @@ def main(
     local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Materialized spec to {local_spec_path}")
 
-    # Cred bootstrap is launcher-host scoped (writes ~/.cloudflare/, ~/.runpod/,
-    # ~/.oci/) and runs once per launcher invocation. Provider auto-detected
-    # from the template's `resources.cloud`. Subprocess inherits os.environ +
-    # any --env-file values; bootstrap script captures stdout (which it never
-    # emits anyway by design) so a tee'd caller workflow can't leak secrets.
-    #
-    # Runs BEFORE `upload_spec_to_r2` so a bootstrap failure (e.g. missing
-    # provider env) fails the launcher fast without polluting R2 with a spec
-    # that no worker will ever consume.
-    #
-    # Local provider (kind) needs no compute creds and the CI workflow writes
-    # the managed-jobs controller-resource shrink directly — skip the bootstrap.
+    # Local provider (kind) needs no compute creds; CI writes the controller-resource shrink. See #876.
     provider = _detect_provider(template_path)
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
@@ -599,7 +596,7 @@ def main(
     # runner. Calling `sky.check.check` in-process before launch is the documented
     # workaround (test-skypilot-local.yml). RunPod/OCI source creds from disk on every launch.
     if provider == "local":
-        # Deferred so non-kubernetes runs (RunPod / OCI) skip the submodule import entirely.
+        # Deferred so non-kubernetes runs (RunPod / OCI) skip the sky.check submodule import.
         import sky.check
 
         sky.check.check(clouds=["kubernetes"], quiet=False)
@@ -638,7 +635,9 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
 
     SkyPilot's OCI backend rejects ``image_id: docker:<image>`` — that path runs the worker via
     a sub-docker invocation inside the YAML's run: block and consumes WORKER_IMAGE from env, so
-    OCI Resources are left untouched here.
+    OCI Resources entries are left unmodified. The function unconditionally rebuilds the Task's
+    resources collection via ``task.set_resources(...)`` even when no entry was mutated, so
+    callers (and mock-based test readers) should expect that call regardless of provider mix.
     """
     from sky.clouds import OCI
 

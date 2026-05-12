@@ -86,12 +86,13 @@ compute_config: null
 
 ### 4.1 SkyPilot YAML configs (`configs/compute/`)
 
-The smoke pipeline ships two real templates:
+The smoke pipeline ships three real templates:
 
 ```
 configs/compute/
 ├── runpod-template.yaml      # RunPod GPU (primary smoke target)
-└── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
+├── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
+└── local-template.yaml       # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
 ```
 
 Both share the launcher (`src/pipeline/skypilot_launch.py`),

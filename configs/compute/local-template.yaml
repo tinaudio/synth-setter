@@ -13,7 +13,7 @@
 # defaults of cpus=4+/mem=4x/disk_size=50 don't fit on GHA's kind cluster,
 # and k8s rejects disk_size). See PR #876.
 # R2 still ships the materialized spec
-# (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`).
+# (`r2://<bucket>/skypilot-launcher-specs/<job>.json`).
 #
 # Image: `tinaudio/synth-setter:<worker-image-tag>` is loaded into the kind
 # cluster via `kind load docker-image` ahead of launch (CI does this; for

@@ -64,12 +64,15 @@ _capture_cluster_overview() {
 # the `skypilot` namespace and is captured separately by _capture_controller_pod.
 _capture_worker_pods() {
   # Portable to bash 3.2 (macOS /bin/bash) — `readarray` is bash 4+ only.
+  # `/^No resources/` skips kubectl's empty-namespace banner (older versions
+  # send it to stdout instead of stderr — without this filter, "No" gets
+  # treated as a pod name).
   local worker_pods=()
   local line
   while IFS= read -r line; do
     [[ -n "${line}" ]] && worker_pods+=("${line}")
   done < <(kubectl get pods -n default --no-headers 2>/dev/null \
-    | awk '$1 !~ /^sky-jobs-controller/ {print $1}')
+    | awk '/^No resources/ {next} $1 ~ /^sky-jobs-controller/ {next} {print $1}')
   if [[ ${#worker_pods[@]} -eq 0 ]]; then
     echo "no non-controller pods in default namespace at capture time" \
       > "${OUT_DIR}/describe-worker-none.txt"
@@ -88,15 +91,17 @@ _capture_worker_pods() {
 # — that's where SkyPilot writes the per-retry scheduling decisions.
 _capture_controller_pod() {
   local controller_line controller_ns controller_pod
+  # `$2 ~ /^sky-jobs-controller/` is column-aware (pod-name column) — a stray
+  # substring match in another column can't false-match. `print; exit` keeps
+  # head-1 semantics for the rare case of two matching rows.
   controller_line="$(kubectl get pods -A --no-headers 2>/dev/null \
-    | grep sky-jobs-controller | head -n1)"
+    | awk '$2 ~ /^sky-jobs-controller/ {print; exit}')"
   if [[ -z "${controller_line}" ]]; then
     echo "no sky-jobs-controller pod found" \
       > "${OUT_DIR}/describe-controller.txt"
     return 0
   fi
-  controller_ns="$(awk '{print $1}' <<<"${controller_line}")"
-  controller_pod="$(awk '{print $2}' <<<"${controller_line}")"
+  read -r controller_ns controller_pod _ <<<"${controller_line}"
   kubectl describe pod -n "${controller_ns}" "${controller_pod}" \
     > "${OUT_DIR}/describe-controller.txt" 2>&1 || true
   kubectl logs -n "${controller_ns}" "${controller_pod}" \
@@ -105,8 +110,16 @@ _capture_controller_pod() {
     > "${OUT_DIR}/logs-controller-previous.txt" 2>&1 || true
   # shellcheck disable=SC2016
   # ${HOME} and ${latest} must expand inside the controller pod, not the runner.
+  # `bash -c` (not `-lc`): no need to load profile/rc files for this payload.
   kubectl exec -n "${controller_ns}" "${controller_pod}" -c ray-node -- \
-    bash -lc 'set -euo pipefail; latest="$(ls -td "${HOME}/sky_logs/sky-"*/ 2>/dev/null | head -n1)"; if [[ -n "${latest}" ]]; then echo "=== ${latest}provision.log ==="; tail -400 "${latest}provision.log" 2>/dev/null; fi' \
+    bash -c '
+      set -euo pipefail
+      latest="$(ls -td "${HOME}/sky_logs/sky-"*/ 2>/dev/null | head -n1)"
+      if [[ -n "${latest}" ]]; then
+        echo "=== ${latest}provision.log ==="
+        tail -400 "${latest}provision.log" 2>/dev/null
+      fi
+    ' \
     > "${OUT_DIR}/controller-provision-log.txt" 2>&1 || true
 }
 

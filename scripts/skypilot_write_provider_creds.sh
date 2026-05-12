@@ -1,6 +1,6 @@
 #!/bin/bash
 # Bootstrap SkyPilot R2 + per-provider creds to disk before `sky check` /
-# `sky.launch`. No stdout output by design (safe for tee'd contexts).
+# `sky.jobs.launch`. No stdout output by design (safe for tee'd contexts).
 #
 # Providers (gated on --provider runpod | oci): the local (kubernetes / kind)
 # provider needs no compute auth — the launcher skips this script for that

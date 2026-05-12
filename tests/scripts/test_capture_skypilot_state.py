@@ -180,6 +180,18 @@ exit 0
 """
 
 
+# Mimics older kubectl versions that print the "No resources found" banner to
+# *stdout* instead of stderr. Without an explicit filter, the script's awk
+# pipeline would pick up "No" as the pod name and write describe-worker-No.txt.
+_NO_RESOURCES_BANNER_SHIM = r"""
+if [[ "$1" == "get" && "$2" == "pods" && "$3" == "-n" && "$4" == "default" && "$5" == "--no-headers" ]]; then
+  printf 'No resources found in default namespace.\n'
+  exit 0
+fi
+exit 0
+"""
+
+
 class TestWorkerPodCapture:
     """Worker pods (non-controller pods in default namespace) get per-pod describe files."""
 
@@ -218,6 +230,28 @@ class TestWorkerPodCapture:
         sentinel = run_dir / "k8s_state" / "describe-worker-none.txt"
         assert sentinel.exists()
         assert "no non-controller pods" in sentinel.read_text()
+
+    def test_no_resources_banner_does_not_become_pod_name(self, tmp_path: Path) -> None:
+        """Older kubectl prints "No resources found ..." on stdout when the namespace is empty.
+
+        The script must filter that line out of the worker-pod list — otherwise the awk
+        pipeline picks up "No" as a pod name and writes ``describe-worker-No.txt``.
+        Equivalent to the empty-namespace case: the sentinel is written instead.
+
+        :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
+            RUN_METADATA_DIR.
+        """
+        shim_dir = tmp_path / "shims"
+        shim_dir.mkdir()
+        _write_kubectl_shim(shim_dir / "kubectl", _NO_RESOURCES_BANNER_SHIM)
+        run_dir = tmp_path / "run-meta"
+        _run(shim_dir, run_dir, home=tmp_path)
+
+        out_dir = run_dir / "k8s_state"
+        assert not (out_dir / "describe-worker-No.txt").exists()
+        # "No" must not have leaked through under any spelling.
+        assert not list(out_dir.glob("describe-worker-No*"))
+        assert (out_dir / "describe-worker-none.txt").exists()
 
 
 # ---------------------------------------------------------------------------

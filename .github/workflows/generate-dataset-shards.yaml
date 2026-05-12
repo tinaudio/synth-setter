@@ -243,7 +243,7 @@ jobs:
       # let the `if: always()` `Snapshot sky logs` step run, instead of
       # burning the full 60-min job timeout before logs are uploaded.
       # NOTE: step-level timeout sends SIGKILL — Python `finally` blocks in the
-      # launcher are bypassed. Operators may need `sky jobs cancel --name <cluster>`
+      # launcher are bypassed. Operators may need `sky jobs cancel --name <job-name>`
       # manually after a timeout. See #876.
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}

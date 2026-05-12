@@ -1020,6 +1020,57 @@ class TestJobNameValidation:
         assert result.exit_code == 0, result.output
         assert mock_sky.jobs.launch.call_args.kwargs["name"] == good_name
 
+    def test_derived_default_name_with_bad_task_name_is_rejected(
+        self,
+        experiment: str,
+        fake_plugin: Path,
+        template_yaml: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If ``--job-name`` is not passed and ``spec.task_name`` contains characters not allowed
+        in a managed-job name (e.g. ``/`` or ``..``), the launcher must reject the derived default
+        *before* writing the spec or invoking sky — path-traversal hardening for the local tempfile
+        and the R2 object key."""
+        # Build a real DatasetSpec carrying a task_name with a path separator and have
+        # the launcher's hydra-compose helper hand it back to main().
+        bad_spec = DatasetSpec.model_validate(
+            {
+                "task_name": "foo/bar",  # `:8` slice → "foo/bar" — fails _JOB_NAME_RE
+                "output_format": "hdf5",
+                "train_val_test_sizes": [1, 0, 0],
+                "base_seed": 0,
+                "r2_bucket": "intermediate-data",
+                "render": {
+                    "plugin_path": str(fake_plugin),
+                    "preset_path": "presets/surge-base.vstpreset",
+                    "param_spec_name": "surge_simple",
+                    "renderer_version": "1.3.4",
+                    "sample_rate": 16000,
+                    "channels": 2,
+                    "velocity": 100,
+                    "signal_duration_seconds": 4.0,
+                    "min_loudness": -55.0,
+                    "sample_batch_size": 1,
+                    "batch_per_shard": 1,
+                },
+            }
+        )
+        monkeypatch.setattr(
+            "src.pipeline.skypilot_launch._compose_dataset_spec",
+            lambda *_a, **_k: bad_spec,
+        )
+
+        result = _invoke(experiment, template_yaml, env_file, fake_plugin=fake_plugin)
+
+        assert result.exit_code != 0
+        assert "derived job name" in result.output
+        assert list(local_spec_dir.glob("*.json")) == []
+        mock_sky.jobs.launch.assert_not_called()
+
 
 class TestNoTailMode:
     """Default `--no-tail` mode: submit each rank, print job_id + the `sky jobs logs` / `sky jobs
@@ -1487,7 +1538,7 @@ class TestNumWorkersFanOut:
             experiment,
             template_yaml,
             env_file,
-            "--cluster-name",
+            "--job-name",
             "smoke-job-1",
             "--num-workers",
             "3",
