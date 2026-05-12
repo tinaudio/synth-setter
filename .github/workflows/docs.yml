@@ -66,23 +66,42 @@ jobs:
         run: mkdocs build --strict
 
       # gh-pages is the benchmark-action's persistence layer; only its
-      # dev/bench/ subtree is republished by the next step. continue-on-error
-      # so a fresh repo (no gh-pages branch yet) deploys docs without bench.
+      # dev/bench/ subtree is republished by the next step. The probe lets a
+      # fresh repo (no gh-pages branch yet) deploy docs without bench while
+      # still failing the workflow loudly on transient checkout errors —
+      # `continue-on-error: true` on the checkout itself would also swallow
+      # network / auth failures, not just a missing branch.
+      - name: Probe gh-pages branch existence
+        id: probe_ghpages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/branches/gh-pages" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Fetch benchmark history from gh-pages data branch
+        if: steps.probe_ghpages.outputs.exists == 'true'
         uses: actions/checkout@v6
         with:
           ref: gh-pages
           path: gh-pages-data
-        continue-on-error: true
 
+      # rm -rf before cp avoids the cp -R nested-directory hazard: if
+      # site/dev/bench already exists (mkdocs emits there in the future, or
+      # this step is re-run), cp -R would create site/dev/bench/bench/.
       - name: Merge benchmark chart into site
+        if: steps.probe_ghpages.outputs.exists == 'true'
         run: |
           if [ -d gh-pages-data/dev/bench ]; then
+            rm -rf site/dev/bench
             mkdir -p site/dev
             cp -R gh-pages-data/dev/bench site/dev/bench
             echo "Merged benchmark chart into site/dev/bench"
           else
-            echo "No gh-pages-data/dev/bench/ found — skipping bench merge"
+            echo "gh-pages branch exists but has no dev/bench/ — skipping bench merge"
           fi
 
       - name: Configure Pages
