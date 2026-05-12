@@ -1382,8 +1382,12 @@ class TestOverrideImageId:
         assert all(r.image_id == "docker:tinaudio/synth-setter:test-tag" for r in new_resources)
 
     def test_oci_resource_left_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """An OCI Resources entry is passed through unchanged — no `.copy(image_id=...)`, and
-        `set_resources` is not called when nothing mutated."""
+        """An OCI Resources entry is passed through unchanged — no `.copy(image_id=...)`.
+
+        The helper always rebuilds `task.resources` from the original entries, so it may
+        call `set_resources`; what matters behaviorally is that the OCI entry is never
+        copied with a new image_id and is preserved verbatim in the rebuilt list.
+        """
         import sky.clouds
 
         class FakeOCI:
@@ -1397,7 +1401,9 @@ class TestOverrideImageId:
         _override_image_id(task, "tinaudio/synth-setter:test-tag")
 
         oci_res.copy.assert_not_called()
-        task.set_resources.assert_not_called()
+        if task.set_resources.called:
+            new_resources = list(task.set_resources.call_args.args[0])
+            assert new_resources == [oci_res]
 
 
 # ---------------------------------------------------------------------------

@@ -588,14 +588,12 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
 
     docker_ref = f"docker:{worker_image}"
     new_resources: list[sky.Resources] = []
-    mutated = False
     for res in task.resources:
         if isinstance(res.cloud, OCI):
             new_resources.append(res)
             continue
         new_resources.append(res.copy(image_id=docker_ref))
-        mutated = True
-    if mutated:
+    if new_resources:
         task.set_resources(type(task.resources)(new_resources))
 
 
