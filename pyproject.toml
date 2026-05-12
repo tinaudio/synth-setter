@@ -211,7 +211,6 @@ exclude = '''(?x)
   | ^src/train\.py$
   | ^src/utils/callbacks\.py$
   | ^src/utils/instantiators\.py$
-  | ^src/utils/pylogger\.py$
   | ^src/utils/rich_utils\.py$
   | ^src/utils/utils\.py$
   | ^tests/_baseline_worktree\.py$
