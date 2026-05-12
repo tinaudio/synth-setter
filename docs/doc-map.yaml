@@ -219,6 +219,17 @@ docs:
       - pattern: ".github/PULL_REQUEST_TEMPLATE.md"
         covers: "PR template structure, required sections"
 
+  # ── GitHub Actions reference (workflow catalog + secrets) ───────
+  - doc: docs/reference/github-actions.md
+    description: Workflow catalog, secrets table, dependency map, gotchas
+    sources:
+      - pattern: ".github/workflows/**"
+        covers: "Workflow catalog rows (purpose + gotcha), dependency map (workflow_call / workflow_run / artifact chains), secrets table. Per-workflow source-to-design-doc mappings live in their own doc entries (docker.md, training-pipeline.md, etc.); this entry catches drift when a workflow is added/removed/renamed and the reference doc forgets to update."
+      - pattern: ".github/workflows/docs.yml"
+        covers: "Phase 2 docs deploy: mkdocs build --strict on push to main + workflow_run completion of VST Slow Tests; GitHub Pages deploy via actions/deploy-pages@v4; environment: github-pages binding (only workflow using one); concurrency: pages serialization; gh-pages branch as benchmark-action data store (merged into site/dev/bench/ pre-deploy)."
+      - pattern: ".github/workflows/test-vst-slow.yml"
+        covers: "VST slow tests + benchmark-action publish to gh-pages branch (data store for the chart, served via the docs workflow's deploy step)."
+
   # ── Configuration reference ────────────────────────────────────
   - doc: docs/reference/configuration-reference.md
     description: Configuration architecture layers, cloud provider comparison, boundary rules, known gaps
