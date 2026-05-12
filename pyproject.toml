@@ -15,6 +15,35 @@ docs = [
   "griffe-pydantic",
 ]
 
+[tool.setuptools]
+# Phase 1 scaffold: enumerate packages explicitly so that the new
+# `synth_setter` package (physically at src/synth_setter/) is importable as
+# both `synth_setter` (the future canonical PEP src-layout name) AND as
+# `src.synth_setter` (the legacy name used during migration). The legacy
+# `src*` packages are listed here too because they're consumed via
+# `from src.X` at ~52 import sites today. Phases 2–5 rewrite those imports
+# and this list collapses to a `[tool.setuptools.packages.find]` with
+# `where = ["src"]`.
+packages = [
+  "synth_setter",
+  "src",
+  "src.data",
+  "src.data.components",
+  "src.data.vst",
+  "src.models",
+  "src.models.components",
+  "src.pipeline",
+  "src.pipeline.ci",
+  "src.pipeline.schemas",
+  "src.synth_setter",
+  "src.utils",
+]
+
+[tool.setuptools.package-dir]
+# Map the top-level `synth_setter` namespace to its physical location at
+# src/synth_setter/, so it is importable as `synth_setter` (PEP src-layout).
+# Other packages use the implicit root mapping (`src` lives at ./src, etc.).
+"synth_setter" = "src/synth_setter"
 
 
 [tool.pytest.ini_options]
@@ -43,6 +72,7 @@ markers = [
   "infra: tests that assert invariants of the devcontainer + GitHub Actions configuration",
 ]
 minversion = "6.0"
+pythonpath = ["src"]
 testpaths = "tests/"
 
 [tool.ruff]
