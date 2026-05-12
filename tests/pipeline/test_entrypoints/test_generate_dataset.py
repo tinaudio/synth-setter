@@ -1,4 +1,4 @@
-"""Tests for src/synth_setter/cli/generate_dataset.py — spec-driven run.
+"""Tests for synth_setter.cli.generate_dataset — spec-driven run.
 
 The entrypoint's public surface is a single ``run(spec)`` function that:
   1. Serializes the spec to a tempfile.

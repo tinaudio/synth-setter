@@ -86,11 +86,8 @@ PREDICT_SCRIPTS: tuple[str, ...] = (
 # Update on PR merge: MODEL_BASELINE bumps when a published-results-relevant
 # config change lands and a new release tag is cut.
 FIXTURE_BASELINE = "1bfa7ea9c4b237a4561a9ac546a3e241ecff5951"  # PR #679 merge commit on main
-# Bumped from v0.0.0 (= 79552d2) for #989 (Phase 2 src-layout migration). All
-# `_target_:` keys in configs/ moved from `src.X` to `synth_setter.X`, and
-# jobs/train/{kosc,surge}/train.sh switched from `python src/train.py` to
-# `python -m synth_setter.cli.train`. The bump is to the head of the Phase 2 PR
-# so the resolved Hydra YAMLs on both sides reference the new module paths.
+# Pinned to the initial commit of the Phase 2 src-layout migration (#989) — re-bump to
+# a post-merge tag once #989 lands on main.
 MODEL_BASELINE = "4e0895090f193464a1b716b50e0b2e10a55be2dd"
 
 

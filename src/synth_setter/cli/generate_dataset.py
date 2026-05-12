@@ -27,6 +27,7 @@ from omegaconf import DictConfig, OmegaConf
 # ``synth_setter/cli/train.py`` / ``synth_setter/cli/eval.py``.
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
+# TODO(#784): collapse to synth_setter.pipeline.* once Phase 3 hoists src/pipeline/.
 from src.pipeline import r2_io  # noqa: E402
 from src.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
 from src.pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
