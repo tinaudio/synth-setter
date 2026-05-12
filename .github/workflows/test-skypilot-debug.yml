@@ -345,7 +345,9 @@ jobs:
       # honestly mirroring what a developer would have on their laptop.
       - name: Install launcher deps (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
-        run: pip install -r requirements-app.txt
+        run: |
+          pip install -r requirements-app.txt
+          pip install -e .
 
       # The launcher's `upload_spec_to_r2` shells out to `rclone copyto` to
       # ship the materialized spec to R2 (#749 mitigation). The dev-snapshot
