@@ -1,6 +1,6 @@
 FROM catthehacker/ubuntu:act-latest
 
-ARG DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN set -eux; \
     apt-get update; \

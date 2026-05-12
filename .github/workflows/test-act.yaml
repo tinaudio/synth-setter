@@ -54,7 +54,7 @@ jobs:
       # `act -l` parses every workflow file under .github/workflows/ and applies
       # the repo `.actrc` (runner-label mappings). It fails if any workflow YAML
       # is malformed, or if `.actrc` references an unknown flag.
-      - name: List workflows (parses every .yml + honors .actrc)
+      - name: List workflows (parses every .yml/.yaml + honors .actrc)
         run: act -l
 
       # `act -n` (dry-run) resolves action references in addition to parsing,
