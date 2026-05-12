@@ -4,13 +4,21 @@ name: Test OCI Image Bake
 # template. Dispatches the (yet-to-land) oci-image-bake.yaml on the PR
 # branch with a PR-scoped display name, waits for it to finish, then
 # verifies the resulting OCI custom image is registered in the target
-# compartment. Always cleans up the PR-scoped image at the end so PR
-# pushes don't accumulate billable boot-image artifacts.
+# compartment. Best-effort cleanup of the PR-scoped image at the end:
+# the verify job's cleanup step runs under `always()` and re-resolves
+# the OCID by display-name so a leaked image still gets reaped even if
+# the in-step lookup failed. Cleanup itself is best-effort (it can be
+# missed if the gate is cancelled before verify runs, or if OCI is
+# transiently unreachable); a periodic out-of-band sweep is the
+# backstop for true "always cleans up" semantics.
 #
 # Cost: each run dispatches a real bake — billable OCI VM time
 # (~30–90 min per run) plus a transient OCI custom image. Concurrency
-# cancels in-progress runs on rapid pushes. Fork PRs are skipped because
-# OCI secrets aren't exposed to them.
+# cancels in-progress runs of *this* gate on rapid pushes; the gate
+# also explicitly cancels the dispatched bake run on its own
+# cancellation/failure so an orphan bake doesn't keep burning OCI VM
+# time after the gate goes away. Fork PRs are skipped because OCI
+# secrets aren't exposed to them.
 #
 # Inert until #927 lands oci-image-bake.yaml. The bake workflow it
 # dispatches is workflow_dispatch-only and produces an OCI custom image
@@ -54,7 +62,8 @@ jobs:
           short_sha="${HEAD_SHA:0:7}"
           echo "name=synth-setter-pr${PR_NUMBER}-${short_sha}" >> "$GITHUB_OUTPUT"
 
-      - name: Dispatch oci-image-bake on PR branch and wait
+      - name: Dispatch oci-image-bake on PR branch
+        id: dispatch
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_NAME: ${{ steps.compute_name.outputs.name }}
@@ -80,8 +89,29 @@ jobs:
             echo "ERROR: dispatched bake run did not appear within 60s" >&2
             exit 1
           fi
-          echo "Watching bake run $run_id ..."
-          gh run watch "$run_id" --exit-status
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for bake to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          echo "Watching bake run $RUN_ID ..."
+          gh run watch "$RUN_ID" --exit-status
+
+      - name: Cancel orphan bake on gate cancel/failure
+        if: ${{ always() && steps.dispatch.outputs.run_id != '' && (cancelled() || failure()) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          status=$(gh run view "$RUN_ID" --json status --jq .status 2>/dev/null || echo "unknown")
+          if [ "$status" != "completed" ]; then
+            echo "Cancelling orphan bake run $RUN_ID (gate is $status)"
+            gh run cancel "$RUN_ID" || echo "cancel failed (non-fatal)"
+          fi
 
   verify-image-exists:
     needs: trigger-bake
@@ -113,12 +143,19 @@ jobs:
             exit 1
           fi
           echo "Found baked image: $ocid"
-          echo "ocid=$ocid" >> "$GITHUB_OUTPUT"
 
-      - name: Cleanup PR-scoped image
-        if: ${{ always() && steps.lookup.outputs.ocid != '' }}
-        env:
-          IMAGE_OCID: ${{ steps.lookup.outputs.ocid }}
+      - name: Cleanup PR-scoped image (best-effort)
+        if: ${{ always() }}
         run: |
-          set -euo pipefail
-          oci compute image delete --image-id "$IMAGE_OCID" --force
+          set -uo pipefail
+          ocid=$(oci compute image list \
+            --compartment-id "$COMPARTMENT_OCID" \
+            --display-name "$IMAGE_NAME" \
+            --query 'data[0].id' --raw-output 2>/dev/null || echo "")
+          if [ -n "$ocid" ] && [ "$ocid" != "null" ]; then
+            echo "Cleaning up image $ocid"
+            oci compute image delete --image-id "$ocid" --force \
+              || echo "Cleanup of $ocid failed (non-fatal — periodic sweep is the backstop)"
+          else
+            echo "No image found by display-name $IMAGE_NAME — nothing to clean up"
+          fi
