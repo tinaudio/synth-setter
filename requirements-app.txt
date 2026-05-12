@@ -19,6 +19,10 @@ pyyaml
 skypilot[runpod,oci]==0.12.0
 structlog
 tenacity
+# tomli is the py3.10 fallback for stdlib `tomllib` (py3.11+); used by
+# scripts/check_no_new_funcs_in_pydoclint_excluded.py in code-quality-pr CI.
+# Pinned explicitly so the guard doesn't rely on a transitive pytest/runpod dep.
+tomli; python_version < "3.11"
 webdataset
 
 # --------- others --------- #

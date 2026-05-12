@@ -28,14 +28,14 @@ PYDOCLINT_EXCLUDE_REGEX = r"""(?x)
 """
 
 
-def test_extract_exclude_regex_reads_pydoclint_table(tmp_path: Path) -> None:
+def test_extract_exclude_regex_reads_pydoclint_table(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
     """The regex is loaded from the project's pyproject.toml verbatim."""
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[tool.pydoclint]\nexclude = '''" + PYDOCLINT_EXCLUDE_REGEX + "'''\n")
     assert guard.load_exclude_regex(pyproject).pattern == PYDOCLINT_EXCLUDE_REGEX
 
 
-def test_extract_exclude_regex_errors_when_pyproject_lacks_section(tmp_path: Path) -> None:
+def test_extract_exclude_regex_errors_when_pyproject_lacks_section(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
     """A pyproject without the pydoclint section is a configuration error, not a silent pass."""
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[project]\nname = 'demo'\n")
@@ -173,7 +173,27 @@ def test_find_new_defs_ignores_addition_in_test_diff_artifact() -> None:
     assert guard.find_new_defs_in_excluded(diff, regex) == []
 
 
-def test_main_exits_zero_when_no_findings(tmp_path: Path) -> None:
+def test_find_new_defs_does_not_count_no_newline_marker_toward_line_numbers() -> None:
+    r"""``\ No newline at end of file`` is diff metadata, not a file line — line numbers after the
+    marker must not be skewed."""
+    diff = (
+        "diff --git a/src/eval.py b/src/eval.py\n"
+        "--- a/src/eval.py\n"
+        "+++ b/src/eval.py\n"
+        "@@ -10,1 +10,3 @@\n"
+        " existing_line\n"
+        "\\ No newline at end of file\n"
+        "+def added_after_marker(x: int) -> int:\n"
+        "+    return x\n"
+    )
+    import re
+
+    regex = re.compile(PYDOCLINT_EXCLUDE_REGEX)
+    findings = guard.find_new_defs_in_excluded(diff, regex)
+    assert findings == [("src/eval.py", "added_after_marker", 11)]
+
+
+def test_main_exits_zero_when_no_findings(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
     """`main` exits 0 and prints nothing for a clean diff."""
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[tool.pydoclint]\nexclude = '''" + PYDOCLINT_EXCLUDE_REGEX + "'''\n")
@@ -189,7 +209,7 @@ def test_main_exits_zero_when_no_findings(tmp_path: Path) -> None:
     assert exit_code == 0
 
 
-def test_main_exits_one_and_prints_findings_when_violation_present(
+def test_main_exits_one_and_prints_findings_when_violation_present(  # noqa: DOC101,DOC103
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`main` exits 1 and reports each finding with file:line: name."""

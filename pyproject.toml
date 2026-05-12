@@ -61,29 +61,35 @@ select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001", "D102", "D103", "D107"]
 ignore = ["E501", "S101"]
 
 [tool.ruff.lint.per-file-ignores]
+# D102/D103/D107: per-file ignores for missing docstrings on the same legacy
+# files that pydoclint's [tool.pydoclint].exclude already lists. Mirrored as
+# explicit per-file entries (not directory globs) so new files under
+# scripts/, src/data/, etc. are not silently exempt. Shrinks as files are
+# cleaned up — tracked by #938.
 "notebooks/**" = ["E702", "E722", "F841", "T201", "ANN001"]
-"scripts/add_music2latent.py" = ["S605"]
-"scripts/compute_audio_metrics.py" = ["T201", "ANN001"]
+"scripts/add_music2latent.py" = ["S605", "D102", "D103", "D107"]
+"scripts/compute_audio_metrics.py" = ["T201", "ANN001", "D102", "D103", "D107"]
 "scripts/get_dataset_stats.py" = ["E402", "T201", "ANN001"]
 "scripts/make_sig_perf.py" = ["E402", "T201"]
 "scripts/model_from_wandb_repl.py" = ["E402"]
 "scripts/paramspec_to_table.py" = ["E402", "T201"]
 "scripts/plot_param2tok.py" = ["E402", "E741", "F841", "T201"]
-"scripts/predict_vst_audio.py" = ["E402", "F841"]
+"scripts/predict_vst_audio.py" = ["E402", "F841", "D102", "D103", "D107"]
 # S603/S606/S607: idle/passthrough use os.execvp by design — replace-process
 # semantics so Docker SIGTERM reaches the exec'd PID 1.
-"scripts/docker_entrypoint.py" = ["S603", "S606", "S607"]
+"scripts/docker_entrypoint.py" = ["S603", "S606", "S607", "D102", "D103", "D107"]
 # S603/S607: rclone subprocess calls use CLI args (user-controlled, not untrusted input).
 # T201: click.echo used for CLI output.
-"scripts/r2_shard_report.py" = ["S603", "S607", "T201"]
+"scripts/r2_shard_report.py" = ["S603", "S607", "T201", "D102", "D103", "D107"]
 "scripts/reshard_data.py" = ["T201"]
 # .claude/skills/_shared/post_review.py: CLI helper that shells out to `gh` and
 # prints html_url on success. S603/S607 are the bandit warnings for subprocess
 # with a partial path — `gh` is on PATH by design (same pattern used by the
 # scripts/r2_shard_report.py exemption above).
 ".claude/skills/_shared/post_review.py" = ["T201", "S603", "S607"]
-"scripts/rewrite_dataset_to_latest.py" = ["ANN001"]
-"scripts/subdir_funtime.py" = ["F841", "ANN001"]
+"scripts/rewrite_dataset_to_latest.py" = ["ANN001", "D102", "D103", "D107"]
+"scripts/subdir_funtime.py" = ["F841", "ANN001", "D102", "D103", "D107"]
+"scripts/surge_xt_interactive.py" = ["D102", "D103", "D107"]
 # S603/S607: rclone subprocess calls in R2 integration test fixtures.
 "tests/scripts/test_r2_shard_report.py" = ["S603", "S607"]
 # ANN001: pytest fixture-injected args left un-annotated on legacy callsites.
@@ -96,12 +102,15 @@ ignore = ["E501", "S101"]
 # ANN001: directory-wide ignore for legacy untyped function args under src/models/.
 # New code under src/models/ should still annotate; remove this entry once legacy
 # callsites are cleaned up.
-# D102/D103/D107: directory-wide ignore for missing docstrings on the same legacy
-# files that pydoclint's [tool.pydoclint].exclude already lists. Shrinks as files
-# are cleaned up — tracked by #938.
 "src/models/**" = ["ANN001", "D102", "D103", "D107"]
-"src/data/**" = ["D102", "D103", "D107"]
-"scripts/**" = ["D102", "D103", "D107"]
+"src/data/audio_datamodule.py" = ["D102", "D103", "D107"]
+"src/data/fm_datamodule.py" = ["D102", "D103", "D107"]
+"src/data/kosc_datamodule.py" = ["D102", "D103", "D107"]
+"src/data/ksin_datamodule.py" = ["D102", "D103", "D107"]
+"src/data/surge_datamodule.py" = ["D102", "D103", "D107"]
+"src/data/vst/core.py" = ["D102", "D103", "D107"]
+"src/data/vst/generate_vst_dataset.py" = ["D102", "D103", "D107"]
+"src/data/vst/param_spec.py" = ["D102", "D103", "D107"]
 "src/metrics.py" = ["D102", "D103", "D107"]
 "src/utils/callbacks.py" = ["F821", "T201", "ANN001", "D102", "D103", "D107"]
 "src/utils/math.py" = ["ANN001", "D102", "D103", "D107"]
@@ -225,7 +234,6 @@ exclude = '''(?x)
   | ^tests/pipeline/test_schemas/test_image_config\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
   | ^tests/infra/
-  | ^tests/scripts/test_check_no_new_funcs_in_pydoclint_excluded\.py$
   | ^tests/scripts/test_compute_audio_metrics\.py$
   | ^tests/scripts/test_r2_shard_report\.py$
   | ^tests/scripts/test_skypilot_write_provider_creds\.py$

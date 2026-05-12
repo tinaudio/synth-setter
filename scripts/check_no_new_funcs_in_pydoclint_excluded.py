@@ -97,6 +97,10 @@ def find_new_defs_in_excluded(
             continue
         if raw_line.startswith("-"):
             continue
+        # "\ No newline at end of file" is a diff metadata marker, not a real file line —
+        # don't count it toward current_line or it would skew the reported line numbers.
+        if raw_line.startswith("\\"):
+            continue
         if current_line is not None:
             current_line += 1
     return findings
