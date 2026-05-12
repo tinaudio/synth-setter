@@ -21,10 +21,7 @@ import rootutils
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
-# Set PROJECT_ROOT env var and add the repo root to sys.path so
-# ``configs/paths/default.yaml``'s ``root_dir: ${oc.env:PROJECT_ROOT}`` interpolation
-# resolves under ``python -m synth_setter.cli.generate_dataset``. Mirrors
-# ``synth_setter/cli/train.py`` / ``synth_setter/cli/eval.py``.
+# Bootstrap PROJECT_ROOT + sys.path — see https://github.com/ashleve/rootutils.
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 # TODO(#784): collapse to synth_setter.pipeline.* once Phase 3 hoists src/pipeline/.
