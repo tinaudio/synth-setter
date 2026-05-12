@@ -376,15 +376,12 @@ class TestProviderGating:
     @pytest.mark.parametrize(
         "bad_content_writer,expected_reason",
         [
-            # Top level isn't a mapping (e.g. a YAML list from a hand-edit gone wrong) — the
-            # `isinstance(existing, dict)` guard must catch this with a clear named error rather
-            # than a bare `TypeError` from `existing[key] = ...`.
+            # Top level is a YAML list, not a mapping — caught by the `isinstance(existing, dict)`
+            # guard (would otherwise hit `TypeError` from `existing[key] = ...`).
             (lambda p: p.write_text("- accidentally\n- a list\n"), "not a YAML mapping"),
-            # Unparsable YAML (unbalanced flow sequence → ScannerError) — caught by the
-            # `yaml.YAMLError` guard around `yaml.safe_load`.
+            # Unbalanced flow sequence → ScannerError — caught by the `yaml.YAMLError` guard.
             (lambda p: p.write_text("oci: [unterminated\n"), "not valid YAML"),
-            # Latin-1 byte that's invalid as the start of a UTF-8 sequence — caught by the
-            # `UnicodeDecodeError` guard around `Path.read_text`.
+            # Invalid UTF-8 start byte — caught by the `UnicodeDecodeError` guard.
             (lambda p: p.write_bytes(b"\xff\xfe oci: foo\n"), "not valid UTF-8"),
         ],
         ids=["not_a_mapping", "unparsable_yaml", "non_utf8"],
