@@ -68,6 +68,14 @@ For GitHub Actions concepts, see [GitHub's docs](https://docs.github.com/en/acti
 
 - `auto-approve` triggers on completion of: `Tests`, `Code Quality PR`
 
+**Check-run triggers (`check_run`):**
+
+- `auto-approve` triggers on completion of any check-run on a PR commit (covers all CI workflows beyond the two listed under `workflow_run`, including ones added later). Self-loop on its own `Auto-approve status` check-run is suppressed by a job-level `if:` guard.
+
+**Scheduled triggers (`schedule`):**
+
+- `auto-approve` runs hourly (`0 * * * *`) as a safety net. Catches blockers that clear without firing any workflow event — most notably, Copilot review threads being resolved (GitHub does not expose `pull_request_review_thread` as a workflow trigger). On a scheduled run the `discover` job enumerates every open eligible PR and the `auto-approve` matrix re-evaluates each.
+
 **Artifact chains (`upload-artifact` → `download-artifact`):**
 
 - `test-dataset-generation` still writes a per-provider `test-run-metadata-<provider>` artifact for failure debugging, but the `validate-dataset-shards` jobs no longer consume it — they read the spec from R2 at `r2://<bucket>/skypilot-launcher-specs/<cluster_name>.json` (the `spec_uri` output of `generate-dataset-shards`, or the same path written by the inline `local` cell's explicit upload step).
