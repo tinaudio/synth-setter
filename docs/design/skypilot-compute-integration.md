@@ -95,7 +95,7 @@ configs/compute/
 └── local-template.yaml       # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
 ```
 
-Both share the launcher (`src/pipeline/skypilot_launch.py`),
+All three share the launcher (`src/pipeline/skypilot_launch.py`),
 the `dev-snapshot` Docker image, the R2-uploaded spec contract, and the
 unified click-CLI dispatch (`scripts/docker_entrypoint.py generate_dataset`,
 which carries the `os._exit(0)` defensive workaround for #735 inline).
