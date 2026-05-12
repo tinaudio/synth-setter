@@ -277,7 +277,7 @@ jobs:
                   "setup did not complete so the boot volume is not bake-ready"
               )
 
-          records = sky.stream_and_get(sky.status([cluster], refresh=False))
+          records = sky.stream_and_get(sky.status([cluster], refresh=sky.StatusRefreshMode.NONE))
           if not records:
               raise SystemExit(f"[bake] sky.status returned no record for cluster {cluster}")
           name_on_cloud = getattr(records[0], "cluster_name_on_cloud", None)
