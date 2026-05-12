@@ -14,6 +14,9 @@ on:
       - ".actrc"
       - "docs/operations/act-runner.Dockerfile"
       - ".github/workflows/test-act.yaml"
+      - ".github/workflows/test-dataset-generation.yml"
+      - ".github/workflows/generate-dataset-shards.yaml"
+      - ".github/workflows/validate-dataset-shards.yaml"
   workflow_dispatch:
 
 permissions:
