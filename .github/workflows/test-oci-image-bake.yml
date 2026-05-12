@@ -9,8 +9,15 @@ name: Test OCI Image Bake
 # expose a workflow_call interface accepting an `image_tag` string input
 # and to publish the image at tinaudio/synth-setter:<image_tag> — the same
 # repository convention used by spec-materialization.yml and push-to-ocir.yml.
-# This file ships as a contract-first gate: until #921 lands the bake
-# workflow, this workflow's path filter never matches and it stays inert.
+# This file ships as a contract-first gate: edits to either this workflow
+# or the bake workflow trigger it. Until #921 lands oci-image-bake.yaml the
+# `bake` job will fail at workflow resolution; that's the intended signal.
+#
+# The image_tag includes the PR head SHA so each commit's bake produces a
+# distinct tag — without it, verify-pullable could pass against a stale
+# image left over from a previous bake on the same PR. Fork PRs are
+# skipped via job-level `if:` (same pattern as test-skypilot-local.yml)
+# since `secrets: inherit` can't deliver registry creds to a fork.
 
 on:
   pull_request:
@@ -27,19 +34,21 @@ permissions:
 
 jobs:
   bake:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     uses: ./.github/workflows/oci-image-bake.yaml
     with:
-      image_tag: pr-${{ github.event.pull_request.number }}
+      image_tag: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
     secrets: inherit
 
   verify-pullable:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     needs: bake
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Pull baked image
         env:
-          IMAGE_REF: tinaudio/synth-setter:pr-${{ github.event.pull_request.number }}
+          IMAGE_REF: tinaudio/synth-setter:pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           docker pull "$IMAGE_REF"
