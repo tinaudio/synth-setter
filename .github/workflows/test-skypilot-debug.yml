@@ -379,7 +379,7 @@ jobs:
           python -m src.pipeline.skypilot_launch \
             --experiment "$CONFIG_PATH" \
             --template "$TEMPLATE" \
-            --cluster-name "$CLUSTER_NAME" \
+            --job-name "$CLUSTER_NAME" \
             --tail \
             2>&1 | tee "$LOG_PATH"
 
@@ -422,7 +422,7 @@ jobs:
               python -m src.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
-                --cluster-name "$CLUSTER_NAME" \
+                --job-name "$CLUSTER_NAME" \
                 --tail
             ' \
             2>&1 | tee "$LOG_PATH"

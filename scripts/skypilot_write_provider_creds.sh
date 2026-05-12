@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Bootstrap SkyPilot R2 + per-provider creds to disk before `sky check` /
 # `sky.jobs.launch`. No stdout output by design (safe for tee'd contexts).
 #
