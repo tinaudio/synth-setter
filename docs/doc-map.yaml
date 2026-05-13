@@ -82,8 +82,8 @@ docs:
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Input spec filename constant"
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "DatasetSpec, RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, EXTENSION_TO_OUTPUT_FORMAT (Hydra-composed cfg → spec_from_cfg → DatasetSpec)"
-      - pattern: "src/pipeline/schemas/shard_metadata.py"
+        covers: "DatasetSpec, RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, EXTENSION_TO_OUTPUT_FORMAT (consumed by spec_from_cfg in cli/generate_dataset.py to build DatasetSpec from a Hydra-composed cfg)"
+      - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
         covers: "ShardMetadata — strict pydantic sidecar payload destined for the wds tar's metadata.json member; mirrors HDF5 audio attrs. Writer + validate_shard wds branch land in PR-13."
 
   # ── SkyPilot compute integration design doc ─────────────────────
