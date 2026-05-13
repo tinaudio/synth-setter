@@ -204,9 +204,7 @@ repos:
             jobs/render/render-audio\.sh|
             jobs/train/kosc/train\.sh|
             jobs/train/surge/train\.sh|
-            renderscript\.sh|
-            scripts/aggregate_samples\.sh|
-            scripts/get-ckpt-from-wandb\.sh
+            renderscript\.sh
           )$
 
   # makefile linter

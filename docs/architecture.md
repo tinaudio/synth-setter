@@ -74,20 +74,24 @@ original parameters.
 
 ```
 synth-setter/
-├── src/                    # ML code + entrypoints
-│   ├── train.py            #   Training entry point (Hydra)
-│   ├── eval.py             #   Evaluation entry point (Hydra)
-│   ├── generate_dataset.py #   Dataset-generation entry point (Hydra)
+├── src/synth_setter/       # PEP src-layout package (#784)
+│   ├── cli/                #   @hydra.main entrypoints (published as synth-setter-* console scripts)
+│   │   ├── train.py        #     Training entrypoint
+│   │   ├── eval.py         #     Evaluation entrypoint
+│   │   └── generate_dataset.py  # Dataset-generation entrypoint
 │   ├── metrics.py          #   Metric definitions
 │   ├── data/               #   DataModules (Surge, K-Sin, K-Osc, etc.)
 │   ├── models/             #   LightningModules (flow matching, FF, FlowVAE)
-│   │   └── components/     #   Model building blocks (VAE, networks)
+│   │   └── components/     #     Model building blocks (VAE, networks)
 │   ├── utils/              #   Logging, config helpers
-│   └── pipeline/           #   Distributed data pipeline
-│       ├── schemas/        #     Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
-│       ├── ci/             #     CI validation scripts (materialize_spec, validate_shard, validate_spec)
-│       ├── skypilot_launch.py  # SkyPilot launcher CLI
-│       └── constants.py    #     Shared constants (R2 bucket, spec filename)
+│   ├── pipeline/           #   Distributed data pipeline
+│   │   ├── schemas/        #     Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
+│   │   ├── ci/             #     CI validation scripts (materialize_spec, validate_shard, validate_spec)
+│   │   ├── data/           #     Dataset-shaping utilities (reshard, rewrite_to_latest, stats, r2_report, ...)
+│   │   ├── skypilot_launch.py  # SkyPilot launcher CLI
+│   │   └── constants.py    #     Shared constants (R2 bucket, spec filename)
+│   ├── evaluation/         #   predict_vst_audio, compute_audio_metrics (library code called by cli/eval.py)
+│   └── tools/              #   `python -m` utilities (surge_xt_interactive, plot_param2tok, docker_entrypoint, ...)
 │
 ├── configs/                # Hydra YAML configs (and SkyPilot Task templates under compute/)
 │   ├── dataset.yaml        #   Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)
@@ -101,11 +105,11 @@ synth-setter/
 │   ├── logger/             #   Logger configs (W&B, CSV, TensorBoard)
 │   └── train.yaml          #   Root training config
 │
-├── scripts/                # Standalone utility scripts
-├── tests/                  # Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)
+├── scripts/                # SkyPilot/CI shell tooling (skypilot/, ci/) — bare root is empty by design
+├── tests/                  # Test suite (mirrors src/synth_setter/ structure)
 ├── docs/                   # Documentation
 │   └── design/             #   Design documents
-└── docker/                 # Dockerfiles and entrypoints
+└── docker/                 # Dockerfiles and image-build helpers
 ```
 
 ## Key Design Decisions

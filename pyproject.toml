@@ -93,29 +93,13 @@ synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 
 
 
-[tool.setuptools]
-packages = [
-  "synth_setter",
-  "synth_setter.cli",
-  "synth_setter.data",
-  "synth_setter.data.components",
-  "synth_setter.data.vst",
-  "synth_setter.evaluation",
-  "synth_setter.models",
-  "synth_setter.models.components",
-  "synth_setter.pipeline",
-  "synth_setter.pipeline.ci",
-  "synth_setter.pipeline.data",
-  "synth_setter.pipeline.schemas",
-  "synth_setter.tools",
-  "synth_setter.utils",
-]
+[tool.setuptools.packages.find]
+# PEP src-layout: the only Python package this project ships is `synth_setter`,
+# living at src/synth_setter/. Setuptools discovers subpackages automatically.
+where = ["src"]
 
 [tool.setuptools.package-dir]
-# Map the top-level `synth_setter` namespace to its physical location at
-# src/synth_setter/, so it is importable as `synth_setter` (PEP src-layout).
-# Other packages use the implicit root mapping (`src` lives at ./src, etc.).
-"synth_setter" = "src/synth_setter"
+"" = "src"
 
 
 [tool.pytest.ini_options]
