@@ -64,12 +64,13 @@ def experiment(fake_plugin: Path) -> str:
     launcher's ``--experiment`` flag; ad-hoc Hydra overrides (e.g. ``render.plugin_path=...``) flow
     through ``_invoke``'s positional trailing args.
 
-    Uses ``runpod-smoke-shard`` (12 samples, 3 shards at batch_per_shard=4) for fast CI.
+    Uses ``generate_dataset/runpod-smoke-shard`` (12 samples, 3 shards at batch_per_shard=4)
+    for fast CI.
     """
     # fake_plugin is a fixture dep so the path is built before tests use it via
     # the plugin_path override threaded through _invoke.
     _ = fake_plugin
-    return "runpod-smoke-shard"
+    return "generate_dataset/runpod-smoke-shard"
 
 
 @pytest.fixture()
@@ -386,7 +387,7 @@ class TestMainCli:
             main,
             [
                 "--experiment",
-                "runpod-smoke-shard",
+                "generate_dataset/runpod-smoke-shard",
                 "--template",
                 str(template_yaml),
                 "--env-file",
@@ -480,7 +481,7 @@ class TestMainCli:
         spec = DatasetSpec.model_validate_json(spec_files[0].read_text())
         assert spec.git_sha == "abc123def456"
         assert spec.is_repo_dirty is False
-        # ``runpod-smoke-shard``: 12 samples / batch_per_shard=4 = 3 shards.
+        # ``generate_dataset/runpod-smoke-shard``: 12 samples / batch_per_shard=4 = 3 shards.
         assert spec.num_shards == 3
         assert spec.r2_bucket == "intermediate-data"
 

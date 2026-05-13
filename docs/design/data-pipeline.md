@@ -78,18 +78,18 @@ RunPod is used because it's the platform where GPUs are already available and co
 ```bash
 # 1. Pick an experiment config (filename = experiment id).
 #    Hydra composes the final DatasetSpec from configs/dataset.yaml + this overlay.
-cat configs/experiment/surge-simple-480k-10k.yaml
+cat configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 
 # 2. Run sequential multi-shard generation on a single worker.
-python -m synth_setter.cli.generate_dataset experiment=surge-simple-480k-10k
+python -m synth_setter.cli.generate_dataset experiment=generate_dataset/surge-simple-480k-10k
 # → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
 # **Planned CLI** — the distributed pipeline CLI (`python -m src.pipeline generate/status/finalize`)
 # is not yet implemented; `generate_dataset` is the current MVP, deprecated when
 # `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
-# python -m pipeline generate --experiment surge-simple-480k-10k --workers 10
+# python -m pipeline generate --experiment generate_dataset/surge-simple-480k-10k --workers 10
 # → Created run surge-simple-480k-10k-20260313T100000123Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
@@ -112,7 +112,7 @@ Make targets are thin aliases for convenience:
 > **Not yet implemented.** These `make` targets are planned but do not exist in the Makefile yet ([#72](https://github.com/tinaudio/synth-setter/issues/72)).
 
 ```bash
-make generate ARGS="--experiment surge-simple-480k-10k --workers 10"
+make generate ARGS="--experiment generate_dataset/surge-simple-480k-10k --workers 10"
 make status ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 ```
@@ -1373,7 +1373,7 @@ Pydantic is for trust boundaries — where data enters the system from an extern
 A run starts from a Hydra experiment YAML composed against `configs/dataset.yaml`:
 
 ```yaml
-# configs/experiment/surge-simple-480k-10k.yaml (filename = dataset_config_id)
+# configs/experiment/generate_dataset/surge-simple-480k-10k.yaml (filename stem = dataset_config_id)
 # @package _global_
 
 defaults:
@@ -1415,7 +1415,7 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 | Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022500Z`                             |
 | R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/` |
 
-Config filenames live in `configs/experiment/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `runpod-smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
+Config filenames live in `configs/experiment/generate_dataset/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `runpod-smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
 
 ### 14.7 CLI & Directory Structure
 
@@ -1462,15 +1462,17 @@ src/
   # logging_config.py   # structlog configuration
 ```
 
-Pipeline configs live under `configs/` as Hydra groups composed by `configs/dataset.yaml` (filename of `configs/experiment/<id>.yaml` = `dataset_config_id`):
+Pipeline configs live under `configs/` as Hydra groups composed by `configs/dataset.yaml` (filename stem of `configs/experiment/generate_dataset/<id>.yaml` = `dataset_config_id`):
 
 ```
 configs/
   dataset.yaml         # @hydra.main entry point; defaults list (data/render/r2/paths/hydra/experiment)
-  experiment/          # Dataset generation recipes; filename = dataset_config_id
-    surge-simple-480k-10k.yaml
-    runpod-smoke-shard.yaml
-    ci-materialize-test.yaml
+  experiment/
+    generate_dataset/  # Dataset generation recipes; filename stem = dataset_config_id
+      surge-simple-480k-10k.yaml
+      runpod-smoke-shard.yaml
+      ci-materialize-test.yaml
+      10-1k-shards.yaml
   data/                # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
@@ -1486,7 +1488,8 @@ configs/
   #     launcher to @hydra.main and removes load_dataset_spec_yaml) ---
   # dataset.yaml         # Top-level @hydra.main composition target
   # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
-  #   surge-simple-480k-10k.yaml
+  #   generate_dataset/
+  #     surge-simple-480k-10k.yaml
   # render/              # Renderer-specific configs (param_spec_name, renderer_version, batch_per_shard, …)
   #   surge_xt.yaml
   # r2/                  # R2 bucket + prefix_root

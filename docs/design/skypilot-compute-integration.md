@@ -137,7 +137,7 @@ Source of truth: a `.env` file at the repo root.
 cp .env.example .env
 $EDITOR .env  # fill in RCLONE_CONFIG_R2_* + WANDB_API_KEY
 python -m src.pipeline.skypilot_launch \
-    --experiment runpod-smoke-shard
+    --experiment generate_dataset/runpod-smoke-shard
 ```
 
 The launcher finds `<repo_root>/.env`, parses it via `python-dotenv`, and resolves all keys from there. Process env is a non-event because `.env` wins per key — useful when you have stale shell exports.
@@ -255,7 +255,7 @@ Replace RunPod references with SkyPilot/provider-agnostic language.
 **Files to modify:**
 
 - `pipeline/schemas/spec.py` — add a `compute_config` field (optional, defaults to `None`) to `DatasetSpec`
-- `configs/experiment/surge-simple-480k-10k.yaml` — add an optional `compute_config` key, or leave it out for local execution
+- `configs/experiment/generate_dataset/surge-simple-480k-10k.yaml` — add an optional `compute_config` key, or leave it out for local execution
 - Tests: `tests/pipeline/test_schemas/` — add test cases for the new field, backward compat
 
 Note: `DatasetConfig`/`DatasetPipelineSpec`/`materialize_spec()` no longer exist as separate types — they unified into `DatasetSpec` ([#887](https://github.com/tinaudio/synth-setter/pull/887)) and the spec is now composed via Hydra (`spec_from_cfg(cfg)` from `configs/dataset.yaml` + an experiment override; the legacy `load_dataset_spec_yaml` bridge was removed in [#917](https://github.com/tinaudio/synth-setter/pull/917)).

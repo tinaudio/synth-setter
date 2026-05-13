@@ -100,7 +100,7 @@ Matches design doc §14.5. Config filenames encode runtime parameters — the fi
 stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)):
 
 ```yaml
-# configs/experiment/surge-simple-480k-10k.yaml
+# configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # → dataset_config_id = surge-simple-480k-10k
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3    # renderer_version pinned via SURGE_XT_RENDERER_VERSION constant; worker verifies
@@ -131,7 +131,7 @@ CLI (compute/storage are not in config):
 
 ```bash
 python -m pipeline generate \
-  --experiment surge-simple-480k-10k \
+  --experiment generate_dataset/surge-simple-480k-10k \
   --workers 10 --backend runpod --image tinaudio/synth-setter:dev-snapshot-abc1234
 ```
 
@@ -250,7 +250,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 - `pipeline/schemas/` — Pydantic models split across submodules: ~~`config.py`~~ ✅ (`DatasetConfig`, `SplitsConfig`, load/ID helpers), ~~`spec.py`~~ ✅ (`DatasetPipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass).
   **Note:** ~~`prefix.py`~~ ✅ and ~~`image_config.py`~~ ✅ also exist.
   `report.py`, `card.py`, and `sample.py` are not yet created.
-- ~~`configs/experiment/surge-simple-480k-10k.yaml`~~ ✅ — sample config (filename = `dataset_config_id`)
+- ~~`configs/experiment/generate_dataset/surge-simple-480k-10k.yaml`~~ ✅ — sample config (filename stem = `dataset_config_id`)
 - ~~`tests/pipeline/__init__.py`~~ ✅
 - ~~`tests/pipeline/test_schemas/`~~ ✅
 
@@ -913,7 +913,7 @@ ______________________________________________________________________
 
 1. **Per-PR:** CI runs `pytest` + `ruff` on every push
 2. **After all tasks:** `pytest tests/pipeline/ -v`, `pytest tests/pipeline/test_e2e.py -v`
-3. **Local dry run:** `python -m pipeline generate --experiment surge-simple-480k-10k --backend local --workers 2`
+3. **Local dry run:** `python -m pipeline generate --experiment generate_dataset/surge-simple-480k-10k --backend local --workers 2`
 4. **Docker fidelity:** `bash scripts/test_local_docker.sh`
 5. **Mutation testing:** `mutmut run --paths-to-mutate=pipeline/`
 
