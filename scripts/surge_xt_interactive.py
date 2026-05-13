@@ -129,6 +129,8 @@ _VST_HEADLESS_WRAPPER = _REPO_ROOT / "scripts" / "run-linux-vst-headless.sh"
 _EVAL_SCRIPT = _REPO_ROOT / "src" / "eval.py"
 _PREDICT_VST_AUDIO_SCRIPT = _REPO_ROOT / "scripts" / "predict_vst_audio.py"
 _COMPUTE_AUDIO_METRICS_SCRIPT = _REPO_ROOT / "scripts" / "compute_audio_metrics.py"
+_GET_DATASET_STATS_SCRIPT = _REPO_ROOT / "scripts" / "get_dataset_stats.py"
+_STATS_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 # Below this peak, librosa RMS norms underflow and ``compute_rms`` produces
 # 0/0 → NaN (see ``compute_rms`` in ``scripts/compute_audio_metrics.py``).
@@ -1251,6 +1253,24 @@ def main(
 EvalRunner = Callable[[int, Path, Path, str, str], None]
 
 
+def _compute_dataset_stats(
+    h5_path: Path,
+    *,
+    subprocess_runner: SubprocessRunner | None = None,
+) -> None:
+    """Write a sibling ``stats.npz`` for ``h5_path`` via ``get_dataset_stats.py``; see #1002."""
+    runner = subprocess_runner if subprocess_runner is not None else subprocess.check_call
+    runner(  # noqa: S603
+        [
+            sys.executable,
+            str(_GET_DATASET_STATS_SCRIPT),
+            str(h5_path.resolve()),
+            "--mask-degenerate-bins",
+        ],
+        timeout=_STATS_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+
 def _maybe_eval_captured_patches(
     patch_file_path: Path,
     output_dataset_dir_path: Path,
@@ -1260,19 +1280,17 @@ def _maybe_eval_captured_patches(
     preset_path: str,
     *,
     eval_runner: EvalRunner | None = None,
+    subprocess_runner: SubprocessRunner | None = None,
 ) -> None:
-    """Replicate captured patches into the four eval-pipeline splits and run eval_patches if a
-    checkpoint is provided; no-op otherwise.
+    """Replicate captured patches into the four eval-pipeline splits, write sibling stats.npz, and
+    run eval_patches if a checkpoint is provided; no-op otherwise.
 
-    The Click ``--checkpoint-path`` option already validates ``exists=True``, so when this is
-    invoked from ``main`` ``checkpoint_path`` is guaranteed to refer to an existing file.
-    ``param_spec_name`` and ``preset_path`` are forwarded to ``eval_patches`` so the predict /
-    render / metrics steps decode and re-render against the same spec + preset that were used
-    when the patches were captured.
+    ``surge/test.yaml`` sets ``use_saved_mean_and_variance: true``, so ``SurgeXTDataset`` requires
+    a sibling ``stats.npz`` next to ``predict.h5``. Generate it here from ``patch_file_path`` via
+    ``scripts/get_dataset_stats.py --mask-degenerate-bins`` so the interactive predict path works
+    without an extra manual step (see #1002).
 
-    ``eval_runner`` exists for test injection (#844). ``None`` (the default) resolves to the
-    module-level :func:`eval_patches` at call time so legacy ``monkeypatch.setattr(module,
-    "eval_patches", ...)`` tests keep working until they migrate to direct injection.
+    ``eval_runner`` / ``subprocess_runner`` are test seams (#844).
     """
     if checkpoint_path is None:
         logger.info("No --checkpoint-path provided; skipping patch evaluation.")
@@ -1293,6 +1311,7 @@ def _maybe_eval_captured_patches(
             except OSError:
                 logger.exception("failed to roll back partial sibling copy at %s", created)
         raise
+    _compute_dataset_stats(patch_file_path, subprocess_runner=subprocess_runner)
     runner(num_patches, output_dataset_dir_path, checkpoint_path, param_spec_name, preset_path)
 
 

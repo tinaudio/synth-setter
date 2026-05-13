@@ -1162,13 +1162,15 @@ class TestMaybeEvalCapturedPatches:
     def test_replicates_train_h5_to_three_siblings(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """When ``--checkpoint-path`` is given, ``train.h5`` is copied to test/val/predict.h5 and
-        ``param_spec_name`` / ``preset_path`` are forwarded verbatim to the eval runner."""
+        """When ``--checkpoint-path`` is given, ``train.h5`` is copied to test/val/predict.h5, a
+        sibling ``stats.npz`` is produced via ``get_dataset_stats.py --mask-degenerate-bins``
+        (#1002), and ``param_spec_name`` / ``preset_path`` are forwarded to the eval runner."""
         train_path = tmp_path / "train.h5"
         train_path.write_bytes(b"train-content")
         ckpt_path = tmp_path / "model.ckpt"
         ckpt_path.write_bytes(b"ckpt")
         runner = _RecordingEvalRunner()
+        stats_runner = _RecordingSubprocessRunner()
 
         surge_xt_interactive._maybe_eval_captured_patches(
             patch_file_path=train_path,
@@ -1178,6 +1180,7 @@ class TestMaybeEvalCapturedPatches:
             param_spec_name=SURGE_SIMPLE,
             preset_path="presets/surge-simple.vstpreset",
             eval_runner=runner,
+            subprocess_runner=stats_runner,
         )
 
         for sibling in ("test.h5", "val.h5", "predict.h5"):
@@ -1185,6 +1188,11 @@ class TestMaybeEvalCapturedPatches:
         assert runner.calls == [
             (3, tmp_path, ckpt_path, SURGE_SIMPLE, "presets/surge-simple.vstpreset")
         ]
+        assert len(stats_runner.calls) == 1
+        argv = stats_runner.calls[0]
+        assert argv[1].endswith("scripts/get_dataset_stats.py")
+        assert argv[2] == str(train_path.resolve())
+        assert "--mask-degenerate-bins" in argv
 
     def test_failed_copy_rolls_back_partial_siblings(
         self, surge_xt_interactive, tmp_path: Path
@@ -1206,6 +1214,7 @@ class TestMaybeEvalCapturedPatches:
         (tmp_path / "val.h5").mkdir()
 
         runner = _RecordingEvalRunner()
+        stats_runner = _RecordingSubprocessRunner()
 
         with pytest.raises(OSError):
             surge_xt_interactive._maybe_eval_captured_patches(
@@ -1216,6 +1225,7 @@ class TestMaybeEvalCapturedPatches:
                 param_spec_name=SURGE_SIMPLE,
                 preset_path="presets/surge-base.vstpreset",
                 eval_runner=runner,
+                subprocess_runner=stats_runner,
             )
 
         # First sibling was copied, second failed; rollback removes the first.
@@ -1224,6 +1234,8 @@ class TestMaybeEvalCapturedPatches:
         assert (tmp_path / "val.h5").is_dir()
         assert not (tmp_path / "predict.h5").exists()
         assert runner.calls == []
+        # Stats step is gated behind successful copies, so it must not be invoked on copy failure.
+        assert stats_runner.calls == []
 
 
 def _write_wav(path: Path, *, silent: bool, sample_rate: int = 44100) -> None:
