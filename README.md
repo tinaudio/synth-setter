@@ -129,13 +129,16 @@ src/synth_setter/   ML code and data pipeline (PEP src-layout package)
   models/              LightningModules and components
   utils/               Logging, callbacks, instantiators, math
   metrics.py           Audio + parameter-space metrics
-  pipeline/            Distributed data pipeline (moved under synth_setter/ in Phase 3, #995):
+  pipeline/            Distributed data pipeline:
     schemas/             Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
     ci/                  CI validation scripts (materialize_spec, validate_shard, validate_spec)
+    data/                Dataset-shaping utilities (reshard, rewrite_to_latest, stats, r2_report)
     skypilot_launch.py   SkyPilot launcher CLI
+  evaluation/          predict_vst_audio, compute_audio_metrics (called by cli/eval.py)
+  tools/               python -m utilities (surge_xt_interactive, plot_param2tok, docker_entrypoint, ...)
 configs/        Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
-scripts/        Standalone scripts
-tests/          Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)
+scripts/        SkyPilot / CI shell tooling (skypilot/, ci/)
+tests/          Test suite (mirrors src/synth_setter/ structure)
 docs/design/    Design documents
 ```
 

@@ -6,25 +6,21 @@ on:
     branches: [main]
     paths:
       - "src/**"
-      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
       - "environment.yaml"
       - "pyproject.toml"
-      - "setup.py"
       - ".github/workflows/test-conda.yml"
   pull_request:
     branches: [main, "release/*", "dev"]
     paths:
       - "src/**"
-      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
       - "environment.yaml"
       - "pyproject.toml"
-      - "setup.py"
       - ".github/workflows/test-conda.yml"
 
 defaults:

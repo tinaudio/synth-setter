@@ -6,23 +6,19 @@ on:
     branches: [main]
     paths:
       - "src/**"
-      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
       - "pyproject.toml"
-      - "setup.py"
       - ".github/workflows/test.yml"
   pull_request:
     branches: [main, "release/*", "dev"]
     paths:
       - "src/**"
-      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
       - "pyproject.toml"
-      - "setup.py"
       - ".github/workflows/test.yml"
 
 jobs:
