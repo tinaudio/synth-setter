@@ -9,11 +9,12 @@ import torch
 from lightning import LightningDataModule
 
 from synth_setter.data.ot import _hungarian_match
+from synth_setter.data.stats_utils import compute_scale
 
 
 class SurgeXTDataset(torch.utils.data.Dataset):
     mean: Optional[np.ndarray] = None
-    std: Optional[np.ndarray] = None
+    scale: Optional[np.ndarray] = None
 
     def __init__(
         self,
@@ -60,8 +61,11 @@ class SurgeXTDataset(torch.utils.data.Dataset):
             )
 
         with np.load(stats_file) as stats:
-            self.mean = stats["mean"]
-            self.std = stats["std"]
+            mean = stats["mean"]
+            std = stats["std"]
+
+        self.mean = mean
+        self.scale = compute_scale(std)
 
     @staticmethod
     def get_stats_file_path(dataset_file: Union[str, Path]) -> Path:
@@ -122,8 +126,8 @@ class SurgeXTDataset(torch.utils.data.Dataset):
 
         if self.read_mel:
             mel_spec = self._index_dataset(self.dataset_file["mel_spec"], idx)
-            if self.mean is not None and self.std is not None:
-                mel_spec = (mel_spec - self.mean) / self.std
+            if self.mean is not None and self.scale is not None:
+                mel_spec = (mel_spec - self.mean) * self.scale
             mel_spec = torch.from_numpy(mel_spec).to(dtype=torch.float32)
         else:
             mel_spec = None

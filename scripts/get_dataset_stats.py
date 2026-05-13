@@ -1,19 +1,56 @@
+import argparse
+import logging
 import os
-import sys
 
 import dask.array as da
 import h5py
 import numpy as np
 import rootutils
 from dask.distributed import Client, progress
-from loguru import logger
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from synth_setter.data.audio_datamodule import AudioFolderDataset
 from synth_setter.data.surge_datamodule import SurgeXTDataset
 
+logger = logging.getLogger(__name__)
 
-def get_stats_hdf5(filename):
+
+def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> None:
+    """Raise on zero-variance bins unless masking is enabled.
+
+    A zero entry in ``std`` means the corresponding mel bin was constant across
+    the entire dataset, which propagates as inf/nan through downstream
+    ``(x - mean) / std`` normalization. By default this aborts so the upstream
+    cause (silence-dominated data, mel filterbank above Nyquist, dataset too
+    small) is surfaced; with ``mask_degenerate=True`` the caller opts in to
+    persisting ``std=0`` and letting the datamodule treat it as a mask.
+
+    :param std: Per-bin standard deviation array. Zero entries indicate
+        constant bins.
+    :param mask_degenerate: If True, log a warning and return. If False, raise.
+
+    :raises ValueError: When ``mask_degenerate`` is False and any entry of
+        ``std`` is zero. The message lists the degenerate bin indices.
+    """
+    degenerate = np.where(std == 0)[0]
+    if degenerate.size == 0:
+        return
+    if not mask_degenerate:
+        raise ValueError(
+            f"Found {degenerate.size} mel bin(s) with zero variance across the "
+            f"dataset: indices {degenerate.tolist()}. This usually indicates an "
+            f"upstream problem (silence-dominated data, mel filterbank above "
+            f"Nyquist, or a dataset too small to vary these bins). Rerun with "
+            f"--mask-degenerate-bins to mask these bins instead of failing."
+        )
+    logger.warning(
+        "Masking %d degenerate mel bin(s) with zero variance: %s",
+        degenerate.size,
+        degenerate.tolist(),
+    )
+
+
+def get_stats_hdf5(filename, mask_degenerate: bool = False):
     dataset_name = "mel_spec"
 
     num_workers = 4
@@ -44,10 +81,13 @@ def get_stats_hdf5(filename):
     print("Mean:", mean_val)
     print("std:", std_val)
 
-    print("Saving to file...")
-    out_file = SurgeXTDataset.get_stats_file_path(filename)
     mean = mean_val.compute()
     std = std_val.compute()
+
+    _check_degenerate_bins(std, mask_degenerate)
+
+    print("Saving to file...")
+    out_file = SurgeXTDataset.get_stats_file_path(filename)
     np.savez(out_file, mean=mean, std=std)
 
 
@@ -61,13 +101,15 @@ def update(existing, new):
     return count, mean, M2
 
 
-def finalize(existing):
+def finalize(existing, mask_degenerate: bool = False):
     count, mean, M2 = existing
     variance = M2 / count if count > 1 else 0
-    return mean, np.sqrt(variance)
+    std = np.sqrt(variance)
+    _check_degenerate_bins(std, mask_degenerate)
+    return mean, std
 
 
-def get_stats_directory(directory):
+def get_stats_directory(directory, mask_degenerate: bool = False):
     dataset = AudioFolderDataset(directory)
     out_file = AudioFolderDataset.get_stats_file_path(directory)
 
@@ -78,20 +120,46 @@ def get_stats_directory(directory):
         existing = update(existing, x)
 
         if i % 10 == 0:
-            logger.info(f"Processed {i + 1} files...")
+            logger.info("Processed %d files...", i + 1)
 
-    mean, std = finalize(existing)
+    mean, std = finalize(existing, mask_degenerate=mask_degenerate)
 
-    logger.info(f"Saving to {str(out_file)}")
+    logger.info("Saving to %s", str(out_file))
 
     np.savez(out_file, mean=mean, std=std)
 
 
-if __name__ == "__main__":
-    # filename = "/data/scratch/acw585/surge/train.hdf5"
-    filename = sys.argv[1]
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compute mean/std statistics over a Surge XT HDF5 file or an audio "
+            "folder and write the result to a sibling stats.npz."
+        )
+    )
+    parser.add_argument(
+        "input",
+        help=(
+            "Path to a .h5 file (Dask path) or a directory of audio files "
+            "(streaming Welford path)."
+        ),
+    )
+    parser.add_argument(
+        "--mask-degenerate-bins",
+        action="store_true",
+        help=(
+            "If set, mel bins with zero variance across the dataset are masked "
+            "(their normalization scale is set to 0 by downstream consumers) "
+            "rather than raising an error. Default is to raise so degenerate "
+            "bins are surfaced explicitly."
+        ),
+    )
+    return parser.parse_args(argv)
 
-    if os.path.splitext(filename)[-1] == ".h5":
-        get_stats_hdf5(filename)
+
+if __name__ == "__main__":
+    args = _parse_args()
+
+    if os.path.splitext(args.input)[-1] == ".h5":
+        get_stats_hdf5(args.input, mask_degenerate=args.mask_degenerate_bins)
     else:
-        get_stats_directory(filename)
+        get_stats_directory(args.input, mask_degenerate=args.mask_degenerate_bins)

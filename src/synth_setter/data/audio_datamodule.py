@@ -7,6 +7,8 @@ import torch
 from lightning import LightningDataModule
 from pedalboard.io import AudioFile
 
+from synth_setter.data.stats_utils import compute_scale
+
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
     """Values hardcoded to be roughly like those used by the audio spectrogram transformer.
@@ -52,12 +54,15 @@ class AudioFolderDataset(torch.utils.data.Dataset):
     def _load_stats(self, reference_stats_file: Optional[str]):
         if reference_stats_file is None:
             self.mean = None
-            self.std = None
+            self.scale = None
             return
 
         with np.load(reference_stats_file) as stats:
-            self.mean = stats["mean"]
-            self.std = stats["std"]
+            mean = stats["mean"]
+            std = stats["std"]
+
+        self.mean = mean
+        self.scale = compute_scale(std)
 
         # TODO: think this through better --- how do we rescale after prediction?
 
@@ -121,7 +126,7 @@ class AudioFolderDataset(torch.utils.data.Dataset):
 
         spec = make_spectrogram(audio, sample_rate)
         if self.mean is not None:
-            spec = (spec - self.mean) / self.std
+            spec = (spec - self.mean) * self.scale
 
         audio = torch.from_numpy(audio).to(dtype=torch.float32)
         spec = torch.from_numpy(spec).to(dtype=torch.float32)
