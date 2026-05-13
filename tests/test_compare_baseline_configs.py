@@ -374,6 +374,39 @@ def _normalize_for_compare(cfg: dict) -> dict:
     return _strip_leaf_keys(stripped, ACCEPTED_DIFF_LEAVES)
 
 
+# Unit tests for _strip_leaf_keys. The end-to-end resolved-config tests exercise
+# this indirectly, but they're slow (~10min) and only pass when `_target_` is the
+# leaf — a focused unit test covers dict/list recursion + the deep-copy contract.
+class TestStripLeafKeys:
+    def test_removes_key_at_top_level(self) -> None:
+        result = _strip_leaf_keys({"_target_": "X", "keep": 1}, ("_target_",))
+        assert result == {"keep": 1}
+
+    def test_removes_key_at_nested_dict_depth(self) -> None:
+        cfg = {"model": {"net": {"_target_": "X", "dim": 8}}}
+        result = _strip_leaf_keys(cfg, ("_target_",))
+        assert result == {"model": {"net": {"dim": 8}}}
+
+    def test_removes_key_inside_dict_in_list(self) -> None:
+        cfg = {"callbacks": [{"_target_": "X", "n": 1}, {"_target_": "Y", "n": 2}]}
+        result = _strip_leaf_keys(cfg, ("_target_",))
+        assert result == {"callbacks": [{"n": 1}, {"n": 2}]}
+
+    def test_does_not_mutate_input(self) -> None:
+        cfg = {"a": {"_target_": "X"}, "b": [{"_target_": "Y"}]}
+        _ = _strip_leaf_keys(cfg, ("_target_",))
+        assert cfg == {"a": {"_target_": "X"}, "b": [{"_target_": "Y"}]}
+
+    def test_empty_leaf_keys_is_identity(self) -> None:
+        cfg = {"_target_": "X", "nested": {"_target_": "Y"}}
+        assert _strip_leaf_keys(cfg, ()) == cfg
+
+    def test_strips_multiple_leaf_names(self) -> None:
+        cfg = {"_target_": "X", "_partial_": True, "keep": 1}
+        result = _strip_leaf_keys(cfg, ("_target_", "_partial_"))
+        assert result == {"keep": 1}
+
+
 def _assert_resolved_configs_equal(baseline: dict, current: dict) -> None:
     """Assert the resolved configs match modulo invocation/deployment-volatile keys."""
     # No custom message: pytest renders a structured dict-diff for ==/!= on
