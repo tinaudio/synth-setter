@@ -1,7 +1,8 @@
 import hashlib
 import random
 from dataclasses import dataclass
-from typing import Any, List, Tuple
+from pathlib import Path
+from typing import Any, Tuple
 
 import h5py
 import hdf5plugin
@@ -11,10 +12,12 @@ import rootutils
 from loguru import logger
 from pyloudnorm import Meter
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
-from tqdm import trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.pipeline.schemas.spec import (  # noqa: E402
+    EXTENSION_TO_OUTPUT_FORMAT,
+    RenderConfig,
+)
 from synth_setter.data.vst import param_specs  # noqa
 from synth_setter.data.vst.core import render_params  # noqa
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa
@@ -159,25 +162,6 @@ def save_sample(
     logger.info(f"Sample {idx} written!")
 
 
-def save_samples(
-    samples: List[VSTDataSample],
-    audio_dataset: h5py.Dataset,
-    mel_dataset: h5py.Dataset,
-    param_dataset: h5py.Dataset,
-    start_idx: int,
-) -> None:
-    logger.info(f"Saving {len(samples)} samples...")
-    audios = np.stack([s.audio.T for s in samples], axis=0)
-    mel_specs = np.stack([s.mel_spec for s in samples], axis=0)
-    param_arrays = np.stack([s.param_array for s in samples], axis=0)
-
-    audio_dataset[start_idx : start_idx + len(samples), :, :] = audios
-    mel_dataset[start_idx : start_idx + len(samples), :, :] = mel_specs
-    param_dataset[start_idx : start_idx + len(samples), :] = param_arrays
-
-    logger.info(f"{len(samples)} samples written!")
-
-
 def get_first_unwritten_idx(dataset: h5py.Dataset) -> int:
     num_rows, *_ = dataset.shape
     for i in range(num_rows):
@@ -246,109 +230,14 @@ def create_datasets_and_get_start_idx(
     )
 
 
-def make_dataset(
-    hdf5_file: h5py.File,
-    render_cfg: RenderConfig,
-    *,
-    fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
-) -> None:
-    """Render ``render_cfg.batch_per_shard`` samples and append them to ``hdf5_file``.
-
-    Resumable: a partially-written file picks up at the first all-zero row, so a
-    crashed worker can re-run with the same ``render_cfg`` and only the missing tail
-    is regenerated. The ``param_spec_name`` is resolved against the in-process
-    registry here (not at the launcher) so the per-shard config stays JSON-only.
-    """
-    param_spec = param_specs[render_cfg.param_spec_name]
-    num_samples = render_cfg.batch_per_shard
-
-    audio_dataset, mel_dataset, param_dataset, start_idx = (
-        create_datasets_and_get_start_idx(
-            hdf5_file=hdf5_file,
-            num_samples=num_samples,
-            channels=render_cfg.channels,
-            sample_rate=render_cfg.sample_rate,
-            signal_duration_seconds=render_cfg.signal_duration_seconds,
-            num_params=len(param_spec),
-        )
-    )
-
-    expected_fixed_len = num_samples - start_idx
-    for name, lst in [
-        ("fixed_synth_params_list", fixed_synth_params_list),
-        ("fixed_note_params_list", fixed_note_params_list),
-    ]:
-        if lst is not None and len(lst) < expected_fixed_len:
-            raise ValueError(
-                f"{name} has length {len(lst)}, expected at least "
-                f"num_samples - start_idx = {expected_fixed_len} "
-                f"(num_samples={num_samples}, start_idx={start_idx})"
-            )
-
-    audio_dataset.attrs["velocity"] = render_cfg.velocity
-    audio_dataset.attrs["signal_duration_seconds"] = render_cfg.signal_duration_seconds
-    audio_dataset.attrs["sample_rate"] = render_cfg.sample_rate
-    audio_dataset.attrs["channels"] = render_cfg.channels
-    audio_dataset.attrs["min_loudness"] = render_cfg.min_loudness
-
-    sample_batch = []
-    sample_batch_start = start_idx
-    batch_size = render_cfg.sample_batch_size
-
-    for i in trange(start_idx, num_samples):
-        logger.info(f"Making sample {i}")
-        fixed_idx = i - start_idx
-        sample = generate_sample(
-            render_cfg.plugin_path,
-            velocity=render_cfg.velocity,
-            signal_duration_seconds=render_cfg.signal_duration_seconds,
-            sample_rate=render_cfg.sample_rate,
-            channels=render_cfg.channels,
-            min_loudness=render_cfg.min_loudness,
-            param_spec=param_spec,
-            preset_path=render_cfg.preset_path,
-            fixed_synth_params=(
-                fixed_synth_params_list[fixed_idx]
-                if fixed_synth_params_list is not None
-                else None
-            ),
-            fixed_note_params=(
-                fixed_note_params_list[fixed_idx]
-                if fixed_note_params_list is not None
-                else None
-            ),
-        )
-
-        sample_batch.append(sample)
-        if len(sample_batch) == batch_size:
-            save_samples(
-                sample_batch,
-                audio_dataset,
-                mel_dataset,
-                param_dataset,
-                sample_batch_start,
-            )
-            sample_batch = []
-            sample_batch_start += batch_size
-
-    if len(sample_batch) > 0:
-        save_samples(
-            sample_batch,
-            audio_dataset,
-            mel_dataset,
-            param_dataset,
-            sample_batch_start,
-        )
-
-
 class _GenerateCliArgs(RenderConfig, BaseSettings):
     """Pydantic-settings CLI binding for ``generate_vst_dataset.py``.
 
     Inherits every ``RenderConfig`` field so the CLI flag set tracks the model
     automatically — adding or removing a field on ``RenderConfig`` extends or
     shrinks the CLI surface without a parallel update here. Adds ``data_file``
-    as the sole positional arg (the destination path for the HDF5 shard).
+    as the sole positional arg (the destination shard path; suffix selects
+    writer via ``EXTENSION_TO_OUTPUT_FORMAT``).
     """
 
     model_config = SettingsConfigDict(
@@ -363,11 +252,31 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
 
 
 def main() -> None:
-    """Entry point — parse CLI args into a ``RenderConfig`` and render one shard."""
+    """Entry point — parse CLI args into a ``RenderConfig`` and render one shard.
+
+    The writer is dispatched on ``data_file``'s suffix via
+    ``EXTENSION_TO_OUTPUT_FORMAT`` (``.h5`` → HDF5, ``.tar`` → wds). An unknown
+    suffix raises ``SystemExit`` rather than silently producing a half-written
+    file in the wrong format.
+    """
+    # Import lazily so that the writer module's transitive deps (h5py, webdataset)
+    # only load when this CLI entrypoint is invoked, not when callers merely
+    # import this module to reach VSTDataSample / generate_sample.
+    from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
+
     args = CliApp.run(_GenerateCliArgs)
     render_cfg = RenderConfig(**args.model_dump(exclude={"data_file"}))
-    with h5py.File(args.data_file, "a") as f:
-        make_dataset(f, render_cfg)
+    suffix = Path(args.data_file).suffix
+    fmt = EXTENSION_TO_OUTPUT_FORMAT.get(suffix)
+    if fmt == "hdf5":
+        make_hdf5_dataset(args.data_file, render_cfg)
+    elif fmt == "wds":
+        make_wds_dataset(args.data_file, render_cfg)
+    else:
+        raise SystemExit(
+            f"data_file must end in one of {sorted(EXTENSION_TO_OUTPUT_FORMAT)}, "
+            f"got {suffix!r}"
+        )
 
 
 if __name__ == "__main__":
