@@ -25,6 +25,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      # synth_setter.pipeline.ci.validate_spec imports OUTPUT_FORMAT_TO_EXTENSION
+      # from synth_setter.pipeline.schemas.spec, which transitively loads pydantic
+      # at module top. Install only that — keep the runner-side env minimal
+      # instead of `pip install -r requirements.txt` (which pulls torch).
+      - name: Install validate_spec runtime deps
+        run: pip install --no-deps -e . "pydantic>=2,<3"
+
       - name: Download spec artifact
         uses: actions/download-artifact@v4
         with:

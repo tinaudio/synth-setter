@@ -25,6 +25,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      # Host-side `Validate spec structure` step below runs
+      # `python3 -m synth_setter.pipeline.ci.validate_spec` outside the docker
+      # container. Phase 3 made `synth_setter` only importable when installed
+      # (PEP src-layout, sources under `src/`). Install --no-deps to keep the
+      # host env minimal (torch and the rest stay in the image).
+      - name: Install validate_spec runtime deps
+        run: pip install --no-deps -e . "pydantic>=2,<3"
+
       - name: Pull image
         run: docker pull tinaudio/synth-setter:${{ inputs.image_tag }}
 
