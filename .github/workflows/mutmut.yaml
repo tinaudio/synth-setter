@@ -1,0 +1,59 @@
+name: Mutation Testing
+
+# Mutation testing is slow and noisy; run on demand or weekly, never on every PR.
+# This workflow exists primarily as a Level-1 verification gate for the
+# `[tool.mutmut]` configuration — it proves the mutmut sandbox imports resolve
+# and that `mutmut run` actually completes end-to-end. The end-to-end completion
+# is *not* possible on macOS (Apple's fork-safety + heavy C-extension imports in
+# tests/conftest.py — torch, h5py, hydra — cause SIGSEGV in forked children).
+# On ubuntu-latest, os.fork() works cleanly.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Sundays at 09:00 UTC — once a week is enough for a slow-changing config
+    # whose own pre-merge gate is the CI test suite (test.yml).
+    - cron: "0 9 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  mutmut_run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[torch,dev]"
+
+      - name: Run mutmut
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: mutmut run
+
+      - name: Print results
+        if: always()
+        run: mutmut results
+
+      - name: Upload mutants/ artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutmut-mutants
+          path: mutants/
+          retention-days: 14
+          if-no-files-found: warn

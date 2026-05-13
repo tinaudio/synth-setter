@@ -3,19 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
-import sys
-from pathlib import Path
 from types import ModuleType
 
 import numpy as np
 import pytest
 
 from synth_setter.pipeline.data import stats as _stats_module
-
-_STATS_MODULE_NAME = "synth_setter.pipeline.data.stats"
-_PACKAGE_SRC_DIR = Path(_stats_module.__file__).resolve().parents[3]
 
 
 @pytest.fixture(scope="module")
@@ -251,19 +244,24 @@ def test_finalize_with_at_most_one_sample_raises_distinct_error(stats_script: Mo
             stats_script.finalize(existing, mask_degenerate=True)
 
 
-def test_cli_help_advertises_mask_degenerate_bins_flag() -> None:
-    """The CLI ``--help`` text documents the new flag so operators can discover it."""
-    # 60s rather than 30s: under `make test-fast`'s parallel xdist load,
-    # rootutils.setup_root walking the project tree from many workers at
-    # once stretches script import time past the conservative default.
-    env = {**os.environ, "PYTHONPATH": str(_PACKAGE_SRC_DIR)}
-    result = subprocess.run(  # noqa: S603
-        [sys.executable, "-m", _STATS_MODULE_NAME, "--help"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-        env=env,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "--mask-degenerate-bins" in result.stdout
+def test_cli_help_advertises_mask_degenerate_bins_flag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI ``--help`` text documents the new flag so operators can discover it.
+
+    Invokes ``_parse_args`` in-process rather than shelling out to
+    ``python -m synth_setter.pipeline.data.stats``: under ``mutmut run``'s
+    stats phase, a subprocess inherits ``MUTANT_UNDER_TEST=stats`` and the
+    mutated module's trampoline calls into ``mutmut.config`` which is
+    ``None`` in any fresh interpreter — see CLAUDE.md "Mutation Testing".
+    In-process also lets mutations of ``_parse_args`` actually reach this
+    test (the subprocess form would always run the un-mutated function).
+
+    :param capsys: pytest fixture that captures ``sys.stdout``/``sys.stderr``
+        emitted by argparse's ``--help`` handler.
+    """
+    with pytest.raises(SystemExit) as exc_info:
+        _stats_module._parse_args(["--help"])
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "--mask-degenerate-bins" in captured.out
