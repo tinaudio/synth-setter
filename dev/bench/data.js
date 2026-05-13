@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778705084878,
+  "lastUpdate": 1778705086721,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3753,6 +3753,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.838391927400005,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ad5c853689e93005b8111b8ce96111725e2bb7ba",
+          "message": "ci(docker): strip runtime PYTHONPATH from docker runs in workflows (#1017)\n\nPR #647 / #667 fixed setup.py so find_packages exposes the pipeline\npackage without a runtime PYTHONPATH override, and PR #797 wired\ndev-snapshot to rebuild on every push-to-main (merged 2026-05-04) so\nthe in-image package surface tracks main. The temporary\n-e PYTHONPATH=/home/build/synth-setter override added in 3529fae is no\nlonger needed; strip it from all docker run invocations.\n\nRemoves 15 -e PYTHONPATH=... lines across 10 workflow files:\n\n- .github/workflows/docker-build-validation.yml\n- .github/workflows/flush-investigation.yml\n- .github/workflows/generate-dataset-shards.yaml\n- .github/workflows/job-queue.yaml\n- .github/workflows/spec-materialization.yml\n- .github/workflows/test-dataset-generation.yml\n- .github/workflows/test-gpu.yml\n- .github/workflows/test-skypilot-debug.yml\n- .github/workflows/test-vst-slow.yml\n- .github/workflows/validate-dataset-shards.yaml\n\nThe integration check is the smoke tests in docker-build-validation.yml\nand test-dataset-generation.yml; a local docker probe was not run\nbecause docker was not available in the working environment.\n\nCloses #670\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>\nCo-authored-by: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>",
+          "timestamp": "2026-05-13T20:31:26Z",
+          "tree_id": "3c8bc483552ff70d508d62080e2457e3ddb06999",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ad5c853689e93005b8111b8ce96111725e2bb7ba"
+        },
+        "date": 1778705086406,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.442899703979492,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.2709480833169073,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.018059860914945602,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.005213499069213867,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.75197172164917,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.426629607699994,
             "unit": "seconds"
           }
         ]
