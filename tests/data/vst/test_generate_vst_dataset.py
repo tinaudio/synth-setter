@@ -1,4 +1,4 @@
-"""Basic e2e test for src/synth_setter/data/vst/generate_vst_dataset.py — verifies HDF5 output."""
+"""Basic e2e test for src/synth_setter/data/vst/writers.py — verifies HDF5 output."""
 
 import json
 import logging
@@ -20,8 +20,8 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.evaluation.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import render_params
-from synth_setter.data.vst.generate_vst_dataset import make_dataset
 from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.writers import make_hdf5_dataset
 
 log = logging.getLogger(__name__)
 
@@ -732,9 +732,10 @@ def _assert_round_trip_matches(
 def test_datasets_from_hardcoded_params_are_identical(
     tmp_path: Path,
 ) -> None:
-    """make_dataset round-trips a single hardcoded param set when ``param_spec.sample`` is patched.
+    """make_hdf5_dataset round-trips a single hardcoded param set when ``param_spec.sample`` is
+    patched.
 
-    Both stages of ``make_dataset`` patch ``param_spec.sample`` to return the same
+    Both stages of ``make_hdf5_dataset`` patch ``param_spec.sample`` to return the same
     hardcoded ``(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)`` tuple, so every
     one of the ``2 × num_samples`` renders uses identical inputs. This pins
     reproducibility on a fixed, version-controlled patch — no random sampling, no
@@ -754,11 +755,8 @@ def test_datasets_from_hardcoded_params_are_identical(
 
     expected_dataset = tmp_path / "expected.h5"
     t0 = time.perf_counter()
-    with (
-        h5py.File(expected_dataset, "a") as f,
-        _patched_sample(spec, replay),
-    ):
-        make_dataset(hdf5_file=f, render_cfg=_render_cfg(num_samples))
+    with _patched_sample(spec, replay):
+        make_hdf5_dataset(hdf5_file=expected_dataset, render_cfg=_render_cfg(num_samples))
     stage1_seconds = time.perf_counter() - t0
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
@@ -767,11 +765,8 @@ def test_datasets_from_hardcoded_params_are_identical(
 
     got_dataset = tmp_path / "replayed.h5"
     t0 = time.perf_counter()
-    with (
-        h5py.File(got_dataset, "a") as f,
-        _patched_sample(spec, replay),
-    ):
-        make_dataset(hdf5_file=f, render_cfg=_render_cfg(num_samples))
+    with _patched_sample(spec, replay):
+        make_hdf5_dataset(hdf5_file=got_dataset, render_cfg=_render_cfg(num_samples))
     stage2_seconds = time.perf_counter() - t0
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
@@ -817,11 +812,11 @@ def test_datasets_from_hardcoded_params_are_identical(
 @pytest.mark.requires_vst
 @skip_no_vst
 def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
-    """make_dataset reproduces a previous dataset row-for-row when params are replayed.
+    """make_hdf5_dataset reproduces a previous dataset row-for-row when params are replayed.
 
     Two-stage e2e test:
 
-    1. Build a "candidates" dataset by calling ``make_dataset`` with the natural
+    1. Build a "candidates" dataset by calling ``make_hdf5_dataset`` with the natural
        random source. ``generate_sample`` samples params via ``param_spec.sample()``
        and rejects renders below ``_MIN_LOUDNESS`` in a ``while True`` loop, so each
        surviving row is guaranteed to be loud enough to pass the loudness gate.
@@ -850,8 +845,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     # Stage 1: random-sampled "candidates" dataset (loudness-filtered).
     expected_dataset = tmp_path / "candidates.h5"
     t0 = time.perf_counter()
-    with h5py.File(expected_dataset, "a") as expected_file:
-        make_dataset(hdf5_file=expected_file, render_cfg=_render_cfg(_NUM_SAMPLES))
+    make_hdf5_dataset(hdf5_file=expected_dataset, render_cfg=_render_cfg(_NUM_SAMPLES))
     stage1_seconds = time.perf_counter() - t0
 
     expected_audio, expected_mel, expected_params = _assert_h5_structure_is_valid(
@@ -866,7 +860,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     )
 
     # Decode the candidate rows back into synth/note params dicts. These are the
-    # inputs for the second ``make_dataset`` run — guaranteed past the loudness
+    # inputs for the second ``make_hdf5_dataset`` run — guaranteed past the loudness
     # gate by construction (the candidate render survived stage 1).
     synth_patches: list[dict[str, float]] = []
     note_patches: list[dict[str, int | tuple[float, float]]] = []
@@ -887,12 +881,9 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     got_dataset = tmp_path / "replayed.h5"
     replay = list(zip(synth_patches, note_patches, strict=True))
     t0 = time.perf_counter()
-    with (
-        h5py.File(got_dataset, "a") as f,
-        _patched_sample(spec, replay),
-    ):
-        make_dataset(
-            hdf5_file=f,
+    with _patched_sample(spec, replay):
+        make_hdf5_dataset(
+            hdf5_file=got_dataset,
             render_cfg=_render_cfg(_NUM_SAMPLES, min_loudness=float("-inf")),
         )
     stage2_seconds = time.perf_counter() - t0
@@ -930,12 +921,11 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
 @pytest.mark.requires_vst
 @skip_no_vst
 def test_make_dataset(tmp_path: Path) -> None:
-    """make_dataset with the natural random source writes a valid h5."""
+    """make_hdf5_dataset with the natural random source writes a valid h5."""
     out = tmp_path / "random.h5"
     spec = param_specs[_SPEC_NAME]
 
-    with h5py.File(out, "a") as f:
-        make_dataset(hdf5_file=f, render_cfg=_render_cfg(_NUM_SAMPLES))
+    make_hdf5_dataset(hdf5_file=out, render_cfg=_render_cfg(_NUM_SAMPLES))
 
     _, _, params = _assert_h5_structure_is_valid(out, spec, _NUM_SAMPLES)
 
@@ -1006,15 +996,14 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
 def test_make_dataset_raises_when_fixed_params_list_is_too_short(
     tmp_path: Path,
 ) -> None:
-    """make_dataset rejects fixed_*_params_list shorter than batch_per_shard - start_idx."""
+    """make_hdf5_dataset rejects fixed_*_params_list shorter than batch_per_shard - start_idx."""
     out = tmp_path / "should_not_write.h5"
-    with h5py.File(out, "a") as f:
-        with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
-            make_dataset(
-                hdf5_file=f,
-                render_cfg=_render_cfg(num_samples=3),
-                fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS],
-            )
+    with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
+        make_hdf5_dataset(
+            hdf5_file=out,
+            render_cfg=_render_cfg(num_samples=3),
+            fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS],
+        )
 
 
 # Unit tests for the loudness-loop retry/raise semantics. Mocking
@@ -1145,17 +1134,17 @@ def test_generate_sample_retries_when_only_fixed_note_params(
 def test_make_dataset_uses_fixed_params_lists_when_provided(
     tmp_path: Path,
 ) -> None:
-    """make_dataset writes the supplied fixed params verbatim, bypassing param_spec.sample()."""
+    """make_hdf5_dataset writes the supplied fixed params verbatim, bypassing
+    param_spec.sample()."""
     spec = param_specs[_SPEC_NAME]
     out = tmp_path / "fixed.h5"
     num_samples = 3
-    with h5py.File(out, "a") as f:
-        make_dataset(
-            hdf5_file=f,
-            render_cfg=_render_cfg(num_samples),
-            fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
-            fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
-        )
+    make_hdf5_dataset(
+        hdf5_file=out,
+        render_cfg=_render_cfg(num_samples),
+        fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
+        fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
+    )
 
     _, _, params = _assert_h5_structure_is_valid(out, spec, num_samples)
     # ParamSpec.encode is annotated dict[str, float] on main but accepts the runtime

@@ -540,7 +540,7 @@ ______________________________________________________________________
   interpreter per child — no inherited VST plugin state, no shared mutable globals.
   See design doc §7.8.1 for full trade-off analysis.
 - Per-shard lifecycle: write `.rendering` to **remote** storage FIRST → spawn child process
-  → child imports and calls `make_dataset(shard_path, shard_spec)` →
+  → child imports and calls `make_hdf5_dataset(shard_path, shard_spec)` →
   parent waits with `join(timeout=SHARD_TIMEOUT)` → on success: validate locally →
   upload `.h5` to storage → write `.valid` to storage.
   `.rendering` in remote storage survives worker/child death (crash resilience).
@@ -558,8 +558,8 @@ ______________________________________________________________________
   with `p.kill()`, shard marked invalid.
 - **Xvfb display isolation:** Each child process should use a per-process X11 display
   number (`:N` derived from PID or shard ID) to avoid contention in headless VST rendering.
-- **No `generate_fn` argument:** The child process imports `make_dataset` directly
-  (`from synth_setter.data.vst.generate_vst_dataset import make_dataset`). Under `spawn`, the child is a fresh
+- **No `generate_fn` argument:** The child process imports `make_hdf5_dataset` directly
+  (`from synth_setter.data.vst.writers import make_hdf5_dataset`). Under `spawn`, the child is a fresh
   interpreter, so the import is clean. No pickling concerns — only `shard_spec` and
   `shard_path` cross the process boundary. For tests, `LocalBackend` calls
   `run_worker()` in-process (no spawn), so test fixtures can inject a fake function.
@@ -928,7 +928,7 @@ ______________________________________________________________________
 05. W&B optional (`--skip-wandb`) — tests skip it; mock test for artifact structure
 06. Workers use ThreadPoolExecutor for parallel shard generation
 07. Each shard renders in a child process via `multiprocessing.get_context("spawn").Process(...)`.
-    Child process imports `make_dataset` directly (`from synth_setter.data.vst.generate_vst_dataset import make_dataset`).
+    Child process imports `make_hdf5_dataset` directly (`from synth_setter.data.vst.writers import make_hdf5_dataset`).
     Only `shard_spec` and `shard_path` cross the process boundary — no function objects.
     `LocalBackend` accepts an optional `generate_fn` for tests (runs in-process, no spawn).
     For v1, no seeding (current behavior). Post-launch, dual-RNG seeding

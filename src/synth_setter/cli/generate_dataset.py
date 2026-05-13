@@ -103,12 +103,9 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 
     The flag set is derived from ``RenderConfig.model_fields`` so every renderer
     config field surfaces as a ``--<field>`` option automatically; adding a
-    field on the model auto-extends the CLI invocation.
-
-    HDF5-only: ``DatasetSpec.output_format`` is currently restricted to
-    ``"hdf5"`` and ``generate_vst_dataset.py`` writes HDF5 regardless of the
-    output path. Format dispatch on ``shard.filename`` suffix lands when wds
-    is introduced (PR-12/13/14 in the dataset-pipeline chain).
+    field on the model auto-extends the CLI invocation. The writer is dispatched
+    on ``shard.filename``'s suffix inside the subprocess via
+    ``EXTENSION_TO_OUTPUT_FORMAT``.
     """
     output_path = output_dir / shard.filename
     args = [
@@ -137,8 +134,7 @@ def run(spec: DatasetSpec) -> None:
 
     The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
     ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
-    — verifies the plugin and pinned ``renderer_version`` agree. HDF5-only for now:
-    ``spec.output_format`` is restricted to ``"hdf5"``.
+    — verifies the plugin and pinned ``renderer_version`` agree.
 
     :raises RuntimeError: If the worker's plugin version disagrees with
         ``spec.render.renderer_version``.
