@@ -104,7 +104,7 @@ jobs:
       # Real-run the data-pipeline chain via act with provider=local —
       # dropping `-n` lets `setup` populate `$GITHUB_OUTPUT` so the dynamic
       # matrix resolves. Fork PRs skip (R2 secrets unavailable to forks).
-      # Three act-only knobs paper over real act-vs-GHA divergences without
+      # Four act-only knobs paper over real act-vs-GHA divergences without
       # touching the production workflow:
       #   * `--env PIP_BREAK_SYSTEM_PACKAGES=1` — catthehacker's python3.12
       #     ships PEP 668's externally-managed marker; the workflow's
@@ -119,6 +119,15 @@ jobs:
       #   * `--artifact-server-path` — `actions/upload-artifact@v4` needs
       #     `ACTIONS_RUNTIME_TOKEN`; act issues one only when its local
       #     artifact server is enabled via this flag.
+      #   * `--matrix output_format:hdf5` — act runs every matrix cell
+      #     against the same act-runner container, so the parallel
+      #     `actions/setup-python@v6` invocations from `hdf5` and `wds`
+      #     race on `/opt/hostedtoolcache/Python`'s cleanup hook and
+      #     both fail (Directory not empty / cd: bin/: No such file or
+      #     directory). Real GHA gives each matrix cell its own runner,
+      #     so this is purely an act limitation. Restrict the regression
+      #     guard to one cell — the per-cell validate-shards behavior
+      #     itself is exercised by the real GHA matrix on every PR.
       - name: Real-run test-dataset-generation chain via act (provider=local)
         if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
         env:
@@ -139,6 +148,7 @@ jobs:
           act workflow_dispatch \
             -W .github/workflows/test-dataset-generation.yml \
             --input provider=local \
+            --matrix output_format:hdf5 \
             --secret-file "${secrets_file}" \
             --env PIP_BREAK_SYSTEM_PACKAGES=1 \
             --container-options "-v /tmp:/tmp" \
