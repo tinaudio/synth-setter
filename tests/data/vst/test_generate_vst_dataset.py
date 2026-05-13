@@ -345,6 +345,7 @@ def _patched_sample(
     pull_count = [0]
 
     def fake_sample() -> tuple[dict[str, float], dict[str, int | tuple[float, float]]]:
+        """Return the next ``(synth_params, note_params)`` pair from the replay tape."""
         pull_count[0] += 1
         return next(replay_iter)
 
