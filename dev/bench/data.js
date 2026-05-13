@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778686444378,
+  "lastUpdate": 1778686447744,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3324,6 +3324,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.551055831200006,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7d8a43877a722e382e76787f28f36e987917c420",
+          "message": "refactor(layout)!: nest src/pipeline/ under synth_setter/, drop legacy src/ package (#1001)\n\n* refactor(layout)!: nest src/pipeline/ under synth_setter/, drop legacy src/ package\n\nMove `src/pipeline/` to `src/synth_setter/pipeline/` and remove the residual\n`src/__init__.py` so `src/` now contains only the `synth_setter` package.\n\nSweeps:\n- Python imports: `from src.pipeline.` -> `from synth_setter.pipeline.` across\n  tests/, scripts/, and the self-reference in materialize_spec.py's docstring.\n- YAML / Dockerfile / docs: `python -m src.pipeline.` ->\n  `python -m synth_setter.pipeline.` across .github/workflows, configs/compute,\n  configs/image, and docs/.\n- pyproject.toml [tool.setuptools].packages: drop `src`, `src.pipeline`,\n  `src.pipeline.ci`, `src.pipeline.schemas`; add `synth_setter.pipeline`,\n  `synth_setter.pipeline.ci`, `synth_setter.pipeline.schemas`. Delete the\n  Phase 2 transition comment that explained the dual registration.\n- CLAUDE.md Architecture section: collapse the separate `src/pipeline/` bullet\n  into a sub-bullet under `src/synth_setter/`.\n- tests/conftest.py: update the `RenderConfig` reference comment.\n\n`MODEL_BASELINE` in tests/test_compare_baseline_configs.py is intentionally\nunchanged — the project's stable-baseline-anchor rule applies and the\nresolved-YAML grep confirmed no `_target_: src.pipeline` rewrites surface\nunder the move.\n\nThe `!` flags this as breaking because `import src.pipeline` now raises\n`ModuleNotFoundError`. All in-tree callers have been migrated.\n\nCloses #995\nRefs #784\n\n* fix(ci,docs): pip install -e . in docker-build-validation; address Copilot review\n\nPhase 3 (#995) rewrote `.github/workflows/docker-build-validation.yml` to\ninvoke `python -m synth_setter.pipeline.ci.load_image_config`, but the\nworkflow's setup only installed `pyyaml pydantic` — the `synth_setter`\npackage itself was never installed on the runner. Pre-Phase-3 the call\nworked because `python -m src.pipeline.ci.load_image_config` resolved\nagainst the cwd-relative `src/` directory; post-Phase-3 the principled fix\nis `pip install -e .`, matching the pattern Phase 2 (#991) established\nfor every other CI workflow that spawns Python expecting `synth_setter`.\n\nAlso addresses three inline review findings from Copilot on PR #1001:\n\n- src/synth_setter/cli/generate_dataset.py: drop the `TODO(#784):\n  collapse to synth_setter.pipeline.* once Phase 3 hoists ...` comment;\n  the imports below are already on `synth_setter.pipeline.*` after this\n  PR, so the TODO is satisfied.\n- docs/doc-map.yaml: correct the `covers:` description for\n  `src/synth_setter/pipeline/constants.py` — the module defines only\n  `INPUT_SPEC_FILENAME`, no R2 bucket name constant.\n- docs/design/data-pipeline-implementation-plan.md: repoint the\n  `make_dataset` import example from the non-existent\n  `synth_setter.pipeline.vst` to the actual current location,\n  `synth_setter.data.vst.generate_vst_dataset`.\n\nRefs #995\nRefs #784\n\n* fix(ci): also install pyyaml + pydantic for docker-build-validation\n\nThe previous fix (`pip install -e .`) makes `synth_setter` importable but\ndoesn't pull in `pyyaml` or `pydantic` because neither is a declared\nruntime dependency in `pyproject.toml`. The Phase 3 sweep replaced the\nprior bare `pyyaml pydantic` install with `pip install -e .` alone, which\nre-broke the same step on a different `ModuleNotFoundError`. Pin both\nexplicitly alongside the editable install so the step has a self-contained\nenvironment for `python -m synth_setter.pipeline.ci.load_image_config`.\n\nRefs #995\nRefs #784\n\n* fix(ci,docs): install synth_setter for validate-dataset-shards; fix duplicate stale vst import\n\nTwo follow-up findings from Copilot's review of b9dd27d:\n\n1. .github/workflows/validate-dataset-shards.yaml — the validate-spec\n   job runs `python3 -m synth_setter.pipeline.ci.validate_spec` but its\n   install step only installed pydantic. Same regression as\n   docker-build-validation.yml in b9dd27d. Use `pip install --no-deps -e .`\n   alongside the explicit `pydantic>=2,<3` pin so the runner-side env\n   stays minimal (no torch) but synth_setter is importable. The comment\n   block above the step (which explains why this is a minimal install)\n   is preserved verbatim — the rationale still holds.\n\n2. docs/design/data-pipeline-implementation-plan.md L931 — the\n   \"Assumptions\" section had a second stale reference to the\n   non-existent `synth_setter.pipeline.vst.make_dataset` module that\n   c669164 only fixed at L562. Repointed to the actual current\n   location, `synth_setter.data.vst.generate_vst_dataset.make_dataset`,\n   matching the L562 fix.\n\nRefs #995\nRefs #784\n\n* fix(ci): install synth_setter for spec-materialization host-side validate\n\nThe host-side `Validate spec structure` step in spec-materialization.yml and\nthe `Assert test-specific values` step in test-spec-materialization.yml both\nrun `python3 -m synth_setter.pipeline.ci.validate_spec` outside the docker\ncontainer. Phase 3 made `synth_setter` only importable when installed (PEP\nsrc-layout, sources under src/), so both invocations would raise\nModuleNotFoundError on a fresh runner.\n\nSame fix pattern as c669164 / b9dd27d9 / b0c9cfd: add setup-python +\n`pip install --no-deps -e . \"pydantic>=2,<3\"` before the python invocation.\n--no-deps keeps the host env minimal (torch stays in the image).\n\nAddresses Copilot's suppressed low-confidence comment from review\n4282446908 on .github/workflows/test-spec-materialization.yml:35.\n\nRefs #995\n\n* fix(ci): drop --no-deps from host-side validate_spec installs\n\nThe `pip install --no-deps -e . \"pydantic>=2,<3\"` install pattern used by\nthe three host-side `Validate spec structure` / equivalent steps had a\nsubtle bug: `--no-deps` applies to *every* package in the pip command,\nnot just the editable install. As a result pydantic gets installed but\nits required `pydantic-core` (a separately-shipped C extension) does\nnot. The act-verify CI job caught this on PR #1001 with:\n\n    Successfully installed pydantic-2.13.4 synth-setter-3.0.0\n    ...\n    ModuleNotFoundError: No module named 'pydantic_core'\n\n`--no-deps` was originally added to keep the host env minimal (no torch).\nThe minimal-install goal is already met by `[project].dependencies = []`\nin pyproject.toml — the editable install adds nothing transitively for\nsynth_setter itself. Dropping `--no-deps` lets pydantic pull in its\nrequired pydantic-core, while torch still stays out of the env.\n\nAffects three workflows (each running `python3 -m\nsynth_setter.pipeline.ci.validate_spec` on a host runner, not in the\ndocker image):\n\n- .github/workflows/validate-dataset-shards.yaml\n- .github/workflows/spec-materialization.yml\n- .github/workflows/test-spec-materialization.yml\n\nComment blocks above each install step are updated to explain the\nnon-obvious interaction between `--no-deps` and pydantic's own\ndependency on pydantic-core, so the next refactor doesn't reintroduce\nthe flag.\n\nRefs #995\nRefs #784",
+          "timestamp": "2026-05-13T15:20:28Z",
+          "tree_id": "01a20ad39e9ec59ede0933d1188b34cee53d1769",
+          "url": "https://github.com/tinaudio/synth-setter/commit/7d8a43877a722e382e76787f28f36e987917c420"
+        },
+        "date": 1778686447017,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 3.4932525157928467,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 4.092073093727231,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.028483038768172264,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.014163613319396973,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.1601274013519287,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 20.329702602499992,
             "unit": "seconds"
           }
         ]
