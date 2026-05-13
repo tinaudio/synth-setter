@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778713536435,
+  "lastUpdate": 1778714283324,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2514,6 +2514,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03721886873245239,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9cf790ffd1e8700ad28d4de8a0a6e38b53ded6b5",
+          "message": "internal-feat(vst): split make_dataset into make_hdf5_dataset + make_wds_dataset; dispatch CLI by suffix (#1030)\n\n* internal-feat(vst): split make_dataset into make_hdf5_dataset + make_wds_dataset; dispatch CLI by suffix\n\nSplits the single legacy ``make_dataset(h5py.File, render_cfg)`` into two\nwriter entrypoints dispatched by the renderer CLI on the output file's\nsuffix:\n\n- ``make_hdf5_dataset(hdf5_file: Path | str, render_cfg, ...)`` — keeps\n  the resumable HDF5 path; signature changes to take a path and open the\n  file internally. Writes the ``audio.attrs`` sidecar from a new\n  ``ShardMetadata`` instance.\n- ``make_wds_dataset(wds_file: Path | str, render_cfg, ...)`` — new wds\n  path using ``webdataset.TarWriter``. Emits per-batch ``.npy`` members\n  plus a ``metadata.json`` member from the same ``ShardMetadata`` instance.\n\nBoth paths share rendering logic via ``_validate_fixed_params_lengths`` /\n``_generate_sample_for_index`` / ``_shard_metadata_from_render`` /\n``_render_in_batches`` helpers. The new writer helpers live in a fresh\n``synth_setter.data.vst.writers`` module so the code-quality guard (#938)\nstays green without docstring-cleaning the legacy parts of\n``generate_vst_dataset.py``.\n\nCLI ``main`` in ``generate_vst_dataset.py`` dispatches by\n``Path(args.data_file).suffix`` via ``EXTENSION_TO_OUTPUT_FORMAT``\n(``.h5`` → HDF5, ``.tar`` → wds, unknown → ``SystemExit``).\n\nUpdates the one in-tree caller (``tools/surge_xt_interactive.py``) to\nthe new path-accepting signature. Drops the stale \"HDF5-only\" docstring\nclaims from ``cli/generate_dataset.py``.\n\nRefs #874\nRefs #882\n\n* docs(design,guides): sweep stale make_dataset refs after writer split\n\nPost-#1030 doc-drift cleanup. The PR renames make_dataset →\nmake_hdf5_dataset + adds make_wds_dataset, and lifts both into a new\nsynth_setter.data.vst.writers module. This commit ports the docs over.\n\n* docs/design/data-pipeline.md:\n  - Fix broken import example (was `from ...generate_vst_dataset import\n    make_hdf5_dataset` → now `from ...writers import make_hdf5_dataset`).\n  - Rename `make_dataset()` / `make_dataset` in §7.8.1 spawn-rationale\n    prose.\n  - Rewrite §7.10 head paragraph and the \"Why generation stays HDF5\"\n    sub-section: workers now emit the format selected by the spec; the\n    \"design in transition\" Note that pointed at PR-13 is replaced by a\n    factual HDF5-is-resumable / WDS-is-not paragraph since PR-13 has\n    landed.\n  - Fix stale src/pipeline/schemas/shard_metadata.py path (post-#1001\n    layout) at line 863.\n* docs/design/data-pipeline-implementation-plan.md — three\n  make_dataset / generate_vst_dataset import refs renamed to\n  make_hdf5_dataset / writers.\n* docs/reference/audio-similarity-benchmarks.md — two prose refs to\n  make_dataset renamed to make_hdf5_dataset.\n* docs/guides/surge-xt-interactive.md — seven refs renamed; module\n  path on the symbol-link swapped from generate_vst_dataset.py to\n  writers.py.\n* docs/doc-map.yaml — retarget the surge-xt-interactive\n  generate_vst_dataset.py entry to its remaining surface\n  (generate_sample / VSTDataSample / make_spectrogram) and add new\n  writers.py + shapes.py entries under both the data-pipeline design\n  doc and the surge-xt-interactive guide.\n\nRefs #874\nRefs #882\n\n* internal-fix(vst): address Copilot review nits on PR #1030\n\n- Drop the unused `from synth_setter.data.vst import param_specs` import in\n  test_writers_wds_e2e.py — would trip ruff F401.\n- Rewrite the stale \"Inlined here to avoid a cross-test import dependency\"\n  comment that contradicted the actual import-from-sibling-test pattern.\n- Narrow `pytest.raises(Exception, ...)` → `pytest.raises(pydantic.ValidationError, ...)`\n  in test_make_wds_dataset_metadata_json_strict_rejects_extra so the test\n  actually pins the `extra=\"forbid\"` behavior its docstring promises.\n- Rename three test functions in test_generate_vst_dataset.py from\n  `test_make_dataset*` → `test_make_hdf5_dataset*` to match the post-split\n  public entrypoint name (better for grep/test selection).\n\nRefs #874\nRefs #882\n\n* internal-fix(vst): address Copilot follow-ups on PR #1030\n\n- Drop unused hashlib and random imports from generate_vst_dataset.py\n  (left over after the writer split — would have failed ruff F401 once\n  the file isn't pydoclint-excluded).\n- Correct the WebDataset shard-structure snippet in the data-pipeline\n  design doc: real members are <start_idx:08d>.<audio|mel_spec|param_array>.npy\n  (per DATASET_FIELD_NAMES + save_wds_samples), each holds a whole\n  batch stacked on axis 0, and keys advance by sample_batch_size.\n\nRefs #874\n\n* chore(lint): remove test_generate_vst_dataset.py from pydoclint excludes\n\nThe 254c534 rename of three tests (test_make_dataset* → test_make_hdf5_dataset*)\nin tests/data/vst/test_generate_vst_dataset.py registers as new top-level\ndefs in the diff against main, which trips the\ncheck_no_new_funcs_in_pydoclint_excluded guard (#938).\n\nThe file is already lint-clean: 0 missing arg annotations, only 1 missing\ndocstring on a nested `fake_sample` closure — added a one-liner.\n\nDrop the file from [tool.pydoclint].exclude. pydoclint now runs against\nit and exits clean.\n\nRefs #25\nRefs #874\n\n* revert(vst): keep test_make_dataset names to satisfy code-quality guard\n\nThe 254c534 rename of three tests in test_generate_vst_dataset.py\n(`test_make_dataset` -> `test_make_hdf5_dataset` and friends) was a\nCopilot polish suggestion but tripped the\ncheck_no_new_funcs_in_pydoclint_excluded guard (#938) — the diff against\nmain shows them as new top-level defs, and the file is on\n[tool.pydoclint].exclude.\n\nThe previous attempted fix (remove the file from the exclude list)\nsilently failed locally because the `pre-commit run` output was piped\nthrough `tail -8`, which truncated pydoclint's 13+ DOC101/DOC103\nviolations on pytest-fixture-args (`tmp_path`, `monkeypatch`) — those\ndocstrings would all need `:param:` sections to clear pydoclint, which\nis out of scope for this PR.\n\nReverting just the three function names; the docstrings already say\n\"make_hdf5_dataset\" so future maintainers know the function under test.\n\nRefs #874\nRefs #882\n\n* internal-fix(vst): address Copilot review nits on PR #1030\n\n- writers.py: tighten fixed_*_params_list validation from len() < to\n  len() != expected_fixed_len. The writer indexes fixed params by\n  ``i - start_idx``, so a shard-length list on a resumed run\n  (start_idx > 0) would silently shift indices (row start_idx using\n  list[0]). Exact-equality catches that mismatch at validation time\n  instead of letting it through. Existing too-short test still\n  matches via the \"fixed_synth_params_list has length\" prefix.\n- writers.py: rewrite make_hdf5_dataset / make_wds_dataset /\n  _validate_fixed_params_lengths docstrings to spell out the\n  tail-only contract on resumed runs (list[0] lands at row start_idx,\n  caller slices a full-length list themselves), so the indexing\n  semantics are visible at the public API surface.\n- generate_vst_dataset.py: rewrite the main() lazy-import rationale —\n  h5py is already a module-level import here, so it is not what the\n  lazy load defers; only webdataset is.\n\nRefs #874\n\n* Update writers.py\n\n* docs(claude-md): point doc-map's dispatch-maps covers at the actual dispatcher\n\nCopilot review on PR #1030 flagged that the doc-map.yaml line 85 entry\nfor spec.py says the suffix-dispatch maps are consumed by \"the renderer\nCLI's main() in writers.py\", but the dispatch actually lives in\ndata/vst/generate_vst_dataset.py::main() (which imports\nEXTENSION_TO_OUTPUT_FORMAT, reads Path(data_file).suffix, and routes to\nwriters.make_hdf5_dataset or writers.make_wds_dataset).\n\nUpdate the covers text to point at the correct module and spell out\nthe lookup so future doc-drift checks anchor on the right symbol.\n\nRefs #874\nRefs #882\n\n---------\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>",
+          "timestamp": "2026-05-13T19:02:45-04:00",
+          "tree_id": "8d7c78e4f10f30a150409487d4f0ac9ec73a335e",
+          "url": "https://github.com/tinaudio/synth-setter/commit/9cf790ffd1e8700ad28d4de8a0a6e38b53ded6b5"
+        },
+        "date": 1778714282213,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.1501553058624268,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.343547191619873,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.026436209678649902,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.014015793800354004,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.1869046688079834,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.785817476249994,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.5833048820495605,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.7500910580158235,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.039276544004678726,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.046715378761291504,
             "unit": "1-cos"
           },
           {
