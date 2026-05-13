@@ -39,11 +39,17 @@ _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
 
 
-def _render_cfg(num_samples: int, sample_batch_size: int | None = None) -> RenderConfig:
+def _render_cfg(
+    num_samples: int,
+    sample_batch_size: int | None = None,
+    min_loudness: float = _MIN_LOUDNESS,
+) -> RenderConfig:
     """Build a RenderConfig with this module's test defaults.
 
     ``batch_per_shard`` is set to ``num_samples`` (one shard = one batch in tests);
     ``sample_batch_size`` defaults to the same so each test renders in a single batch.
+    ``min_loudness`` defaults to ``_MIN_LOUDNESS`` and can be lowered (e.g. to
+    ``-inf``) to disable the loudness gate during replay runs — see #489.
     """
     return RenderConfig(
         plugin_path=_PLUGIN_PATH,
@@ -54,7 +60,7 @@ def _render_cfg(num_samples: int, sample_batch_size: int | None = None) -> Rende
         channels=_CHANNELS,
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
-        min_loudness=_MIN_LOUDNESS,
+        min_loudness=min_loudness,
         sample_batch_size=sample_batch_size if sample_batch_size is not None else num_samples,
         batch_per_shard=num_samples,
     )
@@ -268,13 +274,14 @@ _HARDCODED_NOTE_PARAMS: dict[str, int | tuple[float, float]] = {
 
 
 def _assert_h5_structure_is_valid(
-    out: Path, spec, num_samples: int
+    out: Path, spec, num_samples: int, min_loudness: float = _MIN_LOUDNESS
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Open ``out`` and assert dataset keys, shapes, dtypes, attrs, and finiteness.
 
     Returns materialized (audio, mel_spec, param_array) numpy arrays so callers can perform per-row
     decode checks without re-opening the file. Shared by the round-trip and random-sampling e2e
-    tests.
+    tests. ``min_loudness`` overrides the expected ``audio.attrs["min_loudness"]`` for callers
+    that disable the loudness gate (e.g. replay runs that pass ``-inf``).
     """
     expected_audio_shape = (num_samples, _CHANNELS, int(_SAMPLE_RATE * _DURATION))
     expected_mel_shape = (num_samples, *_PER_SAMPLE_MEL_SHAPE)
@@ -304,7 +311,7 @@ def _assert_h5_structure_is_valid(
         assert audio.attrs["sample_rate"] == _SAMPLE_RATE
         assert audio.attrs["channels"] == _CHANNELS
         assert audio.attrs["signal_duration_seconds"] == _DURATION
-        assert audio.attrs["min_loudness"] == _MIN_LOUDNESS
+        assert audio.attrs["min_loudness"] == min_loudness
 
         audio_arr = audio[...].astype(np.float32)
         mel_arr = mel[...]
@@ -820,9 +827,11 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
        surviving row is guaranteed to be loud enough to pass the loudness gate.
     2. Decode the candidate ``param_array`` rows back into ``synth_patches`` /
        ``note_patches`` and replay them in Stage 2 by patching ``param_spec.sample``
-       (via ``_patched_sample``) to yield the candidate tuples in order. Because the
-       params are guaranteed-loud (step 1), this run can't infinite-loop on the
-       loudness gate.
+       (via ``_patched_sample``) to yield the candidate tuples in order. Stage 2
+       passes ``min_loudness=-inf`` to disable the loudness gate: phase
+       nondeterminism (#489) can drop a stage-1 candidate that just cleared
+       ``_MIN_LOUDNESS`` below it on re-render, which would trigger a retry and
+       desync the replay iterator.
 
     Assertions:
 
@@ -872,6 +881,9 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     log.info("note_patches: %s", note_patches)
 
     # Stage 2: replay the candidates via ``_patched_sample`` and verify reproducibility.
+    # ``min_loudness=-inf`` disables the loudness gate so phase-nondeterminism (#489)
+    # can't drop a barely-loud stage-1 candidate below ``_MIN_LOUDNESS`` on re-render
+    # and desync the replay iterator. The gate already served its purpose in stage 1.
     got_dataset = tmp_path / "replayed.h5"
     replay = list(zip(synth_patches, note_patches, strict=True))
     t0 = time.perf_counter()
@@ -879,11 +891,14 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
         h5py.File(got_dataset, "a") as f,
         _patched_sample(spec, replay),
     ):
-        make_dataset(hdf5_file=f, render_cfg=_render_cfg(_NUM_SAMPLES))
+        make_dataset(
+            hdf5_file=f,
+            render_cfg=_render_cfg(_NUM_SAMPLES, min_loudness=float("-inf")),
+        )
     stage2_seconds = time.perf_counter() - t0
 
     actual_audio, actual_mel, actual_params = _assert_h5_structure_is_valid(
-        got_dataset, spec, _NUM_SAMPLES
+        got_dataset, spec, _NUM_SAMPLES, min_loudness=float("-inf")
     )
 
     round_trip_metrics = _assert_round_trip_matches(
