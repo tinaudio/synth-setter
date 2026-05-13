@@ -38,7 +38,7 @@ on:
         required: true
         type: string
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/runpod-smoke-shard`)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
         type: string
       image_tag:
@@ -86,10 +86,10 @@ on:
           - runpod
           - oci
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/runpod-smoke-shard`)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
         type: string
-        default: "generate_dataset/runpod-smoke-shard"
+        default: "generate_dataset/smoke-shard"
       image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false

@@ -30,12 +30,12 @@ ______________________________________________________________________
 ### 2.1 Data Generation
 
 ```
-configs/experiment/{id}.yaml → Hydra compose against configs/dataset.yaml
+configs/experiment/generate_dataset/{id}.yaml → Hydra compose against configs/dataset.yaml
   → spec_from_cfg(cfg) → DatasetSpec (frozen, Pydantic, the spec ON R2)
     → uploaded to R2 as {r2_prefix}/input_spec.json (model.model_dump_json())
 ```
 
-- Input is mutable, human-authored YAML under `configs/experiment/`
+- Input is mutable, human-authored YAML under `configs/experiment/generate_dataset/`
 - `DatasetSpec` is the unified model: the same frozen Pydantic instance is both the validated input and the materialized artifact (`DatasetConfig` + `DatasetPipelineSpec` were unified in #887)
 - Runtime state (git SHA, renderer version, per-shard seeds) auto-fills via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`, plus `run_id` and `r2_prefix` via the `_default_run_id` / `_default_r2_prefix` factories)
 - Spec is the reproducibility unit and reconciliation target

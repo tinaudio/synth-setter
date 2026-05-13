@@ -137,7 +137,7 @@ Source of truth: a `.env` file at the repo root.
 cp .env.example .env
 $EDITOR .env  # fill in RCLONE_CONFIG_R2_* + WANDB_API_KEY
 python -m src.pipeline.skypilot_launch \
-    --experiment generate_dataset/runpod-smoke-shard
+    --experiment generate_dataset/smoke-shard
 ```
 
 The launcher finds `<repo_root>/.env`, parses it via `python-dotenv`, and resolves all keys from there. Process env is a non-event because `.env` wins per key — useful when you have stale shell exports.
