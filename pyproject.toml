@@ -397,4 +397,11 @@ tests_dir = [
     "tests/pipeline/data/",
     "tests/scripts/ci/",
 ]
+# mutmut copies only `paths_to_mutate` into `mutants/` and strips the real
+# `src/` off `sys.path` (see mutmut/__main__.py:setup_source_paths). Without
+# `also_copy`, transitive imports from the un-mutated rest of the package
+# (e.g. `synth_setter.cli`, `synth_setter.pipeline.r2_io`) fail with
+# ImportError during stats collection. Copy the whole package so the sandbox
+# can resolve them.
+also_copy = ["src/synth_setter/"]
 pytest_add_cli_args = ["-m", "not slow and not requires_vst and not r2 and not gpu and not benchmark"]
