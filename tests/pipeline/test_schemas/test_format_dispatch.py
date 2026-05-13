@@ -18,3 +18,13 @@ def test_extension_to_output_format_covers_h5_and_tar() -> None:
     """The reverse map dispatches the two formats the pipeline writes today."""
     assert EXTENSION_TO_OUTPUT_FORMAT[".h5"] == "hdf5"
     assert EXTENSION_TO_OUTPUT_FORMAT[".tar"] == "wds"
+
+
+def test_reverse_map_has_no_silent_collisions() -> None:
+    """The reverse map never loses entries to last-key-wins collisions.
+
+    The forward map must use distinct extensions per format, so reversing it
+    preserves cardinality. This pins the invariant the import-time guard in
+    ``spec.py`` enforces.
+    """
+    assert len(EXTENSION_TO_OUTPUT_FORMAT) == len(OUTPUT_FORMAT_TO_EXTENSION)

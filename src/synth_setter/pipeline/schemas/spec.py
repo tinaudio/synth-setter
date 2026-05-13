@@ -47,7 +47,16 @@ OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5", "wds": ".tar"}
 
 # Reverse lookup for dispatching shard writers/validators by file suffix;
 # derived from the forward map so adding a format stays a one-place edit.
+# Two formats must never share an extension — a collision would silently drop
+# an entry from the dict-comprehension (last-key-wins) and route the wrong
+# format downstream, so guard at import time.
 EXTENSION_TO_OUTPUT_FORMAT: dict[str, str] = {v: k for k, v in OUTPUT_FORMAT_TO_EXTENSION.items()}
+if len(EXTENSION_TO_OUTPUT_FORMAT) != len(OUTPUT_FORMAT_TO_EXTENSION):
+    raise RuntimeError(
+        "Duplicate extensions in OUTPUT_FORMAT_TO_EXTENSION — "
+        "two output formats map to the same suffix: "
+        f"{OUTPUT_FORMAT_TO_EXTENSION!r}"
+    )
 
 
 # Sentinel returned by ``_get_git_sha`` when called outside a git working
