@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778705812825,
+  "lastUpdate": 1778711019971,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2178,6 +2178,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.05448567867279053,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0a074b9e1a741a4cd6df8c1f7f2a49aaaebc9171",
+          "message": "internal-feat(vst): promote writer shape helpers + DATASET_FIELD_NAMES to public (#1025)\n\n* internal-feat(vst): promote writer shape helpers + DATASET_FIELD_NAMES to public\n\nPromote the per-row array names and the audio/mel/param shape calculators\ninside synth_setter.data.vst.generate_vst_dataset to public module-level\nhelpers (DATASET_FIELD_NAMES, audio_dataset_shape, mel_dataset_shape,\nparam_array_dataset_shape) plus the mel-front-end constants and\nmel_hop_length / mel_n_fft / mel_n_frames helpers. make_spectrogram and\ncreate_datasets_and_get_start_idx now call the new helpers; behavior is\nbyte-identical for the existing render configs.\n\nFoundation for the upcoming WDS writer and shard-validator inner-shape\nchecks, which need to share these primitives with the validator side.\n\nRefs #874\nRefs #882\n\n* internal-fix(vst): extract shape primitives to shapes.py to clear code-quality guard\n\nThe first commit added six new top-level helpers (DATASET_FIELD_NAMES,\nmel_hop_length, mel_n_fft, mel_n_frames, audio_dataset_shape,\nmel_dataset_shape, param_array_dataset_shape) and four module-level\nconstants to src/synth_setter/data/vst/generate_vst_dataset.py, which is\non the [tool.pydoclint].exclude list — and the code-quality CI guard\n(scripts/check_no_new_funcs_in_pydoclint_excluded.py, see #938) rejects\nany new top-level def in an excluded file. The preferred fix is to\nremove the source file from the exclude list, but generate_vst_dataset.py\nhas 12+ pre-existing pydoclint violations on neighbouring functions\n(make_spectrogram, generate_sample, make_dataset, _GenerateCliArgs) —\nall out of scope for this foundation PR.\n\nMove the new helpers to a fresh sibling module\nsrc/synth_setter/data/vst/shapes.py that was never on the exclude list,\nso pydoclint runs on it from day one and the guard sees the new defs\nland in an unexcluded file. generate_vst_dataset.py now imports the\nprimitives from the new module; behaviour is unchanged.\n\nAlso addresses the doc-drift advisory on the misleading \"single source\nof truth for the shard validator\" comment — the comment now lives in\nshapes.py's module docstring and hedges the validator/wds writer\nconsumers as \"(planned)\" since validate_shard.py still has its own\nprivate _EXPECTED_DATASETS tuple.\n\nRefs #874\nRefs #882\nRefs #938\n\n* internal-fix(vst): wire DATASET_FIELD_NAMES into the writer's HDF5 dataset names\n\nCopilot review on PR #1025 flagged the prior \"single source of truth\"\ncomment on DATASET_FIELD_NAMES as overpromising: save_samples and\ncreate_datasets_and_get_start_idx still hard-coded \"audio\", \"mel_spec\",\n\"param_array\" as string literals, so the constant was orthogonal to the\nwriter. The first follow-up commit (a2376d0) addressed half of that by\nmoving the constant to shapes.py and softening the comment.\n\nThis commit takes the other half — actually making the constant\nload-bearing on the writer side:\n\n- shapes.py exposes per-field constants AUDIO_FIELD, MEL_SPEC_FIELD,\n  PARAM_ARRAY_FIELD and builds DATASET_FIELD_NAMES from them, so the\n  tuple stays a derived view of the per-field constants.\n- create_datasets_and_get_start_idx now passes AUDIO_FIELD /\n  MEL_SPEC_FIELD / PARAM_ARRAY_FIELD into create_dataset instead of\n  the bare string literals.\n- A new shape-helpers test pins\n  DATASET_FIELD_NAMES == (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)\n  and the literal triple so renaming any field still forces the\n  validator's expected tuple to update in lockstep.\n\nsave_samples doesn't reference dataset names (it operates on already-\ncreated h5py.Dataset handles), so no change there.\n\nRefs #874\nRefs #882\n\n* internal-fix(vst): pass center=True explicitly to make_spectrogram's librosa call\n\nThe shape helpers in shapes.py (mel_n_frames) document the librosa\ncenter=True framing assumption, but make_spectrogram relied on the\nimplicit librosa default. Pinning center=True keeps the writer and the\n(planned) shard validator aligned on the same framing if librosa ever\nchanges its default.\n\nRefs #1025.\n\n* fix(vst): mel_hop_length raises on sample rates that would yield zero hop\n\nCopilot review on #1025 flagged that `mel_hop_length()` returns 0 when\n`sample_rate < MEL_FRAMES_PER_SECOND` (e.g., 50), and that 0 would later\ntrigger a `ZeroDivisionError` inside `mel_n_frames()`'s\n`audio_length // hop` floor-division. The schema doesn't lower-bound\nsample_rate at this depth, so guard at the leaf helper instead of\nrelying on upstream validation.\n\nRaises `ValueError` at the helper boundary so the failure surfaces with\na clear message instead of an opaque ZeroDivisionError downstream.\nNew test pins the raise.\n\nRefs #874\nRefs #882\n\n* internal-fix(vst): guard mel_n_fft against sample rates that round to n_fft=0\n\nmel_n_fft now raises ValueError when int(0.025 * sample_rate) rounds down\nto 0 (e.g., sample_rate <= 39), mirroring the mel_hop_length guard so the\nfailure surfaces at the leaf helper instead of as an opaque librosa error\ndownstream. Also corrects a stale phrase in the mel_hop_length docstring\nthat still referenced the pre-guard ZeroDivisionError path.\n\n---------\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>",
+          "timestamp": "2026-05-13T22:11:52Z",
+          "tree_id": "678e5b4d8aed880c1b20ae014808f476767541c5",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0a074b9e1a741a4cd6df8c1f7f2a49aaaebc9171"
+        },
+        "date": 1778711019163,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.929286241531372,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.725713217165321,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.023583507165312767,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.01666557788848877,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.565333604812622,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.894026241666666,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.517528057098389,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.891145356092602,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.032504044473171234,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.047752559185028076,
             "unit": "1-cos"
           },
           {
