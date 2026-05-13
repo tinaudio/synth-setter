@@ -68,7 +68,6 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e EXPERIMENT \
-            -e PYTHONPATH=/home/build/synth-setter \
             tinaudio/synth-setter:${{ inputs.image_tag }} \
             bash -c '
               set -euo pipefail

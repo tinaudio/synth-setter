@@ -114,7 +114,6 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
-            -e PYTHONPATH=/home/build/synth-setter \
             -w /home/build/synth-setter \
             "${IMAGE}" \
             python scripts/job_queue.py "${COMMAND_FILE}" \
@@ -141,7 +140,6 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v "${{ github.workspace }}/.queue-state:/queue-state" \
-            -e PYTHONPATH=/home/build/synth-setter \
             -e XDG_DATA_HOME=/queue-state \
             -e COMMAND_FILE \
             -e JOB_GROUP \

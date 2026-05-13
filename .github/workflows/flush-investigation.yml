@@ -52,7 +52,6 @@ jobs:
             -v "${{ github.workspace }}/notebooks:/workspace/notebooks" \
             -v "${{ github.workspace }}/reports:/reports" \
             -e SURGE_VST3_PATH="${SURGE_VST3_PATH}" \
-            -e PYTHONPATH=/home/build/synth-setter \
             synth-setter:dev-snapshot \
             passthrough bash -c '
               set -euo pipefail

@@ -79,7 +79,6 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
-            -e PYTHONPATH=/home/build/synth-setter:/home/build/synth-setter/src \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
@@ -107,7 +106,6 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -v /tmp/bench:/bench \
-            -e PYTHONPATH=/home/build/synth-setter:/home/build/synth-setter/src \
             -e BENCHMARK_OUTPUT_DIR=/bench \
             -e HYDRA_FULL_ERROR=1 \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \

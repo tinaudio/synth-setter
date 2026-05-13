@@ -414,7 +414,6 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e R2_ACCOUNT_ID \
-            -e PYTHONPATH=/home/build/synth-setter \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
