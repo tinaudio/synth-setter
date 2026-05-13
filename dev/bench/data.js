@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778711958847,
+  "lastUpdate": 1778711961528,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -4182,6 +4182,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 12.498737114300003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0bcf7c6797e0bc4ca4b901537dd779122d3c06bb",
+          "message": "ci(testing): wire Codecov gates and consolidate coverage collection (#1031)\n\nSteps 2-4 of the coverage-enforcement roadmap (#14). Builds the gating\ninfrastructure; activation of the Codecov GitHub App and CODECOV_TOKEN\nsecret happen separately (step 1, requires org admin in the UI).\n\n- Collapse the duplicate code-coverage job: every fast-suite leg\n  (ubuntu 3.10, ubuntu 3.11, macos 3.10) now produces a coverage.xml\n  and uploads under flag unit-cpu, instead of a fourth job re-running\n  the same suite.\n- Add [tool.coverage.run] (source, branch=true, parallel=true,\n  relative_files=true, omit) and [tool.coverage.paths] to pyproject.toml\n  so reports from different worktree paths merge cleanly.\n- New codecov.yml: project + patch status checks (informational for the\n  first week so we can observe before blocking), unit-cpu flag, and\n  per-directory component targets (pipeline 90%, models 85%, tools 50%,\n  rest auto). Validated against https://codecov.io/validate.\n- Align make coverage with CI flags (--cov-branch, xml + html reports,\n  same marker filter).\n\nFollow-ups (separate PRs): wire coverage into GPU/MPS/VST/slow workflows\nwith their own flags; add diff-cover as a fallback gate; add the Codecov\nbadge to README; flip status checks from informational to required once\nbaseline numbers stabilize.\n\nRefs #14, #149, #155, #30\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>",
+          "timestamp": "2026-05-13T22:25:09Z",
+          "tree_id": "9ff00cb80a88d885f01328da660167e26c0e0cd9",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0bcf7c6797e0bc4ca4b901537dd779122d3c06bb"
+        },
+        "date": 1778711960962,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.5336928367614746,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 4.0762998408079145,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.009413882158696651,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.004644632339477539,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.8985748291015625,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.586727661099996,
             "unit": "seconds"
           }
         ]
