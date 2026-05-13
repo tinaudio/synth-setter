@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778703208387,
+  "lastUpdate": 1778703210714,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3610,6 +3610,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 12.414048475200001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "156164a30795b1ac89baad85ec3bec9ae911b911",
+          "message": "internal-feat(schemas): add ShardMetadata + wds row in OUTPUT_FORMAT_TO_EXTENSION (#976)\n\n* internal-feat(schemas): add ShardMetadata + wds row in OUTPUT_FORMAT_TO_EXTENSION\n\nPlates the schema layer for the wds writer landing in PR-13:\n\n- New leaf module src/pipeline/schemas/shard_metadata.py holds the strict,\n  frozen ShardMetadata model (sidecar JSON for the wds tar's metadata.json\n  member). No project imports — consumers on either side of the src ↔\n  src/pipeline boundary can pick it up without forming a launcher-side\n  import cycle through pedalboard.\n- Extend OUTPUT_FORMAT_TO_EXTENSION from {\"hdf5\": \".h5\"} to\n  {\"hdf5\": \".h5\", \"wds\": \".tar\"} and widen DatasetSpec.output_format from\n  Literal[\"hdf5\"] to Literal[\"hdf5\", \"wds\"]. The existing\n  _shard_filenames_match_output_format model_validator now defends both\n  formats.\n\nJoins the existing schemas in the pydoclint exclude list (alongside\nspec.py, prefix.py, image_config.py) per the convention documented at\nthe exclude block — see #938 for the cleanup-as-we-go epic.\n\nInternal-only — no config / launcher / worker changes. PR-13 splits the\nwriter, PR-14 wires --wds-out end-to-end (closes #874).\n\nRefs #975\nPart of #72\n\n* docs(design): sync data-pipeline doc with ShardMetadata + Literal[\"hdf5\", \"wds\"]\n\nApply doc-drift findings from PR #976 review:\n\n- §14.1 spec sketch — drop the \"wds in a later PR\" trailer and widen the\n  Literal to match spec.py's new Literal[\"hdf5\", \"wds\"].\n- §14.7 directory tree — list the new shard_metadata.py leaf module.\n- §7.6 finalize step + §8 WDS shard structure — reference the metadata.json\n  sidecar (one per shard) and point readers at the ShardMetadata model.\n- doc-map.yaml — map src/pipeline/schemas/shard_metadata.py to the\n  data-pipeline design doc so future drift checks catch evolution of the\n  sidecar contract.\n\nRefs #975\nPart of #72\n\n* internal-fix(schemas): tighten ShardMetadata sample_rate type + AST-based leaf-import test\n\nAddresses Copilot review on PR #976:\n\n- ShardMetadata.sample_rate: float → int. The h5py audio attr is written\n  from RenderConfig.sample_rate (int), so the wds sidecar mirrors the\n  canonical type now rather than drifting at the format boundary. Test\n  payloads updated to match.\n- The leaf-module test now parses the module's AST and asserts no\n  ImportFrom/Import nodes targeting src.* — replaces the substring grep,\n  which would have false-failed on a docstring mentioning \"from src.\" and\n  missed alternative import phrasings.\n\nRefs #975\n\n* ci: re-trigger test-dataset-generation after transient VST X-server flake\n\n* internal-fix(schemas): clarify ShardMetadata is not yet read by validate_shard; UTF-8 source read in leaf-import test\n\nAddresses Copilot round 2 on PR #976:\n\n- ShardMetadata docstring + doc-map covers entry no longer claim the sidecar\n  is \"validated on read by validate_shard\". The wds writer and the wds branch\n  of validate_shard land in PR-13; PR-12 only plates the model. Reworded to\n  reflect current behavior (model exists, wiring in PR-13).\n- test_module_has_no_project_imports now uses Path(...).read_text(encoding=\"utf-8\")\n  instead of bare open().read(); shard_metadata.py contains the non-ASCII ↔\n  glyph, so a non-UTF-8 default locale (Windows) would have errored.\n\nRefs #975\n\n* test(pipeline): widen leaf-import check to flag all project-import forms\n\nAddresses Copilot round 3 on PR #976:\n\nThe AST check previously only caught ``import src.x`` and ``from src.x\nimport y``. Bare ``import src``, ``from src import x``, and any relative\n``from .x import y`` would have bypassed it. Now flags:\n\n- ast.Import: alias.name == \"src\" OR alias.name.startswith(\"src.\")\n- ast.ImportFrom: node.level > 0 (any relative import) OR node.module\n  starts with \"src.\" OR node.module == \"src\"\n\nThe wider check enforces the actual contract (no project-internal imports\nthat would form a launcher-side cycle), not a substring of one shape.\n\nRefs #975\n\n* internal-fix(schemas): add range validators on ShardMetadata + clarify leaf-test docstring\n\nAddresses Copilot round 4 on PR #976:\n\n- ShardMetadata now runs a _ranges_must_be_sane model_validator that mirrors\n  RenderConfig._ranges_must_be_sane: velocity ∈ [0, 127], sample_rate > 0,\n  channels >= 1, signal_duration_seconds > 0. The JSON-from-R2 path is a\n  trust boundary, so this catches corrupted/hand-edited sidecars at read\n  time rather than letting nonsensical values reach training. Tests pin\n  each rejection.\n- The leaf-import test docstring no longer claims generate_vst_dataset\n  imports ShardMetadata — that wiring lands in PR-13. Reworded to refer\n  to the future consumer.\n- Add tests/pipeline/test_schemas/test_shard_metadata.py to the pydoclint\n  exclude — its parametrized tests trip DOC101/DOC103 just like the\n  sibling test_dataset_spec.py / test_image_config.py / test_prefix.py\n  (which are all already excluded for the same reason).\n\nRefs #975\n\n* docs(design): clarify staged shards stay HDF5 regardless of output_format\n\nAddresses Copilot round 5 on PR #976. §7.6 hardcodes `.h5 + .valid` for the\nstaged-shard existence check (step 03), the structural-check open (step 04),\nand the promote copy (step 05). Now that `DatasetSpec.output_format` accepts\n`wds`, a casual reader might expect staging to flip to `.tar` for wds specs —\nbut it doesn't: workers always emit HDF5; only finalize's step 08 diverges per\nformat (transcoding to wds on demand). The rationale lives in §8's \"Why\ngeneration stays HDF5 regardless of output format\" but wasn't cross-referenced\nfrom §7.6.\n\nAdds a one-line clarifier at the top of §7.6 pointing readers to the §8 note,\nso the staging-stays-HDF5 contract is explicit without requiring the reader\nto find the other section.\n\nRefs #975\n\n* docs(design): revert §7.6 staged-HDF5 clarifier — conflicts with schema contract\n\nAddresses Copilot round 6 on PR #976. The clarifier added in 027a2df read:\n\"Staged shards are always HDF5 regardless of spec.output_format\". That's\ninternally inconsistent with PR-12's schema, where DatasetSpec.shards\nderives the shard filename from output_format via OUTPUT_FORMAT_TO_EXTENSION\n(wds → .tar). Reverting the clarifier keeps §7.6 matching the only working\ngeneration path today (hdf5); PR-13 will rewrite §7.6 + §8's \"Why generation\nstays HDF5\" section when the wds writer + extension dispatch land.\n\nRefs #975\n\n* docs(design): note §8 design-transition for wds — schema admits wds, writer lands PR-13\n\nAddresses Copilot round 7 on PR #976. Copilot rightly flagged that §8's \"Why\ngeneration stays HDF5 regardless of output format\" claim is inconsistent\nwith the schema's output_format → shard.filename wiring after PR-12. The\ntruth is the design IS changing across PR-12/PR-13: PR-12 widens the spec;\nPR-13 lands the wds writer + extension dispatch and will rewrite §8 to\nmatch the new pipeline shape.\n\nAdds a forward-looking note under §8's \"Why generation stays HDF5\" header\nthat:\n- points readers at §14.1's OUTPUT_FORMAT_TO_EXTENSION mapping,\n- states the eventual behavior (wds workers emit .tar directly),\n- says PR-13 lands the writer + section rewrite,\n- makes clear that on main today the schema admits wds but no writer is\n  wired.\n\nRefs #975\n\n---------\n\nCo-authored-by: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>",
+          "timestamp": "2026-05-13T16:00:22-04:00",
+          "tree_id": "dcc6c23e6dcfb5f6652ca4ee848339819679c7af",
+          "url": "https://github.com/tinaudio/synth-setter/commit/156164a30795b1ac89baad85ec3bec9ae911b911"
+        },
+        "date": 1778703210450,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.403386354446411,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.6680791029147803,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.011606983840465546,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.051624417304992676,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.0681002140045166,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.838391927400005,
             "unit": "seconds"
           }
         ]
