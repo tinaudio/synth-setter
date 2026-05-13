@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       experiment:
-        description: "Datagen experiment id (e.g. ci-materialize-test) — composed via Hydra against configs/dataset.yaml"
+        description: "Datagen experiment id (e.g. generate_dataset/ci-materialize-test) — composed via Hydra against configs/dataset.yaml"
         required: true
         type: string
       artifact_name:

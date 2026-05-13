@@ -58,9 +58,9 @@ on:
   workflow_dispatch:
     inputs:
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `runpod-smoke-shard`)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
-        default: "runpod-smoke-shard"
+        default: "generate_dataset/smoke-shard"
       docker_image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -193,8 +193,8 @@ jobs:
           DATASET_CONFIG: >-
             ${{
               github.event_name == 'pull_request'
-                && 'runpod-smoke-shard'
-                || (inputs.dataset_config || 'runpod-smoke-shard')
+                && 'generate_dataset/smoke-shard'
+                || (inputs.dataset_config || 'generate_dataset/smoke-shard')
             }}
         run: |
           set -euo pipefail
@@ -231,8 +231,8 @@ jobs:
       DATASET_CONFIG: >-
         ${{
           github.event_name == 'pull_request'
-            && 'runpod-smoke-shard'
-            || (inputs.dataset_config || 'runpod-smoke-shard')
+            && 'generate_dataset/smoke-shard'
+            || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -353,8 +353,8 @@ jobs:
       dataset_config: >-
         ${{
           github.event_name == 'pull_request'
-            && 'runpod-smoke-shard'
-            || (inputs.dataset_config || 'runpod-smoke-shard')
+            && 'generate_dataset/smoke-shard'
+            || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}

@@ -41,7 +41,7 @@ original parameters.
 
 ## Data Flow
 
-1. **Configure** -- Define a dataset in `configs/experiment/*.yaml` (synth, sample
+1. **Configure** -- Define a dataset in `configs/experiment/generate_dataset/*.yaml` (synth, sample
    count, shard size, parameter spec). Hydra composes the experiment against
    `configs/dataset.yaml` and `spec_from_cfg(cfg)` builds the unified
    `DatasetSpec` (post-#887 unification, post-#917 Hydra-only construction).

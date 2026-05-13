@@ -2,7 +2,7 @@
 """Validate a materialized DatasetSpec JSON.
 
 Provides structural validation (required fields, git_sha format, etc.) and optional test-value
-validation for ci-materialize-test.yaml expectations.
+validation for generate_dataset/ci-materialize-test.yaml expectations.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def validate_structure(spec: dict[str, Any]) -> list[str]:
 
 
 def validate_test_values(spec: dict[str, Any]) -> list[str]:
-    """Validate test-specific values expected from ci-materialize-test.yaml.
+    """Validate test-specific values expected from generate_dataset/ci-materialize-test.yaml.
 
     Returns a list of error strings (empty means valid).
     Checks: 3 shards, seeds [42,43,44], filenames zero-padded,

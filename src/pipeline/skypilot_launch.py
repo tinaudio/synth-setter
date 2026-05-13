@@ -120,7 +120,7 @@ _TAIL_LOGS_RC_SUCCESS = 0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_DIR = REPO_ROOT / "configs"
-DEFAULT_EXPERIMENT = "runpod-smoke-shard"
+DEFAULT_EXPERIMENT = "generate_dataset/smoke-shard"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
 DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 
@@ -389,10 +389,11 @@ def _warn_if_deprecated_cluster_name() -> None:
     default=DEFAULT_EXPERIMENT,
     show_default=True,
     help=(
-        "Datagen experiment name (e.g. `runpod-smoke-shard`). Resolved as Hydra "
-        "`compose(config_name='dataset', overrides=[f'experiment={name}'])` against "
-        "`configs/dataset.yaml`. Use trailing positional args for ad-hoc Hydra overrides, "
-        "e.g. `--experiment ci-materialize-test render.plugin_path=/path/to/Plugin.vst3`."
+        "Datagen experiment name (e.g. `generate_dataset/smoke-shard`). Resolved "
+        "as Hydra `compose(config_name='dataset', overrides=[f'experiment={name}'])` "
+        "against `configs/dataset.yaml`. Use trailing positional args for ad-hoc Hydra "
+        "overrides, e.g. `--experiment generate_dataset/ci-materialize-test "
+        "render.plugin_path=/path/to/Plugin.vst3`."
     ),
 )
 @click.argument("hydra_overrides", nargs=-1, type=click.UNPROCESSED)

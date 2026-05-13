@@ -121,7 +121,7 @@ class TestValidateTestValues:
     """Tests for validate_test_values."""
 
     def test_valid_test_spec_returns_no_errors(self) -> None:
-        """Spec matching ci-materialize-test.yaml expectations passes."""
+        """Spec matching generate_dataset/ci-materialize-test.yaml expectations passes."""
         spec = _make_valid_spec()
         assert validate_test_values(spec) == []
         assert all(s["filename"].endswith(".h5") for s in spec["shards"])
