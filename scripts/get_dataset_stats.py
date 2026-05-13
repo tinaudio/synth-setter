@@ -55,6 +55,14 @@ def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> np.ndarray
     # rather than their own framework's ``nonzero`` delegate, which returns
     # an axis-tuple layout that breaks index reporting.
     std = np.asarray(std)
+    if std.ndim == 0:
+        # ``finalize()`` returns a scalar variance when the Welford state has
+        # seen <=1 samples; treat that as a distinct, surface-the-real-problem
+        # failure rather than a generic degenerate-bin report.
+        raise ValueError(
+            "stats reduce to a scalar (likely a dataset with <=1 samples); "
+            "cannot compute per-bin std. Need at least 2 samples."
+        )
     # For 1-D std (e.g. unit tests, simple flattened layouts) ``np.where``
     # returns a list of bin indices. For multi-D std (real Surge mel:
     # (channels, mels, frames); audio: (mels, frames)) ``np.argwhere`` returns
@@ -121,13 +129,11 @@ def get_stats_hdf5(filename, mask_degenerate: bool = False):
     print("Mean:", mean_val)
     print("std:", std_val)
 
-    mean = mean_val.compute()
-    std = std_val.compute()
-
-    std = _check_degenerate_bins(std, mask_degenerate)
-
     print("Saving to file...")
     out_file = SurgeXTDataset.get_stats_file_path(filename)
+    mean = mean_val.compute()
+    std = std_val.compute()
+    std = _check_degenerate_bins(std, mask_degenerate)
     np.savez(out_file, mean=mean, std=std)
 
 
@@ -143,12 +149,7 @@ def update(existing, new):
 
 def finalize(existing, mask_degenerate: bool = False):
     count, mean, M2 = existing
-    if count == 0:
-        raise ValueError("Cannot compute stats on an empty dataset (no samples observed).")
-    # count >= 1 implies update() ran at least once, which makes M2 an ndarray
-    # of the per-bin shape. For count == 1 every bin is constant by construction,
-    # so std is a zero array and _check_degenerate_bins surfaces it as expected.
-    variance = M2 / count
+    variance = M2 / count if count > 1 else 0
     std = np.sqrt(variance)
     std = _check_degenerate_bins(std, mask_degenerate)
     return mean, std
@@ -165,11 +166,11 @@ def get_stats_directory(directory, mask_degenerate: bool = False):
         existing = update(existing, x)
 
         if i % 10 == 0:
-            logger.info("Processed %d files...", i + 1)
+            logger.info(f"Processed {i + 1} files...")
 
     mean, std = finalize(existing, mask_degenerate=mask_degenerate)
 
-    logger.info("Saving to %s", str(out_file))
+    logger.info(f"Saving to {str(out_file)}")
 
     np.savez(out_file, mean=mean, std=std)
 

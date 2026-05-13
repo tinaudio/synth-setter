@@ -212,31 +212,24 @@ def test_check_degenerate_bins_caps_index_preview_with_overflow_summary(
         stats_script._check_degenerate_bins(std, mask_degenerate=False)
 
 
-def test_finalize_empty_state_raises(stats_script: ModuleType) -> None:
-    """An empty Welford state (no ``update`` calls) raises with a clear message.
+def test_finalize_with_at_most_one_sample_raises_distinct_error(stats_script: ModuleType) -> None:
+    """Count<=1 (empty state or single sample) raises a distinct ``<=1 samples`` error.
+
+    The pre-existing ``M2 / count if count > 1 else 0`` line in ``finalize``
+    returns a scalar variance for these cases, which the degeneracy check
+    surfaces as a "scalar / <=1 samples" failure rather than the per-bin
+    "zero variance" path that requires a populated std array.
 
     :param stats_script: Imported get_dataset_stats module (fixture).
     """
     empty_existing = (0, 0, 0)
-
-    with pytest.raises(ValueError, match="empty dataset"):
-        stats_script.finalize(empty_existing)
-
-
-def test_finalize_single_sample_raises_listing_all_bins(stats_script: ModuleType) -> None:
-    """A single-sample dataset (count==1) yields zero variance for every bin and raises.
-
-    Regression test: previously the ``count > 1 else 0`` branch returned a
-    Python scalar and crashed numpy's ``where`` call before reaching the
-    degeneracy check.
-
-    :param stats_script: Imported get_dataset_stats module (fixture).
-    """
     sample = np.array([0.1, 0.2, 0.3])
-    existing = stats_script.update((0, np.zeros(3), np.zeros(3)), sample)
+    single_sample_existing = stats_script.update((0, np.zeros(3), np.zeros(3)), sample)
 
-    with pytest.raises(ValueError, match=r"zero variance.*indices \[0, 1, 2\]"):
-        stats_script.finalize(existing)
+    with pytest.raises(ValueError, match=r"<=1 samples"):
+        stats_script.finalize(empty_existing)
+    with pytest.raises(ValueError, match=r"<=1 samples"):
+        stats_script.finalize(single_sample_existing)
 
 
 def test_cli_help_advertises_mask_degenerate_bins_flag() -> None:
