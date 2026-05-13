@@ -24,11 +24,20 @@ MEL_WINDOW = "hamming"
 def mel_hop_length(sample_rate: float) -> int:
     """Librosa hop length: ``sample_rate / MEL_FRAMES_PER_SECOND``.
 
-    :param sample_rate: Audio sample rate in Hz.
+    :param sample_rate: Audio sample rate in Hz. Must be at least
+        ``MEL_FRAMES_PER_SECOND`` — lower rates would produce a hop length of 0
+        and trigger a ``ZeroDivisionError`` downstream in ``mel_n_frames``.
     :returns: Hop length in samples, rounded down to an integer.
     :rtype: int
+    :raises ValueError: If ``sample_rate`` would produce a hop length of 0.
     """
-    return int(sample_rate / MEL_FRAMES_PER_SECOND)
+    hop = int(sample_rate / MEL_FRAMES_PER_SECOND)
+    if hop <= 0:
+        raise ValueError(
+            f"sample_rate={sample_rate} produces hop length {hop}; "
+            f"sample_rate must be at least MEL_FRAMES_PER_SECOND={MEL_FRAMES_PER_SECOND}."
+        )
+    return hop
 
 
 def mel_n_fft(sample_rate: float) -> int:

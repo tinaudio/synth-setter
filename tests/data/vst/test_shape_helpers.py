@@ -58,6 +58,14 @@ def test_mel_hop_length_matches_legacy_inline_calc() -> None:
     assert mel_hop_length(44100) == 441
 
 
+def test_mel_hop_length_raises_when_hop_would_be_zero() -> None:
+    """Reject sample rates below MEL_FRAMES_PER_SECOND so n_frames never divides by zero."""
+    import pytest
+
+    with pytest.raises(ValueError, match="hop length 0"):
+        mel_hop_length(50)
+
+
 def test_mel_n_fft_matches_legacy_inline_calc() -> None:
     """``mel_n_fft(16000)`` equals the legacy ``int(0.025 * sr)`` literal (400)."""
     assert mel_n_fft(16000) == 400
