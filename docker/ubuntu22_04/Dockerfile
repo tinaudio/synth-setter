@@ -280,10 +280,10 @@ FROM python-base AS builder-install-synth-setter-deps
 #
 # Cache scope: only pyproject.toml + README.md are copied in (README.md is
 # referenced by [project].readme), so unrelated source edits do not bust the
-# ~2.5 GB torch-wheels layer. uv pip compile resolves the [torch] + [dev]
-# extras into a flat requirements list; uv pip install then materializes
-# them. The project itself is reinstalled --no-deps from real source in the
-# dev-base stage below.
+# ~2.5 GB torch-wheels layer. uv reads dependencies directly from
+# pyproject.toml via `-r`, with `--extra torch --extra dev` pulling the
+# matching optional groups. The project itself is reinstalled --no-deps
+# from real source in the dev-base stage below.
 #
 # --torch-backend: tells uv which PyTorch variant to install (e.g. cu128, cpu).
 # This replaces --extra-index-url + --index-strategy unsafe-best-match,
@@ -294,11 +294,10 @@ COPY --from=synth-setter-src /home/build/synth-setter/README.md /artifacts/
 ARG TORCH_BACKEND=cu128
 RUN --mount=type=cache,target=/root/.cache/uv \
     cd /artifacts && \
-    uv pip compile pyproject.toml --extra torch --extra dev --quiet -o /tmp/requirements.lock && \
     uv pip install \
         --torch-backend ${TORCH_BACKEND} \
-        -r /tmp/requirements.lock && \
-    rm -rf /artifacts/pyproject.toml /artifacts/README.md /tmp/requirements.lock
+        -r pyproject.toml --extra torch --extra dev && \
+    rm -rf /artifacts/pyproject.toml /artifacts/README.md
 
 # Runtime apt packages: headless VST loading, rclone for R2 uploads, and the
 # toolchain SkyPilot's RunPod backend needs to provision and stage file_mounts
