@@ -63,20 +63,21 @@ def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> np.ndarray
             "stats reduce to a scalar (likely a dataset with <=1 samples); "
             "cannot compute per-bin std. Need at least 2 samples."
         )
-    # For 1-D std (e.g. unit tests, simple flattened layouts) ``np.where``
-    # returns a list of bin indices. For multi-D std (real Surge mel:
-    # (channels, mels, frames); audio: (mels, frames)) ``np.argwhere`` returns
-    # one coordinate tuple per degenerate element, which is the only useful
-    # form — first-axis-only indexing would collapse all element coordinates
-    # to channel/row indices and lose the bin location.
-    if std.ndim == 1:
-        positions = np.where(std == 0)[0].tolist()
-    else:
-        positions = np.argwhere(std == 0).tolist()
-    n_degenerate = len(positions)
+    mask = std == 0
+    n_degenerate = int(mask.sum())
     if n_degenerate == 0:
         return std
-    preview = positions[:_MAX_DEGENERATE_INDEX_PREVIEW]
+    # Slice the index array before ``.tolist()`` so a fully-degenerate ~100k-
+    # element mel doesn't allocate a 100k-tuple Python list just to print 20.
+    # 1-D std (unit tests, simple flattened layouts) yields bin indices;
+    # N-D std (real Surge mel: (channels, mels, frames); audio: (mels,
+    # frames)) yields one coordinate tuple per degenerate element — first-
+    # axis-only indexing would collapse element coordinates to channel/row
+    # indices and lose the bin location.
+    if std.ndim == 1:
+        preview = np.flatnonzero(mask)[:_MAX_DEGENERATE_INDEX_PREVIEW].tolist()
+    else:
+        preview = np.argwhere(mask)[:_MAX_DEGENERATE_INDEX_PREVIEW].tolist()
     overflow = n_degenerate - _MAX_DEGENERATE_INDEX_PREVIEW
     suffix = f"; +{overflow} more" if overflow > 0 else ""
     if not mask_degenerate:
@@ -95,7 +96,12 @@ def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> np.ndarray
         preview,
         suffix,
     )
-    return np.where(std == 0, 1.0, std)
+    # Preserve std's dtype: ``np.where(mask, 1.0, std)`` would promote
+    # float32 → float64 from the Python literal and silently inflate
+    # stats.npz on disk + change downstream dtypes.
+    out = std.copy()
+    out[mask] = std.dtype.type(1)
+    return out
 
 
 def get_stats_hdf5(filename, mask_degenerate: bool = False):

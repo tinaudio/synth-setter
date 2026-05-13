@@ -42,19 +42,22 @@ def stats_script() -> ModuleType:
     return _load_stats_script()
 
 
-def _existing_from_samples(samples: np.ndarray) -> tuple[int, np.ndarray, np.ndarray]:
+def _existing_from_samples(
+    stats_script: ModuleType, samples: np.ndarray
+) -> tuple[int, np.ndarray, np.ndarray]:
     """Run the script's Welford ``update`` over ``samples`` and return the state.
 
+    :param stats_script: Imported get_dataset_stats module (the module-scoped
+        fixture, passed in to avoid re-importing the script per call).
     :param samples: Array of shape ``(N, D)``. Each row is one observation.
 
     :returns: ``(count, mean, M2)`` tuple matching the layout the script's
         ``finalize()`` consumes.
     :rtype: tuple[int, np.ndarray, np.ndarray]
     """
-    script = _load_stats_script()
     existing = (0, np.zeros(samples.shape[1]), np.zeros(samples.shape[1]))
     for row in samples:
-        existing = script.update(existing, row)
+        existing = stats_script.update(existing, row)
     return existing
 
 
@@ -65,7 +68,7 @@ def test_finalize_healthy_data_returns_positive_std(stats_script: ModuleType) ->
     """
     rng = np.random.default_rng(0)
     samples = rng.normal(size=(50, 4))
-    existing = _existing_from_samples(samples)
+    existing = _existing_from_samples(stats_script, samples)
 
     mean, std = stats_script.finalize(existing)
 
@@ -83,7 +86,7 @@ def test_finalize_constant_bin_raises_by_default(stats_script: ModuleType) -> No
     samples = rng.normal(size=(50, 4))
     samples[:, 2] = 3.14  # bin 2 is constant across every sample
 
-    existing = _existing_from_samples(samples)
+    existing = _existing_from_samples(stats_script, samples)
 
     with pytest.raises(ValueError, match=r"zero variance.*indices \[2\]"):
         stats_script.finalize(existing)
@@ -105,7 +108,7 @@ def test_finalize_constant_bin_masked_substitutes_unit_std_and_warns(
     samples = rng.normal(size=(50, 4))
     samples[:, 1] = -7.0
 
-    existing = _existing_from_samples(samples)
+    existing = _existing_from_samples(stats_script, samples)
 
     with caplog.at_level(logging.WARNING):
         mean, std = stats_script.finalize(existing, mask_degenerate=True)
@@ -128,7 +131,7 @@ def test_finalize_multiple_constant_bins_lists_all_indices(
     samples[:, 0] = 1.0
     samples[:, 3] = -2.0
 
-    existing = _existing_from_samples(samples)
+    existing = _existing_from_samples(stats_script, samples)
 
     with pytest.raises(ValueError, match=r"indices \[0, 3\]"):
         stats_script.finalize(existing)
@@ -210,6 +213,25 @@ def test_check_degenerate_bins_caps_index_preview_with_overflow_summary(
 
     with pytest.raises(ValueError, match=r"\+80 more"):
         stats_script._check_degenerate_bins(std, mask_degenerate=False)
+
+
+def test_check_degenerate_bins_masking_preserves_input_dtype(
+    stats_script: ModuleType,
+) -> None:
+    """Masking float32 ``std`` keeps it float32 — substituted entries do not promote to float64.
+
+    Real ``stats.npz`` files written from torch tensors / HDF5 are float32; a
+    ``np.where(std == 0, 1.0, std)`` substitution would promote the literal
+    1.0 and silently double the on-disk size of the artifact.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    std = np.array([0.1, 0.0, 0.5], dtype=np.float32)
+
+    returned = stats_script._check_degenerate_bins(std, mask_degenerate=True)
+
+    assert returned.dtype == np.float32
+    np.testing.assert_array_equal(returned, np.array([0.1, 1.0, 0.5], dtype=np.float32))
 
 
 def test_finalize_with_at_most_one_sample_raises_distinct_error(stats_script: ModuleType) -> None:
