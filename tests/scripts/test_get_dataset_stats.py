@@ -89,10 +89,14 @@ def test_finalize_constant_bin_raises_by_default(stats_script: ModuleType) -> No
         stats_script.finalize(existing)
 
 
-def test_finalize_constant_bin_masked_returns_zero_std_and_warns(
+def test_finalize_constant_bin_masked_substitutes_unit_std_and_warns(
     stats_script: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """With ``mask_degenerate=True``, the degenerate bin returns ``std=0`` and is logged.
+    """With ``mask_degenerate=True``, the degenerate bin's ``std`` is replaced by 1.0 and logged.
+
+    The substitution makes downstream ``(spec - mean) / std`` yield 0 for that
+    bin on the training distribution (since ``spec == mean == constant``), so
+    no datamodule changes are needed.
 
     :param stats_script: Imported get_dataset_stats module (fixture).
     :param caplog: pytest log-capture fixture.
@@ -106,8 +110,8 @@ def test_finalize_constant_bin_masked_returns_zero_std_and_warns(
     with caplog.at_level(logging.WARNING):
         mean, std = stats_script.finalize(existing, mask_degenerate=True)
 
-    assert std[1] == 0.0
-    assert (std[[0, 2, 3]] > 0).all()
+    assert std[1] == 1.0
+    assert (std[[0, 2, 3]] > 0).all() and (std[[0, 2, 3]] != 1.0).all()
     np.testing.assert_allclose(mean[1], -7.0)
     assert any("[1]" in record.message for record in caplog.records), caplog.text
 
@@ -130,17 +134,20 @@ def test_finalize_multiple_constant_bins_lists_all_indices(
         stats_script.finalize(existing)
 
 
-def test_check_degenerate_bins_no_zeros_returns_silently(
+def test_check_degenerate_bins_no_zeros_returns_unchanged(
     stats_script: ModuleType,
 ) -> None:
-    """All-positive ``std`` is a silent no-op in both modes.
+    """All-positive ``std`` is returned unchanged in both modes (no raise, no warning).
 
     :param stats_script: Imported get_dataset_stats module (fixture).
     """
     std = np.array([0.1, 0.5, 2.0])
 
-    stats_script._check_degenerate_bins(std, mask_degenerate=False)
-    stats_script._check_degenerate_bins(std, mask_degenerate=True)
+    returned_strict = stats_script._check_degenerate_bins(std, mask_degenerate=False)
+    returned_masked = stats_script._check_degenerate_bins(std, mask_degenerate=True)
+
+    np.testing.assert_array_equal(returned_strict, std)
+    np.testing.assert_array_equal(returned_masked, std)
 
 
 def test_check_degenerate_bins_zero_entry_raises_when_not_masked(
@@ -156,10 +163,10 @@ def test_check_degenerate_bins_zero_entry_raises_when_not_masked(
         stats_script._check_degenerate_bins(std, mask_degenerate=False)
 
 
-def test_check_degenerate_bins_zero_entry_warns_when_masked(
+def test_check_degenerate_bins_zero_entry_substitutes_unit_std_and_warns(
     stats_script: ModuleType, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A single ``std==0`` entry with masking enabled logs a warning naming the index.
+    """A single ``std==0`` entry with masking returns std with 1.0 substituted and logs the index.
 
     :param stats_script: Imported get_dataset_stats module (fixture).
     :param caplog: pytest log-capture fixture.
@@ -167,8 +174,9 @@ def test_check_degenerate_bins_zero_entry_warns_when_masked(
     std = np.array([0.1, 0.0, 0.5])
 
     with caplog.at_level(logging.WARNING):
-        stats_script._check_degenerate_bins(std, mask_degenerate=True)
+        returned = stats_script._check_degenerate_bins(std, mask_degenerate=True)
 
+    np.testing.assert_array_equal(returned, np.array([0.1, 1.0, 0.5]))
     assert any("[1]" in record.message for record in caplog.records), caplog.text
 
 
@@ -233,11 +241,14 @@ def test_finalize_single_sample_raises_listing_all_bins(stats_script: ModuleType
 
 def test_cli_help_advertises_mask_degenerate_bins_flag() -> None:
     """The CLI ``--help`` text documents the new flag so operators can discover it."""
+    # 60s rather than 30s: under `make test-fast`'s parallel xdist load,
+    # rootutils.setup_root walking the project tree from many workers at
+    # once stretches script import time past the conservative default.
     result = subprocess.run(  # noqa: S603
         [sys.executable, str(_SCRIPT_PATH), "--help"],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
         check=False,
     )
     assert result.returncode == 0, result.stderr

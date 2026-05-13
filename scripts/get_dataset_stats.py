@@ -20,19 +20,32 @@ logger = logging.getLogger(__name__)
 _MAX_DEGENERATE_INDEX_PREVIEW = 20
 
 
-def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> None:
-    """Raise on zero-variance bins unless masking is enabled.
+def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> np.ndarray:
+    """Raise on zero-variance bins, or substitute ``std=1.0`` at degenerate positions.
 
     A zero entry in ``std`` means the corresponding mel bin was constant across
     the entire dataset, which propagates as inf/nan through downstream
-    ``(x - mean) / std`` normalization. By default this aborts so the upstream
-    cause (silence-dominated data, mel filterbank above Nyquist, dataset too
-    small) is surfaced; with ``mask_degenerate=True`` the caller opts in to
-    persisting ``std=0`` and letting the datamodule treat it as a mask.
+    ``(spec - mean) / std`` normalization in the datamodules. By default this
+    aborts so the upstream cause (silence-dominated data, mel filterbank above
+    Nyquist, dataset too small) is surfaced.
+
+    With ``mask_degenerate=True`` the function instead substitutes ``std=1.0``
+    at every degenerate position and returns the patched array. Because Welford
+    converges to ``mean == constant_value`` for any bin that was constant during
+    stat collection, the downstream normalization at training/eval time yields
+    ``(constant - constant) / 1.0 = 0`` for those bins — equivalent to a
+    constant-zero mask on in-distribution data, and a sensible centered
+    pass-through on out-of-distribution data. The datamodules need no changes.
 
     :param std: Per-bin standard deviation array. Zero entries indicate
         constant bins.
-    :param mask_degenerate: If True, log a warning and return. If False, raise.
+    :param mask_degenerate: If True, substitute ``std=1.0`` at degenerate
+        positions and log a warning. If False, raise.
+
+    :returns: The std array. Unchanged when no bins are degenerate or when
+        ``mask_degenerate`` is False (in which case the function raises).
+        When masking, a new array with ``std=1.0`` at degenerate positions.
+    :rtype: np.ndarray
 
     :raises ValueError: When ``mask_degenerate`` is False and any entry of
         ``std`` is zero. The message lists the degenerate bin indices.
@@ -54,7 +67,7 @@ def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> None:
         positions = np.argwhere(std == 0).tolist()
     n_degenerate = len(positions)
     if n_degenerate == 0:
-        return
+        return std
     preview = positions[:_MAX_DEGENERATE_INDEX_PREVIEW]
     overflow = n_degenerate - _MAX_DEGENERATE_INDEX_PREVIEW
     suffix = f"; +{overflow} more" if overflow > 0 else ""
@@ -68,12 +81,13 @@ def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> None:
             f"these bins instead of failing."
         )
     logger.warning(
-        "Masking %d degenerate mel bin(s) with zero variance (std shape %s; indices %s%s).",
+        "Masking %d degenerate mel bin(s) with std=1.0 (std shape %s; indices %s%s).",
         n_degenerate,
         std.shape,
         preview,
         suffix,
     )
+    return np.where(std == 0, 1.0, std)
 
 
 def get_stats_hdf5(filename, mask_degenerate: bool = False):
@@ -110,7 +124,7 @@ def get_stats_hdf5(filename, mask_degenerate: bool = False):
     mean = mean_val.compute()
     std = std_val.compute()
 
-    _check_degenerate_bins(std, mask_degenerate)
+    std = _check_degenerate_bins(std, mask_degenerate)
 
     print("Saving to file...")
     out_file = SurgeXTDataset.get_stats_file_path(filename)
@@ -136,7 +150,7 @@ def finalize(existing, mask_degenerate: bool = False):
     # so std is a zero array and _check_degenerate_bins surfaces it as expected.
     variance = M2 / count
     std = np.sqrt(variance)
-    _check_degenerate_bins(std, mask_degenerate)
+    std = _check_degenerate_bins(std, mask_degenerate)
     return mean, std
 
 
@@ -179,9 +193,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "If set, mel bins with zero variance across the dataset are masked "
-            "(their normalization scale is set to 0 by downstream consumers) "
-            "rather than raising an error. Default is to raise so degenerate "
-            "bins are surfaced explicitly."
+            "by substituting std=1.0 at those positions. Because the mean for a "
+            "constant bin converges to that constant value, downstream "
+            "(spec - mean) / std then yields 0 on the training distribution. "
+            "Default is to raise so degenerate bins are surfaced explicitly."
         ),
     )
     return parser.parse_args(argv)
