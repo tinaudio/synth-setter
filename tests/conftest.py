@@ -332,9 +332,11 @@ def _build_surge_xt_smoke_cfg(accelerator: str, param_spec_name: str) -> DictCon
             cfg.data.batch_size = 1
             cfg.data.pin_memory = False
             cfg.data.ot = False
-            # The 5-sample fixture's stats.npz has zero-std mel bins that poison the batch
-            # with NaN via (mel - mean) / std.
-            cfg.data.use_saved_mean_and_variance = False
+            # `surge_xt_smoke_datasets` writes a sibling stats.npz via
+            # `get_dataset_stats.py --mask-degenerate-bins`, so the SurgeXTDataset's
+            # `(mel - mean) / std` is finite on the smoke fixture's constant bins. Keep
+            # normalization on so the smoke tests exercise the production code path.
+            cfg.data.use_saved_mean_and_variance = True
             cfg.data.num_workers = 0
 
             cfg.trainer.devices = 1
@@ -451,6 +453,43 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         "Dataset generation failed to produce train.h5 fixture"
     )
     _validate_surge_dataset(smoke_dataset_dir / "train.h5", NUM_FIXTURE_SAMPLES)
+
+    # Mel normalization stats are computed once over train.h5 and the resulting
+    # stats.npz is shared by the train/val/test splits (all three live in the
+    # same directory). `--mask-degenerate-bins` substitutes std=1.0 at constant
+    # mel bins so the SurgeXTDataset's `(mel - mean) / std` yields 0 on those
+    # bins instead of NaN — see #1002 for the masking semantics.
+    stats_args = [
+        sys.executable,
+        "scripts/get_dataset_stats.py",
+        str(smoke_dataset_dir / "train.h5"),
+        "--mask-degenerate-bins",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603
+            stats_args,
+            text=True,
+            check=False,
+            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"get_dataset_stats timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"command: {stats_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    if result.returncode != 0:
+        pytest.fail(
+            f"get_dataset_stats failed (exit {result.returncode})\n"
+            f"command: {stats_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    assert (smoke_dataset_dir / "stats.npz").exists(), (
+        "get_dataset_stats failed to produce stats.npz fixture"
+    )
+
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "val.h5")
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "test.h5")
     return Path(smoke_dataset_dir)
