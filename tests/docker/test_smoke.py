@@ -7,7 +7,7 @@ CI runs individual tests by node ID (see docker-build-validation.yml).
 To run all smoke tests manually inside a container:
 
     docker run --rm "$IMAGE" pytest tests/docker/test_smoke.py -m docker_smoke -v
-    docker run --rm "$IMAGE" scripts/run-linux-vst-headless.sh \
+    docker run --rm "$IMAGE" docker/ubuntu22_04/run-linux-vst-headless.sh \
         pytest tests/docker/test_smoke.py -m "docker_smoke and requires_vst" -v
 """
 

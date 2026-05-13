@@ -48,9 +48,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system sh
+        run: uv pip install --system -e ".[torch,dev]"
 
       # Install the Surge XT VST3 cask and symlink it into the repo-relative
       # `plugins/Surge XT.vst3` path that configs, CLI `--plugin_path` defaults,
@@ -66,7 +64,7 @@ jobs:
       # the cask install or symlink is broken before the full pytest run.
       - name: Smoke-test Surge XT plugin load
         run: |
-          python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
+          python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin('plugins/Surge XT.vst3')"
 
       # Confirm MPS is actually visible to PyTorch — without this, the parametrized
       # `accelerator` fixture in tests/conftest.py would hardfail every collected

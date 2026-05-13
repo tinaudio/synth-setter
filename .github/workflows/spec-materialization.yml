@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       experiment:
-        description: "Datagen experiment id (e.g. ci-materialize-test) — composed via Hydra against configs/dataset.yaml"
+        description: "Datagen experiment id (e.g. generate_dataset/ci-materialize-test) — composed via Hydra against configs/dataset.yaml"
         required: true
         type: string
       artifact_name:
@@ -24,6 +24,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      # Host-side `Validate spec structure` step below runs
+      # `python3 -m synth_setter.pipeline.ci.validate_spec` outside the docker
+      # container. Phase 3 made `synth_setter` only importable when installed
+      # (PEP src-layout, sources under `src/`). Keep the runner-side env
+      # minimal: install the project with --no-deps (the full
+      # [project.dependencies] would drag in torch, skypilot, librosa, etc.),
+      # then add pydantic in a second command so its own required
+      # `pydantic-core` resolves.
+      - name: Install validate_spec runtime deps
+        run: |
+          pip install --no-deps -e .
+          pip install "pydantic>=2,<3"
 
       - name: Pull image
         run: docker pull tinaudio/synth-setter:${{ inputs.image_tag }}
@@ -59,10 +77,10 @@ jobs:
               cd /home/build/synth-setter
               # Runner UID != container UID; git refuses to run in untrusted dirs
               git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               # Headless X11 needed because importing pedalboard (via param_specs) requires it
-              scripts/run-linux-vst-headless.sh \
-                python -m src.pipeline.ci.materialize_spec "$EXPERIMENT" /spec-output
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
+                python -m synth_setter.pipeline.ci.materialize_spec "$EXPERIMENT" /spec-output
             '
 
       - name: Validate spec structure
@@ -71,7 +89,7 @@ jobs:
           cat /tmp/spec-output/input_spec.json
           echo ""
           echo "=== Structural Validation ==="
-          python3 -m src.pipeline.ci.validate_spec /tmp/spec-output/input_spec.json
+          python3 -m synth_setter.pipeline.ci.validate_spec /tmp/spec-output/input_spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@v4

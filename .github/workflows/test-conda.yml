@@ -6,11 +6,10 @@ on:
     branches: [main]
     paths:
       - "src/**"
-      - "src/pipeline/**"
+      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
-      - "requirements*.txt"
       - "environment.yaml"
       - "pyproject.toml"
       - "setup.py"
@@ -19,11 +18,10 @@ on:
     branches: [main, "release/*", "dev"]
     paths:
       - "src/**"
-      - "src/pipeline/**"
+      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
-      - "requirements*.txt"
       - "environment.yaml"
       - "pyproject.toml"
       - "setup.py"
@@ -49,8 +47,11 @@ jobs:
           environment-file: environment.yaml
           environment-name: myenv
           cache-environment: true
-          cache-environment-key: env-${{ hashFiles('environment.yaml', 'requirements-app.txt') }}
+          cache-environment-key: env-${{ hashFiles('environment.yaml', 'pyproject.toml') }}
           init-shell: bash
+
+      - name: Install package as editable
+        run: pip install -e .
 
       - name: List dependencies
         run: |

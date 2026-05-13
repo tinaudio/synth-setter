@@ -13,7 +13,7 @@ jobs:
     uses: ./.github/workflows/spec-materialization.yml
     with:
       image_tag: ${{ inputs.image_tag }}
-      experiment: ci-materialize-test
+      experiment: generate_dataset/ci-materialize-test
       artifact_name: test-materialized-spec
     secrets: inherit
 
@@ -25,10 +25,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      # synth_setter.pipeline.ci.validate_spec imports OUTPUT_FORMAT_TO_EXTENSION
+      # from synth_setter.pipeline.schemas.spec, which transitively loads pydantic
+      # at module top. Keep the runner-side env minimal: install the project
+      # with --no-deps (the full [project.dependencies] would drag in torch,
+      # skypilot, librosa, etc.), then add pydantic in a second command so its
+      # own required `pydantic-core` resolves.
+      - name: Install validate_spec runtime deps
+        run: |
+          pip install --no-deps -e .
+          pip install "pydantic>=2,<3"
+
       - name: Download spec artifact
         uses: actions/download-artifact@v4
         with:
           name: test-materialized-spec
 
       - name: Assert test-specific values
-        run: python3 -m src.pipeline.ci.validate_spec input_spec.json --test-values
+        run: python3 -m synth_setter.pipeline.ci.validate_spec input_spec.json --test-values

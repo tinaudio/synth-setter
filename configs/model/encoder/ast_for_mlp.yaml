@@ -1,4 +1,4 @@
-_target_: src.models.components.transformer.AudioSpectrogramTransformer
+_target_: synth_setter.models.components.transformer.AudioSpectrogramTransformer
 d_model: 512
 n_heads: 8
 n_layers: 8

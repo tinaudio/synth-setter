@@ -6,11 +6,10 @@ on:
     branches: [main]
     paths:
       - "src/**"
-      - "src/pipeline/**"
+      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
-      - "requirements*.txt"
       - "pyproject.toml"
       - "setup.py"
       - ".github/workflows/test.yml"
@@ -18,11 +17,10 @@ on:
     branches: [main, "release/*", "dev"]
     paths:
       - "src/**"
-      - "src/pipeline/**"
+      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
-      - "requirements*.txt"
       - "pyproject.toml"
       - "setup.py"
       - ".github/workflows/test.yml"
@@ -54,9 +52,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system sh
+        run: uv pip install --system -e ".[torch,dev]"
 
       - name: List dependencies
         run: uv pip list --system
@@ -93,9 +89,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system sh
+        run: uv pip install --system -e ".[torch,dev]"
 
       - name: List dependencies
         run: uv pip list --system
@@ -125,9 +119,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system -r requirements.txt
+          uv pip install --system -e ".[torch,dev]"
           uv pip install --system pytest-cov[toml]
-          uv pip install --system sh
 
       - name: Run tests and collect coverage
         env:

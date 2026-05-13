@@ -25,7 +25,7 @@ echo "Using checkpoint: $CKPT_PATH"
 rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
-python src/eval.py \
+python -m synth_setter.cli.eval \
     experiment=surge/flow_simple \
     model.test_cfg_strength=2.0 \
     model.test_sample_steps=100 \

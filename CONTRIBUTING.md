@@ -28,7 +28,7 @@ cd synth-setter
 Install the project in editable mode with development dependencies:
 
 ```bash
-make install        # runs: pip install uv && uv pip install -r requirements.txt -e .
+make install        # runs: pip install uv && uv pip install -e ".[torch,dev]"
 ```
 
 Install pre-commit hooks:
@@ -122,14 +122,13 @@ output — no version drift.
 
 ### Project layout
 
-| Directory      | Purpose                                               |
-| -------------- | ----------------------------------------------------- |
-| `src/`         | ML code (models, data modules, training, evaluation)  |
-| `pipeline/`    | Distributed data pipeline                             |
-| `scripts/`     | Standalone utility scripts                            |
-| `configs/`     | Hydra YAML configs and pipeline configs               |
-| `tests/`       | Test suite (mirrors `src/` and `pipeline/` structure) |
-| `docs/design/` | Design documents                                      |
+| Directory           | Purpose                                                                 |
+| ------------------- | ----------------------------------------------------------------------- |
+| `src/synth_setter/` | ML code, distributed data pipeline (`pipeline/`), CLIs (PEP src-layout) |
+| `scripts/`          | Standalone utility scripts                                              |
+| `configs/`          | Hydra YAML configs and pipeline configs                                 |
+| `tests/`            | Test suite (mirrors `src/synth_setter/`)                                |
+| `docs/design/`      | Design documents                                                        |
 
 ## Testing
 

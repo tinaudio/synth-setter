@@ -24,6 +24,6 @@ EXPERIMENT=$(sed -n "${SGE_TASK_ID}p" jobs/train/kosc/experiments.txt)
 rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
-python src/train.py experiment=$EXPERIMENT \
+python -m synth_setter.cli.train experiment=$EXPERIMENT \
   logger.csv=null \
   seed=999

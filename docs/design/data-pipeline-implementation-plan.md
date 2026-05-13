@@ -76,8 +76,8 @@ ______________________________________________________________________
 
 ### On `main` already (no porting needed)
 
-- `src/data/vst/generate_vst_dataset.py` — VST audio generation (worker calls this)
-- `scripts/reshard_data.py` — HDF5 virtual dataset resharding
+- `src/synth_setter/data/vst/generate_vst_dataset.py` — VST audio generation (worker calls this)
+- `src/synth_setter/pipeline/data/reshard.py` — HDF5 virtual dataset resharding
 - Basic `Makefile` (help/clean targets only)
 - All model/training code, configs, notebooks
 
@@ -100,7 +100,7 @@ Matches design doc §14.5. Config filenames encode runtime parameters — the fi
 stem is the `dataset_config_id` (see [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids)):
 
 ```yaml
-# configs/experiment/surge-simple-480k-10k.yaml
+# configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # → dataset_config_id = surge-simple-480k-10k
 param_spec: surge_simple
 plugin_path: plugins/Surge XT.vst3    # renderer_version pinned via SURGE_XT_RENDERER_VERSION constant; worker verifies
@@ -131,7 +131,7 @@ CLI (compute/storage are not in config):
 
 ```bash
 python -m pipeline generate \
-  --experiment surge-simple-480k-10k \
+  --experiment generate_dataset/surge-simple-480k-10k \
   --workers 10 --backend runpod --image tinaudio/synth-setter:dev-snapshot-abc1234
 ```
 
@@ -181,11 +181,11 @@ ______________________________________________________________________
 
 **Files to port from `experiment`:**
 
-- `src/data/uploader.py` (new) — `DatasetUploader` protocol, `RcloneUploader`, `LocalFakeUploader`
-- `src/train.py` — minor fixes (resolver registration)
-- `src/utils/utils.py` — minor fixes
-- `src/data/ksin_datamodule.py` — pin_memory fix
-- `src/data/surge_datamodule.py` — fix
+- `src/synth_setter/data/uploader.py` (new) — `DatasetUploader` protocol, `RcloneUploader`, `LocalFakeUploader`
+- `src/synth_setter/cli/train.py` — minor fixes (resolver registration)
+- `src/synth_setter/utils/utils.py` — minor fixes
+- `src/synth_setter/data/ksin_datamodule.py` — pin_memory fix
+- `src/synth_setter/data/surge_datamodule.py` — fix
 - `tests/conftest.py` — register resolvers, lr_monitor fix
 - `tests/helpers/package_available.py` — importlib.metadata migration
 - `tests/helpers/run_if.py` — fix
@@ -250,7 +250,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
 - `pipeline/schemas/` — Pydantic models split across submodules: ~~`config.py`~~ ✅ (`DatasetConfig`, `SplitsConfig`, load/ID helpers), ~~`spec.py`~~ ✅ (`DatasetPipelineSpec`, `ShardSpec`, `materialize_spec`), `report.py` (`WorkerReport`, `ShardResult`), `card.py` (`DatasetCard`, `ValidationSummary`), `sample.py` (`Sample` dataclass).
   **Note:** ~~`prefix.py`~~ ✅ and ~~`image_config.py`~~ ✅ also exist.
   `report.py`, `card.py`, and `sample.py` are not yet created.
-- ~~`configs/experiment/surge-simple-480k-10k.yaml`~~ ✅ — sample config (filename = `dataset_config_id`)
+- ~~`configs/experiment/generate_dataset/surge-simple-480k-10k.yaml`~~ ✅ — sample config (filename stem = `dataset_config_id`)
 - ~~`tests/pipeline/__init__.py`~~ ✅
 - ~~`tests/pipeline/test_schemas/`~~ ✅
 
@@ -334,7 +334,7 @@ ______________________________________________________________________
 
 ### Task 2.2: Storage Layer ([#102](https://github.com/tinaudio/synth-setter/issues/102))
 
-**Goal:** Abstract R2/local filesystem with design doc's path layout. Wraps `src/data/uploader.py`.
+**Goal:** Abstract R2/local filesystem with design doc's path layout. Wraps `src/synth_setter/data/uploader.py`.
 
 **Files to create:**
 
@@ -458,8 +458,8 @@ Sub-issue: [#7](https://github.com/tinaudio/synth-setter/issues/7) (buildx TARGE
 **Files to port from `experiment`:**
 
 - `docker/ubuntu22_04/Dockerfile` — multi-stage build with BuildKit secrets
-- `scripts/docker_entrypoint.py` — container dispatch (existing subcommands only for now)
-- `scripts/run-linux-vst-headless.sh` — Xvfb wrapper for headless VST
+- `src/synth_setter/tools/docker_entrypoint.py` — container dispatch (existing subcommands only for now)
+- `docker/ubuntu22_04/run-linux-vst-headless.sh` — Xvfb wrapper for headless VST
 - `Makefile` additions — `docker-build-dev-snapshot`
 
 **Verification:**
@@ -559,7 +559,7 @@ ______________________________________________________________________
 - **Xvfb display isolation:** Each child process should use a per-process X11 display
   number (`:N` derived from PID or shard ID) to avoid contention in headless VST rendering.
 - **No `generate_fn` argument:** The child process imports `make_dataset` directly
-  (`from pipeline.vst import make_dataset`). Under `spawn`, the child is a fresh
+  (`from synth_setter.data.vst.generate_vst_dataset import make_dataset`). Under `spawn`, the child is a fresh
   interpreter, so the import is clean. No pickling concerns — only `shard_spec` and
   `shard_path` cross the process boundary. For tests, `LocalBackend` calls
   `run_worker()` in-process (no spawn), so test fixtures can inject a fake function.
@@ -816,7 +816,7 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `scripts/docker_entrypoint.py` — add `generate-shards` subcommand
+- `src/synth_setter/tools/docker_entrypoint.py` — add `generate-shards` subcommand
 - `Makefile` — `make pipeline-generate`, `pipeline-status`, `pipeline-finalize`
 
 **RunPodBackend:** `runpod.create_pod()` with env vars, auth check, dry-run. Tags all
@@ -884,7 +884,7 @@ These tests are written incrementally as each PR lands.
 
 ### Worker Hard Timeout & RunPod Auto-stop ([#77](https://github.com/tinaudio/synth-setter/issues/77))
 
-- Hard timeout in `scripts/docker_entrypoint.py` — kill worker process after
+- Hard timeout in `src/synth_setter/tools/docker_entrypoint.py` — kill worker process after
   configurable max duration (`WORKER_TIMEOUT_SECONDS`)
 - EXIT trap fires on SIGTERM timeout kill (debug log + error.json uploaded).
   **Note:** EXIT traps do NOT fire on SIGKILL (OOM-killer, `kill -9`). For hard kills,
@@ -913,7 +913,7 @@ ______________________________________________________________________
 
 1. **Per-PR:** CI runs `pytest` + `ruff` on every push
 2. **After all tasks:** `pytest tests/pipeline/ -v`, `pytest tests/pipeline/test_e2e.py -v`
-3. **Local dry run:** `python -m pipeline generate --experiment surge-simple-480k-10k --backend local --workers 2`
+3. **Local dry run:** `python -m pipeline generate --experiment generate_dataset/surge-simple-480k-10k --backend local --workers 2`
 4. **Docker fidelity:** `bash scripts/test_local_docker.sh`
 5. **Mutation testing:** `mutmut run --paths-to-mutate=pipeline/`
 
@@ -928,7 +928,7 @@ ______________________________________________________________________
 05. W&B optional (`--skip-wandb`) — tests skip it; mock test for artifact structure
 06. Workers use ThreadPoolExecutor for parallel shard generation
 07. Each shard renders in a child process via `multiprocessing.get_context("spawn").Process(...)`.
-    Child process imports `make_dataset` directly (`from pipeline.vst import make_dataset`).
+    Child process imports `make_dataset` directly (`from synth_setter.data.vst.generate_vst_dataset import make_dataset`).
     Only `shard_spec` and `shard_path` cross the process boundary — no function objects.
     `LocalBackend` accepts an optional `generate_fn` for tests (runs in-process, no spawn).
     For v1, no seeding (current behavior). Post-launch, dual-RNG seeding
@@ -939,7 +939,7 @@ ______________________________________________________________________
 09. Tests in `tests/pipeline/` with own conftest
 10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling
     `reshard_data.py` — it hardcodes 10k shard size)
-11. `R2StorageBackend` wraps `src/data/uploader.RcloneUploader` (already has `--checksum`)
+11. `R2StorageBackend` wraps `src/synth_setter/data/uploader.RcloneUploader` (already has `--checksum`)
 12. `shard_id` is `int` in schema, formatted to string for paths/filenames
 13. Config splits use `{train: N, val: N, test: N}` matching design doc §14.4
 
@@ -965,7 +965,7 @@ no workers launched.
 
 **GP4. Plugin-path validation belongs on the worker, not the launcher.**
 The launcher path is interpreter-only (the SkyPilot launcher in
-`pipeline/entrypoints/skypilot_launch.py` cannot load a VST3 plugin — no X11),
+`src/synth_setter/pipeline/skypilot_launch.py` cannot load a VST3 plugin — no X11),
 so `materialize_spec` no longer extracts `renderer_version` from the plugin bundle and
 no longer enforces a `plugin_path.exists()` precondition. Pin `renderer_version` to
 `SURGE_XT_RENDERER_VERSION` at materialization; the worker calls

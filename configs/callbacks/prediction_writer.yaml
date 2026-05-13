@@ -1,4 +1,4 @@
 prediction_writer:
-  _target_: src.utils.callbacks.PredictionWriter
+  _target_: synth_setter.utils.callbacks.PredictionWriter
   output_dir: ${paths.output_dir}/predictions
   write_interval: batch

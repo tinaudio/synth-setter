@@ -1,4 +1,4 @@
-"""Tests for log_wandb_provenance() in src/utils/logging_utils.py.
+"""Tests for log_wandb_provenance() in src/synth_setter/utils/logging_utils.py.
 
 Uses fakes (not mocks) for wandb, real subprocess where possible, and state assertions throughout.
 See python-testing.md §Fakes.
@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.utils.logging_utils import log_wandb_provenance
+from synth_setter.utils.logging_utils import log_wandb_provenance
 
 # ---------------------------------------------------------------------------
 # Fake wandb module — captures config updates as inspectable state
@@ -102,7 +102,7 @@ class TestLogWandbProvenanceFallbacks:
         with (
             patch.dict("sys.modules", {"wandb": fake}),
             patch(
-                "src.utils.logging_utils.subprocess.check_output",
+                "synth_setter.utils.logging_utils.subprocess.check_output",
                 side_effect=error,
             ),
         ):

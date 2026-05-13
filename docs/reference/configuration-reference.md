@@ -7,12 +7,12 @@ ______________________________________________________________________
 
 ## 1. Configuration Layers
 
-| Layer                         | Tool                                                                                                                                                                                                                                                                                                                | Validation                                                                                                                                                                                                                | Stored In                                                                                         | Example                                         |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Experiment config             | Hydra YAML composition                                                                                                                                                                                                                                                                                              | Deferred — class constructors at `hydra.utils.instantiate()`                                                                                                                                                              | git (`configs/experiment/`)                                                                       | `configs/experiment/surge/flow_simple.yaml`     |
-| Pipeline input + runtime spec | Pydantic `BaseModel(strict=True, frozen=True, extra="forbid")` — `DatasetSpec` unifies the prior config + materialized-spec split. All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) are strict; JSON round-trip coercions (`list→tuple`, `str→datetime`) are handled by explicit per-field validators. | Parse-time — Hydra `compose` → `spec_from_cfg()` (#887, #912, #917 unified the prior `DatasetConfig` + `DatasetPipelineSpec` split into one model that is both the validated input *and* the materialized artifact on R2) | git (`configs/experiment/`) for input; R2 (`{r2_prefix}/input_spec.json`) for the serialized JSON | `configs/experiment/surge-simple-480k-10k.yaml` |
-| Cloud infrastructure          | SkyPilot Task YAML                                                                                                                                                                                                                                                                                                  | Launcher script (not Hydra)                                                                                                                                                                                               | git (`configs/compute/`)                                                                          | `configs/compute/runpod-template.yaml`          |
-| Secrets / credentials         | Environment variables                                                                                                                                                                                                                                                                                               | Runtime                                                                                                                                                                                                                   | `.env` (local), CI secrets                                                                        | `WANDB_API_KEY`                                 |
+| Layer                         | Tool                                                                                                                                                                                                                                                                                                                | Validation                                                                                                                                                                                                                | Stored In                                                                                                          | Example                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Experiment config             | Hydra YAML composition                                                                                                                                                                                                                                                                                              | Deferred — class constructors at `hydra.utils.instantiate()`                                                                                                                                                              | git (`configs/experiment/`)                                                                                        | `configs/experiment/surge/flow_simple.yaml`                      |
+| Pipeline input + runtime spec | Pydantic `BaseModel(strict=True, frozen=True, extra="forbid")` — `DatasetSpec` unifies the prior config + materialized-spec split. All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) are strict; JSON round-trip coercions (`list→tuple`, `str→datetime`) are handled by explicit per-field validators. | Parse-time — Hydra `compose` → `spec_from_cfg()` (#887, #912, #917 unified the prior `DatasetConfig` + `DatasetPipelineSpec` split into one model that is both the validated input *and* the materialized artifact on R2) | git (`configs/experiment/generate_dataset/`) for input; R2 (`{r2_prefix}/input_spec.json`) for the serialized JSON | `configs/experiment/generate_dataset/surge-simple-480k-10k.yaml` |
+| Cloud infrastructure          | SkyPilot Task YAML                                                                                                                                                                                                                                                                                                  | Launcher script (not Hydra)                                                                                                                                                                                               | git (`configs/compute/`)                                                                                           | `configs/compute/runpod-template.yaml`                           |
+| Secrets / credentials         | Environment variables                                                                                                                                                                                                                                                                                               | Runtime                                                                                                                                                                                                                   | `.env` (local), CI secrets                                                                                         | `WANDB_API_KEY`                                                  |
 
 ### Why These Boundaries
 
@@ -30,12 +30,12 @@ ______________________________________________________________________
 ### 2.1 Data Generation
 
 ```
-configs/experiment/{id}.yaml → Hydra compose against configs/dataset.yaml
+configs/experiment/generate_dataset/{id}.yaml → Hydra compose against configs/dataset.yaml
   → spec_from_cfg(cfg) → DatasetSpec (frozen, Pydantic, the spec ON R2)
     → uploaded to R2 as {r2_prefix}/input_spec.json (model.model_dump_json())
 ```
 
-- Input is mutable, human-authored YAML under `configs/experiment/`
+- Input is mutable, human-authored YAML under `configs/experiment/generate_dataset/`
 - `DatasetSpec` is the unified model: the same frozen Pydantic instance is both the validated input and the materialized artifact (`DatasetConfig` + `DatasetPipelineSpec` were unified in #887)
 - Runtime state (git SHA, renderer version, per-shard seeds) auto-fills via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`, plus `run_id` and `r2_prefix` via the `_default_run_id` / `_default_r2_prefix` factories)
 - Spec is the reproducibility unit and reconciliation target
@@ -77,15 +77,15 @@ Reference: `eval-pipeline.md` §4–5
 
 ```
 configs/compute/{provider}-template.yaml (SkyPilot Task YAML)
-  → launcher script (src.pipeline.skypilot_launch)
+  → launcher script (synth_setter.pipeline.skypilot_launch)
     reads YAML, materializes spec, mounts spec into worker
     → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
       → pod runs: python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
 ```
 
 - Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — the launcher itself uses Hydra's `compose()` to build the `DatasetSpec` from `configs/dataset.yaml` + the named experiment.
-- Launcher takes the task template + an `--experiment <name>`, composes the `DatasetSpec` via Hydra, uploads its JSON to R2 (under `skypilot-launcher-specs/<cluster>.json`), and forwards the `r2://` URI to the worker via `task.update_envs(WORKER_SPEC_URI=...)`. R2 is used instead of `task.update_file_mounts` because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
-- Invoked via: `python -m src.pipeline.skypilot_launch --experiment <name> --template <yaml>` (trailing positional args, e.g. `render.plugin_path=...`, are forwarded to Hydra `compose` as overrides).
+- Launcher takes the task template + an `--experiment <name>`, composes the `DatasetSpec` via Hydra, uploads its JSON to R2 (under `skypilot-launcher-specs/<job>.json`), and forwards the `r2://` URI to the worker via `task.update_envs(WORKER_SPEC_URI=...)`. R2 is used instead of `task.update_file_mounts` because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
+- Invoked via: `python -m synth_setter.pipeline.skypilot_launch --experiment <name> --template <yaml>` (trailing positional args, e.g. `render.plugin_path=...`, are forwarded to Hydra `compose` as overrides).
 
 Reference: `training-pipeline.md` Appendix D
 
@@ -119,7 +119,7 @@ The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet
 **RunPod** (`configs/compute/runpod-template.yaml`) — landed. Abridged
 shape (see the file for the full template; the `os._exit(0)` workaround for
 [#735](https://github.com/tinaudio/synth-setter/issues/735) lives inside the
-`generate_dataset` subcommand of `scripts/docker_entrypoint.py`):
+`generate_dataset` subcommand of `src/synth_setter/tools/docker_entrypoint.py`):
 
 The launcher injects `image_id` per-launch via `--worker-image-tag` (default `dev-snapshot`) for non-OCI backends, so the template no longer carries a literal `image_id: docker:tinaudio/synth-setter:dev-snapshot`:
 
@@ -137,7 +137,7 @@ envs:
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WANDB_API_KEY: ""
-  WORKER_SPEC_URI: ""                 # set by the launcher to r2://<bucket>/skypilot-launcher-specs/<cluster>.json
+  WORKER_SPEC_URI: ""                 # set by the launcher to r2://<bucket>/skypilot-launcher-specs/<job>.json
 
 run: |
   set -euo pipefail
@@ -147,7 +147,7 @@ run: |
 ```
 
 The launcher uploads the materialized spec to R2 (under
-`r2://{bucket}/skypilot-launcher-specs/<cluster>.json`) rather than using
+`r2://{bucket}/skypilot-launcher-specs/<job>.json`) rather than using
 `task.update_file_mounts(...)` — see [#749](https://github.com/tinaudio/synth-setter/issues/749).
 
 **Vast.ai** (`configs/compute/vast-template.yaml`) — planned, not implemented:

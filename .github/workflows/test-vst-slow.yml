@@ -37,11 +37,11 @@ on:
     # Revert to ``[main]`` once the chart exists.
     branches: [main, test/vst-roundtrip-xfail-tests]
     paths:
-      - "src/data/vst/**"
+      - "src/synth_setter/data/vst/**"
       - "tests/data/vst/**"
-      - "scripts/compute_audio_metrics.py"
+      - "src/synth_setter/evaluation/compute_audio_metrics.py"
       - ".github/workflows/test-vst-slow.yml"
-      - "requirements*.txt"
+      - "pyproject.toml"
 
 concurrency:
   group: test-vst-slow-${{ github.ref }}
@@ -79,14 +79,14 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
-            -e PYTHONPATH=/home/build/synth-setter \
+            -e PYTHONPATH=/home/build/synth-setter:/home/build/synth-setter/src \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              scripts/run-linux-vst-headless.sh \
-                python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
+                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
             '
 
       - name: Run VST slow tests in Docker
@@ -107,7 +107,7 @@ jobs:
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
             -v /tmp/bench:/bench \
-            -e PYTHONPATH=/home/build/synth-setter \
+            -e PYTHONPATH=/home/build/synth-setter:/home/build/synth-setter/src \
             -e BENCHMARK_OUTPUT_DIR=/bench \
             -e HYDRA_FULL_ERROR=1 \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
@@ -116,7 +116,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              scripts/run-linux-vst-headless.sh \
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
                 pytest -vv -s tests/data/vst/test_generate_vst_dataset.py
             '
 

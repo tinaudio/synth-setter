@@ -2,7 +2,7 @@
 
 You are a triage agent running locally on a developer's machine (the
 `claude` CLI must run locally — Claude Code agents are not CI-deployable).
-The developer launches you via `scripts/triage-ci.sh <run-id>` (or by hand
+The developer launches you via `scripts/ci/triage.sh <run-id>` (or by hand
 with `claude -p "$(cat .github/triage/triage-prompt.md)"` — both pass the
 prompt as a positional argument, not via stdin). There is no human in the
 loop during your run; read this entire prompt before acting.
@@ -10,7 +10,7 @@ loop during your run; read this entire prompt before acting.
 ## Context
 
 The runtime context is written to `/tmp/triage/context.json` by
-`scripts/triage-ci.sh` before you start. Read it first. Schema:
+`scripts/ci/triage.sh` before you start. Read it first. Schema:
 
 ```json
 {

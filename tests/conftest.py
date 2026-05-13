@@ -16,12 +16,12 @@ from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, open_dict
 
-from src.data.vst import param_specs, preset_paths
-from src.utils.utils import register_resolvers
+from synth_setter.data.vst import param_specs, preset_paths
+from synth_setter.utils.utils import register_resolvers
 from tests._baseline_worktree import worktree_for_ref  # noqa: F401 — pytest fixture re-export
 
 # Per-clip dimensions for the smoke fixture's HDF5 output. ``RenderConfig`` in
-# ``src.pipeline.schemas.spec`` declares no field defaults — the fixture passes
+# ``synth_setter.pipeline.schemas.spec`` declares no field defaults — the fixture passes
 # explicit values for every flag below, so these constants must match the values
 # the subprocess is invoked with.
 _SURGE_FIXTURE_SAMPLE_RATE = 44100
@@ -52,7 +52,7 @@ NUM_FIXTURE_SAMPLES = 5
 # X11 wrapping lives at the audio-rendering boundary (the subprocess call),
 # not at the container entrypoint — the click CLI stays X11-agnostic so idle
 # and passthrough don't pay the Xvfb startup cost.
-VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
+VST_HEADLESS_WRAPPER = "docker/ubuntu22_04/run-linux-vst-headless.sh"
 
 
 def _validate_surge_dataset(path: Path, num_samples: int) -> None:
@@ -107,7 +107,7 @@ def _validate_surge_dataset(path: Path, num_samples: int) -> None:
 
 
 # Register custom OmegaConf resolvers (mul, div) needed to parse Hydra configs.
-# This import pulls in torch/lightning transitively via src.utils.utils, but every
+# This import pulls in torch/lightning transitively via synth_setter.utils.utils, but every
 # test in this suite already requires those dependencies, so there is no benefit to
 # isolating resolver registration into a lighter module.
 register_resolvers()
@@ -282,7 +282,7 @@ def param_spec_name(request: pytest.FixtureRequest) -> str:
     :param request: Pytest fixture request — when parametrized indirectly, ``request.param``
         carries the spec name; otherwise the default ``"surge_4"`` is used.
 
-    :return: A key into :data:`src.data.vst.param_specs` and :data:`src.data.vst.preset_paths`.
+    :return: A key into :data:`synth_setter.data.vst.param_specs` and :data:`synth_setter.data.vst.preset_paths`.
     """
     return getattr(request, "param", "surge_4")
 
@@ -298,7 +298,7 @@ def _build_surge_xt_smoke_cfg(accelerator: str, param_spec_name: str) -> DictCon
     on any host so the YAML never silently drifts from this builder).
 
     :param accelerator: Lightning ``trainer.accelerator`` — ``"cpu"``, ``"mps"``, or ``"gpu"``.
-    :param param_spec_name: Key into :data:`src.data.vst.param_specs`; drives
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs`; drives
         ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``.
 
     :return: Resolved DictConfig with the smoke-test bake-ins applied.
@@ -332,9 +332,8 @@ def _build_surge_xt_smoke_cfg(accelerator: str, param_spec_name: str) -> DictCon
             cfg.data.batch_size = 1
             cfg.data.pin_memory = False
             cfg.data.ot = False
-            # The 5-sample fixture's stats.npz has zero-std mel bins that poison the batch
-            # with NaN via (mel - mean) / std.
-            cfg.data.use_saved_mean_and_variance = False
+            # Smoke fixture writes stats.npz via masked get_dataset_stats — see #1002.
+            cfg.data.use_saved_mean_and_variance = True
             cfg.data.num_workers = 0
 
             cfg.trainer.devices = 1
@@ -374,7 +373,7 @@ def cfg_surge_xt_global(accelerator: str, param_spec_name: str) -> DictConfig:
 
     :param accelerator: Parametrized accelerator (``"cpu"`` / ``"mps"`` / ``"gpu"``) — drives
         Lightning's ``trainer.accelerator`` and applies device-specific config tweaks.
-    :param param_spec_name: Name of the :mod:`src.data.vst` param spec the cfg is wired for —
+    :param param_spec_name: Name of the :mod:`synth_setter.data.vst` param spec the cfg is wired for —
         drives ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``.
 
     :return: A DictConfig object configured for a one-step Surge XT smoke train.
@@ -388,8 +387,8 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
     :param tmp_path: Per-test temporary directory; the dataset is written under
         ``tmp_path / "data" / "smoke"``.
-    :param param_spec_name: Param spec name (key into :data:`src.data.vst.param_specs`
-        and :data:`src.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
+    :param param_spec_name: Param spec name (key into :data:`synth_setter.data.vst.param_specs`
+        and :data:`synth_setter.data.vst.preset_paths`) — selects the matching ``--param_spec_name``
         and ``--preset_path`` for ``generate_vst_dataset``.
 
     :return: A Path object pointing at the directory containing the N-sample Surge XT smoke-test
@@ -405,7 +404,7 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
 
     generate_dataset_args += [
         sys.executable,
-        "src/data/vst/generate_vst_dataset.py",
+        "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(smoke_dataset_dir / "train.h5"),
         f"--plugin_path={_SURGE_FIXTURE_PLUGIN_PATH}",
         f"--preset_path={preset_paths[param_spec_name]}",
@@ -451,6 +450,40 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         "Dataset generation failed to produce train.h5 fixture"
     )
     _validate_surge_dataset(smoke_dataset_dir / "train.h5", NUM_FIXTURE_SAMPLES)
+
+    # Sibling stats.npz; shared across train/val/test splits — see #1002.
+    stats_args = [
+        sys.executable,
+        "-m",
+        "synth_setter.pipeline.data.stats",
+        str(smoke_dataset_dir / "train.h5"),
+        "--mask-degenerate-bins",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603
+            stats_args,
+            text=True,
+            check=False,
+            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"get_dataset_stats timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"command: {stats_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    if result.returncode != 0:
+        pytest.fail(
+            f"get_dataset_stats failed (exit {result.returncode})\n"
+            f"command: {stats_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    assert (smoke_dataset_dir / "stats.npz").exists(), (
+        "get_dataset_stats failed to produce stats.npz fixture"
+    )
+
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "val.h5")
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "test.h5")
     return Path(smoke_dataset_dir)

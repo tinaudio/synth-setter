@@ -14,7 +14,7 @@ Browse [`tests/`](../../tests) for the current layout. The tree has several **di
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Hydra-config validation                           | [`tests/test_configs.py`](../../tests/test_configs.py)                                                                             | Uses `cfg_train` / `cfg_eval` fixtures; light assertions + `hydra.utils.instantiate()`   | (none by default)                                             |
 | Hydra+Lightning **E2E** train/eval                | [`tests/test_eval.py`](../../tests/test_eval.py), [`tests/test_train.py`](../../tests/test_train.py)                               | Uses fixtures; round-trips `train()` → checkpoint → `evaluate()`                         | `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` |
-| Hydra sweeps                                      | [`tests/test_sweeps.py`](../../tests/test_sweeps.py)                                                                               | Invokes `src/train.py` as a subprocess via `run_sh_command` helper                       | `gpu`, `slow`                                                 |
+| Hydra sweeps                                      | [`tests/test_sweeps.py`](../../tests/test_sweeps.py)                                                                               | Invokes `src/synth_setter/cli/train.py` as a subprocess via `run_sh_command` helper      | `gpu`, `slow`                                                 |
 | Pure-Python unit tests                            | [`tests/test_logging_utils.py`](../../tests/test_logging_utils.py), [`tests/test_datamodules.py`](../../tests/test_datamodules.py) | No Hydra fixtures; direct module/class tests                                             | (usually none)                                                |
 | Property-based tests                              | [`tests/test_properties.py`](../../tests/test_properties.py)                                                                       | Hypothesis (`@given`, `@settings`); no fixtures                                          | `hypothesis`, `slow`                                          |
 | Performance benchmarks                            | [`tests/test_benchmarks.py`](../../tests/test_benchmarks.py)                                                                       | `pytest-benchmark`'s `benchmark` fixture                                                 | `benchmark`, `slow`                                           |
@@ -102,8 +102,8 @@ import pytest
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from src.eval import evaluate
-from src.train import train
+from synth_setter.cli.eval import evaluate
+from synth_setter.cli.train import train
 from tests.helpers.run_if import RunIf
 
 
@@ -147,15 +147,15 @@ ______________________________________________________________________
 
 ## 6. Gotchas
 
-1. **DataModule `setup(stage)` must cover every stage you invoke.** Lightning passes one of `{"fit", "validate", "test", "predict"}` depending on which Trainer method runs. A `setup()` that only handles `"fit"` silently builds the wrong (or no) dataloader for the others. See Lightning's [DataModule docs](https://lightning.ai/docs/pytorch/stable/data/datamodule.html) for the contract, and [`src/data/ksin_datamodule.py`](../../src/data/ksin_datamodule.py) for the canonical three-branch pattern in this repo.
+1. **DataModule `setup(stage)` must cover every stage you invoke.** Lightning passes one of `{"fit", "validate", "test", "predict"}` depending on which Trainer method runs. A `setup()` that only handles `"fit"` silently builds the wrong (or no) dataloader for the others. See Lightning's [DataModule docs](https://lightning.ai/docs/pytorch/stable/data/datamodule.html) for the contract, and [`src/synth_setter/data/ksin_datamodule.py`](../../src/synth_setter/data/ksin_datamodule.py) for the canonical three-branch pattern in this repo.
 
 2. **`configs/train.yaml` and `configs/eval.yaml` require explicit `data=` / `model=`.** Both entry points use `???` for `data` and `model`, so Hydra fails fast if either is missing. Production runs pass them via an `experiment=` config; tests pass them at compose time inside `conftest.py`. There is no fallback to a researcher-local default.
 
 3. **GPU tests use a three-marker stack.** `@pytest.mark.gpu`, `@pytest.mark.slow`, `@RunIf(min_gpus=1)` each do distinct things. The CI selector for GPU tests lives in [`.github/workflows/test-gpu.yml`](../../.github/workflows/test-gpu.yml); local `make test-fast` and `make test-full-gpu` filters live in the Makefile. If the CI filter changes, the docs don't need updating — the code does.
 
-4. **`weights_only=False` when loading a checkpoint for eval.** PyTorch 2.6 tightened `torch.load`'s default to `weights_only=True`, which refuses Lightning checkpoint metadata. `src/eval.py` passes `weights_only=False` explicitly to `trainer.test/validate/predict(ckpt_path=...)`. New standalone loader code needs the same.
+4. **`weights_only=False` when loading a checkpoint for eval.** PyTorch 2.6 tightened `torch.load`'s default to `weights_only=True`, which refuses Lightning checkpoint metadata. `src/synth_setter/cli/eval.py` passes `weights_only=False` explicitly to `trainer.test/validate/predict(ckpt_path=...)`. New standalone loader code needs the same.
 
-5. **Adding a new `cfg.mode=<x>` dispatch?** Audit every DataModule's `setup()` for that stage. `src/eval.py` routes `mode` to `trainer.test/validate/predict`, each passing a different `stage` string. Gotcha #1 bites if a DataModule doesn't handle the new stage.
+5. **Adding a new `cfg.mode=<x>` dispatch?** Audit every DataModule's `setup()` for that stage. `src/synth_setter/cli/eval.py` routes `mode` to `trainer.test/validate/predict`, each passing a different `stage` string. Gotcha #1 bites if a DataModule doesn't handle the new stage.
 
 ______________________________________________________________________
 

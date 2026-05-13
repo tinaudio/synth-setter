@@ -13,14 +13,14 @@ ______________________________________________________________________
 
 ## 1. IDs
 
-| ID                     | Construction                                                      | Source                             | Example                           |
-| ---------------------- | ----------------------------------------------------------------- | ---------------------------------- | --------------------------------- |
-| `dataset_config_id`    | Config filename (stem)                                            | `configs/experiment/{id}.yaml`     | `diva-v1`                         |
-| `dataset_wandb_run_id` | Configurable, default `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` | `wandb.init(id=...)`               | `diva-v1-20260312T143022500Z`     |
-| `train_config_id`      | Config filename (stem)                                            | `configs/experiment/.../{id}.yaml` | `flow-simple`                     |
-| `train_wandb_run_id`   | Configurable, default `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}`   | `wandb.init(id=...)`               | `flow-simple-20260315T091500250Z` |
-| `eval_config_id`       | Eval dataset config filename (stem)                               | `configs/experiment/{id}.yaml`     | `nsynth-v1`                       |
-| `eval_wandb_run_id`    | Configurable, default `{eval_config_id}-{YYYYMMDDTHHMMSSsssZ}`    | `wandb.init(id=...)`               | `nsynth-v1-20260320T160000750Z`   |
+| ID                     | Construction                                                      | Source                                          | Example                           |
+| ---------------------- | ----------------------------------------------------------------- | ----------------------------------------------- | --------------------------------- |
+| `dataset_config_id`    | Config filename (stem)                                            | `configs/experiment/generate_dataset/{id}.yaml` | `diva-v1`                         |
+| `dataset_wandb_run_id` | Configurable, default `{dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` | `wandb.init(id=...)`                            | `diva-v1-20260312T143022500Z`     |
+| `train_config_id`      | Config filename (stem)                                            | `configs/experiment/.../{id}.yaml`              | `flow-simple`                     |
+| `train_wandb_run_id`   | Configurable, default `{train_config_id}-{YYYYMMDDTHHMMSSsssZ}`   | `wandb.init(id=...)`                            | `flow-simple-20260315T091500250Z` |
+| `eval_config_id`       | Eval dataset config filename (stem)                               | `configs/experiment/{id}.yaml`                  | `nsynth-v1`                       |
+| `eval_wandb_run_id`    | Configurable, default `{eval_config_id}-{YYYYMMDDTHHMMSSsssZ}`    | `wandb.init(id=...)`                            | `nsynth-v1-20260320T160000750Z`   |
 
 - `*_config_id` = filename of the YAML config, without extension
 - `*_wandb_run_id` = the W&B run ID, set via `wandb.init(id=...)`. Default convention is `{*_config_id}-{timestamp}`, but the path format is agnostic to how the ID is generated.
@@ -106,7 +106,7 @@ ______________________________________________________________________
 | Type           | Name Pattern               | Logged By                         | Example name        |
 | -------------- | -------------------------- | --------------------------------- | ------------------- |
 | `dataset`      | `data-{dataset_config_id}` | `pipeline.cli finalize` (planned) | `data-diva-v1`      |
-| `model`        | `model-{train_config_id}`  | `src/train.py`                    | `model-flow-simple` |
+| `model`        | `model-{train_config_id}`  | `src/synth_setter/cli/train.py`   | `model-flow-simple` |
 | `eval-results` | `eval-{eval_config_id}`    | eval script                       | `eval-nsynth-v1`    |
 
 > **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
@@ -161,7 +161,7 @@ ______________________________________________________________________
 | `job_type`        | Stage         | Script                            |
 | ----------------- | ------------- | --------------------------------- |
 | `data-generation` | Data pipeline | `pipeline.cli finalize` (planned) |
-| `training`        | Training      | `src/train.py`                    |
+| `training`        | Training      | `src/synth_setter/cli/train.py`   |
 | `evaluation`      | Evaluation    | eval script                       |
 
 > **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.

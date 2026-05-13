@@ -24,24 +24,24 @@ The reconciliation-based pipeline design is naturally compatible with SkyPilot m
 
 ## 2. Architecture Decisions
 
-| Decision          | Choice                                                  | Rationale                                                                                                                               |
-| ----------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Integration depth | Full managed jobs                                       | Spot recovery + R2 markers as natural checkpoints. Cost savings 3-5x on interruptible instances                                         |
-| Local dev/test    | Keep LocalBackend                                       | In-process execution for fast unit tests. Two code paths (local vs SkyPilot)                                                            |
-| Field name        | `compute_config` *(proposed)*                           | Tool-agnostic. Value is the resolved SkyPilot YAML *content* (embedded dict — see §3.1). Survives tool changes without schema migration |
-| Backend selection | Presence of `compute_config` *(proposed)*               | `None` → local, dict → SkyPilot. No enum, no protocol, no extra plumbing                                                                |
-| Shard parallelism | `--num-workers` CLI flag on the launcher                | Worker count is a launcher concern, not a `DatasetSpec` field; parallelism is recoverable from the per-cluster spec upload              |
-| Worker identity   | UUID generated at worker start                          | Decoupled from any provider. Fully portable                                                                                             |
-| Deployment        | Docker image                                            | Reproducible; aligns with `pipeline/schemas/image_config.py` (see `docs/reference/docker.md`). SkyPilot pulls the image                 |
-| CLI ownership     | `python -m pipeline generate` wraps SkyPilot            | Single entry point. User never touches `sky` CLI directly for generation                                                                |
-| Frozen spec       | Include `compute_config` *(proposed)*                   | For provenance and cost tracking                                                                                                        |
-| Scope             | Design all three config types, implement pipeline first | DatasetSpec, train, eval all get `compute_config` *(proposed)*                                                                          |
+| Decision          | Choice                                                    | Rationale                                                                                                                                |
+| ----------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Integration depth | Full managed jobs                                         | Spot recovery + R2 markers as natural checkpoints. Cost savings 3-5x on interruptible instances                                          |
+| Local dev/test    | Keep LocalBackend                                         | In-process execution for fast unit tests. Two code paths (local vs SkyPilot)                                                             |
+| Field name        | `compute_config` *(proposed)*                             | Tool-agnostic. Value is the resolved SkyPilot YAML *content* (embedded dict — see §3.1). Survives tool changes without schema migration  |
+| Backend selection | Presence of `compute_config` *(proposed)*                 | `None` → local, dict → SkyPilot. No enum, no protocol, no extra plumbing                                                                 |
+| Shard parallelism | `--num-workers` CLI flag on the launcher                  | Worker count is a launcher concern, not a `DatasetSpec` field; parallelism is recoverable from the per-job spec upload                   |
+| Worker identity   | UUID generated at worker start                            | Decoupled from any provider. Fully portable                                                                                              |
+| Deployment        | Docker image                                              | Reproducible; aligns with `src/synth_setter/pipeline/schemas/image_config.py` (see `docs/reference/docker.md`). SkyPilot pulls the image |
+| CLI ownership     | `python -m synth_setter.pipeline generate` wraps SkyPilot | Single entry point. User never touches `sky` CLI directly for generation                                                                 |
+| Frozen spec       | Include `compute_config` *(proposed)*                     | For provenance and cost tracking                                                                                                         |
+| Scope             | Design all three config types, implement pipeline first   | DatasetSpec, train, eval all get `compute_config` *(proposed)*                                                                           |
 
 ## 3. Schema Changes
 
-### 3.1 DatasetSpec (`pipeline/schemas/spec.py`) — *proposed, not yet implemented*
+### 3.1 DatasetSpec (`src/synth_setter/pipeline/schemas/spec.py`) — *proposed, not yet implemented*
 
-`DatasetConfig` + `DatasetPipelineSpec` were unified into a single `DatasetSpec` in [#887](https://github.com/tinaudio/synth-setter/pull/887) (the constructed Pydantic model **is** the artifact on R2; `model.model_dump_json()` is the JSON). The current schema (see [data-pipeline.md §14.1](data-pipeline.md#141-input-spec-schema) and `pipeline/schemas/spec.py`) has no compute-related field. The SkyPilot integration adds **one** new field:
+`DatasetConfig` + `DatasetPipelineSpec` were unified into a single `DatasetSpec` in [#887](https://github.com/tinaudio/synth-setter/pull/887) (the constructed Pydantic model **is** the artifact on R2; `model.model_dump_json()` is the JSON). The current schema (see [data-pipeline.md §14.1](data-pipeline.md#141-input-spec-schema) and `src/synth_setter/pipeline/schemas/spec.py`) has no compute-related field. The SkyPilot integration adds **one** new field:
 
 ```python
 class DatasetSpec(BaseModel):
@@ -71,7 +71,7 @@ defaults:
 compute_config: null  # Path to SkyPilot YAML. null = local execution
 ```
 
-The training entrypoint (`src/train.py`) reads `cfg.get("compute_config")` and either trains locally or launches via SkyPilot SDK.
+The training entrypoint (`src/synth_setter/cli/train.py`) reads `cfg.get("compute_config")` and either trains locally or launches via SkyPilot SDK.
 
 ### 3.3 Eval config (Hydra — `configs/eval.yaml`)
 
@@ -86,35 +86,36 @@ compute_config: null
 
 ### 4.1 SkyPilot YAML configs (`configs/compute/`)
 
-The smoke pipeline ships two real templates:
+The smoke pipeline ships three real templates:
 
 ```
 configs/compute/
 ├── runpod-template.yaml      # RunPod GPU (primary smoke target)
-└── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
+├── oci-cpu-template.yaml     # OCI x86 CPU Flex (second smoke target)
+└── local-template.yaml       # kind/kubernetes (sky local up; CI smoke only — see the YAML header for the CI-only resource shrink, PR #876)
 ```
 
-Both share the launcher (`pipeline/entrypoints/skypilot_launch.py`),
+All three share the launcher (`src/synth_setter/pipeline/skypilot_launch.py`),
 the `dev-snapshot` Docker image, the R2-uploaded spec contract, and the
-unified click-CLI dispatch (`scripts/docker_entrypoint.py generate_dataset`,
+unified click-CLI dispatch (`src/synth_setter/tools/docker_entrypoint.py generate_dataset`,
 which carries the `os._exit(0)` defensive workaround for #735 inline).
 They differ only in the `resources:` block (provider, accelerators vs.
 CPU/memory floor, region) and the provider-specific credential setup in CI.
 Future targets follow the same pattern.
 
-The launcher (`pipeline.entrypoints.skypilot_launch`) does not override the `run:` block — it instantiates the Task from YAML and only calls `task.update_envs(...)` to inject the per-launch credential set + the spec URI. The `run:` block in each template handles the worker invocation; per-rank shard scoping is forwarded via `SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS` envs.
+The launcher (`synth_setter.pipeline.skypilot_launch`) does not override the `run:` block — it instantiates the Task from YAML and only calls `task.update_envs(...)` to inject the per-launch credential set + the spec URI. The `run:` block in each template handles the worker invocation; per-rank shard scoping is forwarded via `SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS` envs.
 
 #### 4.1.1 Launch mode (`--tail` / `--no-tail`)
 
-The launcher accepts `--tail/--no-tail` (default `--no-tail`) — see the Click option in `pipeline/entrypoints/skypilot_launch.py` for the live help text and defaults. `--no-tail` waits for `sky.launch` + `sky.stream_and_get` to return a `job_id` per rank (provisioning completes), prints `sky logs <cluster> <job_id>` and `sky down <cluster>` commands the operator can run, and exits without tailing logs and without tearing successfully-provisioned clusters down — `idle_minutes_to_autostop=5, down=True` on `sky.launch` is the safety net for those left-running clusters. Half-provisioned clusters (those whose `sky.launch`/`sky.stream_and_get` raised or yielded no `job_id`) are still torn down in `--no-tail` so SkyPilot state doesn't accumulate orphans; sibling clusters that launched cleanly are left running. `--tail` opts into `sky.tail_logs(follow=True)` and unconditional `finally`-block teardown of every cluster; CI lanes that need exit-code-reflects-worker-success-and-uniform-cleanup pass `--tail` explicitly.
+The launcher accepts `--tail/--no-tail` (default `--no-tail`) — see the Click option in `src/synth_setter/pipeline/skypilot_launch.py` for the live help text and defaults. `--no-tail` waits for `sky.jobs.launch` + `sky.stream_and_get` to return a job_id per rank (the controller has accepted the job), prints `sky jobs logs --name <job_name>` and `sky jobs cancel --name <job_name>` commands the operator can run, and exits without tailing logs and without cancelling successfully-submitted jobs — the controller's terminal-status lifecycle releases the underlying compute on success/fail, so a clean launcher exit doesn't kill in-flight work. Half-submitted jobs (those whose `sky.jobs.launch`/`sky.stream_and_get` raised or yielded no job_id) are still cancelled in `--no-tail` so the controller doesn't accumulate orphan state; sibling jobs that launched cleanly are left running. `--tail` opts into `sky.jobs.tail_logs(follow=True)` and unconditional `finally`-block cancellation of every job; CI lanes that need exit-code-reflects-worker-success-and-uniform-cleanup pass `--tail` explicitly.
 
 ### 4.2 Env-var resolution: launcher → worker
 
-The SkyPilot launcher (`pipeline.entrypoints.skypilot_launch`) needs to forward a small fixed set of secrets and configuration values from the operator's environment into the worker pod's environment. The contract is deliberately narrow — only the keys the worker actually reads — and the resolution is per-key so local dev and CI can share the same launcher code without special cases.
+The SkyPilot launcher (`synth_setter.pipeline.skypilot_launch`) needs to forward a small fixed set of secrets and configuration values from the operator's environment into the worker pod's environment. The contract is deliberately narrow — only the keys the worker actually reads — and the resolution is per-key so local dev and CI can share the same launcher code without special cases.
 
 #### The forwarded set
 
-Defined as `_WORKER_ENV_KEYS` in `pipeline/entrypoints/skypilot_launch.py`. The tuple is the source of truth for what the launcher forwards to the worker pod via `task.update_envs(...)`; the matching `envs:` block in `configs/compute/runpod-template.yaml` declares the same names with empty defaults so the SkyPilot Task validates as fully-specified before the launcher fills them.
+Defined as `_WORKER_ENV_KEYS` in `src/synth_setter/pipeline/skypilot_launch.py`. The tuple is the source of truth for what the launcher forwards to the worker pod via `task.update_envs(...)`; the matching `envs:` block in `configs/compute/runpod-template.yaml` declares the same names with empty defaults so the SkyPilot Task validates as fully-specified before the launcher fills them.
 
 Anything outside the tuple is *not* forwarded to the worker, even if it's set in the launcher's environment. Adding a key requires adding it both to `_WORKER_ENV_KEYS` and to the `envs:` block.
 
@@ -135,8 +136,8 @@ Source of truth: a `.env` file at the repo root.
 ```bash
 cp .env.example .env
 $EDITOR .env  # fill in RCLONE_CONFIG_R2_* + WANDB_API_KEY
-python -m pipeline.entrypoints.skypilot_launch \
-    --experiment runpod-smoke-shard
+python -m synth_setter.pipeline.skypilot_launch \
+    --experiment generate_dataset/smoke-shard
 ```
 
 The launcher finds `<repo_root>/.env`, parses it via `python-dotenv`, and resolves all keys from there. Process env is a non-event because `.env` wins per key — useful when you have stale shell exports.
@@ -166,7 +167,7 @@ The SkyPilot launch step in `.github/workflows/test-dataset-generation.yml` (onl
       -e RCLONE_CONFIG_R2_ENDPOINT \
       -e R2_ACCOUNT_ID \
       -e WANDB_API_KEY \
-      "$IMAGE" bash -c '... python -m pipeline.entrypoints.skypilot_launch ...'
+      "$IMAGE" bash -c '... python -m synth_setter.pipeline.skypilot_launch ...'
 ```
 
 Notes:
@@ -176,13 +177,13 @@ Notes:
 
 #### Why each key lives where it does
 
-| Where                                  | What                                                                                                                            | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Workflow YAML `env:` block             | `secrets.R2_*`, `secrets.WANDB_API_KEY`                                                                                         | GitHub-side secret materialization. Visible only to same-repo PRs (gated by the `if:` on the `generate` job).                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `docker run -e ...` flags              | Maps host `R2_*` → container `RCLONE_CONFIG_R2_*` (renamed at the boundary because rclone wants the `RCLONE_CONFIG_R2_` prefix) | Container env is the natural place for runtime secrets. No file persists on the runner.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Launcher's `_WORKER_ENV_KEYS`          | rclone-R2, WANDB, worker-spec/git-ref (the keys resolved from `.env` / process env)                                             | Defines the forwarding contract for keys that come *from the operator's environment*. Partition rank/world (`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) are NOT in this tuple — they're synthesized per-rank inside `_run_workers` and injected via `task.update_envs(...)` directly.                                                                                                                                                                                                                                                                                      |
-| `runpod-template.yaml` `envs:` block   | Same keys with empty defaults                                                                                                   | Template-side schema declaration. Empty defaults make the Task YAML valid even before the launcher fills them. The interpreter-shutdown defensive workaround for [#735](https://github.com/tinaudio/synth-setter/issues/735) lives in the click `generate_dataset` subcommand of `scripts/docker_entrypoint.py` (force-`os._exit(0)` after `run()`) — applies to every invocation that goes through the click CLI, including the `local` matrix cell of `test-dataset-generation.yml`. The previous "SkyPilot-only consumer" framing predates the entrypoint unification (see PR #828). |
-| `~/.runpod/config.toml` (in-container) | `RUNPOD_API_KEY`                                                                                                                | SkyPilot's RunPod backend reads from this file specifically; env var alone is insufficient for `sky check runpod`. Written with `umask 077` so the API key is 600. Skipped entirely when `SKYPILOT_API_SERVER_ENDPOINT` is set — the remote API server holds provider creds and the local SkyPilot client only needs the endpoint URL ([#785](https://github.com/tinaudio/synth-setter/issues/785)).                                                                                                                                                                                    |
+| Where                                  | What                                                                                                                            | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Workflow YAML `env:` block             | `secrets.R2_*`, `secrets.WANDB_API_KEY`                                                                                         | GitHub-side secret materialization. Visible only to same-repo PRs (gated by the `if:` on the `generate` job).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `docker run -e ...` flags              | Maps host `R2_*` → container `RCLONE_CONFIG_R2_*` (renamed at the boundary because rclone wants the `RCLONE_CONFIG_R2_` prefix) | Container env is the natural place for runtime secrets. No file persists on the runner.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Launcher's `_WORKER_ENV_KEYS`          | rclone-R2, WANDB, worker-spec/git-ref (the keys resolved from `.env` / process env)                                             | Defines the forwarding contract for keys that come *from the operator's environment*. Partition rank/world (`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) are NOT in this tuple — they're synthesized per-rank inside `_run_workers` and injected via `task.update_envs(...)` directly.                                                                                                                                                                                                                                                                                                     |
+| `runpod-template.yaml` `envs:` block   | Same keys with empty defaults                                                                                                   | Template-side schema declaration. Empty defaults make the Task YAML valid even before the launcher fills them. The interpreter-shutdown defensive workaround for [#735](https://github.com/tinaudio/synth-setter/issues/735) lives in the click `generate_dataset` subcommand of `src/synth_setter/tools/docker_entrypoint.py` (force-`os._exit(0)` after `run()`) — applies to every invocation that goes through the click CLI, including the `local` matrix cell of `test-dataset-generation.yml`. The previous "SkyPilot-only consumer" framing predates the entrypoint unification (see PR #828). |
+| `~/.runpod/config.toml` (in-container) | `RUNPOD_API_KEY`                                                                                                                | SkyPilot's RunPod backend reads from this file specifically; env var alone is insufficient for `sky check runpod`. Written with `umask 077` so the API key is 600. Skipped entirely when `SKYPILOT_API_SERVER_ENDPOINT` is set — the remote API server holds provider creds and the local SkyPilot client only needs the endpoint URL ([#785](https://github.com/tinaudio/synth-setter/issues/785)).                                                                                                                                                                                                   |
 
 #### Failure modes
 
@@ -196,7 +197,7 @@ Notes:
 
 ### 4.3 Worker adaptation
 
-The existing worker design (`pipeline/worker.py`, not yet implemented) stays mostly the same. Changes:
+The existing worker design (`src/synth_setter/pipeline/worker.py`, not yet implemented) stays mostly the same. Changes:
 
 - Worker generates a UUID on startup for `worker_id` (instead of reading `RUNPOD_POD_ID`).
 - Worker reads its assigned shard range from CLI args or env vars (set by pipeline CLI at SkyPilot launch time).
@@ -253,8 +254,8 @@ Replace RunPod references with SkyPilot/provider-agnostic language.
 
 **Files to modify:**
 
-- `pipeline/schemas/spec.py` — add a `compute_config` field (optional, defaults to `None`) to `DatasetSpec`
-- `configs/experiment/surge-simple-480k-10k.yaml` — add an optional `compute_config` key, or leave it out for local execution
+- `src/synth_setter/pipeline/schemas/spec.py` — add a `compute_config` field (optional, defaults to `None`) to `DatasetSpec`
+- `configs/experiment/generate_dataset/surge-simple-480k-10k.yaml` — add an optional `compute_config` key, or leave it out for local execution
 - Tests: `tests/pipeline/test_schemas/` — add test cases for the new field, backward compat
 
 Note: `DatasetConfig`/`DatasetPipelineSpec`/`materialize_spec()` no longer exist as separate types — they unified into `DatasetSpec` ([#887](https://github.com/tinaudio/synth-setter/pull/887)) and the spec is now composed via Hydra (`spec_from_cfg(cfg)` from `configs/dataset.yaml` + an experiment override; the legacy `load_dataset_spec_yaml` bridge was removed in [#917](https://github.com/tinaudio/synth-setter/pull/917)).
@@ -274,8 +275,8 @@ Note: `DatasetConfig`/`DatasetPipelineSpec`/`materialize_spec()` no longer exist
 
 **Files to create/modify:**
 
-- `pipeline/worker.py` — worker process with UUID identity, shard range args, idempotent resume
-- `pipeline/cli.py` / `pipeline/__main__.py` — CLI that reconciles, partitions, launches
+- `src/synth_setter/pipeline/worker.py` — worker process with UUID identity, shard range args, idempotent resume
+- `src/synth_setter/pipeline/cli.py` / `src/synth_setter/pipeline/__main__.py` — CLI that reconciles, partitions, launches
 - SkyPilot SDK calls in CLI: `sky.jobs.launch()` per worker batch
 
 This is where the `compute_config` presence/absence drives behavior:
@@ -304,8 +305,8 @@ else:
 
 - `configs/train.yaml` — add `compute_config: null`
 - `configs/eval.yaml` — add `compute_config: null`
-- `src/train.py` — check `cfg.get("compute_config")`, launch via SkyPilot if set
-- `src/eval.py` — same
+- `src/synth_setter/cli/train.py` — check `cfg.get("compute_config")`, launch via SkyPilot if set
+- `src/synth_setter/cli/eval.py` — same
 
 Training/eval SkyPilot integration is architecturally simpler than the pipeline — it's a single job (not N parallel workers). The entrypoint wraps the existing `train(cfg)` call in a SkyPilot task.
 

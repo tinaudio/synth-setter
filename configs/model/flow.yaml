@@ -2,7 +2,7 @@ defaults:
   - encoder: cnn
   - _self_
 
-_target_: src.models.ksin_flow_matching_module.KSinFlowMatchingModule
+_target_: synth_setter.models.ksin_flow_matching_module.KSinFlowMatchingModule
 
 scheduler: null
 
@@ -13,9 +13,9 @@ optimizer:
   weight_decay: 0.0
 
 vector_field:
-  _target_: src.models.components.transformer.ApproxEquivTransformer
+  _target_: synth_setter.models.components.transformer.ApproxEquivTransformer
   projection:
-    _target_: src.models.components.transformer.LearntProjection
+    _target_: synth_setter.models.components.transformer.LearntProjection
     d_model: ${model.vector_field.d_model}
     d_token: ${model.vector_field.d_model}
     num_params: ${mul:${data.k},2}

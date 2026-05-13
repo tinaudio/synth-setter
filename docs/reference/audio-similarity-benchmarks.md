@@ -2,8 +2,16 @@
 
 Reference for the per-run audio-similarity metrics published by
 [`.github/workflows/test-vst-slow.yml`](../../.github/workflows/test-vst-slow.yml)
-to the `gh-pages` chart at
+to the benchmark chart at
 **<https://tinaudio.github.io/synth-setter/dev/bench/>**.
+
+`gh-pages` is now a **data store**, not the served branch: the
+`benchmark-action` keeps appending entries to `gh-pages/dev/bench/data.js`
+as before, but `gh-pages` itself is no longer rendered by Pages. The
+[`docs`](../../.github/workflows/docs.yml) workflow (Phase 2 of the docs
+pipeline) reads `gh-pages/dev/bench/`, merges it into the deployed
+mkdocs site under `/dev/bench/`, and publishes via
+`actions/deploy-pages@v4`. The chart URL is unchanged.
 
 ## Purpose
 
@@ -24,7 +32,7 @@ of the kind of regressions the chart is designed to surface:
 - **`librosa` / `pedalboard` upgrade** changing mel-spectrogram
   computation or VST host behavior, even with identical params.
 - **Regression in the renderer's determinism** in
-  `src/data/vst/core.py` § `render_params()` — bug
+  `src/synth_setter/data/vst/core.py` § `render_params()` — bug
   [#489](https://github.com/tinaudio/synth-setter/issues/489) was the
   every-other-render variance, closed by
   [#713](https://github.com/tinaudio/synth-setter/pull/713) via per-render
@@ -96,15 +104,15 @@ Both buckets emit the per-row "round-trip" series (five distance metrics
 plus the two non-distance sentinels `num-samples` and
 `wall-clock-seconds-per-render`):
 
-| Metric                                | Computed by                                                                 | Unit        | Smaller-is-better? |
-| ------------------------------------- | --------------------------------------------------------------------------- | ----------- | ------------------ |
-| `multi-scale-spectral-loss-max`       | `compute_mss` (`scripts/compute_audio_metrics.py`) — multi-scale log-mel L1 | dB          | yes                |
-| `dtw-aligned-mfcc-distance-max`       | `compute_wmfcc` — DTW-aligned MFCC L1 distance                              | L1          | yes                |
-| `spectral-optimal-transport-max`      | `compute_sot` — Wasserstein on STFT magnitudes                              | Wasserstein | yes                |
-| `rms-envelope-cosine-distance-max`    | `1 - compute_rms` — RMS envelope cosine distance                            | 1-cos       | yes                |
-| `mel-spectrogram-mean-absolute-error` | mean abs diff on stored mel arrays                                          | dB          | yes                |
-| `num-samples`                         | static fixture size (input parameter)                                       | count       | n/a (sentinel)     |
-| `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                 | seconds     | yes                |
+| Metric                                | Computed by                                                                                     | Unit        | Smaller-is-better? |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------- | ------------------ |
+| `multi-scale-spectral-loss-max`       | `compute_mss` (`src/synth_setter/evaluation/compute_audio_metrics.py`) — multi-scale log-mel L1 | dB          | yes                |
+| `dtw-aligned-mfcc-distance-max`       | `compute_wmfcc` — DTW-aligned MFCC L1 distance                                                  | L1          | yes                |
+| `spectral-optimal-transport-max`      | `compute_sot` — Wasserstein on STFT magnitudes                                                  | Wasserstein | yes                |
+| `rms-envelope-cosine-distance-max`    | `1 - compute_rms` — RMS envelope cosine distance                                                | 1-cos       | yes                |
+| `mel-spectrogram-mean-absolute-error` | mean abs diff on stored mel arrays                                                              | dB          | yes                |
+| `num-samples`                         | static fixture size (input parameter)                                                           | count       | n/a (sentinel)     |
+| `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                                     | seconds     | yes                |
 
 The **`1 preset N renders`** bucket additionally emits five `all-pairs-*`
 series — these are the **fix-regression signal for the #489
@@ -152,9 +160,16 @@ docker run -v /tmp/bench:/bench -e BENCHMARK_OUTPUT_DIR=/bench ...
    v
 benchmark-action/github-action-benchmark@v1   (one publish step per bucket)
    |
-   |  fetch + commit + push gh-pages
+   |  fetch + commit + push gh-pages  (data store; not served directly)
    v
-gh-pages branch  →  GitHub Pages  →  https://tinaudio.github.io/synth-setter/dev/bench/
+gh-pages branch  →  workflow_run trigger fires the `docs` workflow
+                    (.github/workflows/docs.yml)
+                    |
+                    |  actions/checkout@v6 (ref: gh-pages, path: gh-pages-data)
+                    |  cp -R gh-pages-data/dev/bench site/dev/bench
+                    |  actions/configure-pages + upload-pages-artifact + deploy-pages
+                    v
+                    GitHub Pages  →  https://tinaudio.github.io/synth-setter/dev/bench/
 ```
 
 ## Operations
@@ -176,9 +191,18 @@ git -c user.email="<your-noreply>@users.noreply.github.com" commit -m "Initial g
 git push origin gh-pages
 ```
 
-Then enable Pages: **Settings → Pages → Source = "Deploy from a
-branch", branch = `gh-pages`, folder = `/ (root)`**. The chart will
-populate on the next workflow run that publishes.
+Then enable Pages: **Settings → Pages → Source = "GitHub Actions"**.
+This is the single Pages source for the whole repo — the docs site
+(mkdocs) and the benchmark chart are both served through
+`actions/deploy-pages@v4` from the [`docs`](../../.github/workflows/docs.yml)
+workflow. Do **not** set Source to "Deploy from a branch" pointing at
+`gh-pages`: that mode is incompatible with `actions/deploy-pages@v4`
+and would unpublish the docs site.
+
+The chart will populate on the next `docs` workflow run after a
+benchmark publish — either the `workflow_run` trigger fires
+automatically when `test-vst-slow` completes on main, or a maintainer
+can `gh workflow run Docs --ref main` to redeploy on demand.
 
 ### Publishing from a feature branch (pre-merge)
 

@@ -14,7 +14,7 @@ name: Docker Image Build and Push
 # via the SYNTH_PERMUTATIONS_GIT_REF build-arg. The build ALWAYS pins to
 # the resolved commit SHA — the original input form is discarded.
 # The resolved SHA is validated as 40-char lowercase hex by load_image_config
-# (src/pipeline/schemas/image_config.py) in the "Load image config" step.
+# (src/synth_setter/pipeline/schemas/image_config.py) in the "Load image config" step.
 
 on:
   workflow_dispatch:
@@ -33,10 +33,10 @@ on:
     paths:
       - "docker/**"
       - "configs/image/**"
-      - "src/pipeline/schemas/image_config.py"
-      - "src/pipeline/ci/load_image_config.py"
+      - "src/synth_setter/pipeline/schemas/image_config.py"
+      - "src/synth_setter/pipeline/ci/load_image_config.py"
       - ".github/workflows/docker-build-validation.yml"
-      - "requirements*.txt"
+      - "pyproject.toml"
       - "tests/docker/**"
 
 jobs:
@@ -152,13 +152,20 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install config dependencies
-        run: uv pip install --system pyyaml pydantic
+      # load_image_config only needs pyyaml + pydantic (pydantic-core
+      # resolves transitively). Keep the runner-side env minimal: install
+      # the project with --no-deps so the full [project.dependencies]
+      # doesn't drag in torch/skypilot/librosa, then add pyyaml and
+      # pydantic in a second command with their own deps.
+      - name: Install synth_setter (editable; provides the load_image_config CLI plus its pyyaml + pydantic deps)
+        run: |
+          uv pip install --system --no-deps -e .
+          uv pip install --system pyyaml pydantic
 
       - name: Load image config
         id: config
         run: |
-          python -m src.pipeline.ci.load_image_config \
+          python -m synth_setter.pipeline.ci.load_image_config \
             --config configs/image/dev-snapshot.yaml \
             --github-sha '${{ steps.source.outputs.sha }}' \
             --issue-number '${{ github.event.pull_request.number || github.event.inputs.issue_number || 311 }}'
@@ -287,5 +294,5 @@ jobs:
           docker run --rm \
             -e PYTHONPATH=/home/build/synth-setter \
             "$SMOKE_IMAGE" \
-            scripts/run-linux-vst-headless.sh \
+            docker/ubuntu22_04/run-linux-vst-headless.sh \
               pytest tests/docker/test_smoke.py::test_surge_xt_loads -v

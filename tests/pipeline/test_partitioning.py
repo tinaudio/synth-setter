@@ -1,4 +1,4 @@
-"""Tests for src.pipeline.partitioning.
+"""Tests for synth_setter.pipeline.partitioning.
 
 ``get_my_shards`` and ``validate_rank_world`` are pure — tests pass
 ``rank`` / ``world`` / ``total_shards`` as direct arguments. ``read_rank_world_from_env``
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.pipeline.partitioning import (
+from synth_setter.pipeline.partitioning import (
     get_my_shards,
     read_rank_world_from_env,
     validate_rank_world,

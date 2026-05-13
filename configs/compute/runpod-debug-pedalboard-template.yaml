@@ -9,7 +9,7 @@
 #
 # This is the canary for bug #3 in #735 (Python interpreter shutdown
 # hang). Once the underlying thread leak is fixed at its source and the
-# `os._exit(0)` workaround in scripts/docker_entrypoint.py is reverted,
+# `os._exit(0)` workaround in src/synth_setter/tools/docker_entrypoint.py is reverted,
 # this variant should still pass — proving the fix.
 
 resources:
@@ -45,8 +45,8 @@ setup: |
 # the synced workdir hides.
 run: |
   set -euo pipefail
-  bash scripts/ensure_plugin_symlinks.sh
-  bash scripts/run-linux-vst-headless.sh python -c '
+  bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+  bash docker/ubuntu22_04/run-linux-vst-headless.sh python -c '
   from pedalboard import VST3Plugin
   plugin = VST3Plugin("plugins/Surge XT.vst3")
   print(f"plugin loaded: name={plugin.name!r} version={plugin.version!r}")

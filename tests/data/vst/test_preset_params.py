@@ -30,7 +30,7 @@ skip_no_vst = pytest.mark.skipif(
 
 skip_linux = pytest.mark.skipif(
     sys.platform == "linux",
-    reason=" test needs refactor to use  scripts/run-linux-vst-headless.sh",
+    reason=" test needs refactor to use  docker/ubuntu22_04/run-linux-vst-headless.sh",
 )
 
 @requires_vst
@@ -68,10 +68,10 @@ def test_render_params_sets_preset_dependent_param():
     """render_params must successfully set preset-dependent params without raising."""
     import numpy as np
 
-    from src.data.vst.core import render_params
+    from synth_setter.data.vst.core import render_params
 
     # render_params now takes a plugin_path and loads its own VST3Plugin instance
-    # per call (see src/data/vst/core.py docstring), so the caller cannot observe
+    # per call (see src/synth_setter/data/vst/core.py docstring), so the caller cannot observe
     # the post-call parameter state directly. Verify instead that the call does
     # not raise KeyError and returns finite, non-silent audio.
     output = render_params(

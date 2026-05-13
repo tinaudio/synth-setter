@@ -10,9 +10,9 @@ import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, open_dict
 
-from src.data.vst import param_specs, preset_paths
-from src.eval import evaluate
-from src.train import train
+from synth_setter.cli.eval import evaluate
+from synth_setter.cli.train import train
+from synth_setter.data.vst import param_specs, preset_paths
 from tests.conftest import (
     _VST_SUBPROCESS_TIMEOUT_SECONDS,
     NUM_FIXTURE_SAMPLES,
@@ -234,7 +234,7 @@ def test_train_eval_surge_xt(
     from click.testing import CliRunner
     from pedalboard.io import AudioFile
 
-    from scripts.compute_audio_metrics import main as compute_audio_metrics_main
+    from synth_setter.evaluation.compute_audio_metrics import main as compute_audio_metrics_main
 
     NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
     METRICS_FILE_EXPECTATIONS = {
@@ -258,7 +258,7 @@ def test_train_eval_surge_xt(
     HydraConfig().set_config(cfg_surge_xt_eval)
     evaluate(cfg_surge_xt_eval)
 
-    # `PredictionWriter` (in `src/utils/callbacks.py`) with `write_interval=batch` saves three
+    # `PredictionWriter` (in `src/synth_setter/utils/callbacks.py`) with `write_interval=batch` saves three
     # tensors per predict batch: `pred-{i}.pt`, `target-audio-{i}.pt`, `target-params-{i}.pt`.
     predictions_dir = tmp_path / "predictions"
     assert predictions_dir.is_dir()
@@ -276,7 +276,7 @@ def test_train_eval_surge_xt(
     # Render predicted params through the Surge XT VST to per-sample audio directories.
     # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
     # of the saved target audio. Also works around an `UnboundLocalError` in
-    # `scripts/predict_vst_audio.py` where `target_synth_params` is referenced in the default
+    # `src/synth_setter/evaluation/predict_vst_audio.py` where `target_synth_params` is referenced in the default
     # path without being defined outside the `rerender_target` branch (see #672).
     audio_dir = tmp_path / "audio"
     runner = CliRunner()
@@ -287,7 +287,8 @@ def test_train_eval_surge_xt(
 
     args += [
         sys.executable,
-        "scripts/predict_vst_audio.py",
+        "-m",
+        "synth_setter.evaluation.predict_vst_audio",
         str(predictions_dir),
         str(audio_dir),
         f"--param_spec={param_spec_name}",

@@ -58,3 +58,4 @@ nav:
   - Home: index.md
   - Config Reference:
       - Dataset Spec: config_reference/dataset_spec.md
+  - Benchmarks: https://tinaudio.github.io/synth-setter/dev/bench/

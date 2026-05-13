@@ -1,4 +1,4 @@
-"""Basic e2e test for src/data/vst/generate_vst_dataset.py — verifies HDF5 output."""
+"""Basic e2e test for src/synth_setter/data/vst/generate_vst_dataset.py — verifies HDF5 output."""
 
 import json
 import logging
@@ -16,12 +16,12 @@ _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
 
-from src.pipeline.schemas.spec import RenderConfig
-from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
-from src.data.vst import param_specs
-from src.data.vst.core import render_params
-from src.data.vst.generate_vst_dataset import make_dataset
-from src.data.vst.param_spec import ParamSpec
+from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.evaluation.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
+from synth_setter.data.vst import param_specs
+from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.generate_vst_dataset import make_dataset
+from synth_setter.data.vst.param_spec import ParamSpec
 
 log = logging.getLogger(__name__)
 
@@ -79,9 +79,9 @@ _AUDIO_PEAK_SILENCE_FLOOR = 1e-4
 # trailing frame). If _CHANNELS, _DURATION, librosa kwargs, or the writer literal
 # change, update this constant.
 # Pointers:
-#   - `create_datasets_and_get_start_idx()` in `src/data/vst/generate_vst_dataset.py`
+#   - `create_datasets_and_get_start_idx()` in `src/synth_setter/data/vst/generate_vst_dataset.py`
 #     (the literal `(num_samples, 2, 128, 401)` passed to `create_dataset`)
-#   - `make_spectrogram()` in `src/data/vst/generate_vst_dataset.py`
+#   - `make_spectrogram()` in `src/synth_setter/data/vst/generate_vst_dataset.py`
 #   - `_SURGE_MEL_SHAPE` in `tests/conftest.py` — mirror, keep in sync.
 _PER_SAMPLE_MEL_SHAPE = (2, 128, 401)
 
@@ -1037,7 +1037,7 @@ def test_generate_sample_raises_when_fixed_synth_params_renders_silent(
     note params alone never lifts a silent synth above threshold. Post-fix, the
     "fixed synth" branch raises immediately. See issue #724.
     """
-    from src.data.vst import generate_vst_dataset
+    from synth_setter.data.vst import generate_vst_dataset
 
     spec = param_specs[_SPEC_NAME]
     monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _silent_audio())
@@ -1061,7 +1061,7 @@ def test_generate_sample_raises_when_both_fixed_renders_silent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Both-fixed silent render still raises (existing fully-fixed behavior preserved)."""
-    from src.data.vst import generate_vst_dataset
+    from synth_setter.data.vst import generate_vst_dataset
 
     spec = param_specs[_SPEC_NAME]
     monkeypatch.setattr(generate_vst_dataset, "render_params", lambda *a, **kw: _silent_audio())
@@ -1090,7 +1090,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
     retry rather than raise — re-sampling the synth each iteration can lift loudness
     above threshold.
     """
-    from src.data.vst import generate_vst_dataset
+    from synth_setter.data.vst import generate_vst_dataset
 
     spec = param_specs[_SPEC_NAME]
 

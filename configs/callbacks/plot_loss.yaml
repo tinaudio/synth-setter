@@ -1,5 +1,5 @@
 # https://lightning.ai/docs/pytorch/stable/api/lightning.pytorch.callbacks.RichModelSummary.html
 
 plot_loss:
-  _target_: src.utils.callbacks.PlotLossPerTimestep
+  _target_: synth_setter.utils.callbacks.PlotLossPerTimestep
   num_timesteps: 100

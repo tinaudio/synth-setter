@@ -93,7 +93,7 @@ ______________________________________________________________________
 ### Cloudflare Account ID (`R2_ACCOUNT_ID`)
 
 **What:** The Cloudflare account ID, written to `~/.cloudflare/accountid`
-by `scripts/skypilot_write_provider_creds.sh` so SkyPilot's R2 storage
+by `scripts/skypilot/write_provider_creds.sh` so SkyPilot's R2 storage
 adaptor can address the account once #749 is unblocked. Required by every
 launcher invocation (`skypilot-local`, `runpod`, `oci`). Stored as a secret
 for the same reason as the R2 endpoint — to avoid embedding the account ID

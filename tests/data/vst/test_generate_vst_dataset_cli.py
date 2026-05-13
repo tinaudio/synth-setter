@@ -1,4 +1,4 @@
-"""CLI surface tests for ``src/data/vst/generate_vst_dataset.py``.
+"""CLI surface tests for ``src/synth_setter/data/vst/generate_vst_dataset.py``.
 
 Pins the pydantic-settings parity guard: the CLI flag set is derived from
 ``RenderConfig.model_fields`` so adding/removing a field on the model
@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.generate_dataset import build_generate_args
-from src.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.cli.generate_dataset import build_generate_args
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from pydantic_settings import CliApp
-from src.data.vst.generate_vst_dataset import _GenerateCliArgs
+from synth_setter.data.vst.generate_vst_dataset import _GenerateCliArgs
 
 
 def test_cli_args_class_inherits_every_render_config_field() -> None:

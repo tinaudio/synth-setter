@@ -1,0 +1,145 @@
+name: Verify act setup
+
+# Regression guard for the local `act` setup documented in
+# docs/operations/running-workflows-locally.md. The runbook is the contract
+# the rest of the team relies on; if any file listed in `paths:` below drifts
+# in a way that breaks `act` (the `.actrc` mappings, the runner Dockerfile,
+# this guard itself, or the data-pipeline workflows the guard dry-runs),
+# this job fails before the next contributor wastes 20 minutes discovering
+# it locally.
+
+on:
+  pull_request:
+    paths:
+      - ".actrc"
+      - "docs/operations/act-runner.Dockerfile"
+      - ".github/workflows/test-act.yaml"
+      - ".github/workflows/test-dataset-generation.yml"
+      - ".github/workflows/generate-dataset-shards.yaml"
+      - ".github/workflows/validate-dataset-shards.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-act-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-act:
+    name: Verify act parses repo + builds runner image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Pin act to a specific tagged release + verify the tarball checksum,
+      # rather than piping nektos/act `master`'s install.sh into sudo bash
+      # (supply-chain risk: master can change/be tampered with under us, and
+      # the script's own behavior can drift). Bump ACT_VERSION + ACT_SHA256
+      # together when adopting new act features.
+      - name: Install act
+        env:
+          ACT_VERSION: v0.2.88
+          ACT_SHA256: 1eb9996682dfcc053ac8f3f90f2ec50376f0cdfc229712d82da03d673c63a2b3
+        run: |
+          set -euo pipefail
+          tarball="act_Linux_x86_64.tar.gz"
+          curl -fsSL -o "${tarball}" \
+            "https://github.com/nektos/act/releases/download/${ACT_VERSION}/${tarball}"
+          echo "${ACT_SHA256}  ${tarball}" | sha256sum -c -
+          sudo tar -xzf "${tarball}" -C /usr/local/bin act
+          rm -f "${tarball}"
+          act --version
+
+      # `act -l` parses every workflow file under .github/workflows/ and applies
+      # the repo `.actrc` (runner-label mappings). It fails if any workflow YAML
+      # is malformed, or if `.actrc` references an unknown flag.
+      - name: List workflows (parses every .yml/.yaml + honors .actrc)
+        run: act -l
+
+      # `act -n` (dry-run) resolves action references in addition to parsing,
+      # catching broken `uses:` pins that `-l` would miss. pr-metadata-gate.yaml
+      # is a stable, short workflow that exercises the common shape.
+      - name: Dry-run pr-metadata-gate.yaml
+        run: act pull_request -W .github/workflows/pr-metadata-gate.yaml -n
+
+      # The runbook's custom-image recipe is what users follow when a workflow
+      # shells out to `gh`. Build it from scratch every time (no cache) so a
+      # broken upstream apt repo or base-image bump fails this step rather
+      # than someone's laptop a week later.
+      - name: Build act-runner-gh image from docs Dockerfile
+        run: |
+          set -euo pipefail
+          DOCKER_BUILDKIT=0 docker build --no-cache \
+            -f docs/operations/act-runner.Dockerfile \
+            -t act-runner-gh:latest \
+            docs/operations
+          docker run --rm act-runner-gh:latest gh --version
+
+      # Verify the documented `-P ubuntu-latest=<image>` override syntax still
+      # works against the just-built image.
+      - name: Dry-run with custom runner image
+        run: |
+          act pull_request \
+            -W .github/workflows/pr-metadata-gate.yaml \
+            -P ubuntu-latest=act-runner-gh:latest \
+            --pull=false -n
+
+      # Dry-run the data-pipeline workflow chain. test-dataset-generation has
+      # a dynamic matrix (`fromJSON(needs.setup.outputs.providers)`) that act
+      # cannot evaluate at dry-run because `-n` skips setup's bash and leaves
+      # `needs.setup.outputs.*` empty — so target `setup` specifically, then
+      # dry-run each `workflow_call` reusable directly so the parse-chain stays
+      # covered. The real-run step below closes the matrix-evaluation gap.
+      - name: Dry-run test-dataset-generation chain
+        run: |
+          set -euo pipefail
+          act pull_request -W .github/workflows/test-dataset-generation.yml -j setup -n
+          act workflow_dispatch -W .github/workflows/generate-dataset-shards.yaml -n
+          act workflow_dispatch -W .github/workflows/validate-dataset-shards.yaml -n
+
+      # Real-run the data-pipeline chain via act with provider=local —
+      # dropping `-n` lets `setup` populate `$GITHUB_OUTPUT` so the dynamic
+      # matrix resolves. Fork PRs skip (R2 secrets unavailable to forks).
+      # Three act-only knobs paper over real act-vs-GHA divergences without
+      # touching the production workflow:
+      #   * `--env PIP_BREAK_SYSTEM_PACKAGES=1` — catthehacker's python3.12
+      #     ships PEP 668's externally-managed marker; the workflow's
+      #     `pip install hydra-core ...` works on real GHA but fails under
+      #     act without the override.
+      #   * `--container-options "-v /tmp:/tmp"` — `generate-local` mkdir's
+      #     /tmp/run-metadata-local inside the act runner and then does a
+      #     host-daemon `docker run -v /tmp/run-metadata-local:/run-metadata`.
+      #     Without /tmp shared host↔runner, the spec lands on the host but
+      #     the in-runner `Validate spec exists` step (which reads from the
+      #     runner namespace) can't see it.
+      #   * `--artifact-server-path` — `actions/upload-artifact@v4` needs
+      #     `ACTIONS_RUNTIME_TOKEN`; act issues one only when its local
+      #     artifact server is enabled via this flag.
+      - name: Real-run test-dataset-generation chain via act (provider=local)
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          secrets_file="$(mktemp)"
+          artifact_dir="$(mktemp -d)"
+          trap 'rm -rf "${secrets_file}" "${artifact_dir}"' EXIT
+          {
+            printf 'RCLONE_CONFIG_R2_ACCESS_KEY_ID=%s\n' "${RCLONE_CONFIG_R2_ACCESS_KEY_ID}"
+            printf 'RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=%s\n' "${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY}"
+            printf 'RCLONE_CONFIG_R2_ENDPOINT=%s\n' "${RCLONE_CONFIG_R2_ENDPOINT}"
+          } > "${secrets_file}"
+          act workflow_dispatch \
+            -W .github/workflows/test-dataset-generation.yml \
+            --input provider=local \
+            --secret-file "${secrets_file}" \
+            --env PIP_BREAK_SYSTEM_PACKAGES=1 \
+            --container-options "-v /tmp:/tmp" \
+            --artifact-server-path "${artifact_dir}"

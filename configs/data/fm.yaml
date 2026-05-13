@@ -1,4 +1,4 @@
-_target_: src.data.fm_datamodule.FMDataModule
+_target_: synth_setter.data.fm_datamodule.FMDataModule
 algorithm: mixed
 signal_length: 1024
 break_symmetry: false

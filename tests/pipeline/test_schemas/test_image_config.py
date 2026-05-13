@@ -1,4 +1,5 @@
-"""Tests for src/pipeline/schemas/image_config.py — image creation config schema and loader.
+"""Tests for src/synth_setter/pipeline/schemas/image_config.py — image creation config schema and
+loader.
 
 Tests are organized around the PUBLIC typed API:
 - load_image_config(): loads YAML config, merges runtime inputs, validates via Pydantic
@@ -12,7 +13,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from src.pipeline.schemas.image_config import load_image_config
+from synth_setter.pipeline.schemas.image_config import load_image_config
 
 VALID_SHA = "a" * 40
 VALID_ISSUE = 266
