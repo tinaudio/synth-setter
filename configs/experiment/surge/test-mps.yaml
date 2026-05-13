@@ -37,7 +37,8 @@ data:
   batch_size: 1
   pin_memory: false
   ot: false
-  use_saved_mean_and_variance: false
+  # Requires sibling stats.npz; see #1002.
+  use_saved_mean_and_variance: true
   num_workers: 0
 
 trainer:

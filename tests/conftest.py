@@ -332,9 +332,8 @@ def _build_surge_xt_smoke_cfg(accelerator: str, param_spec_name: str) -> DictCon
             cfg.data.batch_size = 1
             cfg.data.pin_memory = False
             cfg.data.ot = False
-            # The 5-sample fixture's stats.npz has zero-std mel bins that poison the batch
-            # with NaN via (mel - mean) / std.
-            cfg.data.use_saved_mean_and_variance = False
+            # Smoke fixture writes stats.npz via masked get_dataset_stats — see #1002.
+            cfg.data.use_saved_mean_and_variance = True
             cfg.data.num_workers = 0
 
             cfg.trainer.devices = 1
@@ -451,6 +450,40 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         "Dataset generation failed to produce train.h5 fixture"
     )
     _validate_surge_dataset(smoke_dataset_dir / "train.h5", NUM_FIXTURE_SAMPLES)
+
+    # Sibling stats.npz; shared across train/val/test splits — see #1002.
+    stats_args = [
+        sys.executable,
+        "-m",
+        "synth_setter.pipeline.data.stats",
+        str(smoke_dataset_dir / "train.h5"),
+        "--mask-degenerate-bins",
+    ]
+    try:
+        result = subprocess.run(  # noqa: S603
+            stats_args,
+            text=True,
+            check=False,
+            timeout=_VST_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"get_dataset_stats timed out after {_VST_SUBPROCESS_TIMEOUT_SECONDS}s\n"
+            f"command: {stats_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    if result.returncode != 0:
+        pytest.fail(
+            f"get_dataset_stats failed (exit {result.returncode})\n"
+            f"command: {stats_args}\n"
+            f"(child stdout/stderr printed above; rerun with `pytest -s` if captured)",
+            pytrace=False,
+        )
+    assert (smoke_dataset_dir / "stats.npz").exists(), (
+        "get_dataset_stats failed to produce stats.npz fixture"
+    )
+
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "val.h5")
     shutil.copy(smoke_dataset_dir / "train.h5", smoke_dataset_dir / "test.h5")
     return Path(smoke_dataset_dir)
