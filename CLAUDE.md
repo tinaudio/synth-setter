@@ -48,7 +48,7 @@ Non-exhaustive table of common synth-setter scopes:
 | Scope        | Meaning                                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `metrics`    | Normalization-stats computation/writer (`scripts/get_dataset_stats.py`, `stats.npz`, mel/audio metric tooling)     |
-| `pipeline`   | Broader distributed data-pipeline code (`src/synth_setter/pipeline/` outside metrics)                              |
+| `pipeline`   | Broader distributed data-pipeline code under `src/synth_setter/pipeline/` (stats-writer code uses `metrics`)       |
 | `datamodule` | Lightning datamodules (`src/synth_setter/data/*_datamodule.py`)                                                    |
 | `training`   | Training entrypoint and `src/synth_setter/cli/train.py` / training loop code                                       |
 | `eval`       | Evaluation entrypoint and `src/synth_setter/cli/eval.py` / evaluation harness                                      |
@@ -61,7 +61,7 @@ Non-exhaustive table of common synth-setter scopes:
 
 **`metrics`, not `pipeline`, for stats-writer changes.** Any change touching `scripts/get_dataset_stats.py`, `stats.npz` schema/handling, or other mel/audio normalization-stats tooling uses `(metrics)` as its scope — even though the file lives under `scripts/` and the data it produces is consumed by the pipeline. The rule is "narrowest accurate scope": `metrics` is more specific than `pipeline` and makes the log easier to scan.
 
-Formatting follows the same convention as the title example under [`### PR Titles`](#pr-titles) (`feat(pipeline)!: complete Hydra migration; ...`): conventional prefix, scope in parentheses, optional `!` for breaking, then a colon and the human-readable subject.
+Formatting follows the same convention as the title example under [`### PR Titles`](#pr-titles) (`feat(pipeline)!: complete dataset_spec Hydra migration; remove load_dataset_spec_yaml`): conventional prefix, scope in parentheses, optional `!` for breaking, then a colon and the human-readable subject.
 
 ### Writing Code
 
