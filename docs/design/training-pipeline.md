@@ -271,7 +271,7 @@ ______________________________________________________________________
 
 > Authoritative storage and W&B conventions are defined in [storage-provenance-spec.md](storage-provenance-spec.md#4-wb-artifact-types). Repeated here for training context.
 
-The R2 training-artifact path follows the [storage-provenance-spec](storage-provenance-spec.md) §2 convention:
+The R2 training-artifact subtree (under the `intermediate-data/` bucket root — see [storage-provenance-spec §2](storage-provenance-spec.md#2-r2-bucket-layout)) mirrors [§3b Training](storage-provenance-spec.md#3b-training):
 
 ```
 train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
