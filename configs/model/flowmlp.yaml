@@ -2,7 +2,7 @@ defaults:
   - encoder: cnn
   - _self_
 
-_target_: src.models.ksin_flow_matching_module.KSinFlowMatchingModule
+_target_: synth_setter.models.ksin_flow_matching_module.KSinFlowMatchingModule
 
 scheduler: null
 
@@ -13,7 +13,7 @@ optimizer:
   weight_decay: 0.0
 
 vector_field:
-  _target_: src.models.components.residual_mlp.ConditionalResidualMLP
+  _target_: synth_setter.models.components.residual_mlp.ConditionalResidualMLP
   n_params: 1
   d_model: 192
   d_enc: 128

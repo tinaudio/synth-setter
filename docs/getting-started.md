@@ -38,8 +38,9 @@ cd synth-setter
 1. Installs [uv](https://docs.astral.sh/uv/) if it is not already on your PATH.
 2. Creates `.venv/` using a managed Python 3.10 interpreter (downloaded by uv
    if you do not have one locally). The venv prompt label is `synth-setter`.
-3. Installs everything in `requirements.txt` plus the project itself in
-   editable mode (`pip install -e .`).
+3. Installs the project itself in editable mode together with its `torch`
+   and `dev` optional-dependency groups from `pyproject.toml`
+   (`uv pip install -e ".[torch,dev]"`).
 4. Registers the pre-commit hooks — **unless** `git config core.hooksPath`
    is set (as it is in the dev container, where hooks are managed by the
    image). In that case `make install` prints a skip note and leaves the
@@ -157,14 +158,14 @@ do not need any external datasets, VST plugins, or cloud storage.
 ### 3a. Train a model
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse trainer.max_steps=5000 trainer.min_steps=null
+python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer.max_steps=5000 trainer.min_steps=null
 ```
 
 > **No CUDA GPU?** The default trainer is `gpu` (CUDA). On CPU-only machines use
 > `trainer=cpu`; on Apple Silicon use `trainer=mps`:
 >
 > ```bash
-> python src/train.py experiment=kosc/ffn_mse trainer=cpu trainer.max_steps=5000 trainer.min_steps=null
+> python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu trainer.max_steps=5000 trainer.min_steps=null
 > ```
 
 This runs a feed-forward network with MSE loss on the k-osc task for 5,000
@@ -198,7 +199,7 @@ The `configs/experiment/kosc/` directory contains several variants:
 Run any of them with:
 
 ```bash
-python src/train.py experiment=kosc/<variant>
+python -m synth_setter.cli.train experiment=kosc/<variant>
 ```
 
 ______________________________________________________________________
@@ -321,7 +322,7 @@ in the codebase.
 4. Run training as usual — metrics flow to W&B + CSV + TensorBoard:
 
    ```bash
-   python src/train.py experiment=kosc/ffn_mse
+   python -m synth_setter.cli.train experiment=kosc/ffn_mse
    ```
 
 **Disabled — drop W&B from the default compose:** comment out `- wandb` in
@@ -329,7 +330,7 @@ in the codebase.
 or `logger=tensorboard`:
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse logger=csv
+python -m synth_setter.cli.train experiment=kosc/ffn_mse logger=csv
 ```
 
 Without `wandb login` (or `WANDB_API_KEY`), the W&B logger will prompt for
@@ -389,18 +390,16 @@ If you are exercising the OCI target:
 
    `chmod 600 ~/.oci/oci_api_key.pem` and `chmod 600 ~/.oci/config`.
 
-3. Write `~/.sky/config.yaml` so SkyPilot launches target your compartment
-   on the supported Ubuntu image:
+3. Optional: write `~/.sky/config.yaml` only if you need to target a
+   non-root OCI compartment (for cleaner quota / IAM scoping). SkyPilot's
+   OCI backend defaults to the root compartment and its default cpu-Ubuntu
+   image when these keys are unset:
 
    ```yaml
    oci:
      default:
-       compartment_ocid: <compartment-ocid>
-       image_tag_general: skypilot:cpu-ubuntu-2204
+       compartment_ocid: <child-compartment-ocid>
    ```
-
-   Use the tenancy OCID for the root compartment, or a child compartment
-   OCID for cleaner quota / IAM scoping.
 
 4. Smoke check the credentials:
 
@@ -445,22 +444,22 @@ Override any config value from the command line:
 
 ```bash
 # Change batch size
-python src/train.py experiment=kosc/ffn_mse data.batch_size=32
+python -m synth_setter.cli.train experiment=kosc/ffn_mse data.batch_size=32
 
 # Change learning rate
-python src/train.py experiment=kosc/ffn_mse model.optimizer.lr=1e-4
+python -m synth_setter.cli.train experiment=kosc/ffn_mse model.optimizer.lr=1e-4
 
 # Use CPU trainer instead of GPU
-python src/train.py experiment=kosc/ffn_mse trainer=cpu
+python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu
 
 # Override default logger compose (default is W&B + CSV + TensorBoard)
-python src/train.py experiment=kosc/ffn_mse logger=csv
+python -m synth_setter.cli.train experiment=kosc/ffn_mse logger=csv
 
 # Limit training steps
-python src/train.py experiment=kosc/ffn_mse trainer.max_steps=10000
+python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer.max_steps=10000
 
 # Run in debug mode (1 batch per epoch, no logging)
-python src/train.py experiment=kosc/ffn_mse debug=default
+python -m synth_setter.cli.train experiment=kosc/ffn_mse debug=default
 ```
 
 For the full configuration reference, see
@@ -474,7 +473,7 @@ After training, evaluate the model on the test set. You must provide the
 checkpoint path (`ckpt_path` is required):
 
 ```bash
-python src/eval.py ckpt_path=/path/to/checkpoint.ckpt
+python -m synth_setter.cli.eval ckpt_path=/path/to/checkpoint.ckpt
 ```
 
 Use the checkpoint saved during training (see the checkpoint path in
@@ -525,7 +524,7 @@ Make sure your virtual environment is active and dependencies are installed:
 
 ```bash
 source .venv/bin/activate
-uv pip install -r requirements.txt -e .
+uv pip install -e ".[torch,dev]"
 ```
 
 ### `make format` fails on first run
@@ -543,13 +542,13 @@ make format
 Reduce the batch size:
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse data.batch_size=8
+python -m synth_setter.cli.train experiment=kosc/ffn_mse data.batch_size=8
 ```
 
 Or switch to CPU for debugging:
 
 ```bash
-python src/train.py experiment=kosc/ffn_mse trainer=cpu
+python -m synth_setter.cli.train experiment=kosc/ffn_mse trainer=cpu
 ```
 
 ### W&B login issues
@@ -574,8 +573,9 @@ ______________________________________________________________________
 
 - **Experiment configs:** Browse `configs/experiment/` for pre-configured
   experiments across different models and datasets.
-- **Data generation:** See `src/generate_dataset.py` for the dataset
-  generation entry point (Hydra; `configs/dataset.yaml` is the root config).
+- **Data generation:** See `src/synth_setter/cli/generate_dataset.py` for the dataset
+  generation entry point (Hydra; `configs/dataset.yaml` is the root config). The
+  `synth-setter-generate-dataset` console script is the canonical surface.
 - **Design docs:** Read `docs/design/data-pipeline.md` for the data pipeline
   architecture and `docs/design/training-pipeline.md` for the training pipeline.
 - **Configuration reference:**
@@ -602,12 +602,11 @@ themselves (pip, conda, pyenv, system Python, etc.).
 python3.10 -m venv .venv
 source .venv/bin/activate
 
-pip install -r requirements.txt
-pip install -e .
+pip install -e ".[torch,dev]"
 pre-commit install
 ```
 
-Drop `-e` on the second line for a non-editable install.
+Drop `-e` for a non-editable install.
 
 ### A.2. conda
 
@@ -615,14 +614,13 @@ Drop `-e` on the second line for a non-editable install.
 conda create -n synth-setter python=3.10
 conda activate synth-setter
 
-pip install -r requirements.txt
-pip install -e .
+pip install -e ".[torch,dev]"
 pre-commit install
 ```
 
-`requirements.txt` contains pip-only packages (torch, lightning, hydra-core,
-etc.), so we install them with pip inside the conda environment rather than
-through conda-forge.
+The project's runtime and `torch`-extra packages (hydra-core, torch,
+lightning, etc.) ship through PyPI rather than conda-forge, so we install
+everything with pip inside the conda environment.
 
 ### A.3. uv pip without `make install`
 
@@ -632,7 +630,7 @@ you manage yourself):
 ```bash
 uv venv --python 3.10 --prompt synth-setter .venv
 source .venv/bin/activate
-uv pip install -r requirements.txt -e .
+uv pip install -e ".[torch,dev]"
 pre-commit install
 ```
 
@@ -640,8 +638,8 @@ This is what `make install` does under the hood.
 
 ### A.4. GPU vs CPU PyTorch
 
-`requirements.txt` pins `torch>=2.0.0` without fixing the CPU/CUDA build.
-After installing requirements, override with the wheel you want from the
+The `torch` extra pins `torch>=2.0.0` without fixing the CPU/CUDA build.
+After installing the project, override with the wheel you want from the
 [PyTorch install matrix](https://pytorch.org/get-started/locally/):
 
 ```bash
@@ -792,8 +790,9 @@ ssh admin@$(tart ip synth-setter-macos)           # password: admin
 > SSH key to `~admin/.ssh/authorized_keys` and disable `PasswordAuthentication`
 > in `/etc/ssh/sshd_config` before exposing port 22.
 
-The image ships with the repo cloned at `~/synth-setter`, a venv with all
-`requirements.txt` deps (CPU torch wheels — Tart VMs have no GPU), Surge XT
+The image ships with the repo cloned at `~/synth-setter`, a venv with the
+project's `[torch,dev]` extras installed (CPU torch wheels — Tart VMs have no
+GPU), Surge XT
 at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`, and
 `source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
 interactive shell has the venv active from login.

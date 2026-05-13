@@ -1,4 +1,4 @@
-"""Tests for src/generate_dataset.py — spec-driven run.
+"""Tests for synth_setter.cli.generate_dataset — spec-driven run.
 
 The entrypoint's public surface is a single ``run(spec)`` function that:
   1. Serializes the spec to a tempfile.
@@ -21,13 +21,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.generate_dataset import (
+from synth_setter.cli.generate_dataset import (
     VST_HEADLESS_WRAPPER,
     build_generate_args,
     run,
 )
-from src.pipeline.constants import INPUT_SPEC_FILENAME
-from src.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version
@@ -139,10 +139,10 @@ class TestRun:
         Tests that exercise the skip-existing path override this with their own
         ``monkeypatch.setattr`` on ``pipeline.r2_io.object_size``.
         """
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_uploads_spec_to_r2_at_expected_path(
         self,
         mock_rclone: MagicMock,
@@ -162,8 +162,8 @@ class TestRun:
         assert spec_src.endswith(INPUT_SPEC_FILENAME)
         assert spec_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_spec_upload_precedes_shard_generation(
         self,
         mock_rclone: MagicMock,
@@ -181,8 +181,8 @@ class TestRun:
         call_names = [c[0] for c in manager.mock_calls]
         assert call_names.index("rclone") < call_names.index("check_call")
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_invokes_generate_vst_dataset_with_spec_derived_args(
         self,
         mock_rclone: MagicMock,
@@ -199,15 +199,16 @@ class TestRun:
         assert any("generate_vst_dataset.py" in a for a in args)
         assert str(spec.render.batch_per_shard) in args
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_shard_generation_runs_under_headless_vst_wrapper(
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """The VST subprocess is prefixed with scripts/run-linux-vst-headless.sh on Linux.
+        """The VST subprocess is prefixed with docker/ubuntu22_04/run-linux-vst-headless.sh on
+        Linux.
 
         X11 bootstrap lives at the audio-rendering boundary (this subprocess) so the
         docker_entrypoint click CLI can stay X11-agnostic — idle and passthrough modes don't pay
@@ -220,13 +221,13 @@ class TestRun:
         args = mock_check_call.call_args[0][0]
         if sys.platform == "linux":
             assert args[0] == VST_HEADLESS_WRAPPER
-            assert args[2] == "src/data/vst/generate_vst_dataset.py"
+            assert args[2] == "src/synth_setter/data/vst/generate_vst_dataset.py"
         else:
             assert VST_HEADLESS_WRAPPER not in args
-            assert args[1] == "src/data/vst/generate_vst_dataset.py"
+            assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_uploads_shard_to_r2_after_generation(
         self,
         mock_rclone: MagicMock,
@@ -243,8 +244,8 @@ class TestRun:
         assert "shard-000000.h5" in shard_src
         assert shard_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_subprocess_failure_propagates(
         self,
         mock_rclone: MagicMock,
@@ -257,8 +258,8 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_rclone_failure_propagates(
         self,
         mock_rclone: MagicMock,
@@ -271,8 +272,8 @@ class TestRun:
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_with_three_shards_renders_each_shard(
         self,
         mock_rclone: MagicMock,
@@ -293,8 +294,8 @@ class TestRun:
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [s.filename for s in spec.shards]
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_spec_uploaded_exactly_once_for_multi_shard_run(
         self,
         mock_rclone: MagicMock,
@@ -313,8 +314,8 @@ class TestRun:
         ]
         assert len(spec_uploads) == 1
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_each_shard_uploaded_after_its_render(
         self,
         mock_rclone: MagicMock,
@@ -342,8 +343,8 @@ class TestRun:
             "rclone",  # upload shard 2
         ]
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_local_shard_file_removed_after_upload(
         self,
         mock_rclone: MagicMock,
@@ -368,8 +369,8 @@ class TestRun:
         for shard_path in shard_uploads:
             assert not shard_path.exists(), f"shard file still on disk after run: {shard_path}"
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_subprocess_failure_in_second_shard_propagates_immediately(
         self,
         mock_rclone: MagicMock,
@@ -396,8 +397,8 @@ class TestRun:
 
         assert mock_check_call.call_count == 2
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_subprocess_exits_zero_without_writing_shard_raises(
         self,
         mock_rclone: MagicMock,
@@ -418,8 +419,8 @@ class TestRun:
         # Spec was uploaded (1 rclone call), but no shard upload was attempted.
         assert mock_rclone.call_count == 1
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_renderer_version_mismatch_raises_before_uploads(
         self,
         mock_rclone: MagicMock,
@@ -438,8 +439,8 @@ class TestRun:
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_raises_when_skypilot_env_missing(
         self,
         mock_rclone: MagicMock,
@@ -464,8 +465,8 @@ class TestRun:
         mock_rclone.assert_not_called()
         mock_check_call.assert_not_called()
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_rank_0_of_2_renders_only_first_half_of_shards(
         self,
         mock_rclone: MagicMock,
@@ -488,8 +489,8 @@ class TestRun:
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [spec.shards[0].filename, spec.shards[1].filename]
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_rank_1_of_2_renders_only_remaining_shard(
         self,
         mock_rclone: MagicMock,
@@ -512,8 +513,8 @@ class TestRun:
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == [spec.shards[2].filename]
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_spec_uploaded_exactly_once_independent_of_partition(
         self,
         mock_rclone: MagicMock,
@@ -534,8 +535,8 @@ class TestRun:
         ]
         assert len(spec_uploads) == 1
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_excess_worker_renders_no_shards_but_still_uploads_spec(
         self,
         mock_rclone: MagicMock,
@@ -562,8 +563,8 @@ class TestRun:
 
     # Skip-existing-shards — see #750.
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_skips_render_when_shard_already_in_r2(
         self,
         mock_rclone: MagicMock,
@@ -572,7 +573,7 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Object present (size > 0) → renderer is not invoked, shard upload is not attempted."""
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
 
         run(spec)
 
@@ -581,8 +582,8 @@ class TestRun:
         assert mock_rclone.call_count == 1
         assert mock_rclone.call_args_list[0][0][0].endswith(INPUT_SPEC_FILENAME)
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_renders_when_object_absent(
         self,
         mock_rclone: MagicMock,
@@ -599,8 +600,8 @@ class TestRun:
 
         mock_check_call.assert_called_once()
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_renders_when_object_zero_size(
         self,
         mock_rclone: MagicMock,
@@ -609,15 +610,15 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Zero-byte object is treated as absent — defensive against half-uploaded objects."""
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", lambda *_a, **_k: 0)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 0)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
         mock_check_call.assert_called_once()
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_skip_path_probes_full_object_uri_per_shard(
         self,
         mock_rclone: MagicMock,
@@ -633,7 +634,7 @@ class TestRun:
             probed_uris.append(uri)
             return None
 
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", _probe)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _probe)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
@@ -642,8 +643,8 @@ class TestRun:
             f"r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}" for shard in spec.shards
         ]
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_renders_only_absent_shards_in_mixed_run(
         self,
         mock_rclone: MagicMock,
@@ -657,7 +658,7 @@ class TestRun:
         def _present_only_for_shard_0(uri: str) -> int | None:
             return 9999 if uri.endswith("shard-000000.h5") else None
 
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", _present_only_for_shard_0)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
@@ -669,9 +670,9 @@ class TestRun:
             rendered_filenames.append(Path(output_file).name)
         assert rendered_filenames == ["shard-000001.h5", "shard-000002.h5"]
 
-    @patch("src.generate_dataset.logger")
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.logger")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_logs_summary_with_rendered_and_skipped_counts(
         self,
         mock_rclone: MagicMock,
@@ -686,7 +687,7 @@ class TestRun:
         def _present_only_for_shard_0(uri: str) -> int | None:
             return 9999 if uri.endswith("shard-000000.h5") else None
 
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", _present_only_for_shard_0)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
@@ -697,8 +698,8 @@ class TestRun:
         assert "rendered=2" in summary_lines[0]
         assert "skipped=1" in summary_lines[0]
 
-    @patch("src.generate_dataset.subprocess.check_call")
-    @patch("src.generate_dataset._rclone_copy")
+    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
+    @patch("synth_setter.cli.generate_dataset._rclone_copy")
     def test_run_probe_failure_propagates(
         self,
         mock_rclone: MagicMock,
@@ -711,7 +712,7 @@ class TestRun:
         def _raise(*_a: object, **_k: object) -> None:
             raise subprocess.CalledProcessError(1, ["rclone", "lsf"])
 
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", _raise)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _raise)
 
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)
@@ -764,7 +765,7 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        assert args[1] == "src/data/vst/generate_vst_dataset.py"
+        assert args[1] == "src/synth_setter/data/vst/generate_vst_dataset.py"
 
 
 # ---------------------------------------------------------------------------
@@ -784,7 +785,7 @@ class TestSpecFromCfg:
         """
         from omegaconf import OmegaConf
 
-        from src.generate_dataset import spec_from_cfg
+        from synth_setter.cli.generate_dataset import spec_from_cfg
 
         cfg_dict: dict[str, object] = dict(valid_dataset_spec_kwargs)
         cfg_dict["data"] = {"sample_rate": 16000}
@@ -807,7 +808,7 @@ class TestSpecFromCfg:
         """
         from omegaconf import OmegaConf
 
-        from src.generate_dataset import spec_from_cfg
+        from synth_setter.cli.generate_dataset import spec_from_cfg
 
         kwargs = dict(valid_dataset_spec_kwargs)
         kwargs["r2_bucket"] = "${r2.bucket}"

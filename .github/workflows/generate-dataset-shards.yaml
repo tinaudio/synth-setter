@@ -3,15 +3,18 @@ name: Generate Dataset Shards
 # Reusable workflow that owns one provider's launcher invocation. Callers fan
 # out across providers (see test-dataset-generation.yml) and pass per-provider
 # values via inputs. Behavior is identical to the inline blocks this replaced —
-# inputs are simple passthroughs to `src.pipeline.skypilot_launch` flags
+# inputs are simple passthroughs to `synth_setter.pipeline.skypilot_launch` flags
 # plus the artifact-name knob the validate-dataset-shards.yaml downstream
 # expects to find on disk.
 #
 # Provider-specific behavior:
 #   * `skypilot-local` — provisions a kind cluster on the runner via
-#     `sky local up`, loads the dev-snapshot image into kind, and invokes the
-#     launcher against `configs/compute/local-template.yaml` (cloud:
-#     kubernetes). Always tears down kind in `if: always()`.
+#     `sky local up`, loads the dev-snapshot image into kind, writes the
+#     managed-jobs controller-resource shrink into ~/.sky/config.yaml so the
+#     controller pod fits on kind, and invokes the launcher against
+#     `configs/compute/local-template.yaml` (cloud: kubernetes). The launcher
+#     skips its cred bootstrap for the local provider. Always tears down kind
+#     in `if: always()`.
 #   * `runpod` / `oci` — in-container launcher invocation against the matching
 #     `configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
 #     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
@@ -22,7 +25,7 @@ name: Generate Dataset Shards
 #   RCLONE_CONFIG_R2_ENDPOINT, R2_ACCOUNT_ID — every provider.
 #   RUNPOD_API_KEY — runpod row.
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
-#     OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — oci row.
+#     OCI_API_KEY_PEM — oci row.
 #   SKYPILOT_API_SERVER_ENDPOINT (optional) — when set, launcher skips local
 #     cred bootstrap.
 #   WANDB_API_KEY (optional) — forwarded to the worker.
@@ -35,7 +38,7 @@ on:
         required: true
         type: string
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `runpod-smoke-shard`)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
         type: string
       image_tag:
@@ -83,10 +86,10 @@ on:
           - runpod
           - oci
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `runpod-smoke-shard`)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
         type: string
-        default: "runpod-smoke-shard"
+        default: "generate_dataset/smoke-shard"
       image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -171,14 +174,14 @@ jobs:
       # ----- skypilot-local row: kind setup + launcher
       - name: Install kind (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           install_only: true
           version: v0.24.0
 
       - name: Install kubectl (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
 
       - name: Install socat (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
@@ -192,15 +195,15 @@ jobs:
 
       - name: Install uv (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements-app.txt"
+          cache-dependency-glob: "pyproject.toml"
 
       - name: Install launcher deps (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: |
-          uv pip install --system -r requirements-app.txt "skypilot[kubernetes]==0.12.0"
+          uv pip install --system -e . "skypilot[kubernetes]==0.12.0"
           sudo apt-get install -y -qq rclone
 
       - name: sky local up (skypilot-local row)
@@ -211,14 +214,40 @@ jobs:
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: kind load docker-image "${IMAGE}" --name skypilot
 
+      # Shrink the managed-jobs controller pod's resource floor to fit on the
+      # GHA-kind cluster. SkyPilot's default (cpus: 4+, memory: 4x) doesn't
+      # fit in the ~1950m allocatable CPU after kube-system + sky-jobs-controller.
+      # This is a CI-only workaround; dev machines running `sky local up` against
+      # a real-sized kind don't need it. See PR #876.
+      - name: Shrink managed-jobs controller resources for kind (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.sky"
+          cat > "${HOME}/.sky/config.yaml" <<'YAML'
+          jobs:
+            controller:
+              resources:
+                cpus: 1+
+                memory: 1+
+          YAML
+          chmod 600 "${HOME}/.sky/config.yaml"
+
       # `--local` flips the launcher's local-vs-remote dispatch (#841); today's
       # skypilot-local caller passes it `true` to clear any inherited
       # SKYPILOT_API_SERVER_ENDPOINT. `num_workers: '1'` overrides the config
       # because the kind cluster can't host parallel workers (#843). The
       # argument array is built conditionally so optional flags don't expand
       # to empty strings.
+      # 20-min step cap: if the launcher (sky.jobs SDK) hangs, fail-fast and
+      # let the `if: always()` `Snapshot sky logs` step run, instead of
+      # burning the full 60-min job timeout before logs are uploaded.
+      # NOTE: step-level timeout sends SIGKILL — Python `finally` blocks in the
+      # launcher are bypassed. Operators may need `sky jobs cancel --name <job-name>`
+      # manually after a timeout. See #876.
       - name: Run launcher against local-template (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
+        timeout-minutes: 20
         env:
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
@@ -235,7 +264,7 @@ jobs:
           ARGS=(
             --experiment "$CONFIG_PATH"
             --template configs/compute/local-template.yaml
-            --cluster-name "$CLUSTER_NAME"
+            --job-name "$CLUSTER_NAME"
             --worker-image-tag "$IMAGE_TAG"
             --spec-out "${RUN_METADATA_DIR}/input_spec.json"
           )
@@ -248,13 +277,47 @@ jobs:
           if [[ "$INPUT_TAIL" == "true" ]]; then
             ARGS+=(--tail)
           fi
-          python -m src.pipeline.skypilot_launch "${ARGS[@]}" \
+          python -m synth_setter.pipeline.skypilot_launch "${ARGS[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
+
+      # Capture controller-side state (apiserver + on-pod provision.log) before
+      # `sky local down` reaps the kind cluster. See scripts/skypilot/capture-state.sh
+      # for what's captured and why. Best-effort — never fails the workflow.
+      - name: Capture kind cluster state (skypilot-local row)
+        if: ${{ always() && inputs.provider == 'skypilot-local' }}
+        run: scripts/skypilot/capture-state.sh
 
       - name: sky local down (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
         run: sky local down || true
+
+      # Snapshot SkyPilot's two on-disk log roots into the run-metadata dir so
+      # the existing `Upload run metadata` step picks them up. Without this,
+      # a launcher hang/cancel leaves the operator with only the bare
+      # `View logs: sky api logs -l <id>/file_mounts.log` pointer the SDK
+      # printed to stdout — the actual log file is destroyed with the runner.
+      #   * `~/sky_logs/`                       — CLI invocations (sky local up/down).
+      #   * `~/.sky/api_server/clients/<hash>/sky_logs/` — SDK client logs that
+      #     `sky api logs -l <id>` resolves to (file_mounts.log, provision.log,
+      #     setup.log, etc.). Local API server in 0.12 stores them here.
+      # Placed AFTER `sky local down` so local_down.log is captured too.
+      - name: Snapshot sky logs (skypilot-local row)
+        if: ${{ always() && inputs.provider == 'skypilot-local' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs"
+          cp -r "${HOME}/sky_logs/." "${RUN_METADATA_DIR}/sky_logs/" 2>/dev/null || true
+          shopt -s nullglob
+          for client_dir in "${HOME}"/.sky/api_server/clients/*/; do
+            [[ -d "${client_dir}sky_logs" ]] || continue
+            client_hash="$(basename "${client_dir}")"
+            mkdir -p "${RUN_METADATA_DIR}/sky_api_server_logs/${client_hash}"
+            cp -r "${client_dir}sky_logs/." \
+              "${RUN_METADATA_DIR}/sky_api_server_logs/${client_hash}/" 2>/dev/null || true
+          done
+          echo "=== snapshot sizes ==="
+          du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
 
       # ----- runpod / oci row: in-container launcher
       # Optional launcher flags are pre-rendered into env-var strings on the
@@ -269,13 +332,11 @@ jobs:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
           TEMPLATE: configs/compute/${{ inputs.provider == 'oci' && 'oci-cpu' || inputs.provider }}-template.yaml
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
-          OCI_IMAGE_TAG: ${{ inputs.provider == 'oci' && 'skypilot:cpu-ubuntu-2204' || '' }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
           OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
           OCI_REGION: ${{ secrets.OCI_REGION }}
-          OCI_COMPARTMENT_OCID: ${{ secrets.OCI_COMPARTMENT_OCID }}
           OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
@@ -296,13 +357,11 @@ jobs:
             -e TEMPLATE \
             -e CLUSTER_NAME \
             -e IMAGE_TAG \
-            -e OCI_IMAGE_TAG \
             -e RUNPOD_API_KEY \
             -e OCI_USER_OCID \
             -e OCI_TENANCY_OCID \
             -e OCI_FINGERPRINT \
             -e OCI_REGION \
-            -e OCI_COMPARTMENT_OCID \
             -e OCI_API_KEY_PEM \
             -e CONFIG_PATH \
             -e WORKER_GIT_REF \
@@ -320,11 +379,11 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
-              python -m src.pipeline.skypilot_launch \
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+              python -m synth_setter.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
-                --cluster-name "$CLUSTER_NAME" \
+                --job-name "$CLUSTER_NAME" \
                 --worker-image-tag "$IMAGE_TAG" \
                 --spec-out /tmp/input_spec.json \
                 $LOCAL_FLAG $NUM_WORKERS_FLAG $TAIL_FLAG

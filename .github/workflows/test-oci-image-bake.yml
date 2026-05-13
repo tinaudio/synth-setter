@@ -1,0 +1,83 @@
+name: Test OCI Image Bake
+
+# PR-triggered gate for changes to oci-image-bake.yaml / its source
+# template. Calls oci-image-bake.yaml via workflow_call on the PR's
+# commit (so changes are exercised before merge), then verifies the
+# bake's image_ocid output is non-empty and cleans the PR-scoped image
+# up so PR pushes don't accumulate billable boot-image artifacts.
+#
+# Why workflow_call (not gh workflow run): GitHub's workflow_dispatch
+# endpoint resolves the workflow's filename against the repo's default
+# branch. For a new workflow being added in this PR the file isn't on
+# the default branch yet, so dispatch 404s. workflow_call resolves
+# `uses: ./.github/workflows/oci-image-bake.yaml` on the PR branch's
+# commit and works in that scenario.
+#
+# Cost: each gate run does a real bake — billable OCI VM time (~30–90
+# min per run) plus a transient OCI custom image. Concurrency cancels
+# in-progress runs on rapid pushes; cancellation of the parent
+# workflow_call also cancels the called bake. Fork PRs are skipped
+# because OCI secrets aren't exposed to them.
+#
+# The image display name embeds the PR head SHA so each commit's bake
+# produces a distinct image and verify can't pass on a stale one. Note
+# that OCI display names are not uniqueness-constrained, so cleanup
+# uses the OCID (a unique identifier) returned by the bake.
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/oci-image-bake.yaml
+      - .github/workflows/test-oci-image-bake.yml
+      - configs/compute/oci-cpu-template.yaml
+
+concurrency:
+  group: test-oci-image-bake-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bake:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    uses: ./.github/workflows/oci-image-bake.yaml
+    with:
+      image_display_name: synth-setter-pr${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+    secrets: inherit
+
+  verify-and-cleanup:
+    needs: bake
+    if: ${{ always() && needs.bake.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      IMAGE_OCID: ${{ needs.bake.outputs.image_ocid }}
+      IMAGE_DISPLAY_NAME: ${{ needs.bake.outputs.image_display_name }}
+      OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+      OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_CLI_REGION: ${{ secrets.OCI_REGION }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_API_KEY_PEM }}
+    steps:
+      - name: Verify bake produced an image OCID
+        if: ${{ needs.bake.result == 'success' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$IMAGE_OCID" ]; then
+            echo "ERROR: bake succeeded but image_ocid output is empty" >&2
+            exit 1
+          fi
+          echo "Baked image: $IMAGE_OCID (display: $IMAGE_DISPLAY_NAME)"
+
+      - name: Install OCI CLI for cleanup
+        if: ${{ always() && env.IMAGE_OCID != '' }}
+        run: pip install --quiet "oci-cli==3.81.1"
+
+      - name: Cleanup PR-scoped image (best-effort)
+        if: ${{ always() && env.IMAGE_OCID != '' }}
+        run: |
+          set -uo pipefail
+          echo "Deleting OCI image $IMAGE_OCID ..."
+          oci compute image delete --image-id "$IMAGE_OCID" --force \
+            || echo "Cleanup of $IMAGE_OCID failed (non-fatal — periodic sweep is the backstop)"

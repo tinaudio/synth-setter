@@ -13,18 +13,18 @@ ______________________________________________________________________
 
 ## 1. Entrypoint — click group with per-mode spec
 
-`scripts/docker_entrypoint.py` is the image's live `ENTRYPOINT`: a click
+`src/synth_setter/tools/docker_entrypoint.py` is the image's live `ENTRYPOINT`: a click
 group with five subcommands. Each spec-taking subcommand deserializes its
 `--spec` into a mode-specific pydantic model at the container boundary
 (parse-don't-validate), then hands off to the downstream.
 
-| Subcommand         | Args                     | Behavior                                                                                                                             |
-| ------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `idle`             | none                     | `exec sleep infinity`                                                                                                                |
-| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                                                         |
-| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetSpec`, call `src.generate_dataset.run(spec)`, then `os._exit(0)` (defensive #735 workaround — bypasses atexit) |
-| `render_eval`      | `--spec PATH`            | `click.ClickException` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410)                                      |
-| `train`            | `--spec PATH`            | `click.ClickException` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409)                                      |
+| Subcommand         | Args                     | Behavior                                                                                                                                          |
+| ------------------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `idle`             | none                     | `exec sleep infinity`                                                                                                                             |
+| `passthrough`      | trailing ARGV (required) | `exec ARGV`; errors on empty                                                                                                                      |
+| `generate_dataset` | `--spec PATH`            | Parse PATH as `DatasetSpec`, call `synth_setter.cli.generate_dataset.run(spec)`, then `os._exit(0)` (defensive #735 workaround — bypasses atexit) |
+| `render_eval`      | `--spec PATH`            | `click.ClickException` — tracked in [#410](https://github.com/tinaudio/synth-setter/issues/410)                                                   |
+| `train`            | `--spec PATH`            | `click.ClickException` — tracked in [#409](https://github.com/tinaudio/synth-setter/issues/409)                                                   |
 
 `generate_dataset` does **not** consume any env vars for its dispatch
 inputs. All dataset-run configuration — including the R2 bucket
@@ -36,11 +36,11 @@ spec at `--spec`.
 ### Headless X11
 
 `generate_dataset` invokes `generate_vst_dataset.py` wrapped in
-`scripts/run-linux-vst-headless.sh` from inside `run()` (the
+`docker/ubuntu22_04/run-linux-vst-headless.sh` from inside `run()` (the
 audio-rendering layer). The click CLI itself does not start Xvfb —
 `idle` and `passthrough` don't pay the bootstrap cost. Callers that
 need X11 via `passthrough` (notebook execution, spec materialization
-that imports pedalboard) should prepend `scripts/run-linux-vst-headless.sh`
+that imports pedalboard) should prepend `docker/ubuntu22_04/run-linux-vst-headless.sh`
 to their command.
 
 ### Exit codes
@@ -133,7 +133,7 @@ Dispatch and dataset-run configuration flow via CLI, not env vars: the
 subcommand (`generate_dataset`, `idle`, `passthrough`, …) is a positional
 arg; the pipeline spec — including the R2 bucket — is read from the JSON
 file passed via `--spec`. `input_spec.json` is written by the caller (the
-`src.pipeline.ci.materialize_spec` bootstrap step in CI) to a bind-mounted
+`synth_setter.pipeline.ci.materialize_spec` bootstrap step in CI) to a bind-mounted
 directory. Multi-shard generation runs sequentially on a single worker;
 distributed parallelism is tracked in [#407](https://github.com/tinaudio/synth-setter/issues/407).
 

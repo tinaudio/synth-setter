@@ -5,7 +5,7 @@ import pytest
 from tests.helpers.run_if import RunIf
 from tests.helpers.run_sh_command import run_sh_command
 
-startfile = "src/train.py"
+startfile = "src/synth_setter/cli/train.py"
 # logger=[] disables wandb/tensorboard for these throwaway sweep subprocess runs.
 # ~callbacks.lr_monitor works around #517 — LearningRateMonitor hard-requires a
 # logger and crashes at on_train_start when logger is empty.

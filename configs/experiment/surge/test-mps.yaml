@@ -37,7 +37,8 @@ data:
   batch_size: 1
   pin_memory: false
   ot: false
-  use_saved_mean_and_variance: false
+  # Requires sibling stats.npz; see #1002.
+  use_saved_mean_and_variance: true
   num_workers: 0
 
 trainer:
@@ -53,7 +54,7 @@ trainer:
 
 callbacks:
   log_per_param_mse:
-    _target_: src.utils.callbacks.LogPerParamMSE
+    _target_: synth_setter.utils.callbacks.LogPerParamMSE
     param_spec: surge_4
   plot_proj_ii: null
   model_checkpoint:

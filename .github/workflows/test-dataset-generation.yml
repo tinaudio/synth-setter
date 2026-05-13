@@ -22,7 +22,7 @@ name: Test Dataset Generation
 #     docs/design/skypilot-compute-integration.md.
 #
 # All non-`local` rows let the launcher invoke the cred-bootstrap script
-# (`src.pipeline.skypilot_launch._run_cred_bootstrap`); the launcher
+# (`synth_setter.pipeline.skypilot_launch._run_cred_bootstrap`); the launcher
 # captures the script's stdout via `subprocess.run(capture_output=True)` so a
 # `tee`'d caller workflow can't leak secrets.
 #
@@ -47,8 +47,10 @@ name: Test Dataset Generation
 #   RUNPOD_API_KEY — written to ~/.runpod/config.toml so SkyPilot's RunPod
 #     backend can `sky check runpod` (env var alone is insufficient).
 #   OCI_USER_OCID, OCI_TENANCY_OCID, OCI_FINGERPRINT, OCI_REGION,
-#     OCI_COMPARTMENT_OCID, OCI_API_KEY_PEM — written to ~/.oci/config +
-#     ~/.sky/config.yaml so SkyPilot's OCI backend can `sky check oci`.
+#     OCI_API_KEY_PEM — written to ~/.oci/config + ~/.oci/oci_api_key.pem
+#     so SkyPilot's OCI backend can `sky check oci`. SkyPilot defaults to
+#     the root compartment when oci.default.compartment_ocid is unset, so
+#     ~/.sky/config.yaml is no longer managed here — see #876.
 #   SKYPILOT_API_SERVER_ENDPOINT (optional) — when set, the launcher skips
 #     the cred-bootstrap because the remote API server (#785) holds creds.
 
@@ -56,9 +58,9 @@ on:
   workflow_dispatch:
     inputs:
       dataset_config:
-        description: "Hydra experiment name under configs/experiment/ (e.g. `runpod-smoke-shard`)"
+        description: "Hydra experiment name under configs/experiment/ (e.g. `generate_dataset/smoke-shard`)"
         required: true
-        default: "runpod-smoke-shard"
+        default: "generate_dataset/smoke-shard"
       docker_image_tag:
         description: "Docker image tag (e.g., dev-snapshot, dev-snapshot-<sha>)"
         required: false
@@ -76,26 +78,26 @@ on:
           - oci
   pull_request:
     paths:
-      - "src/data/vst/**"
-      - "src/pipeline/schemas/**"
+      - "src/synth_setter/data/vst/**"
+      - "src/synth_setter/pipeline/schemas/**"
       - "configs/experiment/**"
       - "configs/dataset.yaml"
       - "configs/render/**"
       - "configs/r2/**"
       - "configs/compute/**"
-      - "src/generate_dataset.py"
-      - "src/pipeline/ci/**"
-      - "src/pipeline/r2_io.py"
-      - "scripts/docker_entrypoint.py"
-      - "scripts/run-linux-vst-headless.sh"
-      - "scripts/ensure_plugin_symlinks.sh"
+      - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/pipeline/ci/**"
+      - "src/synth_setter/pipeline/r2_io.py"
+      - "src/synth_setter/tools/docker_entrypoint.py"
+      - "docker/ubuntu22_04/run-linux-vst-headless.sh"
+      - "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
       - "scripts/sync_worker_checkout.sh"
-      - "scripts/skypilot_write_provider_creds.sh"
-      - "src/pipeline/skypilot_launch.py"
+      - "scripts/skypilot/write_provider_creds.sh"
+      - "src/synth_setter/pipeline/skypilot_launch.py"
       - ".github/workflows/test-dataset-generation.yml"
       - ".github/workflows/generate-dataset-shards.yaml"
       - ".github/workflows/validate-dataset-shards.yaml"
-      - "requirements*.txt"
+      - "pyproject.toml"
 
 permissions:
   contents: read
@@ -177,7 +179,7 @@ jobs:
       # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
       # plugin. Without it, Hydra compose fails with:
       #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
-      # Pin both to the same versions as requirements-app.txt.
+      # Pin both to the same versions as [project.dependencies] in pyproject.toml.
       - name: Install Hydra for dataset-config composition
         run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
@@ -191,8 +193,8 @@ jobs:
           DATASET_CONFIG: >-
             ${{
               github.event_name == 'pull_request'
-                && 'runpod-smoke-shard'
-                || (inputs.dataset_config || 'runpod-smoke-shard')
+                && 'generate_dataset/smoke-shard'
+                || (inputs.dataset_config || 'generate_dataset/smoke-shard')
             }}
         run: |
           set -euo pipefail
@@ -229,8 +231,8 @@ jobs:
       DATASET_CONFIG: >-
         ${{
           github.event_name == 'pull_request'
-            && 'runpod-smoke-shard'
-            || (inputs.dataset_config || 'runpod-smoke-shard')
+            && 'generate_dataset/smoke-shard'
+            || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
@@ -271,9 +273,9 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
-              python -m src.pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
-              python scripts/docker_entrypoint.py generate_dataset \
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
+              python -m synth_setter.pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
+              python -m synth_setter.tools.docker_entrypoint generate_dataset \
                 --spec /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \
@@ -282,7 +284,7 @@ jobs:
       # Upload the spec to R2 at the same path-shape the launcher uses, so
       # validate-dataset-shards.yaml can read it without knowing whether the
       # generate path was launcher- or local-provider. Uses the in-image
-      # rclone helper through src.pipeline.r2_io to keep all rclone invocations
+      # rclone helper through synth_setter.pipeline.r2_io to keep all rclone invocations
       # in one place.
       - name: Upload spec to R2 for validate handoff
         env:
@@ -306,7 +308,7 @@ jobs:
             python3 -c "
           import os
           from pathlib import Path
-          from src.pipeline.r2_io import upload_to_uri
+          from synth_setter.pipeline.r2_io import upload_to_uri
           uri = f\"r2://{os.environ['R2_BUCKET']}/skypilot-launcher-specs/{os.environ['CLUSTER_NAME']}.json\"
           upload_to_uri(Path('/run-metadata/input_spec.json'), uri)
           print(f'spec uploaded to {uri}')
@@ -351,8 +353,8 @@ jobs:
       dataset_config: >-
         ${{
           github.event_name == 'pull_request'
-            && 'runpod-smoke-shard'
-            || (inputs.dataset_config || 'runpod-smoke-shard')
+            && 'generate_dataset/smoke-shard'
+            || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}

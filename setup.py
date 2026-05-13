@@ -2,6 +2,10 @@
 
 from setuptools import find_packages, setup
 
+# Legacy `console_scripts` (`train_command`, `eval_command`) were removed in
+# the Phase 2 src-layout migration (#989). Console scripts are now declared in
+# `pyproject.toml` under `[project.scripts]`. Full `setup.py` deletion happens
+# in Phase 5 of #784.
 setup(
     name="src",
     version="0.0.1",
@@ -11,11 +15,4 @@ setup(
     url="https://github.com/user/project",
     install_requires=["lightning", "hydra-core"],
     packages=find_packages(),
-    # use this to customize global commands available in the terminal after installing the package
-    entry_points={
-        "console_scripts": [
-            "train_command = src.train:main",
-            "eval_command = src.eval:main",
-        ]
-    },
 )

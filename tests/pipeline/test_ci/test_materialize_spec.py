@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from src.pipeline.ci.materialize_spec import main
-from src.pipeline.constants import INPUT_SPEC_FILENAME
+from synth_setter.pipeline.ci.materialize_spec import main
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 
 
 class TestMaterializeSpecCli:
@@ -22,7 +22,10 @@ class TestMaterializeSpecCli:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Happy path: a valid experiment name composes into a DatasetSpec written as JSON."""
-        monkeypatch.setattr("sys.argv", ["materialize_spec", "ci-materialize-test", str(tmp_path)])
+        monkeypatch.setattr(
+            "sys.argv",
+            ["materialize_spec", "generate_dataset/ci-materialize-test", str(tmp_path)],
+        )
         main()
         out_path = tmp_path / INPUT_SPEC_FILENAME
         assert out_path.is_file()

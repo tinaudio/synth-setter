@@ -1,4 +1,4 @@
-_target_: src.data.audio_datamodule.AudioDataModule
+_target_: synth_setter.data.audio_datamodule.AudioDataModule
 root: /data/EECS-C4DM-Fazekas/benhayes/nsynth-test/audio
 batch_size: 32
 num_workers: 4

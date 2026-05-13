@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from src.data.vst.core import extract_renderer_version
+from synth_setter.data.vst.core import extract_renderer_version
 
 
 class TestExtractRendererVersion:

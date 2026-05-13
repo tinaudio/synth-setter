@@ -15,7 +15,7 @@ single-sourced so edits land in one place and reach every entry point.
 ## When to spawn this subagent
 
 - The user asks to clean up lint for a specific file (e.g., "clean up
-  `src/utils/math.py`").
+  `src/synth_setter/utils/math.py`").
 - The user wants to work through the next unchecked file on the
   [#25](https://github.com/tinaudio/synth-setter/issues/25) checklist.
 - A reviewer asks for a file to be removed from `.pre-commit-config.yaml`'s

@@ -51,7 +51,7 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 ### Distributed Pipeline
 
 > **Implementation status:** Single-machine sequential multi-shard generation is
-> implemented today (`src/generate_dataset.py` loops over
+> implemented today (`src/synth_setter/cli/generate_dataset.py` loops over
 > `spec.shards`, skipping shards already present in R2 — worker-side
 > resumability MVP per #750; the launcher-side reconciliation engine described
 > in §7.4 / §7.7 is not yet built). The distributed/parallel pipeline described
@@ -76,31 +76,33 @@ RunPod is used because it's the platform where GPUs are already available and co
 ## 2. Typical Workflow
 
 ```bash
-# 1. Pick an experiment config (filename = experiment id).
+# 1. Pick an experiment config. The filename stem (e.g. `surge-simple-480k-10k`)
+#    is the dataset_config_id / task_name; the Hydra config-group path you pass
+#    as `experiment=` is `generate_dataset/<stem>`.
 #    Hydra composes the final DatasetSpec from configs/dataset.yaml + this overlay.
-cat configs/experiment/surge-simple-480k-10k.yaml
+cat configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
 
 # 2. Run sequential multi-shard generation on a single worker.
-python -m src.generate_dataset experiment=surge-simple-480k-10k
+python -m synth_setter.cli.generate_dataset experiment=generate_dataset/surge-simple-480k-10k
 # → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
-# **Planned CLI** — the distributed pipeline CLI (`python -m src.pipeline generate/status/finalize`)
+# **Planned CLI** — the distributed pipeline CLI (`python -m synth_setter.pipeline generate/status/finalize`)
 # is not yet implemented; `generate_dataset` is the current MVP, deprecated when
 # `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
-# python -m pipeline generate --experiment surge-simple-480k-10k --workers 10
+# python -m synth_setter.pipeline generate --experiment generate_dataset/surge-simple-480k-10k --workers 10
 # → Created run surge-simple-480k-10k-20260313T100000123Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
 #
-# python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m synth_setter.pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 # → Valid: 44/48  Missing: 2  Quarantined: 2
 #
-# python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m synth_setter.pipeline generate --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 4 shards missing, launching 1 worker
 #
-# python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m synth_setter.pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 48/48 valid. output_format: hdf5
 # → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
 # → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
@@ -112,7 +114,7 @@ Make targets are thin aliases for convenience:
 > **Not yet implemented.** These `make` targets are planned but do not exist in the Makefile yet ([#72](https://github.com/tinaudio/synth-setter/issues/72)).
 
 ```bash
-make generate ARGS="--experiment surge-simple-480k-10k --workers 10"
+make generate ARGS="--experiment generate_dataset/surge-simple-480k-10k --workers 10"
 make status ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 make finalize ARGS="--run-id surge-simple-480k-10k-20260313T100000123Z"
 ```
@@ -281,51 +283,13 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 
 ### R2 File Structure
 
-> R2 root path follows [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout). Pipeline-specific internal structure (workers/, lifecycle markers) is additive detail.
+The canonical R2 bucket layout — root path, top-level prefixes, and per-workflow contents — is defined in [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout) and [§3a](storage-provenance-spec.md#3a-data-generation). The data pipeline writes under `data/{dataset_config_id}/{dataset_wandb_run_id}/`: workers stage shards and per-attempt artifacts under `metadata/workers/`, and `finalize` is the only writer to `shards/`, `train.h5`/`val.h5`/`test.h5` (or `*.tar` for WebDataset), `stats.npz`, and `metadata/dataset.{json,complete}`. Datasets are immutable once `metadata/dataset.complete` exists; new versions require a new `dataset_wandb_run_id`.
 
-```
-data/{dataset_config_id}/{dataset_wandb_run_id}/   # e.g. data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/
-  shards/                              # Written ONLY by finalize (promoted from staging)
-    shard-000000.h5                    # Canonical finalized shards
-    shard-000001.h5
-    ...
-    shard-000479.h5
-  # output_format: hdf5
-  train.h5                             # Virtual dataset (written by finalize)
-  val.h5
-  test.h5
-  # output_format: wds
-  train-000000.tar                     # WebDataset archives (written by finalize)
-  train-000001.tar
-  ...
-  val-000000.tar
-  test-000000.tar
-  stats.npz                            # Normalization statistics
-  metadata/
-    config.yaml                          # User recipe (provenance copy, not authoritative)
-    input_spec.json                      # Frozen input specification (authoritative)
-    dataset.json                         # Self-describing dataset card (written by finalize)
-    dataset.complete                     # Completion marker (written by finalize)
-    workers/                             # Workers may only write under metadata/workers/
-      shards/                            # Per-shard staging area + lifecycle markers
-        shard-000000/
-          {worker_id}-{attempt_uuid}.h5          # Worker's validated shard output
-          {worker_id}-{attempt_uuid}.valid       # Commit marker: staged shard committed
-        shard-000042/
-          {worker_id}-{attempt_uuid}.h5          # Second attempt's shard output
-          {worker_id}-{attempt_uuid}.rendering   # First attempt: started but crashed
-          {worker_id}-{attempt_uuid}.valid       # Second attempt: succeeded
-          quarantine/
-            {worker_id}-{attempt_uuid}.h5        # Corrupt version, preserved for debugging
-      attempts/                           # Per-attempt worker artifacts
-        {worker_id}-{attempt_uuid}/
-          report.json                    # Worker summary — per-shard results, content_hash, timing
-          debug.log                      # Debug log (JSONL), uploaded by EXIT trap
-```
-
-Datasets are immutable once metadata/dataset.complete exists. Creating a new dataset version requires a new dataset_wandb_run_id.
+Pipeline-specific staging conventions (per-attempt shard filenames, lifecycle markers, quarantine layout) are additive detail — see [Artifact Taxonomy](#artifact-taxonomy) below.
 
 ### Artifact Taxonomy
+
+> This section covers **pipeline file artifacts** — the structured files the data pipeline produces in R2, their producers and consumers, and the shard attempt lifecycle. The canonical R2 paths are defined in [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation); the **W&B artifact taxonomy** (dataset/model/eval-results artifact types) is defined in [storage-provenance-spec.md §4](storage-provenance-spec.md#4-wb-artifact-types).
 
 All structured files in the pipeline, in one place:
 
@@ -574,7 +538,7 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 `make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for `.h5` + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
 
 ```
-$ python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
+$ python -m synth_setter.pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 
 Run: surge-simple-480k-10k-20260313T100000123Z
 Spec shards: 48
@@ -786,7 +750,7 @@ def _render_shard(shard_spec, shard_path):
     The import happens here, in the child, so the VST plugin loads cleanly.
     """
     import numpy as np
-    from src.data.vst.generate_vst_dataset import make_hdf5_dataset
+    from synth_setter.data.vst.generate_vst_dataset import make_hdf5_dataset
     # P3 (post-launch): seed both RNGs for reproducibility — see #100
     # random.seed(shard_spec.seed)
     # np.random.seed(shard_spec.seed)
@@ -1212,7 +1176,7 @@ This section covers how the design is realized — specific libraries, configura
 
 Schema for the frozen input specification described in [§7.1](#71-storage-as-the-source-of-truth) and [§6 artifact taxonomy](#artifact-taxonomy).
 
-See `src/pipeline/schemas/spec.py` for the authoritative definition. The model is `DatasetSpec` (unifies the previous `DatasetConfig` + `DatasetPipelineSpec` split; the constructed Pydantic instance **is** the artifact on R2 — `model.model_dump_json()` is the JSON).
+See `src/synth_setter/pipeline/schemas/spec.py` for the authoritative definition. The model is `DatasetSpec` (unifies the previous `DatasetConfig` + `DatasetPipelineSpec` split; the constructed Pydantic instance **is** the artifact on R2 — `model.model_dump_json()` is the JSON).
 
 ```python
 class ShardSpec(BaseModel):
@@ -1376,7 +1340,7 @@ Pydantic is for trust boundaries — where data enters the system from an extern
 A run starts from a Hydra experiment YAML composed against `configs/dataset.yaml`:
 
 ```yaml
-# configs/experiment/surge-simple-480k-10k.yaml (filename = dataset_config_id)
+# configs/experiment/generate_dataset/surge-simple-480k-10k.yaml (filename stem = dataset_config_id)
 # @package _global_
 
 defaults:
@@ -1395,7 +1359,7 @@ render:
 
 `configs/dataset.yaml` is the `@hydra.main` entry. Its `defaults` list pulls in `data:` (param spec / channels / velocity / loudness floor), `render:` (renderer + plugin / preset / sample rate / batch sizes), `r2:` (bucket + prefix root), `paths:`, `hydra:`, and the named `experiment:`. Required slots are marked `???` and filled by the chosen experiment.
 
-On first `generate` (`python -m src.generate_dataset experiment=<id>`):
+On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id>`):
 
 1. Hydra composes the experiment against `configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
@@ -1418,7 +1382,7 @@ On first `generate` (`python -m src.generate_dataset experiment=<id>`):
 | Config ID + ISO timestamp | `dataset_wandb_run_id`                             | `surge-simple-480k-10k-20260312T143022500Z`                             |
 | R2 root path              | `data/{dataset_config_id}/{dataset_wandb_run_id}/` | `data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/` |
 
-Config filenames live in `configs/experiment/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `runpod-smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
+Config filenames live in `configs/experiment/generate_dataset/`. Production training configs follow the pattern `{name}-{total_train_samples}-{shard_size}.yaml` (e.g. `surge-simple-480k-10k.yaml`); CI smoke and partitioner-exercise configs use shorter, role-descriptive names (e.g. `smoke-shard.yaml`, `10-1k-shards.yaml`). The filename without extension is the `dataset_config_id` — choose names that read clearly in R2 paths and W&B run IDs.
 
 ### 14.7 CLI & Directory Structure
 
@@ -1466,15 +1430,17 @@ src/
   # logging_config.py   # structlog configuration
 ```
 
-Pipeline configs live under `configs/` as Hydra groups composed by `configs/dataset.yaml` (filename of `configs/experiment/<id>.yaml` = `dataset_config_id`):
+Pipeline configs live under `configs/` as Hydra groups composed by `configs/dataset.yaml` (filename stem of `configs/experiment/generate_dataset/<id>.yaml` = `dataset_config_id`):
 
 ```
 configs/
   dataset.yaml         # @hydra.main entry point; defaults list (data/render/r2/paths/hydra/experiment)
-  experiment/          # Dataset generation recipes; filename = dataset_config_id
-    surge-simple-480k-10k.yaml
-    runpod-smoke-shard.yaml
-    ci-materialize-test.yaml
+  experiment/
+    generate_dataset/  # Dataset generation recipes; filename stem = dataset_config_id
+      surge-simple-480k-10k.yaml
+      smoke-shard.yaml
+      ci-materialize-test.yaml
+      10-1k-shards.yaml
   data/                # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
@@ -1490,7 +1456,8 @@ configs/
   #     launcher to @hydra.main and removes load_dataset_spec_yaml) ---
   # dataset.yaml         # Top-level @hydra.main composition target
   # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
-  #   surge-simple-480k-10k.yaml
+  #   generate_dataset/
+  #     surge-simple-480k-10k.yaml
   # render/              # Renderer-specific configs (param_spec_name, renderer_version, batch_per_shard, …)
   #   surge_xt.yaml
   # r2/                  # R2 bucket + prefix_root
@@ -1519,7 +1486,7 @@ configs/
 | **Lifecycle marker**       | Empty file in `metadata/workers/shards/shard-{id}/` named `{worker_id}-{attempt}.{state}`. Three commit points: `.rendering` (attempt started), `.valid` (staged shard committed), `.promoted` (canonical shard committed). Plus `.invalid` (validation failed). Presence is the state — no content to parse.                                                                                                                                                                                          |
 | **Quarantined shard**      | A corrupt shard uploaded by the worker to `metadata/workers/shards/shard-{id}/quarantine/` on validation failure. Preserves the evidence for debugging alongside lifecycle markers.                                                                                                                                                                                                                                                                                                                    |
 | **Dataset card**           | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                                                                                                                                                                                                             |
-| **param_spec**             | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Registered specs live in `param_specs` in [`src/data/vst/__init__.py`](../../src/data/vst/__init__.py); see also the [glossary entry](../glossary.md).                                                                                                                                                                                                                                        |
+| **param_spec**             | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Registered specs live in `param_specs` in [`src/synth_setter/data/vst/__init__.py`](../../src/synth_setter/data/vst/__init__.py); see also the [glossary entry](../glossary.md).                                                                                                                                                                                                              |
 | **VST**                    | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Mel spectrogram**        | Frequency-domain audio representation used as neural network input. 128 mels, ~100 frames/sec.                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **Fully parallel**         | Workload where tasks are completely independent — no communication or shared state between workers.                                                                                                                                                                                                                                                                                                                                                                                                    |

@@ -2,10 +2,11 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-03-20
+> **Last Updated**: 2026-05-13
 > **Tracking**: #107
-> **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 > **Issue tracking**: [github-taxonomy.md](github-taxonomy.md)
+
+> **Storage & provenance conventions**: [storage-provenance-spec.md](storage-provenance-spec.md) (authoritative)
 
 ______________________________________________________________________
 
@@ -46,18 +47,18 @@ Training is operationally different from the data pipeline:
 | Monitoring       | Storage-based completion                  | W&B metrics + pod liveness            |
 | Output           | Dataset shards → R2                       | Checkpoints → W&B, metrics → W&B      |
 
-**Key insight:** the data pipeline's reconciliation backend does not apply to training. Training on RunPod is just "launch one pod with `python src/train.py ...`". No shard partitioning, no worker graph, no storage-based coordination loop.
+**Key insight:** the data pipeline's reconciliation backend does not apply to training. Training on RunPod is just "launch one pod with `python -m synth_setter.cli.train ...`". No shard partitioning, no worker graph, no storage-based coordination loop.
 
 ### Current Strengths
 
-| Already works today                          | Notes                                                                                     |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `python src/train.py` with Hydra composition | Mature entry point                                                                        |
-| W&B logger                                   | Tracks metrics; `log_model: "all"` uploads every checkpoint as a W&B artifact immediately |
-| `ModelCheckpoint`                            | Saves every 5000 steps + best + last                                                      |
-| CSV logger                                   | Local fallback                                                                            |
-| Lightning resume                             | `ckpt_path=` already supported                                                            |
-| `rootutils` / `PROJECT_ROOT`                 | Paths already resolve cleanly                                                             |
+| Already works today                                       | Notes                                                                                     |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `python -m synth_setter.cli.train` with Hydra composition | Mature entry point                                                                        |
+| W&B logger                                                | Tracks metrics; `log_model: "all"` uploads every checkpoint as a W&B artifact immediately |
+| `ModelCheckpoint`                                         | Saves every 5000 steps + best + last                                                      |
+| CSV logger                                                | Local fallback                                                                            |
+| Lightning resume                                          | `ckpt_path=` already supported                                                            |
+| `rootutils` / `PROJECT_ROOT`                              | Paths already resolve cleanly                                                             |
 
 ### Current Gaps
 
@@ -103,7 +104,7 @@ cp .env.example .env
 make train EXPERIMENT=surge/flow_simple
 
 # 3. Resume from a local checkpoint
-python src/train.py experiment=surge/flow_simple ckpt_path=logs/train/.../checkpoints/last.ckpt
+python -m synth_setter.cli.train experiment=surge/flow_simple ckpt_path=logs/train/.../checkpoints/last.ckpt
 ```
 
 ### RunPod training (target state)
@@ -116,12 +117,12 @@ make runpod-train EXPERIMENT=surge/flow_simple
 make resume EXPERIMENT=surge/flow_simple RUN_ID=<train_wandb_run_id>
 
 # Or specify a W&B artifact alias directly:
-python src/train.py \
+python -m synth_setter.cli.train \
   experiment=surge/flow_simple \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
 
-In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/train.py` with Hydra config, and uploads checkpoints to R2 at `{R2_PREFIX}/training/{wandb_run_id}/`. On main, checkpoint durability is W&B-only (see Section 6.2).
+In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `r2:intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/` (per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)). On main, checkpoint durability is W&B-only (see Section 6.2).
 
 ### Docker
 
@@ -197,7 +198,7 @@ Training is a **single long-running job**. All durable outputs flow through W&B:
 ```
 ┌──────────────┐     ┌────────────────────────┐      ┌────────────────────┐
 │ Dataset      │────►│       TRAIN JOB        │─────►│  Local checkpoints │
-│ local or R2  │     │  python src/train.py   │      │  last.ckpt         │
+│ local or R2  │     │  python -m synth_setter.cli.train   │      │  last.ckpt         │
 └──────────────┘     │                        │      │  best.ckpt         │
                      │  Lightning + Hydra     │      └────────────────────┘
                      │  W&B + CSV logger      │
@@ -229,7 +230,7 @@ ______________________________________________________________________
 
 | Property     | Value                                                                             |
 | ------------ | --------------------------------------------------------------------------------- |
-| **Command**  | `python src/train.py experiment={exp} [overrides...]`                             |
+| **Command**  | `python -m synth_setter.cli.train experiment={exp} [overrides...]`                |
 | **Input**    | Dataset, model config, optimizer / trainer config                                 |
 | **Output**   | W&B metrics, CSV logs, local checkpoints                                          |
 | **Compute**  | GPU                                                                               |
@@ -247,13 +248,13 @@ ______________________________________________________________________
 
 ### 5.3 Resume
 
-| Property     | Value                                                                |
-| ------------ | -------------------------------------------------------------------- |
-| **Command**  | `python src/train.py ... ckpt_path={local_path_or_wandb_artifact}`   |
-| **Input**    | Local checkpoint or W&B artifact reference                           |
-| **Output**   | Continued training with restored optimizer / scheduler / epoch state |
-| **Compute**  | GPU                                                                  |
-| **Contract** | Reuse Lightning native resume semantics                              |
+| Property     | Value                                                                           |
+| ------------ | ------------------------------------------------------------------------------- |
+| **Command**  | `python -m synth_setter.cli.train ... ckpt_path={local_path_or_wandb_artifact}` |
+| **Input**    | Local checkpoint or W&B artifact reference                                      |
+| **Output**   | Continued training with restored optimizer / scheduler / epoch state            |
+| **Compute**  | GPU                                                                             |
+| **Contract** | Reuse Lightning native resume semantics                                         |
 
 ### 5.4 Promotion Handoff
 
@@ -269,6 +270,18 @@ ______________________________________________________________________
 ## 6. W&B Integration
 
 > Authoritative storage and W&B conventions are defined in [storage-provenance-spec.md](storage-provenance-spec.md#4-wb-artifact-types). Repeated here for training context.
+
+The R2 training-artifact subtree (under the `intermediate-data/` bucket root — see [storage-provenance-spec §2](storage-provenance-spec.md#2-r2-bucket-layout)) mirrors [§3b Training](storage-provenance-spec.md#3b-training):
+
+```
+train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
+├── checkpoints/
+│   ├── last.ckpt
+│   └── best.ckpt
+└── config.yaml               # Frozen experiment config
+```
+
+R2 checkpoint upload is not enabled on `main` — checkpoint durability is W&B-only (see §6.2, §7.5). The path above is the layout the experimental `MODE=train` flow ([#409](https://github.com/tinaudio/synth-setter/issues/409)) and any future R2 mirror would write to.
 
 ### 6.1 Dataset Access
 
@@ -520,13 +533,13 @@ ______________________________________________________________________
 
 ## Appendix B: Current File Inventory
 
-| File                        | Current role                                                                                   | Gap                               |
-| --------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------- |
-| `src/train.py`              | Main training entry point                                                                      | —                                 |
-| `configs/logger/wandb.yaml` | W&B config (`log_model: "all"` — uploads every checkpoint immediately, env-var entity/project) | —                                 |
-| `configs/data/*.yaml`       | Dataset paths                                                                                  | Shared portability cleanup needed |
-| `docker/*`                  | Existing container setup                                                                       | Training-specific image needed    |
-| `scripts/runpod_*.py`       | Data-pipeline-focused launchers                                                                | No training launcher              |
+| File                            | Current role                                                                                   | Gap                               |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------- |
+| `src/synth_setter/cli/train.py` | Main training entry point                                                                      | —                                 |
+| `configs/logger/wandb.yaml`     | W&B config (`log_model: "all"` — uploads every checkpoint immediately, env-var entity/project) | —                                 |
+| `configs/data/*.yaml`           | Dataset paths                                                                                  | Shared portability cleanup needed |
+| `docker/*`                      | Existing container setup                                                                       | Training-specific image needed    |
+| `scripts/runpod_*.py`           | Data-pipeline-focused launchers                                                                | No training launcher              |
 
 ## Appendix C: Checkpoint Policy
 
@@ -551,7 +564,7 @@ def launch_training(
     image: str = "tinaudio/synth-setter-train:latest",
 ):
     """Launch a single training pod on RunPod."""
-    cmd = f"python src/train.py experiment={experiment} {' '.join(config_overrides)}"
+    cmd = f"python -m synth_setter.cli.train experiment={experiment} {' '.join(config_overrides)}"
     pod = runpod.create_pod(
         name=f"train-{experiment}-{timestamp}",
         image_name=image,

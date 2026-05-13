@@ -54,14 +54,14 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/home/build/synth-setter \
-            -e PYTHONPATH=/home/build/synth-setter \
+            -e PYTHONPATH=/home/build/synth-setter:/home/build/synth-setter/src \
             "$IMAGE" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              scripts/run-linux-vst-headless.sh \
-                python -X faulthandler -c "from src.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
+                python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
             '
 
       # Mount the PR's tests + src into the container so we test THIS
@@ -76,7 +76,7 @@ jobs:
         run: |
           docker run --rm --gpus all \
             -v ${{ github.workspace }}:/home/build/synth-setter \
-            -e PYTHONPATH=/home/build/synth-setter \
+            -e PYTHONPATH=/home/build/synth-setter:/home/build/synth-setter/src \
             -e HYDRA_FULL_ERROR=1 \
             -e "SYNTH_SETTER_PLUGIN_PATH=/usr/lib/vst3/Surge XT.vst3" \
             "$IMAGE" \
@@ -84,6 +84,6 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              scripts/run-linux-vst-headless.sh \
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
                 pytest -vv -s -m gpu
             '

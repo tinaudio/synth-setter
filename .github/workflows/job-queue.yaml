@@ -1,0 +1,172 @@
+name: Job Queue Dispatch
+
+# Dispatchable workflow that feeds a line-separated command file into the
+# job-queue CLI (`scripts/job_queue.py`). Each non-blank, non-comment line of
+# the input file becomes one queued job in the named group; the workflow then
+# uploads the persisted queue state directory as a workflow artifact.
+#
+# The current backend is pueue (https://github.com/Nukesor/pueue), baked into
+# the `tinaudio/synth-setter` Docker image. Pueue is treated as an
+# implementation detail — the workflow inputs and CLI flags are
+# backend-neutral.
+#
+# Waiting for the queue to drain is opt-in: set `wait_timeout_seconds` > 0 to
+# block on `pueue wait` (bounded by that timeout) before the container exits.
+# The default of 0 returns immediately after submission.
+#
+# CAVEAT: because the worker step uses `docker run --rm` (foreground), as soon
+# as the in-container shell exits the container is torn down and any
+# still-running pueue tasks are killed. So with the default
+# `wait_timeout_seconds=0`, only jobs that complete during the brief
+# `pueue add` window will actually finish — anything still in `Running` or
+# `Queued` state at shell exit is lost. The artifact upload captures the
+# state.json snapshot from that moment, which is useful for inspecting what
+# *was* enqueued, not what eventually ran. Set `wait_timeout_seconds` to a
+# value larger than the longest expected job runtime when you need jobs to
+# actually complete inside the workflow.
+#
+# Use cases:
+#   - smoke-test a sweep file from the repo (e.g. sweeps/quick.txt) without
+#     standing up a worker on RunPod
+#   - dry-run a sweep file to validate the backend invocations the CLI would
+#     produce before committing to a real run
+#
+# Queue state is rooted via XDG_DATA_HOME so the persisted path is the same
+# regardless of whether the image runs as root or as a non-root user (e.g.
+# `devcontainer-tools` sets `USER dev`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      command_file:
+        description: "Path (relative to repo root) of the line-separated command file."
+        required: true
+        type: string
+      image_tag:
+        description: "Docker image tag for tinaudio/synth-setter."
+        required: false
+        type: string
+        default: "dev-snapshot"
+      group:
+        description: "Job-queue group to enqueue into. Created if missing."
+        required: false
+        type: string
+        default: "default"
+      parallel:
+        description: "Concurrent job slots for the group."
+        required: false
+        type: number
+        default: 1
+      label_prefix:
+        description: "Prefix for per-job labels (each label becomes '<prefix>-<index>')."
+        required: false
+        type: string
+        default: "gha"
+      dry_run:
+        description: "Print the backend commands instead of running them."
+        required: false
+        type: boolean
+        default: false
+      wait_timeout_seconds:
+        description: "How long to block waiting for the queue to drain. 0 means do not wait."
+        required: false
+        type: number
+        default: 0
+
+permissions:
+  contents: read
+
+jobs:
+  enqueue:
+    name: Enqueue ${{ inputs.command_file }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      IMAGE: tinaudio/synth-setter:${{ inputs.image_tag }}
+      COMMAND_FILE: ${{ inputs.command_file }}
+      JOB_GROUP: ${{ inputs.group }}
+      JOB_PARALLEL: ${{ inputs.parallel }}
+      JOB_LABEL_PREFIX: ${{ inputs.label_prefix }}
+      JOB_WAIT_TIMEOUT: ${{ inputs.wait_timeout_seconds }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate command file exists in checkout
+        run: |
+          set -euo pipefail
+          if [[ ! -f "${COMMAND_FILE}" ]]; then
+            echo "ERROR: command file not found in checkout: ${COMMAND_FILE}" >&2
+            exit 1
+          fi
+          echo "Command file (${COMMAND_FILE}):"
+          cat "${COMMAND_FILE}"
+
+      - name: Pull synth-setter image
+        run: docker pull "${IMAGE}"
+
+      # Dry-run mode skips the daemon — `python scripts/ci/job_queue.py --dry-run`
+      # only prints the backend argv it would emit, so we don't need a running
+      # daemon. This branch is also what the validate workflow exercises.
+      - name: Dry-run job_queue CLI
+        if: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
+            -e PYTHONPATH=/home/build/synth-setter \
+            -w /home/build/synth-setter \
+            "${IMAGE}" \
+            python scripts/ci/job_queue.py "${COMMAND_FILE}" \
+              --group "${JOB_GROUP}" \
+              --parallel "${JOB_PARALLEL}" \
+              --label-prefix "${JOB_LABEL_PREFIX}" \
+              --dry-run
+
+      # Real run: persist the queue daemon state outside the container so we
+      # can upload the queue log as an artifact afterwards. The daemon runs
+      # in the background inside the container; the script enqueues and
+      # (optionally) waits for completion before the container exits.
+      #
+      # Mount path uses XDG_DATA_HOME=/queue-state rather than the
+      # backend-default `~/.local/share/pueue` so the persisted directory is
+      # the same whether the image runs as root or as a non-root user (e.g.
+      # the `devcontainer-tools` image sets `USER dev`). Pueue honors
+      # XDG_DATA_HOME for its data_local_dir lookup.
+      - name: Run job_queue CLI
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ github.workspace }}/.queue-state"
+          docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
+            -v "${{ github.workspace }}/.queue-state:/queue-state" \
+            -e PYTHONPATH=/home/build/synth-setter \
+            -e XDG_DATA_HOME=/queue-state \
+            -e COMMAND_FILE \
+            -e JOB_GROUP \
+            -e JOB_PARALLEL \
+            -e JOB_LABEL_PREFIX \
+            -e JOB_WAIT_TIMEOUT \
+            -w /home/build/synth-setter \
+            "${IMAGE}" \
+            bash -euxo pipefail -c '
+              python scripts/ci/job_queue.py "$COMMAND_FILE" \
+                --group "$JOB_GROUP" \
+                --parallel "$JOB_PARALLEL" \
+                --label-prefix "$JOB_LABEL_PREFIX"
+              if [ "$JOB_WAIT_TIMEOUT" -gt 0 ]; then
+                echo "Waiting up to ${JOB_WAIT_TIMEOUT}s for queue to drain..."
+                timeout "$JOB_WAIT_TIMEOUT" pueue wait --group "$JOB_GROUP" || true
+              fi
+              pueue status --group "$JOB_GROUP"
+            '
+
+      - name: Upload queue state and logs
+        if: ${{ !inputs.dry_run && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-state-${{ github.run_id }}
+          path: .queue-state/
+          if-no-files-found: warn
+          retention-days: 7

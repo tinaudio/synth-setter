@@ -91,12 +91,12 @@ set -a && source .env && set +a
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
 > venv yourself, see
 > [docs/getting-started.md Appendix A](docs/getting-started.md#appendix-a-manual-environment-setup)
-> for a walkthrough using `pip install -r requirements.txt -e .` inside your
-> own environment.
+> for a walkthrough using `pip install -e ".[torch,dev]"` inside your own
+> environment.
 
 ### GPU vs CPU
 
-This project depends on PyTorch (`torch>=2.0.0`), but the requirements do not fix
+This project depends on PyTorch (`torch>=2.0.0`), but the install does not fix
 whether you use a CPU-only build or a CUDA-enabled build. Choose and install the
 appropriate PyTorch package for your system (CPU-only or a specific CUDA version)
 using the [PyTorch install matrix](https://pytorch.org/get-started/locally/), then
@@ -120,32 +120,37 @@ See the project documentation for a full walkthrough.
 ## Project Structure
 
 ```
-src/           ML code (models, data modules, training, evaluation, and entrypoints)
-  generate_dataset.py  Dataset-generation entrypoint (Hydra)
-  train.py             Training entrypoint (Hydra)
-  eval.py              Evaluation entrypoint (Hydra)
-  pipeline/            Distributed data pipeline
+src/synth_setter/   ML code and data pipeline (PEP src-layout package)
+  cli/                 Hydra entrypoints (also published as synth-setter-* console scripts):
+    train.py             Training entrypoint
+    eval.py              Evaluation entrypoint
+    generate_dataset.py  Dataset-generation entrypoint
+  data/                Datamodules and dataset construction
+  models/              LightningModules and components
+  utils/               Logging, callbacks, instantiators, math
+  metrics.py           Audio + parameter-space metrics
+  pipeline/            Distributed data pipeline (moved under synth_setter/ in Phase 3, #995):
     schemas/             Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
     ci/                  CI validation scripts (materialize_spec, validate_shard, validate_spec)
     skypilot_launch.py   SkyPilot launcher CLI
-configs/       Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
-scripts/       Standalone scripts
-tests/         Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)
-docs/design/   Design documents
+configs/        Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
+scripts/        Standalone scripts
+tests/          Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)
+docs/design/    Design documents
 ```
 
 ## Key Files
 
 ```
-src/models/components/transformer.py       DiT and AST implementations
-src/models/components/residual_mlp.py      Residual MLP implementations
-src/models/components/cnn.py               CNN encoder implementations
-src/models/components/vae.py               VAE+RealNVP baseline implementation
-src/models/*_module.py                     LightningModule implementations
-src/data/vst/*                             Dataset generation
-src/data/vst/surge_xt_param_spec.py        Surge XT dataset sampling distributions
-src/data/ot.py                             Optimal transport minibatch coupling
-src/data/kosc_datamodule.py                k-osc task data module
+src/synth_setter/models/components/transformer.py       DiT and AST implementations
+src/synth_setter/models/components/residual_mlp.py      Residual MLP implementations
+src/synth_setter/models/components/cnn.py               CNN encoder implementations
+src/synth_setter/models/components/vae.py               VAE+RealNVP baseline implementation
+src/synth_setter/models/*_module.py                     LightningModule implementations
+src/synth_setter/data/vst/*                             Dataset generation
+src/synth_setter/data/vst/surge_xt_param_spec.py        Surge XT dataset sampling distributions
+src/synth_setter/data/ot.py                             Optimal transport minibatch coupling
+src/synth_setter/data/kosc_datamodule.py                k-osc task data module
 configs/experiment/kosc                    k-osc experiment configs
 configs/experiment/surge                   Surge XT experiment configs
 ```

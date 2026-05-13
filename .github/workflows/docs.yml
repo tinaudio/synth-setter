@@ -1,29 +1,56 @@
 name: Docs
 
-# Phase 1 (this file): build the mkdocs site on PRs and upload site/ as an
-# artifact for reviewer preview. Phase 2 (#967) flips this to on: push to main
-# with pages: write + id-token: write and chains configure-pages /
-# upload-pages-artifact / deploy-pages to deploy on merge.
+# Phase 2 (this file): on merge to main (or manual dispatch), build the mkdocs
+# site, merge the benchmark chart from the gh-pages data branch, and deploy
+# the combined site to GitHub Pages via actions/deploy-pages@v4. Phase 1 (#966)
+# uploaded site/ as a downloadable PR artifact; that behavior is intentionally
+# replaced here — reviewers preview locally via `mkdocs serve`. See #967.
 
 on:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - "docs/**"
       - "mkdocs.yml"
       - "pyproject.toml"
-      - "src/pipeline/schemas/spec.py"
+      - "src/synth_setter/pipeline/schemas/spec.py"
       - ".github/workflows/docs.yml"
+  workflow_dispatch:
+  # Redeploy after the benchmark workflow pushes new chart data to gh-pages.
+  # gh-pages is the benchmark-action's persistence layer (see
+  # docs/reference/audio-similarity-benchmarks.md); this workflow merges its
+  # dev/bench/ content into the deployed site, so a bench-only update must
+  # also trigger a deploy.
+  workflow_run:
+    workflows: ["VST Slow Tests"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+# Serialize Pages deploys: cancel-in-progress: false lets an in-flight deploy
+# finish (avoids a half-published site) while still queuing the next one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  build-docs:
+  deploy-docs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Skip on workflow_run when the upstream run didn't succeed — otherwise
+    # we'd republish stale chart data after a failed bench run.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-      - name: Checkout
+      - name: Checkout docs source
         uses: actions/checkout@v6
 
       - name: Set up Python
@@ -38,10 +65,61 @@ jobs:
       - name: Build site
         run: mkdocs build --strict
 
-      - name: Upload site artifact
-        uses: actions/upload-artifact@v4
+      # gh-pages is the benchmark-action's persistence layer; only its
+      # dev/bench/ subtree is republished by the next step. The probe lets a
+      # fresh repo (no gh-pages branch yet) deploy docs without bench while
+      # still failing the workflow loudly on transient errors — explicitly
+      # discriminating HTTP 404 (branch absent, intended soft-skip) from
+      # 5xx / network / auth failures (fail loud). A blanket
+      # `continue-on-error: true` on the checkout, or a `2>&1`-swallowing
+      # probe, would deploy without the chart on a transient blip.
+      - name: Probe gh-pages branch existence
+        id: probe_ghpages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          http_code=$(curl -sS --retry 3 --retry-delay 2 \
+            -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/branches/gh-pages")
+          case "$http_code" in
+            200) echo "gh-pages branch exists"; echo "exists=true" >> "$GITHUB_OUTPUT" ;;
+            404) echo "gh-pages branch absent - bench merge will be skipped"; echo "exists=false" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "Unexpected HTTP $http_code from branches/gh-pages" >&2; exit 1 ;;
+          esac
+
+      - name: Fetch benchmark history from gh-pages data branch
+        if: steps.probe_ghpages.outputs.exists == 'true'
+        uses: actions/checkout@v6
         with:
-          name: mkdocs-site-${{ github.event.pull_request.number }}
+          ref: gh-pages
+          path: gh-pages-data
+
+      # rm -rf before cp avoids the cp -R nested-directory hazard: if
+      # site/dev/bench already exists (mkdocs emits there in the future, or
+      # this step is re-run), cp -R would create site/dev/bench/bench/.
+      - name: Merge benchmark chart into site
+        if: steps.probe_ghpages.outputs.exists == 'true'
+        run: |
+          if [ -d gh-pages-data/dev/bench ]; then
+            rm -rf site/dev/bench
+            mkdir -p site/dev
+            cp -R gh-pages-data/dev/bench site/dev/bench
+            echo "Merged benchmark chart into site/dev/bench"
+          else
+            echo "gh-pages branch exists but has no dev/bench/ — skipping bench merge"
+          fi
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
           path: site/
-          retention-days: 14
-          if-no-files-found: error
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

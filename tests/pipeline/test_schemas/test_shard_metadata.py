@@ -2,9 +2,8 @@
 
 ShardMetadata is the strict sidecar payload for wds tar shards (member
 ``metadata.json``). It lives in a leaf module with no project imports so
-consumers on either side of the ``src/`` ↔ ``src/pipeline/`` boundary can
-import it without picking up transitive dependencies that would form an
-import cycle.
+consumers anywhere in the ``synth_setter`` package can import it without
+picking up transitive dependencies that would form an import cycle.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from src.pipeline.schemas.shard_metadata import ShardMetadata
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 
 def _valid_kwargs(**overrides: Any) -> dict[str, Any]:
@@ -118,19 +117,20 @@ class TestShardMetadataLeafImport:
         """Parse the module's AST and assert it has no project-internal imports.
 
         The leaf-module guarantee matters because the wds writer side
-        (``src.data.vst.generate_vst_dataset``, to be wired in PR-13) will
-        import this model; if the module pulled in ``src.pipeline.schemas.spec``
-        or another non-leaf, the import graph would form a cycle through
-        ``param_specs`` / pedalboard. The check flags every form Python
-        supports for reaching project code: ``import src``/``import
-        src.x.y``, ``from src import x`` (module == "src"), ``from src.x.y
-        import z`` (module starts with "src."), and any relative ``from .x
-        import y`` (``node.level > 0``).
+        (``synth_setter.data.vst.generate_vst_dataset``, to be wired in PR-13)
+        will import this model; if the module pulled in
+        ``synth_setter.pipeline.schemas.spec`` or another non-leaf, the import
+        graph would form a cycle through ``param_specs`` / pedalboard. The check
+        flags every form Python supports for reaching project code:
+        ``import synth_setter``/``import synth_setter.x.y``,
+        ``from synth_setter import x`` (module == "synth_setter"),
+        ``from synth_setter.x.y import z`` (module starts with "synth_setter."),
+        and any relative ``from .x import y`` (``node.level > 0``).
         """
         import ast
         from pathlib import Path
 
-        module = importlib.import_module("src.pipeline.schemas.shard_metadata")
+        module = importlib.import_module("synth_setter.pipeline.schemas.shard_metadata")
         source = module.__file__
         assert source is not None
         tree = ast.parse(Path(source).read_text(encoding="utf-8"))
@@ -140,11 +140,13 @@ class TestShardMetadataLeafImport:
                 project_imports.extend(
                     alias.name
                     for alias in node.names
-                    if alias.name == "src" or alias.name.startswith("src.")
+                    if alias.name == "synth_setter" or alias.name.startswith("synth_setter.")
                 )
             elif isinstance(node, ast.ImportFrom):
                 if node.level > 0:
                     project_imports.append(f"<relative-level-{node.level}>")
-                elif node.module == "src" or (node.module or "").startswith("src."):
+                elif node.module == "synth_setter" or (node.module or "").startswith(
+                    "synth_setter."
+                ):
                     project_imports.append(node.module or "")
         assert project_imports == [], f"leaf module pulled project imports: {project_imports}"
