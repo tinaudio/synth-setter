@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778697269038,
+  "lastUpdate": 1778697271565,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3467,6 +3467,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 20.329702602499992,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ebd0dfa6c5dc4a7c9b33c75858a1a980b6360cf2",
+          "message": "chore(deps): consolidate requirements*.txt into pyproject.toml extras (#1008)\n\n* chore(deps): consolidate requirements*.txt into pyproject.toml extras\n\nMove requirements-torch.txt to [project.optional-dependencies].torch,\nrequirements-app.txt's runtime deps to [project.dependencies], and the\ndev tools (pytest, ruff, pre-commit, pyright, mutmut, pytest-benchmark,\npytest-xdist, hypothesis) to [project.optional-dependencies].dev. Add a\nconvenience [all] extra = [torch,dev]. Every pin (loguru==0.7.3,\nscipy==1.14.1, mutmut==3.5.*, pyright==1.1.408,\nskypilot[runpod,oci]==0.12.0, runpod==1.8.1, click<8.2, pesto-pitch,\ndtw-python, kymatio) is preserved verbatim.\n\nReplace the three requirements*.txt files with their pyproject equivalents\nacross all consumers: Makefile install, docker/ubuntu22_04/Dockerfile\n(now uv pip compile pyproject.toml --extra torch --extra dev so the\n~2.5 GB torch-wheels layer keeps surviving source edits — cache key\nnarrows to pyproject.toml + README.md), .devcontainer/Dockerfile,\nenvironment.yaml (.[dev]), scripts/sync_worker_checkout.sh, and every\nGitHub Actions workflow under .github/workflows/.\n\nTwo workflows that previously installed only pydantic on top of\npip install -e . (when [project.dependencies] was empty) — namely\ntest-spec-materialization.yml and validate-dataset-shards.yaml — switch\nto pip install --no-deps -e . + pip install pydantic so they continue\nto avoid pulling torch, librosa, skypilot, etc.\n\nVerified: uv pip compile --extra torch --extra dev resolves with every\npin honored; editable install dry-run produces the same direct-dep set.\nmake format passes (one pre-existing pyright failure on\ntests/pipeline/test_entrypoints/test_skypilot_launch.py is unrelated).\n\nCloses #533\nCloses #181\n\n* chore(deps): also update tart/macos.pkr.hcl install line\n\nDoc-drift review on PR #1008 caught a missed reference: the Packer\ntemplate's \"Clone the repo, use venv with all runtime deps\" provisioner\nstill ran `uv pip install -r requirements.txt && uv pip install --no-deps\n-e .`, which would break the next Tart image build now that\nrequirements.txt is gone.\n\nCollapse the two lines into the equivalent\n`uv pip install --torch-backend ${var.torch_backend} -e \".[torch,dev]\"`\nso the macOS VM ends up with the same dep set as before (torch backend\nhonored via uv's --torch-backend; project installed editably with the\ntorch and dev extras). docs/getting-started.md already advertises this\nbehavior — this brings the build script in line with the doc.\n\nRefs #533\n\n* docs(getting-started): clarify hydra-core lives in runtime deps, not torch extra\n\nCopilot review on #1008 flagged that the conda parenthetical claimed\nhydra-core ships in the `torch` extra. It actually lives in\n`[project.dependencies]`; the `torch` extra is just torch /\ntorchvision / torchaudio / lightning / torchmetrics. Reword to describe\nboth groups as the pip-only set the conda flow installs.\n\nRefs #533\n\n* ci: switch remaining minimal-install workflows to --no-deps\n\nNow that [project.dependencies] is populated, `pip install -e .`\n(and `uv pip install --system -e .`) drags in the full runtime\ndep set. Switch the two remaining minimal-install workflows to\nthe same `--no-deps` + explicit-deps pattern already used by\ntest-spec-materialization.yml and validate-dataset-shards.yaml:\n\n- spec-materialization.yml: `pip install -e . \"pydantic>=2,<3\"`\n  → `pip install --no-deps -e .` + `pip install \"pydantic>=2,<3\"`.\n  Update the inline rationale comment (it claimed `--no-deps`\n  would skip pydantic-core, which is no longer the reason — the\n  reason is now that the project's runtime deps are heavy).\n- docker-build-validation.yml: `uv pip install --system -e .\n  pyyaml pydantic` → `uv pip install --system --no-deps -e .`\n  + `uv pip install --system pyyaml pydantic`.\n\nRefs #533\n\n* chore(deps): collapse Docker uv pip compile+install into one pass\n\nCI Build-and-push failure on PR #1008 root-caused: the two-step\n`uv pip compile pyproject.toml --extra torch --extra dev → uv pip install\n--torch-backend ${TORCH_BACKEND} -r /tmp/requirements.lock` flow resolved\ntorch against the PyPI index in the compile step (no --torch-backend\nthere), pinning torch==2.12.0 (PyPI). The install step then asked the\ncu128 index for that exact version and got \"No solution found\" because\nthe cu128 index ships CUDA-tagged builds (e.g. 2.7.0+cu128), not the bare\n2.12.0 PyPI version.\n\nDrop the compile indirection entirely and use uv's direct support for\nreading deps out of pyproject.toml: `uv pip install -r pyproject.toml\n--extra torch --extra dev`. This resolves and installs in one pass\nagainst the cu128 index, matching the original requirements.txt flow,\nand removes the cross-index inconsistency.\n\nRefs #533\n\n* chore(deps): keep transitional requirements.txt stub for dev-snapshot bake lag\n\nCI Run-generate_dataset failure on PR #1008 root-cause: the\nskypilot-local worker runs `bash scripts/sync_worker_checkout.sh` from\nthe published `dev-snapshot` image, which was baked from main BEFORE\nthis PR. Bash buffers the script at open-time, so even though\n`git checkout WORKER_GIT_REF` succeeds and rewrites the worker's\nworking tree to this PR's HEAD (deleting requirements.txt in the\nprocess), the bash process is mid-execution of the OLD baked script\nlines. The next line in the old script is `uv pip install -r\nrequirements.txt`, which now errors with `File not found`.\n\nKeep a one-line requirements.txt stub that resolves to `-e .[torch]`\nso the OLD baked script's install still works. Once the dev-snapshot\nimage is rebuilt from main after this PR merges (the next push to\nmain triggers it), the baked script will be the updated one that\ndoes `uv pip install -e \".[torch]\"` directly — at which point this\nfile can be deleted. The stub has a sunset comment naming the\ndeletion criterion.\n\nRefs #533\n\n---------\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>",
+          "timestamp": "2026-05-13T14:21:01-04:00",
+          "tree_id": "7321193c266ae8201b5ebe7d3c3e564c99a2dbd5",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ebd0dfa6c5dc4a7c9b33c75858a1a980b6360cf2"
+        },
+        "date": 1778697270834,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.5147171020507812,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.720987428314984,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.011726384051144123,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.03645879030227661,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.395329475402832,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.414048475200001,
             "unit": "seconds"
           }
         ]
