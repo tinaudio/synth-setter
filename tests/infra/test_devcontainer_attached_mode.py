@@ -96,9 +96,11 @@ def test_docker_entrypoint_idle_mode_blocks_attached_mode(project_root: Path) ->
         (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "idle"),
         None,
     )
-    assert idle_fn is not None, "scripts/docker_entrypoint.py: missing `idle` function"
+    assert idle_fn is not None, (
+        "src/synth_setter/tools/docker_entrypoint.py: missing `idle` function"
+    )
     body_strings = [node.value for node in ast.walk(idle_fn) if isinstance(node, ast.Constant)]
     assert "sleep" in body_strings and "infinity" in body_strings, (
-        f"scripts/docker_entrypoint.py: idle() must exec `sleep infinity` so PID 1 stays alive "
+        f"src/synth_setter/tools/docker_entrypoint.py: idle() must exec `sleep infinity` so PID 1 stays alive "
         f"for attached-mode; constants found in idle() body: {body_strings!r}"
     )

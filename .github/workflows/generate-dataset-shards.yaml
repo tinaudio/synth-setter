@@ -283,11 +283,11 @@ jobs:
           chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
 
       # Capture controller-side state (apiserver + on-pod provision.log) before
-      # `sky local down` reaps the kind cluster. See scripts/capture-skypilot-state.sh
+      # `sky local down` reaps the kind cluster. See scripts/skypilot/capture-state.sh
       # for what's captured and why. Best-effort — never fails the workflow.
       - name: Capture kind cluster state (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
-        run: scripts/capture-skypilot-state.sh
+        run: scripts/skypilot/capture-state.sh
 
       - name: sky local down (skypilot-local row)
         if: ${{ always() && inputs.provider == 'skypilot-local' }}
@@ -380,7 +380,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               python -m synth_setter.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \

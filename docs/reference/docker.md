@@ -235,7 +235,7 @@ docker run --rm synth-setter:dev-snapshot \
 
 Generates one or more VST dataset shards (looping over `spec.shards`) via `generate_vst_dataset.py` under
 headless X11 (Xvfb). The click entrypoint itself is X11-agnostic; the
-headless bootstrap (`scripts/run-linux-vst-headless.sh`) is applied
+headless bootstrap (`docker/ubuntu22_04/run-linux-vst-headless.sh`) is applied
 inside `synth_setter.cli.generate_dataset.run()` at the
 audio-rendering boundary, wrapping only the generator subprocess — so
 `idle` and `passthrough` don't pay the Xvfb startup cost.
@@ -307,7 +307,7 @@ wrapper to your command:
 
 ```bash
 docker run --rm synth-setter:dev-snapshot \
-  passthrough scripts/run-linux-vst-headless.sh \
+  passthrough docker/ubuntu22_04/run-linux-vst-headless.sh \
     python -c "
       from pedalboard import VST3Plugin
       p = VST3Plugin('/usr/lib/vst3/Surge XT.vst3')
@@ -421,7 +421,7 @@ docker run --rm -it synth-setter:dev-snapshot \
 
 Headless X11 issues — check in order:
 
-1. **Xvfb running?** `scripts/run-linux-vst-headless.sh` starts it automatically
+1. **Xvfb running?** `docker/ubuntu22_04/run-linux-vst-headless.sh` starts it automatically
 2. **Missing libraries?** `ldd /usr/lib/vst3/Surge\ XT.vst3/Contents/*/libSurge\ XT.so`
 3. **Software rendering?** Verify `LIBGL_ALWAYS_SOFTWARE=1` is set (no GPU in CI)
 

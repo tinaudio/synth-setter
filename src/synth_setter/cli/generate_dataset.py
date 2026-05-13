@@ -4,7 +4,7 @@
 ``python -m synth_setter.cli.generate_dataset experiment=<id>`` (or the
 ``synth-setter-generate-dataset`` console script).
 
-The click CLI in ``scripts/docker_entrypoint.py`` is the SkyPilot-worker entry that reads a
+The click CLI in ``src/synth_setter/tools/docker_entrypoint.py`` is the SkyPilot-worker entry that reads a
 pre-materialized spec from R2 via ``load_spec_from_uri``.
 """
 
@@ -64,7 +64,7 @@ def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
 # X11 wrapping lives at the audio-rendering boundary (this subprocess call),
 # not at the container entrypoint — the click CLI stays X11-agnostic so idle
 # and passthrough don't pay the Xvfb startup cost.
-VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
+VST_HEADLESS_WRAPPER = "docker/ubuntu22_04/run-linux-vst-headless.sh"
 
 
 def _rclone_copy(src: str, dest: str) -> None:

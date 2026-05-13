@@ -1,4 +1,4 @@
-"""Tests for scripts/skypilot_write_provider_creds.sh — provider cred bootstrap.
+"""Tests for scripts/skypilot/write_provider_creds.sh — provider cred bootstrap.
 
 The script writes per-provider SkyPilot credentials before `sky check` /
 `sky.launch`:
@@ -30,8 +30,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-SCRIPT = REPO_ROOT / "scripts" / "skypilot_write_provider_creds.sh"
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "skypilot" / "write_provider_creds.sh"
 
 R2_ENV: dict[str, str] = {
     "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "AK_TEST",

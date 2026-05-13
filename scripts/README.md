@@ -1,31 +1,37 @@
 # Scripts
 
-Standalone scripts for data generation, evaluation, and analysis.
+This directory holds **shell / Python tooling that ships outside the `synth_setter` wheel** — utilities the test suite and CI workflows shell out to, plus operator-side commands. After the [#784](https://github.com/tinaudio/synth-setter/issues/784) layout migration, every resident here lives under a categorized subdirectory; the bare `scripts/` root contains no `.sh` or `.py` files of its own.
 
-| Script                         | Purpose                                                                                                                              | Example                                                                      |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `add_music2latent.py`          | Add music2latent embeddings to HDF5 shards                                                                                           | `python scripts/add_music2latent.py --help`                                  |
-| `aggregate_samples.sh`         | Collect audio samples from multiple model runs into a flat directory                                                                 | `bash scripts/aggregate_samples.sh`                                          |
-| `compute_audio_metrics.py`     | Compute multi-scale spectrogram and MFCC audio metrics on predicted vs target audio                                                  | `python scripts/compute_audio_metrics.py --help`                             |
-| `docker_entrypoint.py`         | Docker container ENTRYPOINT — click group with per-mode `--spec` (`idle`, `passthrough`, `generate_dataset`, `render_eval`, `train`) | `python scripts/docker_entrypoint.py idle`                                   |
-| `generate_surge_xt_data.py`    | Generate Surge XT synthesizer audio dataset (stub)                                                                                   | `python scripts/generate_surge_xt_data.py --surge-path "vsts/Surge XT.vst3"` |
-| `get-ckpt-from-wandb.sh`       | Find the latest checkpoint file for a W&B run ID                                                                                     | `bash scripts/get-ckpt-from-wandb.sh <wandb-run-id>`                         |
-| `get_dataset_stats.py`         | Compute per-feature mean and std of an HDF5 dataset using Dask                                                                       | `python scripts/get_dataset_stats.py`                                        |
-| `make_sig_perf.py`             | Benchmark k-osc and k-sin signal generation performance                                                                              | `python scripts/make_sig_perf.py`                                            |
-| `model_from_wandb_repl.py`     | Load a trained model from a W&B run and drop into an IPython REPL                                                                    | `python scripts/model_from_wandb_repl.py`                                    |
-| `paramspec_to_table.py`        | Convert VST parameter specs to a LaTeX longtable                                                                                     | `python scripts/paramspec_to_table.py`                                       |
-| `plot_param2tok.py`            | Plot parameter-to-token mappings from a trained model checkpoint                                                                     | `python scripts/plot_param2tok.py`                                           |
-| `predict_vst_audio.py`         | Render audio from predicted VST parameters and compare with targets                                                                  | `python scripts/predict_vst_audio.py --help`                                 |
-| `r2_shard_report.py`           | Generate a report of shards stored in an R2 bucket via rclone                                                                        | `python scripts/r2_shard_report.py --help`                                   |
-| `reshard_data.py`              | Reshard HDF5 dataset into train/val/test splits                                                                                      | `python scripts/reshard_data.py <dataset_root> -t 200 -v 4 -e 1`             |
-| `rewrite_dataset_to_latest.py` | Rewrite HDF5 shards with `libver="latest"` for SWMR support                                                                          | `python scripts/rewrite_dataset_to_latest.py --help`                         |
-| `run-linux-vst-headless.sh`    | Bootstrap headless X11/D-Bus/xsettingsd for running VST3 plugins in CI                                                               | `bash scripts/run-linux-vst-headless.sh <command>`                           |
-| `schedule.sh`                  | Run a sequence of training jobs with different configs                                                                               | `bash scripts/schedule.sh`                                                   |
-| `subdir_funtime.py`            | Compute pairwise mel-spectrogram distances between audio files in subdirectories                                                     | `python scripts/subdir_funtime.py --help`                                    |
+## Layout
 
-### Data directories
+| Subdir              | Purpose                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------- |
+| `scripts/skypilot/` | SkyPilot bootstrap / diagnostics (cred writers, worker checkout, cluster-state capture)                   |
+| `scripts/ci/`       | Local CI tooling (triage agent launcher, pueue job queue CLI used by `.github/workflows/job-queue*.yaml`) |
 
-| Directory       | Purpose                                                         |
-| --------------- | --------------------------------------------------------------- |
-| `audio_dirs/`   | Text files listing audio output directories per dataset variant |
-| `sample_lists/` | Text files listing sample IDs to aggregate per dataset variant  |
+## Where Python tools moved
+
+The Python utilities previously rooted in `scripts/` now live inside the `synth_setter` package and are invoked as `python -m synth_setter.<subpkg>.<module>`:
+
+| Subpackage                   | Modules                                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `synth_setter.evaluation`    | `predict_vst_audio`, `compute_audio_metrics`                                                                        |
+| `synth_setter.tools`         | `surge_xt_interactive`, `docker_entrypoint`, `model_from_wandb`, `plot_param2tok`, `paramspec_to_table`, `sig_perf` |
+| `synth_setter.pipeline.data` | `reshard`, `rewrite_to_latest`, `stats`, `r2_report`, `add_music2latent`                                            |
+
+The `synth-setter-train`, `synth-setter-eval`, and `synth-setter-generate-dataset` console scripts (declared in `pyproject.toml`'s `[project.scripts]`) remain the canonical entrypoints for the train / eval / dataset-generation workflows.
+
+## Where shell helpers moved
+
+Container-runtime shell helpers (X11 / VST3 bootstrap) moved next to the `Dockerfile` that `COPY`s them:
+
+| Helper                      | New home                                       |
+| --------------------------- | ---------------------------------------------- |
+| `run-linux-vst-headless.sh` | `docker/ubuntu22_04/run-linux-vst-headless.sh` |
+| `ensure_plugin_symlinks.sh` | `docker/ubuntu22_04/ensure_plugin_symlinks.sh` |
+
+## See also
+
+- [`CLAUDE.md`](../CLAUDE.md) — repo layout + commit conventions.
+- [`docs/architecture.md`](../docs/architecture.md) — package layout overview.
+- [#784](https://github.com/tinaudio/synth-setter/issues/784) — the layout-migration epic that put these files in their current homes.

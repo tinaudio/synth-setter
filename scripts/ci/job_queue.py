@@ -19,7 +19,7 @@ Example file::
 
 Example invocation::
 
-    python scripts/job_queue.py sweeps/train.txt \\
+    python scripts/ci/job_queue.py sweeps/train.txt \\
         --group train --parallel 2 --label-prefix sweep
 
 Each line becomes one ``pueue add`` invocation. Pueue runs the command through

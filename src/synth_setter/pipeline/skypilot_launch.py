@@ -285,7 +285,7 @@ def _apply_dispatch_mode(api_server: str | None, local: bool) -> None:
 
 
 def _run_cred_bootstrap(*, provider: str, env_file_path: Path | None = None) -> None:
-    """Invoke `scripts/skypilot_write_provider_creds.sh` for `provider`.
+    """Invoke `scripts/skypilot/write_provider_creds.sh` for `provider`.
 
     The script writes cred files to disk and emits no stdout — captured anyway
     via `subprocess.run(capture_output=True)` so even surprise output cannot

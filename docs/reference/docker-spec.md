@@ -13,7 +13,7 @@ ______________________________________________________________________
 
 ## 1. Entrypoint — click group with per-mode spec
 
-`scripts/docker_entrypoint.py` is the image's live `ENTRYPOINT`: a click
+`src/synth_setter/tools/docker_entrypoint.py` is the image's live `ENTRYPOINT`: a click
 group with five subcommands. Each spec-taking subcommand deserializes its
 `--spec` into a mode-specific pydantic model at the container boundary
 (parse-don't-validate), then hands off to the downstream.
@@ -36,11 +36,11 @@ spec at `--spec`.
 ### Headless X11
 
 `generate_dataset` invokes `generate_vst_dataset.py` wrapped in
-`scripts/run-linux-vst-headless.sh` from inside `run()` (the
+`docker/ubuntu22_04/run-linux-vst-headless.sh` from inside `run()` (the
 audio-rendering layer). The click CLI itself does not start Xvfb —
 `idle` and `passthrough` don't pay the bootstrap cost. Callers that
 need X11 via `passthrough` (notebook execution, spec materialization
-that imports pedalboard) should prepend `scripts/run-linux-vst-headless.sh`
+that imports pedalboard) should prepend `docker/ubuntu22_04/run-linux-vst-headless.sh`
 to their command.
 
 ### Exit codes

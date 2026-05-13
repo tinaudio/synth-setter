@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from synth_setter.pipeline.schemas.spec import RenderConfig
-from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
+from synth_setter.evaluation.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import render_params
 from synth_setter.data.vst.generate_vst_dataset import make_dataset

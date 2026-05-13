@@ -58,7 +58,7 @@ jobs:
               set -euo pipefail
               uv pip install -q jupyter nbconvert auraloss librosa
               cd /home/build/synth-setter
-              scripts/run-linux-vst-headless.sh \
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
                 jupyter nbconvert \
                   --to html \
                   --execute \

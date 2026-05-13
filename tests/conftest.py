@@ -52,7 +52,7 @@ NUM_FIXTURE_SAMPLES = 5
 # X11 wrapping lives at the audio-rendering boundary (the subprocess call),
 # not at the container entrypoint — the click CLI stays X11-agnostic so idle
 # and passthrough don't pay the Xvfb startup cost.
-VST_HEADLESS_WRAPPER = "scripts/run-linux-vst-headless.sh"
+VST_HEADLESS_WRAPPER = "docker/ubuntu22_04/run-linux-vst-headless.sh"
 
 
 def _validate_surge_dataset(path: Path, num_samples: int) -> None:

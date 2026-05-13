@@ -39,7 +39,7 @@ on:
     paths:
       - "src/synth_setter/data/vst/**"
       - "tests/data/vst/**"
-      - "scripts/compute_audio_metrics.py"
+      - "src/synth_setter/evaluation/compute_audio_metrics.py"
       - ".github/workflows/test-vst-slow.yml"
       - "requirements*.txt"
 
@@ -85,7 +85,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              scripts/run-linux-vst-headless.sh \
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
                 python -X faulthandler -c "from synth_setter.data.vst.core import load_plugin; load_plugin(\"/usr/lib/vst3/Surge XT.vst3\")"
             '
 
@@ -116,7 +116,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              scripts/run-linux-vst-headless.sh \
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
                 pytest -vv -s tests/data/vst/test_generate_vst_dataset.py
             '
 

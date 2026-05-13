@@ -1,9 +1,9 @@
-"""Tests for `scripts/get_dataset_stats.py` degenerate-bin handling (#998)."""
+"""Tests for `synth_setter.pipeline.data.stats` degenerate-bin handling (#998)."""
 
 from __future__ import annotations
 
-import importlib.util
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,34 +12,20 @@ from types import ModuleType
 import numpy as np
 import pytest
 
-_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "get_dataset_stats.py"
+from synth_setter.pipeline.data import stats as _stats_module
 
-
-def _load_stats_script() -> ModuleType:
-    """Import ``scripts/get_dataset_stats.py`` outside the package path.
-
-    The script lives under ``scripts/`` which isn't on ``pythonpath`` (only
-    ``src/`` is), so use ``importlib.util`` to import it by path without
-    polluting ``sys.path``.
-
-    :returns: The freshly imported script module.
-    :rtype: ModuleType
-    """
-    spec = importlib.util.spec_from_file_location("_get_dataset_stats", _SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+_STATS_MODULE_NAME = "synth_setter.pipeline.data.stats"
+_PACKAGE_SRC_DIR = Path(_stats_module.__file__).resolve().parents[3]
 
 
 @pytest.fixture(scope="module")
 def stats_script() -> ModuleType:
-    """Module-scoped handle to the imported stats script.
+    """Module-scoped handle to the stats module.
 
-    :returns: The imported script module shared across this file's tests.
+    :returns: The imported module shared across this file's tests.
     :rtype: ModuleType
     """
-    return _load_stats_script()
+    return _stats_module
 
 
 def _existing_from_samples(
@@ -270,12 +256,14 @@ def test_cli_help_advertises_mask_degenerate_bins_flag() -> None:
     # 60s rather than 30s: under `make test-fast`'s parallel xdist load,
     # rootutils.setup_root walking the project tree from many workers at
     # once stretches script import time past the conservative default.
+    env = {**os.environ, "PYTHONPATH": str(_PACKAGE_SRC_DIR)}
     result = subprocess.run(  # noqa: S603
-        [sys.executable, str(_SCRIPT_PATH), "--help"],
+        [sys.executable, "-m", _STATS_MODULE_NAME, "--help"],
         capture_output=True,
         text=True,
         timeout=60,
         check=False,
+        env=env,
     )
     assert result.returncode == 0, result.stderr
     assert "--mask-degenerate-bins" in result.stdout

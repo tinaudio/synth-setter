@@ -56,7 +56,7 @@ class SurgeXTDataset(torch.utils.data.Dataset):
         if not stats_file.exists():
             raise FileNotFoundError(
                 f"Could not find statistics file {stats_file}. \n"
-                "Make sure to first run `scripts/get_dataset_stats.py`."
+                "Make sure to first run `src/synth_setter/pipeline/data/stats.py`."
             )
 
         with np.load(stats_file) as stats:
