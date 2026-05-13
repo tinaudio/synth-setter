@@ -76,11 +76,27 @@ on:
           - skypilot-local
           - runpod
           - oci
+  # Trigger paths are intentionally narrow — this workflow burns runner minutes
+  # (skypilot-local kind cluster + dev-snapshot image pull). Only list paths
+  # whose changes can plausibly break dataset generation. In particular:
+  #
+  #   * `pyproject.toml` is NOT listed — the workflow runs against a pre-built
+  #     `dev-snapshot` image, so dep bumps land via the docker build pipeline,
+  #     not here. Lint/test/dev-only pyproject changes were the largest source
+  #     of false-positive runs.
+  #   * `configs/experiment/**` is narrowed to `generate_dataset/**` — the
+  #     other subdirs (surge/fm/kosc/...) are training experiments and don't
+  #     feed this workflow's Hydra compose.
+  #   * `src/synth_setter/pipeline/schemas/**` is enumerated to the specific
+  #     files actually imported by the generation path (spec / image_config /
+  #     prefix). `shard_metadata.py` is downstream-only and shouldn't fire.
   pull_request:
     paths:
       - "src/synth_setter/data/vst/**"
-      - "src/synth_setter/pipeline/schemas/**"
-      - "configs/experiment/**"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/pipeline/schemas/image_config.py"
+      - "src/synth_setter/pipeline/schemas/prefix.py"
+      - "configs/experiment/generate_dataset/**"
       - "configs/dataset.yaml"
       - "configs/render/**"
       - "configs/r2/**"
@@ -97,7 +113,6 @@ on:
       - ".github/workflows/test-dataset-generation.yml"
       - ".github/workflows/generate-dataset-shards.yaml"
       - ".github/workflows/validate-dataset-shards.yaml"
-      - "pyproject.toml"
 
 permissions:
   contents: read
