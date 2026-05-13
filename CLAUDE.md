@@ -251,6 +251,17 @@ The bad version forces the reader to ask "Hydra migration of *what*?" — the pr
 
 ### PR Readiness
 
+**Hard gate (all four must hold).** A PR is ready iff:
+
+1. **CI is fully green** — every required AND optional check passing, none pending, errored, or failing.
+2. **`mergeable=MERGEABLE`** — no merge conflicts and GitHub's mergeability calc is settled (not `UNKNOWN`, not `CONFLICTING`).
+3. **Every open review comment has an inline reply** — human reviewers AND Copilot.
+4. **Copilot has produced no new comments since the last push** — verify both the inline-comments endpoint and the top-level reviews endpoint.
+
+"PR mergeable" alone is **not** the gate — green CI is a separate, equally-hard precondition. All four conditions are AND-ed; failing any one means not ready.
+
+Detailed elaboration of each gate:
+
 A PR is **not ready** — for review, merge, or hand-off — until **all** of these hold:
 
 - **All CI checks pass.** Both required and optional checks must pass — a failing, errored, or still-pending check means not ready.
