@@ -618,9 +618,9 @@ pip install -e ".[torch,dev]"
 pre-commit install
 ```
 
-The project's `torch` extra (torch, lightning, hydra-core, etc.) ships
-through PyPI rather than conda-forge, so we install everything with pip
-inside the conda environment.
+The project's runtime and `torch`-extra packages (hydra-core, torch,
+lightning, etc.) ship through PyPI rather than conda-forge, so we install
+everything with pip inside the conda environment.
 
 ### A.3. uv pip without `make install`
 
