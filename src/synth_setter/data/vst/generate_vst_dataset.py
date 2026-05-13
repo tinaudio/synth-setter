@@ -18,6 +18,18 @@ from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
 from synth_setter.data.vst import param_specs  # noqa
 from synth_setter.data.vst.core import render_params  # noqa
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    MEL_N_MELS,
+    MEL_SPEC_FIELD,
+    MEL_WINDOW,
+    PARAM_ARRAY_FIELD,
+    audio_dataset_shape,
+    mel_dataset_shape,
+    mel_hop_length,
+    mel_n_fft,
+    param_array_dataset_shape,
+)
 
 
 @dataclass
@@ -39,22 +51,15 @@ class VSTDataSample:
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Values hardcoded to be roughly like those used by the audio spectrogram transformer.
-
-    i.e. 100 frames per second, 128 mels, ~25ms window, hamming window.
-    """
-
-    n_fft = int(0.025 * sample_rate)
-    hop_length = int(sample_rate / 100.0)
-    window = "hamming"
-
+    """Per-channel mel-spectrogram in dB; STFT params come from module-level constants."""
     spec = librosa.feature.melspectrogram(
         y=audio,
         sr=sample_rate,
-        n_mels=128,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        window=window,
+        n_mels=MEL_N_MELS,
+        n_fft=mel_n_fft(sample_rate),
+        hop_length=mel_hop_length(sample_rate),
+        window=MEL_WINDOW,
+        center=True,
     )
     spec_db = librosa.power_to_db(spec, ref=np.max)
     return spec_db
@@ -213,22 +218,22 @@ def create_datasets_and_get_start_idx(
 ):
     audio_dataset, audio_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "audio",
-        (num_samples, channels, sample_rate * signal_duration_seconds),
+        AUDIO_FIELD,
+        audio_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float16,
         compression=hdf5plugin.Blosc2(),
     )
     mel_dataset, mel_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "mel_spec",
-        (num_samples, 2, 128, 401),
+        MEL_SPEC_FIELD,
+        mel_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),
     )
     param_dataset, param_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "param_array",
-        (num_samples, num_params),  # +1 for MIDI note
+        PARAM_ARRAY_FIELD,
+        param_array_dataset_shape(num_samples, num_params),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),
     )
