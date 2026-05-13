@@ -37,9 +37,7 @@ data:
   batch_size: 1
   pin_memory: false
   ot: false
-  # Mirrors the smoke fixture which now generates stats.npz via
-  # `scripts/get_dataset_stats.py --mask-degenerate-bins`. CLI runs on the smoke
-  # dataset inherit that stats.npz; CLI runs on other datasets must compute their own.
+  # Requires sibling stats.npz; see #1002.
   use_saved_mean_and_variance: true
   num_workers: 0
 

@@ -332,10 +332,7 @@ def _build_surge_xt_smoke_cfg(accelerator: str, param_spec_name: str) -> DictCon
             cfg.data.batch_size = 1
             cfg.data.pin_memory = False
             cfg.data.ot = False
-            # `surge_xt_smoke_datasets` writes a sibling stats.npz via
-            # `get_dataset_stats.py --mask-degenerate-bins`, so the SurgeXTDataset's
-            # `(mel - mean) / std` is finite on the smoke fixture's constant bins. Keep
-            # normalization on so the smoke tests exercise the production code path.
+            # Smoke fixture writes stats.npz via masked get_dataset_stats — see #1002.
             cfg.data.use_saved_mean_and_variance = True
             cfg.data.num_workers = 0
 
@@ -454,11 +451,7 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     )
     _validate_surge_dataset(smoke_dataset_dir / "train.h5", NUM_FIXTURE_SAMPLES)
 
-    # Mel normalization stats are computed once over train.h5 and the resulting
-    # stats.npz is shared by the train/val/test splits (all three live in the
-    # same directory). `--mask-degenerate-bins` substitutes std=1.0 at constant
-    # mel bins so the SurgeXTDataset's `(mel - mean) / std` yields 0 on those
-    # bins instead of NaN — see #1002 for the masking semantics.
+    # Sibling stats.npz; shared across train/val/test splits — see #1002.
     stats_args = [
         sys.executable,
         "scripts/get_dataset_stats.py",
