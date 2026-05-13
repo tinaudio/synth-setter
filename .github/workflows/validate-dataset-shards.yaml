@@ -70,7 +70,7 @@ jobs:
       # Install only that — keep the runner-side env minimal instead of
       # `pip install -r requirements.txt` (which pulls torch and friends).
       - name: Install validate_spec runtime deps
-        run: pip install "pydantic>=2,<3"
+        run: pip install --no-deps -e . "pydantic>=2,<3"
 
       - name: Validate spec structure
         run: python3 -m synth_setter.pipeline.ci.validate_spec "${{ inputs.spec_uri }}"

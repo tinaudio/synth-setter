@@ -928,7 +928,7 @@ ______________________________________________________________________
 05. W&B optional (`--skip-wandb`) — tests skip it; mock test for artifact structure
 06. Workers use ThreadPoolExecutor for parallel shard generation
 07. Each shard renders in a child process via `multiprocessing.get_context("spawn").Process(...)`.
-    Child process imports `make_dataset` directly (`from synth_setter.pipeline.vst import make_dataset`).
+    Child process imports `make_dataset` directly (`from synth_setter.data.vst.generate_vst_dataset import make_dataset`).
     Only `shard_spec` and `shard_path` cross the process boundary — no function objects.
     `LocalBackend` accepts an optional `generate_fn` for tests (runs in-process, no spawn).
     For v1, no seeding (current behavior). Post-launch, dual-RNG seeding
