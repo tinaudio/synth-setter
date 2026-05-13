@@ -341,7 +341,12 @@ exclude = '''(?x)
   | ^tests/pipeline/test_schemas/test_image_config\.py$
   | ^tests/pipeline/test_schemas/test_shard_metadata\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
-  | ^tests/infra/
+  | ^tests/infra/conftest\.py$
+  | ^tests/infra/test_devcontainer_attached_mode\.py$
+  | ^tests/infra/test_gh_auth_flow\.py$
+  | ^tests/infra/test_no_secrets_in_image\.py$
+  | ^tests/infra/test_post_create_performance\.py$
+  | ^tests/infra/test_workflows_under_act\.py$
   | ^tests/evaluation/test_compute_audio_metrics\.py$
   | ^tests/pipeline/data/test_r2_report\.py$
   | ^tests/scripts/skypilot/test_write_provider_creds\.py$
