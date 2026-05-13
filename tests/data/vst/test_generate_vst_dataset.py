@@ -920,7 +920,7 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_make_dataset(tmp_path: Path) -> None:
+def test_make_hdf5_dataset(tmp_path: Path) -> None:
     """make_hdf5_dataset with the natural random source writes a valid h5."""
     out = tmp_path / "random.h5"
     spec = param_specs[_SPEC_NAME]
@@ -993,7 +993,7 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
             )
 
 
-def test_make_dataset_raises_when_fixed_params_list_is_too_short(
+def test_make_hdf5_dataset_raises_when_fixed_params_list_is_too_short(
     tmp_path: Path,
 ) -> None:
     """make_hdf5_dataset rejects fixed_*_params_list shorter than batch_per_shard - start_idx."""
@@ -1131,7 +1131,7 @@ def test_generate_sample_retries_when_only_fixed_note_params(
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst
-def test_make_dataset_uses_fixed_params_lists_when_provided(
+def test_make_hdf5_dataset_uses_fixed_params_lists_when_provided(
     tmp_path: Path,
 ) -> None:
     """make_hdf5_dataset writes the supplied fixed params verbatim, bypassing

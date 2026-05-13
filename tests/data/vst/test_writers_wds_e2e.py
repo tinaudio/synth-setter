@@ -17,10 +17,10 @@ from pathlib import Path
 import h5py
 import hdf5plugin  # noqa: F401  registers Blosc2 for h5py reads
 import numpy as np
+import pydantic
 import pytest
 import webdataset as wds
 
-from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -42,13 +42,11 @@ skip_no_vst = pytest.mark.skipif(
     reason=f"VST plugin not found at {_PLUGIN_PATH}",
 )
 
-# Hardcoded loudness-passing patch from a prior surge_xt run — same one
-# ``test_generate_vst_dataset.py`` uses. Inlined here to avoid a cross-test
-# import dependency (the other module's _HARDCODED_SYNTH_PARAMS is module-
-# private). Re-importing it via a fixture would couple this module to that
-# one's test setup; copying the literal keeps each module self-contained.
-# When the spec changes the hardcoded dict in BOTH modules needs regenerating
-# — kept in sync manually.
+# Hardcoded loudness-passing patch and h5↔h5 phase-robust comparison helpers
+# are reused verbatim from ``test_generate_vst_dataset.py`` so this module's
+# h5↔wds parity check uses the same thresholds the h5↔h5 round-trip tests
+# already pin. Imported (not copied) on purpose: a future spec change updates
+# the canonical patch in one place, and both test modules track it.
 from tests.data.vst.test_generate_vst_dataset import (
     _HARDCODED_NOTE_PARAMS,
     _HARDCODED_SYNTH_PARAMS,
@@ -315,5 +313,5 @@ def test_make_wds_dataset_metadata_json_strict_rejects_extra(tmp_path: Path) -> 
     raw = json.loads(members["metadata.json"])
     # ``extra="forbid"`` on ShardMetadata means unknown fields raise.
     raw["unexpected_field"] = "boom"
-    with pytest.raises(Exception, match="unexpected_field"):
+    with pytest.raises(pydantic.ValidationError, match="unexpected_field"):
         ShardMetadata.model_validate(raw)
