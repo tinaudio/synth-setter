@@ -1,19 +1,9 @@
 """Per-shard dataset writers — HDF5 (resumable) and webdataset tar (new).
 
-Splits the single legacy ``make_dataset(h5py.File, render_cfg)`` into two
-entrypoints dispatched by the renderer CLI on the output file's suffix:
+Consist of two entrypoints dispatched by the renderer CLI on the output file's suffix:
 ``make_hdf5_dataset`` keeps the resumable HDF5 path (signature takes a path and
 opens the file internally), and ``make_wds_dataset`` is the new tar-shard
-writer using ``webdataset.TarWriter``. Both share rendering/loudness/loop
-logic via the ``_validate_fixed_params_lengths`` / ``_generate_sample_for_index``
-/ ``_shard_metadata_from_render`` helpers below, and both write the same
-``ShardMetadata`` sidecar (``audio.attrs`` on the HDF5 path, ``metadata.json``
-tar member on the wds path) so consumers see identical per-shard metadata
-regardless of which format the worker produced.
-
-This module lives outside ``[tool.pydoclint].exclude`` — every public symbol
-carries a Sphinx-style ``:param:`` / ``:returns:`` / ``:rtype:`` / ``:raises:``
-docstring so the ``code-quality-pr`` guard (#938) stays green.
+writer using ``webdataset.TarWriter``.
 """
 
 from __future__ import annotations
