@@ -80,21 +80,30 @@ on:
   # (skypilot-local kind cluster + dev-snapshot image pull). Only list paths
   # whose changes can plausibly break dataset generation. In particular:
   #
-  #   * `pyproject.toml` is NOT listed — the workflow runs against a pre-built
-  #     `dev-snapshot` image, so dep bumps land via the docker build pipeline,
-  #     not here. Lint/test/dev-only pyproject changes were the largest source
-  #     of false-positive runs.
+  #   * `pyproject.toml` is NOT listed. The worker container pulls the
+  #     pre-built `dev-snapshot` image, so dep bumps don't reach the worker
+  #     side from here. The launcher side IS affected (the `skypilot-local`
+  #     row runs `uv pip install --system -e .` in
+  #     `generate-dataset-shards.yaml`'s "Install launcher deps" step), so
+  #     pyproject changes that break that install would fail this workflow
+  #     too — but they would fail `test.yml` (also `pip install -e .`) and
+  #     `docker-build-validation.yml` (rebuilds the image) FIRST. We accept
+  #     that redundant coverage in exchange for not firing on the steady
+  #     stream of lint / test / dev-only pyproject changes (mutmut, gitlint,
+  #     ruff config, dev-only deps) that were the largest source of
+  #     false-positive runs.
   #   * `configs/experiment/**` is narrowed to `generate_dataset/**` — the
   #     other subdirs (surge/fm/kosc/...) are training experiments and don't
   #     feed this workflow's Hydra compose.
   #   * `src/synth_setter/pipeline/schemas/**` is enumerated to the specific
-  #     files actually imported by the generation path (spec / image_config /
-  #     prefix). `shard_metadata.py` is downstream-only and shouldn't fire.
+  #     files actually imported by the generation path (`spec.py`, `prefix.py`).
+  #     `shard_metadata.py` is downstream-only; `image_config.py` is consumed
+  #     by `pipeline/ci/load_image_config.py` for `docker-build-validation.yml`,
+  #     not by anything `test-dataset-generation` invokes.
   pull_request:
     paths:
       - "src/synth_setter/data/vst/**"
       - "src/synth_setter/pipeline/schemas/spec.py"
-      - "src/synth_setter/pipeline/schemas/image_config.py"
       - "src/synth_setter/pipeline/schemas/prefix.py"
       - "configs/experiment/generate_dataset/**"
       - "configs/dataset.yaml"
