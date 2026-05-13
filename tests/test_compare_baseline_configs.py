@@ -16,10 +16,11 @@ and assert the two YAMLs match modulo invocation/deployment-volatile keys
 
 Two pinned constants below: ``FIXTURE_BASELINE`` covers the synthetic-fixture
 sanity tests, and ``MODEL_BASELINE`` pins the ``jobs/train/{kosc,surge}/train.sh``
-configs against a known-good model snapshot. ``MODEL_BASELINE`` is a stable
-"published-results known-good" anchor — bump it only when the snapshot itself
-is regenerated. Mechanical migrations (e.g. ``_target_:`` renames) get absorbed
-through ``ACCEPTED_DIFFS`` / ``ACCEPTED_DIFF_LEAVES`` instead.
+**and** ``jobs/predict/*.sh`` configs against a known-good model snapshot.
+``MODEL_BASELINE`` is a stable "published-results known-good" anchor — bump it
+only when the snapshot itself is regenerated. Mechanical migrations
+(e.g. ``_target_:`` renames) get absorbed through ``ACCEPTED_DIFFS`` /
+``ACCEPTED_DIFF_LEAVES`` instead.
 """
 
 from __future__ import annotations
@@ -82,10 +83,11 @@ PREDICT_SCRIPTS: tuple[str, ...] = (
 # possible: they're more stable/discoverable for humans, and the harness
 # fetches the requested ref itself when needed (see `try_fetch_ref`).
 # FIXTURE_BASELINE pins the synthetic-fixture equality + inequality tests.
-# MODEL_BASELINE pins the K-OSC + SURGE train.sh tests against the
-# published-results model-config snapshot. Keep it stable — only bump when the
-# snapshot itself is regenerated. Mechanical migrations go through
-# ACCEPTED_DIFFS / ACCEPTED_DIFF_LEAVES instead.
+# MODEL_BASELINE pins the K-OSC + SURGE train.sh tests AND the
+# jobs/predict/*.sh predict-script tests against the published-results
+# model-config snapshot. Keep it stable — only bump when the snapshot itself
+# is regenerated. Mechanical migrations go through ACCEPTED_DIFFS /
+# ACCEPTED_DIFF_LEAVES instead.
 FIXTURE_BASELINE = "1bfa7ea9c4b237a4561a9ac546a3e241ecff5951"  # PR #679 merge commit on main
 # Mechanical migrations (e.g. Phase 2's `src.X` → `synth_setter.X` `_target_:` rewrite,
 # #989) are absorbed via ACCEPTED_DIFF_LEAVES / #993, not by bumping this anchor.
