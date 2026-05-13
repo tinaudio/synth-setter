@@ -19,4 +19,8 @@ train_val_test_sizes: [32, 32, 32]
 render:
   sample_rate: 16000
   min_loudness: -50.0
+  # `sample_batch_size` equals `batch_per_shard` here so each shard renders in
+  # one sample batch — matches `smoke-shard.yaml`'s explicit style and pins the
+  # batching shape against the `surge_xt` render-group default of 32.
+  sample_batch_size: 32
   batch_per_shard: 32

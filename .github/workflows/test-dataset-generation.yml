@@ -140,6 +140,14 @@ jobs:
   #                             job (no launcher).
   #   * `providers_launcher`  — subset routed through the
   #                             `generate-dataset-shards.yaml` reusable.
+  #   * `output_formats`      — shard-format axis. On pull_request both rows
+  #                             (`hdf5`, `wds`) run because the workflow pins a
+  #                             per-format experiment config for each. On
+  #                             workflow_dispatch the matrix collapses to the
+  #                             single format the dispatched config resolves to
+  #                             — a single config hardcodes one `output_format`,
+  #                             and the spec-format cross-check would otherwise
+  #                             fail the non-matching cell.
   #   * `r2_bucket`           — Cloudflare R2 bucket name (from
   #                             configs/image/dev-snapshot.yaml). Used to
   #                             construct the spec_uri the validate job pulls.
@@ -170,12 +178,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # configs/hydra/default.yaml's `defaults` block overrides job_logging /
+      # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
+      # plugin. Without it, Hydra compose fails with:
+      #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
+      # Pin both to the same versions as [project.dependencies] in pyproject.toml.
+      # Installed before the `matrix` step because that step also composes the
+      # dispatched config to resolve `output_format` on workflow_dispatch.
+      - name: Install Hydra for dataset-config composition
+        run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
+
       - id: matrix
         env:
           EVENT_NAME: ${{ github.event_name }}
           PROVIDER_INPUT: ${{ inputs.provider || 'all' }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
+          DISPATCH_DATASET_CONFIG: ${{ inputs.dataset_config || 'generate_dataset/smoke-shard' }}
         run: |
           set -euo pipefail
           if [[ "${EVENT_NAME}" == "pull_request" && "${PR_HEAD_REPO}" == "${REPO}" ]]; then
@@ -193,10 +212,29 @@ jobs:
           fi
           providers_local=$(python3 -c "import json,sys; ps=json.loads(sys.argv[1]); print(json.dumps([p for p in ps if p == 'local']))" "${providers}")
           providers_launcher=$(python3 -c "import json,sys; ps=json.loads(sys.argv[1]); print(json.dumps([p for p in ps if p != 'local']))" "${providers}")
+          # On pull_request we pin two distinct per-format experiment configs
+          # (`smoke-shard` for hdf5, `ci-materialize-test-wds` for wds), so the
+          # matrix expands to both cells. On workflow_dispatch the user supplies
+          # a single experiment config which hardcodes one `output_format`, so
+          # the matrix collapses to whatever format that config resolves to —
+          # otherwise the cell whose `matrix.output_format` doesn't match would
+          # deterministically fail the spec-format cross-check.
           if [[ "${providers}" == "[]" ]]; then
             output_formats='[]'
-          else
+          elif [[ "${EVENT_NAME}" == "pull_request" ]]; then
             output_formats='["hdf5","wds"]'
+          else
+            DISPATCH_FORMAT=$(python3 -c "
+          import os
+          from pathlib import Path
+          from hydra import compose, initialize_config_dir
+          cfg_dir = str(Path.cwd() / 'configs')
+          experiment = os.environ['DISPATCH_DATASET_CONFIG']
+          with initialize_config_dir(version_base='1.3', config_dir=cfg_dir):
+              cfg = compose(config_name='dataset', overrides=[f'experiment={experiment}'])
+          print(cfg.output_format)
+          ")
+            output_formats="[\"${DISPATCH_FORMAT}\"]"
           fi
           echo "providers=${providers}" >> "${GITHUB_OUTPUT}"
           echo "providers_local=${providers_local}" >> "${GITHUB_OUTPUT}"
@@ -206,14 +244,6 @@ jobs:
           echo "providers_local: ${providers_local}"
           echo "providers_launcher: ${providers_launcher}"
           echo "output_formats: ${output_formats}"
-
-      # configs/hydra/default.yaml's `defaults` block overrides job_logging /
-      # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
-      # plugin. Without it, Hydra compose fails with:
-      #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
-      # Pin both to the same versions as [project.dependencies] in pyproject.toml.
-      - name: Install Hydra for dataset-config composition
-        run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
       # Bucket comes from the composed dataset config (the source of truth the
       # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
