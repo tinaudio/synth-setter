@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778705810735,
+  "lastUpdate": 1778705812825,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3896,6 +3896,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.426629607699994,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e2c780ae3677279f07c832d6f4b8f90faea54558",
+          "message": "chore(lint): close P1/P5/P6 pydoclint blind spots (#978)\n\n* chore(lint): close P1/P5/P6 pydoclint blind spots from adversarial probe\n\nThree concrete fixes for the slip categories the #939 adversarial probe\ndocumented. None of P2/P3/P4 are addressed here — those are inherent to\npydoclint and remain Open Questions on #938.\n\nP5 — flip pydoclint native-mode-noqa-location to \"definition\".\nThe CLI default is \"docstring\", so suppressions on the def line were\nsilently inert. Aligning with flake8/ruff convention means\n`# noqa: DOCxxx` next to `def` now does what every developer in this\nstack expects.\n\nP1 — add ruff D102/D103/D107 (missing-docstring rules).\nPydoclint defers \"must have a docstring\" to pydocstyle, which was not\nwired in. Ruff implements the same family. D102 = public method, D103 =\npublic function, D107 = __init__. Per-file-ignores cover the 40 tracked\nfiles that fail today; the list mirrors [tool.pydoclint].exclude.\n\nP6 — CI guard against new defs/classes in pydoclint-excluded files.\nscripts/check_no_new_funcs_in_pydoclint_excluded.py reads the pydoclint\nexclude regex from pyproject.toml and scans the PR diff for `+def`/\n`+class` lines whose file matches it. New tests pin its behaviour on\nsynthetic diffs; wired into code-quality-pr.yaml as a new step.\n\nCONTRIBUTING.md and .github/agents/lint-cleanup.md updated to describe\nthe new ruff D rules, the def-line noqa convention, and the guard.\n\nRefs #938\nRefs #939\n\n* docs(pydoclint): address doc-drift after P1/P5/P6 fixes\n\n- CONTRIBUTING.md: restore ANN001 to the ruff rule list it had been\n  dropped from when D102/D103/D107 were added.\n- CLAUDE.md: replace the inlined ruff rule list with a pointer to\n  [tool.ruff.lint].select so the drift clock does not reset on the next\n  rule addition; mention the new D rules.\n- docs/reference/github-actions.md: code-quality-pr now also runs the\n  pydoclint-excluded-file ratchet; document the new responsibility and\n  the fetch-depth: 0 requirement that goes with it.\n\n* chore(lint): address Copilot review on PR #978\n\n- Remove tests/scripts/test_check_no_new_funcs_in_pydoclint_excluded.py\n  from [tool.pydoclint].exclude and add `# noqa: DOC101,DOC103` to the\n  four test defs that take pytest fixtures. The previous setup made the\n  PR self-fail its own new P6 guard (verified: guard exit=1 against\n  origin/main, 12 findings before this commit; exit=0 after).\n  (comment #3223490913)\n\n- Replace `scripts/**` and `src/data/**` directory globs in\n  [tool.ruff.lint.per-file-ignores] with per-file entries mirroring\n  [tool.pydoclint].exclude. New files under those directories are no\n  longer silently exempt from D102/D103/D107.\n  (comment #3223490899)\n\n- Skip `\\\\ No newline at end of file` diff metadata in the guard's line\n  counter; add a pinning test. Without this, post-marker line numbers\n  in the guard's `path:line: name` report could be off-by-one.\n  (comment #3223490926)\n\n- Add an explicit `tomli; python_version < \"3.11\"` pin to\n  requirements-app.txt. The dep was already transitively available via\n  pytest/runpod, but pinning explicitly removes the fragility of relying\n  on a third-party transitive resolution.\n  (comment #3223490886)\n\nRefs #938\n\n* chore(lint): address Copilot post-push review on PR #978\n\nThree new Copilot comments after the merge from main:\n\n- pyproject.toml: flatten src/models/** for D102/D103/D107 the same way\n  scripts/** and src/data/** were already flattened. Keep ANN001 on the\n  glob (legacy, separate concern) but list each model file explicitly\n  for the D-rules so new files under src/models/ are not silently\n  exempt. (comment #3228263848)\n\n- scripts/check_no_new_funcs_in_pydoclint_excluded.py: fix module\n  docstring drift. The text said nested closures with \"six or more\n  leading spaces\" are ignored, but DEF_OR_CLASS_PATTERN matches 0-4\n  spaces, so anything >=5 is ignored. Rewrote to name the threshold\n  precisely and point at the regex where it lives. (comment #3228263810)\n\n- tests/scripts/test_check_no_new_funcs_in_pydoclint_excluded.py: import\n  the guard via importlib.util.spec_from_file_location instead of\n  mutating sys.path at module import time. Avoids leaking the change\n  into the rest of the test session. (comment #3228263867)\n\n* chore: trigger copilot review\n\nEmpty commit per CLAUDE.md step 6a — Copilot did not re-review 2625abd\nwithin the 15-min SLA and reviewers API rejects copilot-pull-request-reviewer\nas a non-collaborator. Push restarts the readiness loop.\n\n* docs(test): fix Copilot-flagged docstring typo on diff-header test\n\nCopilot review comment #3228504254 on PR #978: the test docstring said\n\"`+-+` headers\" — that is not a real unified-diff marker. The test\nactually guards against `+++ b/file.py` and `--- a/file.py` headers\nbeing mistaken for additions. Updated the docstring to name both\nmarkers correctly.\n\n* chore: resolve main merge conflicts in pydoclint follow-up PR\n\nAgent-Logs-Url: https://github.com/tinaudio/synth-setter/sessions/21c6c7a6-a341-4ed4-8ec7-ab11adad08ee\n\nCo-authored-by: ktinubu <17952332+ktinubu@users.noreply.github.com>\n\n* chore(lint): close P6 ratchet gap exposed by Phase 4 merge\n\nThe Phase 4 layout migration (#1009) moved files into\nsrc/synth_setter/{tools,models,metrics.py}/. The ruff per-file-ignores\nwere updated to mirror the new paths, but [tool.pydoclint].exclude\nwasn't, so 13 files had D102/D103/D107 ignored but were not in the\npydoclint exclude regex — re-opening the same blind spot this PR's\nP6 ratchet was supposed to close.\n\nRestores the maintainer's stated invariant from review round 2\n(comment #3228291103: \"D-rule ignores mirror pydoclint.exclude\")\nby adding the missing entries:\n\n  src/synth_setter/metrics.py\n  src/synth_setter/tools/model_from_wandb.py\n  src/synth_setter/tools/paramspec_to_table.py\n  src/synth_setter/tools/plot_param2tok.py\n  src/synth_setter/tools/sig_perf.py\n  src/synth_setter/models/components/cnn.py\n  src/synth_setter/models/components/embed_pool.py\n  src/synth_setter/models/components/residual_mlp.py\n  src/synth_setter/models/components/vector_field.py\n  src/synth_setter/models/ksin_ff_module.py\n  src/synth_setter/models/surge_ff_module.py\n  src/synth_setter/models/surge_flow_matching_module.py\n  src/synth_setter/models/surge_flowvae_module.py\n\nAfter this change, an adversarial probe (synthetic +def in\nsrc/synth_setter/{metrics,tools/sig_perf,models/components/cnn,\nmodels/ksin_ff_module}.py) makes the guard exit 1 in every case;\nthe 13 existing P6 tests still pass.\n\nRefs #938\n\n---------\n\nCo-authored-by: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>",
+          "timestamp": "2026-05-13T16:42:04-04:00",
+          "tree_id": "1697ba459f4799f7739afd06d9bc413baa440ca0",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e2c780ae3677279f07c832d6f4b8f90faea54558"
+        },
+        "date": 1778705812337,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.0836551189422607,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.8851351030170918,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.018047884106636047,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.022361278533935547,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 0.9098212718963623,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.997688747899996,
             "unit": "seconds"
           }
         ]
