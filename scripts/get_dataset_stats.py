@@ -14,6 +14,11 @@ from synth_setter.data.surge_datamodule import SurgeXTDataset
 
 logger = logging.getLogger(__name__)
 
+# Cap the listed degenerate indices in error/warning messages so a fully
+# degenerate dataset (e.g. count==1 on a 3-D mel spec, ~100k elements) doesn't
+# emit a megabyte-scale message. Remaining count is summarised as "+N more".
+_MAX_DEGENERATE_INDEX_PREVIEW = 20
+
 
 def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> None:
     """Raise on zero-variance bins unless masking is enabled.
@@ -32,21 +37,42 @@ def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> None:
     :raises ValueError: When ``mask_degenerate`` is False and any entry of
         ``std`` is zero. The message lists the degenerate bin indices.
     """
-    degenerate = np.where(std == 0)[0]
-    if degenerate.size == 0:
+    # Cast through ``np.asarray`` so torch tensors (returned by datamodule
+    # ``__getitem__``) and other array-likes go through numpy's ``argwhere``
+    # rather than their own framework's ``nonzero`` delegate, which returns
+    # an axis-tuple layout that breaks index reporting.
+    std = np.asarray(std)
+    # For 1-D std (e.g. unit tests, simple flattened layouts) ``np.where``
+    # returns a list of bin indices. For multi-D std (real Surge mel:
+    # (channels, mels, frames); audio: (mels, frames)) ``np.argwhere`` returns
+    # one coordinate tuple per degenerate element, which is the only useful
+    # form — first-axis-only indexing would collapse all element coordinates
+    # to channel/row indices and lose the bin location.
+    if std.ndim == 1:
+        positions = np.where(std == 0)[0].tolist()
+    else:
+        positions = np.argwhere(std == 0).tolist()
+    n_degenerate = len(positions)
+    if n_degenerate == 0:
         return
+    preview = positions[:_MAX_DEGENERATE_INDEX_PREVIEW]
+    overflow = n_degenerate - _MAX_DEGENERATE_INDEX_PREVIEW
+    suffix = f"; +{overflow} more" if overflow > 0 else ""
     if not mask_degenerate:
         raise ValueError(
-            f"Found {degenerate.size} mel bin(s) with zero variance across the "
-            f"dataset: indices {degenerate.tolist()}. This usually indicates an "
-            f"upstream problem (silence-dominated data, mel filterbank above "
-            f"Nyquist, or a dataset too small to vary these bins). Rerun with "
-            f"--mask-degenerate-bins to mask these bins instead of failing."
+            f"Found {n_degenerate} mel bin(s) with zero variance across the "
+            f"dataset (std shape {std.shape}; indices {preview}{suffix}). "
+            f"This usually indicates an upstream problem (silence-dominated "
+            f"data, mel filterbank above Nyquist, or a dataset too small to "
+            f"vary these bins). Rerun with --mask-degenerate-bins to mask "
+            f"these bins instead of failing."
         )
     logger.warning(
-        "Masking %d degenerate mel bin(s) with zero variance: %s",
-        degenerate.size,
-        degenerate.tolist(),
+        "Masking %d degenerate mel bin(s) with zero variance (std shape %s; indices %s%s).",
+        n_degenerate,
+        std.shape,
+        preview,
+        suffix,
     )
 
 
@@ -103,7 +129,12 @@ def update(existing, new):
 
 def finalize(existing, mask_degenerate: bool = False):
     count, mean, M2 = existing
-    variance = M2 / count if count > 1 else 0
+    if count == 0:
+        raise ValueError("Cannot compute stats on an empty dataset (no samples observed).")
+    # count >= 1 implies update() ran at least once, which makes M2 an ndarray
+    # of the per-bin shape. For count == 1 every bin is constant by construction,
+    # so std is a zero array and _check_degenerate_bins surfaces it as expected.
+    variance = M2 / count
     std = np.sqrt(variance)
     _check_degenerate_bins(std, mask_degenerate)
     return mean, std

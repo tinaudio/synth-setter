@@ -172,6 +172,65 @@ def test_check_degenerate_bins_zero_entry_warns_when_masked(
     assert any("[1]" in record.message for record in caplog.records), caplog.text
 
 
+def test_check_degenerate_bins_multi_d_std_reports_coordinate_tuples(
+    stats_script: ModuleType,
+) -> None:
+    """For multi-D std (real mel layouts), degenerate positions are reported as coordinate tuples.
+
+    First-axis-only indexing would collapse all degenerate element coordinates to channel/row
+    indices and lose the bin location.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    std = np.array([[0.5, 0.0], [0.3, 0.7]])  # one degenerate element at [0, 1]
+
+    with pytest.raises(ValueError, match=r"shape \(2, 2\).*indices \[\[0, 1\]\]"):
+        stats_script._check_degenerate_bins(std, mask_degenerate=False)
+
+
+def test_check_degenerate_bins_caps_index_preview_with_overflow_summary(
+    stats_script: ModuleType,
+) -> None:
+    """Large degenerate counts truncate the listing with a ``+N more`` suffix.
+
+    A fully-degenerate 3-D mel spec can contain ~100k zero-variance elements; listing them all
+    would produce a megabyte-scale message.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    std = np.zeros(100)  # 100 degenerate bins; preview cap is 20 → expect "+80 more"
+
+    with pytest.raises(ValueError, match=r"\+80 more"):
+        stats_script._check_degenerate_bins(std, mask_degenerate=False)
+
+
+def test_finalize_empty_state_raises(stats_script: ModuleType) -> None:
+    """An empty Welford state (no ``update`` calls) raises with a clear message.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    empty_existing = (0, 0, 0)
+
+    with pytest.raises(ValueError, match="empty dataset"):
+        stats_script.finalize(empty_existing)
+
+
+def test_finalize_single_sample_raises_listing_all_bins(stats_script: ModuleType) -> None:
+    """A single-sample dataset (count==1) yields zero variance for every bin and raises.
+
+    Regression test: previously the ``count > 1 else 0`` branch returned a
+    Python scalar and crashed numpy's ``where`` call before reaching the
+    degeneracy check.
+
+    :param stats_script: Imported get_dataset_stats module (fixture).
+    """
+    sample = np.array([0.1, 0.2, 0.3])
+    existing = stats_script.update((0, np.zeros(3), np.zeros(3)), sample)
+
+    with pytest.raises(ValueError, match=r"zero variance.*indices \[0, 1, 2\]"):
+        stats_script.finalize(existing)
+
+
 def test_cli_help_advertises_mask_degenerate_bins_flag() -> None:
     """The CLI ``--help`` text documents the new flag so operators can discover it."""
     result = subprocess.run(  # noqa: S603
