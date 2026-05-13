@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778711961528,
+  "lastUpdate": 1778712691939,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2346,6 +2346,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.039746224880218506,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b2cc2a1fa454f25d83707b539f5c2ba0949546ca",
+          "message": "chore(ci): fix broken mutmut sandbox imports + document setup (#1026)\n\n* chore(ci): fix broken mutmut sandbox imports + document setup\n\nmutmut copies only `paths_to_mutate` into `mutants/` and strips the real\n`src/` off `sys.path`, so tests that transitively import un-mutated\nparts of the package (e.g. `synth_setter.cli.generate_dataset`,\n`synth_setter.pipeline.r2_io`) blow up during stats collection with\nImportError. PR #302 worked because it mutated `scripts/` only; the\nPhase 4 widen to `src/synth_setter/{evaluation,tools,pipeline/data}/`\nbroke this path and was never re-verified end-to-end.\n\nAdd `also_copy = [\"src/synth_setter/\"]` so the whole package lands in\nthe sandbox alongside the mutated subdirs, and document the moving\nparts in CLAUDE.md (Commands + a Mutation Testing section) so the next\ntime someone widens `paths_to_mutate` they know to recheck this.\n\nRefs #296\n\n* chore(ci): make mutmut run end-to-end (Linux CI workflow + subprocess fix)\n\nThree changes on top of the import-resolution fix in this PR's first\ncommit:\n\n1. **`tests/pipeline/data/test_stats.py`** — rewrite\n   `test_cli_help_advertises_mask_degenerate_bins_flag` to invoke\n   `_parse_args([\"--help\"])` in-process instead of shelling out via\n   `python -m`. Under `mutmut run`'s stats phase, the subprocess\n   inherited `MUTANT_UNDER_TEST=stats` and the mutated module's\n   trampoline tripped on `mutmut.config is None` in the fresh\n   interpreter, crashing stats collection. In-process avoids that\n   entirely and lets mutations of `_parse_args` actually be exercised\n   by this test (the subprocess form would have always run the\n   un-mutated function).\n\n2. **`.github/workflows/mutmut.yaml`** — new workflow_dispatch + weekly\n   cron job that runs `mutmut run` end-to-end on ubuntu-latest and\n   uploads the `mutants/` meta as an artifact. This is the\n   authoritative end-to-end gate for the `[tool.mutmut]` config.\n   macOS local runs cannot serve as that gate because\n   `tests/conftest.py` imports torch/h5py/hydra into the parent and\n   Apple's fork-safety check then SIGSEGVs every forked child.\n\n3. **`Makefile` + `CLAUDE.md`** — `make mutmut` sets\n   `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` (defensive on macOS,\n   no-op on Linux) and CLAUDE.md's \"Mutation Testing\" section now\n   covers (a) the subprocess pitfall, (b) the macOS caveat, and\n   (c) where the authoritative run lives.\n\nRefs #296\n\n* ci(mutmut): TEMP pull_request trigger to Level-1-verify the workflow on PR #1026 (revert before merge)\n\n* ci(mutmut): drop the temporary pull_request trigger\n\nRun 25829272616 (this branch's first commit with the workflow added)\ncompleted green on ubuntu-latest with the expected mix of statuses\n(🎉 810 killed, 🙁 341 survived, 🫥 1771 no tests, ⏰ 3 timeouts), so\nthe workflow is now Level-1-verified. Restore the trigger surface to\nworkflow_dispatch + weekly cron only.\n\nRefs #296\n\n---------\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>",
+          "timestamp": "2026-05-13T22:32:10Z",
+          "tree_id": "3ed3a9d5082b21cb35deb38f66cd68b17c24f256",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b2cc2a1fa454f25d83707b539f5c2ba0949546ca"
+        },
+        "date": 1778712691538,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.068583965301514,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.933693888883572,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02558779902756214,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.03581094741821289,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.519242286682129,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.274884934833329,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.311225891113281,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.65796631552279,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03224911913275719,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03608280420303345,
             "unit": "1-cos"
           },
           {
