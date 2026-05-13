@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+from typing import NamedTuple
 
 import dask.array as da
 import h5py
@@ -20,45 +21,40 @@ logger = logging.getLogger(__name__)
 _MAX_DEGENERATE_INDEX_PREVIEW = 20
 
 
-def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> np.ndarray:
-    """Raise on zero-variance bins, or substitute ``std=1.0`` at degenerate positions.
+class _DegenerateBinsFound(NamedTuple):
+    # Bundle of degenerate-bin info shared between ``_check_degenerate_bins`` and
+    # ``_fix_degenerate_bins`` — see ``_locate_degenerate_bins`` for population.
+    std: np.ndarray
+    mask: np.ndarray
+    n_degenerate: int
+    preview: list
+    overflow_suffix: str
 
-    A zero entry in ``std`` means the corresponding mel bin was constant across
-    the entire dataset, which propagates as inf/nan through downstream
-    ``(spec - mean) / std`` normalization in the datamodules. By default this
-    aborts so the upstream cause (silence-dominated data, mel filterbank above
-    Nyquist, dataset too small) is surfaced.
 
-    With ``mask_degenerate=True`` the function instead substitutes ``std=1.0``
-    at every degenerate position and returns the patched array. Because Welford
-    converges to ``mean == constant_value`` for any bin that was constant during
-    stat collection, the downstream normalization at training/eval time yields
-    ``(constant - constant) / 1.0 = 0`` for those bins — equivalent to a
-    constant-zero mask on in-distribution data, and a sensible centered
-    pass-through on out-of-distribution data. The datamodules need no changes.
+def _locate_degenerate_bins(std: np.ndarray) -> _DegenerateBinsFound | None:
+    """Find and format degenerate (``std==0``) positions for error/warning rendering.
 
-    :param std: Per-bin standard deviation array. Zero entries indicate
-        constant bins.
-    :param mask_degenerate: If True, substitute ``std=1.0`` at degenerate
-        positions and log a warning. If False, raise.
+    Internal helper shared between ``_check_degenerate_bins`` (which raises on the
+    result) and ``_fix_degenerate_bins`` (which substitutes ``std=1.0`` and warns).
+    Always raises on 0-d std: when ``finalize()`` reduces to a scalar variance
+    (Welford state with <=1 samples), there is no per-bin shape to either check
+    or mask.
 
-    :returns: The std array. Unchanged when no bins are degenerate or when
-        ``mask_degenerate`` is False (in which case the function raises).
-        When masking, a new array with ``std=1.0`` at degenerate positions.
-    :rtype: np.ndarray
+    :param std: Array-like per-bin standard deviation. Cast through ``np.asarray``
+        so torch tensors (returned by datamodule ``__getitem__``) and other
+        array-likes go through numpy's ``argwhere`` rather than their own
+        framework's ``nonzero`` delegate.
 
-    :raises ValueError: When ``mask_degenerate`` is False and any entry of
-        ``std`` is zero. The message lists the degenerate bin indices.
+    :returns: ``None`` if no bins are degenerate; otherwise a
+        :class:`_DegenerateBinsFound` carrying the canonicalized array, boolean
+        mask, count, truncated preview, and ``"; +N more"`` overflow suffix.
+    :rtype: _DegenerateBinsFound | None
+
+    :raises ValueError: When ``std`` is 0-d (count<=1 datasets); a generic
+        degenerate-bin report makes no sense in that case.
     """
-    # Cast through ``np.asarray`` so torch tensors (returned by datamodule
-    # ``__getitem__``) and other array-likes go through numpy's ``argwhere``
-    # rather than their own framework's ``nonzero`` delegate, which returns
-    # an axis-tuple layout that breaks index reporting.
     std = np.asarray(std)
     if std.ndim == 0:
-        # ``finalize()`` returns a scalar variance when the Welford state has
-        # seen <=1 samples; treat that as a distinct, surface-the-real-problem
-        # failure rather than a generic degenerate-bin report.
         raise ValueError(
             "stats reduce to a scalar (likely a dataset with <=1 samples); "
             "cannot compute per-bin std. Need at least 2 samples."
@@ -66,7 +62,7 @@ def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> np.ndarray
     mask = std == 0
     n_degenerate = int(mask.sum())
     if n_degenerate == 0:
-        return std
+        return None
     # Slice the index array before ``.tolist()`` so a fully-degenerate ~100k-
     # element mel doesn't allocate a 100k-tuple Python list just to print 20.
     # 1-D std (unit tests, simple flattened layouts) yields bin indices;
@@ -80,27 +76,69 @@ def _check_degenerate_bins(std: np.ndarray, mask_degenerate: bool) -> np.ndarray
         preview = np.argwhere(mask)[:_MAX_DEGENERATE_INDEX_PREVIEW].tolist()
     overflow = n_degenerate - _MAX_DEGENERATE_INDEX_PREVIEW
     suffix = f"; +{overflow} more" if overflow > 0 else ""
-    if not mask_degenerate:
-        raise ValueError(
-            f"Found {n_degenerate} mel bin(s) with zero variance across the "
-            f"dataset (std shape {std.shape}; indices {preview}{suffix}). "
-            f"This usually indicates an upstream problem (silence-dominated "
-            f"data, mel filterbank above Nyquist, or a dataset too small to "
-            f"vary these bins). Rerun with --mask-degenerate-bins to mask "
-            f"these bins instead of failing."
-        )
+    return _DegenerateBinsFound(std, mask, n_degenerate, preview, suffix)
+
+
+def _check_degenerate_bins(std: np.ndarray) -> None:
+    """Raise if any entry of ``std`` is zero (or ``std`` is 0-d from a <=1-sample dataset).
+
+    Pure check: does not mutate the input. Used by the default
+    (``mask_degenerate=False``) path; pair with :func:`_fix_degenerate_bins` for
+    the opt-in masking path.
+
+    :param std: Per-bin standard deviation array.
+
+    :raises ValueError: When ``std`` is 0-d, or any entry is zero. The message
+        lists the degenerate bin indices (truncated past
+        ``_MAX_DEGENERATE_INDEX_PREVIEW``).
+    """
+    found = _locate_degenerate_bins(std)
+    if found is None:
+        return
+    raise ValueError(
+        f"Found {found.n_degenerate} mel bin(s) with zero variance across the "
+        f"dataset (std shape {found.std.shape}; indices "
+        f"{found.preview}{found.overflow_suffix}). This usually indicates an "
+        f"upstream problem (silence-dominated data, mel filterbank above "
+        f"Nyquist, or a dataset too small to vary these bins). Rerun with "
+        f"--mask-degenerate-bins to mask these bins instead of failing."
+    )
+
+
+def _fix_degenerate_bins(std: np.ndarray) -> np.ndarray:
+    """Substitute ``std=1.0`` at degenerate positions and return the patched array.
+
+    Pairs with :func:`_check_degenerate_bins` for the ``--mask-degenerate-bins``
+    path. Because Welford's ``mean`` converges to the constant value for any bin
+    that was constant during stat collection, downstream ``(spec - mean) / std``
+    at training/eval time yields ``(constant - constant) / 1.0 = 0`` — equivalent
+    to a constant-zero mask on in-distribution data, with no datamodule changes.
+
+    Raises on 0-d ``std`` (count<=1 datasets) via :func:`_locate_degenerate_bins`,
+    since substituting a scalar makes no sense.
+
+    :param std: Per-bin standard deviation array.
+
+    :returns: A new array of the same dtype with degenerate positions set to
+        ``1.0`` (in the input's dtype). Returns the canonicalized input
+        unchanged when no bins are degenerate.
+    :rtype: np.ndarray
+    """
+    found = _locate_degenerate_bins(std)
+    if found is None:
+        return np.asarray(std)
     logger.warning(
         "Masking %d degenerate mel bin(s) with std=1.0 (std shape %s; indices %s%s).",
-        n_degenerate,
-        std.shape,
-        preview,
-        suffix,
+        found.n_degenerate,
+        found.std.shape,
+        found.preview,
+        found.overflow_suffix,
     )
     # Preserve std's dtype: ``np.where(mask, 1.0, std)`` would promote
     # float32 → float64 from the Python literal and silently inflate
     # stats.npz on disk + change downstream dtypes.
-    out = std.copy()
-    out[mask] = std.dtype.type(1)
+    out = found.std.copy()
+    out[found.mask] = found.std.dtype.type(1)
     return out
 
 
@@ -139,7 +177,10 @@ def get_stats_hdf5(filename, mask_degenerate: bool = False):
     out_file = SurgeXTDataset.get_stats_file_path(filename)
     mean = mean_val.compute()
     std = std_val.compute()
-    std = _check_degenerate_bins(std, mask_degenerate)
+    if mask_degenerate:
+        std = _fix_degenerate_bins(std)
+    else:
+        _check_degenerate_bins(std)
     np.savez(out_file, mean=mean, std=std)
 
 
@@ -157,7 +198,10 @@ def finalize(existing, mask_degenerate: bool = False):
     count, mean, M2 = existing
     variance = M2 / count if count > 1 else 0
     std = np.sqrt(variance)
-    std = _check_degenerate_bins(std, mask_degenerate)
+    if mask_degenerate:
+        std = _fix_degenerate_bins(std)
+    else:
+        _check_degenerate_bins(std)
     return mean, std
 
 
