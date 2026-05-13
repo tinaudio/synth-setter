@@ -14,15 +14,6 @@ on:
     # Sundays at 09:00 UTC — once a week is enough for a slow-changing config
     # whose own pre-merge gate is the CI test suite (test.yml).
     - cron: "0 9 * * 0"
-  # TEMPORARY: PR trigger so this workflow can be Level-1-verified against
-  # this PR (#1026). workflow_dispatch needs the workflow on the default
-  # branch first. Remove this `pull_request:` block before merging — see
-  # the PR description.
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/mutmut.yaml"
-      - "pyproject.toml"
 
 permissions:
   contents: read
