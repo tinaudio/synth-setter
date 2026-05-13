@@ -164,6 +164,7 @@ jobs:
       providers: ${{ steps.matrix.outputs.providers }}
       providers_local: ${{ steps.matrix.outputs.providers_local }}
       providers_launcher: ${{ steps.matrix.outputs.providers_launcher }}
+      output_formats: ${{ steps.matrix.outputs.output_formats }}
       r2_bucket: ${{ steps.bucket.outputs.r2_bucket }}
     steps:
       - name: Checkout
@@ -192,12 +193,19 @@ jobs:
           fi
           providers_local=$(python3 -c "import json,sys; ps=json.loads(sys.argv[1]); print(json.dumps([p for p in ps if p == 'local']))" "${providers}")
           providers_launcher=$(python3 -c "import json,sys; ps=json.loads(sys.argv[1]); print(json.dumps([p for p in ps if p != 'local']))" "${providers}")
+          if [[ "${providers}" == "[]" ]]; then
+            output_formats='[]'
+          else
+            output_formats='["hdf5","wds"]'
+          fi
           echo "providers=${providers}" >> "${GITHUB_OUTPUT}"
           echo "providers_local=${providers_local}" >> "${GITHUB_OUTPUT}"
           echo "providers_launcher=${providers_launcher}" >> "${GITHUB_OUTPUT}"
+          echo "output_formats=${output_formats}" >> "${GITHUB_OUTPUT}"
           echo "providers: ${providers}"
           echo "providers_local: ${providers_local}"
           echo "providers_launcher: ${providers_launcher}"
+          echo "output_formats: ${output_formats}"
 
       # configs/hydra/default.yaml's `defaults` block overrides job_logging /
       # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
@@ -242,7 +250,7 @@ jobs:
   # `skypilot-launcher-specs/<cluster_name>.json` key the launcher uses for
   # the other providers, so validate-dataset-shards.yaml is provider-agnostic.
   generate-local:
-    name: Run generate_dataset (${{ matrix.provider }})
+    name: Run generate_dataset (${{ matrix.provider }} / ${{ matrix.output_format }})
     needs: setup
     if: ${{ needs.setup.outputs.providers_local != '[]' }}
     runs-on: ubuntu-latest
@@ -251,16 +259,19 @@ jobs:
       fail-fast: false
       matrix:
         provider: ${{ fromJSON(needs.setup.outputs.providers_local) }}
+        output_format: ${{ fromJSON(needs.setup.outputs.output_formats) }}
     env:
       DATASET_CONFIG: >-
         ${{
           github.event_name == 'pull_request'
-            && 'generate_dataset/smoke-shard'
+            && (matrix.output_format == 'wds'
+                && 'generate_dataset/ci-materialize-test-wds'
+                || 'generate_dataset/smoke-shard')
             || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       IMAGE_TAG: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
       IMAGE: tinaudio/synth-setter:${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
+      CLUSTER_NAME: synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}
       R2_BUCKET: ${{ needs.setup.outputs.r2_bucket }}
     steps:
       - name: Checkout
@@ -270,7 +281,7 @@ jobs:
         run: docker pull --quiet "${IMAGE}"
 
       - name: Prepare run-metadata mount
-        run: mkdir -p "/tmp/run-metadata-${{ matrix.provider }}"
+        run: mkdir -p "/tmp/run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}"
 
       - name: Run generate_dataset locally (inside container)
         env:
@@ -282,7 +293,7 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v "/tmp/run-metadata-${{ matrix.provider }}:/run-metadata" \
+            -v "/tmp/run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}:/run-metadata" \
             -e CONFIG_PATH \
             -e RCLONE_CONFIG_R2_TYPE=s3 \
             -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
@@ -302,7 +313,7 @@ jobs:
                 --spec /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \
-            2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}/generate.log"
+            2>&1 | tee "/tmp/run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}/generate.log"
 
       # Upload the spec to R2 at the same path-shape the launcher uses, so
       # validate-dataset-shards.yaml can read it without knowing whether the
@@ -318,7 +329,7 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
-            -v "/tmp/run-metadata-${{ matrix.provider }}:/run-metadata:ro" \
+            -v "/tmp/run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}:/run-metadata:ro" \
             -e RCLONE_CONFIG_R2_TYPE=s3 \
             -e RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
@@ -336,23 +347,34 @@ jobs:
           print(f'spec uploaded to {uri}')
           "
 
-      - name: Validate spec exists
+      # Cross-check that the spec the worker materialized actually has the
+      # output_format the matrix cell expects — a regression where Hydra
+      # resolved the wrong experiment would otherwise silently produce hdf5
+      # shards under the wds cell and fail at validate-shards much later.
+      - name: Validate spec exists and matches matrix output_format
+        env:
+          EXPECTED_FORMAT: ${{ matrix.output_format }}
         run: |
           set -euo pipefail
-          SPEC_PATH="/tmp/run-metadata-${{ matrix.provider }}/input_spec.json"
+          SPEC_PATH="/tmp/run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}/input_spec.json"
           if [[ ! -f "${SPEC_PATH}" ]]; then
             echo "::error::input_spec.json not found at ${SPEC_PATH}"
             exit 1
           fi
-          echo "=== Materialized Spec (${{ matrix.provider }}) ==="
+          echo "=== Materialized Spec (${{ matrix.provider }} / ${{ matrix.output_format }}) ==="
           head -20 "${SPEC_PATH}"
+          ACTUAL_FORMAT=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['output_format'])" "${SPEC_PATH}")
+          if [[ "${ACTUAL_FORMAT}" != "${EXPECTED_FORMAT}" ]]; then
+            echo "::error::spec output_format=${ACTUAL_FORMAT} but matrix expected ${EXPECTED_FORMAT}"
+            exit 1
+          fi
 
       - name: Upload run metadata
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-run-metadata-${{ matrix.provider }}
-          path: /tmp/run-metadata-${{ matrix.provider }}/
+          name: test-run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}
+          path: /tmp/run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}/
           retention-days: 7
           if-no-files-found: warn
 
@@ -362,46 +384,50 @@ jobs:
   # `--num-workers 1` override for skypilot-local mirrors today's hardcoded
   # behavior — the single-node kind cluster can't host parallel workers (#843).
   generate-launcher:
-    name: Run generate_dataset (${{ matrix.provider }})
+    name: Run generate_dataset (${{ matrix.provider }} / ${{ matrix.output_format }})
     needs: setup
     if: ${{ needs.setup.outputs.providers_launcher != '[]' }}
     strategy:
       fail-fast: false
       matrix:
         provider: ${{ fromJSON(needs.setup.outputs.providers_launcher) }}
+        output_format: ${{ fromJSON(needs.setup.outputs.output_formats) }}
     uses: ./.github/workflows/generate-dataset-shards.yaml
     with:
       provider: ${{ matrix.provider }}
       dataset_config: >-
         ${{
           github.event_name == 'pull_request'
-            && 'generate_dataset/smoke-shard'
+            && (matrix.output_format == 'wds'
+                && 'generate_dataset/ci-materialize-test-wds'
+                || 'generate_dataset/smoke-shard')
             || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
+      cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}
       num_workers: ${{ matrix.provider == 'skypilot-local' && '1' || '' }}
       tail: true
       local: ${{ matrix.provider == 'skypilot-local' }}
-      artifact_name: test-run-metadata-${{ matrix.provider }}
+      artifact_name: test-run-metadata-${{ matrix.provider }}-${{ matrix.output_format }}
     secrets: inherit
 
   # validate-spec + validate-shard pull the spec from R2 directly. The URI is
-  # constructed deterministically from the per-provider cluster_name pattern
+  # constructed deterministically from the per-cell cluster_name pattern
   # (matching what generate-launcher's launcher and generate-local's explicit
-  # upload step both write to). `if: !cancelled()` decouples each provider's
-  # validate cell from the OTHER provider's generate outcome — RunPod
-  # transients won't skip OCI validation.
+  # upload step both write to). `if: !cancelled()` decouples each provider ×
+  # output_format cell from the OTHER cells' generate outcomes — RunPod
+  # transients won't skip OCI validation, and an hdf5 failure won't skip wds.
   validate:
-    name: Validate ${{ matrix.provider }} dataset
+    name: Validate ${{ matrix.provider }} / ${{ matrix.output_format }} dataset
     needs: [setup, generate-local, generate-launcher]
     if: ${{ !cancelled() && needs.setup.outputs.providers != '[]' }}
     strategy:
       fail-fast: false
       matrix:
         provider: ${{ fromJSON(needs.setup.outputs.providers) }}
+        output_format: ${{ fromJSON(needs.setup.outputs.output_formats) }}
     uses: ./.github/workflows/validate-dataset-shards.yaml
     with:
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
-      spec_uri: r2://${{ needs.setup.outputs.r2_bucket }}/skypilot-launcher-specs/synth-setter-smoke-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}.json
+      spec_uri: r2://${{ needs.setup.outputs.r2_bucket }}/skypilot-launcher-specs/synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ github.run_id }}-${{ github.run_attempt }}.json
     secrets: inherit
