@@ -64,15 +64,18 @@ class RunIf:
         :param max_torch: Maximum pytorch version to run test.
         :param min_python: Minimum python version required to run test.
         :param skip_windows: Skip test for Windows platform.
-        :param tpu: If TPU is available.
         :param sh: If `sh` module is required to run the test.
+        :param tpu: If TPU is available.
         :param fairscale: If `fairscale` module is required to run the test.
         :param deepspeed: If `deepspeed` module is required to run the test.
         :param wandb: If `wandb` module is required to run the test.
         :param neptune: If `neptune` module is required to run the test.
         :param comet: If `comet` module is required to run the test.
         :param mlflow: If `mlflow` module is required to run the test.
-        :param kwargs: Native `pytest.mark.skipif` keyword arguments.
+        :param \\*\\*kwargs: Native `pytest.mark.skipif` keyword arguments.
+        :returns: A `pytest.mark.skipif` `MarkDecorator` whose ``condition`` is
+            true when any of the requested capabilities are missing.
+        :rtype: MarkDecorator
         """
         conditions = []
         reasons = []

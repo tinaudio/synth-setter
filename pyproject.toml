@@ -327,8 +327,6 @@ exclude = '''(?x)
   | ^tests/data/vst/test_preset_coverage\.py$
   | ^tests/fixtures/baseline_repo/scripts/baseline_app\.py$
   | ^tests/fixtures/diff_repo/scripts/diff_app\.py$
-  | ^tests/helpers/package_available\.py$
-  | ^tests/helpers/run_if\.py$
   | ^tests/pipeline/ci/test_validate_shard\.py$
   | ^tests/pipeline/ci/test_validate_spec\.py$
   | ^tests/pipeline/conftest\.py$
