@@ -19,8 +19,11 @@ from synth_setter.data.vst import param_specs  # noqa
 from synth_setter.data.vst.core import render_params  # noqa
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa
 from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
     MEL_N_MELS,
+    MEL_SPEC_FIELD,
     MEL_WINDOW,
+    PARAM_ARRAY_FIELD,
     audio_dataset_shape,
     mel_dataset_shape,
     mel_hop_length,
@@ -214,21 +217,21 @@ def create_datasets_and_get_start_idx(
 ):
     audio_dataset, audio_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "audio",
+        AUDIO_FIELD,
         audio_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float16,
         compression=hdf5plugin.Blosc2(),
     )
     mel_dataset, mel_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "mel_spec",
+        MEL_SPEC_FIELD,
         mel_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),
     )
     param_dataset, param_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
-        "param_array",
+        PARAM_ARRAY_FIELD,
         param_array_dataset_shape(num_samples, num_params),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),

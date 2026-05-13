@@ -10,7 +10,10 @@ import surface (h5py, pedalboard, the VST renderer).
 
 from __future__ import annotations
 
-DATASET_FIELD_NAMES: tuple[str, ...] = ("audio", "mel_spec", "param_array")
+AUDIO_FIELD: str = "audio"
+MEL_SPEC_FIELD: str = "mel_spec"
+PARAM_ARRAY_FIELD: str = "param_array"
+DATASET_FIELD_NAMES: tuple[str, ...] = (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)
 
 MEL_FRAMES_PER_SECOND = 100
 MEL_N_MELS = 128

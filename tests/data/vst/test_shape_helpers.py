@@ -12,11 +12,14 @@ import numpy as np
 
 from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
 from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
     DATASET_FIELD_NAMES,
     MEL_FRAMES_PER_SECOND,
     MEL_N_FFT_FRACTION_OF_SAMPLE_RATE,
     MEL_N_MELS,
+    MEL_SPEC_FIELD,
     MEL_WINDOW,
+    PARAM_ARRAY_FIELD,
     audio_dataset_shape,
     mel_dataset_shape,
     mel_hop_length,
@@ -29,6 +32,16 @@ from synth_setter.data.vst.shapes import (
 def test_dataset_field_names_match_writer_emissions() -> None:
     """Pins the public field-name tuple; adding a field forces writer + validator update."""
     assert DATASET_FIELD_NAMES == ("audio", "mel_spec", "param_array")
+
+
+def test_dataset_field_constants_match_tuple_order() -> None:
+    """``DATASET_FIELD_NAMES`` is built from the per-field constants the writer uses."""
+    assert DATASET_FIELD_NAMES == (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD)
+    assert (AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD) == (
+        "audio",
+        "mel_spec",
+        "param_array",
+    )
 
 
 def test_mel_front_end_constants_match_legacy_values() -> None:
