@@ -1395,7 +1395,7 @@ src/
 
     schemas/            # Pydantic models (implemented)
       __init__.py
-      spec.py           # DatasetSpec (unified config + runtime), RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, spec_from_cfg flow
+      spec.py           # DatasetSpec (unified config + runtime), RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION, EXTENSION_TO_OUTPUT_FORMAT, spec_from_cfg flow
       shard_metadata.py # ShardMetadata — wds tar metadata.json sidecar (leaf module, no project imports)
       prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix helpers
       image_config.py   # Docker image configuration
