@@ -54,13 +54,13 @@ If `gh pr checks <N>` is easier than parsing the JSON, use it — but capture th
 
 Read the file list from Step 1. Map file types → relevant skills:
 
-| File pattern | Skills that always run |
+| File pattern | Skills to run |
 |---|---|
 | Always | `code-health`, `synth-setter-project-standards` |
 | `*.py` | `python-style`, `tdd-implementation` |
 | `*.sh` or bash inside YAML `run:` blocks | `shell-style` |
 | `.github/workflows/*.{yml,yaml}` | `gha-workflow-validator` |
-| ML model / pipeline / training code under `src/` or `pipeline/` | `ml-data-pipeline`, `ml-test` |
+| ML model / pipeline / training code under `src/synth_setter/` | `ml-data-pipeline`, `ml-test` |
 | Diff renames or moves files (anything with `R` in `git diff --name-status`) | `tdd-refactor` |
 
 Always run `code-health` and `synth-setter-project-standards`. Other skills opt in based on file extensions in the diff. Note which skills you selected; you'll launch one parallel agent per skill.
