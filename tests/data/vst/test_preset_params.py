@@ -30,7 +30,7 @@ skip_no_vst = pytest.mark.skipif(
 
 skip_linux = pytest.mark.skipif(
     sys.platform == "linux",
-    reason=" test needs refactor to use  scripts/run-linux-vst-headless.sh",
+    reason=" test needs refactor to use  docker/ubuntu22_04/run-linux-vst-headless.sh",
 )
 
 @requires_vst

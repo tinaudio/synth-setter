@@ -77,9 +77,9 @@ jobs:
               cd /home/build/synth-setter
               # Runner UID != container UID; git refuses to run in untrusted dirs
               git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               # Headless X11 needed because importing pedalboard (via param_specs) requires it
-              scripts/run-linux-vst-headless.sh \
+              docker/ubuntu22_04/run-linux-vst-headless.sh \
                 python -m synth_setter.pipeline.ci.materialize_spec "$EXPERIMENT" /spec-output
             '
 

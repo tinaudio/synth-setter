@@ -99,7 +99,7 @@ name: Test SkyPilot Debug
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT                          — Cloudflare R2
 #   RUNPOD_API_KEY  — written to ~/.runpod/config.toml by
-#                     scripts/skypilot_write_provider_creds.sh so SkyPilot
+#                     scripts/skypilot/write_provider_creds.sh so SkyPilot
 #                     can provision a pod. Skipped when
 #                     SKYPILOT_API_SERVER_ENDPOINT is set (see #785) — the
 #                     remote API server holds provider creds and the local
@@ -264,7 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
-            bash scripts/skypilot_write_provider_creds.sh --provider "${PROVIDER}"
+            bash scripts/skypilot/write_provider_creds.sh --provider "${PROVIDER}"
           else
             echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
           fi
@@ -418,7 +418,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               python -m synth_setter.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \

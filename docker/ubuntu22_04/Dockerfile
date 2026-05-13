@@ -326,7 +326,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 
 # Install pueue task queue manager (https://github.com/Nukesor/pueue). Static
 # musl binaries from the upstream release page — no apt repo and no rust
-# toolchain pulled into the image. Used by `scripts/job_queue.py` as the
+# toolchain pulled into the image. Used by `scripts/ci/job_queue.py` as the
 # job-queue backend.
 #
 # Integrity: each binary is verified against a pinned SHA256 (per arch) before
@@ -352,7 +352,7 @@ RUN case "${TARGETARCH:-}" in \
     pueued --version
 
 WORKDIR /artifacts
-COPY --from=synth-setter-src /home/build/synth-setter/scripts/run-linux-vst-headless.sh /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/docker/ubuntu22_04/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/data/vst/core.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
 # Validate that Surge XT loads correctly under headless X11
@@ -409,7 +409,7 @@ RUN uv pip install --no-deps -e .
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
 
-COPY scripts/docker_entrypoint.py /usr/local/bin/entrypoint.py
+COPY src/synth_setter/tools/docker_entrypoint.py /usr/local/bin/entrypoint.py
 RUN chmod +x /usr/local/bin/entrypoint.py
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
 # `dockerArgs: "bash -c '<base64-setup>'"`, and a baked-in click-CLI

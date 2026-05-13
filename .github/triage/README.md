@@ -56,7 +56,7 @@ Given a failing run ID — copy it from the GitHub Actions UI or
 `gh run list --status failure`:
 
 ```bash
-./scripts/triage-ci.sh 25687139710
+./scripts/ci/triage.sh 25687139710
 ```
 
 The helper script writes `/tmp/triage/context.json`, then pipes the prompt

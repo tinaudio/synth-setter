@@ -1,4 +1,4 @@
-"""Tests for scripts/job_queue.py — line-by-line command queueing.
+"""Tests for scripts/ci/job_queue.py — line-by-line command queueing.
 
 The CLI shells out to the pueue binary, so the tests pin the public typed API
 (parse_command_file, build_pueue_add_args, ensure_group, enqueue_all) and use
@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-from scripts.job_queue import (
+from scripts.ci.job_queue import (
     DEFAULT_GROUP,
     build_pueue_add_args,
     enqueue_all,

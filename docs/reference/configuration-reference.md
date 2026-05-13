@@ -119,7 +119,7 @@ The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet
 **RunPod** (`configs/compute/runpod-template.yaml`) — landed. Abridged
 shape (see the file for the full template; the `os._exit(0)` workaround for
 [#735](https://github.com/tinaudio/synth-setter/issues/735) lives inside the
-`generate_dataset` subcommand of `scripts/docker_entrypoint.py`):
+`generate_dataset` subcommand of `src/synth_setter/tools/docker_entrypoint.py`):
 
 The launcher injects `image_id` per-launch via `--worker-image-tag` (default `dev-snapshot`) for non-OCI backends, so the template no longer carries a literal `image_id: docker:tinaudio/synth-setter:dev-snapshot`:
 

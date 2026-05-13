@@ -53,6 +53,6 @@ fi
 
 openbox &
 xsettingsd &
-python scripts/predict_vst_audio.py -X -S -r presets/$PRESET.vstpreset --param_spec $SPEC $1 $2
+python -m synth_setter.evaluation.predict_vst_audio -X -S -r presets/$PRESET.vstpreset --param_spec $SPEC $1 $2
 kill $XVFB_PID
 rm "$tempfile"

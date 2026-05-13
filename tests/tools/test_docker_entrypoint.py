@@ -1,4 +1,5 @@
-"""Tests for scripts/docker_entrypoint.py — click-based CLI with per-mode spec parsing.
+"""Tests for src/synth_setter/tools/docker_entrypoint.py — click-based CLI with per-mode spec
+parsing.
 
 The entrypoint is a click group with five subcommands:
   - idle                → execs ``sleep infinity``
@@ -13,10 +14,8 @@ at module scope where needed). No subprocess calls; everything runs in-process.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -26,8 +25,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-ENTRYPOINT_PATH = REPO_ROOT / "scripts" / "docker_entrypoint.py"
+from synth_setter.tools import docker_entrypoint as _docker_entrypoint_module
 
 
 @pytest.fixture()
@@ -63,23 +61,10 @@ def _detach_pytest_live_logging_handler() -> Iterator[None]:
             root.handlers.insert(i, h)
 
 
-def _load_entrypoint_module() -> ModuleType:
-    """Import scripts/docker_entrypoint.py as a module for in-process testing."""
-    module_name = "_docker_entrypoint_under_test"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    spec = importlib.util.spec_from_file_location(module_name, ENTRYPOINT_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.fixture()
 def entrypoint() -> ModuleType:
     """The loaded docker_entrypoint module."""
-    return _load_entrypoint_module()
+    return _docker_entrypoint_module
 
 
 @pytest.fixture()

@@ -2,13 +2,13 @@
 
 > **Status**: Stable
 > **Last Updated**: 2026-05-08
-> **Source**: [`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py)
+> **Source**: [`src/synth_setter/tools/surge_xt_interactive.py`](../../src/synth_setter/tools/surge_xt_interactive.py)
 
 ______________________________________________________________________
 
 ## What it is
 
-`scripts/surge_xt_interactive.py` opens the Surge XT VST3 editor with
+`src/synth_setter/tools/surge_xt_interactive.py` opens the Surge XT VST3 editor with
 ML-predicted (or dataset-derived) parameters preloaded, streams real-time
 audio so you can audition and tweak the patch by ear, lets you snapshot
 patches by pressing `p`, and after the session writes a directory
@@ -53,13 +53,13 @@ Bare audition — open the editor on the registry-selected base preset,
 no preloaded params:
 
 ```bash
-python scripts/surge_xt_interactive.py --param-spec-name surge_xt
+python -m synth_setter.tools.surge_xt_interactive --param-spec-name surge_xt
 ```
 
 Audition a single prediction row (row index 0 inside `outputs/pred-0.pt`):
 
 ```bash
-python scripts/surge_xt_interactive.py \
+python -m synth_setter.tools.surge_xt_interactive \
     --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0
 ```
@@ -67,7 +67,7 @@ python scripts/surge_xt_interactive.py \
 Audition a row from an existing HDF5 dataset:
 
 ```bash
-python scripts/surge_xt_interactive.py \
+python -m synth_setter.tools.surge_xt_interactive \
     --param-spec-name surge_xt \
     --dataset-ref outputs/test.h5:0
 ```
@@ -75,7 +75,7 @@ python scripts/surge_xt_interactive.py \
 Record patches and render them into a fresh dataset directory:
 
 ```bash
-python scripts/surge_xt_interactive.py \
+python -m synth_setter.tools.surge_xt_interactive \
     --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0 \
     --output-dataset-dir-path outputs/curated-patches/
@@ -86,7 +86,7 @@ when no audio output device is available, and for reproducible audio
 diffs of model predictions:
 
 ```bash
-python scripts/surge_xt_interactive.py \
+python -m synth_setter.tools.surge_xt_interactive \
     --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0 \
     --session-recording-path outputs/session.wav
@@ -119,8 +119,8 @@ raises `click.UsageError`.
 | `--session-recording-path`  | path               | unset                   | Optional WAV file to render a deterministic test clip to. When set, the script renders a fixed `SESSION_RECORDING_DURATION_SECONDS` (10 s) WAV containing middle C from `NOTE_START` (2 s) to `NOTE_END` (4 s) through the loaded plugin and exits the audio thread. No live device output. Output depends only on plugin state (preset + `--pred` / `--dataset-ref` params) — same inputs always produce the same WAV. No-op when not set.                                                                        |
 
 Tip — the help strings above are quoted verbatim from the Click
-decorators in `scripts/surge_xt_interactive.py`. Run
-`python scripts/surge_xt_interactive.py --help` to confirm the current
+decorators in `src/synth_setter/tools/surge_xt_interactive.py`. Run
+`python -m synth_setter.tools.surge_xt_interactive --help` to confirm the current
 text.
 
 ## The interactive session
@@ -172,7 +172,7 @@ to consume. Each file has these datasets:
 
 Where `N = len(synth_patches)`, `sample_rate = 44100`, and
 `signal_duration_seconds = 4.0` (constants at the top of
-`scripts/surge_xt_interactive.py`).
+`src/synth_setter/tools/surge_xt_interactive.py`).
 
 The audio attached attrs on the `audio` dataset record the rendering
 config: `velocity`, `signal_duration_seconds`, `sample_rate`,
@@ -203,7 +203,7 @@ the starting parameters; the live editor session captures user-curated
 patches; on close, `make_dataset` writes them to `train.h5` inside
 `--output-dataset-dir-path` for downstream training. When
 `--checkpoint-path` is set, the `eval_patches` function in
-`scripts/surge_xt_interactive.py` then runs the eval pipeline against
+`src/synth_setter/tools/surge_xt_interactive.py` then runs the eval pipeline against
 the captured patches — see its docstring for the predict → render →
 metrics steps and their per-step validation.
 
@@ -214,19 +214,19 @@ Worked example:
 python -m synth_setter.cli.eval +experiment=surge/eval ckpt_path=...
 
 # 2. Audition row 0 of the resulting predictions.
-python scripts/surge_xt_interactive.py \
+python -m synth_setter.tools.surge_xt_interactive \
     --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0
 
 # 3. When you find sounds you like, record them and produce a dataset.
-python scripts/surge_xt_interactive.py \
+python -m synth_setter.tools.surge_xt_interactive \
     --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0 \
     --output-dataset-dir-path outputs/curated-patches/
 
 # 4. (Optional) re-run with --checkpoint-path to also evaluate the
 #    captured patches end-to-end (predict → render → metrics).
-python scripts/surge_xt_interactive.py \
+python -m synth_setter.tools.surge_xt_interactive \
     --param-spec-name surge_xt \
     --pred outputs/pred-0.pt:0 \
     --output-dataset-dir-path outputs/curated-patches/ \
@@ -264,7 +264,7 @@ your teammates so they aren't blindsided.
 - **Silent captured patches fast-fail** — `generate_sample` raises
   `ValueError` when `fixed_synth_params` is set and the render falls
   below `MAKE_DATASET_MIN_LOUDNESS = -50.0`
-  ([`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py)).
+  ([`src/synth_setter/tools/surge_xt_interactive.py`](../../src/synth_setter/tools/surge_xt_interactive.py)).
   The synth patch dominates loudness, so re-sampling note params alone
   can't lift a silent patch above threshold; rather than loop, the
   whole `make_dataset` call aborts and points at the offending patch.
@@ -274,7 +274,7 @@ your teammates so they aren't blindsided.
   `click.getchar()`, which only checks `stop_event` between
   keystrokes. After the editor closes, you may need to press one key
   to let the script proceed to dataset rendering. Documented inline
-  in [`scripts/surge_xt_interactive.py`](../../scripts/surge_xt_interactive.py).
+  in [`src/synth_setter/tools/surge_xt_interactive.py`](../../src/synth_setter/tools/surge_xt_interactive.py).
 - **No explicit lock on plugin parameters** — the audio thread reads
   the plugin's parameter state to render the next buffer at the same
   time the GUI thread may be writing it. `pedalboard` may handle this
