@@ -160,16 +160,34 @@ jobs:
           # re-triggered check permanently blocks auto-approve.
           # See: PR #142 — check-pr-metadata passed on re-run but auto-approve
           # still saw "1 check(s) failed" from the original run.
-          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" --jq '
-            [.check_runs[]
-              | select((.name | startswith("auto-approve")) | not)
-              | select(.name != "Auto-approve status")
-            ]
-            | group_by(.name)
-            | map(sort_by(.id) | last)
-            | .[]
-            | "\(.status) \(.conclusion // "none") \(.name)"
-          ')
+          #
+          # BUG FIX: The "Copilot code review" workflow is GitHub-managed
+          # (event=="dynamic") and can leave failed bootstrap check-runs
+          # (e.g. a "Prepare" job failing with "Resource not accessible by
+          # integration") attached to the head SHA even when the review
+          # itself posts successfully in a later run. We can't see or re-run
+          # those workflows, and the dedupe-by-name above doesn't help
+          # because the failed check_run name only appears in the failing
+          # run. Filter the whole Copilot suite out. We deliberately do NOT
+          # filter on event=="dynamic" alone — the GitHub-managed default-
+          # setup CodeQL pipeline (workflow name "PR #<n>", event="dynamic")
+          # contributes the `Analyze (actions)` / `Analyze (python)` checks
+          # we DO want to gate on. See PR #1024.
+          COPILOT_SUITE_IDS=$(gh api \
+            "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}&per_page=100" \
+            --jq '[.workflow_runs[] | select(.name == "Copilot code review") | .check_suite_id] | unique')
+          CHECK_DATA=$(gh api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" \
+            | jq --argjson skip "$COPILOT_SUITE_IDS" -r '
+              [.check_runs[]
+                | select((.name | startswith("auto-approve")) | not)
+                | select(.name != "Auto-approve status")
+                | select(.check_suite.id as $id | $skip | index($id) | not)
+              ]
+              | group_by(.name)
+              | map(sort_by(.id) | last)
+              | .[]
+              | "\(.status) \(.conclusion // "none") \(.name)"
+            ')
           PENDING=$(echo "$CHECK_DATA" | grep -c "^queued\|^in_progress" || true)
           FAILED=$(echo "$CHECK_DATA" | grep -v "^completed success\|^completed skipped\|^completed neutral\|^queued\|^in_progress" | grep -c . || true)
           if [ "$PENDING" -gt 0 ]; then
