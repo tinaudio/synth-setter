@@ -143,7 +143,7 @@ Or use the Actions tab UI.
 
 ### GPU runner torch pin
 
-`test-gpu` runs on `gpu-x64`, a GitHub-hosted GPU larger runner (NVIDIA driver 12080 / CUDA 12.8). It pins `torch<2.7.0` via a constraint file passed to `uv pip install --constraint`, because torch 2.7+ requires CUDA 13.x. The pin is applied at install time so `requirements-torch.txt` doesn't need to change. If the runner's driver is upgraded to CUDA 13.x, drop the pin.
+`test-gpu` runs on `gpu-x64`, a GitHub-hosted GPU larger runner (NVIDIA driver 12080 / CUDA 12.8). It pins `torch<2.7.0` via a constraint file passed to `uv pip install --constraint`, because torch 2.7+ requires CUDA 13.x. The pin is applied at install time so the `torch` extra in `pyproject.toml` doesn't need to change. If the runner's driver is upgraded to CUDA 13.x, drop the pin.
 
 ### Public image, runtime secrets
 

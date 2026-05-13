@@ -132,8 +132,7 @@ build {
       "git clone https://github.com/tinaudio/synth-setter.git ~/synth-setter",
       "cd ~/synth-setter && git checkout ${var.synth_setter_git_ref}",
       "cd ~/synth-setter && uv venv --python ${var.python_version}",
-      "cd ~/synth-setter && uv pip install --torch-backend ${var.torch_backend} -r requirements.txt",
-      "cd ~/synth-setter && uv pip install --no-deps -e .",
+      "cd ~/synth-setter && uv pip install --torch-backend ${var.torch_backend} -e \".[torch,dev]\"",
       # Mirror the Docker dev-base convention: symlink the cask-installed
       # VST3 bundle to the repo-relative `plugins/Surge XT.vst3` path that
       # configs, CLI `--plugin_path` defaults, and tests all assume. See

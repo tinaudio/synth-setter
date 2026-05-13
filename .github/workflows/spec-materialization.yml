@@ -33,13 +33,15 @@ jobs:
       # Host-side `Validate spec structure` step below runs
       # `python3 -m synth_setter.pipeline.ci.validate_spec` outside the docker
       # container. Phase 3 made `synth_setter` only importable when installed
-      # (PEP src-layout, sources under `src/`). `[project].dependencies = []` in
-      # pyproject.toml, so the editable install adds nothing transitively for the
-      # project itself; only pydantic brings in its required `pydantic-core`.
-      # Don't use `--no-deps` — it applies to the whole pip command, so
-      # pydantic-core would be skipped and validate_spec would fail at runtime.
+      # (PEP src-layout, sources under `src/`). Keep the runner-side env
+      # minimal: install the project with --no-deps (the full
+      # [project.dependencies] would drag in torch, skypilot, librosa, etc.),
+      # then add pydantic in a second command so its own required
+      # `pydantic-core` resolves.
       - name: Install validate_spec runtime deps
-        run: pip install -e . "pydantic>=2,<3"
+        run: |
+          pip install --no-deps -e .
+          pip install "pydantic>=2,<3"
 
       - name: Pull image
         run: docker pull tinaudio/synth-setter:${{ inputs.image_tag }}
