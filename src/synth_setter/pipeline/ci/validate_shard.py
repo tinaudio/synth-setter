@@ -42,6 +42,12 @@ def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
     Keys match ``DATASET_FIELD_NAMES``; values come from the writer's own
     shape helpers in ``synth_setter.data.vst.shapes`` so a future renderer
     change that drifts the audio / mel / param shapes fails fast here.
+
+    :param spec: Dataset spec whose ``render`` config and ``num_params`` parameterize
+        the per-field shapes the writer would emit for one shard.
+    :returns: Mapping with one entry per writer-emitted dataset name to its full
+        ``(N, ...)`` shape tuple.
+    :rtype: dict[str, tuple[int, ...]]
     """
     render = spec.render
     num_samples = render.batch_per_shard
@@ -65,7 +71,10 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     3. Each dataset's full ``.shape`` matches what
        ``_expected_dataset_shapes`` predicts for ``spec``
 
-    Returns list of error strings (empty = valid).
+    :param shard_path: Local filesystem path to the HDF5 shard to validate.
+    :param spec: Dataset spec the shard is expected to conform to.
+    :returns: List of error strings (empty = valid).
+    :rtype: list[str]
     """
     if not shard_path.exists():
         return [f"shard file not found: {shard_path}"]
@@ -92,7 +101,13 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 
 
 def _load_spec(spec_arg: str) -> DatasetSpec:
-    """Load a spec from a local path or `r2://bucket/key` URI."""
+    """Load a spec from a local path or ``r2://bucket/key`` URI.
+
+    :param spec_arg: Either a local filesystem path or an ``r2://...`` URI pointing
+        at the spec JSON file.
+    :returns: Parsed ``DatasetSpec`` instance.
+    :rtype: DatasetSpec
+    """
     if is_r2_uri(spec_arg):
         with downloaded_to_tempfile(spec_arg) as local_path:
             return DatasetSpec.model_validate_json(local_path.read_text())
@@ -100,10 +115,13 @@ def _load_spec(spec_arg: str) -> DatasetSpec:
 
 
 def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
-    """Validate every shard in `spec.shards` by downloading from R2.
+    """Validate every shard in ``spec.shards`` by downloading from R2.
 
-    Returns aggregated error strings across all shards (empty = all valid). Each error is prefixed
-    with the shard filename so the source is obvious.
+    :param spec: Dataset spec whose ``shards`` list drives the iteration; each
+        listed shard is fetched from R2 under ``r2://{spec.r2_bucket}/{spec.r2_prefix}``.
+    :returns: Aggregated error strings across all shards (empty = all valid). Each
+        error is prefixed with the shard filename so the source is obvious.
+    :rtype: list[str]
     """
     errors: list[str] = []
     for shard in spec.shards:

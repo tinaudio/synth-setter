@@ -270,7 +270,6 @@ exclude = '''(?x)
   | ^\.worktrees/
   | ^notebooks/
   | ^src/synth_setter/pipeline/ci/load_image_config\.py$
-  | ^src/synth_setter/pipeline/ci/validate_shard\.py$
   | ^src/synth_setter/pipeline/ci/validate_spec\.py$
   | ^src/synth_setter/cli/generate_dataset\.py$
   | ^src/synth_setter/pipeline/skypilot_launch\.py$
