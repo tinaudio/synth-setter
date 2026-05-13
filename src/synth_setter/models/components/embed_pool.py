@@ -7,7 +7,16 @@ import torch
 import torch.nn as nn
 
 
-def make_sin_pos_enc(max_len, d_enc):
+def make_sin_pos_enc(max_len: int, d_enc: int) -> torch.Tensor:
+    """Build a sinusoidal positional-encoding tensor.
+
+    :param max_len: Maximum sequence length the encoding should cover.
+    :param d_enc: Dimensionality of the encoding (must be even).
+    :returns: A tensor of shape ``(1, max_len, d_enc)`` containing sin/cos positional
+        encodings interleaved across the feature dimension. The leading singleton
+        dimension allows broadcasting across a batch.
+    :rtype: torch.Tensor
+    """
     pe = torch.zeros(max_len, d_enc)
     position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
     div_term = torch.exp(
@@ -23,7 +32,13 @@ def make_sin_pos_enc(max_len, d_enc):
 
 
 class PosEnc(nn.Module):
-    """Sinusoidal or learned positional encoding added to a ``(B, T, D)`` tensor."""
+    """Positional-encoding module supporting fixed sinusoidal or learned variants.
+
+    :param d_enc: Dimensionality of the encoding (must be even for ``"sin"``).
+    :param max_len: Maximum sequence length the encoding should cover.
+    :param pos_enc_type: ``"sin"`` for fixed sinusoidal encoding registered as a buffer,
+        or ``"learned"`` for a trainable parameter.
+    """
 
     def __init__(
         self,
@@ -39,12 +54,29 @@ class PosEnc(nn.Module):
             self.pe = nn.Parameter(torch.randn(1, max_len, d_enc) / math.sqrt(d_enc))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Add the positional encoding to ``x`` and return the result.
+
+        :param x: Input tensor of shape ``(batch, seq, d_enc)``. Only the first
+            ``x.shape[1]`` positions of the encoding are used.
+        :returns: A tensor of the same shape as ``x`` with the positional encoding added.
+        :rtype: torch.Tensor
+        """
         x = x + self.pe[:, : x.shape[1], :]
         return x
 
 
 class EmbeddingPool(nn.Module):
-    """Pool a sequence of embeddings into a single vector via a learned-query cross-attention."""
+    """Pool a variable-length embedding sequence into a single ``d_model`` vector.
+
+    The module applies a positional encoding and a feed-forward residual block to the
+    input embedding, then collapses the sequence dimension via a single-query
+    multi-head attention over the resulting tokens.
+
+    :param embed_dim: Dimensionality of the input embedding features.
+    :param d_model: Output dimensionality and the attention model dimension.
+    :param num_heads: Number of attention heads.
+    :param pos_enc: Positional-encoding variant forwarded to :class:`PosEnc`.
+    """
 
     def __init__(
         self,
@@ -67,7 +99,15 @@ class EmbeddingPool(nn.Module):
         )
         self.residual = nn.Linear(embed_dim, d_model, bias=False)
 
-    def forward(self, embed: torch.Tensor):
+    def forward(self, embed: torch.Tensor) -> torch.Tensor:
+        """Pool an embedding sequence into a single vector per batch element.
+
+        :param embed: Input tensor of shape ``(batch, embed_dim, seq)``. The sequence
+            axis is permuted to the middle position internally before the attention
+            pool collapses it.
+        :returns: A tensor of shape ``(batch, d_model)`` summarising each input sequence.
+        :rtype: torch.Tensor
+        """
         embed = embed.permute(0, 2, 1)
 
         embed = self.positional_encoding(embed)

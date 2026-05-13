@@ -142,7 +142,6 @@ repos:
             src/synth_setter/data/vst/surge_xt_param_spec\.py|
             src/synth_setter/metrics\.py|
             src/synth_setter/models/components/cnn\.py|
-            src/synth_setter/models/components/embed_pool\.py|
             src/synth_setter/models/components/loss\.py|
             src/synth_setter/models/components/residual_mlp\.py|
             src/synth_setter/models/components/sinkhorn\.py|
