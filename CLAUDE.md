@@ -39,6 +39,30 @@ Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters fo
 - The PR that wires everything together and makes the feature user-facing uses `feat:`.
 - Don't contort prefixes to avoid bumps. If it's user-facing, it's `feat:`.
 
+#### Commit Scopes
+
+The optional `(scope)` after the prefix names the **specific component** being changed, not the broad area. Reach for the narrowest accurate scope before falling back to a wider one — `fix(metrics):` is more useful in `git log` than `fix(pipeline):` when only the normalization-stats writer changed, even though that writer lives structurally under the data pipeline.
+
+Non-exhaustive table of common synth-setter scopes:
+
+| Scope        | Meaning                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `metrics`    | Normalization-stats computation/writer (`scripts/get_dataset_stats.py`, `stats.npz`, mel/audio metric tooling)     |
+| `pipeline`   | Broader distributed data-pipeline code (`src/synth_setter/pipeline/` outside metrics)                              |
+| `datamodule` | Lightning datamodules (`src/synth_setter/data/*_datamodule.py`)                                                    |
+| `training`   | Training entrypoint and `src/synth_setter/cli/train.py` / training loop code                                       |
+| `eval`       | Evaluation entrypoint and `src/synth_setter/cli/eval.py` / evaluation harness                                      |
+| `configs`    | Hydra YAML configs under `configs/`                                                                                |
+| `layout`     | Package-layout / src-layout moves (the [#784](https://github.com/tinaudio/synth-setter/issues/784) migration line) |
+| `claude-md`  | Edits to `CLAUDE.md` itself                                                                                        |
+| `ci`         | GitHub Actions workflows, CI scripts                                                                               |
+| `docker`     | Dockerfiles, devcontainer configs, image build setup                                                               |
+| `deps`       | Dependency bumps (`pyproject.toml`, lockfiles)                                                                     |
+
+**`metrics`, not `pipeline`, for stats-writer changes.** Any change touching `scripts/get_dataset_stats.py`, `stats.npz` schema/handling, or other mel/audio normalization-stats tooling uses `(metrics)` as its scope — even though the file lives under `scripts/` and the data it produces is consumed by the pipeline. The rule is "narrowest accurate scope": `metrics` is more specific than `pipeline` and makes the log easier to scan.
+
+Formatting follows the same convention as the title example under [`### PR Titles`](#pr-titles) (`feat(pipeline)!: complete Hydra migration; ...`): conventional prefix, scope in parentheses, optional `!` for breaking, then a colon and the human-readable subject.
+
 ### Writing Code
 
 - Write readable code. Prefer clarity over cleverness.
