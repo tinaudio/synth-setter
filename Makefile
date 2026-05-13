@@ -141,12 +141,13 @@ install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already pr
 	esac; \
 	echo "Installed $$DEST"
 
-# coverage runs serially (no -n auto): GPU tests require exclusive device
-# access and VRAM contention causes flaky failures with xdist parallelism.
+# Mirrors the --cov flags used by .github/workflows/test.yml so local
+# coverage runs reproduce CI output (xml report feeds Codecov; html is for
+# local browsing).
 coverage: ## Run tests with coverage report
 	pip install uv
 	uv pip install pytest-cov[toml]
-	pytest --cov=src --cov-report=term-missing --cov-report=html -m "not slow"
+	pytest --cov=src --cov-branch --cov-report=xml --cov-report=term-missing --cov-report=html -m "not slow and not gpu and not mps"
 
 benchmark: ## Run performance benchmarks
 	pytest --benchmark-only -m "benchmark" -v
