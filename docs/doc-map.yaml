@@ -82,9 +82,13 @@ docs:
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Input spec filename constant"
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "DatasetSpec, RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (DatasetSpec is built by spec_from_cfg in cli/generate_dataset.py from a Hydra-composed cfg; the extension maps are not yet consumed — shard writers/validators will dispatch on them in PR-13)"
+        covers: "DatasetSpec, RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (DatasetSpec is built by spec_from_cfg in cli/generate_dataset.py from a Hydra-composed cfg; the suffix-dispatch maps are consumed by the renderer CLI's main() in writers.py)"
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
-        covers: "ShardMetadata — strict pydantic sidecar payload destined for the wds tar's metadata.json member; mirrors HDF5 audio attrs. Writer + validate_shard wds branch land in PR-13."
+        covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json and into HDF5 shards as audio.attrs; mirrored across both formats by make_hdf5_dataset / make_wds_dataset in writers.py."
+      - pattern: "src/synth_setter/data/vst/writers.py"
+        covers: "make_hdf5_dataset + make_wds_dataset entrypoints; per-batch sample-save helpers; ShardMetadata sidecar wiring; CLI suffix dispatch via EXTENSION_TO_OUTPUT_FORMAT."
+      - pattern: "src/synth_setter/data/vst/shapes.py"
+        covers: "Shared shape primitives consumed by writers + (planned) shard validator — DATASET_FIELD_NAMES, mel-front-end constants, audio_dataset_shape / mel_dataset_shape / param_array_dataset_shape."
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
@@ -293,7 +297,13 @@ docs:
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/generate_vst_dataset.py"
-        covers: "fixed_synth_params_list / fixed_note_params_list optional path used to render captured patches; mel_spec shape (2,128,401), audio dtype float16"
+        covers: "generate_sample / VSTDataSample / make_spectrogram — per-sample render and feature-extraction primitives invoked by the writers in writers.py"
+        scope: "interactive"
+      - pattern: "src/synth_setter/data/vst/writers.py"
+        covers: "make_hdf5_dataset accepts fixed_synth_params_list / fixed_note_params_list to render captured patches into train.h5; audio dtype float16; mel shape comes from shapes.mel_dataset_shape"
+        scope: "interactive"
+      - pattern: "src/synth_setter/data/vst/shapes.py"
+        covers: "Source of truth for the (channels, n_mels, n_frames) trailing-dims of mel_spec output and (channels, time_samples) trailing-dims of audio output written by make_hdf5_dataset"
         scope: "interactive"
 
   # ── CI triage agent operator notes (local-only invocation) ──────

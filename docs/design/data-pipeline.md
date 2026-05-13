@@ -750,7 +750,7 @@ def _render_shard(shard_spec, shard_path):
     The import happens here, in the child, so the VST plugin loads cleanly.
     """
     import numpy as np
-    from synth_setter.data.vst.generate_vst_dataset import make_hdf5_dataset
+    from synth_setter.data.vst.writers import make_hdf5_dataset
     # P3 (post-launch): seed both RNGs for reproducibility — see #100
     # random.seed(shard_spec.seed)
     # np.random.seed(shard_spec.seed)
@@ -779,9 +779,9 @@ else:
 
 **Why `spawn` and not `fork`:** The `fork` start method copies the parent's memory via copy-on-write. If the parent has loaded a VST plugin, the child inherits that plugin's global mutable state (internal buffers, audio engine state). VST plugins are not designed for this — shared mutable state across forked processes leads to undefined behavior. `spawn` starts a fresh Python interpreter with no inherited state: each child loads the plugin from scratch, with clean globals and its own memory space. This eliminates shared-state corruption between concurrent shard renders.
 
-**Why not direct function call (`make_dataset()` in-process):** A direct call is simpler and avoids per-shard process overhead, but a SIGSEGV in the plugin kills the entire worker process. Per-shard try/except cannot catch OS-level signals. The bash EXIT trap (Layer 2) would upload logs, and reconciliation (Layer 3) would detect the missing shards — but all in-progress shards on that worker are lost, not just the crashing one. For a 48-shard worker, losing all shards to one bad shard is unacceptable.
+**Why not direct function call (`make_hdf5_dataset()` in-process):** A direct call is simpler and avoids per-shard process overhead, but a SIGSEGV in the plugin kills the entire worker process. Per-shard try/except cannot catch OS-level signals. The bash EXIT trap (Layer 2) would upload logs, and reconciliation (Layer 3) would detect the missing shards — but all in-progress shards on that worker are lost, not just the crashing one. For a 48-shard worker, losing all shards to one bad shard is unacceptable.
 
-**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also makes testing harder — you'd need to mock the subprocess, which couples tests to CLI argument construction. With `multiprocessing.Process`, the child imports `make_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
+**Why not `subprocess.run` calling `generate_vst_dataset.py`:** Same crash isolation as `multiprocessing.Process`, but requires adding a `--seed` CLI parameter to `generate_vst_dataset.py` (which doesn't exist). The subprocess approach also makes testing harder — you'd need to mock the subprocess, which couples tests to CLI argument construction. With `multiprocessing.Process`, the child imports `make_hdf5_dataset` directly and receives only simple data (`shard_spec`, `shard_path`) as args. For tests, `LocalBackend` runs in-process (no spawn) so test fixtures can inject a fake generate function directly.
 
 **P3 — Dual-RNG seeding (post-launch, [#100](https://github.com/tinaudio/synth-setter/issues/100)):** The existing VST parameter sampling code (`param_spec.py`) uses both `random` (stdlib) and `np.random` for parameter generation. For v1, shards generate without seeding (current behavior — non-reproducible but correct). The seeding lines in `_render_shard` above are commented out until this is implemented. Post-launch, uncomment and seed both RNGs from `shard_spec.seed`:
 
@@ -830,7 +830,7 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 ### 7.10 Output Format: HDF5 vs WebDataset
 
-The pipeline supports two output formats, selected via `output_format` in the config and frozen in the spec. The format determines what finalize produces and how training consumes the data. Generation is unaffected — workers always produce HDF5 shards regardless of output format.
+The pipeline supports two output formats, selected via `output_format` in the config and frozen in the spec. The format determines both what the worker emits and how training consumes the data — the renderer CLI dispatches on the shard's filename suffix (`.h5` → `make_hdf5_dataset`, `.tar` → `make_wds_dataset`) via `EXTENSION_TO_OUTPUT_FORMAT`.
 
 **Why two formats:**
 
@@ -841,11 +841,9 @@ The pipeline supports two output formats, selected via `output_format` in the co
 
 HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequentially without coordinating seeks across workers. Streaming HDF5 virtual datasets from R2 during training creates heavy seek traffic and GPU idle time. Downloading the full dataset to every training node wastes storage and time at scale. WebDataset solves both — each `.tar` shard is a sequential stream that can be read over HTTP with near-zero overhead.
 
-**Why generation stays HDF5 regardless of output format:**
+**HDF5 is resumable; WDS is not:**
 
-Workers generate HDF5 because it is the right format for atomic writes, random-access validation, and debugging. The staging/canonical split is unaffected by output format. WebDataset is a training distribution format, not a generation format. Finalize handles the transcoding — it already downloads, validates, and reshards, so adding a format conversion step is a natural extension.
-
-> **Note — design in transition.** PR-12 widens `DatasetSpec.output_format` to `Literal["hdf5", "wds"]` and computes the shard filename extension from that field via `OUTPUT_FORMAT_TO_EXTENSION` (see §14.1). With the original design above, that would only affect finalize's training-output transcoding. PR-13 then lands a direct wds writer in `make_dataset` and dispatches the worker on the shard's filename suffix — so `output_format="wds"` will result in workers emitting `.tar` shards directly rather than HDF5-then-transcode. This section will be rewritten when PR-13 lands; until then, the schema admits `wds` but no wds writer is wired.
+`make_hdf5_dataset` is resumable — a partially-written file picks up at the first all-zero row, so a crashed worker can re-run with the same render config and only the missing tail is regenerated. `make_wds_dataset` is not resumable today (the tar writer overwrites the destination on open); a crashed wds worker re-renders the whole shard. The staging/canonical split is unaffected by output format.
 
 **WebDataset shard structure:**
 
