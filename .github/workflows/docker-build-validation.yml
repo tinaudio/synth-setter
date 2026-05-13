@@ -152,8 +152,15 @@ jobs:
         with:
           enable-cache: true
 
+      # load_image_config only needs pyyaml + pydantic (pydantic-core
+      # resolves transitively). Keep the runner-side env minimal: install
+      # the project with --no-deps so the full [project.dependencies]
+      # doesn't drag in torch/skypilot/librosa, then add pyyaml and
+      # pydantic in a second command with their own deps.
       - name: Install synth_setter (editable; provides the load_image_config CLI plus its pyyaml + pydantic deps)
-        run: uv pip install --system -e . pyyaml pydantic
+        run: |
+          uv pip install --system --no-deps -e .
+          uv pip install --system pyyaml pydantic
 
       - name: Load image config
         id: config
