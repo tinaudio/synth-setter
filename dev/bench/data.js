@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778703210714,
+  "lastUpdate": 1778705084878,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2010,6 +2010,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04671293497085571,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ad5c853689e93005b8111b8ce96111725e2bb7ba",
+          "message": "ci(docker): strip runtime PYTHONPATH from docker runs in workflows (#1017)\n\nPR #647 / #667 fixed setup.py so find_packages exposes the pipeline\npackage without a runtime PYTHONPATH override, and PR #797 wired\ndev-snapshot to rebuild on every push-to-main (merged 2026-05-04) so\nthe in-image package surface tracks main. The temporary\n-e PYTHONPATH=/home/build/synth-setter override added in 3529fae is no\nlonger needed; strip it from all docker run invocations.\n\nRemoves 15 -e PYTHONPATH=... lines across 10 workflow files:\n\n- .github/workflows/docker-build-validation.yml\n- .github/workflows/flush-investigation.yml\n- .github/workflows/generate-dataset-shards.yaml\n- .github/workflows/job-queue.yaml\n- .github/workflows/spec-materialization.yml\n- .github/workflows/test-dataset-generation.yml\n- .github/workflows/test-gpu.yml\n- .github/workflows/test-skypilot-debug.yml\n- .github/workflows/test-vst-slow.yml\n- .github/workflows/validate-dataset-shards.yaml\n\nThe integration check is the smoke tests in docker-build-validation.yml\nand test-dataset-generation.yml; a local docker probe was not run\nbecause docker was not available in the working environment.\n\nCloses #670\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>\nCo-authored-by: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>",
+          "timestamp": "2026-05-13T20:31:26Z",
+          "tree_id": "3c8bc483552ff70d508d62080e2457e3ddb06999",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ad5c853689e93005b8111b8ce96111725e2bb7ba"
+        },
+        "date": 1778705084439,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.175958633422852,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.949400022663176,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.030557164922356606,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.037357985973358154,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.3612630367279053,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 11.793521742750002,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.615119934082031,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.5907240908360105,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03667474910616875,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.050898730754852295,
             "unit": "1-cos"
           },
           {
