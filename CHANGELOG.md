@@ -1,6 +1,155 @@
 # CHANGELOG
 
 
+## v3.0.0 (2026-05-13)
+
+### Refactoring
+
+- **layout**: Nest src/* under synth_setter/, declare console scripts
+  ([#991](https://github.com/tinaudio/synth-setter/pull/991),
+  [`dbb469e`](https://github.com/tinaudio/synth-setter/commit/dbb469ece61306fa036351a16a27178e9bb71628))
+
+* refactor(layout)!: nest src/* under synth_setter/, declare console scripts
+
+Phase 2 of the PEP src-layout migration (#989, parent #784).
+
+Hoists `src/{data,models,utils,metrics.py}` to `src/synth_setter/` and
+  `src/{train,eval,generate_dataset}.py` to `src/synth_setter/cli/`. Adds the three
+  `synth-setter-{train,eval,generate-dataset}` console scripts via `[project.scripts]`. Sweeps all
+  `from src.X` imports, `_target_: src.X` Hydra refs in configs, `python src/X.py` shell invocations
+  in jobs/ and sweeps/, and prose references in active docs.
+
+Out of scope: `src/pipeline/` (Phase 3, #784), `scripts/` depopulation (Phase 4), `setup.py`
+  deletion (Phase 5); only the legacy `train_command` / `eval_command` `console_scripts` entries are
+  dropped here.
+
+Breaking: any external consumer importing `src.{data,models,utils,
+  metrics,train,eval,generate_dataset}` must rewrite to `synth_setter.{...}` /
+  `synth_setter.cli.{...}`. Legacy `train_command` / `eval_command` scripts are removed (replaced by
+  `synth-setter-train` / `synth-setter-eval`).
+
+* test(baseline-configs): bump MODEL_BASELINE to Phase 2 src-layout SHA
+
+The Phase 2 migration (#989) rewrote every Hydra `_target_:` from `src.X` to `synth_setter.X` and
+  switched `jobs/train/{kosc,surge}/train.sh` from `python src/train.py` to `python -m
+  synth_setter.cli.train`. The resolved Hydra YAMLs from the v0.0.0 baseline therefore literally
+  contain `_target_: src.X` keys while the live tree's resolved YAMLs contain `_target_:
+  synth_setter.X` — a 44-case failure (KOSC) plus a parallel SURGE failure pinned at the old tag.
+
+Bumping MODEL_BASELINE to the Phase 2 commit captures the migration as the new known-good
+  model-config snapshot. FIXTURE_BASELINE is untouched: the synthetic-fixture scripts under
+  `tests/fixtures/` are self-contained and don't reference `src.X`.
+
+Refs #989.
+
+* fix(tests): set PYTHONPATH=src in CI subprocess + workflow probes
+
+The Phase 2 migration's lazy import inside `DatasetSpec.num_params` switched from `from
+  src.data.vst.param_spec_registry` to `from synth_setter.data.vst.param_spec_registry`. That import
+  is triggered by `model_dump_json()` and is exercised by:
+
+* `tests/pipeline/test_schemas/test_dataset_spec.py` — two tests spawn fresh `sys.executable`
+  subprocesses to verify the spec stays pedalboard-free / launcher-pure. The subprocesses don't
+  inherit pytest's `pythonpath = ["src"]`, so `synth_setter` isn't reachable without an editable
+  install. Fixed by passing `PYTHONPATH=<repo>:<repo>/src` to the subprocess `env`.
+
+* `.github/workflows/test-{mps,gpu,vst-slow}.yml` — the Surge XT plugin-load smoke checks `python -c
+  "from synth_setter.data.vst.core import load_plugin..."` against a fresh interpreter (macOS host
+  and Docker container). Fixed by adding `src/` to the PYTHONPATH env var the workflow already
+  exports.
+
+Both `make test-fast` (556/5) and the full slow `test_compare_baseline_configs` suite (87 passed in
+  11m17s, including all 44 KOSC + 8 SURGE + 18 predict cases) pass locally against the bumped
+  `MODEL_BASELINE=4e08950`.
+
+* docs(design): update stale src/* refs to synth_setter/* (Phase 2)
+
+Seven design docs (training-pipeline, eval-pipeline, data-pipeline, skypilot-compute-integration,
+  storage-provenance-spec, plus the two *-implementation-plan docs) referenced legacy
+  `src/train.py`, `src/eval.py`, `src/data/`, `src/utils/`, `src/models/` paths and a `_target_:
+  src.X` YAML example that no longer resolve after the Phase 2 src-layout move.
+
+Rewrote file paths to `src/synth_setter/cli/{train,eval}.py` and
+  `src/synth_setter/{data,utils,models}/`; rewrote `_target_:` to `synth_setter.X`; rewrote `python
+  src/train.py …` CLI invocations in code blocks to `python -m synth_setter.cli.train …` per the new
+  canonical surface.
+
+Surfaced by the doc-drift advisory on PR #991.
+
+* fix(tests): pass PYTHONPATH to VST subprocess in conftest fixture
+
+The macOS MPS CI workflow does not run `pip install -e .` before pytest, so the in-process
+  `pythonpath = ["src"]` from pyproject.toml doesn't propagate to subprocess.run children. The
+  `surge_xt_smoke_datasets` fixture spawns `python
+  src/synth_setter/data/vst/generate_vst_dataset.py`, which fails with `ModuleNotFoundError: No
+  module named 'synth_setter'` when its `from synth_setter.data.vst import param_specs` import runs
+  in the child interpreter.
+
+Mirrors the `_subprocess_env()` helper already in `tests/pipeline/test_schemas/test_dataset_spec.py`
+  (added in b7c62c0): set PYTHONPATH=<repo>:<repo>/src on the child env so it can resolve both
+  `src.pipeline.*` and `synth_setter.*` without an install step.
+
+* fix(ci): install editable package in test workflows, drop PYTHONPATH workaround
+
+The proper fix for "subprocesses spawned from tests can't import synth_setter": install the package
+  via `pip install -e .` in each workflow's setup. Once installed, the import resolves naturally —
+  no duplicated `_subprocess_env()` helper, no PYTHONPATH gymnastics.
+
+Workflows updated: test.yml (3 jobs), test-mps.yml, test-conda.yml. Each now installs `synth_setter`
+  as editable after the dependency install. test-mps.yml's "Smoke-test Surge XT plugin load" step
+  drops its `PYTHONPATH: src` env which b7c62c0 added as a workaround — also no longer needed.
+
+The `_subprocess_env()` helper in tests/conftest.py and
+  tests/pipeline/test_schemas/test_dataset_spec.py is removed entirely. That duplication was a code
+  smell flagged by /repo-review-full as BLOCK; the real problem was the missing install step.
+
+Addresses BLOCK findings from review #4276527174: - [code-health] _subprocess_env duplicated across
+  two test files - [gha] test-mps.yml Run MPS tests has no install / no PYTHONPATH
+
+* chore(review): address PR #991 review feedback round 1
+
+- src/synth_setter/cli/generate_dataset.py: add TODO(#784) above the legacy `src.pipeline.*` import
+  block flagging Phase 3 collapse. - tests/test_compare_baseline_configs.py: tighten the
+  MODEL_BASELINE prose to a 2-line pointer to #989 and correct the misleading "head of the Phase 2
+  PR" wording — the SHA is the initial commit of #989, not the head. -
+  tests/pipeline/test_entrypoints/test_generate_dataset.py: switch module-docstring header from file
+  path to module form so it doesn't drift if the file moves.
+
+Refs #989
+
+* fix(ci): install synth_setter editable in launcher workflows
+
+Phase 2 src-layout migration moved `synth_setter` from `src/`-on-PYTHONPATH to a properly-installed
+  package. Two launcher workflows still invoke `python -m src.pipeline.skypilot_launch` (which
+  imports `synth_setter.cli.generate_dataset` at module load) without installing the package first,
+  so they hit `ModuleNotFoundError: No module named 'synth_setter'` at
+  src/pipeline/skypilot_launch.py:51.
+
+Same fix shape as 64ac16d (test.yml / test-mps.yml / test-conda.yml): add `pip install -e .` after
+  the requirements install.
+
+- generate-dataset-shards.yaml: skypilot-local row's "Install launcher deps" step. Fixes the
+  PR-blocking `Test Dataset Generation / Run generate_dataset (skypilot-local)` failure on #991. -
+  test-skypilot-debug.yml: launcher-runner mode's "Install launcher deps" step. workflow_dispatch
+  only, same root cause.
+
+In-container invocations (runpod / oci rows; launcher-docker mode) don't need a change — the
+  dev-snapshot Dockerfile already does `uv pip install --no-deps -e .` at build time.
+
+test-skypilot-local.yml uses sky.launch directly with no synth_setter imports — no fix needed there.
+
+* chore(review): address PR #991 review feedback round 2
+
+- src/synth_setter/cli/{train,eval,generate_dataset}.py: collapse the copy-pasted 15-line rootutils
+  explanatory block (and the variant in generate_dataset.py) to a single one-liner pointing at the
+  rootutils README, per CLAUDE.md comment-hygiene ("Keep comments terse — typically one short
+  line"). - src/synth_setter/cli/eval.py: add a one-line comment on the `mode == "val" or mode ==
+  "validate"` branch documenting that both spellings are accepted for backwards compatibility with
+  older configs. - pyproject.toml: drop alignment whitespace on the three `[project.scripts]`
+  entries to match standard TOML formatting. - src/__init__.py: rephrase the docstring so it
+  acknowledges that src/pipeline/ is still part of the codebase, not just legacy residue.
+
+
 ## v2.0.0 (2026-05-12)
 
 ### Chores

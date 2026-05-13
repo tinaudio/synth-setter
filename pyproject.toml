@@ -1,6 +1,6 @@
 [project]
 name = "synth-setter"
-version = "2.0.0"
+version = "3.0.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
@@ -14,6 +14,13 @@ docs = [
   "mkdocstrings[python]",
   "griffe-pydantic",
 ]
+
+
+[project.scripts]
+synth-setter-train = "synth_setter.cli.train:main"
+synth-setter-eval = "synth_setter.cli.eval:main"
+synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
+
 
 
 [tool.setuptools]
@@ -42,11 +49,6 @@ packages = [
 # src/synth_setter/, so it is importable as `synth_setter` (PEP src-layout).
 # Other packages use the implicit root mapping (`src` lives at ./src, etc.).
 "synth_setter" = "src/synth_setter"
-
-[project.scripts]
-synth-setter-train = "synth_setter.cli.train:main"
-synth-setter-eval = "synth_setter.cli.eval:main"
-synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 
 
 [tool.pytest.ini_options]
@@ -77,6 +79,7 @@ markers = [
 minversion = "6.0"
 pythonpath = ["src"]
 testpaths = "tests/"
+
 
 [tool.ruff]
 target-version = "py310"
@@ -138,6 +141,7 @@ ignore = ["E501", "S101"]
 "src/synth_setter/utils/__init__.py" = ["F401"]
 "src/synth_setter/utils/callbacks.py" = ["F821", "T201", "ANN001"]
 
+
 [tool.interrogate]
 verbose = 2
 fail-under = 80
@@ -155,6 +159,7 @@ black = true
 # pydoclint: signature ↔ docstring consistency checks. Rule families documented
 # at https://jsh9.github.io/pydoclint/violation_codes.html. Sphinx style chosen
 # to match existing :param:/:return: docstrings and [tool.docformatter] above.
+
 [tool.pydoclint]
 style = "sphinx"
 arg-type-hints-in-signature = true
@@ -267,6 +272,7 @@ allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "internal-feat", 
 minor_tags = ["feat"]
 patch_tags = ["fix", "perf", "revert"]
 
+
 [tool.coverage.report]
 exclude_lines = [
     "pragma: nocover",
@@ -274,6 +280,7 @@ exclude_lines = [
     "raise NotImplementedError()",
     "if __name__ == .__main__.:",
 ]
+
 
 [tool.mutmut]
 # src/ excluded: mutmut v3 asserts module names don't start with "src." (it
