@@ -72,6 +72,14 @@ def test_mel_n_fft_matches_legacy_inline_calc() -> None:
     assert mel_n_fft(44100) == 1102
 
 
+def test_mel_n_fft_raises_when_n_fft_would_be_zero() -> None:
+    """Reject sample rates where ``int(0.025 * sr)`` rounds to 0 (not a valid librosa n_fft)."""
+    import pytest
+
+    with pytest.raises(ValueError, match="n_fft 0"):
+        mel_n_fft(10)
+
+
 def test_mel_n_frames_matches_legacy_inline_calc() -> None:
     """``mel_n_frames`` reproduces librosa's center=True frame count: ``1 + len // hop``."""
     # 16k * 4s = 64000 samples, hop = 160 -> 1 + 64000 // 160 = 401.

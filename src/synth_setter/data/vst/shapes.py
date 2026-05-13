@@ -25,8 +25,8 @@ def mel_hop_length(sample_rate: float) -> int:
     """Librosa hop length: ``sample_rate / MEL_FRAMES_PER_SECOND``.
 
     :param sample_rate: Audio sample rate in Hz. Must be at least
-        ``MEL_FRAMES_PER_SECOND`` — lower rates would produce a hop length of 0
-        and trigger a ``ZeroDivisionError`` downstream in ``mel_n_frames``.
+        ``MEL_FRAMES_PER_SECOND`` — lower rates round down to a hop of 0,
+        which is not a valid librosa ``hop_length``.
     :returns: Hop length in samples, rounded down to an integer.
     :rtype: int
     :raises ValueError: If ``sample_rate`` would produce a hop length of 0.
@@ -43,11 +43,22 @@ def mel_hop_length(sample_rate: float) -> int:
 def mel_n_fft(sample_rate: float) -> int:
     """Librosa FFT window length: ``MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate``.
 
-    :param sample_rate: Audio sample rate in Hz.
+    :param sample_rate: Audio sample rate in Hz. Must be large enough that
+        ``int(MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate) >= 1`` —
+        smaller rates round down to ``n_fft=0``, which is not a valid librosa
+        FFT window length.
     :returns: FFT window length in samples, rounded down to an integer.
     :rtype: int
+    :raises ValueError: If ``sample_rate`` would produce ``n_fft`` of 0.
     """
-    return int(MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate)
+    n_fft = int(MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate)
+    if n_fft <= 0:
+        raise ValueError(
+            f"sample_rate={sample_rate} produces n_fft {n_fft}; "
+            f"sample_rate must be at least "
+            f"1/MEL_N_FFT_FRACTION_OF_SAMPLE_RATE={1 / MEL_N_FFT_FRACTION_OF_SAMPLE_RATE}."
+        )
+    return n_fft
 
 
 def mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
