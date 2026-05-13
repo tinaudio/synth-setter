@@ -6,7 +6,7 @@ datasets (audio, mel_spec, param_array), and that each dataset's row count
 matches ``spec.render.batch_per_shard``.
 
 CLI usage:
-    python3 -m src.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
+    python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
 
 Iterates `spec.shards` and downloads each shard from R2 (under
 `r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}`) before validating.
@@ -20,8 +20,8 @@ from typing import cast
 
 import h5py
 
-from src.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri, shard_uri
-from src.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri, shard_uri
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 _EXPECTED_DATASETS = ("audio", "mel_spec", "param_array")
 

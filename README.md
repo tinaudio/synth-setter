@@ -120,7 +120,7 @@ See the project documentation for a full walkthrough.
 ## Project Structure
 
 ```
-src/synth_setter/   ML code (PEP src-layout package)
+src/synth_setter/   ML code and data pipeline (PEP src-layout package)
   cli/                 Hydra entrypoints (also published as synth-setter-* console scripts):
     train.py             Training entrypoint
     eval.py              Evaluation entrypoint
@@ -129,10 +129,10 @@ src/synth_setter/   ML code (PEP src-layout package)
   models/              LightningModules and components
   utils/               Logging, callbacks, instantiators, math
   metrics.py           Audio + parameter-space metrics
-src/pipeline/   Distributed data pipeline (moves under synth_setter/ in Phase 3, #784)
-  schemas/             Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
-  ci/                  CI validation scripts (materialize_spec, validate_shard, validate_spec)
-  skypilot_launch.py   SkyPilot launcher CLI
+  pipeline/            Distributed data pipeline (moved under synth_setter/ in Phase 3, #995):
+    schemas/             Pydantic models (DatasetSpec, RenderConfig, prefix, image_config)
+    ci/                  CI validation scripts (materialize_spec, validate_shard, validate_spec)
+    skypilot_launch.py   SkyPilot launcher CLI
 configs/        Hydra YAML configs (top-level: train.yaml / eval.yaml / dataset.yaml)
 scripts/        Standalone scripts
 tests/          Test suite (mirrors src/ structure; pipeline tests under tests/pipeline/)

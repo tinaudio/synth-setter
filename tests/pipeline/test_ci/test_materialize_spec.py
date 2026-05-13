@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from src.pipeline.ci.materialize_spec import main
-from src.pipeline.constants import INPUT_SPEC_FILENAME
+from synth_setter.pipeline.ci.materialize_spec import main
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 
 
 class TestMaterializeSpecCli:

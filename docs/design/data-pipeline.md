@@ -86,23 +86,23 @@ cat configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # 2. Run sequential multi-shard generation on a single worker.
 python -m synth_setter.cli.generate_dataset experiment=generate_dataset/surge-simple-480k-10k
 # → Loops over spec.shards, skipping shards already present in R2 (worker-side resumability MVP, #750).
-# **Planned CLI** — the distributed pipeline CLI (`python -m src.pipeline generate/status/finalize`)
+# **Planned CLI** — the distributed pipeline CLI (`python -m synth_setter.pipeline generate/status/finalize`)
 # is not yet implemented; `generate_dataset` is the current MVP, deprecated when
 # `generate-shards` lands on main (#411).
 
 # --- Target state (distributed pipeline, not yet implemented) ---
-# python -m pipeline generate --experiment generate_dataset/surge-simple-480k-10k --workers 10
+# python -m synth_setter.pipeline generate --experiment generate_dataset/surge-simple-480k-10k --workers 10
 # → Created run surge-simple-480k-10k-20260313T100000123Z
 # → Launched 10 workers for 48 shards
 # → Exiting. Run 'status' to check progress.
 #
-# python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m synth_setter.pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 # → Valid: 44/48  Missing: 2  Quarantined: 2
 #
-# python -m pipeline generate --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m synth_setter.pipeline generate --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 4 shards missing, launching 1 worker
 #
-# python -m pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
+# python -m synth_setter.pipeline finalize --run-id surge-simple-480k-10k-20260313T100000123Z
 # → 48/48 valid. output_format: hdf5
 # → Resharding → train.h5, val.h5, test.h5  (or .tar shards if wds)
 # → Stats computed. Dataset registered in W&B as data-surge-simple-480k-10k.
@@ -576,7 +576,7 @@ Instead of tracking worker state or polling provider APIs, the pipeline determin
 `make status` runs the same reconciliation logic as `generate` but only prints the result. It checks for `.h5` + `.valid` marker existence — no data loading or re-validation. It does not query RunPod, check worker health, or monitor live tasks. The output is fully determined by storage contents — running it from any machine, at any time, produces the same result.
 
 ```
-$ python -m pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
+$ python -m synth_setter.pipeline status --run-id surge-simple-480k-10k-20260313T100000123Z
 
 Run: surge-simple-480k-10k-20260313T100000123Z
 Spec shards: 48
@@ -1211,7 +1211,7 @@ This section covers how the design is realized — specific libraries, configura
 
 Schema for the frozen input specification described in [§7.1](#71-storage-as-the-source-of-truth) and [§6 artifact taxonomy](#artifact-taxonomy).
 
-See `src/pipeline/schemas/spec.py` for the authoritative definition. The model is `DatasetSpec` (unifies the previous `DatasetConfig` + `DatasetPipelineSpec` split; the constructed Pydantic instance **is** the artifact on R2 — `model.model_dump_json()` is the JSON).
+See `src/synth_setter/pipeline/schemas/spec.py` for the authoritative definition. The model is `DatasetSpec` (unifies the previous `DatasetConfig` + `DatasetPipelineSpec` split; the constructed Pydantic instance **is** the artifact on R2 — `model.model_dump_json()` is the JSON).
 
 ```python
 class ShardSpec(BaseModel):

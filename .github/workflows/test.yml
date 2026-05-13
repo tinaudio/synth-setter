@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - "src/**"
-      - "src/pipeline/**"
+      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"
@@ -18,7 +18,7 @@ on:
     branches: [main, "release/*", "dev"]
     paths:
       - "src/**"
-      - "src/pipeline/**"
+      - "src/synth_setter/pipeline/**"
       - "tests/**"
       - "configs/**"
       - "scripts/**"

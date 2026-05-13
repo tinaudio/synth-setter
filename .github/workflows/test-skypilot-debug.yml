@@ -66,7 +66,7 @@ name: Test SkyPilot Debug
 #                    saw the same pod IP across multiple production-smoke
 #                    failures while matrix succeeded.
 #
-#   launcher         Invokes the actual `src.pipeline.skypilot_launch`
+#   launcher         Invokes the actual `synth_setter.pipeline.skypilot_launch`
 #                    launcher CLI from the GH-actions runner directly (no
 #                    docker), against a minimal template that no-ops on the
 #                    worker. PASS = launcher works on RunPod from a bare
@@ -378,7 +378,7 @@ jobs:
           LOG_PATH: /tmp/debug-pure-sky-${{ matrix.cluster_suffix }}.log
         run: |
           set -euo pipefail
-          python -m src.pipeline.skypilot_launch \
+          python -m synth_setter.pipeline.skypilot_launch \
             --experiment "$CONFIG_PATH" \
             --template "$TEMPLATE" \
             --job-name "$CLUSTER_NAME" \
@@ -421,7 +421,7 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              python -m src.pipeline.skypilot_launch \
+              python -m synth_setter.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
                 --job-name "$CLUSTER_NAME" \

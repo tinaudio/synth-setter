@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from src.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
-from src.pipeline.schemas.spec import (
+from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
+from synth_setter.pipeline.schemas.spec import (
     OUTPUT_FORMAT_TO_EXTENSION,
     DatasetSpec,
     RenderConfig,

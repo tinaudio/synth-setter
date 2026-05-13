@@ -3,13 +3,13 @@ name: Validate Dataset Shards
 # Reusable workflow that validates a generated dataset's spec + shards by
 # pulling everything from R2. Consumes the `spec_uri` output emitted by
 # `generate-dataset-shards.yaml` (or any caller that uploaded a spec to a
-# known r2:// URI). All rclone copies live inside `src.pipeline.ci.validate_*` —
+# known r2:// URI). All rclone copies live inside `synth_setter.pipeline.ci.validate_*` —
 # the workflow no longer downloads files itself.
 #
 # Two jobs:
-#   * validate-spec   — structural checks on the spec (src.pipeline.ci.validate_spec).
+#   * validate-spec   — structural checks on the spec (synth_setter.pipeline.ci.validate_spec).
 #   * validate-shard  — iterates spec.shards and validates each downloaded
-#                       HDF5 (src.pipeline.ci.validate_shard).
+#                       HDF5 (synth_setter.pipeline.ci.validate_shard).
 #
 # Required secrets (callers should `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -65,15 +65,15 @@ jobs:
       - name: Install rclone
         run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
 
-      # src.pipeline.ci.validate_spec imports OUTPUT_FORMAT_TO_EXTENSION from
-      # src.pipeline.schemas.spec, which transitively loads pydantic at module top.
+      # synth_setter.pipeline.ci.validate_spec imports OUTPUT_FORMAT_TO_EXTENSION from
+      # synth_setter.pipeline.schemas.spec, which transitively loads pydantic at module top.
       # Install only that — keep the runner-side env minimal instead of
       # `pip install -r requirements.txt` (which pulls torch and friends).
       - name: Install validate_spec runtime deps
         run: pip install "pydantic>=2,<3"
 
       - name: Validate spec structure
-        run: python3 -m src.pipeline.ci.validate_spec "${{ inputs.spec_uri }}"
+        run: python3 -m synth_setter.pipeline.ci.validate_spec "${{ inputs.spec_uri }}"
 
   validate-shard:
     name: Validate shards
@@ -86,7 +86,7 @@ jobs:
         uses: actions/checkout@v6
 
       # validate_shard.py iterates spec.shards and pulls each from R2 via
-      # src.pipeline.r2_io. Run in dev-snapshot so h5py is available without a
+      # synth_setter.pipeline.r2_io. Run in dev-snapshot so h5py is available without a
       # host-side install.
       - name: Pull dev-snapshot image
         run: docker pull "${IMAGE}"
@@ -109,4 +109,4 @@ jobs:
             -e SPEC_URI \
             -e PYTHONPATH=/home/build/synth-setter \
             "${IMAGE}" \
-            python3 -m src.pipeline.ci.validate_shard "$SPEC_URI"
+            python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"

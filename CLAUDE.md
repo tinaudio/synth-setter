@@ -112,19 +112,19 @@ The block-scalar should contain only commands. The reader who wants to know *why
 
 ### Architecture
 
-- `src/synth_setter/` — ML code (models, data modules, training, evaluation, dataset-generation entrypoint, utilities). PEP src-layout package; populated across Phases 2–5 of the layout migration ([#784](https://github.com/tinaudio/synth-setter/issues/784)).
+- `src/synth_setter/` — ML code (models, data modules, training, evaluation, dataset-generation entrypoint, utilities) and the distributed data pipeline. PEP src-layout package; populated across Phases 2–5 of the layout migration ([#784](https://github.com/tinaudio/synth-setter/issues/784)).
   - `cli/` — `@hydra.main` entrypoints (`train`, `eval`, `generate_dataset`), each exposed as a `synth-setter-*` console script via `[project.scripts]`.
   - `data/`, `models/`, `utils/`, `metrics.py` — ML code moved out of `src/` in Phase 2 ([#989](https://github.com/tinaudio/synth-setter/issues/989)).
-- `src/pipeline/` — distributed data pipeline (`python -m src.pipeline` planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
-  - `schemas/` — Pydantic models (`DatasetSpec` + `RenderConfig` in `spec.py`, `prefix`, `image_config`; planned: report, card, sample — [#74](https://github.com/tinaudio/synth-setter/issues/74))
-  - `ci/` — CI validation scripts (materialize_spec, validate_shard, validate_spec, load_image_config)
-  - `constants.py` — shared constants (R2 bucket, spec filename)
-  - `skypilot_launch.py` — SkyPilot launcher CLI for the distributed pipeline
-  - `stages/` — generate and finalize stage logic (planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
-  - `backends/` — compute providers: local, RunPod (planned — [#71](https://github.com/tinaudio/synth-setter/issues/71))
+  - `pipeline/` — distributed data pipeline, moved under `synth_setter/` in Phase 3 ([#995](https://github.com/tinaudio/synth-setter/issues/995); `python -m synth_setter.pipeline` planned — [#72](https://github.com/tinaudio/synth-setter/issues/72)).
+    - `schemas/` — Pydantic models (`DatasetSpec` + `RenderConfig` in `spec.py`, `prefix`, `image_config`; planned: report, card, sample — [#74](https://github.com/tinaudio/synth-setter/issues/74))
+    - `ci/` — CI validation scripts (materialize_spec, validate_shard, validate_spec, load_image_config)
+    - `constants.py` — shared constants (R2 bucket, spec filename)
+    - `skypilot_launch.py` — SkyPilot launcher CLI for the distributed pipeline
+    - `stages/` — generate and finalize stage logic (planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
+    - `backends/` — compute providers: local, RunPod (planned — [#71](https://github.com/tinaudio/synth-setter/issues/71))
 - `scripts/` — standalone scripts
 - `configs/` — Hydra YAML configs. `dataset.yaml` is the top-level datagen entrypoint config (mirrors `train.yaml` / `eval.yaml`); see `configs/dataset.yaml`'s `defaults:` for its composition groups
-- `tests/` — mirrors `src/` (including `tests/pipeline/` for `src/pipeline/`)
+- `tests/` — mirrors `src/` (including `tests/pipeline/` for `src/synth_setter/pipeline/`)
 - `docs/design/` — design documents
 
 ### Git Workflow

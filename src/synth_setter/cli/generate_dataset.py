@@ -24,12 +24,15 @@ from omegaconf import DictConfig, OmegaConf
 # Bootstrap PROJECT_ROOT + sys.path — see https://github.com/ashleve/rootutils.
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-# TODO(#784): collapse to synth_setter.pipeline.* once Phase 3 hoists src/pipeline/.
-from src.pipeline import r2_io  # noqa: E402
-from src.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
-from src.pipeline.partitioning import get_my_shards, read_rank_world_from_env  # noqa: E402
-from src.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
+# TODO(#784): collapse to synth_setter.pipeline.* once Phase 3 hoists src/synth_setter/pipeline/.
 from synth_setter.data.vst.core import extract_renderer_version  # noqa: E402
+from synth_setter.pipeline import r2_io  # noqa: E402
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
+from synth_setter.pipeline.partitioning import (  # noqa: E402
+    get_my_shards,
+    read_rank_world_from_env,
+)
+from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
 
 # Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
 # sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``

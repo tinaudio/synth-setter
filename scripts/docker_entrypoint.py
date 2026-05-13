@@ -41,8 +41,8 @@ import click
 from pydantic import VERSION as _PYDANTIC_VERSION
 from pydantic import ValidationError
 
-from src.pipeline.schemas.spec import DatasetSpec
 from synth_setter.cli.generate_dataset import load_spec_from_uri, run
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 if not _PYDANTIC_VERSION.startswith("2."):
     raise RuntimeError(f"docker_entrypoint requires pydantic v2, got {_PYDANTIC_VERSION}")

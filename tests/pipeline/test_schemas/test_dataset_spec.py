@@ -10,12 +10,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from src.pipeline.schemas.spec import (
+from synth_setter.data.vst import param_specs
+from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
     RenderConfig,
     ShardSpec,
 )
-from synth_setter.data.vst import param_specs
 
 FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -53,9 +53,9 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
 @pytest.fixture()
 def patch_runtime_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub git/timestamp factories so DatasetSpec construction is deterministic."""
-    monkeypatch.setattr("src.pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
-    monkeypatch.setattr("src.pipeline.schemas.spec._is_repo_dirty", lambda: False)
-    monkeypatch.setattr("src.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "abc123def456")
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: FIXED_NOW)
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +410,7 @@ class TestDatasetSpecRoundTrip:
             return "f" * 40
 
         # Patch the factory; if pass-through works the factory shouldn't be called.
-        import src.pipeline.schemas.spec as spec_mod
+        import synth_setter.pipeline.schemas.spec as spec_mod
 
         original = spec_mod._get_git_sha
         spec_mod._get_git_sha = _drift_sha
@@ -434,7 +434,7 @@ class TestGitHelpersGraceful:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A non-zero ``git rev-parse`` exit returns the sentinel rather than raising."""
-        import src.pipeline.schemas.spec as spec_mod
+        import synth_setter.pipeline.schemas.spec as spec_mod
 
         def _raise(*args: object, **kwargs: object) -> object:
             raise subprocess.CalledProcessError(returncode=128, cmd=["git", "rev-parse", "HEAD"])
@@ -446,7 +446,7 @@ class TestGitHelpersGraceful:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A missing ``git`` binary yields the sentinel — worker hosts without git survive."""
-        import src.pipeline.schemas.spec as spec_mod
+        import synth_setter.pipeline.schemas.spec as spec_mod
 
         def _raise(*args: object, **kwargs: object) -> object:
             raise FileNotFoundError("git")
@@ -458,7 +458,7 @@ class TestGitHelpersGraceful:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A missing ``git`` binary makes ``_is_repo_dirty`` return False rather than raise."""
-        import src.pipeline.schemas.spec as spec_mod
+        import synth_setter.pipeline.schemas.spec as spec_mod
 
         def _raise(*args: object, **kwargs: object) -> object:
             raise FileNotFoundError("git")
@@ -470,7 +470,7 @@ class TestGitHelpersGraceful:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``git diff --quiet`` exits 128 outside a worktree — treat as "no git", not "dirty"."""
-        import src.pipeline.schemas.spec as spec_mod
+        import synth_setter.pipeline.schemas.spec as spec_mod
 
         class _FakeCompleted:
             returncode = 128
@@ -488,10 +488,10 @@ class TestGitHelpersGraceful:
 
 
 class TestSpecImportStaysLauncherPure:
-    """``import src.pipeline.schemas.spec`` alone must not pull heavy modules."""
+    """``import synth_setter.pipeline.schemas.spec`` alone must not pull heavy modules."""
 
     def test_bare_spec_import_does_not_pull_data_vst_core(self) -> None:
-        """`import src.pipeline.schemas.spec` alone must not transitively load
+        """`import synth_setter.pipeline.schemas.spec` alone must not transitively load
         ``synth_setter.data.vst.core`` or ``pedalboard``.
 
         ``spec.py``'s only ``synth_setter.data.vst`` import is inside
@@ -502,7 +502,7 @@ class TestSpecImportStaysLauncherPure:
         """
         script = (
             "import sys\n"
-            "import src.pipeline.schemas.spec  # noqa: F401\n"
+            "import synth_setter.pipeline.schemas.spec  # noqa: F401\n"
             "for name in ('synth_setter.data.vst.core', 'synth_setter.data.vst', 'pedalboard'):\n"
             "    assert name not in sys.modules, (\n"
             "        f'{name!r} leaked into spec module import; '\n"
@@ -545,7 +545,7 @@ class TestSpecConstructionStaysPedalboardFree:
         """
         script = (
             "import sys\n"
-            "from src.pipeline.schemas.spec import DatasetSpec\n"
+            "from synth_setter.pipeline.schemas.spec import DatasetSpec\n"
             "spec = DatasetSpec(\n"
             "    task_name='ci', output_format='hdf5', train_val_test_sizes=[1, 0, 0],\n"
             "    base_seed=0, r2_bucket='b',\n"

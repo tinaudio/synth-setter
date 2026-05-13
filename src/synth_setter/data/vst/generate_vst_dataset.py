@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsCo
 from tqdm import trange
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from src.pipeline.schemas.spec import RenderConfig  # noqa: E402
+from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
 from synth_setter.data.vst import param_specs  # noqa
 from synth_setter.data.vst.core import render_params  # noqa
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa

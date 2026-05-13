@@ -7,7 +7,7 @@ experiment-name interface that drives Hydra compose under the hood.
 
 Usage::
 
-    python -m src.pipeline.ci.materialize_spec <experiment> <output_dir>
+    python -m synth_setter.pipeline.ci.materialize_spec <experiment> <output_dir>
 
 The composed spec is written to ``<output_dir>/input_spec.json`` and echoed on stdout.
 """
@@ -23,10 +23,10 @@ from hydra.errors import HydraException
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-from src.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
 from synth_setter.cli.generate_dataset import spec_from_cfg  # noqa: E402
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
 
-CONFIG_DIR = Path(__file__).resolve().parent.parent.parent.parent / "configs"
+CONFIG_DIR = Path(__file__).resolve().parents[4] / "configs"
 REPO_ROOT = CONFIG_DIR.parent
 
 

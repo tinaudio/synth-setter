@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from synth_setter.cli.generate_dataset import build_generate_args
-from src.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from pydantic_settings import CliApp
 from synth_setter.data.vst.generate_vst_dataset import _GenerateCliArgs
 

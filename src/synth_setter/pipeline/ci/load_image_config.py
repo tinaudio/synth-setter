@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from src.pipeline.schemas.image_config import load_image_config
+from synth_setter.pipeline.schemas.image_config import load_image_config
 
 
 def main() -> None:

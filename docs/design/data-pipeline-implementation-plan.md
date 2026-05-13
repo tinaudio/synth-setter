@@ -559,7 +559,7 @@ ______________________________________________________________________
 - **Xvfb display isolation:** Each child process should use a per-process X11 display
   number (`:N` derived from PID or shard ID) to avoid contention in headless VST rendering.
 - **No `generate_fn` argument:** The child process imports `make_dataset` directly
-  (`from pipeline.vst import make_dataset`). Under `spawn`, the child is a fresh
+  (`from synth_setter.pipeline.vst import make_dataset`). Under `spawn`, the child is a fresh
   interpreter, so the import is clean. No pickling concerns — only `shard_spec` and
   `shard_path` cross the process boundary. For tests, `LocalBackend` calls
   `run_worker()` in-process (no spawn), so test fixtures can inject a fake function.
@@ -928,7 +928,7 @@ ______________________________________________________________________
 05. W&B optional (`--skip-wandb`) — tests skip it; mock test for artifact structure
 06. Workers use ThreadPoolExecutor for parallel shard generation
 07. Each shard renders in a child process via `multiprocessing.get_context("spawn").Process(...)`.
-    Child process imports `make_dataset` directly (`from pipeline.vst import make_dataset`).
+    Child process imports `make_dataset` directly (`from synth_setter.pipeline.vst import make_dataset`).
     Only `shard_spec` and `shard_path` cross the process boundary — no function objects.
     `LocalBackend` accepts an optional `generate_fn` for tests (runs in-process, no spawn).
     For v1, no seeding (current behavior). Post-launch, dual-RNG seeding
@@ -965,7 +965,7 @@ no workers launched.
 
 **GP4. Plugin-path validation belongs on the worker, not the launcher.**
 The launcher path is interpreter-only (the SkyPilot launcher in
-`src/pipeline/skypilot_launch.py` cannot load a VST3 plugin — no X11),
+`src/synth_setter/pipeline/skypilot_launch.py` cannot load a VST3 plugin — no X11),
 so `materialize_spec` no longer extracts `renderer_version` from the plugin bundle and
 no longer enforces a `plugin_path.exists()` precondition. Pin `renderer_version` to
 `SURGE_XT_RENDERER_VERSION` at materialization; the worker calls

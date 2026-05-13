@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from src.pipeline.schemas.prefix import (
+from synth_setter.pipeline.schemas.prefix import (
     DatasetConfigId,
     DatasetRunId,
     make_dataset_wandb_run_id,
@@ -36,7 +36,7 @@ class TestMakeDatasetWandbRunId:
         id2 = make_dataset_wandb_run_id(DatasetConfigId("cfg"), timestamp=ts2)
         assert id1 != id2
 
-    @patch("src.pipeline.schemas.prefix.datetime")
+    @patch("synth_setter.pipeline.schemas.prefix.datetime")
     def test_make_run_id_default_timestamp_is_utc(self, mock_datetime):
         """Default (no timestamp) uses datetime.now(UTC) and produces the expected ID."""
         mock_datetime.now.return_value = FIXED_NOW

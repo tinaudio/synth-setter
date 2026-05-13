@@ -58,9 +58,9 @@ from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
 
-from src.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
-from src.pipeline.schemas.spec import DatasetSpec
 from synth_setter.cli.generate_dataset import spec_from_cfg
+from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 # Per-launch R2 key for the materialized spec (file_mounts blocked by #749).
 _LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
@@ -112,13 +112,13 @@ _SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
 )
 
 _CRED_BOOTSTRAP_SCRIPT = (
-    Path(__file__).resolve().parent.parent.parent / "scripts" / "skypilot_write_provider_creds.sh"
+    Path(__file__).resolve().parents[3] / "scripts" / "skypilot_write_provider_creds.sh"
 )
 
 # sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.
 _TAIL_LOGS_RC_SUCCESS = 0
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_DIR = REPO_ROOT / "configs"
 DEFAULT_EXPERIMENT = "generate_dataset/smoke-shard"
 DEFAULT_TEMPLATE = REPO_ROOT / "configs" / "compute" / "runpod-template.yaml"
@@ -453,7 +453,7 @@ def _warn_if_deprecated_cluster_name() -> None:
         "RunPod and OCI don't support num_nodes>1 for this workload, so we synthesize "
         "multi-worker partitioning by launching N independent managed jobs and injecting "
         "SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS per rank. Each rank downloads "
-        "the same materialized spec and uses src.pipeline.partitioning.get_my_shards to slice "
+        "the same materialized spec and uses synth_setter.pipeline.partitioning.get_my_shards to slice "
         "its share."
     ),
 )

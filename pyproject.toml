@@ -24,11 +24,6 @@ synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 
 
 [tool.setuptools]
-# Phase 2 of the PEP src-layout migration (#989). The data/models/utils/metrics
-# trees and the CLI entrypoints now live under `synth_setter`; only
-# `src/pipeline/` remains as `src.pipeline` (moves in Phase 3, #784).
-# Enumerated rather than discovered so the dual `synth_setter` / `src.pipeline`
-# layout stays explicit until Phase 3 collapses to a single `find` directive.
 packages = [
   "synth_setter",
   "synth_setter.cli",
@@ -37,11 +32,10 @@ packages = [
   "synth_setter.data.vst",
   "synth_setter.models",
   "synth_setter.models.components",
+  "synth_setter.pipeline",
+  "synth_setter.pipeline.ci",
+  "synth_setter.pipeline.schemas",
   "synth_setter.utils",
-  "src",
-  "src.pipeline",
-  "src.pipeline.ci",
-  "src.pipeline.schemas",
 ]
 
 [tool.setuptools.package-dir]
@@ -184,16 +178,16 @@ exclude = '''(?x)
   | ^\.claude/
   | ^\.worktrees/
   | ^notebooks/
-  | ^src/pipeline/ci/load_image_config\.py$
-  | ^src/pipeline/ci/validate_shard\.py$
-  | ^src/pipeline/ci/validate_spec\.py$
+  | ^src/synth_setter/pipeline/ci/load_image_config\.py$
+  | ^src/synth_setter/pipeline/ci/validate_shard\.py$
+  | ^src/synth_setter/pipeline/ci/validate_spec\.py$
   | ^src/synth_setter/cli/generate_dataset\.py$
-  | ^src/pipeline/skypilot_launch\.py$
-  | ^src/pipeline/partitioning\.py$
-  | ^src/pipeline/r2_io\.py$
-  | ^src/pipeline/schemas/image_config\.py$
-  | ^src/pipeline/schemas/prefix\.py$
-  | ^src/pipeline/schemas/spec\.py$
+  | ^src/synth_setter/pipeline/skypilot_launch\.py$
+  | ^src/synth_setter/pipeline/partitioning\.py$
+  | ^src/synth_setter/pipeline/r2_io\.py$
+  | ^src/synth_setter/pipeline/schemas/image_config\.py$
+  | ^src/synth_setter/pipeline/schemas/prefix\.py$
+  | ^src/synth_setter/pipeline/schemas/spec\.py$
   | ^scripts/add_music2latent\.py$
   | ^scripts/compute_audio_metrics\.py$
   | ^scripts/docker_entrypoint\.py$

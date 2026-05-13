@@ -16,7 +16,7 @@ _ = hdf5plugin  # keep type checkers from flagging the side-effect import
 import numpy as np
 import pytest
 
-from src.pipeline.schemas.spec import RenderConfig
+from synth_setter.pipeline.schemas.spec import RenderConfig
 from scripts.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import render_params

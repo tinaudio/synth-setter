@@ -32,7 +32,6 @@ from pedalboard.io import AudioFile, AudioStream, StreamResampler  # noqa: E402
 from rich.console import Console  # noqa: E402
 from rich.logging import RichHandler  # noqa: E402
 
-from src.pipeline.schemas.spec import RenderConfig  # noqa: E402
 from synth_setter.data.vst import param_specs, preset_paths  # noqa: E402
 from synth_setter.data.vst.core import (  # noqa: E402
     extract_renderer_version,  # noqa: E402
@@ -43,6 +42,7 @@ from synth_setter.data.vst.core import (  # noqa: E402
 )
 from synth_setter.data.vst.generate_vst_dataset import make_dataset  # noqa: E402
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa: E402
+from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
 
 MIDI_LISTEN_MESSAGE_TYPES = ("note_on", "note_off", "control_change", "pitchwheel", "aftertouch")
 

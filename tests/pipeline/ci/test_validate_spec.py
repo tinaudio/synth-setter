@@ -1,4 +1,4 @@
-"""Tests for src.pipeline.ci.validate_spec validation functions."""
+"""Tests for synth_setter.pipeline.ci.validate_spec validation functions."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from src.pipeline.ci.validate_spec import (
+from synth_setter.pipeline.ci.validate_spec import (
     _REQUIRED_RENDER_FIELDS,
     _REQUIRED_TOP_LEVEL_FIELDS,
     _read_spec_text,
     validate_structure,
     validate_test_values,
 )
-from src.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 
 def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dict:
@@ -166,11 +166,13 @@ class TestReadSpecText:
         assert json.loads(_read_spec_text(str(spec_path))) == {"hello": "world"}
 
     def test_r2_uri_downloads_via_r2_io(self) -> None:
-        """R2:// URI dispatches through src.pipeline.r2_io.downloaded_to_tempfile."""
+        """R2:// URI dispatches through synth_setter.pipeline.r2_io.downloaded_to_tempfile."""
 
         def fake_check_call(args: list[str]) -> None:
             Path(args[-1]).write_text(json.dumps({"hello": "from-r2"}))
 
-        with patch("src.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call):
+        with patch(
+            "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
+        ):
             text = _read_spec_text("r2://bucket/spec.json")
         assert json.loads(text) == {"hello": "from-r2"}

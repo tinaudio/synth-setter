@@ -3,7 +3,7 @@ name: Generate Dataset Shards
 # Reusable workflow that owns one provider's launcher invocation. Callers fan
 # out across providers (see test-dataset-generation.yml) and pass per-provider
 # values via inputs. Behavior is identical to the inline blocks this replaced —
-# inputs are simple passthroughs to `src.pipeline.skypilot_launch` flags
+# inputs are simple passthroughs to `synth_setter.pipeline.skypilot_launch` flags
 # plus the artifact-name knob the validate-dataset-shards.yaml downstream
 # expects to find on disk.
 #
@@ -278,7 +278,7 @@ jobs:
           if [[ "$INPUT_TAIL" == "true" ]]; then
             ARGS+=(--tail)
           fi
-          python -m src.pipeline.skypilot_launch "${ARGS[@]}" \
+          python -m synth_setter.pipeline.skypilot_launch "${ARGS[@]}" \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
           chmod 0644 "${RUN_METADATA_DIR}/input_spec.json"
 
@@ -381,7 +381,7 @@ jobs:
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
               bash scripts/ensure_plugin_symlinks.sh
-              python -m src.pipeline.skypilot_launch \
+              python -m synth_setter.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \
                 --job-name "$CLUSTER_NAME" \

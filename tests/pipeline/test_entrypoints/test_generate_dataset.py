@@ -21,13 +21,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.pipeline.constants import INPUT_SPEC_FILENAME
-from src.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.cli.generate_dataset import (
     VST_HEADLESS_WRAPPER,
     build_generate_args,
     run,
 )
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 
 # Reusable VST3 bundle with a real Contents/moduleinfo.json so
 # extract_renderer_version (called by run) returns a deterministic version
@@ -139,7 +139,7 @@ class TestRun:
         Tests that exercise the skip-existing path override this with their own
         ``monkeypatch.setattr`` on ``pipeline.r2_io.object_size``.
         """
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", lambda *_a, **_k: None)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: None)
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -572,7 +572,7 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Object present (size > 0) → renderer is not invoked, shard upload is not attempted."""
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 12345)
 
         run(spec)
 
@@ -609,7 +609,7 @@ class TestRun:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Zero-byte object is treated as absent — defensive against half-uploaded objects."""
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", lambda *_a, **_k: 0)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", lambda *_a, **_k: 0)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
@@ -633,7 +633,7 @@ class TestRun:
             probed_uris.append(uri)
             return None
 
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", _probe)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _probe)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
@@ -657,7 +657,7 @@ class TestRun:
         def _present_only_for_shard_0(uri: str) -> int | None:
             return 9999 if uri.endswith("shard-000000.h5") else None
 
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", _present_only_for_shard_0)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
@@ -686,7 +686,7 @@ class TestRun:
         def _present_only_for_shard_0(uri: str) -> int | None:
             return 9999 if uri.endswith("shard-000000.h5") else None
 
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", _present_only_for_shard_0)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _present_only_for_shard_0)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
@@ -711,7 +711,7 @@ class TestRun:
         def _raise(*_a: object, **_k: object) -> None:
             raise subprocess.CalledProcessError(1, ["rclone", "lsf"])
 
-        monkeypatch.setattr("src.pipeline.r2_io.object_size", _raise)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", _raise)
 
         with pytest.raises(subprocess.CalledProcessError):
             run(spec)

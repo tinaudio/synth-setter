@@ -3,7 +3,7 @@
 Importing this module pulls only ``param_spec`` and ``surge_xt_param_spec`` —
 both of which are pure-Python and free of pedalboard / VST3 native deps. This
 is the canonical pedalboard-free entrypoint for interpreter-only contexts
-(the SkyPilot launcher, spec construction in ``src.pipeline.schemas.spec``);
+(the SkyPilot launcher, spec construction in ``synth_setter.pipeline.schemas.spec``);
 ``synth_setter.data.vst`` re-exports the same names for backward compat, but importing
 ``synth_setter.data.vst.core`` directly is what pulls pedalboard.
 """

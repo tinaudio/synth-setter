@@ -5,7 +5,7 @@
 # diagnostic path independent of the production launcher: production ships
 # the materialized DatasetSpec via R2 (uploaded by the launcher, fetched by
 # the worker through `WORKER_SPEC_URI`) because programmatic `file_mounts`
-# is blocked on RunPod — see `src/pipeline/skypilot_launch.py` and #749.
+# is blocked on RunPod — see `src/synth_setter/pipeline/skypilot_launch.py` and #749.
 # PASS = file_mounts upload during provisioning works on RunPod and the
 # worker can read the mounted file. FAIL = something about the mount upload
 # extends pod-boot timing past the SSH-readiness window, OR mounts land in
