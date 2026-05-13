@@ -1,9 +1,9 @@
-"""Unit tests for ``scripts.compute_audio_metrics``."""
+"""Unit tests for ``synth_setter.evaluation.compute_audio_metrics``."""
 
 import numpy as np
 import pytest
 
-from scripts.compute_audio_metrics import compute_rms
+from synth_setter.evaluation.compute_audio_metrics import compute_rms
 
 _SR = 44100
 

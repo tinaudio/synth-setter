@@ -99,7 +99,7 @@ name: Test SkyPilot Debug
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
 #   RCLONE_CONFIG_R2_ENDPOINT                          — Cloudflare R2
 #   RUNPOD_API_KEY  — written to ~/.runpod/config.toml by
-#                     scripts/skypilot_write_provider_creds.sh so SkyPilot
+#                     scripts/skypilot/write_provider_creds.sh so SkyPilot
 #                     can provision a pod. Skipped when
 #                     SKYPILOT_API_SERVER_ENDPOINT is set (see #785) — the
 #                     remote API server holds provider creds and the local
@@ -264,7 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${SKYPILOT_API_SERVER_ENDPOINT:-}" ]]; then
-            bash scripts/skypilot_write_provider_creds.sh --provider "${PROVIDER}"
+            bash scripts/skypilot/write_provider_creds.sh --provider "${PROVIDER}"
           else
             echo "SKYPILOT_API_SERVER_ENDPOINT is set; remote API server holds provider creds, skipping local cred bootstrap"
           fi
@@ -337,17 +337,15 @@ jobs:
               )
           PY
 
-      # Full requirements-app.txt install (skypilot + python-dotenv + loguru +
+      # Full [project.dependencies] install (skypilot + python-dotenv + loguru +
       # pedalboard + mido + numpy + pydantic + click + ...). The launcher's
       # import chain (skypilot_launch -> spec.py -> synth_setter.data.vst ->
       # core.py) pulls in the whole runtime, so a targeted install is
-      # whack-a-mole — full requirements-app keeps the launcher-runner mode
+      # whack-a-mole — the project's default deps keep launcher-runner mode
       # honestly mirroring what a developer would have on their laptop.
       - name: Install launcher deps (launcher-runner mode)
         if: matrix.mode == 'launcher-runner'
-        run: |
-          pip install -r requirements-app.txt
-          pip install -e .
+        run: pip install -e .
 
       # The launcher's `upload_spec_to_r2` shells out to `rclone copyto` to
       # ship the materialized spec to R2 (#749 mitigation). The dev-snapshot
@@ -419,7 +417,7 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               python -m synth_setter.pipeline.skypilot_launch \
                 --experiment "$CONFIG_PATH" \
                 --template "$TEMPLATE" \

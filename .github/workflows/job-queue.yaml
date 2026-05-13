@@ -105,7 +105,7 @@ jobs:
       - name: Pull synth-setter image
         run: docker pull "${IMAGE}"
 
-      # Dry-run mode skips the daemon — `python scripts/job_queue.py --dry-run`
+      # Dry-run mode skips the daemon — `python scripts/ci/job_queue.py --dry-run`
       # only prints the backend argv it would emit, so we don't need a running
       # daemon. This branch is also what the validate workflow exercises.
       - name: Dry-run job_queue CLI
@@ -116,7 +116,7 @@ jobs:
             -v "${{ github.workspace }}:/home/build/synth-setter:ro" \
             -w /home/build/synth-setter \
             "${IMAGE}" \
-            python scripts/job_queue.py "${COMMAND_FILE}" \
+            python scripts/ci/job_queue.py "${COMMAND_FILE}" \
               --group "${JOB_GROUP}" \
               --parallel "${JOB_PARALLEL}" \
               --label-prefix "${JOB_LABEL_PREFIX}" \
@@ -149,7 +149,7 @@ jobs:
             -w /home/build/synth-setter \
             "${IMAGE}" \
             bash -euxo pipefail -c '
-              python scripts/job_queue.py "$COMMAND_FILE" \
+              python scripts/ci/job_queue.py "$COMMAND_FILE" \
                 --group "$JOB_GROUP" \
                 --parallel "$JOB_PARALLEL" \
                 --label-prefix "$JOB_LABEL_PREFIX"

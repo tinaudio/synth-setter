@@ -55,10 +55,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system sh
-          uv pip install --system -e .
+        run: uv pip install --system -e ".[torch,dev]"
 
       - name: List dependencies
         run: uv pip list --system

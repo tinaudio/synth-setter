@@ -207,7 +207,8 @@ class TestRun:
         mock_check_call: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """The VST subprocess is prefixed with scripts/run-linux-vst-headless.sh on Linux.
+        """The VST subprocess is prefixed with docker/ubuntu22_04/run-linux-vst-headless.sh on
+        Linux.
 
         X11 bootstrap lives at the audio-rendering boundary (this subprocess) so the
         docker_entrypoint click CLI can stay X11-agnostic — idle and passthrough modes don't pay

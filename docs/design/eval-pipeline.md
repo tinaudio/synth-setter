@@ -213,7 +213,7 @@ The evaluation pipeline is a three-stage batch pipeline. Each stage is an indepe
 
 ### Consumers
 
-Interactive captured-patch evaluation: `scripts/surge_xt_interactive.py --checkpoint-path …` invokes the predict → render → metrics chain end-to-end via `eval_patches` (see [`docs/guides/surge-xt-interactive.md`](../guides/surge-xt-interactive.md)).
+Interactive captured-patch evaluation: `src/synth_setter/tools/surge_xt_interactive.py --checkpoint-path …` invokes the predict → render → metrics chain end-to-end via `eval_patches` (see [`docs/guides/surge-xt-interactive.md`](../guides/surge-xt-interactive.md)).
 
 ## 5. Stage Definitions
 
@@ -238,13 +238,13 @@ The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trai
 
 ### 5.2 Render
 
-| Property     | Value                                                                                                    |
-| ------------ | -------------------------------------------------------------------------------------------------------- |
-| **Command**  | `python scripts/predict_vst_audio.py {pred_dir} {output_dir} --plugin_path {vst} --preset_path {preset}` |
-| **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                             |
-| **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`           |
-| **Compute**  | CPU — VST audio rendering via pedalboard                                                                 |
-| **Requires** | Display server (Xvfb on headless Linux, native on macOS)                                                 |
+| Property     | Value                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| **Command**  | `python -m synth_setter.evaluation.predict_vst_audio {pred_dir} {output_dir} --plugin_path {vst} --preset_path {preset}` |
+| **Input**    | Predicted parameter tensors (`.pt` files from predict stage)                                                             |
+| **Output**   | `sample_{N}/pred.wav`, `sample_{N}/target.wav`, `sample_{N}/spec.png`, `sample_{N}/params.csv`                           |
+| **Compute**  | CPU — VST audio rendering via pedalboard                                                                                 |
+| **Requires** | Display server (Xvfb on headless Linux, native on macOS)                                                                 |
 
 The render stage loads each predicted parameter tensor, decodes it using the `ParamSpec`, and renders audio through the Surge XT VST plugin via pedalboard. It also renders the ground-truth target audio for comparison.
 
@@ -261,7 +261,7 @@ The render stage loads each predicted parameter tensor, decodes it using the `Pa
 
 | Property    | Value                                                                                     |
 | ----------- | ----------------------------------------------------------------------------------------- |
-| **Command** | `python scripts/compute_audio_metrics.py {audio_dir} {output_dir}`                        |
+| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`        |
 | **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`    |
 | **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std across samples)            |
 | **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`) |
@@ -472,7 +472,7 @@ export DISPLAY=:$(cat "$tempfile")
 # Select SPEC/PRESET based on $3 (simple, ffn, flowmlp, etc.)
 openbox &
 xsettingsd &
-python scripts/predict_vst_audio.py -X -S -r presets/$PRESET.vstpreset --param_spec $SPEC $1 $2
+python -m synth_setter.evaluation.predict_vst_audio -X -S -r presets/$PRESET.vstpreset --param_spec $SPEC $1 $2
 kill $XVFB_PID
 rm "$tempfile"
 ```
@@ -556,14 +556,14 @@ hands Lightning a resolved local path transparently.
 
 > **Not yet implemented.** These `make` targets are proposed but do not exist in the Makefile yet ([#86](https://github.com/tinaudio/synth-setter/issues/86)).
 
-| Target             | Maps to                                            |
-| ------------------ | -------------------------------------------------- |
-| `make eval`        | `make predict render metrics` (full pipeline)      |
-| `make predict`     | `python -m synth_setter.cli.eval mode=predict ...` |
-| `make render`      | `./renderscript.sh` or direct Python on macOS      |
-| `make metrics`     | `python scripts/compute_audio_metrics.py ...`      |
-| `make docker-eval` | `docker run ... make eval`                         |
-| `make upload-eval` | `rclone sync ... --checksum`                       |
+| Target             | Maps to                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| `make eval`        | `make predict render metrics` (full pipeline)                 |
+| `make predict`     | `python -m synth_setter.cli.eval mode=predict ...`            |
+| `make render`      | `./renderscript.sh` or direct Python on macOS                 |
+| `make metrics`     | `python -m synth_setter.evaluation.compute_audio_metrics ...` |
+| `make docker-eval` | `docker run ... make eval`                                    |
+| `make upload-eval` | `rclone sync ... --checksum`                                  |
 
 **Rationale:** Make targets are discoverable (`make help`), composable, and already the project convention. They hide environment-specific complexity (display detection, R2 paths) behind a consistent interface.
 
@@ -624,7 +624,7 @@ This section consolidates every configuration and environment behavior change in
 | **W&B entity**               | `entity: ${oc.env:WANDB_ENTITY,tinaudio}`, `project: ${oc.env:WANDB_PROJECT,synth-setter}`                                                                               | `configs/logger/wandb.yaml`                                | Yes       | Hardcoded → configurable                         |
 | **SGE scripts**              | Deprecated — left as-is, not maintained                                                                                                                                  | `jobs/predict/*.sh`                                        | No        | Active → deprecated                              |
 | **R2 eval artifact upload**  | `make upload-eval` → `r2:intermediate-data/eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/` | `Makefile`                                                 | Yes       | **New** — 6-segment path encodes full provenance |
-| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                                                                                   | `scripts/compute_audio_metrics.py`                         | Yes       | **New** — programmatic provenance chain          |
+| **W&B eval lineage**         | `use_artifact()` connects dataset → model → eval; R2 reference artifact for bulk files                                                                                   | `src/synth_setter/evaluation/compute_audio_metrics.py`     | Yes       | **New** — programmatic provenance chain          |
 | **Eval CLI**                 | `make predict`, `make render`, `make metrics`                                                                                                                            | `Makefile`                                                 | Yes       | **New** — discoverable, consistent               |
 
 Cloud evaluation runs as `MODE=eval` (planned — [#410](https://github.com/tinaudio/synth-setter/issues/410)). Env var contract follows the same pattern as `MODE=train`: download checkpoint + dataset from R2, run `src/synth_setter/cli/eval.py`, upload results. No implementation exists on any branch.
@@ -818,7 +818,7 @@ ______________________________________________________________________
 **Files to modify:**
 
 - `renderscript.sh` — add macOS detection, Xvfb auto-launch
-- `scripts/predict_vst_audio.py` — make plugin/preset paths configurable via env
+- `src/synth_setter/evaluation/predict_vst_audio.py` — make plugin/preset paths configurable via env
 - `Makefile` — add `render` target
 
 **Files to create:**
@@ -837,7 +837,7 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `scripts/compute_audio_metrics.py` — pin dep versions
+- `src/synth_setter/evaluation/compute_audio_metrics.py` — pin dep versions
 - `Makefile` — add `metrics` target
 
 **Files to create:**
@@ -943,7 +943,7 @@ ______________________________________________________________________
 
 **Files to modify:**
 
-- `scripts/compute_audio_metrics.py` — add `--wandb-run` flag
+- `src/synth_setter/evaluation/compute_audio_metrics.py` — add `--wandb-run` flag
 
 **Files to create:**
 
@@ -1188,13 +1188,13 @@ and **eval artifacts** (audio files, prediction tensors — no W&B UI benefit).
 
 ### Eval Scripts
 
-| File                               | Lines    | Purpose                                     | Cluster coupling                                                          |
-| ---------------------------------- | -------- | ------------------------------------------- | ------------------------------------------------------------------------- |
-| `src/synth_setter/cli/eval.py`     | 121      | Hydra entry point for predict/test/validate | Data configs require explicit `dataset_root`/`predict_file` (no defaults) |
-| `scripts/predict_vst_audio.py`     | 232      | VST rendering from predicted parameters     | Plugin path defaults                                                      |
-| `renderscript.sh`                  | 59       | Xvfb wrapper for headless rendering         | Assumes Linux, no macOS support                                           |
-| `scripts/compute_audio_metrics.py` | 323      | Parallel metric computation                 | None (already portable)                                                   |
-| `jobs/predict/*.sh`                | 19 files | SGE job scripts, one per model (deprecated) | SGE directives, hardcoded paths, `module load`                            |
+| File                                                   | Lines    | Purpose                                     | Cluster coupling                                                          |
+| ------------------------------------------------------ | -------- | ------------------------------------------- | ------------------------------------------------------------------------- |
+| `src/synth_setter/cli/eval.py`                         | 121      | Hydra entry point for predict/test/validate | Data configs require explicit `dataset_root`/`predict_file` (no defaults) |
+| `src/synth_setter/evaluation/predict_vst_audio.py`     | 232      | VST rendering from predicted parameters     | Plugin path defaults                                                      |
+| `renderscript.sh`                                      | 59       | Xvfb wrapper for headless rendering         | Assumes Linux, no macOS support                                           |
+| `src/synth_setter/evaluation/compute_audio_metrics.py` | 323      | Parallel metric computation                 | None (already portable)                                                   |
+| `jobs/predict/*.sh`                                    | 19 files | SGE job scripts, one per model (deprecated) | SGE directives, hardcoded paths, `module load`                            |
 
 ### Data Configs
 

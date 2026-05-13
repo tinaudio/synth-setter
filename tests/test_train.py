@@ -234,7 +234,7 @@ def test_train_eval_surge_xt(
     from click.testing import CliRunner
     from pedalboard.io import AudioFile
 
-    from scripts.compute_audio_metrics import main as compute_audio_metrics_main
+    from synth_setter.evaluation.compute_audio_metrics import main as compute_audio_metrics_main
 
     NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
     METRICS_FILE_EXPECTATIONS = {
@@ -276,7 +276,7 @@ def test_train_eval_surge_xt(
     # Render predicted params through the Surge XT VST to per-sample audio directories.
     # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
     # of the saved target audio. Also works around an `UnboundLocalError` in
-    # `scripts/predict_vst_audio.py` where `target_synth_params` is referenced in the default
+    # `src/synth_setter/evaluation/predict_vst_audio.py` where `target_synth_params` is referenced in the default
     # path without being defined outside the `rerender_target` branch (see #672).
     audio_dir = tmp_path / "audio"
     runner = CliRunner()
@@ -287,7 +287,8 @@ def test_train_eval_surge_xt(
 
     args += [
         sys.executable,
-        "scripts/predict_vst_audio.py",
+        "-m",
+        "synth_setter.evaluation.predict_vst_audio",
         str(predictions_dir),
         str(audio_dir),
         f"--param_spec={param_spec_name}",

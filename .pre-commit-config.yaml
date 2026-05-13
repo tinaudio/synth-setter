@@ -46,14 +46,14 @@ repos:
         exclude: >-
           (?x)^(
             notebooks/|
-            scripts/add_music2latent\.py|
-            scripts/compute_audio_metrics\.py|
-            scripts/get_dataset_stats\.py|
-            scripts/model_from_wandb_repl\.py|
-            scripts/plot_param2tok\.py|
-            scripts/predict_vst_audio\.py|
-            scripts/reshard_data\.py|
-            scripts/rewrite_dataset_to_latest\.py|
+            src/synth_setter/pipeline/data/add_music2latent\.py|
+            src/synth_setter/evaluation/compute_audio_metrics\.py|
+            src/synth_setter/pipeline/data/stats\.py|
+            src/synth_setter/tools/model_from_wandb\.py|
+            src/synth_setter/tools/plot_param2tok\.py|
+            src/synth_setter/evaluation/predict_vst_audio\.py|
+            src/synth_setter/pipeline/data/reshard\.py|
+            src/synth_setter/pipeline/data/rewrite_to_latest\.py|
             src/synth_setter/data/fm_datamodule\.py|
             src/synth_setter/data/kosc_datamodule\.py|
             src/synth_setter/data/ot\.py|
@@ -121,16 +121,15 @@ repos:
       - id: interrogate
         exclude: >-
           (?x)^(
-            scripts/add_music2latent\.py|
-            scripts/compute_audio_metrics\.py|
-            scripts/generate_surge_xt_data\.py|
-            scripts/get_dataset_stats\.py|
-            scripts/make_sig_perf\.py|
-            scripts/model_from_wandb_repl\.py|
-            scripts/paramspec_to_table\.py|
-            scripts/plot_param2tok\.py|
-            scripts/predict_vst_audio\.py|
-            scripts/reshard_data\.py|
+            src/synth_setter/pipeline/data/add_music2latent\.py|
+            src/synth_setter/evaluation/compute_audio_metrics\.py|
+            src/synth_setter/pipeline/data/stats\.py|
+            src/synth_setter/tools/sig_perf\.py|
+            src/synth_setter/tools/model_from_wandb\.py|
+            src/synth_setter/tools/paramspec_to_table\.py|
+            src/synth_setter/tools/plot_param2tok\.py|
+            src/synth_setter/evaluation/predict_vst_audio\.py|
+            src/synth_setter/pipeline/data/reshard\.py|
             src/synth_setter/data/audio_datamodule\.py|
             src/synth_setter/data/fm_datamodule\.py|
             src/synth_setter/data/kosc_datamodule\.py|

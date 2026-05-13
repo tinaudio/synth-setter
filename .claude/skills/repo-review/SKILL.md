@@ -34,6 +34,8 @@ If there is no PR for the current branch, stop and tell the user to push and ope
 
 Reviewers need to know up front if the PR can't merge or has failing CI — both are independent of the diff but reviewers shouldn't have to dig for them. Surface each as a top-of-review `[repo-review:block]` item folded into the review body in Step 5 (not as inline comments — they have no diff anchor).
 
+Both are hard-gate conditions from CLAUDE.md's `### PR Readiness` ("Hard gate (all four must hold)"). A PR with **any failing CI check** or with `mergeable != MERGEABLE` is **not ready**, regardless of how clean the diff is. Always emit the BLOCK lines below when the conditions fire; don't suppress them because the rest of the review is passing.
+
 **Merge conflicts.** From the JSON in Step 1:
 
 - `mergeable == "CONFLICTING"` → record one BLOCK line:

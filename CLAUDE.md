@@ -45,21 +45,21 @@ The optional `(scope)` after the prefix names the **specific component** being c
 
 Non-exhaustive table of common synth-setter scopes:
 
-| Scope        | Meaning                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `metrics`    | Mel/audio metric tooling, normalization-stats computation/writer (`scripts/get_dataset_stats.py`, `stats.npz`,)    |
-| `pipeline`   | Broader distributed data-pipeline code under `src/synth_setter/pipeline/` (stats-writer code uses `metrics`)       |
-| `datamodule` | Lightning datamodules (`src/synth_setter/data/*_datamodule.py`)                                                    |
-| `training`   | Training entrypoint and `src/synth_setter/cli/train.py` / training loop code                                       |
-| `eval`       | Evaluation entrypoint and `src/synth_setter/cli/eval.py` / evaluation harness                                      |
-| `configs`    | Hydra YAML configs under `configs/`                                                                                |
-| `layout`     | Package-layout / src-layout moves (the [#784](https://github.com/tinaudio/synth-setter/issues/784) migration line) |
-| `claude-md`  | Edits to `CLAUDE.md` itself                                                                                        |
-| `ci`         | GitHub Actions workflows, CI scripts                                                                               |
-| `docker`     | Dockerfiles, devcontainer configs, image build setup                                                               |
-| `deps`       | Dependency bumps (`pyproject.toml`, lockfiles)                                                                     |
+| Scope        | Meaning                                                                                                                    |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `metrics`    | Mel/audio metric tooling, normalization-stats computation/writer (`src/synth_setter/pipeline/data/stats.py`, `stats.npz`,) |
+| `pipeline`   | Broader distributed data-pipeline code under `src/synth_setter/pipeline/` (stats-writer code uses `metrics`)               |
+| `datamodule` | Lightning datamodules (`src/synth_setter/data/*_datamodule.py`)                                                            |
+| `training`   | Training entrypoint and `src/synth_setter/cli/train.py` / training loop code                                               |
+| `eval`       | Evaluation entrypoint and `src/synth_setter/cli/eval.py` / evaluation harness                                              |
+| `configs`    | Hydra YAML configs under `configs/`                                                                                        |
+| `layout`     | Package-layout / src-layout moves (the [#784](https://github.com/tinaudio/synth-setter/issues/784) migration line)         |
+| `claude-md`  | Edits to `CLAUDE.md` itself                                                                                                |
+| `ci`         | GitHub Actions workflows, CI scripts                                                                                       |
+| `docker`     | Dockerfiles, devcontainer configs, image build setup                                                                       |
+| `deps`       | Dependency bumps (`pyproject.toml`, lockfiles)                                                                             |
 
-**`metrics`, not `pipeline`, for stats-writer changes.** Any change touching `scripts/get_dataset_stats.py`, `stats.npz` schema/handling, or other mel/audio normalization-stats tooling uses `(metrics)` as its scope — even though the file lives under `scripts/` and the data it produces is consumed by the pipeline. The rule is "narrowest accurate scope": `metrics` is more specific than `pipeline` and makes the log easier to scan.
+**`metrics`, not `pipeline`, for stats-writer changes.** Any change touching `src/synth_setter/pipeline/data/stats.py`, `stats.npz` schema/handling, or other mel/audio normalization-stats tooling uses `(metrics)` as its scope — even though the module lives structurally under `src/synth_setter/pipeline/data/` and the data it produces is consumed by the broader pipeline. The rule is "narrowest accurate scope": `metrics` is more specific than `pipeline` and makes the log easier to scan.
 
 Formatting follows the same convention as the title example under [`### PR Titles`](#pr-titles) (`feat(pipeline)!: complete dataset_spec Hydra migration; remove load_dataset_spec_yaml`): conventional prefix, scope in parentheses, optional `!` for breaking, then a colon and the human-readable subject.
 
@@ -250,6 +250,17 @@ Example:
 The bad version forces the reader to ask "Hydra migration of *what*?" — the project has had several. The good version answers that question in the title.
 
 ### PR Readiness
+
+**Hard gate (all four must hold).** A PR is ready iff:
+
+1. **CI is fully green** — every required AND optional check passing, none pending, errored, or failing.
+2. **`mergeable=MERGEABLE`** — no merge conflicts and GitHub's mergeability calc is settled (not `UNKNOWN`, not `CONFLICTING`).
+3. **Every open review comment has an inline reply** — human reviewers AND Copilot.
+4. **Copilot has produced no new comments since the last push** — verify both the inline-comments endpoint and the top-level reviews endpoint.
+
+"PR mergeable" alone is **not** the gate — green CI is a separate, equally-hard precondition. All four conditions are AND-ed; failing any one means not ready.
+
+Detailed elaboration of each gate:
 
 A PR is **not ready** — for review, merge, or hand-off — until **all** of these hold:
 

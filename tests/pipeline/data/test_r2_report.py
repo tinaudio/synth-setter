@@ -1,4 +1,4 @@
-"""Tests for scripts/r2_shard_report.py — R2 shard analysis and reporting.
+"""Tests for src/synth_setter/pipeline/data/r2_report.py — R2 shard analysis and reporting.
 
 Tests are organized around the PUBLIC typed API:
 - analyze_shards(): pure function that returns a ShardReport TypedDict
@@ -15,7 +15,7 @@ import uuid
 
 import pytest
 
-from scripts.r2_shard_report import (
+from synth_setter.pipeline.data.r2_report import (
     RcloneFile,
     ShardReport,
     analyze_shards,

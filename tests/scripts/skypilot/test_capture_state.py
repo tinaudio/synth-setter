@@ -1,4 +1,4 @@
-"""Tests for scripts/capture-skypilot-state.sh — kind/k8s state capture.
+"""Tests for scripts/skypilot/capture-state.sh — kind/k8s state capture.
 
 The script captures controller-side state from the kind cluster BEFORE
 ``sky local down`` reaps it: apiserver objects (pods, events, nodes,
@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-SCRIPT = REPO_ROOT / "scripts" / "capture-skypilot-state.sh"
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "skypilot" / "capture-state.sh"
 
 
 def _write_kubectl_shim(shim_path: Path, body: str) -> None:
@@ -41,7 +41,7 @@ def _run(
     *,
     expect_success: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run capture-skypilot-state.sh with a stubbed kubectl on PATH.
+    """Run scripts/skypilot/capture-state.sh with a stubbed kubectl on PATH.
 
     :param shim_dir: Directory containing the ``kubectl`` shim. Prepended to PATH.
     :param run_metadata_dir: Value for ``RUN_METADATA_DIR``. ``None`` means leave unset.

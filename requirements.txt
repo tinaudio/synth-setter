@@ -1,6 +1,11 @@
-# Backward-compatible umbrella requirements file.
-# Docker/CI can install these files separately for tighter control and better caching:
-#   uv pip install -r requirements-torch.txt
-#   uv pip install -r requirements-app.txt
--r requirements-torch.txt
--r requirements-app.txt
+# TRANSITIONAL STUB — see #533. Kept ONLY to bridge the `dev-snapshot`
+# image-bake lag during PR CI: the previous image's baked copy of
+# `scripts/sync_worker_checkout.sh` still runs `uv pip install -r
+# requirements.txt` after checking out the PR's HEAD, and bash buffers
+# the script at open-time so the updated script on disk (which does
+# `uv pip install -e ".[torch]"`) doesn't take effect within the same
+# bash process. This stub resolves to that same install so the baked
+# launcher path keeps working until the next dev-snapshot rebuild
+# picks up the new script. Delete this file once the dev-snapshot
+# image has been rebuilt from main with #1008's scripts/.
+-e .[torch]

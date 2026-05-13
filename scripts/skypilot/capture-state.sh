@@ -15,7 +15,7 @@
 # reveals why. See PR #876.
 #
 # Usage:
-#   scripts/capture-skypilot-state.sh
+#   scripts/skypilot/capture-state.sh
 #
 # Required env:
 #   RUN_METADATA_DIR   Output root. Captures land in <RUN_METADATA_DIR>/k8s_state/.

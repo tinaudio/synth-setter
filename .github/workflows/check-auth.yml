@@ -7,7 +7,7 @@ name: Check Auth
 # credential expiries before they take down test-dataset-generation.
 #
 # Per provider the workflow:
-#   1. Runs scripts/skypilot_write_provider_creds.sh, which materializes
+#   1. Runs scripts/skypilot/write_provider_creds.sh, which materializes
 #      ~/.cloudflare/, ~/.runpod/ or ~/.oci/+~/.sky/. The script emits no
 #      stdout by design so this workflow can run it without a leak surface.
 #   2. Verifies the cred files exist with mode 600.
@@ -93,7 +93,7 @@ jobs:
           PROVIDER: ${{ matrix.provider }}
         run: |
           set -euo pipefail
-          bash scripts/skypilot_write_provider_creds.sh --provider "${PROVIDER}"
+          bash scripts/skypilot/write_provider_creds.sh --provider "${PROVIDER}"
 
       - name: Verify cred files exist with restrictive mode
         if: ${{ env.SKIP_CRED_CHECK != '1' }}

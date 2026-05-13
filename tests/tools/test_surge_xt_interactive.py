@@ -1,4 +1,4 @@
-"""Tests for scripts/surge_xt_interactive.py prediction decoding helpers."""
+"""Tests for src/synth_setter/tools/surge_xt_interactive.py prediction decoding helpers."""
 
 import importlib
 import queue
@@ -22,7 +22,7 @@ SURGE_SIMPLE = "surge_simple"
 @pytest.fixture(scope="module")
 def surge_xt_interactive():
     """Import the script module lazily so collection doesn't fail on heavy imports."""
-    return importlib.import_module("scripts.surge_xt_interactive")
+    return importlib.import_module("synth_setter.tools.surge_xt_interactive")
 
 
 @pytest.fixture(scope="module")

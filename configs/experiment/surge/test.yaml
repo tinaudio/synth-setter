@@ -1,7 +1,7 @@
 # @package _global_
 
 # Smoke-test experiment for Surge XT. Uses the cpu trainer so the same config
-# works for both Mac (where `scripts/surge_xt_interactive.py` is normally run)
+# works for both Mac (where `src/synth_setter/tools/surge_xt_interactive.py` is normally run)
 # and Linux CI smoke-tests. Mirrors the bake-ins in `cfg_surge_xt_global`
 # (tests/conftest.py) — one training step, one device, single-sample batches,
 # no logger, no test stage.
@@ -30,14 +30,15 @@ model:
     # Mandatory override — must equal the encoded width of the param_spec used by the run.
     # Set this to ``len(param_specs[<spec-name>])`` via the CLI override (e.g.
     # ``model.net.d_out=92`` for ``surge_simple`` or ``model.net.d_out=300`` for ``surge_xt``).
-    # ``scripts/surge_xt_interactive.py`` injects this automatically from ``--param-spec-name``.
+    # ``src/synth_setter/tools/surge_xt_interactive.py`` injects this automatically from ``--param-spec-name``.
     d_out: ???
 
 data:
   batch_size: 1
   pin_memory: false
   ot: false
-  use_saved_mean_and_variance: false
+  # Requires sibling stats.npz; see #1002.
+  use_saved_mean_and_variance: true
   num_workers: 0
 
 trainer:

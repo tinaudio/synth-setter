@@ -104,15 +104,15 @@ Both buckets emit the per-row "round-trip" series (five distance metrics
 plus the two non-distance sentinels `num-samples` and
 `wall-clock-seconds-per-render`):
 
-| Metric                                | Computed by                                                                 | Unit        | Smaller-is-better? |
-| ------------------------------------- | --------------------------------------------------------------------------- | ----------- | ------------------ |
-| `multi-scale-spectral-loss-max`       | `compute_mss` (`scripts/compute_audio_metrics.py`) — multi-scale log-mel L1 | dB          | yes                |
-| `dtw-aligned-mfcc-distance-max`       | `compute_wmfcc` — DTW-aligned MFCC L1 distance                              | L1          | yes                |
-| `spectral-optimal-transport-max`      | `compute_sot` — Wasserstein on STFT magnitudes                              | Wasserstein | yes                |
-| `rms-envelope-cosine-distance-max`    | `1 - compute_rms` — RMS envelope cosine distance                            | 1-cos       | yes                |
-| `mel-spectrogram-mean-absolute-error` | mean abs diff on stored mel arrays                                          | dB          | yes                |
-| `num-samples`                         | static fixture size (input parameter)                                       | count       | n/a (sentinel)     |
-| `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                 | seconds     | yes                |
+| Metric                                | Computed by                                                                                     | Unit        | Smaller-is-better? |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------- | ------------------ |
+| `multi-scale-spectral-loss-max`       | `compute_mss` (`src/synth_setter/evaluation/compute_audio_metrics.py`) — multi-scale log-mel L1 | dB          | yes                |
+| `dtw-aligned-mfcc-distance-max`       | `compute_wmfcc` — DTW-aligned MFCC L1 distance                                                  | L1          | yes                |
+| `spectral-optimal-transport-max`      | `compute_sot` — Wasserstein on STFT magnitudes                                                  | Wasserstein | yes                |
+| `rms-envelope-cosine-distance-max`    | `1 - compute_rms` — RMS envelope cosine distance                                                | 1-cos       | yes                |
+| `mel-spectrogram-mean-absolute-error` | mean abs diff on stored mel arrays                                                              | dB          | yes                |
+| `num-samples`                         | static fixture size (input parameter)                                                           | count       | n/a (sentinel)     |
+| `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                                     | seconds     | yes                |
 
 The **`1 preset N renders`** bucket additionally emits five `all-pairs-*`
 series — these are the **fix-regression signal for the #489

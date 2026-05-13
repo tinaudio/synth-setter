@@ -1,7 +1,7 @@
 # W&B Integration Reference
 
 > **Code version**: `1970388` (2026-04-25, `feat/wandb-default-logger`)
-> **PyTorch**: see `requirements.txt` · **Lightning**: see `requirements.txt`
+> **PyTorch**: see `pyproject.toml` (`[project.optional-dependencies].torch`) · **Lightning**: see `pyproject.toml` (`[project.optional-dependencies].torch`)
 > **Tracking**: #252, #263
 
 ______________________________________________________________________
@@ -141,7 +141,7 @@ Written via `wandb.config.update(..., allow_val_change=True)`.
 | `sys.argv`     | W&B auto-captures command-line args            |
 | System metrics | GPU utilization, memory, CPU, disk (W&B agent) |
 | Git SHA + diff | W&B auto-captures if in a git repo             |
-| Python deps    | `requirements.txt` / `pip freeze` snapshot     |
+| Python deps    | `pyproject.toml` / `pip freeze` snapshot       |
 
 ______________________________________________________________________
 

@@ -125,13 +125,13 @@ _MIDI_POLL_INTERVAL_SECONDS = 0.01
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 300
 _EVAL_SUBPROCESS_TIMEOUT_SECONDS = 600
 _METRICS_SUBPROCESS_TIMEOUT_SECONDS = 300
-_VST_HEADLESS_WRAPPER = _REPO_ROOT / "scripts" / "run-linux-vst-headless.sh"
+_VST_HEADLESS_WRAPPER = _REPO_ROOT / "docker" / "ubuntu22_04" / "run-linux-vst-headless.sh"
 _EVAL_SCRIPT = _REPO_ROOT / "src" / "eval.py"
-_PREDICT_VST_AUDIO_SCRIPT = _REPO_ROOT / "scripts" / "predict_vst_audio.py"
-_COMPUTE_AUDIO_METRICS_SCRIPT = _REPO_ROOT / "scripts" / "compute_audio_metrics.py"
+_PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
+_COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 
 # Below this peak, librosa RMS norms underflow and ``compute_rms`` produces
-# 0/0 → NaN (see ``compute_rms`` in ``scripts/compute_audio_metrics.py``).
+# 0/0 → NaN (see ``compute_rms`` in ``synth_setter.evaluation.compute_audio_metrics``).
 SILENCE_PEAK_THRESHOLD = 1e-4
 
 _METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
@@ -744,7 +744,7 @@ def _build_predict_vst_audio_argv(
     platform: str | None = None,
     wrapper_path: Path | None = None,
 ) -> list[str]:
-    """Build the argv list for ``scripts/predict_vst_audio.py`` rendering.
+    """Build the argv list for ``synth_setter.evaluation.predict_vst_audio`` rendering.
 
     On Linux the VST headless wrapper is prepended so the subprocess inherits a Xvfb display.
     No subprocess execution and no writes; the only side effects are reading ``sys.platform``
@@ -769,7 +769,8 @@ def _build_predict_vst_audio_argv(
         args.append(str(resolved_wrapper))
     args += [
         sys.executable,
-        str(_PREDICT_VST_AUDIO_SCRIPT),
+        "-m",
+        _PREDICT_VST_AUDIO_MODULE,
         str(predictions_output_dir),
         str(audio_dir),
         "--param_spec",
@@ -884,7 +885,8 @@ def _compute_and_validate_metrics(
     runner(  # noqa: S603
         [
             sys.executable,
-            str(_COMPUTE_AUDIO_METRICS_SCRIPT),
+            "-m",
+            _COMPUTE_AUDIO_METRICS_MODULE,
             str(audio_dir),
             str(metrics_dir),
             "-w",
@@ -916,9 +918,9 @@ def eval_patches(
     1. Predict params via ``src/synth_setter/cli/eval.py mode=predict`` (``_run_predict``).
     2. Verify the per-sample ``pred-{i}.pt`` / ``target-audio-{i}.pt`` / ``target-params-{i}.pt``
        files were written and that prediction tensors are finite (``_validate_predictions``).
-    3. Render predicted vs. target audio via ``scripts/predict_vst_audio.py`` and verify the
+    3. Render predicted vs. target audio via ``synth_setter.evaluation.predict_vst_audio`` and verify the
        per-sample artifacts (``_render_predicted_audio``).
-    4. Compute MSS / wMFCC / SOT / RMS metrics via ``scripts/compute_audio_metrics.py`` and verify
+    4. Compute MSS / wMFCC / SOT / RMS metrics via ``synth_setter.evaluation.compute_audio_metrics`` and verify
        the resulting CSVs (``_compute_and_validate_metrics``).
 
     Re-runs against the same ``dataset_root_dir`` clear the previous prediction/audio/metrics

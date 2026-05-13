@@ -28,7 +28,7 @@ cd synth-setter
 Install the project in editable mode with development dependencies:
 
 ```bash
-make install        # runs: pip install uv && uv pip install -r requirements.txt -e .
+make install        # runs: pip install uv && uv pip install -e ".[torch,dev]"
 ```
 
 Install pre-commit hooks:

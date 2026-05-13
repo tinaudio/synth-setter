@@ -1,18 +1,85 @@
 [project]
 name = "synth-setter"
-version = "4.0.1"
+version = "5.0.0"
 description = "Studying the effect of permutation symmetry on audio synthesiser parameter inference."
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  # --------- hydra --------- #
+  "hydra-colorlog==1.2.0",
+  "hydra-core==1.3.2",
+  "hydra-optuna-sweeper==1.2.0",
+  # --------- loggers --------- #
+  "tensorboard",
+  "wandb",
+  # --------- pipeline --------- #
+  "click<8.2",
+  "numpy",
+  "oci",
+  "pydantic>=2",
+  "pydantic-settings>=2",
+  "pyyaml",
+  # Pin must stay in sync with the bare-runner install in
+  # .github/workflows/test-skypilot-debug.yml.
+  "skypilot[runpod,oci]==0.12.0",
+  "structlog",
+  "tenacity",
+  "webdataset",
+  # --------- runtime --------- #
+  "dask[distributed]",
+  "einops",
+  "h5py",
+  "hdf5plugin",
+  "librosa",
+  "loguru==0.7.3",
+  "matplotlib",
+  "mido",
+  "pandas",
+  "pedalboard",
+  "POT",
+  "pyloudnorm",
+  "python-dotenv",
+  "rich",
+  "rootutils",
+  "runpod==1.8.1",
+  "scipy==1.14.1",
+  "sh",
+  "threadpoolctl",
+  # --------- eval metrics --------- #
+  "pesto-pitch==2.0.1",
+  "dtw-python==1.7.4",
+  "kymatio==0.3.0",
+]
 
 [project.optional-dependencies]
+torch = [
+  # Install with an explicit index (via uv's --torch-backend) when targeting
+  # CUDA wheels in Docker.
+  "torch>=2.0.0",
+  "torchvision>=0.15.0",
+  "torchaudio>=2.0.0",
+  "lightning>=2.6.0",
+  "torchmetrics>=0.11.4",
+]
+dev = [
+  "hypothesis",
+  "mutmut==3.5.*",
+  "pre-commit",
+  "pyright==1.1.408",
+  "pytest",
+  "pytest-benchmark",
+  "pytest-xdist",
+  "ruff",
+]
 docs = [
   "mkdocs",
   "mkdocs-material",
   "mkdocstrings[python]",
   "griffe-pydantic",
+]
+all = [
+  "synth-setter[torch,dev]",
 ]
 
 
@@ -25,6 +92,7 @@ synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 
 
 
+
 [tool.setuptools]
 packages = [
   "synth_setter",
@@ -32,11 +100,14 @@ packages = [
   "synth_setter.data",
   "synth_setter.data.components",
   "synth_setter.data.vst",
+  "synth_setter.evaluation",
   "synth_setter.models",
   "synth_setter.models.components",
   "synth_setter.pipeline",
   "synth_setter.pipeline.ci",
+  "synth_setter.pipeline.data",
   "synth_setter.pipeline.schemas",
+  "synth_setter.tools",
   "synth_setter.utils",
 ]
 
@@ -94,32 +165,31 @@ ignore = ["E501", "S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "notebooks/**" = ["E702", "E722", "F841", "T201", "ANN001"]
-"scripts/add_music2latent.py" = ["S605"]
-"scripts/compute_audio_metrics.py" = ["T201", "ANN001"]
-"scripts/get_dataset_stats.py" = ["E402", "T201", "ANN001"]
-"scripts/make_sig_perf.py" = ["E402", "T201"]
-"scripts/model_from_wandb_repl.py" = ["E402"]
-"scripts/paramspec_to_table.py" = ["E402", "T201"]
-"scripts/plot_param2tok.py" = ["E402", "E741", "F841", "T201"]
-"scripts/predict_vst_audio.py" = ["E402", "F841"]
+"src/synth_setter/pipeline/data/add_music2latent.py" = ["S605"]
+"src/synth_setter/evaluation/compute_audio_metrics.py" = ["T201", "ANN001"]
+"src/synth_setter/pipeline/data/stats.py" = ["E402", "T201", "ANN001"]
+"src/synth_setter/tools/sig_perf.py" = ["E402", "T201"]
+"src/synth_setter/tools/model_from_wandb.py" = ["E402"]
+"src/synth_setter/tools/paramspec_to_table.py" = ["E402", "T201"]
+"src/synth_setter/tools/plot_param2tok.py" = ["E402", "E741", "F841", "T201"]
+"src/synth_setter/evaluation/predict_vst_audio.py" = ["E402", "F841"]
 # S603/S606/S607: idle/passthrough use os.execvp by design — replace-process
 # semantics so Docker SIGTERM reaches the exec'd PID 1.
-"scripts/docker_entrypoint.py" = ["S603", "S606", "S607"]
+"src/synth_setter/tools/docker_entrypoint.py" = ["S603", "S606", "S607"]
 # S603/S607: rclone subprocess calls use CLI args (user-controlled, not untrusted input).
 # T201: click.echo used for CLI output.
-"scripts/r2_shard_report.py" = ["S603", "S607", "T201"]
-"scripts/reshard_data.py" = ["T201"]
+"src/synth_setter/pipeline/data/r2_report.py" = ["S603", "S607", "T201"]
+"src/synth_setter/pipeline/data/reshard.py" = ["T201"]
 # .claude/skills/_shared/post_review.py: CLI helper that shells out to `gh` and
 # prints html_url on success. S603/S607 are the bandit warnings for subprocess
 # with a partial path — `gh` is on PATH by design (same pattern used by the
-# scripts/r2_shard_report.py exemption above).
+# r2_report.py exemption above).
 ".claude/skills/_shared/post_review.py" = ["T201", "S603", "S607"]
-"scripts/rewrite_dataset_to_latest.py" = ["ANN001"]
-"scripts/subdir_funtime.py" = ["F841", "ANN001"]
+"src/synth_setter/pipeline/data/rewrite_to_latest.py" = ["ANN001"]
 # S603/S607: rclone subprocess calls in R2 integration test fixtures.
-"tests/scripts/test_r2_shard_report.py" = ["S603", "S607"]
+"tests/pipeline/data/test_r2_report.py" = ["S603", "S607"]
 # ANN001: pytest fixture-injected args left un-annotated on legacy callsites.
-"tests/scripts/test_surge_xt_interactive.py" = ["ANN001"]
+"tests/tools/test_surge_xt_interactive.py" = ["ANN001"]
 "tests/pipeline/test_schemas/test_dataset_spec.py" = ["ANN001"]
 "tests/pipeline/test_schemas/test_prefix.py" = ["ANN001"]
 "tests/test_benchmarks.py" = ["ANN001"]
@@ -190,14 +260,13 @@ exclude = '''(?x)
   | ^src/synth_setter/pipeline/schemas/image_config\.py$
   | ^src/synth_setter/pipeline/schemas/prefix\.py$
   | ^src/synth_setter/pipeline/schemas/spec\.py$
-  | ^scripts/add_music2latent\.py$
-  | ^scripts/compute_audio_metrics\.py$
-  | ^scripts/docker_entrypoint\.py$
-  | ^scripts/predict_vst_audio\.py$
-  | ^scripts/r2_shard_report\.py$
-  | ^scripts/rewrite_dataset_to_latest\.py$
-  | ^scripts/subdir_funtime\.py$
-  | ^scripts/surge_xt_interactive\.py$
+  | ^src/synth_setter/pipeline/data/add_music2latent\.py$
+  | ^src/synth_setter/evaluation/compute_audio_metrics\.py$
+  | ^src/synth_setter/tools/docker_entrypoint\.py$
+  | ^src/synth_setter/evaluation/predict_vst_audio\.py$
+  | ^src/synth_setter/pipeline/data/r2_report\.py$
+  | ^src/synth_setter/pipeline/data/rewrite_to_latest\.py$
+  | ^src/synth_setter/tools/surge_xt_interactive\.py$
   | ^src/synth_setter/data/audio_datamodule\.py$
   | ^src/synth_setter/data/fm_datamodule\.py$
   | ^src/synth_setter/data/kosc_datamodule\.py$
@@ -241,15 +310,15 @@ exclude = '''(?x)
   | ^tests/pipeline/test_schemas/test_image_config\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
   | ^tests/infra/
-  | ^tests/scripts/test_compute_audio_metrics\.py$
-  | ^tests/scripts/test_r2_shard_report\.py$
-  | ^tests/scripts/test_skypilot_write_provider_creds\.py$
-  | ^tests/scripts/test_surge_xt_interactive\.py$
+  | ^tests/evaluation/test_compute_audio_metrics\.py$
+  | ^tests/pipeline/data/test_r2_report\.py$
+  | ^tests/scripts/skypilot/test_write_provider_creds\.py$
+  | ^tests/tools/test_surge_xt_interactive\.py$
   | ^tests/test_benchmarks\.py$
   | ^tests/test_callbacks\.py$
   | ^tests/test_compare_baseline_configs\.py$
   | ^tests/test_configs\.py$
-  | ^tests/test_docker_entrypoint\.py$
+  | ^tests/tools/test_docker_entrypoint\.py$
   | ^tests/test_logging_utils\.py$
   | ^tests/test_properties\.py$
 '''
@@ -279,8 +348,19 @@ exclude_lines = [
 
 
 [tool.mutmut]
-# src/ excluded: mutmut v3 asserts module names don't start with "src." (it
-# assumes src-layout, but this project imports `src` as a package).
-paths_to_mutate = ["scripts/"]
-tests_dir = ["tests/scripts/"]
+# Phase 4 moved the previously-scripts/-resident Python tools into
+# src/synth_setter/{evaluation,tools,pipeline/data}/; scripts/ci/ retains the
+# job-queue CLI used by .github/workflows/job-queue*.yaml.
+paths_to_mutate = [
+    "src/synth_setter/evaluation/",
+    "src/synth_setter/tools/",
+    "src/synth_setter/pipeline/data/",
+    "scripts/ci/",
+]
+tests_dir = [
+    "tests/evaluation/",
+    "tests/tools/",
+    "tests/pipeline/data/",
+    "tests/scripts/ci/",
+]
 pytest_add_cli_args = ["-m", "not slow and not requires_vst and not r2 and not gpu and not benchmark"]

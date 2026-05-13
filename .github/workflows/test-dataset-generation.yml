@@ -88,16 +88,16 @@ on:
       - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/pipeline/ci/**"
       - "src/synth_setter/pipeline/r2_io.py"
-      - "scripts/docker_entrypoint.py"
-      - "scripts/run-linux-vst-headless.sh"
-      - "scripts/ensure_plugin_symlinks.sh"
+      - "src/synth_setter/tools/docker_entrypoint.py"
+      - "docker/ubuntu22_04/run-linux-vst-headless.sh"
+      - "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
       - "scripts/sync_worker_checkout.sh"
-      - "scripts/skypilot_write_provider_creds.sh"
+      - "scripts/skypilot/write_provider_creds.sh"
       - "src/synth_setter/pipeline/skypilot_launch.py"
       - ".github/workflows/test-dataset-generation.yml"
       - ".github/workflows/generate-dataset-shards.yaml"
       - ".github/workflows/validate-dataset-shards.yaml"
-      - "requirements*.txt"
+      - "pyproject.toml"
 
 permissions:
   contents: read
@@ -179,7 +179,7 @@ jobs:
       # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
       # plugin. Without it, Hydra compose fails with:
       #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
-      # Pin both to the same versions as requirements-app.txt.
+      # Pin both to the same versions as [project.dependencies] in pyproject.toml.
       - name: Install Hydra for dataset-config composition
         run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
@@ -272,9 +272,9 @@ jobs:
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              bash scripts/ensure_plugin_symlinks.sh
+              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
               python -m synth_setter.pipeline.ci.materialize_spec "$CONFIG_PATH" /run-metadata
-              python scripts/docker_entrypoint.py generate_dataset \
+              python -m synth_setter.tools.docker_entrypoint generate_dataset \
                 --spec /run-metadata/input_spec.json
               chmod 0644 /run-metadata/input_spec.json
             ' \

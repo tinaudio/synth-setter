@@ -276,19 +276,28 @@ RUN python --version && \
 FROM python-base AS builder-install-synth-setter-deps
 # Install all Python dependencies via uv in a single resolution pass.
 # uv's built-in cache (mounted below) persists across builds — torch wheels
-# (~2.5 GB) are only downloaded once and survive requirements-app.txt changes.
+# (~2.5 GB) are only downloaded once and survive pyproject.toml changes.
+#
+# Cache scope: only pyproject.toml + README.md are copied in (README.md is
+# referenced by [project].readme), so unrelated source edits do not bust the
+# ~2.5 GB torch-wheels layer. uv reads dependencies directly from
+# pyproject.toml via `-r`, with `--extra torch --extra dev` pulling the
+# matching optional groups. The project itself is reinstalled --no-deps
+# from real source in the dev-base stage below.
 #
 # --torch-backend: tells uv which PyTorch variant to install (e.g. cu128, cpu).
 # This replaces --extra-index-url + --index-strategy unsafe-best-match,
 # which was needed because the PyTorch CUDA index carried stale copies of
 # common packages.
-COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/pyproject.toml /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/README.md /artifacts/
 ARG TORCH_BACKEND=cu128
 RUN --mount=type=cache,target=/root/.cache/uv \
+    cd /artifacts && \
     uv pip install \
         --torch-backend ${TORCH_BACKEND} \
-        -r /artifacts/requirements.txt && \
-    rm -rf /artifacts/requirements*.txt
+        -r pyproject.toml --extra torch --extra dev && \
+    rm -rf /artifacts/pyproject.toml /artifacts/README.md
 
 # Runtime apt packages: headless VST loading, rclone for R2 uploads, and the
 # toolchain SkyPilot's RunPod backend needs to provision and stage file_mounts
@@ -317,7 +326,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
 
 # Install pueue task queue manager (https://github.com/Nukesor/pueue). Static
 # musl binaries from the upstream release page — no apt repo and no rust
-# toolchain pulled into the image. Used by `scripts/job_queue.py` as the
+# toolchain pulled into the image. Used by `scripts/ci/job_queue.py` as the
 # job-queue backend.
 #
 # Integrity: each binary is verified against a pinned SHA256 (per arch) before
@@ -343,7 +352,7 @@ RUN case "${TARGETARCH:-}" in \
     pueued --version
 
 WORKDIR /artifacts
-COPY --from=synth-setter-src /home/build/synth-setter/scripts/run-linux-vst-headless.sh /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/docker/ubuntu22_04/run-linux-vst-headless.sh /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/data/vst/core.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
 # Validate that Surge XT loads correctly under headless X11
@@ -400,7 +409,7 @@ RUN uv pip install --no-deps -e .
 # Run not-slow unit tests (mocked subprocess + LocalFakeUploader — no VST or R2 needed)
 RUN pytest -k "not slow" -v
 
-COPY scripts/docker_entrypoint.py /usr/local/bin/entrypoint.py
+COPY src/synth_setter/tools/docker_entrypoint.py /usr/local/bin/entrypoint.py
 RUN chmod +x /usr/local/bin/entrypoint.py
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
 # `dockerArgs: "bash -c '<base64-setup>'"`, and a baked-in click-CLI
