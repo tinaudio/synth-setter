@@ -267,7 +267,6 @@ jobs:
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e SYNTH_SETTER_WORKER_RANK=0 \
             -e SYNTH_SETTER_NUM_WORKERS=1 \
-            -e PYTHONPATH=/home/build/synth-setter \
             "${IMAGE}" \
             bash -c '
               set -euo pipefail
@@ -303,7 +302,6 @@ jobs:
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e R2_BUCKET \
             -e CLUSTER_NAME \
-            -e PYTHONPATH=/home/build/synth-setter \
             "${IMAGE}" \
             python3 -c "
           import os

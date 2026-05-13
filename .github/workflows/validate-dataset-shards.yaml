@@ -111,6 +111,5 @@ jobs:
             -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
             -e RCLONE_CONFIG_R2_ENDPOINT \
             -e SPEC_URI \
-            -e PYTHONPATH=/home/build/synth-setter \
             "${IMAGE}" \
             python3 -m synth_setter.pipeline.ci.validate_shard "$SPEC_URI"

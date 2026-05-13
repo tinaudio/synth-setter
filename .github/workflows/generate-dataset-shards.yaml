@@ -373,7 +373,6 @@ jobs:
             -e NUM_WORKERS_FLAG \
             -e TAIL_FLAG \
             -e LOCAL_FLAG \
-            -e PYTHONPATH=/home/build/synth-setter \
             "${IMAGE}" \
             bash -c '
               set -euo pipefail

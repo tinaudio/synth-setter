@@ -282,7 +282,6 @@ jobs:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
           docker run --rm \
-            -e PYTHONPATH=/home/build/synth-setter \
             "$SMOKE_IMAGE" \
             pytest tests/docker/test_smoke.py::test_pedalboard_importable -v
 
@@ -292,7 +291,6 @@ jobs:
           SMOKE_IMAGE: ${{ steps.config.outputs.image }}:dev-snapshot-${{ steps.source.outputs.sha }}
         run: |
           docker run --rm \
-            -e PYTHONPATH=/home/build/synth-setter \
             "$SMOKE_IMAGE" \
             docker/ubuntu22_04/run-linux-vst-headless.sh \
               pytest tests/docker/test_smoke.py::test_surge_xt_loads -v
