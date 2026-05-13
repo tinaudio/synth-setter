@@ -33,6 +33,7 @@ from synth_setter.pipeline.schemas.prefix import (
 )
 
 __all__ = [
+    "EXTENSION_TO_OUTPUT_FORMAT",
     "OUTPUT_FORMAT_TO_EXTENSION",
     "DatasetSpec",
     "RenderConfig",
@@ -43,6 +44,10 @@ __all__ = [
 # Adding a format means adding a row here; missing entries surface as KeyError
 # at construction rather than producing a silently-wrong filename.
 OUTPUT_FORMAT_TO_EXTENSION: dict[str, str] = {"hdf5": ".h5", "wds": ".tar"}
+
+# Reverse lookup for dispatching shard writers/validators by file suffix;
+# derived from the forward map so adding a format stays a one-place edit.
+EXTENSION_TO_OUTPUT_FORMAT: dict[str, str] = {v: k for k, v in OUTPUT_FORMAT_TO_EXTENSION.items()}
 
 
 # Sentinel returned by ``_get_git_sha`` when called outside a git working
