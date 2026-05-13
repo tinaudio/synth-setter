@@ -2,10 +2,11 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-03-20
+> **Last Updated**: 2026-05-13
 > **Tracking**: #107
-> **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 > **Issue tracking**: [github-taxonomy.md](github-taxonomy.md)
+
+> **Storage & provenance conventions**: [storage-provenance-spec.md](storage-provenance-spec.md) (authoritative)
 
 ______________________________________________________________________
 
@@ -121,7 +122,7 @@ python -m synth_setter.cli.train \
   ckpt_path=wandb:model-surge-flow-simple:latest
 ```
 
-In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `{R2_PREFIX}/training/{wandb_run_id}/`. On main, checkpoint durability is W&B-only (see Section 6.2).
+In the target/experimental setup (scoped and validated on the `experiment` branch — [#409](https://github.com/tinaudio/synth-setter/issues/409)), cloud training is expected to run with `MODE=train`. This downloads the dataset from R2 via rclone, runs `src/synth_setter/cli/train.py` with Hydra config, and uploads checkpoints to R2 at `r2:intermediate-data/train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/` (per [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout)). On main, checkpoint durability is W&B-only (see Section 6.2).
 
 ### Docker
 
@@ -269,6 +270,18 @@ ______________________________________________________________________
 ## 6. W&B Integration
 
 > Authoritative storage and W&B conventions are defined in [storage-provenance-spec.md](storage-provenance-spec.md#4-wb-artifact-types). Repeated here for training context.
+
+The R2 training-artifact path follows the [storage-provenance-spec](storage-provenance-spec.md) §2 convention:
+
+```
+train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
+├── checkpoints/
+│   ├── last.ckpt
+│   └── best.ckpt
+└── config.yaml               # Frozen experiment config
+```
+
+R2 checkpoint upload is not enabled on `main` — checkpoint durability is W&B-only (see §6.2, §7.5). The path above is the layout the experimental `MODE=train` flow ([#409](https://github.com/tinaudio/synth-setter/issues/409)) and any future R2 mirror would write to.
 
 ### 6.1 Dataset Access
 
