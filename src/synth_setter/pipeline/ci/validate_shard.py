@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Validate HDF5 shards against a DatasetSpec.
+"""Validate dataset shards against a DatasetSpec.
 
-Checks that each shard file is a valid HDF5 file, contains the per-row
-arrays the writer emits (``synth_setter.data.vst.shapes.DATASET_FIELD_NAMES``),
-and that each dataset's full ``.shape`` matches what those shape helpers
-predict for ``spec.render`` — i.e. ``(N, C, time)`` for audio,
-``(N, C, n_mels, n_frames)`` for the mel spectrogram, and
-``(N, num_params)`` for the param array.
+Performs full per-shard validation. Each shard file is dispatched by its
+filename suffix via ``synth_setter.pipeline.schemas.spec.EXTENSION_TO_OUTPUT_FORMAT``
+to either the HDF5 path (``.h5``) or the wds tar path (``.tar``):
+
+- HDF5 path: each top-level dataset's full ``.shape`` matches the writer's
+  source-of-truth shape helpers in ``synth_setter.data.vst.shapes`` —
+  ``(N, C, time)`` for audio, ``(N, C, n_mels, n_frames)`` for the mel
+  spectrogram, and ``(N, num_params)`` for the param array.
+- wds tar path: ``metadata.json`` is present and parses as a strict
+  ``ShardMetadata``; every ``<batch_start_idx:08d>.<field>.npy`` member loads
+  as a numpy array whose trailing dims (``arr.shape[1:]``) match the same
+  shape helpers; and the summed row count per field equals
+  ``spec.render.batch_per_shard``.
 
 CLI usage:
     python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
@@ -17,11 +24,15 @@ Iterates `spec.shards` and downloads each shard from R2 (under
 
 from __future__ import annotations
 
+import io
 import sys
+import tarfile
 from pathlib import Path
 from typing import cast
 
 import h5py
+import numpy as np
+from pydantic import ValidationError
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -33,7 +44,10 @@ from synth_setter.data.vst.shapes import (
     param_array_dataset_shape,
 )
 from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri, shard_uri
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from synth_setter.pipeline.schemas.spec import EXTENSION_TO_OUTPUT_FORMAT, DatasetSpec
+
+_TAR_METADATA_MEMBER = "metadata.json"
 
 
 def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
@@ -63,15 +77,14 @@ def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
 
 
 def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
-    """Validate one HDF5 shard against a DatasetSpec.
+    """Validate one shard against a DatasetSpec, dispatching by filename suffix.
 
-    Checks:
-    1. File opens as HDF5
-    2. Contains every dataset named in ``DATASET_FIELD_NAMES``
-    3. Each dataset's full ``.shape`` matches what
-       ``_expected_dataset_shapes`` predicts for ``spec``
+    Suffix dispatch via ``EXTENSION_TO_OUTPUT_FORMAT``: ``.h5`` -> HDF5 path,
+    ``.tar`` -> tar/wds path. Any other suffix is rejected with an error
+    naming the registered set so a typo or wrong-format file does not
+    surface as a misleading "not valid HDF5".
 
-    :param shard_path: Local filesystem path to the HDF5 shard to validate.
+    :param shard_path: Local filesystem path to the shard to validate.
     :param spec: Dataset spec the shard is expected to conform to.
     :returns: List of error strings (empty = valid).
     :rtype: list[str]
@@ -79,6 +92,29 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     if not shard_path.exists():
         return [f"shard file not found: {shard_path}"]
 
+    fmt = EXTENSION_TO_OUTPUT_FORMAT.get(shard_path.suffix)
+    if fmt == "hdf5":
+        return _validate_h5_shard(shard_path, spec)
+    if fmt == "wds":
+        return _validate_tar_shard(shard_path, spec)
+    return [
+        f"unsupported shard suffix {shard_path.suffix!r} "
+        f"(expected one of: {sorted(EXTENSION_TO_OUTPUT_FORMAT)})"
+    ]
+
+
+def _validate_h5_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
+    """Validate an HDF5 shard's datasets, row counts, and inner shapes.
+
+    Opens the file with h5py, checks every dataset named in ``DATASET_FIELD_NAMES``
+    is present, and that each dataset's full ``.shape`` matches what
+    ``_expected_dataset_shapes`` predicts for ``spec``.
+
+    :param shard_path: Local filesystem path to the HDF5 shard.
+    :param spec: Dataset spec the shard is expected to conform to.
+    :returns: List of error strings (empty = valid).
+    :rtype: list[str]
+    """
     try:
         f = h5py.File(shard_path, "r")
     except OSError:
@@ -91,13 +127,121 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
             if name not in f:
                 errors.append(f"missing dataset: {name!r}")
                 continue
-
             actual = cast(h5py.Dataset, f[name]).shape
             expected = expected_shapes[name]
             if actual != expected:
                 errors.append(f"dataset {name!r} has shape {actual}, expected {expected}")
 
     return errors
+
+
+def _validate_tar_metadata(tar: tarfile.TarFile, member_name: str) -> list[str]:
+    """Validate the tar's ``metadata.json`` parses as a strict ``ShardMetadata``.
+
+    Trust-boundary parse: ``ShardMetadata`` is constructed with
+    ``extra="forbid"`` and ``strict=True`` so unknown keys or type-coerced
+    values surface as a ``ValidationError`` instead of being silently accepted.
+
+    :param tar: Open ``TarFile`` handle. Caller owns the lifecycle.
+    :param member_name: Name of the metadata member to extract.
+    :returns: One error string per problem; empty if metadata is valid.
+    :rtype: list[str]
+    """
+    extracted = tar.extractfile(member_name)
+    if extracted is None:
+        return [f"unable to extract tar member: {member_name!r}"]
+    payload = extracted.read()
+    try:
+        ShardMetadata.model_validate_json(payload)
+    except ValidationError as exc:
+        return [f"{member_name}: invalid ShardMetadata: {exc}"]
+    return []
+
+
+def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
+    """Validate a wds tar shard's members, metadata, row counts, and inner shapes.
+
+    Tar member layout: per-batch ``<batch_start_idx:08d>.<field>.npy`` plus a
+    single ``metadata.json``. Checks:
+
+    1. The file opens as an uncompressed tar archive.
+    2. ``metadata.json`` is present and parses as a strict ``ShardMetadata``.
+    3. Every batch-keyed ``.npy`` member loads as a numpy array.
+    4. Each per-batch array's trailing dims (``arr.shape[1:]``) match the
+       corresponding writer shape (dropping the N dim).
+    5. The summed row count per field across all batches equals
+       ``spec.render.batch_per_shard``.
+
+    :param shard_path: Local filesystem path to the tar shard.
+    :param spec: Dataset spec the shard is expected to conform to.
+    :returns: List of error strings (empty = valid).
+    :rtype: list[str]
+    """
+    try:
+        tar = tarfile.open(shard_path, mode="r:")
+    except tarfile.TarError:
+        return [f"file is not a valid uncompressed tar archive: {shard_path}"]
+
+    expected_inner = {field: shape[1:] for field, shape in _expected_dataset_shapes(spec).items()}
+    errors: list[str] = []
+    with tar:
+        members = sorted(m.name for m in tar.getmembers())
+
+        if _TAR_METADATA_MEMBER not in members:
+            errors.append(f"missing tar member: {_TAR_METADATA_MEMBER!r}")
+        else:
+            errors.extend(_validate_tar_metadata(tar, _TAR_METADATA_MEMBER))
+
+        rows_by_field: dict[str, int] = {field: 0 for field in DATASET_FIELD_NAMES}
+        seen_by_field: dict[str, int] = {field: 0 for field in DATASET_FIELD_NAMES}
+        for name in members:
+            if not name.endswith(".npy"):
+                continue
+            stem = name[: -len(".npy")]
+            _, _, field = stem.rpartition(".")
+            if field not in rows_by_field:
+                continue
+            arr_or_err = _load_npy_member(tar, name)
+            if isinstance(arr_or_err, str):
+                errors.append(arr_or_err)
+                continue
+            rows_by_field[field] += arr_or_err.shape[0]
+            seen_by_field[field] += 1
+            if arr_or_err.shape[1:] != expected_inner[field]:
+                errors.append(
+                    f"{name}: inner shape {arr_or_err.shape[1:]} does not match "
+                    f"expected {expected_inner[field]}"
+                )
+
+        for field in DATASET_FIELD_NAMES:
+            if seen_by_field[field] == 0:
+                errors.append(f"missing tar member: '*.{field}.npy'")
+                continue
+            if rows_by_field[field] != spec.render.batch_per_shard:
+                errors.append(
+                    f"field {field!r} summed {rows_by_field[field]} rows across "
+                    f"{seen_by_field[field]} batch(es), expected {spec.render.batch_per_shard}"
+                )
+
+    return errors
+
+
+def _load_npy_member(tar: tarfile.TarFile, name: str) -> np.ndarray | str:
+    """Load a ``.npy`` tar member into a numpy array, or return an error string.
+
+    :param tar: Open ``TarFile`` handle. Caller owns the lifecycle.
+    :param name: Name of the ``.npy`` member to extract and load.
+    :returns: Loaded array on success, or a single error-message string describing
+        the extraction or load failure.
+    :rtype: np.ndarray | str
+    """
+    extracted = tar.extractfile(name)
+    if extracted is None:
+        return f"unable to extract tar member: {name!r}"
+    try:
+        return np.load(io.BytesIO(extracted.read()))
+    except (ValueError, EOFError, OSError) as exc:
+        return f"{name}: malformed npy payload: {exc}"
 
 
 def _load_spec(spec_arg: str) -> DatasetSpec:
