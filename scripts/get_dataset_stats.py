@@ -190,6 +190,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 if __name__ == "__main__":
     args = _parse_args()
 
+    # Without this the stdlib root logger stays at WARNING and the per-file
+    # progress + "Saving to..." messages emitted by get_stats_*() are silently
+    # dropped, leaving the operator staring at a blank terminal during long
+    # runs over thousands of files.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
     if os.path.splitext(args.input)[-1] == ".h5":
         get_stats_hdf5(args.input, mask_degenerate=args.mask_degenerate_bins)
     else:

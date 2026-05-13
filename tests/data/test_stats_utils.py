@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from synth_setter.data.stats_utils import compute_scale
 
@@ -43,3 +44,27 @@ def test_compute_scale_preserves_dtype_as_float64() -> None:
     scale = compute_scale(std)
 
     assert scale.dtype == np.float64
+
+
+def test_compute_scale_rejects_nan_std() -> None:
+    """``NaN`` in ``std`` indicates corrupted stats; raise rather than silently mask."""
+    std = np.array([0.5, np.nan, 2.0])
+
+    with pytest.raises(ValueError, match="non-finite"):
+        compute_scale(std)
+
+
+def test_compute_scale_rejects_inf_std() -> None:
+    """``inf`` in ``std`` indicates corrupted stats; raise rather than mapping to 0."""
+    std = np.array([0.5, np.inf, 2.0])
+
+    with pytest.raises(ValueError, match="non-finite"):
+        compute_scale(std)
+
+
+def test_compute_scale_rejects_negative_std() -> None:
+    """Negative ``std`` violates the contract; raise rather than silently mask."""
+    std = np.array([0.5, -1.0, 2.0])
+
+    with pytest.raises(ValueError, match="negative"):
+        compute_scale(std)

@@ -125,7 +125,7 @@ class AudioFolderDataset(torch.utils.data.Dataset):
         audio = audio * self.amp_scale
 
         spec = make_spectrogram(audio, sample_rate)
-        if self.mean is not None:
+        if self.mean is not None and self.scale is not None:
             spec = (spec - self.mean) * self.scale
 
         audio = torch.from_numpy(audio).to(dtype=torch.float32)

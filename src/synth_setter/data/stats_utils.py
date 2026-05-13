@@ -14,12 +14,30 @@ def compute_scale(std: np.ndarray) -> np.ndarray:
     (``scripts/get_dataset_stats.py``) surfaces degenerate bins to the operator
     before they reach this stage — see #998.
 
+    Corrupted stats (``NaN``, ``inf``, or negative ``std``) are rejected loudly
+    rather than silently zeroed; the masking branch is for legitimately
+    zero-variance bins only.
+
     :param std: Per-bin standard deviation array.
 
     :returns: Per-bin scale array, the same shape as ``std``, where each entry
         is ``1/std`` when ``std > 0`` and ``0`` otherwise. Always ``float64``.
     :rtype: np.ndarray
+    :raises ValueError: If ``std`` contains ``NaN``, ``inf``, or negative values.
     """
+    std = np.asarray(std)
+    if not np.isfinite(std).all():
+        raise ValueError(
+            "compute_scale received non-finite std values (NaN or inf); "
+            "stats.npz is corrupted. Regenerate it with "
+            "scripts/get_dataset_stats.py."
+        )
+    if (std < 0).any():
+        raise ValueError(
+            "compute_scale received negative std values; stats.npz is "
+            "corrupted (std must be non-negative). Regenerate it with "
+            "scripts/get_dataset_stats.py."
+        )
     return np.divide(
         1.0, std, out=np.zeros_like(std, dtype=np.float64), where=std > 0
     )
