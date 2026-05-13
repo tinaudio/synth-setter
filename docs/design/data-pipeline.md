@@ -76,7 +76,9 @@ RunPod is used because it's the platform where GPUs are already available and co
 ## 2. Typical Workflow
 
 ```bash
-# 1. Pick an experiment config (filename = experiment id).
+# 1. Pick an experiment config. The filename stem (e.g. `surge-simple-480k-10k`)
+#    is the dataset_config_id / task_name; the Hydra config-group path you pass
+#    as `experiment=` is `generate_dataset/<stem>`.
 #    Hydra composes the final DatasetSpec from configs/dataset.yaml + this overlay.
 cat configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
 # → task_name: surge-simple-480k-10k, defaults: [/data: surge_simple, /render: surge_simple, ...], ...
