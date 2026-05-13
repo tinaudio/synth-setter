@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778675698177,
+  "lastUpdate": 1778675700622,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -3181,6 +3181,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 15.484668838300001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dbb469ece61306fa036351a16a27178e9bb71628",
+          "message": "refactor(layout)!: nest src/* under synth_setter/, declare console scripts (#991)\n\n* refactor(layout)!: nest src/* under synth_setter/, declare console scripts\n\nPhase 2 of the PEP src-layout migration (#989, parent #784).\n\nHoists `src/{data,models,utils,metrics.py}` to `src/synth_setter/` and\n`src/{train,eval,generate_dataset}.py` to `src/synth_setter/cli/`. Adds\nthe three `synth-setter-{train,eval,generate-dataset}` console scripts\nvia `[project.scripts]`. Sweeps all `from src.X` imports, `_target_:\nsrc.X` Hydra refs in configs, `python src/X.py` shell invocations in\njobs/ and sweeps/, and prose references in active docs.\n\nOut of scope: `src/pipeline/` (Phase 3, #784), `scripts/`\ndepopulation (Phase 4), `setup.py` deletion (Phase 5); only the\nlegacy `train_command` / `eval_command` `console_scripts` entries\nare dropped here.\n\nBreaking: any external consumer importing `src.{data,models,utils,\nmetrics,train,eval,generate_dataset}` must rewrite to\n`synth_setter.{...}` / `synth_setter.cli.{...}`. Legacy\n`train_command` / `eval_command` scripts are removed (replaced by\n`synth-setter-train` / `synth-setter-eval`).\n\n* test(baseline-configs): bump MODEL_BASELINE to Phase 2 src-layout SHA\n\nThe Phase 2 migration (#989) rewrote every Hydra `_target_:` from `src.X`\nto `synth_setter.X` and switched `jobs/train/{kosc,surge}/train.sh` from\n`python src/train.py` to `python -m synth_setter.cli.train`. The\nresolved Hydra YAMLs from the v0.0.0 baseline therefore literally\ncontain `_target_: src.X` keys while the live tree's resolved YAMLs\ncontain `_target_: synth_setter.X` — a 44-case failure (KOSC) plus a\nparallel SURGE failure pinned at the old tag.\n\nBumping MODEL_BASELINE to the Phase 2 commit captures the migration as\nthe new known-good model-config snapshot. FIXTURE_BASELINE is\nuntouched: the synthetic-fixture scripts under `tests/fixtures/` are\nself-contained and don't reference `src.X`.\n\nRefs #989.\n\n* fix(tests): set PYTHONPATH=src in CI subprocess + workflow probes\n\nThe Phase 2 migration's lazy import inside `DatasetSpec.num_params`\nswitched from `from src.data.vst.param_spec_registry` to\n`from synth_setter.data.vst.param_spec_registry`. That import is\ntriggered by `model_dump_json()` and is exercised by:\n\n  * `tests/pipeline/test_schemas/test_dataset_spec.py` —\n    two tests spawn fresh `sys.executable` subprocesses to verify the\n    spec stays pedalboard-free / launcher-pure. The subprocesses\n    don't inherit pytest's `pythonpath = [\"src\"]`, so\n    `synth_setter` isn't reachable without an editable install.\n    Fixed by passing `PYTHONPATH=<repo>:<repo>/src` to the subprocess\n    `env`.\n\n  * `.github/workflows/test-{mps,gpu,vst-slow}.yml` — the Surge XT\n    plugin-load smoke checks `python -c \"from synth_setter.data.vst.core\n    import load_plugin...\"` against a fresh interpreter (macOS host and\n    Docker container). Fixed by adding `src/` to the PYTHONPATH env\n    var the workflow already exports.\n\nBoth `make test-fast` (556/5) and the full slow `test_compare_baseline_configs`\nsuite (87 passed in 11m17s, including all 44 KOSC + 8 SURGE + 18 predict\ncases) pass locally against the bumped `MODEL_BASELINE=4e08950`.\n\nRefs #989.\n\n* docs(design): update stale src/* refs to synth_setter/* (Phase 2)\n\nSeven design docs (training-pipeline, eval-pipeline, data-pipeline,\nskypilot-compute-integration, storage-provenance-spec, plus the two\n*-implementation-plan docs) referenced legacy `src/train.py`,\n`src/eval.py`, `src/data/`, `src/utils/`, `src/models/` paths and a\n`_target_: src.X` YAML example that no longer resolve after the\nPhase 2 src-layout move.\n\nRewrote file paths to `src/synth_setter/cli/{train,eval}.py` and\n`src/synth_setter/{data,utils,models}/`; rewrote `_target_:` to\n`synth_setter.X`; rewrote `python src/train.py …` CLI invocations\nin code blocks to `python -m synth_setter.cli.train …` per the new\ncanonical surface.\n\nSurfaced by the doc-drift advisory on PR #991.\n\nRefs #989.\n\n* fix(tests): pass PYTHONPATH to VST subprocess in conftest fixture\n\nThe macOS MPS CI workflow does not run `pip install -e .` before\npytest, so the in-process `pythonpath = [\"src\"]` from pyproject.toml\ndoesn't propagate to subprocess.run children. The `surge_xt_smoke_datasets`\nfixture spawns `python src/synth_setter/data/vst/generate_vst_dataset.py`,\nwhich fails with `ModuleNotFoundError: No module named 'synth_setter'`\nwhen its `from synth_setter.data.vst import param_specs` import runs in\nthe child interpreter.\n\nMirrors the `_subprocess_env()` helper already in\n`tests/pipeline/test_schemas/test_dataset_spec.py` (added in b7c62c0):\nset PYTHONPATH=<repo>:<repo>/src on the child env so it can resolve\nboth `src.pipeline.*` and `synth_setter.*` without an install step.\n\nRefs #989.\n\n* fix(ci): install editable package in test workflows, drop PYTHONPATH workaround\n\nThe proper fix for \"subprocesses spawned from tests can't import\nsynth_setter\": install the package via `pip install -e .` in each\nworkflow's setup. Once installed, the import resolves naturally — no\nduplicated `_subprocess_env()` helper, no PYTHONPATH gymnastics.\n\nWorkflows updated: test.yml (3 jobs), test-mps.yml, test-conda.yml.\nEach now installs `synth_setter` as editable after the dependency\ninstall. test-mps.yml's \"Smoke-test Surge XT plugin load\" step drops\nits `PYTHONPATH: src` env which b7c62c0 added as a workaround — also\nno longer needed.\n\nThe `_subprocess_env()` helper in tests/conftest.py and\ntests/pipeline/test_schemas/test_dataset_spec.py is removed entirely.\nThat duplication was a code smell flagged by /repo-review-full as\nBLOCK; the real problem was the missing install step.\n\nAddresses BLOCK findings from review #4276527174:\n  - [code-health] _subprocess_env duplicated across two test files\n  - [gha] test-mps.yml Run MPS tests has no install / no PYTHONPATH\n\nRefs #989.\n\n* chore(review): address PR #991 review feedback round 1\n\n- src/synth_setter/cli/generate_dataset.py: add TODO(#784) above the\n  legacy `src.pipeline.*` import block flagging Phase 3 collapse.\n- tests/test_compare_baseline_configs.py: tighten the MODEL_BASELINE\n  prose to a 2-line pointer to #989 and correct the misleading\n  \"head of the Phase 2 PR\" wording — the SHA is the initial commit\n  of #989, not the head.\n- tests/pipeline/test_entrypoints/test_generate_dataset.py: switch\n  module-docstring header from file path to module form so it\n  doesn't drift if the file moves.\n\nRefs #989\n\n* fix(ci): install synth_setter editable in launcher workflows\n\nPhase 2 src-layout migration moved `synth_setter` from `src/`-on-PYTHONPATH\nto a properly-installed package. Two launcher workflows still invoke\n`python -m src.pipeline.skypilot_launch` (which imports\n`synth_setter.cli.generate_dataset` at module load) without installing the\npackage first, so they hit `ModuleNotFoundError: No module named 'synth_setter'`\nat src/pipeline/skypilot_launch.py:51.\n\nSame fix shape as 64ac16d (test.yml / test-mps.yml / test-conda.yml): add\n`pip install -e .` after the requirements install.\n\n- generate-dataset-shards.yaml: skypilot-local row's \"Install launcher deps\"\n  step. Fixes the PR-blocking `Test Dataset Generation /\n  Run generate_dataset (skypilot-local)` failure on #991.\n- test-skypilot-debug.yml: launcher-runner mode's \"Install launcher deps\"\n  step. workflow_dispatch only, same root cause.\n\nIn-container invocations (runpod / oci rows; launcher-docker mode) don't\nneed a change — the dev-snapshot Dockerfile already does\n`uv pip install --no-deps -e .` at build time.\n\ntest-skypilot-local.yml uses sky.launch directly with no synth_setter\nimports — no fix needed there.\n\nRefs #989\n\n* chore(review): address PR #991 review feedback round 2\n\n- src/synth_setter/cli/{train,eval,generate_dataset}.py: collapse the\n  copy-pasted 15-line rootutils explanatory block (and the variant in\n  generate_dataset.py) to a single one-liner pointing at the rootutils\n  README, per CLAUDE.md comment-hygiene (\"Keep comments terse — typically\n  one short line\").\n- src/synth_setter/cli/eval.py: add a one-line comment on the\n  `mode == \"val\" or mode == \"validate\"` branch documenting that both\n  spellings are accepted for backwards compatibility with older configs.\n- pyproject.toml: drop alignment whitespace on the three\n  `[project.scripts]` entries to match standard TOML formatting.\n- src/__init__.py: rephrase the docstring so it acknowledges that\n  src/pipeline/ is still part of the codebase, not just legacy residue.\n\nRefs #989",
+          "timestamp": "2026-05-13T08:22:59-04:00",
+          "tree_id": "1467e6d7bbbd20f15b0ad2bf1f5bc45a96b05449",
+          "url": "https://github.com/tinaudio/synth-setter/commit/dbb469ece61306fa036351a16a27178e9bb71628"
+        },
+        "date": 1778675699962,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 4.984283924102783,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 7.311417153775692,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.02956530638039112,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.02873861789703369,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 2.010673999786377,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 10.551055831200006,
             "unit": "seconds"
           }
         ]
