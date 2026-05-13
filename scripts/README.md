@@ -1,13 +1,18 @@
 # Scripts
 
-This directory holds **shell / Python tooling that ships outside the `synth_setter` wheel** — utilities the test suite and CI workflows shell out to, plus operator-side commands. After the [#784](https://github.com/tinaudio/synth-setter/issues/784) layout migration, every resident here lives under a categorized subdirectory; the bare `scripts/` root contains no `.sh` or `.py` files of its own.
+This directory holds **shell / Python tooling that ships outside the `synth_setter` wheel** — utilities the test suite and CI workflows shell out to, plus operator-side commands. After the [#784](https://github.com/tinaudio/synth-setter/issues/784) layout migration, every resident lives under a categorized subdirectory **except `sync_worker_checkout.sh`**, which intentionally stays at `scripts/sync_worker_checkout.sh` — see the "Bake-lag exception" section below.
 
 ## Layout
 
-| Subdir              | Purpose                                                                                                   |
-| ------------------- | --------------------------------------------------------------------------------------------------------- |
-| `scripts/skypilot/` | SkyPilot bootstrap / diagnostics (cred writers, worker checkout, cluster-state capture)                   |
-| `scripts/ci/`       | Local CI tooling (triage agent launcher, pueue job queue CLI used by `.github/workflows/job-queue*.yaml`) |
+| Subdir / file                       | Purpose                                                                                                                                                |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scripts/skypilot/`                 | SkyPilot bootstrap / diagnostics (cred writer, cluster-state capture)                                                                                  |
+| `scripts/ci/`                       | Local CI tooling (triage agent launcher, pueue job queue CLI used by `.github/workflows/job-queue*.yaml`)                                              |
+| `scripts/sync_worker_checkout.sh`   | Bake-lag bootstrap — invoked **inside** the worker container by SkyPilot Task `run:` blocks before any source sync; see "Bake-lag exception" below.    |
+
+## Bake-lag exception: `scripts/sync_worker_checkout.sh`
+
+`sync_worker_checkout.sh` is the bootstrap that updates the worker container's baked checkout to the PR head, so SkyPilot workers pick up entrypoint changes from a PR before `main`'s next image rebuild. Because the worker's `cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh` runs **against the previously baked image's filesystem** (i.e. main as of the last image build), the script must live at a path that the baked image already knows. Moving it to `scripts/skypilot/sync_worker_checkout.sh` in this PR would mean the next baked-image-and-after-it-is-the-PR run can't find it, defeating the bake-lag bypass. So it stays at the repo root level of `scripts/`. Once it has lived at the new path for at least one image rebuild cycle, a follow-up PR can relocate it under `scripts/skypilot/`.
 
 ## Where Python tools moved
 

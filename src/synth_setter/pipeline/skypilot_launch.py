@@ -112,7 +112,7 @@ _SECRET_WORKER_ENV_KEYS: tuple[str, ...] = tuple(
 )
 
 _CRED_BOOTSTRAP_SCRIPT = (
-    Path(__file__).resolve().parents[3] / "scripts" / "skypilot_write_provider_creds.sh"
+    Path(__file__).resolve().parents[3] / "scripts" / "skypilot" / "write_provider_creds.sh"
 )
 
 # sky.jobs.tail_logs(follow=True) rc: 0 = SUCCEEDED, 100 = non-SUCCEEDED terminal.

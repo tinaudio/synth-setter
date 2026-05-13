@@ -142,7 +142,7 @@ envs:
 run: |
   set -euo pipefail
   cd /home/build/synth-setter
-  bash scripts/skypilot/sync_worker_checkout.sh
+  bash scripts/sync_worker_checkout.sh
   exec python /usr/local/bin/entrypoint.py generate_dataset --spec "$WORKER_SPEC_URI"
 ```
 

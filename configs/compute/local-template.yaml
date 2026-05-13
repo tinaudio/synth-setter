@@ -56,5 +56,5 @@ run: |
   set -euo pipefail
   cd /home/build/synth-setter
   echo "skypilot-run-cwd: $(pwd)"
-  bash scripts/skypilot/sync_worker_checkout.sh
+  bash scripts/sync_worker_checkout.sh
   exec python -m synth_setter.tools.docker_entrypoint generate_dataset --spec "${WORKER_SPEC_URI}"
