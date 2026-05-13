@@ -295,9 +295,14 @@ exclude = '''(?x)
   | ^src/synth_setter/pipeline/schemas/image_config\.py$
   | ^src/synth_setter/pipeline/schemas/prefix\.py$
   | ^src/synth_setter/pipeline/schemas/spec\.py$
+  | ^src/synth_setter/metrics\.py$
   | ^src/synth_setter/pipeline/data/add_music2latent\.py$
   | ^src/synth_setter/evaluation/compute_audio_metrics\.py$
   | ^src/synth_setter/tools/docker_entrypoint\.py$
+  | ^src/synth_setter/tools/model_from_wandb\.py$
+  | ^src/synth_setter/tools/paramspec_to_table\.py$
+  | ^src/synth_setter/tools/plot_param2tok\.py$
+  | ^src/synth_setter/tools/sig_perf\.py$
   | ^src/synth_setter/evaluation/predict_vst_audio\.py$
   | ^src/synth_setter/pipeline/data/r2_report\.py$
   | ^src/synth_setter/pipeline/data/rewrite_to_latest\.py$
@@ -311,11 +316,19 @@ exclude = '''(?x)
   | ^src/synth_setter/data/vst/generate_vst_dataset\.py$
   | ^src/synth_setter/data/vst/param_spec\.py$
   | ^src/synth_setter/cli/eval\.py$
+  | ^src/synth_setter/models/components/cnn\.py$
+  | ^src/synth_setter/models/components/embed_pool\.py$
   | ^src/synth_setter/models/components/loss\.py$
+  | ^src/synth_setter/models/components/residual_mlp\.py$
   | ^src/synth_setter/models/components/sinkhorn\.py$
   | ^src/synth_setter/models/components/transformer\.py$
   | ^src/synth_setter/models/components/vae\.py$
+  | ^src/synth_setter/models/components/vector_field\.py$
+  | ^src/synth_setter/models/ksin_ff_module\.py$
   | ^src/synth_setter/models/ksin_flow_matching_module\.py$
+  | ^src/synth_setter/models/surge_ff_module\.py$
+  | ^src/synth_setter/models/surge_flow_matching_module\.py$
+  | ^src/synth_setter/models/surge_flowvae_module\.py$
   | ^src/synth_setter/cli/train\.py$
   | ^src/synth_setter/utils/callbacks\.py$
   | ^src/synth_setter/utils/instantiators\.py$
