@@ -47,7 +47,7 @@ Non-exhaustive table of common synth-setter scopes:
 
 | Scope        | Meaning                                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `metrics`    | Normalization-stats computation/writer (`scripts/get_dataset_stats.py`, `stats.npz`, mel/audio metric tooling)     |
+| `metrics`    | Mel/audio metric tooling, normalization-stats computation/writer (`scripts/get_dataset_stats.py`, `stats.npz`,)    |
 | `pipeline`   | Broader distributed data-pipeline code under `src/synth_setter/pipeline/` (stats-writer code uses `metrics`)       |
 | `datamodule` | Lightning datamodules (`src/synth_setter/data/*_datamodule.py`)                                                    |
 | `training`   | Training entrypoint and `src/synth_setter/cli/train.py` / training loop code                                       |
