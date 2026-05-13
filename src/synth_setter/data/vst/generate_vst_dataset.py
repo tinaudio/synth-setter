@@ -18,62 +18,15 @@ from synth_setter.pipeline.schemas.spec import RenderConfig  # noqa: E402
 from synth_setter.data.vst import param_specs  # noqa
 from synth_setter.data.vst.core import render_params  # noqa
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa
-
-
-# Per-row arrays the writer emits and the validator checks. Single source of
-# truth for both save_samples below and the shard validator at
-# synth_setter/pipeline/ci/validate_shard.py.
-DATASET_FIELD_NAMES: tuple[str, ...] = ("audio", "mel_spec", "param_array")
-
-# Mel front-end. Centralised so mel_dataset_shape and make_spectrogram
-# agree on the time-axis size.
-MEL_FRAMES_PER_SECOND = 100
-MEL_N_MELS = 128
-MEL_N_FFT_FRACTION_OF_SAMPLE_RATE = 0.025
-MEL_WINDOW = "hamming"
-
-
-def mel_hop_length(sample_rate: float) -> int:
-    """Librosa hop length: ``sample_rate / MEL_FRAMES_PER_SECOND``."""
-    return int(sample_rate / MEL_FRAMES_PER_SECOND)
-
-
-def mel_n_fft(sample_rate: float) -> int:
-    """Librosa FFT window length: ``MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate``."""
-    return int(MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate)
-
-
-def mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
-    """Number of mel-time frames librosa produces (center=True default).
-
-    Mirrors ``1 + audio_length // hop_length``.
-    """
-    audio_length = int(sample_rate * signal_duration_seconds)
-    return 1 + audio_length // mel_hop_length(sample_rate)
-
-
-def audio_dataset_shape(
-    num_samples: int, channels: int, sample_rate: float, signal_duration_seconds: float
-) -> tuple[int, int, int]:
-    """Audio dataset shape ``(N, C, time_samples)``."""
-    return (num_samples, channels, int(sample_rate * signal_duration_seconds))
-
-
-def mel_dataset_shape(
-    num_samples: int, channels: int, sample_rate: float, signal_duration_seconds: float
-) -> tuple[int, int, int, int]:
-    """Mel-spectrogram dataset shape ``(N, C, n_mels, n_frames)``."""
-    return (
-        num_samples,
-        channels,
-        MEL_N_MELS,
-        mel_n_frames(sample_rate, signal_duration_seconds),
-    )
-
-
-def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, int]:
-    """Param-array dataset shape ``(N, num_params)``."""
-    return (num_samples, num_params)
+from synth_setter.data.vst.shapes import (
+    MEL_N_MELS,
+    MEL_WINDOW,
+    audio_dataset_shape,
+    mel_dataset_shape,
+    mel_hop_length,
+    mel_n_fft,
+    param_array_dataset_shape,
+)
 
 
 @dataclass

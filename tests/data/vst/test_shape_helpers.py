@@ -1,4 +1,4 @@
-"""Unit tests for the public shape primitives in ``generate_vst_dataset``.
+"""Unit tests for the shape primitives in ``synth_setter.data.vst.shapes``.
 
 The writer and the (planned) shard-validator inner-shape checks share these
 helpers, so each test pins one shape against the legacy inline calculation
@@ -10,14 +10,14 @@ silently drifting apart.
 
 import numpy as np
 
-from synth_setter.data.vst.generate_vst_dataset import (
+from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
+from synth_setter.data.vst.shapes import (
     DATASET_FIELD_NAMES,
     MEL_FRAMES_PER_SECOND,
     MEL_N_FFT_FRACTION_OF_SAMPLE_RATE,
     MEL_N_MELS,
     MEL_WINDOW,
     audio_dataset_shape,
-    make_spectrogram,
     mel_dataset_shape,
     mel_hop_length,
     mel_n_fft,
