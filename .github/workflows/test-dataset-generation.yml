@@ -91,7 +91,7 @@ on:
       - "src/synth_setter/tools/docker_entrypoint.py"
       - "docker/ubuntu22_04/run-linux-vst-headless.sh"
       - "docker/ubuntu22_04/ensure_plugin_symlinks.sh"
-      - "scripts/skypilot/sync_worker_checkout.sh"
+      - "scripts/sync_worker_checkout.sh"
       - "scripts/skypilot/write_provider_creds.sh"
       - "src/synth_setter/pipeline/skypilot_launch.py"
       - ".github/workflows/test-dataset-generation.yml"

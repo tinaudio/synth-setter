@@ -59,7 +59,7 @@ Non-exhaustive table of common synth-setter scopes:
 | `docker`     | Dockerfiles, devcontainer configs, image build setup                                                                       |
 | `deps`       | Dependency bumps (`pyproject.toml`, lockfiles)                                                                             |
 
-**`metrics`, not `pipeline`, for stats-writer changes.** Any change touching `src/synth_setter/pipeline/data/stats.py`, `stats.npz` schema/handling, or other mel/audio normalization-stats tooling uses `(metrics)` as its scope — even though the file lives under `scripts/` and the data it produces is consumed by the pipeline. The rule is "narrowest accurate scope": `metrics` is more specific than `pipeline` and makes the log easier to scan.
+**`metrics`, not `pipeline`, for stats-writer changes.** Any change touching `src/synth_setter/pipeline/data/stats.py`, `stats.npz` schema/handling, or other mel/audio normalization-stats tooling uses `(metrics)` as its scope — even though the module lives structurally under `src/synth_setter/pipeline/data/` and the data it produces is consumed by the broader pipeline. The rule is "narrowest accurate scope": `metrics` is more specific than `pipeline` and makes the log easier to scan.
 
 Formatting follows the same convention as the title example under [`### PR Titles`](#pr-titles) (`feat(pipeline)!: complete dataset_spec Hydra migration; remove load_dataset_spec_yaml`): conventional prefix, scope in parentheses, optional `!` for breaking, then a colon and the human-readable subject.
 
