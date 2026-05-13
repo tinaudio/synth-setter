@@ -847,16 +847,16 @@ HDF5 is random-access oriented. Multi-GPU DataLoaders need to stream shards sequ
 
 **WebDataset shard structure:**
 
-Each `.tar` shard contains samples as individual files:
+Each `.tar` shard groups rows into per-batch tar entries. The tar key is the batch's first logical row index zero-padded to 8 digits (`f"{start_idx:08d}"`) and advances by `sample_batch_size`; each `<key>.<field>.npy` member holds the whole batch stacked along axis 0 — not one sample per file. The per-row field names come from `synth_setter.data.vst.shapes.DATASET_FIELD_NAMES` (`audio`, `mel_spec`, `param_array`):
 
 ```
 train-000000.tar
-├── 000000.audio.npy
-├── 000000.params.npy
-├── 000000.mel.npy
-├── 000001.audio.npy
-├── 000001.params.npy
-├── 000001.mel.npy
+├── 00000000.audio.npy      # shape (sample_batch_size, ...)
+├── 00000000.mel_spec.npy
+├── 00000000.param_array.npy
+├── 00000064.audio.npy      # next batch — key advances by sample_batch_size
+├── 00000064.mel_spec.npy
+├── 00000064.param_array.npy
 ├── ...
 └── metadata.json          # ShardMetadata sidecar — see src/synth_setter/pipeline/schemas/shard_metadata.py
 ```
