@@ -24,7 +24,6 @@ from omegaconf import DictConfig, OmegaConf
 # Bootstrap PROJECT_ROOT + sys.path — see https://github.com/ashleve/rootutils.
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-# TODO(#784): collapse to synth_setter.pipeline.* once Phase 3 hoists src/synth_setter/pipeline/.
 from synth_setter.data.vst.core import extract_renderer_version  # noqa: E402
 from synth_setter.pipeline import r2_io  # noqa: E402
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402

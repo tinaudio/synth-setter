@@ -559,7 +559,7 @@ ______________________________________________________________________
 - **Xvfb display isolation:** Each child process should use a per-process X11 display
   number (`:N` derived from PID or shard ID) to avoid contention in headless VST rendering.
 - **No `generate_fn` argument:** The child process imports `make_dataset` directly
-  (`from synth_setter.pipeline.vst import make_dataset`). Under `spawn`, the child is a fresh
+  (`from synth_setter.data.vst.generate_vst_dataset import make_dataset`). Under `spawn`, the child is a fresh
   interpreter, so the import is clean. No pickling concerns — only `shard_spec` and
   `shard_path` cross the process boundary. For tests, `LocalBackend` calls
   `run_worker()` in-process (no spawn), so test fixtures can inject a fake function.

@@ -152,8 +152,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install config dependencies
-        run: uv pip install --system pyyaml pydantic
+      - name: Install synth_setter (editable; provides the load_image_config CLI plus its pyyaml + pydantic deps)
+        run: uv pip install --system -e .
 
       - name: Load image config
         id: config

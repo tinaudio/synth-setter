@@ -82,7 +82,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/r2_io.py"
         covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by ci validators, the worker entrypoint's skip-existing probe, and the generate-local workflow upload step"
       - pattern: "src/synth_setter/pipeline/constants.py"
-        covers: "R2 bucket name constant, input spec filename"
+        covers: "Input spec filename constant"
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
         covers: "DatasetSpec, RenderConfig, ShardSpec, OUTPUT_FORMAT_TO_EXTENSION (Hydra-composed cfg → spec_from_cfg → DatasetSpec)"
 
