@@ -387,3 +387,21 @@ includes the *whole* package, not just the mutated subdirs. If a new
 the new module sits outside `paths_to_mutate`, `also_copy` already covers
 it; only revisit this config when adding a *new* top-level mutate path
 under `src/`.
+
+mutmut also drives subprocesses via `os.fork()` and runs tests under
+`MUTANT_UNDER_TEST=stats`. Tests that shell out to `python -m …` therefore
+inherit that env var and crash mutmut's trampoline (`mutmut.config is None`
+in any fresh interpreter). Keep mutmut-target tests in-process — use
+argparse/click's parser directly with `capsys`/`CliRunner`, not
+`subprocess.run([sys.executable, "-m", …])`. The historical offender
+(`test_cli_help_advertises_mask_degenerate_bins_flag` in
+`tests/pipeline/data/test_stats.py`) is the template.
+
+Run mutmut **on Linux** (CI workflow `.github/workflows/mutmut.yaml`,
+`workflow_dispatch` + weekly cron). On macOS, the parent process imports
+`torch` / `h5py` / `hydra` from `tests/conftest.py` during stats
+collection; Apple's fork-safety check then SIGSEGVs every forked child,
+so local `make mutmut` runs report mass segfaults that don't reflect
+real test outcomes. The Makefile target sets
+`OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` to soften this, but the
+authoritative end-to-end run is the CI job.

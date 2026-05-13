@@ -152,7 +152,7 @@ benchmark: ## Run performance benchmarks
 	pytest --benchmark-only -m "benchmark" -v
 
 mutmut: ## Run mutation testing
-	mutmut run
+	OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES mutmut run
 
 train: ## Train the model
 	python src/train.py
