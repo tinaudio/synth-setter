@@ -283,51 +283,13 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 
 ### R2 File Structure
 
-> R2 root path follows [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout). Pipeline-specific internal structure (workers/, lifecycle markers) is additive detail.
+The canonical R2 bucket layout — root path, top-level prefixes, and per-workflow contents — is defined in [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout) and [§3a](storage-provenance-spec.md#3a-data-generation). The data pipeline writes under `data/{dataset_config_id}/{dataset_wandb_run_id}/`: workers stage shards and per-attempt artifacts under `metadata/workers/`, and `finalize` is the only writer to `shards/`, `train.h5`/`val.h5`/`test.h5` (or `*.tar` for WebDataset), `stats.npz`, and `metadata/dataset.{json,complete}`. Datasets are immutable once `metadata/dataset.complete` exists; new versions require a new `dataset_wandb_run_id`.
 
-```
-data/{dataset_config_id}/{dataset_wandb_run_id}/   # e.g. data/surge-simple-480k-10k/surge-simple-480k-10k-20260312T143022500Z/
-  shards/                              # Written ONLY by finalize (promoted from staging)
-    shard-000000.h5                    # Canonical finalized shards
-    shard-000001.h5
-    ...
-    shard-000479.h5
-  # output_format: hdf5
-  train.h5                             # Virtual dataset (written by finalize)
-  val.h5
-  test.h5
-  # output_format: wds
-  train-000000.tar                     # WebDataset archives (written by finalize)
-  train-000001.tar
-  ...
-  val-000000.tar
-  test-000000.tar
-  stats.npz                            # Normalization statistics
-  metadata/
-    config.yaml                          # User recipe (provenance copy, not authoritative)
-    input_spec.json                      # Frozen input specification (authoritative)
-    dataset.json                         # Self-describing dataset card (written by finalize)
-    dataset.complete                     # Completion marker (written by finalize)
-    workers/                             # Workers may only write under metadata/workers/
-      shards/                            # Per-shard staging area + lifecycle markers
-        shard-000000/
-          {worker_id}-{attempt_uuid}.h5          # Worker's validated shard output
-          {worker_id}-{attempt_uuid}.valid       # Commit marker: staged shard committed
-        shard-000042/
-          {worker_id}-{attempt_uuid}.h5          # Second attempt's shard output
-          {worker_id}-{attempt_uuid}.rendering   # First attempt: started but crashed
-          {worker_id}-{attempt_uuid}.valid       # Second attempt: succeeded
-          quarantine/
-            {worker_id}-{attempt_uuid}.h5        # Corrupt version, preserved for debugging
-      attempts/                           # Per-attempt worker artifacts
-        {worker_id}-{attempt_uuid}/
-          report.json                    # Worker summary — per-shard results, content_hash, timing
-          debug.log                      # Debug log (JSONL), uploaded by EXIT trap
-```
-
-Datasets are immutable once metadata/dataset.complete exists. Creating a new dataset version requires a new dataset_wandb_run_id.
+Pipeline-specific staging conventions (per-attempt shard filenames, lifecycle markers, quarantine layout) are additive detail — see [Artifact Taxonomy](#artifact-taxonomy) below.
 
 ### Artifact Taxonomy
+
+> This section covers **pipeline file artifacts** — the structured files the data pipeline produces in R2, their producers and consumers, and the shard attempt lifecycle. The canonical R2 paths are defined in [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation); the **W&B artifact taxonomy** (dataset/model/eval-results artifact types) is defined in [storage-provenance-spec.md §4](storage-provenance-spec.md#4-wb-artifact-types).
 
 All structured files in the pipeline, in one place:
 
