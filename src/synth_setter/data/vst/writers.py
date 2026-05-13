@@ -152,24 +152,32 @@ def _validate_fixed_params_lengths(
     fixed_synth_params_list: list[dict[str, float]] | None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
 ) -> None:
-    """Raise ``ValueError`` if a fixed-params list is shorter than the remaining renders.
+    """Raise ``ValueError`` unless each fixed-params list exactly matches the tail length.
+
+    The writer indexes fixed params by ``i - start_idx`` (see
+    ``_generate_sample_for_index``), so on a resumed run with ``start_idx > 0``
+    each list must hold only the rows still to render — passing a shard-length
+    list would silently shift indices (row ``start_idx`` would use ``list[0]``).
+    We require exact equality (not ``>=``) so that mismatch is caught here
+    instead of silently truncated.
 
     :param num_samples: Total number of samples this shard will hold.
     :param start_idx: First row index this run will write (non-zero on a resume).
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per row to render.
     :param fixed_note_params_list: Optional pre-set note params, one dict per row to render.
-    :raises ValueError: If either list is shorter than ``num_samples - start_idx``.
+    :raises ValueError: If either list's length is not exactly ``num_samples - start_idx``.
     """
     expected_fixed_len = num_samples - start_idx
     for name, lst in [
         ("fixed_synth_params_list", fixed_synth_params_list),
         ("fixed_note_params_list", fixed_note_params_list),
     ]:
-        if lst is not None and len(lst) < expected_fixed_len:
+        if lst is not None and len(lst) != expected_fixed_len:
             raise ValueError(
-                f"{name} has length {len(lst)}, expected at least "
+                f"{name} has length {len(lst)}, expected exactly "
                 f"num_samples - start_idx = {expected_fixed_len} "
-                f"(num_samples={num_samples}, start_idx={start_idx})"
+                f"(num_samples={num_samples}, start_idx={start_idx}); "
+                "on a resumed run pass only the rows still to render, not the full shard"
             )
 
 
@@ -318,10 +326,13 @@ def make_hdf5_dataset(
     :param hdf5_file: Destination HDF5 path; opened in append mode so partial
         files can resume.
     :param render_cfg: Per-shard renderer config from the dataset spec.
-    :param fixed_synth_params_list: Optional pre-set synth params, indexed in
-        write order across the shard.
-    :param fixed_note_params_list: Optional pre-set note params, indexed in
-        write order across the shard.
+    :param fixed_synth_params_list: Optional pre-set synth params for the rows
+        this run will render. Must have length ``batch_per_shard - start_idx``;
+        on a fresh run that's the full shard, on a resumed run that's only the
+        tail still to render (``list[0]`` lands at row ``start_idx``). Caller
+        is responsible for slicing a full-length list before passing it in.
+    :param fixed_note_params_list: Optional pre-set note params; same
+        tail-aligned contract as ``fixed_synth_params_list``.
     """
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)
@@ -378,10 +389,12 @@ def make_wds_dataset(
 
     :param wds_file: Destination tar path passed to ``webdataset.TarWriter``.
     :param render_cfg: Per-shard renderer config from the dataset spec.
-    :param fixed_synth_params_list: Optional pre-set synth params, indexed in
-        write order across the shard.
-    :param fixed_note_params_list: Optional pre-set note params, indexed in
-        write order across the shard.
+    :param fixed_synth_params_list: Optional pre-set synth params, one dict per
+        row this run will render. Must have length ``batch_per_shard``: the
+        wds path is non-resumable (``start_idx = 0``), so the tail is the
+        whole shard. ``list[0]`` lands at row 0.
+    :param fixed_note_params_list: Optional pre-set note params; same contract
+        as ``fixed_synth_params_list``.
     """
     param_spec = param_specs[render_cfg.param_spec_name]
     meta = _shard_metadata_from_render(render_cfg)

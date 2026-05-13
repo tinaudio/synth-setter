@@ -257,9 +257,10 @@ def main() -> None:
     suffix raises ``SystemExit`` rather than silently producing a half-written
     file in the wrong format.
     """
-    # Import lazily so that the writer module's transitive deps (h5py, webdataset)
-    # only load when this CLI entrypoint is invoked, not when callers merely
-    # import this module to reach VSTDataSample / generate_sample.
+    # Import lazily so that the writer module's webdataset dep only loads when
+    # this CLI entrypoint is invoked, not when callers merely import this
+    # module to reach VSTDataSample / generate_sample. (h5py is already a
+    # module-level import here, so it is not what the lazy load avoids.)
     from synth_setter.data.vst.writers import make_hdf5_dataset, make_wds_dataset
 
     args = CliApp.run(_GenerateCliArgs)
