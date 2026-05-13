@@ -25,6 +25,7 @@ Iterates `spec.shards` and downloads each shard from R2 (under
 from __future__ import annotations
 
 import io
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -48,6 +49,7 @@ from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import EXTENSION_TO_OUTPUT_FORMAT, DatasetSpec
 
 _TAR_METADATA_MEMBER = "metadata.json"
+_TAR_NPY_NAME_RE = re.compile(r"^(?P<batch_key>\d{8})\.(?P<field>[^./]+)\.npy$")
 
 
 def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
@@ -166,10 +168,14 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 
     1. The file opens as an uncompressed tar archive.
     2. ``metadata.json`` is present and parses as a strict ``ShardMetadata``.
-    3. Every batch-keyed ``.npy`` member loads as a numpy array.
-    4. Each per-batch array's trailing dims (``arr.shape[1:]``) match the
+    3. Every ``.npy`` member name matches ``<batch_start_idx:08d>.<field>.npy``
+       (no missing or malformed batch keys).
+    4. Every batch-keyed ``.npy`` member loads as a numpy array.
+    5. Within each batch key, all writer fields are present and share the same
+       row count (the writer's per-batch invariant).
+    6. Each per-batch array's trailing dims (``arr.shape[1:]``) match the
        corresponding writer shape (dropping the N dim).
-    5. The summed row count per field across all batches equals
+    7. The summed row count per field across all batches equals
        ``spec.render.batch_per_shard``.
 
     :param shard_path: Local filesystem path to the tar shard.
@@ -192,42 +198,107 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         else:
             errors.extend(_validate_tar_metadata(tar, _TAR_METADATA_MEMBER))
 
-        rows_by_field: dict[str, int] = {field: 0 for field in DATASET_FIELD_NAMES}
-        seen_by_field: dict[str, int] = {field: 0 for field in DATASET_FIELD_NAMES}
+        rows_by_batch: dict[str, dict[str, int]] = {}
         for name in members:
             if not name.endswith(".npy"):
                 continue
-            stem = name[: -len(".npy")]
-            _, _, field = stem.rpartition(".")
-            if field not in rows_by_field:
+            match = _TAR_NPY_NAME_RE.match(name)
+            if match is None:
+                errors.append(
+                    f"malformed tar member name: {name!r} "
+                    f"(expected '<batch_start_idx:08d>.<field>.npy')"
+                )
+                continue
+            field = match.group("field")
+            if field not in expected_inner:
+                errors.append(f"unknown field in tar member: {name!r}")
                 continue
             arr_or_err = _load_npy_member(tar, name)
             if isinstance(arr_or_err, str):
                 errors.append(arr_or_err)
                 continue
-            rows_by_field[field] += arr_or_err.shape[0]
-            seen_by_field[field] += 1
+            rows_by_batch.setdefault(match.group("batch_key"), {})[field] = arr_or_err.shape[0]
             if arr_or_err.shape[1:] != expected_inner[field]:
                 errors.append(
                     f"{name}: inner shape {arr_or_err.shape[1:]} does not match "
                     f"expected {expected_inner[field]}"
                 )
 
-        for field in DATASET_FIELD_NAMES:
-            if seen_by_field[field] == 0:
-                errors.append(f"missing tar member: '*.{field}.npy'")
-                continue
-            if rows_by_field[field] != spec.render.batch_per_shard:
-                errors.append(
-                    f"field {field!r} summed {rows_by_field[field]} rows across "
-                    f"{seen_by_field[field]} batch(es), expected {spec.render.batch_per_shard}"
-                )
+        errors.extend(_check_per_batch_invariants(rows_by_batch))
+        errors.extend(_check_row_totals(rows_by_batch, spec.render.batch_per_shard))
 
+    return errors
+
+
+def _check_per_batch_invariants(rows_by_batch: dict[str, dict[str, int]]) -> list[str]:
+    """Check the writer's per-batch invariant: every batch key has all fields with matching rows.
+
+    The writer emits one ``.npy`` per ``DATASET_FIELD_NAMES`` for each batch
+    key, and all three are sliced from the same per-sample list — so within
+    a batch the row counts must agree across fields. A drift here would mean
+    misaligned WebDataset samples even if the per-field totals happen to add
+    up.
+
+    :param rows_by_batch: Mapping ``batch_key -> {field: rows}`` populated while
+        iterating tar members. Missing fields surface as the batch key not
+        having an entry for that field.
+    :returns: List of error strings (empty = every batch key has all fields and
+        a single row count).
+    :rtype: list[str]
+    """
+    errors: list[str] = []
+    for batch_key in sorted(rows_by_batch):
+        per_field = rows_by_batch[batch_key]
+        missing = [field for field in DATASET_FIELD_NAMES if field not in per_field]
+        if missing:
+            errors.append(
+                f"batch {batch_key!r} missing field(s): {missing} "
+                f"(expected one '.npy' per field {list(DATASET_FIELD_NAMES)})"
+            )
+            continue
+        row_counts = {per_field[field] for field in DATASET_FIELD_NAMES}
+        if len(row_counts) > 1:
+            errors.append(
+                f"batch {batch_key!r} row-count mismatch across fields: "
+                f"{ {field: per_field[field] for field in DATASET_FIELD_NAMES} }"
+            )
+    return errors
+
+
+def _check_row_totals(rows_by_batch: dict[str, dict[str, int]], batch_per_shard: int) -> list[str]:
+    """Check each field's summed row count across all batches equals ``batch_per_shard``.
+
+    :param rows_by_batch: Mapping ``batch_key -> {field: rows}`` populated while
+        iterating tar members.
+    :param batch_per_shard: The writer's per-shard row total each field must sum to.
+    :returns: List of error strings (empty = every field's row total matches).
+    :rtype: list[str]
+    """
+    errors: list[str] = []
+    for field in DATASET_FIELD_NAMES:
+        batches_with_field = [
+            per_field[field] for per_field in rows_by_batch.values() if field in per_field
+        ]
+        if not batches_with_field:
+            errors.append(f"missing tar member: '*.{field}.npy'")
+            continue
+        total = sum(batches_with_field)
+        if total != batch_per_shard:
+            errors.append(
+                f"field {field!r} summed {total} rows across "
+                f"{len(batches_with_field)} batch(es), expected {batch_per_shard}"
+            )
     return errors
 
 
 def _load_npy_member(tar: tarfile.TarFile, name: str) -> np.ndarray | str:
     """Load a ``.npy`` tar member into a numpy array, or return an error string.
+
+    Rejects payloads that ``np.load`` resolves to anything other than a single
+    ``ndarray`` with at least one dimension (e.g. ``.npz`` bytes saved under a
+    ``.npy`` name resolve to ``NpzFile``; a 0-d scalar has no row dim) — both
+    would later crash the per-batch ``arr.shape[0]`` / ``arr.shape[1:]``
+    accesses with an opaque traceback instead of surfacing here.
 
     :param tar: Open ``TarFile`` handle. Caller owns the lifecycle.
     :param name: Name of the ``.npy`` member to extract and load.
@@ -239,9 +310,14 @@ def _load_npy_member(tar: tarfile.TarFile, name: str) -> np.ndarray | str:
     if extracted is None:
         return f"unable to extract tar member: {name!r}"
     try:
-        return np.load(io.BytesIO(extracted.read()))
+        loaded = np.load(io.BytesIO(extracted.read()))
     except (ValueError, EOFError, OSError) as exc:
         return f"{name}: malformed npy payload: {exc}"
+    if not isinstance(loaded, np.ndarray):
+        return f"{name}: expected a single ndarray, got {type(loaded).__name__}"
+    if loaded.ndim == 0:
+        return f"{name}: expected ndarray with at least one dimension, got 0-d scalar"
+    return loaded
 
 
 def _load_spec(spec_arg: str) -> DatasetSpec:

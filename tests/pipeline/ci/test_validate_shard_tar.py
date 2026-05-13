@@ -370,3 +370,178 @@ class TestTarShardValidation:
         _make_valid_tar_bytes(shard_path, [(0, first), (first, second)])
 
         assert validate_shard(shard_path, real_spec) == []
+
+    def test_validate_shard_tar_rejects_malformed_member_name(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A ``.npy`` member without the ``<batch:08d>.<field>.npy`` prefix is rejected.
+
+        Guards against silently coercing names like ``audio.npy`` (no batch key)
+        or ``foo.audio.npy`` (non-numeric prefix) into the audio bucket. Even
+        though the trailing field token matches, the writer never emits such
+        names — accepting them would let a malformed shard through.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        n_rows = real_spec.render.batch_per_shard
+        arrays = _valid_batch_arrays(n_rows)
+        members: dict[str, bytes] = {
+            "audio.npy": _npy_bytes(arrays["audio"]),
+            "00000000.mel_spec.npy": _npy_bytes(arrays["mel_spec"]),
+            "00000000.param_array.npy": _npy_bytes(arrays["param_array"]),
+            "metadata.json": json.dumps(_VALID_METADATA).encode("utf-8"),
+        }
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("malformed tar member name" in err and "audio.npy" in err for err in errors)
+
+    def test_validate_shard_tar_rejects_within_batch_row_mismatch(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A batch key whose per-field row counts disagree surfaces a mismatch error.
+
+        The writer's invariant is that all three fields under one batch key
+        share the same N. A tar where ``audio`` has N rows under one batch
+        key but ``mel_spec``/``param_array`` have different N under that same
+        key would produce misaligned WebDataset samples even if the per-field
+        sums match.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        total = real_spec.render.batch_per_shard
+        batch_a_audio = 3
+        batch_a_other = total - batch_a_audio
+        batch_b_audio = total - batch_a_audio
+        batch_b_other = batch_a_audio
+        members: dict[str, bytes] = {
+            "00000000.audio.npy": _npy_bytes(_valid_batch_arrays(batch_a_audio)["audio"]),
+            "00000000.mel_spec.npy": _npy_bytes(_valid_batch_arrays(batch_a_other)["mel_spec"]),
+            "00000000.param_array.npy": _npy_bytes(
+                _valid_batch_arrays(batch_a_other)["param_array"]
+            ),
+            f"{batch_a_audio:08d}.audio.npy": _npy_bytes(
+                _valid_batch_arrays(batch_b_audio)["audio"]
+            ),
+            f"{batch_a_audio:08d}.mel_spec.npy": _npy_bytes(
+                _valid_batch_arrays(batch_b_other)["mel_spec"]
+            ),
+            f"{batch_a_audio:08d}.param_array.npy": _npy_bytes(
+                _valid_batch_arrays(batch_b_other)["param_array"]
+            ),
+            "metadata.json": json.dumps(_VALID_METADATA).encode("utf-8"),
+        }
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("row-count mismatch" in err for err in errors)
+
+    def test_validate_shard_tar_rejects_batch_key_missing_field(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A batch key missing one of the three field ``.npy`` files surfaces an error.
+
+        The writer emits one ``.npy`` per ``DATASET_FIELD_NAMES`` for every
+        batch key. A shard with two batch keys where one batch is missing
+        ``param_array`` (yet the field's overall total still hits
+        ``batch_per_shard`` via the other batch) must still be flagged.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        total = real_spec.render.batch_per_shard
+        first = total // 2
+        second = total - first
+        members: dict[str, bytes] = {
+            "00000000.audio.npy": _npy_bytes(_valid_batch_arrays(first)["audio"]),
+            "00000000.mel_spec.npy": _npy_bytes(_valid_batch_arrays(first)["mel_spec"]),
+            f"{first:08d}.audio.npy": _npy_bytes(_valid_batch_arrays(second)["audio"]),
+            f"{first:08d}.mel_spec.npy": _npy_bytes(_valid_batch_arrays(second)["mel_spec"]),
+            f"{first:08d}.param_array.npy": _npy_bytes(_valid_batch_arrays(second)["param_array"]),
+            "metadata.json": json.dumps(_VALID_METADATA).encode("utf-8"),
+        }
+        members[f"{first + second:08d}.param_array.npy"] = _npy_bytes(
+            _valid_batch_arrays(first)["param_array"]
+        )
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any(
+            "00000000" in err and "missing field" in err and "param_array" in err for err in errors
+        )
+
+    def test_validate_shard_tar_rejects_npz_payload_under_npy_name(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A ``.npy`` member whose bytes are actually ``.npz`` (NpzFile) is rejected cleanly.
+
+        Without this guard ``np.load`` would return an ``NpzFile`` which has
+        no ``.shape`` attribute, and the per-batch ``arr.shape[0]`` access
+        would crash with an opaque ``AttributeError`` instead of surfacing
+        the malformed payload as a validation error.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        n_rows = real_spec.render.batch_per_shard
+        arrays = _valid_batch_arrays(n_rows)
+        npz_buf = io.BytesIO()
+        np.savez(npz_buf, audio=arrays["audio"])
+        members: dict[str, bytes] = {
+            "00000000.audio.npy": npz_buf.getvalue(),
+            "00000000.mel_spec.npy": _npy_bytes(arrays["mel_spec"]),
+            "00000000.param_array.npy": _npy_bytes(arrays["param_array"]),
+            "metadata.json": json.dumps(_VALID_METADATA).encode("utf-8"),
+        }
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any(
+            "00000000.audio.npy" in err and "expected a single ndarray" in err for err in errors
+        )
+
+    def test_validate_shard_tar_rejects_zero_d_scalar_npy(
+        self, real_spec: DatasetSpec, tmp_path: Path
+    ) -> None:
+        """A ``.npy`` member that loads as a 0-d scalar is rejected cleanly.
+
+        A 0-d ndarray has ``.shape == ()`` so ``arr.shape[0]`` would raise
+        ``IndexError`` — we want a targeted validation error instead.
+
+        :param real_spec: Spec whose render config matches the canonical valid shapes.
+        :param tmp_path: pytest-provided temp directory for the shard file.
+        :returns: ``None``.
+        :rtype: None
+        """
+        shard_path = tmp_path / "shard-000000.tar"
+        n_rows = real_spec.render.batch_per_shard
+        arrays = _valid_batch_arrays(n_rows)
+        members: dict[str, bytes] = {
+            "00000000.audio.npy": _npy_bytes(np.array(0.0, dtype=np.float32)),
+            "00000000.mel_spec.npy": _npy_bytes(arrays["mel_spec"]),
+            "00000000.param_array.npy": _npy_bytes(arrays["param_array"]),
+            "metadata.json": json.dumps(_VALID_METADATA).encode("utf-8"),
+        }
+        _make_tar_with(shard_path, members)
+
+        errors = validate_shard(shard_path, real_spec)
+
+        assert any("00000000.audio.npy" in err and "0-d scalar" in err for err in errors)
