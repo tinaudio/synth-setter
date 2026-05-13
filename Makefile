@@ -151,6 +151,10 @@ coverage: ## Run tests with coverage report
 benchmark: ## Run performance benchmarks
 	pytest --benchmark-only -m "benchmark" -v
 
+# Local mutmut on macOS produces unreliable results — see #1034. The env var
+# below silences Apple's fork-safety SIGSEGV but doesn't make torch/h5py state
+# actually fork-safe; trust .github/workflows/mutmut.yaml (ubuntu-latest) for
+# authoritative end-to-end runs.
 mutmut: ## Run mutation testing
 	OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES mutmut run
 
