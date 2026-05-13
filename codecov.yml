@@ -1,0 +1,80 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0.5%
+        informational: true
+    patch:
+      default:
+        target: 80%
+        informational: true
+
+comment:
+  layout: "diff, flags, components, files"
+  behavior: default
+  require_changes: false
+
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: unit-cpu
+      paths:
+        - src/synth_setter/
+        - scripts/ci/
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+        threshold: 0.5%
+        informational: true
+  individual_components:
+    - component_id: pipeline
+      name: pipeline
+      paths:
+        - src/synth_setter/pipeline/**
+      statuses:
+        - type: project
+          target: 90%
+          informational: true
+    - component_id: models
+      name: models
+      paths:
+        - src/synth_setter/models/**
+      statuses:
+        - type: project
+          target: 85%
+          informational: true
+    - component_id: data
+      name: data
+      paths:
+        - src/synth_setter/data/**
+    - component_id: evaluation
+      name: evaluation
+      paths:
+        - src/synth_setter/evaluation/**
+    - component_id: tools
+      name: tools
+      paths:
+        - src/synth_setter/tools/**
+      statuses:
+        - type: project
+          target: 50%
+          informational: true
+    - component_id: cli
+      name: cli
+      paths:
+        - src/synth_setter/cli/**
+    - component_id: scripts-ci
+      name: scripts-ci
+      paths:
+        - scripts/ci/**
+
+ignore:
+  - "tests/**"
+  - "**/__main__.py"
+  - "docs/**"
+  - "scripts/skypilot/**"

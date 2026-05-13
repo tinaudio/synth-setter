@@ -10,6 +10,7 @@ on:
       - "configs/**"
       - "scripts/**"
       - "pyproject.toml"
+      - "codecov.yml"
       - ".github/workflows/test.yml"
   pull_request:
     branches: [main, "release/*", "dev"]
@@ -19,6 +20,7 @@ on:
       - "configs/**"
       - "scripts/**"
       - "pyproject.toml"
+      - "codecov.yml"
       - ".github/workflows/test.yml"
 
 jobs:
@@ -48,16 +50,27 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system -e ".[torch,dev]"
+        run: |
+          uv pip install --system -e ".[torch,dev]"
+          uv pip install --system pytest-cov[toml]
 
       - name: List dependencies
         run: uv pip list --system
 
-      - name: Run pytest
+      - name: Run pytest with coverage
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
-          pytest -n auto -m "not slow and not gpu and not mps" -vv -s
+          pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
+            --cov=src --cov-branch --cov-report=xml --cov-report=term
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: unit-cpu
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   run_tests_macos:
     runs-on: ${{ matrix.os }}
@@ -85,44 +98,24 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system -e ".[torch,dev]"
-
-      - name: List dependencies
-        run: uv pip list --system
-
-      - name: Run pytest
-        env:
-          HYDRA_FULL_ERROR: "1"
-        run: pytest -n auto -m "not slow and not gpu and not mps" -vv -s
-
-  # upload code coverage report
-  code-coverage:
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.10"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-
-      - name: Install dependencies
         run: |
           uv pip install --system -e ".[torch,dev]"
           uv pip install --system pytest-cov[toml]
 
-      - name: Run tests and collect coverage
+      - name: List dependencies
+        run: uv pip list --system
+
+      - name: Run pytest with coverage
         env:
           HYDRA_FULL_ERROR: "1"
-        run: pytest -n auto -m "not slow and not gpu and not mps" --cov src # NEEDS TO BE UPDATED WHEN CHANGING THE NAME OF "src" FOLDER
+        run: |
+          pytest -n auto -m "not slow and not gpu and not mps" -vv -s \
+            --cov=src --cov-branch --cov-report=xml --cov-report=term
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-    timeout-minutes: 40
+        with:
+          files: coverage.xml
+          flags: unit-cpu
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

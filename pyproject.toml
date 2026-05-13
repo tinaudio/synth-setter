@@ -372,6 +372,19 @@ minor_tags = ["feat"]
 patch_tags = ["fix", "perf", "revert"]
 
 
+[tool.coverage.run]
+source = ["src/synth_setter", "scripts/ci"]
+branch = true
+parallel = true
+relative_files = true
+omit = ["**/__main__.py"]
+
+
+[tool.coverage.paths]
+source = ["src/synth_setter", "*/src/synth_setter"]
+scripts = ["scripts/ci", "*/scripts/ci"]
+
+
 [tool.coverage.report]
 exclude_lines = [
     "pragma: nocover",
