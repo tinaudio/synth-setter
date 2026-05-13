@@ -322,6 +322,7 @@ exclude = '''(?x)
   | ^tests/_baseline_worktree\.py$
   | ^tests/conftest\.py$
   | ^tests/data/vst/test_core\.py$
+  | ^tests/data/vst/test_generate_vst_dataset\.py$
   | ^tests/data/vst/test_generate_vst_dataset_cli\.py$
   | ^tests/data/vst/test_preset_coverage\.py$
   | ^tests/fixtures/baseline_repo/scripts/baseline_app\.py$
