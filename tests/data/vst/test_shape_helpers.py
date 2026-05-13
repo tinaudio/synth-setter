@@ -1,0 +1,99 @@
+"""Unit tests for the public shape primitives in ``generate_vst_dataset``.
+
+The writer and the (planned) shard-validator inner-shape checks share these
+helpers, so each test pins one shape against the legacy inline calculation
+that lived in ``create_datasets_and_get_start_idx`` / ``make_spectrogram`` on
+``main`` before this PR. If anyone changes a constant (n_mels, fps, ...),
+multiple tests here should fail loudly rather than the writer and validator
+silently drifting apart.
+"""
+
+import numpy as np
+
+from synth_setter.data.vst.generate_vst_dataset import (
+    DATASET_FIELD_NAMES,
+    MEL_FRAMES_PER_SECOND,
+    MEL_N_FFT_FRACTION_OF_SAMPLE_RATE,
+    MEL_N_MELS,
+    MEL_WINDOW,
+    audio_dataset_shape,
+    make_spectrogram,
+    mel_dataset_shape,
+    mel_hop_length,
+    mel_n_fft,
+    mel_n_frames,
+    param_array_dataset_shape,
+)
+
+
+def test_dataset_field_names_match_writer_emissions() -> None:
+    """Pins the public field-name tuple; adding a field forces writer + validator update."""
+    assert DATASET_FIELD_NAMES == ("audio", "mel_spec", "param_array")
+
+
+def test_mel_front_end_constants_match_legacy_values() -> None:
+    """Pin the four module-level mel-front-end constants against legacy literals."""
+    assert MEL_FRAMES_PER_SECOND == 100
+    assert MEL_N_MELS == 128
+    assert MEL_N_FFT_FRACTION_OF_SAMPLE_RATE == 0.025
+    assert MEL_WINDOW == "hamming"
+
+
+def test_mel_hop_length_matches_legacy_inline_calc() -> None:
+    """``mel_hop_length(16000)`` equals the legacy ``int(sr / 100.0)`` literal (160)."""
+    assert mel_hop_length(16000) == 160
+    assert mel_hop_length(44100) == 441
+
+
+def test_mel_n_fft_matches_legacy_inline_calc() -> None:
+    """``mel_n_fft(16000)`` equals the legacy ``int(0.025 * sr)`` literal (400)."""
+    assert mel_n_fft(16000) == 400
+    assert mel_n_fft(44100) == 1102
+
+
+def test_mel_n_frames_matches_legacy_inline_calc() -> None:
+    """``mel_n_frames`` reproduces librosa's center=True frame count: ``1 + len // hop``."""
+    # 16k * 4s = 64000 samples, hop = 160 -> 1 + 64000 // 160 = 401.
+    assert mel_n_frames(16000, 4.0) == 401
+    # 44.1k * 4s = 176400 samples, hop = 441 -> 1 + 176400 // 441 = 401.
+    assert mel_n_frames(44100, 4.0) == 401
+
+
+def test_audio_dataset_shape_matches_legacy_inline_calc() -> None:
+    """Pins ``(num_samples, channels, int(sample_rate * signal_duration_seconds))``."""
+    assert audio_dataset_shape(2, 2, 16000, 4.0) == (2, 2, 64000)
+    assert audio_dataset_shape(5, 2, 44100, 4.0) == (5, 2, 176400)
+
+
+def test_mel_dataset_shape_matches_legacy_inline_calc() -> None:
+    """Pins ``(num_samples, channels, 128, n_frames)`` for 16k x 4s and 44.1k x 4s."""
+    assert mel_dataset_shape(2, 2, 16000, 4.0) == (2, 2, 128, 401)
+    assert mel_dataset_shape(5, 2, 44100, 4.0) == (5, 2, 128, 401)
+
+
+def test_param_array_dataset_shape_matches_legacy_inline_calc() -> None:
+    """Pins ``(num_samples, num_params)``."""
+    assert param_array_dataset_shape(2, 175) == (2, 175)
+    assert param_array_dataset_shape(0, 0) == (0, 0)
+
+
+def test_make_spectrogram_output_shape_matches_mel_dataset_shape_helper() -> None:
+    """make_spectrogram and mel_dataset_shape agree on the trailing (n_mels, n_frames).
+
+    This is the load-bearing invariant the writer and validator both rely on:
+    the actual librosa call inside ``make_spectrogram`` and the precomputed
+    ``mel_dataset_shape`` must produce the same trailing dimensions. Tests a
+    1-channel and a 2-channel render — librosa's behavior is per-channel so
+    the helper pads the channel dimension symmetrically.
+    """
+    sample_rate = 16000
+    duration = 4.0
+    audio_length = int(sample_rate * duration)
+
+    mono = np.zeros((audio_length,), dtype=np.float32)
+    mono_spec = make_spectrogram(mono, sample_rate)
+    assert mono_spec.shape == mel_dataset_shape(1, 1, sample_rate, duration)[2:]
+
+    stereo = np.zeros((2, audio_length), dtype=np.float32)
+    stereo_spec = make_spectrogram(stereo, sample_rate)
+    assert stereo_spec.shape == (2, *mel_dataset_shape(1, 1, sample_rate, duration)[2:])

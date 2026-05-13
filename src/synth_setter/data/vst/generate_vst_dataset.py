@@ -20,6 +20,62 @@ from synth_setter.data.vst.core import render_params  # noqa
 from synth_setter.data.vst.param_spec import ParamSpec  # noqa
 
 
+# Per-row arrays the writer emits and the validator checks. Single source of
+# truth for both save_samples below and the shard validator at
+# synth_setter/pipeline/ci/validate_shard.py.
+DATASET_FIELD_NAMES: tuple[str, ...] = ("audio", "mel_spec", "param_array")
+
+# Mel front-end. Centralised so mel_dataset_shape and make_spectrogram
+# agree on the time-axis size.
+MEL_FRAMES_PER_SECOND = 100
+MEL_N_MELS = 128
+MEL_N_FFT_FRACTION_OF_SAMPLE_RATE = 0.025
+MEL_WINDOW = "hamming"
+
+
+def mel_hop_length(sample_rate: float) -> int:
+    """Librosa hop length: ``sample_rate / MEL_FRAMES_PER_SECOND``."""
+    return int(sample_rate / MEL_FRAMES_PER_SECOND)
+
+
+def mel_n_fft(sample_rate: float) -> int:
+    """Librosa FFT window length: ``MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate``."""
+    return int(MEL_N_FFT_FRACTION_OF_SAMPLE_RATE * sample_rate)
+
+
+def mel_n_frames(sample_rate: float, signal_duration_seconds: float) -> int:
+    """Number of mel-time frames librosa produces (center=True default).
+
+    Mirrors ``1 + audio_length // hop_length``.
+    """
+    audio_length = int(sample_rate * signal_duration_seconds)
+    return 1 + audio_length // mel_hop_length(sample_rate)
+
+
+def audio_dataset_shape(
+    num_samples: int, channels: int, sample_rate: float, signal_duration_seconds: float
+) -> tuple[int, int, int]:
+    """Audio dataset shape ``(N, C, time_samples)``."""
+    return (num_samples, channels, int(sample_rate * signal_duration_seconds))
+
+
+def mel_dataset_shape(
+    num_samples: int, channels: int, sample_rate: float, signal_duration_seconds: float
+) -> tuple[int, int, int, int]:
+    """Mel-spectrogram dataset shape ``(N, C, n_mels, n_frames)``."""
+    return (
+        num_samples,
+        channels,
+        MEL_N_MELS,
+        mel_n_frames(sample_rate, signal_duration_seconds),
+    )
+
+
+def param_array_dataset_shape(num_samples: int, num_params: int) -> tuple[int, int]:
+    """Param-array dataset shape ``(N, num_params)``."""
+    return (num_samples, num_params)
+
+
 @dataclass
 class VSTDataSample:
     synth_params: dict[str, float]
@@ -39,22 +95,14 @@ class VSTDataSample:
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Values hardcoded to be roughly like those used by the audio spectrogram transformer.
-
-    i.e. 100 frames per second, 128 mels, ~25ms window, hamming window.
-    """
-
-    n_fft = int(0.025 * sample_rate)
-    hop_length = int(sample_rate / 100.0)
-    window = "hamming"
-
+    """Per-channel mel-spectrogram in dB; STFT params come from module-level constants."""
     spec = librosa.feature.melspectrogram(
         y=audio,
         sr=sample_rate,
-        n_mels=128,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        window=window,
+        n_mels=MEL_N_MELS,
+        n_fft=mel_n_fft(sample_rate),
+        hop_length=mel_hop_length(sample_rate),
+        window=MEL_WINDOW,
     )
     spec_db = librosa.power_to_db(spec, ref=np.max)
     return spec_db
@@ -214,21 +262,21 @@ def create_datasets_and_get_start_idx(
     audio_dataset, audio_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
         "audio",
-        (num_samples, channels, sample_rate * signal_duration_seconds),
+        audio_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float16,
         compression=hdf5plugin.Blosc2(),
     )
     mel_dataset, mel_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
         "mel_spec",
-        (num_samples, 2, 128, 401),
+        mel_dataset_shape(num_samples, channels, sample_rate, signal_duration_seconds),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),
     )
     param_dataset, param_start_idx = create_dataset_and_get_first_unwritten_idx(
         hdf5_file,
         "param_array",
-        (num_samples, num_params),  # +1 for MIDI note
+        param_array_dataset_shape(num_samples, num_params),
         dtype=np.float32,
         compression=hdf5plugin.Blosc2(),
     )
