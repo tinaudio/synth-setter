@@ -82,7 +82,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/constants.py"
         covers: "Input spec filename constant"
       - pattern: "src/synth_setter/pipeline/schemas/spec.py"
-        covers: "DatasetSpec, RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (DatasetSpec is built by spec_from_cfg in cli/generate_dataset.py from a Hydra-composed cfg; the suffix-dispatch maps are consumed by the renderer CLI's main() in writers.py)"
+        covers: "DatasetSpec, RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (DatasetSpec is built by spec_from_cfg in cli/generate_dataset.py from a Hydra-composed cfg; the suffix-dispatch maps are consumed by the renderer CLI's main() in data/vst/generate_vst_dataset.py — main() reads Path(data_file).suffix, looks it up in EXTENSION_TO_OUTPUT_FORMAT, and calls writers.make_hdf5_dataset or writers.make_wds_dataset)"
       - pattern: "src/synth_setter/pipeline/schemas/shard_metadata.py"
         covers: "ShardMetadata — strict pydantic sidecar payload written into wds tar shards as metadata.json and into HDF5 shards as audio.attrs; mirrored across both formats by make_hdf5_dataset / make_wds_dataset in writers.py."
       - pattern: "src/synth_setter/data/vst/writers.py"
