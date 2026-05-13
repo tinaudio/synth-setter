@@ -38,8 +38,9 @@ cd synth-setter
 1. Installs [uv](https://docs.astral.sh/uv/) if it is not already on your PATH.
 2. Creates `.venv/` using a managed Python 3.10 interpreter (downloaded by uv
    if you do not have one locally). The venv prompt label is `synth-setter`.
-3. Installs everything in `requirements.txt` plus the project itself in
-   editable mode (`pip install -e .`).
+3. Installs the project itself in editable mode together with its `torch`
+   and `dev` optional-dependency groups from `pyproject.toml`
+   (`uv pip install -e ".[torch,dev]"`).
 4. Registers the pre-commit hooks — **unless** `git config core.hooksPath`
    is set (as it is in the dev container, where hooks are managed by the
    image). In that case `make install` prints a skip note and leaves the
@@ -523,7 +524,7 @@ Make sure your virtual environment is active and dependencies are installed:
 
 ```bash
 source .venv/bin/activate
-uv pip install -r requirements.txt -e .
+uv pip install -e ".[torch,dev]"
 ```
 
 ### `make format` fails on first run
@@ -601,12 +602,11 @@ themselves (pip, conda, pyenv, system Python, etc.).
 python3.10 -m venv .venv
 source .venv/bin/activate
 
-pip install -r requirements.txt
-pip install -e .
+pip install -e ".[torch,dev]"
 pre-commit install
 ```
 
-Drop `-e` on the second line for a non-editable install.
+Drop `-e` for a non-editable install.
 
 ### A.2. conda
 
@@ -614,14 +614,13 @@ Drop `-e` on the second line for a non-editable install.
 conda create -n synth-setter python=3.10
 conda activate synth-setter
 
-pip install -r requirements.txt
-pip install -e .
+pip install -e ".[torch,dev]"
 pre-commit install
 ```
 
-`requirements.txt` contains pip-only packages (torch, lightning, hydra-core,
-etc.), so we install them with pip inside the conda environment rather than
-through conda-forge.
+The project's `torch` extra (torch, lightning, hydra-core, etc.) ships
+through PyPI rather than conda-forge, so we install everything with pip
+inside the conda environment.
 
 ### A.3. uv pip without `make install`
 
@@ -631,7 +630,7 @@ you manage yourself):
 ```bash
 uv venv --python 3.10 --prompt synth-setter .venv
 source .venv/bin/activate
-uv pip install -r requirements.txt -e .
+uv pip install -e ".[torch,dev]"
 pre-commit install
 ```
 
@@ -639,8 +638,8 @@ This is what `make install` does under the hood.
 
 ### A.4. GPU vs CPU PyTorch
 
-`requirements.txt` pins `torch>=2.0.0` without fixing the CPU/CUDA build.
-After installing requirements, override with the wheel you want from the
+The `torch` extra pins `torch>=2.0.0` without fixing the CPU/CUDA build.
+After installing the project, override with the wheel you want from the
 [PyTorch install matrix](https://pytorch.org/get-started/locally/):
 
 ```bash
@@ -791,8 +790,9 @@ ssh admin@$(tart ip synth-setter-macos)           # password: admin
 > SSH key to `~admin/.ssh/authorized_keys` and disable `PasswordAuthentication`
 > in `/etc/ssh/sshd_config` before exposing port 22.
 
-The image ships with the repo cloned at `~/synth-setter`, a venv with all
-`requirements.txt` deps (CPU torch wheels — Tart VMs have no GPU), Surge XT
+The image ships with the repo cloned at `~/synth-setter`, a venv with the
+project's `[torch,dev]` extras installed (CPU torch wheels — Tart VMs have no
+GPU), Surge XT
 at `/Library/Audio/Plug-Ins/VST3/Surge XT.vst3`, and
 `source ~/synth-setter/.venv/bin/activate` appended to `~/.zshrc` so every
 interactive shell has the venv active from login.

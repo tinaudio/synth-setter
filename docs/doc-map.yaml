@@ -101,7 +101,7 @@ docs:
       - pattern: "scripts/ensure_plugin_symlinks.sh"
         covers: "Idempotent helper that recreates the plugins/<plugin>.vst3 symlink that the Dockerfile bakes but that GHA workflows destroy when they bind-mount $(pwd) over /home/build/synth-setter. Reads SYNTH_SETTER_PLUGIN_PATH (default /usr/lib/vst3/Surge XT.vst3)."
       - pattern: "scripts/sync_worker_checkout.sh"
-        covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install -r requirements.txt` helper called by both runpod-template.yaml and oci-cpu-template.yaml run: blocks. No-op when WORKER_GIT_REF is unset (operators); when set, full transitive resolve handles PRs that add new top-level packages."
+        covers: "Shared `git fetch + checkout WORKER_GIT_REF` + `uv pip install -e .[torch]` helper called by both runpod-template.yaml and oci-cpu-template.yaml run: blocks. No-op when WORKER_GIT_REF is unset (operators); when set, full transitive resolve handles PRs that add new top-level packages."
       - pattern: "scripts/skypilot_write_provider_creds.sh"
         covers: "Per-provider cred writer extracted from the test-dataset-generation workflow heredoc: PROVIDER=runpod writes ~/.runpod/config.toml; PROVIDER=oci writes ~/.oci/config + ~/.oci/oci_api_key.pem (SkyPilot's OCI backend defaults to the root compartment when oci.default.compartment_ocid is unset, so ~/.sky/config.yaml is no longer managed here — see #876). The kind / kubernetes 'local' provider is handled directly in the CI workflow; the launcher skips this script for that case. Mode 600 via umask 077; require_var fails closed on missing secrets."
       - pattern: "scripts/run-linux-vst-headless.sh"
@@ -118,8 +118,8 @@ docs:
         covers: "SkyPilot Task YAML for the kind/kubernetes 'local' provider (production-path local smoke, distinct from local-debug-rclone-template.yaml). Resources block sized for GHA-kind allocatable (cpus 1+, memory 4+, no disk_size); run: block invokes sync_worker_checkout.sh then docker_entrypoint.py generate_dataset. Spec object is keyed by job-name (skypilot-launcher-specs/<job>.json)."
       - pattern: "scripts/capture-skypilot-state.sh"
         covers: "Best-effort kube-apiserver + controller on-pod sky_logs snapshot called from generate-dataset-shards.yaml (skypilot-local row) before `sky local down` reaps the kind cluster. Captures pod describes, events, controller logs, and the controller's provision.log so scheduling-side hangs are diagnosable post-mortem (#876). Bash-3.2 portable so the same script runs on macOS CI."
-      - pattern: "requirements-app.txt"
-        covers: "skypilot[runpod,oci]==0.12.0 required dependency (decision: not optional — see §8.2)"
+      - pattern: "pyproject.toml"
+        covers: "skypilot[runpod,oci]==0.12.0 listed under [project.dependencies] — required, not optional (decision: see §8.2)"
         scope: "skypilot"
 
   # ── Storage provenance spec ─────────────────────────────────────

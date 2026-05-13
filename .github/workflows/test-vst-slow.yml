@@ -41,7 +41,7 @@ on:
       - "tests/data/vst/**"
       - "scripts/compute_audio_metrics.py"
       - ".github/workflows/test-vst-slow.yml"
-      - "requirements*.txt"
+      - "pyproject.toml"
 
 concurrency:
   group: test-vst-slow-${{ github.ref }}

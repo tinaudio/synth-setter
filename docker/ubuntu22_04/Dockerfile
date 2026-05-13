@@ -276,19 +276,29 @@ RUN python --version && \
 FROM python-base AS builder-install-synth-setter-deps
 # Install all Python dependencies via uv in a single resolution pass.
 # uv's built-in cache (mounted below) persists across builds — torch wheels
-# (~2.5 GB) are only downloaded once and survive requirements-app.txt changes.
+# (~2.5 GB) are only downloaded once and survive pyproject.toml changes.
+#
+# Cache scope: only pyproject.toml + README.md are copied in (README.md is
+# referenced by [project].readme), so unrelated source edits do not bust the
+# ~2.5 GB torch-wheels layer. uv pip compile resolves the [torch] + [dev]
+# extras into a flat requirements list; uv pip install then materializes
+# them. The project itself is reinstalled --no-deps from real source in the
+# dev-base stage below.
 #
 # --torch-backend: tells uv which PyTorch variant to install (e.g. cu128, cpu).
 # This replaces --extra-index-url + --index-strategy unsafe-best-match,
 # which was needed because the PyTorch CUDA index carried stale copies of
 # common packages.
-COPY --from=synth-setter-src /home/build/synth-setter/requirements*.txt /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/pyproject.toml /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/README.md /artifacts/
 ARG TORCH_BACKEND=cu128
 RUN --mount=type=cache,target=/root/.cache/uv \
+    cd /artifacts && \
+    uv pip compile pyproject.toml --extra torch --extra dev --quiet -o /tmp/requirements.lock && \
     uv pip install \
         --torch-backend ${TORCH_BACKEND} \
-        -r /artifacts/requirements.txt && \
-    rm -rf /artifacts/requirements*.txt
+        -r /tmp/requirements.lock && \
+    rm -rf /artifacts/pyproject.toml /artifacts/README.md /tmp/requirements.lock
 
 # Runtime apt packages: headless VST loading, rclone for R2 uploads, and the
 # toolchain SkyPilot's RunPod backend needs to provision and stage file_mounts

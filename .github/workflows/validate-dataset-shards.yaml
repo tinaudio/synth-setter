@@ -67,14 +67,14 @@ jobs:
 
       # synth_setter.pipeline.ci.validate_spec imports OUTPUT_FORMAT_TO_EXTENSION from
       # synth_setter.pipeline.schemas.spec, which transitively loads pydantic at module top.
-      # Install only that — keep the runner-side env minimal instead of
-      # `pip install -r requirements.txt` (which pulls torch and friends).
-      # `[project].dependencies = []` in pyproject.toml, so the editable install pulls
-      # in nothing transitively for the project itself; only pydantic brings in its
-      # required `pydantic-core`. Don't use `--no-deps` here — it applies to the whole
-      # pip command, so pydantic-core would be skipped and validate_spec would fail.
+      # Keep the runner-side env minimal: install the project with --no-deps
+      # (the full [project.dependencies] would drag in torch, skypilot, librosa,
+      # etc.), then add pydantic in a second command so its own required
+      # `pydantic-core` resolves.
       - name: Install validate_spec runtime deps
-        run: pip install -e . "pydantic>=2,<3"
+        run: |
+          pip install --no-deps -e .
+          pip install "pydantic>=2,<3"
 
       - name: Validate spec structure
         run: python3 -m synth_setter.pipeline.ci.validate_spec "${{ inputs.spec_uri }}"

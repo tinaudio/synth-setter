@@ -36,7 +36,7 @@ on:
       - "src/synth_setter/pipeline/schemas/image_config.py"
       - "src/synth_setter/pipeline/ci/load_image_config.py"
       - ".github/workflows/docker-build-validation.yml"
-      - "requirements*.txt"
+      - "pyproject.toml"
       - "tests/docker/**"
 
 jobs:

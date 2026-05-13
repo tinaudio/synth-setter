@@ -1,4 +1,4 @@
-# reasons you might want to use `environment.yaml` instead of `requirements.txt`:
+# reasons you might want to use `environment.yaml` instead of pip + pyproject.toml:
 # - pip installs packages in a loop, without ensuring dependencies across all packages
 #   are fulfilled simultaneously, but conda achieves proper dependency control across
 #   all packages
@@ -18,13 +18,15 @@ channels:
 # Split of responsibilities between conda and pip:
 # - conda owns the torch stack (python, pytorch, torchvision, lightning, torchmetrics)
 #   because that's the whole reason to use the conda path — precompiled binaries.
-# - pip owns everything else, installed in a single shot via `-r requirements-app.txt`
-#   below. This gives us a non-overlapping dependency set by construction, so the
-#   conda and pip installers cannot fight over the same package.
+# - pip owns everything else, installed in a single shot via `.[dev]` (the project
+#   itself plus its `dev` optional-dependency group from pyproject.toml). This gives
+#   us a non-overlapping dependency set by construction, so the conda and pip
+#   installers cannot fight over the same package.
 #
-# The torch-stack version specs here are kept in lock-step with requirements-torch.txt:
-# if that file raises a lower bound, bump the matching spec here too. Otherwise conda
-# could legally resolve to an older version than the pip spec allows, and the two
+# The torch-stack version specs here are kept in lock-step with
+# pyproject.toml's [project.optional-dependencies].torch: if that group raises
+# a lower bound, bump the matching spec here too. Otherwise conda could
+# legally resolve to an older version than the pip spec allows, and the two
 # installers would disagree silently.
 
 dependencies:
@@ -48,5 +50,6 @@ dependencies:
   - pip>=23
   - pip:
       # Non-torch pip deps — conda owns the torch stack above, pip owns everything
-      # else. hydra-core, rich, pre-commit, pytest, etc. all come in via this file.
-      - -r requirements-app.txt
+      # else. hydra-core, rich, pre-commit, pytest, etc. all come in via the
+      # project's [project.dependencies] and [dev] extra in pyproject.toml.
+      - ".[dev]"

@@ -91,12 +91,12 @@ set -a && source .env && set +a
 > **Prefer pip or conda?** If you'd rather manage the Python interpreter and
 > venv yourself, see
 > [docs/getting-started.md Appendix A](docs/getting-started.md#appendix-a-manual-environment-setup)
-> for a walkthrough using `pip install -r requirements.txt -e .` inside your
-> own environment.
+> for a walkthrough using `pip install -e ".[torch,dev]"` inside your own
+> environment.
 
 ### GPU vs CPU
 
-This project depends on PyTorch (`torch>=2.0.0`), but the requirements do not fix
+This project depends on PyTorch (`torch>=2.0.0`), but the install does not fix
 whether you use a CPU-only build or a CUDA-enabled build. Choose and install the
 appropriate PyTorch package for your system (CPU-only or a specific CUDA version)
 using the [PyTorch install matrix](https://pytorch.org/get-started/locally/), then

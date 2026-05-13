@@ -5,14 +5,81 @@ description = "Studying the effect of permutation symmetry on audio synthesiser 
 authors = [{name = "Khaled Tinubu"}, {name = "tinaudio"}]
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  # --------- hydra --------- #
+  "hydra-colorlog==1.2.0",
+  "hydra-core==1.3.2",
+  "hydra-optuna-sweeper==1.2.0",
+  # --------- loggers --------- #
+  "tensorboard",
+  "wandb",
+  # --------- pipeline --------- #
+  "click<8.2",
+  "numpy",
+  "oci",
+  "pydantic>=2",
+  "pydantic-settings>=2",
+  "pyyaml",
+  # Pin must stay in sync with the bare-runner install in
+  # .github/workflows/test-skypilot-debug.yml.
+  "skypilot[runpod,oci]==0.12.0",
+  "structlog",
+  "tenacity",
+  "webdataset",
+  # --------- runtime --------- #
+  "dask[distributed]",
+  "einops",
+  "h5py",
+  "hdf5plugin",
+  "librosa",
+  "loguru==0.7.3",
+  "matplotlib",
+  "mido",
+  "pandas",
+  "pedalboard",
+  "POT",
+  "pyloudnorm",
+  "python-dotenv",
+  "rich",
+  "rootutils",
+  "runpod==1.8.1",
+  "scipy==1.14.1",
+  "sh",
+  "threadpoolctl",
+  # --------- eval metrics --------- #
+  "pesto-pitch==2.0.1",
+  "dtw-python==1.7.4",
+  "kymatio==0.3.0",
+]
 
 [project.optional-dependencies]
+torch = [
+  # Install with an explicit index (via uv's --torch-backend) when targeting
+  # CUDA wheels in Docker.
+  "torch>=2.0.0",
+  "torchvision>=0.15.0",
+  "torchaudio>=2.0.0",
+  "lightning>=2.6.0",
+  "torchmetrics>=0.11.4",
+]
+dev = [
+  "hypothesis",
+  "mutmut==3.5.*",
+  "pre-commit",
+  "pyright==1.1.408",
+  "pytest",
+  "pytest-benchmark",
+  "pytest-xdist",
+  "ruff",
+]
 docs = [
   "mkdocs",
   "mkdocs-material",
   "mkdocstrings[python]",
   "griffe-pydantic",
+]
+all = [
+  "synth-setter[torch,dev]",
 ]
 
 

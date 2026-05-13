@@ -97,7 +97,7 @@ on:
       - ".github/workflows/test-dataset-generation.yml"
       - ".github/workflows/generate-dataset-shards.yaml"
       - ".github/workflows/validate-dataset-shards.yaml"
-      - "requirements*.txt"
+      - "pyproject.toml"
 
 permissions:
   contents: read
@@ -179,7 +179,7 @@ jobs:
       # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
       # plugin. Without it, Hydra compose fails with:
       #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
-      # Pin both to the same versions as requirements-app.txt.
+      # Pin both to the same versions as [project.dependencies] in pyproject.toml.
       - name: Install Hydra for dataset-config composition
         run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
