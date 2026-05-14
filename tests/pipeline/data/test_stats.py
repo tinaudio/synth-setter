@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import logging
+import tarfile
+from pathlib import Path
 from types import ModuleType
 
 import numpy as np
@@ -242,6 +245,252 @@ def test_finalize_with_at_most_one_sample_raises_distinct_error(stats_script: Mo
             stats_script.finalize(existing)
         with pytest.raises(ValueError, match=r"<=1 samples"):
             stats_script.finalize(existing, mask_degenerate=True)
+
+
+def _write_mel_shard(path: Path, mel_batches: list[np.ndarray]) -> None:
+    """Write a tar shard at ``path`` containing one ``mel_spec.npy`` per batch.
+
+    Mirrors the writer's per-batch member naming convention
+    (``<batch_start_idx:08d>.mel_spec.npy``) and tacks on the
+    ``metadata.json`` sentinel that the writer always emits — so the test
+    fixtures look structurally like real shards. Other writer fields
+    (``audio``, ``param_array``) are intentionally omitted: the stats path
+    only consumes ``mel_spec``, and including them would just slow tests
+    down.
+
+    :param path: Filesystem path where the tar archive will be written.
+    :param mel_batches: One mel array per batch, each shaped
+        ``(rows, ...inner)``. Inner shape must agree across batches so the
+        Welford reduction over rows is well-defined.
+    :returns: ``None``.
+    :rtype: None
+    """
+    with tarfile.open(path, mode="w:") as tar:
+        for batch_index, mel in enumerate(mel_batches):
+            buf = io.BytesIO()
+            np.save(buf, mel)
+            payload = buf.getvalue()
+            info = tarfile.TarInfo(name=f"{batch_index:08d}.mel_spec.npy")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        metadata = b"{}"
+        info = tarfile.TarInfo(name="metadata.json")
+        info.size = len(metadata)
+        tar.addfile(info, io.BytesIO(metadata))
+
+
+def test_get_stats_wds_writes_sibling_stats_npz_with_mel_inner_shape(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """One shard with a known mel batch yields ``stats.npz`` sibling whose arrays match
+    ``mel.shape[1:]``.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    rng = np.random.default_rng(0)
+    mel = rng.normal(size=(8, 2, 4, 5)).astype(np.float32)
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
+
+    stats_script.get_stats_wds(str(tmp_path))
+
+    out = np.load(tmp_path / "stats.npz")
+    assert out["mean"].shape == (2, 4, 5)
+    assert out["std"].shape == (2, 4, 5)
+
+
+def test_get_stats_wds_matches_numpy_baseline_across_shards(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Mean and std across two shards match ``np.mean``/``np.std`` over the stacked rows.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    rng = np.random.default_rng(1)
+    mel_a = rng.normal(size=(5, 3, 4)).astype(np.float32)
+    mel_b = rng.normal(size=(7, 3, 4)).astype(np.float32)
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel_a])
+    _write_mel_shard(tmp_path / "shard-000001.tar", [mel_b])
+
+    stats_script.get_stats_wds(str(tmp_path))
+
+    stacked = np.concatenate([mel_a, mel_b], axis=0)
+    out = np.load(tmp_path / "stats.npz")
+    np.testing.assert_allclose(out["mean"], stacked.mean(axis=0), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(out["std"], stacked.std(axis=0, ddof=0), rtol=1e-5, atol=1e-6)
+
+
+def test_get_stats_wds_handles_multiple_batches_per_shard(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Multiple per-batch ``mel_spec.npy`` members in one shard are summed via Welford.
+
+    The writer can split a shard into several ``<batch_key>.mel_spec.npy`` members. The stats path
+    must iterate all of them, not just the first.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    rng = np.random.default_rng(2)
+    batch_a = rng.normal(size=(4, 3, 4)).astype(np.float32)
+    batch_b = rng.normal(size=(6, 3, 4)).astype(np.float32)
+    _write_mel_shard(tmp_path / "shard-000000.tar", [batch_a, batch_b])
+
+    stats_script.get_stats_wds(str(tmp_path))
+
+    stacked = np.concatenate([batch_a, batch_b], axis=0)
+    out = np.load(tmp_path / "stats.npz")
+    np.testing.assert_allclose(out["mean"], stacked.mean(axis=0), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(out["std"], stacked.std(axis=0, ddof=0), rtol=1e-5, atol=1e-6)
+
+
+def test_get_stats_wds_raises_on_constant_bin_by_default(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """A bin that is constant across all rows raises ``ValueError`` from the existing degeneracy
+    check.
+
+    Reuses ``_check_degenerate_bins`` via ``finalize``; this test pins
+    that get_stats_wds wires into the same code path as the other two
+    entrypoints.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    rng = np.random.default_rng(3)
+    mel = rng.normal(size=(8, 2, 3)).astype(np.float32)
+    mel[:, 1, 2] = 0.5
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
+
+    with pytest.raises(ValueError, match=r"zero variance"):
+        stats_script.get_stats_wds(str(tmp_path))
+
+
+def test_get_stats_wds_masks_constant_bin_when_flag_set(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """``mask_degenerate=True`` substitutes ``std=1.0`` at the constant position and writes the
+    file.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    rng = np.random.default_rng(4)
+    mel = rng.normal(size=(8, 2, 3)).astype(np.float32)
+    mel[:, 1, 2] = 0.5
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
+
+    stats_script.get_stats_wds(str(tmp_path), mask_degenerate=True)
+
+    out = np.load(tmp_path / "stats.npz")
+    assert out["std"][1, 2] == 1.0
+    np.testing.assert_allclose(out["mean"][1, 2], 0.5)
+
+
+def test_get_stats_wds_no_shards_in_directory_raises(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """A directory with no ``shard-*.tar`` raises ``FileNotFoundError`` naming the directory.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the (empty) shard directory.
+    """
+    with pytest.raises(FileNotFoundError, match=str(tmp_path)):
+        stats_script.get_stats_wds(str(tmp_path))
+
+
+def test_get_stats_wds_iterates_sorted_shard_order(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Shard filenames are processed in lexicographic order so results are reproducible.
+
+    Welford is order-invariant for mean/std, so order doesn't change the
+    answer — but the dispatch glob must yield a deterministic sequence so
+    log-line ordering and any future order-sensitive accumulators stay
+    reproducible across filesystems whose ``glob`` returns inode order.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    rng = np.random.default_rng(5)
+    mel_a = rng.normal(size=(3, 2, 2)).astype(np.float32)
+    mel_b = rng.normal(size=(3, 2, 2)).astype(np.float32)
+    _write_mel_shard(tmp_path / "shard-000001.tar", [mel_b])
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel_a])
+
+    stats_script.get_stats_wds(str(tmp_path))
+
+    stacked = np.concatenate([mel_a, mel_b], axis=0)
+    out = np.load(tmp_path / "stats.npz")
+    np.testing.assert_allclose(out["mean"], stacked.mean(axis=0), rtol=1e-5, atol=1e-6)
+
+
+def test_cli_dispatches_directory_of_tar_shards_to_wds_path(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``main`` routes a directory containing ``shard-*.tar`` to ``get_stats_wds``.
+
+    Spies on each dispatch target so the assertion verifies the chosen branch, not the resulting
+    stats file (those are covered by the behavior tests above).
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    :param monkeypatch: pytest fixture for swapping in spy callables.
+    """
+    rng = np.random.default_rng(6)
+    mel = rng.normal(size=(2, 2, 2)).astype(np.float32)
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
+
+    calls: list[str] = []
+    monkeypatch.setattr(stats_script, "get_stats_wds", lambda *a, **kw: calls.append("wds"))
+    monkeypatch.setattr(stats_script, "get_stats_hdf5", lambda *a, **kw: calls.append("hdf5"))
+    monkeypatch.setattr(stats_script, "get_stats_directory", lambda *a, **kw: calls.append("dir"))
+
+    stats_script.main([str(tmp_path)])
+
+    assert calls == ["wds"]
+
+
+def test_cli_dispatches_h5_input_to_hdf5_path(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``main`` routes a ``.h5`` input to ``get_stats_hdf5`` (regression guard).
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used to place a sentinel ``.h5`` path.
+    :param monkeypatch: pytest fixture for swapping in spy callables.
+    """
+    h5_path = tmp_path / "train.h5"
+    h5_path.write_bytes(b"")
+
+    calls: list[str] = []
+    monkeypatch.setattr(stats_script, "get_stats_wds", lambda *a, **kw: calls.append("wds"))
+    monkeypatch.setattr(stats_script, "get_stats_hdf5", lambda *a, **kw: calls.append("hdf5"))
+    monkeypatch.setattr(stats_script, "get_stats_directory", lambda *a, **kw: calls.append("dir"))
+
+    stats_script.main([str(h5_path)])
+
+    assert calls == ["hdf5"]
+
+
+def test_cli_dispatches_directory_without_tars_to_audio_directory_path(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``main`` falls back to ``get_stats_directory`` when the directory has no shards.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the (no-shard) input directory.
+    :param monkeypatch: pytest fixture for swapping in spy callables.
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(stats_script, "get_stats_wds", lambda *a, **kw: calls.append("wds"))
+    monkeypatch.setattr(stats_script, "get_stats_hdf5", lambda *a, **kw: calls.append("hdf5"))
+    monkeypatch.setattr(stats_script, "get_stats_directory", lambda *a, **kw: calls.append("dir"))
+
+    stats_script.main([str(tmp_path)])
+
+    assert calls == ["dir"]
 
 
 def test_cli_help_advertises_mask_degenerate_bins_flag(

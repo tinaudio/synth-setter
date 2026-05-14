@@ -1,6 +1,10 @@
 import argparse
+import io
 import logging
-import os
+import re
+import tarfile
+from collections.abc import Iterator
+from pathlib import Path
 from typing import NamedTuple
 
 import dask.array as da
@@ -12,8 +16,12 @@ from dask.distributed import Client, progress
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from synth_setter.data.audio_datamodule import AudioFolderDataset
 from synth_setter.data.surge_datamodule import SurgeXTDataset
+from synth_setter.data.vst.shapes import MEL_SPEC_FIELD
 
 logger = logging.getLogger(__name__)
+
+_SHARD_GLOB = "shard-*.tar"
+_MEL_SPEC_MEMBER_RE = re.compile(rf"^\d{{8}}\.{re.escape(MEL_SPEC_FIELD)}\.npy$")
 
 # Cap the listed degenerate indices in error/warning messages so a fully
 # degenerate dataset (e.g. count==1 on a 3-D mel spec, ~100k elements) doesn't
@@ -225,18 +233,77 @@ def get_stats_directory(directory, mask_degenerate: bool = False):
     np.savez(out_file, mean=mean, std=std)
 
 
+def _iter_mel_batches(shard_path: Path) -> Iterator[np.ndarray]:
+    """Yield each ``mel_spec.npy`` member's array from one shard, in name-sorted order.
+
+    Mirrors ``validate_shard``'s raw-``tarfile`` idiom so the stats path
+    pulls in no extra runtime deps (no ``webdataset``) and surfaces tar
+    parse errors at the same layer as the validator. Ignores the writer's
+    ``metadata.json`` sentinel and other per-row fields.
+
+    :param shard_path: Filesystem path to one ``shard-*.tar``.
+    :yields: One ``(rows, *inner)`` mel array per matched tar member.
+    :ytype: np.ndarray
+    """
+    with tarfile.open(shard_path, mode="r:") as tar:
+        for name in sorted(m.name for m in tar.getmembers()):
+            if not _MEL_SPEC_MEMBER_RE.match(name):
+                continue
+            extracted = tar.extractfile(name)
+            if extracted is None:
+                continue
+            yield np.load(io.BytesIO(extracted.read()))
+
+
+def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
+    """Compute mel-spec mean/std across all ``shard-*.tar`` in ``directory`` and write sibling
+    ``stats.npz``.
+
+    Streams Welford's algorithm row-by-row over each shard's pre-computed
+    ``mel_spec`` arrays — no mel recompute, no full-dataset load.
+
+    :param directory: Path to a directory containing ``shard-*.tar`` shards.
+    :param mask_degenerate: If ``True``, mel bins with zero variance are
+        masked to ``std=1.0`` instead of raising — see the matching flag
+        on :func:`get_stats_hdf5` / :func:`get_stats_directory` for the
+        downstream rationale.
+    :raises FileNotFoundError: When ``directory`` contains no shards.
+    :returns: ``None``. Writes ``stats.npz`` to ``directory / "stats.npz"``.
+    :rtype: None
+    """
+    directory = Path(directory)
+    shard_paths = sorted(directory.glob(_SHARD_GLOB))
+    if not shard_paths:
+        raise FileNotFoundError(f"no {_SHARD_GLOB} files in {directory}")
+    out_file = directory / "stats.npz"
+
+    existing = (0, 0, 0)
+    for shard_path in shard_paths:
+        logger.info(f"Processing {shard_path.name}...")
+        for mel_batch in _iter_mel_batches(shard_path):
+            for row in mel_batch:
+                existing = update(existing, row)
+
+    mean, std = finalize(existing, mask_degenerate=mask_degenerate)
+
+    logger.info(f"Saving to {out_file}")
+    np.savez(out_file, mean=mean, std=std)
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compute mean/std statistics over a Surge XT HDF5 file or an audio "
-            "folder and write the result to a sibling stats.npz."
+            "Compute mean/std statistics over a Surge XT HDF5 file, a "
+            "directory of WebDataset shard-*.tar files, or an audio folder, "
+            "and write the result to a sibling stats.npz."
         )
     )
     parser.add_argument(
         "input",
         help=(
-            "Path to a .h5 file (Dask path) or a directory of audio files "
-            "(streaming Welford path)."
+            "Path to a .h5 file (Dask path), a directory containing "
+            "shard-*.tar shards (streaming Welford path), or a directory of "
+            "audio files (streaming Welford path)."
         ),
     )
     parser.add_argument(
@@ -253,8 +320,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-if __name__ == "__main__":
-    args = _parse_args()
+def main(argv: list[str] | None = None) -> None:
+    """Parse ``argv`` and dispatch to the matching stats entrypoint.
+
+    Dispatch order: ``.h5`` suffix → :func:`get_stats_hdf5`; directory
+    containing ``shard-*.tar`` → :func:`get_stats_wds`; everything else →
+    :func:`get_stats_directory` (audio folder).
+
+    :param argv: Argument list forwarded to ``argparse``. ``None`` uses
+        ``sys.argv[1:]`` — the standard CLI behavior.
+    :returns: ``None``.
+    :rtype: None
+    """
+    args = _parse_args(argv)
 
     # Without this the stdlib root logger stays at WARNING and the per-file
     # progress + "Saving to..." messages emitted by get_stats_*() are silently
@@ -265,7 +343,14 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    if os.path.splitext(args.input)[-1] == ".h5":
+    input_path = Path(args.input)
+    if input_path.suffix == ".h5":
         get_stats_hdf5(args.input, mask_degenerate=args.mask_degenerate_bins)
+    elif input_path.is_dir() and any(input_path.glob(_SHARD_GLOB)):
+        get_stats_wds(args.input, mask_degenerate=args.mask_degenerate_bins)
     else:
         get_stats_directory(args.input, mask_degenerate=args.mask_degenerate_bins)
+
+
+if __name__ == "__main__":
+    main()
