@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778773754225,
+  "lastUpdate": 1778773756028,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -4897,6 +4897,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 12.017828660199996,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f39ebc6d5395e2b43b68cc5c5551fd3c22873c91",
+          "message": "chore(lint): graduate tests/helpers/package_available.py from pydoclint exclude (#1039)\n\nPR #979 cleared this file from `.pre-commit-config.yaml`'s `pyright` exclude\nbut left it in `[tool.pydoclint].exclude` in `pyproject.toml`. Per the\nlint-cleanup runbook (step 5), graduating a file means clearing it from\n*every* exclusion list it appears in.\n\n- Update `_package_available`'s docstring to use the repo's standard\n  Sphinx return convention (`:returns:` + `:rtype: bool`) so pydoclint's\n  DOC203 (return-type consistency) is satisfied.\n- Drop `^tests/helpers/package_available\\.py$` from\n  `[tool.pydoclint].exclude`.\n\nNo source/behavioural change. `pre-commit run --files\ntests/helpers/package_available.py pyproject.toml` is green across all\nhooks (ruff, ruff format, pyright, docformatter, interrogate, pydoclint,\ncodespell).\n\nRefs #25",
+          "timestamp": "2026-05-14T11:21:04-04:00",
+          "tree_id": "40f1ffd0109dd77a56ca7b85f576cbeb28de3097",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f39ebc6d5395e2b43b68cc5c5551fd3c22873c91"
+        },
+        "date": 1778773755730,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 3.510472536087036,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.3798043456673623,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.011838173493742943,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.022286593914031982,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.9131808280944824,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.970398511000008,
             "unit": "seconds"
           }
         ]
