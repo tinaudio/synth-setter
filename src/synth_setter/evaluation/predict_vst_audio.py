@@ -1,3 +1,5 @@
+"""Render predicted-parameter and target audio from a trained model for offline evaluation."""
+
 import os
 from pathlib import Path
 

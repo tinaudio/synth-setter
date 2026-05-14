@@ -1,3 +1,5 @@
+"""Hydra entrypoint for evaluating a trained model on a datamodule's test split."""
+
 from typing import Any
 
 import hydra
@@ -27,7 +29,7 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 @task_wrapper
 def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Evaluates given checkpoint on a datamodule testset.
+    """Evaluate the given checkpoint on a datamodule testset.
 
     This method is wrapped in optional @task_wrapper decorator, that controls the behavior during
     failure. Useful for multiruns, saving info about the crash, etc.
@@ -104,7 +106,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
 @hydra.main(version_base="1.3", config_path="../../../configs", config_name="eval.yaml")
 def main(cfg: DictConfig) -> None:
-    """Main entry point for evaluation.
+    """Run the evaluation entrypoint.
 
     :param cfg: DictConfig configuration composed by Hydra.
     """

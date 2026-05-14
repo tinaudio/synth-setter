@@ -1,3 +1,5 @@
+"""Helper for invoking shell commands inside pytest via the optional ``sh`` package."""
+
 import pytest
 
 from tests.helpers.package_available import _SH_AVAILABLE

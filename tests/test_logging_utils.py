@@ -29,7 +29,7 @@ class FakeWandbConfig:
 
 
 def make_fake_wandb(*, has_run: bool = True) -> SimpleNamespace:
-    """Factory for a fake wandb module with inspectable config state."""
+    """Build a fake wandb module with inspectable config state."""
     return SimpleNamespace(
         run=object() if has_run else None,
         config=FakeWandbConfig(),

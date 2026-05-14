@@ -145,9 +145,14 @@ extend-exclude = []
 # E=pycodestyle errors, F=pyflakes, I=isort, S=bandit security,
 # T=T10 (print) + T20 (debugger), UP=pyupgrade, W=pycodestyle warnings,
 # ANN001=missing-type-function-argument,
-# D102/D103/D107=pydocstyle missing-docstring-on-{method,function,__init__}
-# (closes pydoclint's "no docstring → skip checks" blind spot — see #938).
-select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001", "D102", "D103", "D107"]
+# D100/D101/D102/D103/D107=pydocstyle missing-docstring-on-{module,class,
+# method,function,__init__} — together close pydoclint's "no docstring →
+# skip checks" P1 blind spot (see #938). D205 enforces blank-line between
+# summary and description (the shape sphinx and pydoclint's own parser
+# assume). D401 nudges summaries toward imperative mood ("Return …", not
+# "Returns …").
+select = ["E", "F", "I", "S", "T", "UP", "W", "ANN001",
+          "D100", "D101", "D102", "D103", "D107", "D205", "D401"]
 # E501: line length handled by ruff-format, S101: allow assert in tests
 ignore = ["E501", "S101"]
 
@@ -258,8 +263,13 @@ check-class-attributes = true
 # of this repo's lint stack so contributors don't get a silently inert
 # suppression. See the adversarial probe summary on #939 and #938.
 native-mode-noqa-location = "definition"
-# Path-level exclude regex (verbose). Default infra paths plus files that
-# currently violate the rules — shrinks as files are cleaned up. See #938.
+# Legacy violations are pinned in .pydoclint-baseline.txt (one row per
+# (file, line, rule code)). New violations — including in files that
+# used to be on the path exclude list — fail the hook. Audit baseline
+# diffs in PR reviews; cleanup chunks delete rows. See #938.
+baseline = ".pydoclint-baseline.txt"
+auto-regenerate-baseline = false
+# Path-level exclude regex (verbose). Infra-only after the baseline swap.
 exclude = '''(?x)
     (^|/)\.git(/|$)
   | (^|/)\.tox(/|$)
@@ -270,97 +280,7 @@ exclude = '''(?x)
   | ^\.claude/
   | ^\.worktrees/
   | ^notebooks/
-  | ^src/synth_setter/pipeline/ci/load_image_config\.py$
-  | ^src/synth_setter/pipeline/ci/validate_spec\.py$
-  | ^src/synth_setter/cli/generate_dataset\.py$
-  | ^src/synth_setter/pipeline/skypilot_launch\.py$
-  | ^src/synth_setter/pipeline/partitioning\.py$
-  | ^src/synth_setter/pipeline/r2_io\.py$
-  | ^src/synth_setter/pipeline/schemas/image_config\.py$
-  | ^src/synth_setter/pipeline/schemas/prefix\.py$
-  | ^src/synth_setter/pipeline/schemas/shard_metadata\.py$
-  | ^src/synth_setter/pipeline/schemas/spec\.py$
-  | ^src/synth_setter/metrics\.py$
-  | ^src/synth_setter/pipeline/data/add_music2latent\.py$
-  | ^src/synth_setter/evaluation/compute_audio_metrics\.py$
-  | ^src/synth_setter/tools/docker_entrypoint\.py$
-  | ^src/synth_setter/tools/model_from_wandb\.py$
-  | ^src/synth_setter/tools/paramspec_to_table\.py$
-  | ^src/synth_setter/tools/plot_param2tok\.py$
-  | ^src/synth_setter/tools/sig_perf\.py$
-  | ^src/synth_setter/evaluation/predict_vst_audio\.py$
-  | ^src/synth_setter/pipeline/data/r2_report\.py$
-  | ^src/synth_setter/pipeline/data/rewrite_to_latest\.py$
-  | ^src/synth_setter/tools/surge_xt_interactive\.py$
-  | ^src/synth_setter/data/audio_datamodule\.py$
-  | ^src/synth_setter/data/fm_datamodule\.py$
-  | ^src/synth_setter/data/kosc_datamodule\.py$
-  | ^src/synth_setter/data/ksin_datamodule\.py$
-  | ^src/synth_setter/data/surge_datamodule\.py$
-  | ^src/synth_setter/data/vst/core\.py$
-  | ^src/synth_setter/data/vst/generate_vst_dataset\.py$
-  | ^src/synth_setter/data/vst/param_spec\.py$
-  | ^src/synth_setter/cli/eval\.py$
-  | ^src/synth_setter/models/components/cnn\.py$
-  | ^src/synth_setter/models/components/embed_pool\.py$
-  | ^src/synth_setter/models/components/loss\.py$
-  | ^src/synth_setter/models/components/residual_mlp\.py$
-  | ^src/synth_setter/models/components/sinkhorn\.py$
-  | ^src/synth_setter/models/components/transformer\.py$
-  | ^src/synth_setter/models/components/vae\.py$
-  | ^src/synth_setter/models/components/vector_field\.py$
-  | ^src/synth_setter/models/ksin_ff_module\.py$
-  | ^src/synth_setter/models/ksin_flow_matching_module\.py$
-  | ^src/synth_setter/models/surge_ff_module\.py$
-  | ^src/synth_setter/models/surge_flow_matching_module\.py$
-  | ^src/synth_setter/models/surge_flowvae_module\.py$
-  | ^src/synth_setter/cli/train\.py$
-  | ^src/synth_setter/utils/callbacks\.py$
-  | ^src/synth_setter/utils/rich_utils\.py$
-  | ^src/synth_setter/utils/utils\.py$
-  | ^tests/_baseline_worktree\.py$
-  | ^tests/conftest\.py$
-  | ^tests/data/vst/test_core\.py$
-  | ^tests/data/vst/test_generate_vst_dataset\.py$
-  | ^tests/data/vst/test_generate_vst_dataset_cli\.py$
-  | ^tests/data/vst/test_preset_coverage\.py$
-  | ^tests/fixtures/baseline_repo/scripts/baseline_app\.py$
-  | ^tests/fixtures/diff_repo/scripts/diff_app\.py$
-  | ^tests/pipeline/ci/test_validate_shard\.py$
-  | ^tests/pipeline/ci/test_validate_spec\.py$
-  | ^tests/pipeline/conftest\.py$
-  | ^tests/pipeline/test_ci/test_load_image_config\.py$
-  | ^tests/pipeline/test_ci/test_materialize_spec\.py$
-  | ^tests/pipeline/test_configs/test_experiment_yamls\.py$
-  | ^tests/pipeline/test_entrypoints/test_generate_dataset\.py$
-  | ^tests/pipeline/test_entrypoints/test_skypilot_launch\.py$
-  | ^tests/pipeline/test_partitioning\.py$
-  | ^tests/pipeline/test_r2_io\.py$
-  | ^tests/pipeline/test_schemas/test_dataset_spec\.py$
-  | ^tests/pipeline/test_schemas/test_image_config\.py$
-  | ^tests/pipeline/test_schemas/test_shard_metadata\.py$
-  | ^tests/pipeline/test_schemas/test_prefix\.py$
-  # tests/infra/: the blanket `^tests/infra/` exclusion was removed in #1036
-  # to graduate test_dataset_generation_matrix.py into pydoclint coverage.
-  # New tests under tests/infra/ are now subject to pydoclint by default —
-  # write the docstrings rather than re-adding `^tests/infra/` here.
-  | ^tests/infra/conftest\.py$
-  | ^tests/infra/test_devcontainer_attached_mode\.py$
-  | ^tests/infra/test_gh_auth_flow\.py$
-  | ^tests/infra/test_no_secrets_in_image\.py$
-  | ^tests/infra/test_post_create_performance\.py$
-  | ^tests/infra/test_workflows_under_act\.py$
-  | ^tests/evaluation/test_compute_audio_metrics\.py$
-  | ^tests/pipeline/data/test_r2_report\.py$
-  | ^tests/scripts/skypilot/test_write_provider_creds\.py$
-  | ^tests/tools/test_surge_xt_interactive\.py$
-  | ^tests/test_benchmarks\.py$
-  | ^tests/test_callbacks\.py$
-  | ^tests/test_compare_baseline_configs\.py$
-  | ^tests/test_configs\.py$
-  | ^tests/tools/test_docker_entrypoint\.py$
-  | ^tests/test_logging_utils\.py$
-  | ^tests/test_properties\.py$
+  | ^tests/fixtures/
 '''
 
 [tool.semantic_release]

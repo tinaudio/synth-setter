@@ -1,3 +1,5 @@
+"""Lightning module for the Surge XT Flow-VAE preset prediction model."""
+
 from typing import Any
 
 import torch
@@ -8,6 +10,8 @@ from synth_setter.models.components.vae import compute_flowvae_loss
 
 
 class SurgeFlowVAEModule(LightningModule):
+    """Flow-VAE LightningModule that learns a latent flow and a regression flow to params."""
+
     def __init__(
         self,
         net: torch.nn.Module,

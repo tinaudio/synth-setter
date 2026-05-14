@@ -1,3 +1,5 @@
+"""Tests that Hydra config groups compose without errors."""
+
 from typing import Any
 
 import hydra
@@ -123,7 +125,8 @@ def _diff_dicts(a: dict[Any, Any], b: dict[Any, Any], prefix: str = "") -> list[
 
 
 def test_test_mps_yaml_matches_cfg_surge_xt_global() -> None:
-    """``configs/experiment/surge/test-mps.yaml`` must resolve to the same cfg the surge smoke
+    """``configs/experiment/surge/test-mps.yaml`` must resolve to the same cfg the surge smoke.
+
     fixture builds for ``accelerator="mps"`` and ``param_spec_name="surge_4"``.
 
     Guard against silent drift: the fixture's open_dict bake-ins and the YAML's defaults

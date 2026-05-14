@@ -380,6 +380,8 @@ def _normalize_for_compare(cfg: dict) -> dict:
 # this indirectly, but they're slow (~10min) and only pass when `_target_` is the
 # leaf — a focused unit test covers dict/list recursion + the deep-copy contract.
 class TestStripLeafKeys:
+    """Unit tests for the ``_strip_leaf_keys`` config-pruning helper."""
+
     def test_removes_key_at_top_level(self) -> None:
         result = _strip_leaf_keys({"_target_": "X", "keep": 1}, ("_target_",))
         assert result == {"keep": 1}

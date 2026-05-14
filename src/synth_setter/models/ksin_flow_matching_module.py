@@ -1,3 +1,5 @@
+"""Lightning module for flow-matching k-sinusoidal parameter prediction."""
+
 import math
 from collections.abc import Callable
 from functools import partial
@@ -58,6 +60,8 @@ def rk4_with_cfg(
 
 
 class KSinFlowMatchingModule(LightningModule):
+    """Flow-matching LightningModule for k-sinusoidal parameter prediction (optional OT)."""
+
     def __init__(
         self,
         encoder: torch.nn.Module,
@@ -234,8 +238,9 @@ class KSinFlowMatchingModule(LightningModule):
         return x0, x1, z
 
     def _sample_x0_and_x1(self, params: torch.Tensor, z: torch.Tensor):
-        """Applies coupling according to the schemes in:
-        https://proceedings.mlr.press/v202/pooladian23a/pooladian23a.pdf#page=5.59
+        """Apply the coupling scheme selected by ``self.hparams.coupling``.
+
+        See https://proceedings.mlr.press/v202/pooladian23a/pooladian23a.pdf#page=5.59.
         """
         if self.hparams.coupling == "uniform":
             x0, x1 = self._basic_sample(params)

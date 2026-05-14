@@ -1,8 +1,12 @@
+"""Conditional MLP vector field used by the flow-matching modules."""
+
 import torch
 import torch.nn as nn
 
 
 class AdaptiveLayerNorm(nn.LayerNorm):
+    """LayerNorm with shift and scale predicted from a conditioning vector (AdaLN)."""
+
     def __init__(self, dim: int, conditioning_dim: int, *args, **kwargs):
         super().__init__(dim, *args, **kwargs)
         self.shift = nn.Linear(conditioning_dim, dim)
@@ -16,6 +20,8 @@ class AdaptiveLayerNorm(nn.LayerNorm):
 
 
 class VectorFieldBlock(nn.Module):
+    """Residual MLP block for vector-field networks with optional AdaLN conditioning."""
+
     def __init__(
         self,
         in_dim: int,
@@ -61,6 +67,8 @@ class VectorFieldBlock(nn.Module):
 
 
 class VectorField(nn.Module):
+    """Flow-matching vector field: MLP backbone with timestep + audio conditioning and CFG dropout."""
+
     def __init__(self, field_dim: int, hidden_dim: int, conditioning_dim: int, num_blocks: int):
         super().__init__()
 

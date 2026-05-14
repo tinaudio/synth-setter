@@ -1,3 +1,5 @@
+"""Rich-based helpers for printing Hydra configs and prompting for tags."""
+
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -29,7 +31,7 @@ def print_config_tree(
     resolve: bool = False,
     save_to_file: bool = False,
 ) -> None:
-    """Prints the contents of a DictConfig as a tree structure using the Rich library.
+    """Print the contents of a DictConfig as a tree structure using the Rich library.
 
     :param cfg: A DictConfig composed by Hydra.
     :param print_order: Determines in what order config components are printed. Default is ``("data", "model",

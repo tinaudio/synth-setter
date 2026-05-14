@@ -1,3 +1,5 @@
+"""Flow-VAE components: encoder/decoder CNNs, RealNVP flows, and the FlowVAE module."""
+
 import math
 from dataclasses import dataclass
 
@@ -24,6 +26,7 @@ from synth_setter.data.vst.param_spec import (
 
 class CustomRealNVP(CompositeTransform):
     """Taken from https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/flows.py
+
     Le Vaillant et al"""
 
     def __init__(
@@ -78,6 +81,7 @@ class CustomRealNVP(CompositeTransform):
 
 class EncoderBlock(nn.Module):
     """Like https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/encoder.py
+
     but with added residual connections because that's what we do now."""
 
     def __init__(
@@ -113,6 +117,8 @@ class EncoderBlock(nn.Module):
 
 
 class Encoder(nn.Module):
+    """Spectrogram CNN encoder that maps a ``(2, mel, T)`` input to a ``2 * latent_dim`` vector."""
+
     def __init__(self, latent_dim: int, spec_dim: tuple[int] = (128, 401)):
         super().__init__()
 
@@ -146,6 +152,7 @@ class Encoder(nn.Module):
 
 class DecoderBlock(nn.Module):
     """Like https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/decoder.py
+
     but with added residual connections because that's what we do now."""
 
     def __init__(
@@ -189,6 +196,8 @@ class DecoderBlock(nn.Module):
 
 
 class Decoder(nn.Module):
+    """Spectrogram CNN decoder that maps a latent vector back to a ``(2, mel, T)`` spectrogram."""
+
     def __init__(self, latent_dim: int, num_channels: int, spec_dim: tuple[int] = (128, 401)):
         super().__init__()
 
@@ -212,6 +221,8 @@ class Decoder(nn.Module):
 
 @dataclass
 class VAEOutput:
+    """Container for the tensors produced by a FlowVAE forward pass."""
+
     y_hat: torch.Tensor
 
     x_hat: torch.Tensor
@@ -236,6 +247,8 @@ class VAEOutput:
 
 
 class FlowVAE(nn.Module):
+    """Spectrogram VAE with a RealNVP latent flow and a regression flow to parameter space."""
+
     def __init__(
         self,
         encoder: nn.Module,

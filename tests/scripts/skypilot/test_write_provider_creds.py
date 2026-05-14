@@ -132,7 +132,9 @@ class TestR2CredentialsFile:
 
     def test_writes_credentials_file_with_aws_keys(self, tmp_path: Path) -> None:
         """R2 credentials file contains the AWS-style profile with the supplied access key +
-        secret."""
+
+        secret.
+        """
         _run(tmp_path, {**R2_ENV, **RUNPOD_ENV}, "--provider", "runpod")
         creds = tmp_path / ".cloudflare" / "r2.credentials"
         assert creds.is_file()
@@ -155,8 +157,10 @@ class TestR2CredentialsFile:
         assert _file_mode(accountid) == 0o600
 
     def test_runs_unconditionally_for_oci_provider(self, tmp_path: Path) -> None:
-        """R2 cred files are written even when --provider is oci (R2 is shared across
-        providers)."""
+        """R2 cred files are written even when --provider is oci (R2 is shared across.
+
+        providers).
+        """
         _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
         assert (tmp_path / ".cloudflare" / "r2.credentials").is_file()
         assert (tmp_path / ".cloudflare" / "accountid").is_file()
@@ -187,8 +191,10 @@ class TestIdempotency:
         assert "[r2]" in creds.read_text()
 
     def test_skip_path_tightens_loose_permissions(self, tmp_path: Path) -> None:
-        """A pre-existing cred file with mode 0644 should be tightened to 0600 even when its
-        contents are preserved (no-leak posture: never leave creds world-readable)."""
+        """A pre-existing cred file with mode 0644 should be tightened to 0600 even when its.
+
+        contents are preserved (no-leak posture: never leave creds world-readable).
+        """
         creds = tmp_path / ".cloudflare" / "r2.credentials"
         creds.parent.mkdir(parents=True)
         creds.write_text("HAND_MANAGED\n")
@@ -223,16 +229,19 @@ class TestProviderGating:
         assert _file_mode(tmp_path / ".oci" / "oci_api_key.pem") == 0o600
 
     def test_oci_does_not_touch_sky_config(self, tmp_path: Path) -> None:
-        """OCI provider must not write to ``~/.sky/config.yaml`` — SkyPilot's OCI backend defaults
+        """OCI provider must not write to ``~/.sky/config.yaml`` — SkyPilot's OCI backend defaults.
+
         to the root compartment when ``oci.default.compartment_ocid`` is unset, so the script has
-        nothing to upsert (see PR #876)."""
+        nothing to upsert (see PR #876).
+        """
         _run(tmp_path, {**R2_ENV, **OCI_ENV}, "--provider", "oci")
         assert not (tmp_path / ".sky" / "config.yaml").exists(), (
             "OCI bootstrap should no longer touch ~/.sky/config.yaml"
         )
 
     def test_local_provider_is_rejected(self, tmp_path: Path) -> None:
-        """The script no longer supports ``--provider local`` — the launcher skips this script for
+        """The script no longer supports ``--provider local`` — the launcher skips this script for.
+
         that case and the CI workflow writes the controller-resource shrink directly.
 
         Passing ``local`` must fail loudly so a stale caller doesn't silently
@@ -254,8 +263,10 @@ class TestProviderGating:
         assert result.returncode != 0
 
     def test_provider_flag_without_value_fails_cleanly(self, tmp_path: Path) -> None:
-        """`--provider` as the trailing arg (no value) fails with a clear error rather than a bash
-        `shift` failure under `set -e`."""
+        """`--provider` as the trailing arg (no value) fails with a clear error rather than a bash.
+
+        `shift` failure under `set -e`.
+        """
         result = _run(tmp_path, R2_ENV, "--provider", expect_success=False)
         assert result.returncode != 0
         assert "--provider" in result.stderr

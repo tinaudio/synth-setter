@@ -1,4 +1,5 @@
 """Tests for src/synth_setter/pipeline/skypilot_launch.py — SkyPilot launcher (RunPod / OCI /
+
 kind).
 
 Mock-based: no real SkyPilot or RunPod calls. The `mock_sky` fixture replaces the launcher's
@@ -61,7 +62,8 @@ def patch_materialize_io(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture()
 def experiment(fake_plugin: Path) -> str:
-    """Name a Hydra experiment under ``configs/experiment/``. Tests pass this verbatim to the
+    """Name a Hydra experiment under ``configs/experiment/``. Tests pass this verbatim to the.
+
     launcher's ``--experiment`` flag; ad-hoc Hydra overrides (e.g. ``render.plugin_path=...``) flow
     through ``_invoke``'s positional trailing args.
 
@@ -193,7 +195,9 @@ class TestLoadWorkerEnv:
 
     def test_parses_keys_skips_comments_and_strips_quotes(self, tmp_path: Path) -> None:
         """Python-dotenv handles blanks, comments, and quoted values; loader returns dict[str,
-        str]."""
+
+        str].
+        """
         path = tmp_path / ".env"
         path.write_text(
             "# a comment\n"
@@ -260,7 +264,8 @@ class TestResolveWorkerEnvGitRefValidation:
 
 
 class TestResolveWorkerEnvR2RemoteConstants:
-    """`RCLONE_CONFIG_R2_TYPE=s3` and `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` are constants (not
+    """`RCLONE_CONFIG_R2_TYPE=s3` and `RCLONE_CONFIG_R2_PROVIDER=Cloudflare` are constants (not.
+
     secrets) that rclone needs to construct the `r2:` remote.
 
     The launcher defaults
@@ -335,8 +340,10 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """With no .env on disk and no rclone-R2 keys in process env, the launcher fails fast and
-        never calls sky.*."""
+        """With no .env on disk and no rclone-R2 keys in process env, the launcher fails fast and.
+
+        never calls sky.*.
+        """
         missing = tmp_path / "does-not-exist.env"
         result = _invoke(experiment, template_yaml, missing, fake_plugin=fake_plugin)
         assert result.exit_code != 0
@@ -380,9 +387,11 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Typos of `--`-style launcher options are rejected by Click instead of being silently
+        """Typos of `--`-style launcher options are rejected by Click instead of being silently.
+
         forwarded as Hydra overrides — Hydra overrides are positional ``key=value`` args, not
-        flags, so strict option validation catches misspellings of real launcher flags."""
+        flags, so strict option validation catches misspellings of real launcher flags.
+        """
         runner = CliRunner()
         result = runner.invoke(
             main,
@@ -412,8 +421,10 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """An empty .env on disk and no rclone-R2 keys in process env fails fast — empty .env is
-        equivalent to no .env."""
+        """An empty .env on disk and no rclone-R2 keys in process env fails fast — empty .env is.
+
+        equivalent to no .env.
+        """
         empty_env = tmp_path / "empty.env"
         empty_env.write_text("# only comments\n\n")
         result = _invoke(experiment, template_yaml, empty_env, fake_plugin=fake_plugin)
@@ -433,8 +444,10 @@ class TestMainCli:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """If the .env doesn't exist but the rclone-R2 keys are in process env, the launcher
-        succeeds and forwards the process-env values via task.update_envs."""
+        """If the .env doesn't exist but the rclone-R2 keys are in process env, the launcher.
+
+        succeeds and forwards the process-env values via task.update_envs.
+        """
         missing = tmp_path / "does-not-exist.env"
         monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "s3")
         monkeypatch.setenv("RCLONE_CONFIG_R2_ACCESS_KEY_ID", "process-env-key")
@@ -526,6 +539,7 @@ class TestMainCli:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """`upload_spec_to_r2` puts the spec at `r2://<bucket>/skypilot-launcher-
+
         specs/<cluster>.json` and the launcher injects that URI into the worker's env via
         WORKER_SPEC_URI.
 
@@ -606,6 +620,7 @@ class TestMainCli:
         mock_sky: MagicMock,
     ) -> None:
         """`--tail` streams logs with follow=True via `sky.jobs.tail_logs(job_id=...,
+
         follow=True)`.
 
         The SDK rejects passing both `name=` and `job_id=` ("Cannot specify both name and job_id"),
@@ -661,8 +676,10 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Without --job-name the launcher derives the managed-job name from
-        ``spec.task_name[:8]``."""
+        """Without --job-name the launcher derives the managed-job name from.
+
+        ``spec.task_name[:8]``.
+        """
         # Pin --spec-out so the test reads back the same spec the launcher composed,
         # rather than assuming spec.task_name equals the experiment id (an experiment
         # YAML may override `task_name`).
@@ -717,8 +734,10 @@ class TestMainCli:
         mock_sky: MagicMock,
     ) -> None:
         """Under `--tail`, a non-zero `jobs.tail_logs` rc means the worker job ended in a non-
+
         SUCCEEDED terminal status; the launcher surfaces that as a non-zero exit and still cancels
-        the managed job."""
+        the managed job.
+        """
         mock_sky.jobs.tail_logs.return_value = 100
 
         result = _invoke(experiment, template_yaml, env_file, "--tail", fake_plugin=fake_plugin)
@@ -737,12 +756,11 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`sky.jobs.tail_logs(follow=True)` is contractually `Optional[int]` but only returns None
-        when `follow=False`.
+        """`sky.jobs.tail_logs(follow=True)` only returns ``None`` when ``follow=False``.
 
-        A None back from the SDK while we're passing `follow=True` is a contract violation — the
-        launcher must surface that as a failure rather than mask it as success, otherwise it would
-        exit 0 on a job whose terminal status the launcher never confirmed.
+        A ``None`` back from the SDK while we're passing ``follow=True`` is a contract violation —
+        the launcher must surface that as a failure rather than mask it as success, otherwise it
+        would exit 0 on a job whose terminal status the launcher never confirmed.
         """
         mock_sky.jobs.tail_logs.return_value = None
 
@@ -763,9 +781,11 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """If sky.jobs.launch yields no job_id the launcher aborts; cancel is best-effort and
+        """If sky.jobs.launch yields no job_id the launcher aborts; cancel is best-effort and.
+
         idempotent on a never-submitted job name (sky.jobs.cancel on a missing job is a no-op), so
-        it still runs in the finally block to make multi-worker partial-failure cleanup uniform."""
+        it still runs in the finally block to make multi-worker partial-failure cleanup uniform.
+        """
         responses = {
             "launch-req": ([], MagicMock()),
         }
@@ -786,8 +806,10 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Under `--tail`, a `sky.jobs.tail_logs` transport error must not skip job cancel — the
-        managed job is always cancelled even if the log-stream side raised."""
+        """Under `--tail`, a `sky.jobs.tail_logs` transport error must not skip job cancel — the.
+
+        managed job is always cancelled even if the log-stream side raised.
+        """
         mock_sky.jobs.tail_logs.side_effect = RuntimeError("boom")
 
         result = _invoke(experiment, template_yaml, env_file, "--tail", fake_plugin=fake_plugin)
@@ -805,8 +827,10 @@ class TestMainCli:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """If sky.jobs.launch raises after the launcher materialized + R2-uploaded the spec, the
-        local spec file under LOCAL_SPEC_DIR is still around for downstream artifact upload."""
+        """If sky.jobs.launch raises after the launcher materialized + R2-uploaded the spec, the.
+
+        local spec file under LOCAL_SPEC_DIR is still around for downstream artifact upload.
+        """
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
             lambda args: None,
@@ -864,7 +888,9 @@ class TestJobNameAlias:
         mock_sky: MagicMock,
     ) -> None:
         """The deprecated ``--cluster-name`` alias binds to the same parameter as ``--job-
-        name``."""
+
+        name``.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -944,10 +970,12 @@ class TestJobNameAlias:
 
 
 class TestJobNameValidation:
-    """`--job-name` is interpolated into a local filename under ``$TMPDIR`` and into an R2 object
+    """`--job-name` is interpolated into a local filename under ``$TMPDIR`` and into an R2 object.
+
     key before SkyPilot itself ever sees it, so the launcher validates the value against a strict
     kubernetes-style label pattern up-front and rejects anything containing path separators,
-    whitespace, or other shell-meaningful characters."""
+    whitespace, or other shell-meaningful characters.
+    """
 
     @pytest.mark.parametrize(
         "bad_name",
@@ -973,8 +1001,10 @@ class TestJobNameValidation:
         mock_sky: MagicMock,
         bad_name: str,
     ) -> None:
-        """Bad names fail with a ClickException citing --job-name; no spec is materialized and
-        sky.* is never called."""
+        """Bad names fail with a ClickException citing --job-name; no spec is materialized and.
+
+        sky.* is never called.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -1009,8 +1039,10 @@ class TestJobNameValidation:
         mock_sky: MagicMock,
         good_name: str,
     ) -> None:
-        """Names matching [A-Za-z0-9][A-Za-z0-9_-]{0,62} pass through to sky.jobs.launch
-        unchanged."""
+        """Names matching [A-Za-z0-9][A-Za-z0-9_-]{0,62} pass through to sky.jobs.launch.
+
+        unchanged.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -1033,10 +1065,12 @@ class TestJobNameValidation:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """If ``--job-name`` is not passed and ``spec.task_name`` contains characters not allowed
+        """If ``--job-name`` is not passed and ``spec.task_name`` contains characters not allowed.
+
         in a managed-job name (e.g. ``/`` or ``..``), the launcher must reject the derived default
         *before* writing the spec or invoking sky — path-traversal hardening for the local tempfile
-        and the R2 object key."""
+        and the R2 object key.
+        """
         # Build a real DatasetSpec carrying a task_name with a path separator and have
         # the launcher's hydra-compose helper hand it back to main().
         bad_spec = DatasetSpec.model_validate(
@@ -1075,7 +1109,8 @@ class TestJobNameValidation:
 
 
 class TestNoTailMode:
-    """Default `--no-tail` mode: submit each rank, print job_id + the `sky jobs logs` / `sky jobs
+    """Default `--no-tail` mode: submit each rank, print job_id + the `sky jobs logs` / `sky jobs.
+
     cancel` commands the operator can run, then exit 0 without tailing or cancelling.
 
     The managed-jobs controller's terminal-status lifecycle is the safety net for jobs left
@@ -1115,8 +1150,10 @@ class TestNoTailMode:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """A successful detach leaves the managed job running — the controller's terminal-status
-        lifecycle is the safety net, not the launcher's `finally` cancel."""
+        """A successful detach leaves the managed job running — the controller's terminal-status.
+
+        lifecycle is the safety net, not the launcher's `finally` cancel.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -1139,8 +1176,10 @@ class TestNoTailMode:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """For each submitted job the operator gets the exact `sky jobs logs --name <name>` and
-        `sky jobs cancel --name <name>` commands they can copy-paste."""
+        """For each submitted job the operator gets the exact `sky jobs logs --name <name>` and.
+
+        `sky jobs cancel --name <name>` commands they can copy-paste.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -1164,8 +1203,10 @@ class TestNoTailMode:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Multi-worker detach prints one block per rank — each managed job gets its own `sky jobs
-        logs` / `sky jobs cancel` commands."""
+        """Multi-worker detach prints one block per rank — each managed job gets its own `sky jobs.
+
+        logs` / `sky jobs cancel` commands.
+        """
         TestNumWorkersFanOut._setup_n_workers_mock(mock_sky, n=3)
 
         result = _invoke(
@@ -1197,6 +1238,7 @@ class TestNoTailMode:
         mock_sky: MagicMock,
     ) -> None:
         """Multi-worker detach: if rank 1's launch yields no job_id (half-submitted) but the
+
         other ranks succeed, only the failed job is cancelled. Successful jobs stay running."""
         job_names = [f"smoke-job-1-r{i}" for i in range(3)]
         tasks = {name: MagicMock(name=f"task-{name}") for name in job_names}
@@ -1245,6 +1287,7 @@ class TestNoTailMode:
         mock_sky: MagicMock,
     ) -> None:
         """Single-worker detach: if launch raises, the half-submitted job is still cancelled
+
         (best-effort) and the launcher exits non-zero."""
         mock_sky.jobs.launch.side_effect = RuntimeError("boom")
 
@@ -1330,8 +1373,10 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Under `--tail`, `--num-workers 3` submits exactly 3 managed jobs and tails+cancels each
-        one."""
+        """Under `--tail`, `--num-workers 3` submits exactly 3 managed jobs and tails+cancels each.
+
+        one.
+        """
         self._setup_n_workers_mock(mock_sky, n=3)
 
         result = _invoke(
@@ -1361,8 +1406,10 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """N>1 launches use `<base>-r{i}` job names so the per-rank jobs are distinguishable in
-        SkyPilot's managed-jobs UI / dashboards."""
+        """N>1 launches use `<base>-r{i}` job names so the per-rank jobs are distinguishable in.
+
+        SkyPilot's managed-jobs UI / dashboards.
+        """
         self._setup_n_workers_mock(mock_sky, n=3)
 
         result = _invoke(
@@ -1392,8 +1439,10 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`--num-workers 1` (default) keeps the unsuffixed job name for backward-compat with debug
-        workflows / dashboards that key off it."""
+        """`--num-workers 1` (default) keeps the unsuffixed job name for backward-compat.
+
+        Debug workflows / dashboards key off the unsuffixed name.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -1417,7 +1466,8 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Each rank's task gets ``SYNTH_SETTER_WORKER_RANK=<i>`` and
+        """Each rank's task gets ``SYNTH_SETTER_WORKER_RANK=<i>`` and.
+
         ``SYNTH_SETTER_NUM_WORKERS=<N>`` injected.
 
         Workers read these via ``read_rank_world_from_env`` and partition the
@@ -1458,8 +1508,10 @@ class TestNumWorkersFanOut:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Spec is materialized + uploaded to R2 once and shared across all ranks (single
-        ``r2_prefix`` so the partition is one logical dataset, not three)."""
+        """Spec is materialized + uploaded to R2 once and shared across all ranks (single.
+
+        ``r2_prefix`` so the partition is one logical dataset, not three).
+        """
         self._setup_n_workers_mock(mock_sky, n=3)
         rclone_invocations: list[list[str]] = []
         monkeypatch.setattr(
@@ -1494,9 +1546,11 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Under `--tail`, if any rank's tail_logs returns non-zero, the launcher exits non-zero
+        """Under `--tail`, if any rank's tail_logs returns non-zero, the launcher exits non-zero.
+
         but every managed job (success or fail) gets cancelled — partial-failure cleanup must be
-        uniform."""
+        uniform.
+        """
         self._setup_n_workers_mock(mock_sky, n=3, tail_rcs_by_name={"smoke-job-1-r1": 100})
 
         result = _invoke(
@@ -1526,7 +1580,8 @@ class TestNumWorkersFanOut:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Fan-out variant of
+        """Fan-out variant of.
+
         `test_tail_logs_returning_none_with_follow_true_is_treated_as_failure`.
 
         One rank's `sky.jobs.tail_logs(follow=True)` returns ``None`` (SDK contract violation: the
@@ -1636,9 +1691,10 @@ class TestNumWorkersFanOut:
         mock_sky: MagicMock,
         bad_tag: str,
     ) -> None:
-        """`--worker-image-tag` is interpolated into a docker ref; invalid tags must fail before
-        sky.* is touched, not produce surprising image refs like `tinaudio/synth-
-        setter:foo:bar`."""
+        """`--worker-image-tag` is interpolated into a docker ref; invalid tags must fail before.
+
+        sky.* is touched, not produce surprising image refs like `tinaudio/synth- setter:foo:bar`.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -1699,8 +1755,10 @@ class TestOverrideImageId:
         assert new_resources[0].image_id == "docker:tinaudio/synth-setter:test-tag"
 
     def test_multiple_non_oci_resources_all_get_image_id_overridden(self) -> None:
-        """Every entry in a multi-Resources alt-set (RunPod has 7) is mutated, not just the
-        first."""
+        """Every entry in a multi-Resources alt-set (RunPod has 7) is mutated, not just the.
+
+        first.
+        """
         runpod_cloud = MagicMock(name="RunPodCloud")
         resources = [self._make_resource(runpod_cloud) for _ in range(3)]
         task = self._make_task(resources)
@@ -1746,6 +1804,7 @@ class TestOverrideImageId:
 
 class TestDetectProvider:
     """`_detect_provider` reads `resources.cloud` from a Task YAML and maps it to the cred-
+
     bootstrap `--provider` flag.
 
     Reads the YAML directly (no
@@ -1769,9 +1828,11 @@ class TestDetectProvider:
         assert _real_detect_provider(path) == "oci"
 
     def test_kubernetes_cloud_detected_as_local(self, tmp_path: Path) -> None:
-        """`sky local up`-provisioned kind clusters surface as `cloud: kubernetes`; the launcher
+        """`sky local up`-provisioned kind clusters surface as `cloud: kubernetes`; the launcher.
+
         maps that to the internal ``local`` provider tag, used to gate skipping the cred bootstrap
-        (kind needs no compute creds — see PR #876)."""
+        (kind needs no compute creds — see PR #876).
+        """
         path = tmp_path / "local.yaml"
         path.write_text(yaml.dump({"resources": {"cloud": "kubernetes"}}))
 
@@ -1792,32 +1853,40 @@ class TestDetectProvider:
             _real_detect_provider(path)
 
     def test_empty_yaml_raises_click_exception(self, tmp_path: Path) -> None:
-        """An empty template file makes `yaml.safe_load` return `None`; surface that as a clean
-        ClickException instead of bubbling AttributeError from `doc.get(...)`."""
+        """An empty template file makes `yaml.safe_load` return `None`; surface that as a clean.
+
+        ClickException instead of bubbling AttributeError from `doc.get(...)`.
+        """
         path = tmp_path / "empty.yaml"
         path.write_text("")
         with pytest.raises(click.ClickException, match="(?i)could not detect cloud"):
             _real_detect_provider(path)
 
     def test_non_mapping_resources_raises_click_exception(self, tmp_path: Path) -> None:
-        """A template whose `resources` key is a list / string / scalar raises a clean
-        ClickException instead of bubbling AttributeError from `resources.get(...)`."""
+        """A template whose `resources` key is a list / string / scalar raises a clean.
+
+        ClickException instead of bubbling AttributeError from `resources.get(...)`.
+        """
         path = tmp_path / "scalar-resources.yaml"
         path.write_text(yaml.dump({"resources": "not-a-mapping"}))
         with pytest.raises(click.ClickException, match="(?i)resources.*mapping"):
             _real_detect_provider(path)
 
     def test_non_list_any_of_raises_click_exception(self, tmp_path: Path) -> None:
-        """A template whose `resources.any_of` is something other than a list raises a clean
-        ClickException — defends `(any_of[0] or {}).get(...)` against scalar `any_of`."""
+        """A template whose `resources.any_of` is something other than a list raises a clean.
+
+        ClickException — defends `(any_of[0] or {}).get(...)` against scalar `any_of`.
+        """
         path = tmp_path / "scalar-any-of.yaml"
         path.write_text(yaml.dump({"resources": {"any_of": "not-a-list"}}))
         with pytest.raises(click.ClickException, match="(?i)any_of.*list"):
             _real_detect_provider(path)
 
     def test_non_mapping_any_of_first_entry_raises_click_exception(self, tmp_path: Path) -> None:
-        """A template where `resources.any_of[0]` is a string / scalar raises a clean
-        ClickException instead of bubbling AttributeError from `.get('cloud')`."""
+        """A template where `resources.any_of[0]` is a string / scalar raises a clean.
+
+        ClickException instead of bubbling AttributeError from `.get('cloud')`.
+        """
         path = tmp_path / "scalar-any-of-entry.yaml"
         path.write_text(yaml.dump({"resources": {"any_of": ["not-a-mapping"]}}))
         with pytest.raises(click.ClickException, match="(?i)any_of\\[0\\].*mapping"):
@@ -1834,7 +1903,8 @@ class TestRunCredBootstrap:
     """Behavioral contracts for the launcher's wrapping of the cred-bootstrap script."""
 
     def test_skips_when_api_server_endpoint_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When SKYPILOT_API_SERVER_ENDPOINT is set, the bootstrap script is NOT invoked — the
+        """When SKYPILOT_API_SERVER_ENDPOINT is set, the bootstrap script is NOT invoked — the.
+
         remote API server holds creds.
 
         Returns silently (no exception, no script call).
@@ -1853,9 +1923,11 @@ class TestRunCredBootstrap:
     def test_passes_merged_env_to_subprocess(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """When --env-file is provided, its values are merged into the subprocess env so
+        """When --env-file is provided, its values are merged into the subprocess env so.
+
         RCLONE_CONFIG_R2_* / RUNPOD_API_KEY / OCI_* set only in the dotenv file are visible to the
-        bootstrap script (which runs `resolve_var` against them)."""
+        bootstrap script (which runs `resolve_var` against them).
+        """
         env_file = tmp_path / "creds.env"
         env_file.write_text(
             "RUNPOD_API_KEY=from-env-file\nRCLONE_CONFIG_R2_ACCESS_KEY_ID=from-env-file\n"
@@ -1884,8 +1956,10 @@ class TestRunCredBootstrap:
     def test_propagates_script_failure_as_click_exception(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A non-zero rc from the bootstrap script bubbles up as a ClickException — the launcher
-        fails fast rather than continuing with a half-written cred state."""
+        """A non-zero rc from the bootstrap script bubbles up as a ClickException — the launcher.
+
+        fails fast rather than continuing with a half-written cred state.
+        """
         import subprocess as _subprocess
 
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
@@ -1903,10 +1977,11 @@ class TestRunCredBootstrap:
     def test_capture_output_keeps_stdout_off_caller_log(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Even if the script ever started emitting stdout (it shouldn't), the launcher captures it
-        via `subprocess.run(capture_output=True)` so a tee'd workflow caller cannot leak it.
+        """The launcher captures stdout via ``subprocess.run(capture_output=True)``.
 
-        Pin the kwarg here so a future edit can't drop the capture.
+        Even if the script ever started emitting stdout (it shouldn't), capture_output=True
+        prevents a tee'd workflow caller from leaking it. Pin the kwarg here so a future edit can't
+        drop the capture.
         """
         captured: dict[str, Any] = {}
 
@@ -1977,8 +2052,10 @@ class TestNumWorkersConfigPrecedence:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """The fixture's experiment has no `num_workers`, and no `--num-workers` is passed — the
-        schema default (1) drives a single-cluster fan-out."""
+        """The fixture's experiment has no `num_workers`, and no `--num-workers` is passed — the.
+
+        schema default (1) drives a single-cluster fan-out.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -2011,8 +2088,10 @@ class TestDispatchMode:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """`--local` clears an inherited SKYPILOT_API_SERVER_ENDPOINT so a stale env var can't
-        silently route this run to the remote server."""
+        """`--local` clears an inherited SKYPILOT_API_SERVER_ENDPOINT so a stale env var can't.
+
+        silently route this run to the remote server.
+        """
         monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://stale.example.com")
 
         result = _invoke(
@@ -2039,8 +2118,10 @@ class TestDispatchMode:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """`--api-server <url>` exports the endpoint into os.environ before any sky.* call so the
-        SDK dispatches to the remote server."""
+        """`--api-server <url>` exports the endpoint into os.environ before any sky.* call so the.
+
+        SDK dispatches to the remote server.
+        """
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
 
         result = _invoke(
@@ -2096,8 +2177,10 @@ class TestDispatchMode:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A blank/whitespace-only value is rejected with a clear error rather than silently
-        setting an empty endpoint that makes downstream cred-bootstrap behavior confusing."""
+        """A blank/whitespace-only value is rejected with a clear error rather than silently.
+
+        setting an empty endpoint that makes downstream cred-bootstrap behavior confusing.
+        """
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
 
         result = _invoke(
@@ -2126,8 +2209,10 @@ class TestDispatchMode:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """`--api-server <url>` causes `_run_cred_bootstrap` to short-circuit (remote server holds
-        creds) — no subprocess invocation."""
+        """`--api-server <url>` causes `_run_cred_bootstrap` to short-circuit (remote server holds.
+
+        creds) — no subprocess invocation.
+        """
         monkeypatch.delenv("SKYPILOT_API_SERVER_ENDPOINT", raising=False)
 
         # Re-patch _run_cred_bootstrap to the real impl so the SKYPILOT_API_SERVER_ENDPOINT
@@ -2173,8 +2258,10 @@ class TestDispatchMode:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """`--local` clears the inherited endpoint AND runs the cred bootstrap (the launcher host
-        needs creds on disk for local SDK dispatch)."""
+        """`--local` clears the inherited endpoint AND runs the cred bootstrap (the launcher host.
+
+        needs creds on disk for local SDK dispatch).
+        """
         monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://stale.example.com")
         called: list[str] = []
 
@@ -2216,7 +2303,8 @@ class TestDispatchMode:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When the template's cloud detects as ``local`` (kubernetes / kind), ``main()`` must NOT
+        """When the template's cloud detects as ``local`` (kubernetes / kind), ``main()`` must NOT.
+
         invoke ``_run_cred_bootstrap`` — kind needs no compute creds and the CI workflow writes the
         controller-resource shrink directly to ``~/.sky/config.yaml``.
 
@@ -2260,8 +2348,10 @@ class TestDispatchMode:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """`--api-server` and `--local` are mutually exclusive — a usage error before sky.* is
-        touched."""
+        """`--api-server` and `--local` are mutually exclusive — a usage error before sky.* is.
+
+        touched.
+        """
         result = _invoke(
             experiment,
             template_yaml,
@@ -2290,7 +2380,9 @@ class TestDispatchMode:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Without --api-server / --local the launcher leaves SKYPILOT_API_SERVER_ENDPOINT alone —
-        backward-compat with workflows that already rely on env-var passthrough."""
+
+        backward-compat with workflows that already rely on env-var passthrough.
+        """
         monkeypatch.setenv("SKYPILOT_API_SERVER_ENDPOINT", "https://inherited.example.com")
 
         result = _invoke(
@@ -2333,7 +2425,8 @@ class TestDispatchMode:
 
 
 class TestWorkerEnvToOsEnvironBridge:
-    """`main()` copies `RCLONE_CONFIG_R2_*` from the resolved worker_env into `os.environ` so
+    """`main()` copies `RCLONE_CONFIG_R2_*` from the resolved worker_env into `os.environ` so.
+
     `upload_spec_to_r2`'s `rclone copyto` subprocess inherits them.
 
     Local-dev `--env-file` paths populate worker_env without exporting; without this bridge rclone
@@ -2351,8 +2444,10 @@ class TestWorkerEnvToOsEnvironBridge:
         mock_sky: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Prefixed names from a `.env` (loaded via `--env-file`, not exported) get copied into
-        os.environ before the rclone subprocess runs."""
+        """Prefixed names from a `.env` (loaded via `--env-file`, not exported) get copied into.
+
+        os.environ before the rclone subprocess runs.
+        """
         env_file = tmp_path / "prefixed.env"
         env_file.write_text(
             "RCLONE_CONFIG_R2_ACCESS_KEY_ID=ak-from-env\n"
@@ -2399,8 +2494,10 @@ class TestSecretWorkerEnvKeys:
     """`_SECRET_WORKER_ENV_KEYS` is the residual subset used to detect unconfigured creds."""
 
     def test_excludes_non_secret_rclone_constants(self) -> None:
-        """TYPE / PROVIDER are public rclone configuration — they must not appear in the secret
-        subset."""
+        """TYPE / PROVIDER are public rclone configuration — they must not appear in the secret.
+
+        subset.
+        """
         from synth_setter.pipeline.skypilot_launch import (
             _R2_RCLONE_CONSTANTS,
             _SECRET_WORKER_ENV_KEYS,
@@ -2440,6 +2537,7 @@ class TestLaunchOneRank:
 
     def test_returns_job_id_from_stream_and_get(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Happy path: stream_and_get returns ``([job_id], handle)`` and the helper returns the
+
         job_id."""
         from synth_setter.pipeline.skypilot_launch import _launch_one_rank
 
@@ -2478,6 +2576,7 @@ class TestLaunchOneRank:
         expected_match: str,
     ) -> None:
         """`sky.jobs.launch` + `sky.stream_and_get` together yield ``(Optional[List[int]],
+
         handle)`` (or ``None`` if the whole submission was dropped).
 
         All four "no job_id" shapes — entire
@@ -2506,6 +2605,7 @@ class TestLaunchOneRank:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Pins the contract that the returned job_id is ``stream_and_get_result[0][0]`` — i.e.
+
         sourced from the SDK's response — not derived from ``rank`` (e.g. ``rank + 1``) or any
         other positional convention.
 

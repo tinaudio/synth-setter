@@ -135,7 +135,8 @@ class TestValidation:
 
 
 class TestReadRankWorldFromEnv:
-    """``read_rank_world_from_env`` reads SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS, no
+    """``read_rank_world_from_env`` reads SYNTH_SETTER_WORKER_RANK / SYNTH_SETTER_NUM_WORKERS, no.
+
     defaults.
 
     The silent-default behavior is intentionally refused: a worker invoked

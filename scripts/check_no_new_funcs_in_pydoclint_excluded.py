@@ -1,4 +1,5 @@
-"""CI guard against adding new top-level/methodspace ``def``/``class`` lines to files that
+"""CI guard against adding new top-level/methodspace ``def``/``class`` lines to files that.
+
 ``[tool.pydoclint].exclude`` skips.
 
 Pydoclint's per-file exclude list closes the lint surface for legacy files,

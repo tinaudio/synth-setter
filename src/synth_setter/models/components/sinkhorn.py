@@ -1,3 +1,5 @@
+"""Sinkhorn-Knopp matrix scaling used for token-parameter soft assignment."""
+
 import math
 
 import torch

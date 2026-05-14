@@ -146,7 +146,7 @@ def render_eval(spec_path: Path) -> None:
     Uses ``ClickException`` rather than ``NotImplementedError`` so click's
     standalone driver prints a clean ``Error: ...`` line and exits non-zero
     instead of dumping a Python traceback into container logs.
-    """
+    """  # noqa: D401
     logger.error("render_eval invoked but not implemented (see #410); spec=%s", spec_path)
     raise click.ClickException("render_eval not implemented; tracked in #410")
 
@@ -165,7 +165,7 @@ def train(spec_path: Path) -> None:
     Uses ``ClickException`` rather than ``NotImplementedError`` so click's
     standalone driver prints a clean ``Error: ...`` line and exits non-zero
     instead of dumping a Python traceback into container logs.
-    """
+    """  # noqa: D401
     logger.error("train invoked but not implemented (see #409); spec=%s", spec_path)
     raise click.ClickException("train not implemented; tracked in #409")
 

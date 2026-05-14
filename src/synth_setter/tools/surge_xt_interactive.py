@@ -216,8 +216,10 @@ def _validate_metrics_df(
     metrics_df: pd.DataFrame,
     expected: _MetricsFileSpec,
 ) -> None:
-    """Verify ``metrics_df`` has the expected row count and a superset of expected columns, and
-    that the expected columns are entirely finite."""
+    """Verify ``metrics_df`` has the expected row count and a superset of expected columns, and.
+
+    that the expected columns are entirely finite.
+    """
     if len(metrics_df) != expected.rows:
         raise ValueError(f"{metrics_path}: expected {expected.rows} rows, got {len(metrics_df)}")
     missing_columns = expected.columns - set(metrics_df.columns)
@@ -265,8 +267,10 @@ class PredictionRefType(click.ParamType):
         param: click.Parameter | None,
         ctx: click.Context | None,
     ) -> PredictionRef:
-        """Parse a ``PATH:BATCH_IDX`` string (or pass-through ``PredictionRef``) into a
-        ``PredictionRef``."""
+        """Parse a ``PATH:BATCH_IDX`` string (or pass-through ``PredictionRef``) into a.
+
+        ``PredictionRef``.
+        """
         if isinstance(value, PredictionRef):
             return value
         path_str, sep, idx_str = value.rpartition(":")
@@ -292,8 +296,10 @@ class DatasetRefType(click.ParamType):
         param: click.Parameter | None,
         ctx: click.Context | None,
     ) -> DatasetRef:
-        """Parse a ``PATH:DATASET_IDX`` string (or pass-through ``DatasetRef``) into a
-        ``DatasetRef``."""
+        """Parse a ``PATH:DATASET_IDX`` string (or pass-through ``DatasetRef``) into a.
+
+        ``DatasetRef``.
+        """
         if isinstance(value, DatasetRef):
             return value
         path_str, sep, idx_str = value.rpartition(":")
@@ -709,7 +715,8 @@ def _run_predict(
 
 
 def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> None:
-    """Verify ``PredictionWriter`` (``src/synth_setter/utils/callbacks.py``) wrote the expected
+    """Verify ``PredictionWriter`` (``src/synth_setter/utils/callbacks.py``) wrote the expected.
+
     per-sample ``pred-{i}.pt``, ``target-audio-{i}.pt``, and ``target-params-{i}.pt`` files, and
     that prediction tensors are finite.
 
@@ -1262,7 +1269,8 @@ def _maybe_eval_captured_patches(
     *,
     eval_runner: EvalRunner | None = None,
 ) -> None:
-    """Replicate captured patches into the four eval-pipeline splits and run eval_patches if a
+    """Replicate captured patches into the four eval-pipeline splits and run eval_patches if a.
+
     checkpoint is provided; no-op otherwise.
 
     The Click ``--checkpoint-path`` option already validates ``exists=True``, so when this is

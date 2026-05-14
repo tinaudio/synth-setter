@@ -126,6 +126,7 @@ class TestBaseCaptureFiles:
 
     def test_creates_out_dir_and_base_files(self, tmp_path: Path) -> None:
         """With a no-op kubectl shim, the script still creates ``k8s_state/`` and the four cluster-
+
         overview files (pods, events, nodes, pods-yaml).
 
         :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
@@ -354,9 +355,10 @@ exit 0
 
 
 def test_worker_name_with_unsafe_chars_is_sanitized(tmp_path: Path) -> None:
-    """Worker pod names with `.` or `/` are sanitized to `_` for the filename, so the describe file
-    path is always a single safe basename — no accidental directory traversal from a pod name
-    containing `/`.
+    """Worker pod names with ``.`` or ``/`` are sanitized to ``_`` for the describe filename.
+
+    The describe file path is always a single safe basename — no accidental directory traversal
+    from a pod name containing ``/``.
 
     :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and RUN_METADATA_DIR.
     """
@@ -390,7 +392,8 @@ def test_script_exits_zero_under_various_kubectl_behaviors(
     tmp_path: Path,
     shim_body: str,
 ) -> None:
-    """Whatever kubectl does (success, success-with-output, failure), the script completes
+    """Whatever kubectl does (success, success-with-output, failure), the script completes.
+
     successfully — best-effort tolerance is a contract.
 
     :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and RUN_METADATA_DIR.

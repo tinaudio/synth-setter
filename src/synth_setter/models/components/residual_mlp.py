@@ -1,3 +1,5 @@
+"""Residual MLP backbones (plain, FiLM-conditioned, spectral, and CNN-fronted variants)."""
+
 from typing import Literal
 
 import torch
@@ -8,6 +10,8 @@ from synth_setter.models.components.transformer import SinusoidalEncoding
 
 
 class ResidualMLPBlock(nn.Module):
+    """Two-layer MLP with LayerNorm front and a learned linear shortcut."""
+
     def __init__(
         self,
         in_dim: int,
@@ -39,6 +43,8 @@ class ResidualMLPBlock(nn.Module):
 
 
 class ResidualMLP(nn.Sequential):
+    """Stack of ``ResidualMLPBlock`` layers for predicting parameter vectors from features."""
+
     def __init__(
         self,
         in_dim: int = 1024,
@@ -58,6 +64,8 @@ class ResidualMLP(nn.Sequential):
 
 
 class ConditionalResidualMLPBlock(nn.Module):
+    """Residual MLP block with FiLM-style (gate, bias, scale) conditioning from a context."""
+
     def __init__(
         self,
         d_model: int,
@@ -85,6 +93,8 @@ class ConditionalResidualMLPBlock(nn.Module):
 
 
 class ConditionalResidualMLP(nn.Module):
+    """Flow-matching vector field: conditional residual MLP with timestep + audio context."""
+
     def __init__(
         self,
         n_params: int = 100,
@@ -160,6 +170,8 @@ class ConditionalResidualMLP(nn.Module):
 
 
 class SpectralResidualMLP(ResidualMLP):
+    """ResidualMLP fed the magnitude rFFT of the input waveform."""
+
     def __init__(
         self,
         in_dim: int = 1024,
@@ -177,6 +189,8 @@ class SpectralResidualMLP(ResidualMLP):
 
 
 class CNNResidualMLP(nn.Module):
+    """Spectrum-fronted ResidualEncoder followed by a ResidualMLP trunk."""
+
     def __init__(
         self,
         in_dim: int = 1024,

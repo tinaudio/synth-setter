@@ -1,3 +1,5 @@
+"""Hyperparameter logging helpers and wandb-config provenance writer."""
+
 import os
 import subprocess
 import sys
@@ -14,7 +16,7 @@ log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
 @rank_zero_only
 def log_hyperparameters(object_dict: dict[str, Any]) -> None:
-    """Controls which config parts are saved by Lightning loggers.
+    """Control which config parts are saved by Lightning loggers.
 
     Additionally saves:
         - Number of model parameters

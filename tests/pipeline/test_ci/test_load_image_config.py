@@ -1,4 +1,5 @@
-"""Tests for src/synth_setter/pipeline/ci/load_image_config.py — GITHUB_OUTPUT writer for image
+"""Tests for src/synth_setter/pipeline/ci/load_image_config.py — GITHUB_OUTPUT writer for image.
+
 config.
 
 Tests are organized around the PUBLIC API:
