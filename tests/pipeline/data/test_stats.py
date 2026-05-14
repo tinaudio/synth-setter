@@ -327,6 +327,64 @@ def test_get_stats_wds_matches_numpy_baseline_across_shards(
     np.testing.assert_allclose(out["std"], stacked.std(axis=0, ddof=0), rtol=1e-5, atol=1e-6)
 
 
+def test_get_stats_wds_two_value_textbook_welford_state(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """The textbook ``[1.0, 3.0]`` two-value example yields the documented mean and population std.
+
+    Pins the canonical Welford worked-example: after two updates the state
+    is ``count=2, mean=2.0, M2=2.0``. ``finalize()`` returns population
+    std (``variance = M2 / count`` — matches every other test in this
+    file), so std is ``sqrt(2.0 / 2) = 1.0``. Sample std (``ddof=1``,
+    which the spec sketches as ``M2 / (n-1) = 2.0``) is intentionally
+    *not* what this stats path computes.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    mel = np.array([[1.0], [3.0]], dtype=np.float64)
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
+
+    stats_script.get_stats_wds(str(tmp_path))
+
+    out = np.load(tmp_path / "stats.npz")
+    np.testing.assert_allclose(out["mean"], np.array([2.0]))
+    np.testing.assert_allclose(out["std"], np.array([1.0]))
+
+
+def test_get_stats_wds_large_near_equal_values_avoid_catastrophic_cancellation(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Welford preserves precision on ``[1e9+1..1e9+4]`` where the naive two-pass formula loses
+    significance.
+
+    The naive ``var = (sum(x**2) - sum(x)**2 / n) / n`` subtracts two
+    near-equal ~4e18 floats and loses most of the answer to rounding.
+    Welford's running correction keeps full precision because it
+    operates on deviations from the running mean rather than the raw
+    sums. Mean is asserted with an absolute tolerance (not relative) so
+    a regression that drops the ``.5`` fractional part — the exact
+    failure mode of catastrophic cancellation here — would fail loudly.
+
+    Inputs are float64; float32 cannot represent ``1e9 + k`` for
+    ``k in {1..4}`` distinctly (its integer-precision ceiling is
+    ``2**24 ≈ 1.68e7``), so casting to float32 would collapse the four
+    values before they ever reached Welford.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    values = np.array([1e9 + 1, 1e9 + 2, 1e9 + 3, 1e9 + 4], dtype=np.float64)
+    mel = values.reshape(4, 1)
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
+
+    stats_script.get_stats_wds(str(tmp_path))
+
+    out = np.load(tmp_path / "stats.npz")
+    np.testing.assert_allclose(out["mean"], np.array([1_000_000_002.5]), rtol=0, atol=1e-6)
+    np.testing.assert_allclose(out["std"], np.array([np.sqrt(1.25)]), rtol=1e-9, atol=0)
+
+
 def test_get_stats_wds_handles_multiple_batches_per_shard(
     stats_script: ModuleType, tmp_path: Path
 ) -> None:
