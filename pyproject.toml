@@ -316,7 +316,6 @@ exclude = '''(?x)
   | ^src/synth_setter/models/surge_flowvae_module\.py$
   | ^src/synth_setter/cli/train\.py$
   | ^src/synth_setter/utils/callbacks\.py$
-  | ^src/synth_setter/utils/instantiators\.py$
   | ^src/synth_setter/utils/rich_utils\.py$
   | ^src/synth_setter/utils/utils\.py$
   | ^tests/_baseline_worktree\.py$

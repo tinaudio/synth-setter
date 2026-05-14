@@ -12,7 +12,9 @@ def instantiate_callbacks(callbacks_cfg: DictConfig) -> list[Callback]:
     """Instantiates callbacks from config.
 
     :param callbacks_cfg: A DictConfig object containing callback configurations.
-    :return: A list of instantiated callbacks.
+    :returns: A list of instantiated callbacks.
+    :rtype: list[Callback]
+    :raises TypeError: If ``callbacks_cfg`` is not a :class:`DictConfig`.
     """
     callbacks: list[Callback] = []
 
@@ -35,7 +37,9 @@ def instantiate_loggers(logger_cfg: DictConfig) -> list[Logger]:
     """Instantiates loggers from config.
 
     :param logger_cfg: A DictConfig object containing logger configurations.
-    :return: A list of instantiated loggers.
+    :returns: A list of instantiated loggers.
+    :rtype: list[Logger]
+    :raises TypeError: If ``logger_cfg`` is not a :class:`DictConfig`.
     """
     logger: list[Logger] = []
 
