@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778775892995,
+  "lastUpdate": 1778775896302,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5040,6 +5040,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.970398511000008,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "507b6b29ee40d5c2a76a7af2fd42b44150adb67f",
+          "message": "chore(lint): clean up tests/helpers/run_if.py and package_available.py (#1040)\n\nAdd the missing pydoclint return sections and align docstring arg order\nwith the function signature, then drop both files from\n[tool.pydoclint].exclude in pyproject.toml. Pure docstring/lint changes\n— no behavior changes.\n\nRefs #25\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>",
+          "timestamp": "2026-05-14T12:13:04-04:00",
+          "tree_id": "cac1bb8810606aafb613dff56bcb45fd744b02c0",
+          "url": "https://github.com/tinaudio/synth-setter/commit/507b6b29ee40d5c2a76a7af2fd42b44150adb67f"
+        },
+        "date": 1778775895625,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.3046343326568604,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.7288410878181457,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.016310710459947586,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.07792198657989502,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.9634912014007568,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.603804148399991,
             "unit": "seconds"
           }
         ]
