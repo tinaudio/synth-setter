@@ -296,7 +296,7 @@ jobs:
         ${{
           github.event_name == 'pull_request'
             && (matrix.output_format == 'wds'
-                && 'generate_dataset/ci-materialize-test-wds'
+                && 'generate_dataset/smoke-shard-wds'
                 || 'generate_dataset/smoke-shard')
             || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
@@ -430,7 +430,7 @@ jobs:
         ${{
           github.event_name == 'pull_request'
             && (matrix.output_format == 'wds'
-                && 'generate_dataset/ci-materialize-test-wds'
+                && 'generate_dataset/smoke-shard-wds'
                 || 'generate_dataset/smoke-shard')
             || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}

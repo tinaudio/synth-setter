@@ -1,0 +1,25 @@
+# @package _global_
+
+# WDS-format sibling of `smoke-shard`. Same 12-sample / 3-shard render volume
+# (batch_per_shard=4), but writes `.tar` instead of `.h5`, so the PR-time
+# test-dataset-generation matrix can exercise both formats inside the
+# `generate-dataset-shards` reusable's 20-min step timeout. The larger
+# `ci-materialize-test-wds.yaml` config (96 samples) stays around for
+# workflow_dispatch coverage where the step timeout is moot.
+
+defaults:
+  - override /data: surge_simple
+  - override /render: surge_simple
+  - _self_
+
+task_name: smoke-shard-wds
+
+output_format: wds
+
+train_val_test_sizes: [12, 0, 0]
+
+render:
+  sample_rate: 16000
+  min_loudness: -50.0
+  sample_batch_size: 4
+  batch_per_shard: 4
