@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778772856206,
+  "lastUpdate": 1778773754225,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2682,6 +2682,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03264808654785156,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f39ebc6d5395e2b43b68cc5c5551fd3c22873c91",
+          "message": "chore(lint): graduate tests/helpers/package_available.py from pydoclint exclude (#1039)\n\nPR #979 cleared this file from `.pre-commit-config.yaml`'s `pyright` exclude\nbut left it in `[tool.pydoclint].exclude` in `pyproject.toml`. Per the\nlint-cleanup runbook (step 5), graduating a file means clearing it from\n*every* exclusion list it appears in.\n\n- Update `_package_available`'s docstring to use the repo's standard\n  Sphinx return convention (`:returns:` + `:rtype: bool`) so pydoclint's\n  DOC203 (return-type consistency) is satisfied.\n- Drop `^tests/helpers/package_available\\.py$` from\n  `[tool.pydoclint].exclude`.\n\nNo source/behavioural change. `pre-commit run --files\ntests/helpers/package_available.py pyproject.toml` is green across all\nhooks (ruff, ruff format, pyright, docformatter, interrogate, pydoclint,\ncodespell).\n\nRefs #25",
+          "timestamp": "2026-05-14T11:21:04-04:00",
+          "tree_id": "40f1ffd0109dd77a56ca7b85f576cbeb28de3097",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f39ebc6d5395e2b43b68cc5c5551fd3c22873c91"
+        },
+        "date": 1778773753764,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 2.759427309036255,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 4.145218836017884,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.018349340185523033,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.011978507041931152,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.571202516555786,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.208254313583334,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.48191499710083,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.700341448113322,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.026517517864704132,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03216832876205444,
             "unit": "1-cos"
           },
           {
