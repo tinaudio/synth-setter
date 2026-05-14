@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import tarfile
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -250,13 +251,16 @@ def test_finalize_with_at_most_one_sample_raises_distinct_error(stats_script: Mo
 def _write_mel_shard(path: Path, mel_batches: list[np.ndarray]) -> None:
     """Write a tar shard at ``path`` containing one ``mel_spec.npy`` per batch.
 
-    Mirrors the writer's per-batch member naming convention
-    (``<batch_start_idx:08d>.mel_spec.npy``) and tacks on the
-    ``metadata.json`` sentinel that the writer always emits — so the test
-    fixtures look structurally like real shards. Other writer fields
-    (``audio``, ``param_array``) are intentionally omitted: the stats path
-    only consumes ``mel_spec``, and including them would just slow tests
-    down.
+    Mirrors the writer's per-batch naming convention exactly — the tar key
+    for each batch is the *cumulative row offset* where the batch starts
+    (``writers.py``: ``"__key__": f"{start_idx:08d}"``), not the batch
+    ordinal. So a shard with batches of size 4, 7, 3 emits members
+    ``00000000.mel_spec.npy``, ``00000004.mel_spec.npy``,
+    ``00000011.mel_spec.npy``. Using ordinals instead would silently
+    hide bugs in code that depends on batch keys. The ``metadata.json``
+    sentinel mirrors the writer; other per-row fields (``audio``,
+    ``param_array``) are intentionally omitted — the stats path only
+    consumes ``mel_spec``.
 
     :param path: Filesystem path where the tar archive will be written.
     :param mel_batches: One mel array per batch, each shaped
@@ -266,13 +270,15 @@ def _write_mel_shard(path: Path, mel_batches: list[np.ndarray]) -> None:
     :rtype: None
     """
     with tarfile.open(path, mode="w:") as tar:
-        for batch_index, mel in enumerate(mel_batches):
+        start_idx = 0
+        for mel in mel_batches:
             buf = io.BytesIO()
             np.save(buf, mel)
             payload = buf.getvalue()
-            info = tarfile.TarInfo(name=f"{batch_index:08d}.mel_spec.npy")
+            info = tarfile.TarInfo(name=f"{start_idx:08d}.mel_spec.npy")
             info.size = len(payload)
             tar.addfile(info, io.BytesIO(payload))
+            start_idx += mel.shape[0]
         metadata = b"{}"
         info = tarfile.TarInfo(name="metadata.json")
         info.size = len(metadata)
@@ -401,29 +407,65 @@ def test_get_stats_wds_no_shards_in_directory_raises(
 
 
 def test_get_stats_wds_iterates_sorted_shard_order(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shard filenames are processed in lexicographic order so logs and any future order-sensitive
+    consumers stay reproducible.
+
+    Welford mean/std are order-invariant, so a result-only assertion would
+    pass regardless of iteration order. Spying on ``_iter_mel_batches``
+    captures the actual processing sequence so the determinism
+    requirement is observable.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    :param monkeypatch: pytest fixture used to install the order-recording spy.
+    """
+    rng = np.random.default_rng(5)
+    mel = rng.normal(size=(3, 2, 2)).astype(np.float32)
+    for shard_name in ("shard-000002.tar", "shard-000000.tar", "shard-000001.tar"):
+        _write_mel_shard(tmp_path / shard_name, [mel])
+
+    visited: list[str] = []
+    real_iter = stats_script._iter_mel_batches
+
+    def recording_iter(shard_path: Path) -> Iterator[np.ndarray]:
+        visited.append(Path(shard_path).name)
+        yield from real_iter(shard_path)
+
+    monkeypatch.setattr(stats_script, "_iter_mel_batches", recording_iter)
+
+    stats_script.get_stats_wds(str(tmp_path))
+
+    assert visited == ["shard-000000.tar", "shard-000001.tar", "shard-000002.tar"]
+
+
+def test_get_stats_wds_shard_without_mel_members_raises(
     stats_script: ModuleType, tmp_path: Path
 ) -> None:
-    """Shard filenames are processed in lexicographic order so results are reproducible.
+    """A shard tar that exists but has zero readable ``mel_spec.npy`` members raises
+    ``ValueError``.
 
-    Welford is order-invariant for mean/std, so order doesn't change the
-    answer — but the dispatch glob must yield a deterministic sequence so
-    log-line ordering and any future order-sensitive accumulators stay
-    reproducible across filesystems whose ``glob`` returns inode order.
+    A silent skip would let a truncated or wrong-schema shard contribute
+    nothing to the Welford accumulator while the function still wrote
+    ``stats.npz`` from the remaining shards — partial normalization stats
+    are a footgun.
 
     :param stats_script: Imported stats module (fixture).
     :param tmp_path: pytest tmp dir used as the synthetic shard directory.
     """
-    rng = np.random.default_rng(5)
-    mel_a = rng.normal(size=(3, 2, 2)).astype(np.float32)
-    mel_b = rng.normal(size=(3, 2, 2)).astype(np.float32)
-    _write_mel_shard(tmp_path / "shard-000001.tar", [mel_b])
-    _write_mel_shard(tmp_path / "shard-000000.tar", [mel_a])
+    rng = np.random.default_rng(7)
+    mel = rng.normal(size=(2, 2, 2)).astype(np.float32)
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
 
-    stats_script.get_stats_wds(str(tmp_path))
+    empty_tar = tmp_path / "shard-000001.tar"
+    with tarfile.open(empty_tar, mode="w:") as tar:
+        info = tarfile.TarInfo(name="metadata.json")
+        info.size = 2
+        tar.addfile(info, io.BytesIO(b"{}"))
 
-    stacked = np.concatenate([mel_a, mel_b], axis=0)
-    out = np.load(tmp_path / "stats.npz")
-    np.testing.assert_allclose(out["mean"], stacked.mean(axis=0), rtol=1e-5, atol=1e-6)
+    with pytest.raises(ValueError, match=r"shard-000001\.tar contained no readable"):
+        stats_script.get_stats_wds(str(tmp_path))
 
 
 def test_cli_dispatches_directory_of_tar_shards_to_wds_path(

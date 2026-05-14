@@ -268,6 +268,9 @@ def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
         on :func:`get_stats_hdf5` / :func:`get_stats_directory` for the
         downstream rationale.
     :raises FileNotFoundError: When ``directory`` contains no shards.
+    :raises ValueError: When a matched shard has zero readable
+        ``mel_spec.npy`` members — raised eagerly so partial stats are
+        never written silently for a truncated/malformed shard.
     :returns: ``None``. Writes ``stats.npz`` to ``directory / "stats.npz"``.
     :rtype: None
     """
@@ -280,9 +283,17 @@ def get_stats_wds(directory: str | Path, mask_degenerate: bool = False) -> None:
     existing = (0, 0, 0)
     for shard_path in shard_paths:
         logger.info(f"Processing {shard_path.name}...")
+        shard_rows = 0
         for mel_batch in _iter_mel_batches(shard_path):
             for row in mel_batch:
                 existing = update(existing, row)
+                shard_rows += 1
+        if shard_rows == 0:
+            raise ValueError(
+                f"shard {shard_path.name} contained no readable "
+                f"'*.{MEL_SPEC_FIELD}.npy' members; aborting so partial stats "
+                f"are never written silently for a truncated/malformed shard"
+            )
 
     mean, std = finalize(existing, mask_degenerate=mask_degenerate)
 
