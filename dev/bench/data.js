@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778772853273,
+  "lastUpdate": 1778772856206,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -4754,6 +4754,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.500434518499992,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "74dde261ce9ca1940315e2dd0b7bb1fa8780f56e",
+          "message": "chore(lint): clean up src/synth_setter/utils/instantiators.py (#1038)\n\nAdd :raises TypeError: and :rtype: sections to the two public\nfunctions so the file satisfies pydoclint DOC203/DOC501/DOC503, and\nremove the file from [tool.pydoclint].exclude in pyproject.toml.\n\nNo functional changes — docstring-only edits.\n\nRefs #25",
+          "timestamp": "2026-05-14T11:20:50-04:00",
+          "tree_id": "92b54e89f49d504ffca30a8a4707f063c26b2f78",
+          "url": "https://github.com/tinaudio/synth-setter/commit/74dde261ce9ca1940315e2dd0b7bb1fa8780f56e"
+        },
+        "date": 1778772855674,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.164926528930664,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 3.4442839654535056,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.007339684758335352,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.01555544137954712,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.4874833822250366,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.017828660199996,
             "unit": "seconds"
           }
         ]
