@@ -689,6 +689,10 @@ credentials are required.
    `DEVCONTAINER_USER=root` locally), it drops to the `dev` user first so
    workspace mutations under `.git/` land with dev ownership. Then the
    terminal is ready.
+4. VS Code terminals attach to a shared `main` tmux session (config:
+   `.devcontainer/tmux.conf`, mouse mode on so the wheel scrolls
+   scrollback and click-drag selects). Detach with `Ctrl-b d`, or pick
+   the `bash` profile from the terminal-profile dropdown to bypass tmux.
 
 **Verify:**
 
