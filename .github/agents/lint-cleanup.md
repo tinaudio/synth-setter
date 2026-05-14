@@ -20,6 +20,32 @@ The entry-point stubs may surface a short cross-reference of the rules most ofte
 
 Only formatting, docstrings, and lint fixes. **No functional changes.**
 
+## Picking the next file
+
+When the agent has discretion over which file to work next — i.e. invoked
+without a specific target path — **work the exclusion lists in reverse order
+of when each entry was added: most recently added first, oldest legacy
+entries last (LIFO).**
+
+To rank candidates, run `git blame` against the exclusion-list lines in
+`.pre-commit-config.yaml` and `pyproject.toml` and sort by the commit
+timestamp that introduced each entry. Skip entries that are already in
+flight (open `chore/lint-cleanup/*` PR or a ticked box on
+[#25](https://github.com/tinaudio/synth-setter/issues/25)). If two entries
+share the same introducing commit, break the tie with the smaller file by
+line count.
+
+**Why:** a freshly-added exclusion almost always came from a small,
+well-scoped change by someone whose context is still warm — graduating it
+immediately reverses tech-debt accrual before it cools and keeps the
+exclusion list from compounding. Old legacy entries don't get worse by
+waiting another week; new ones do.
+
+**How to apply:** this LIFO rule supersedes the older "prefer the smallest
+by line count" heuristic in the entry-point stubs. An explicit target named
+by the user (or by the `#25` reviewer) always wins over the default
+ordering — LIFO only governs the no-argument case.
+
 ## Workflow
 
 For each file listed in any `exclude:` block in `.pre-commit-config.yaml` (e.g. `pyright`, `interrogate`, `shellcheck`, `codespell`) **or** under `[tool.pydoclint].exclude` or `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` (pydoclint path excludes and ruff per-file rule ignores are configured there, not in the pre-commit config; note that `per-file-ignores` still runs ruff on the file but suppresses specific rules — it is not a path exclude):
