@@ -63,7 +63,24 @@
         "python.testing.pytestEnabled": true,
         "python.testing.pytestArgs": [
           "tests"
-        ]
+        ],
+        "terminal.integrated.defaultProfile.linux": "tmux",
+        "terminal.integrated.profiles.linux": {
+          "tmux": {
+            "path": "tmux",
+            "args": [
+              "-f",
+              "/home/build/synth-setter/.devcontainer/tmux.conf",
+              "new-session",
+              "-A",
+              "-s",
+              "main"
+            ]
+          },
+          "bash": {
+            "path": "bash"
+          }
+        }
       }
     }
   }
