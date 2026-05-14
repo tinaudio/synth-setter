@@ -526,13 +526,16 @@ def test_get_stats_wds_shard_without_mel_members_raises(
         stats_script.get_stats_wds(str(tmp_path))
 
 
-def test_cli_dispatches_directory_of_tar_shards_to_wds_path(
+def test_cli_dispatches_directory_of_tar_shards_to_wds_path_with_default_flag(
     stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``main`` routes a directory containing ``shard-*.tar`` to ``get_stats_wds``.
+    """``main`` routes a directory containing ``shard-*.tar`` to ``get_stats_wds`` with
+    ``mask_degenerate=False`` by default.
 
-    Spies on each dispatch target so the assertion verifies the chosen branch, not the resulting
-    stats file (those are covered by the behavior tests above).
+    Spies record ``(branch, mask_degenerate)`` so this test pins both the
+    chosen branch *and* the default-False forwarding. A regression that
+    accidentally hardcoded ``True`` (or dropped the kwarg entirely) would
+    fail here, not silently change normalization behavior in production.
 
     :param stats_script: Imported stats module (fixture).
     :param tmp_path: pytest tmp dir used as the synthetic shard directory.
@@ -542,20 +545,33 @@ def test_cli_dispatches_directory_of_tar_shards_to_wds_path(
     mel = rng.normal(size=(2, 2, 2)).astype(np.float32)
     _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
 
-    calls: list[str] = []
-    monkeypatch.setattr(stats_script, "get_stats_wds", lambda *a, **kw: calls.append("wds"))
-    monkeypatch.setattr(stats_script, "get_stats_hdf5", lambda *a, **kw: calls.append("hdf5"))
-    monkeypatch.setattr(stats_script, "get_stats_directory", lambda *a, **kw: calls.append("dir"))
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_wds",
+        lambda *a, **kw: calls.append(("wds", kw.get("mask_degenerate", False))),
+    )
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_hdf5",
+        lambda *a, **kw: calls.append(("hdf5", kw.get("mask_degenerate", False))),
+    )
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_directory",
+        lambda *a, **kw: calls.append(("dir", kw.get("mask_degenerate", False))),
+    )
 
     stats_script.main([str(tmp_path)])
 
-    assert calls == ["wds"]
+    assert calls == [("wds", False)]
 
 
-def test_cli_dispatches_h5_input_to_hdf5_path(
+def test_cli_dispatches_h5_input_to_hdf5_path_with_default_flag(
     stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``main`` routes a ``.h5`` input to ``get_stats_hdf5`` (regression guard).
+    """``main`` routes a ``.h5`` input to ``get_stats_hdf5`` with ``mask_degenerate=False`` by
+    default.
 
     :param stats_script: Imported stats module (fixture).
     :param tmp_path: pytest tmp dir used to place a sentinel ``.h5`` path.
@@ -564,33 +580,134 @@ def test_cli_dispatches_h5_input_to_hdf5_path(
     h5_path = tmp_path / "train.h5"
     h5_path.write_bytes(b"")
 
-    calls: list[str] = []
-    monkeypatch.setattr(stats_script, "get_stats_wds", lambda *a, **kw: calls.append("wds"))
-    monkeypatch.setattr(stats_script, "get_stats_hdf5", lambda *a, **kw: calls.append("hdf5"))
-    monkeypatch.setattr(stats_script, "get_stats_directory", lambda *a, **kw: calls.append("dir"))
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_wds",
+        lambda *a, **kw: calls.append(("wds", kw.get("mask_degenerate", False))),
+    )
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_hdf5",
+        lambda *a, **kw: calls.append(("hdf5", kw.get("mask_degenerate", False))),
+    )
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_directory",
+        lambda *a, **kw: calls.append(("dir", kw.get("mask_degenerate", False))),
+    )
 
     stats_script.main([str(h5_path)])
 
-    assert calls == ["hdf5"]
+    assert calls == [("hdf5", False)]
 
 
-def test_cli_dispatches_directory_without_tars_to_audio_directory_path(
+def test_cli_dispatches_directory_without_tars_to_audio_directory_path_with_default_flag(
     stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``main`` falls back to ``get_stats_directory`` when the directory has no shards.
+    """``main`` falls back to ``get_stats_directory`` with ``mask_degenerate=False`` by default.
 
     :param stats_script: Imported stats module (fixture).
     :param tmp_path: pytest tmp dir used as the (no-shard) input directory.
     :param monkeypatch: pytest fixture for swapping in spy callables.
     """
-    calls: list[str] = []
-    monkeypatch.setattr(stats_script, "get_stats_wds", lambda *a, **kw: calls.append("wds"))
-    monkeypatch.setattr(stats_script, "get_stats_hdf5", lambda *a, **kw: calls.append("hdf5"))
-    monkeypatch.setattr(stats_script, "get_stats_directory", lambda *a, **kw: calls.append("dir"))
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_wds",
+        lambda *a, **kw: calls.append(("wds", kw.get("mask_degenerate", False))),
+    )
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_hdf5",
+        lambda *a, **kw: calls.append(("hdf5", kw.get("mask_degenerate", False))),
+    )
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_directory",
+        lambda *a, **kw: calls.append(("dir", kw.get("mask_degenerate", False))),
+    )
 
     stats_script.main([str(tmp_path)])
 
-    assert calls == ["dir"]
+    assert calls == [("dir", False)]
+
+
+def test_cli_forwards_mask_degenerate_bins_flag_to_wds_path(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``main`` with ``--mask-degenerate-bins`` forwards ``mask_degenerate=True`` to
+    ``get_stats_wds``.
+
+    The CLI dispatch hands the parsed argparse flag through as a kwarg — a regression that
+    hardcoded the value or dropped the kwarg would silently change normalization behavior on
+    degenerate-bin datasets without changing which entrypoint runs.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    :param monkeypatch: pytest fixture for swapping in spy callables.
+    """
+    rng = np.random.default_rng(8)
+    mel = rng.normal(size=(2, 2, 2)).astype(np.float32)
+    _write_mel_shard(tmp_path / "shard-000000.tar", [mel])
+
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_wds",
+        lambda *a, **kw: calls.append(("wds", kw.get("mask_degenerate", False))),
+    )
+
+    stats_script.main([str(tmp_path), "--mask-degenerate-bins"])
+
+    assert calls == [("wds", True)]
+
+
+def test_cli_forwards_mask_degenerate_bins_flag_to_hdf5_path(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``main`` with ``--mask-degenerate-bins`` forwards ``mask_degenerate=True`` to
+    ``get_stats_hdf5``.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used to place a sentinel ``.h5`` path.
+    :param monkeypatch: pytest fixture for swapping in spy callables.
+    """
+    h5_path = tmp_path / "train.h5"
+    h5_path.write_bytes(b"")
+
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_hdf5",
+        lambda *a, **kw: calls.append(("hdf5", kw.get("mask_degenerate", False))),
+    )
+
+    stats_script.main([str(h5_path), "--mask-degenerate-bins"])
+
+    assert calls == [("hdf5", True)]
+
+
+def test_cli_forwards_mask_degenerate_bins_flag_to_audio_directory_path(
+    stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``main`` with ``--mask-degenerate-bins`` forwards ``mask_degenerate=True`` to
+    ``get_stats_directory``.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the (no-shard) input directory.
+    :param monkeypatch: pytest fixture for swapping in spy callables.
+    """
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        stats_script,
+        "get_stats_directory",
+        lambda *a, **kw: calls.append(("dir", kw.get("mask_degenerate", False))),
+    )
+
+    stats_script.main([str(tmp_path), "--mask-degenerate-bins"])
+
+    assert calls == [("dir", True)]
 
 
 def test_cli_help_advertises_mask_degenerate_bins_flag(
