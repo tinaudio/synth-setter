@@ -7,13 +7,9 @@ Run the lint-cleanup workflow from
 [`.github/agents/lint-cleanup.md`](../../.github/agents/lint-cleanup.md) on
 the file `$ARGUMENTS`.
 
-If `$ARGUMENTS` is empty, follow the **"Picking the next file"** section in
-the canonical runbook: work the exclusion lists in reverse order of when
-each entry was added (most recently added first, LIFO). Use `git blame`
-against `.pre-commit-config.yaml` and `pyproject.toml`'s exclusion lines to
-rank candidates by introducing-commit date, and skip entries already in
-flight on [#25](https://github.com/tinaudio/synth-setter/issues/25). Break
-ties by smaller file size.
+If `$ARGUMENTS` is empty, pick the target by following the canonical
+runbook's [**Picking the next file**](../../.github/agents/lint-cleanup.md#picking-the-next-file)
+section — do not reproduce its rules here.
 
 Spawn the `lint-cleanup` subagent (defined in
 `.claude/agents/lint-cleanup.md`) in an isolated worktree to do the work.

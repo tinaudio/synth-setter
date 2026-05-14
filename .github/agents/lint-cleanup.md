@@ -28,12 +28,23 @@ of when each entry was added: most recently added first, oldest legacy
 entries last (LIFO).**
 
 To rank candidates, run `git blame` against the exclusion-list lines in
-`.pre-commit-config.yaml` and `pyproject.toml` and sort by the commit
-timestamp that introduced each entry. Skip entries that are already in
+`.pre-commit-config.yaml` and `pyproject.toml` and sort by the timestamp
+`git blame` reports for each entry's line. Skip entries that are already in
 flight (open `chore/lint-cleanup/*` PR or a ticked box on
 [#25](https://github.com/tinaudio/synth-setter/issues/25)). If two entries
-share the same introducing commit, break the tie with the smaller file by
-line count.
+share the same blame commit, break the tie with the smaller file by line
+count.
+
+**`git blame` is a best-effort heuristic, not a perfect provenance signal.**
+It reports the *last commit that touched the line*, not necessarily the
+commit that originally introduced the entry — a reformat, a YAML reorder,
+or an unrelated `exclude:` edit nearby can move the blame timestamp without
+the entry actually being "new." That's fine: the goal here is to bias
+toward recently-touched entries (which are usually genuinely recent and
+context-fresh), not to reconstruct strict introduction order. Do not reach
+for `git log -L` or pickaxe in the default path — the extra fidelity isn't
+worth the runtime cost or the runbook complexity. If a particular entry
+looks misranked, just pick the next one down and move on.
 
 **Why:** a freshly-added exclusion almost always came from a small,
 well-scoped change by someone whose context is still warm — graduating it
