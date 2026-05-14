@@ -26,7 +26,7 @@
   "remoteUser": "${localEnv:DEVCONTAINER_USER:root}",
   "updateRemoteUserUID": true,
   "workspaceFolder": "/home/build/synth-setter",
-  "postCreateCommand": ".devcontainer/post-create.sh",
+  "postCreateCommand": "/workspaces/${localWorkspaceFolderBasename}/.devcontainer/post-create.sh",
   "customizations": {
     "vscode": {
       "extensions": [
