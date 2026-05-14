@@ -341,6 +341,10 @@ exclude = '''(?x)
   | ^tests/pipeline/test_schemas/test_image_config\.py$
   | ^tests/pipeline/test_schemas/test_shard_metadata\.py$
   | ^tests/pipeline/test_schemas/test_prefix\.py$
+  # tests/infra/: the blanket `^tests/infra/` exclusion was removed in #1036
+  # to graduate test_dataset_generation_matrix.py into pydoclint coverage.
+  # New tests under tests/infra/ are now subject to pydoclint by default —
+  # write the docstrings rather than re-adding `^tests/infra/` here.
   | ^tests/infra/conftest\.py$
   | ^tests/infra/test_devcontainer_attached_mode\.py$
   | ^tests/infra/test_gh_auth_flow\.py$
