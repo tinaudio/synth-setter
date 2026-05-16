@@ -17,7 +17,7 @@ assignment is genuinely the minimum-cost one. This catches subtle bugs the
 from __future__ import annotations
 
 import itertools
-from typing import TypeVar
+from typing import Iterator, TypeVar
 from unittest.mock import patch
 
 import numpy as np
@@ -37,6 +37,22 @@ from synth_setter.data.ot import (
 )
 
 _T = TypeVar("_T")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_torch_rng() -> Iterator[None]:
+    """Snapshot+restore the global torch CPU RNG around every test in this module.
+
+    Several tests call ``torch.manual_seed(0)`` to make ``torch.randn_like``
+    deterministic. Without isolation, that seeding would leak into later tests
+    when the full suite runs under xdist. ``torch.random.fork_rng`` saves the
+    RNG state on entry and restores it on exit, so each test sees the same
+    RNG state as if run alone.
+
+    :yields None: Control returns to the test under the forked RNG context.
+    """
+    with torch.random.fork_rng(devices=[]):
+        yield
 
 
 def _present(x: _T | None) -> _T:
