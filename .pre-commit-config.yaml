@@ -70,6 +70,7 @@ repos:
             src/synth_setter/models/ksin_ff_module\.py|
             src/synth_setter/models/ksin_flow_matching_module\.py|
             src/synth_setter/models/surge_ff_module\.py|
+            src/synth_setter/models/surge_fake_oracle_module\.py|
             src/synth_setter/models/surge_flow_matching_module\.py|
             src/synth_setter/models/surge_flowvae_module\.py|
             src/synth_setter/cli/train\.py|
@@ -151,6 +152,7 @@ repos:
             src/synth_setter/models/ksin_ff_module\.py|
             src/synth_setter/models/ksin_flow_matching_module\.py|
             src/synth_setter/models/surge_ff_module\.py|
+            src/synth_setter/models/surge_fake_oracle_module\.py|
             src/synth_setter/models/surge_flow_matching_module\.py|
             src/synth_setter/models/surge_flowvae_module\.py|
             src/synth_setter/utils/callbacks\.py

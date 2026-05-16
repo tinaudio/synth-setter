@@ -1,0 +1,23 @@
+defaults:
+  - _self_
+
+_target_: synth_setter.models.surge_fake_oracle_module.SurgeFakeOracleModule
+
+net:
+  _target_: synth_setter.models.surge_fake_oracle_module.FakeOracleNet
+  d_out: 92
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: ${trainer.max_steps}
+  eta_min: ${mul:${model.optimizer.lr},1e-2}
+
+optimizer:
+  _target_: torch.optim.Adam
+  _partial_: true
+  lr: 1e-4
+  weight_decay: 0.0
+
+# torch.compile is a waste on the trivial oracle net and adds CI flake risk.
+compile: false

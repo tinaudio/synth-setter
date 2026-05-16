@@ -305,7 +305,7 @@ def _build_surge_xt_smoke_cfg(accelerator: str, param_spec_name: str) -> DictCon
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/ffn_full", "callbacks=[default_surge,eval_surge]"],
+            overrides=["experiment=surge/fake_oracle", "callbacks=[default_surge,eval_surge]"],
         )
         TRAINING_STEPS = 1
         with open_dict(cfg):

@@ -9,17 +9,18 @@
 
 defaults:
   - surge/base
-  - override /model: surge_ffn
+  - override /model: surge_fake_oracle
   - override /data: surge
   - override /trainer: mps
   - override /callbacks: [default_surge, eval_surge]
   - _self_
 
-run_name: ffn
-experiment_name: surge-full-onehot
+run_name: fake_oracle
+experiment_name: surge-fake-oracle
 
 tags:
   - surge
+  - oracle
 
 logger: null
 test: false

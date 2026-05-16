@@ -1,0 +1,24 @@
+# @package _global_
+
+defaults:
+  - surge/base
+  - override /model: surge_fake_oracle
+  - override /data: surge
+  - _self_
+
+run_name: fake_oracle
+experiment_name: surge-fake-oracle
+
+model:
+  net:
+    d_out: 300
+
+tags:
+  - surge
+  - oracle
+
+callbacks:
+  log_per_param_mse:
+    _target_: synth_setter.utils.callbacks.LogPerParamMSE
+    param_spec: surge_xt
+  plot_proj_ii: null
