@@ -1,3 +1,5 @@
+"""CLI for visualising param-to-token projections of a trained KSin model."""
+
 import os
 from pathlib import Path
 from typing import Literal

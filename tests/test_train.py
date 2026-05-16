@@ -1,3 +1,5 @@
+"""Tests for the ``synth-setter-train`` CLI entrypoint."""
+
 import os
 import subprocess
 import sys
@@ -169,9 +171,10 @@ def test_train_resume(tmp_path: Path, cfg_train: DictConfig) -> None:
 
 @pytest.mark.parametrize("param_spec_name", ["surge_4", "surge_simple", "surge_xt"])
 def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
-    """Templated ``_build_surge_xt_smoke_cfg`` propagates the param spec to ``model.net.d_out`` and
-    ``callbacks.log_per_param_mse.param_spec`` for every supported spec — guards against the
-    surge_4-only hardcodes the fixture used to carry.
+    """Templated ``_build_surge_xt_smoke_cfg`` propagates the param spec for every supported spec.
+
+    The propagation reaches both ``model.net.d_out`` and ``callbacks.log_per_param_mse.param_spec``
+    — guards against the surge_4-only hardcodes the fixture used to carry.
 
     Calls the builder directly (not the ``cfg_surge_xt_global`` fixture) and pins
     ``accelerator="cpu"``: the cfg-shape contract is accelerator-independent and going
@@ -220,8 +223,7 @@ def test_train_eval_surge_xt(
     cfg_surge_xt_eval: DictConfig,
     param_spec_name: str,
 ) -> None:
-    """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run
-    standalone eval on the saved checkpoint.
+    """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run standalone eval on the saved checkpoint.
 
     :param tmp_path: The temporary logging path.
     :param cfg_surge_xt: Surge XT smoke-test training config.

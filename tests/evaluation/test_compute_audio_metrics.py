@@ -9,7 +9,7 @@ _SR = 44100
 
 
 def _sine(seconds: float = 1.0, freq: float = 440.0, amplitude: float = 0.5) -> np.ndarray:
-    """A mono ``(1, N)`` sine — the shape ``compute_rms`` expects."""
+    """Generate a mono ``(1, N)`` sine — the shape ``compute_rms`` expects."""
     t = np.arange(int(seconds * _SR), dtype=np.float32) / _SR
     return (amplitude * np.sin(2 * np.pi * freq * t)).reshape(1, -1)
 

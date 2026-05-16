@@ -1,4 +1,5 @@
-"""Runs evaluations in the paper.
+"""Run paper evaluations against rendered audio.
+
 Expects audio in the following folder structure:
 
 audio/
@@ -40,7 +41,7 @@ from pedalboard.io import AudioFile
 
 
 def subdir_matches_pattern(dir: Path) -> bool:
-    """Returns true if subdir contains pred.wav and target.wav."""
+    """Return ``True`` if ``dir`` contains ``pred.wav`` and ``target.wav``."""
     return (dir / "target.wav").exists() and (dir / "pred.wav").exists()
 
 

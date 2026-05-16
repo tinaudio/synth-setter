@@ -1,3 +1,5 @@
+"""CLI for downloading a model checkpoint from a W&B run and dropping into an IPython shell."""
+
 from pathlib import Path
 from typing import Literal
 

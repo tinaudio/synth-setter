@@ -1,3 +1,5 @@
+"""Microbenchmark for the dataset signal-generation functions (kosc, ksin)."""
+
 import os
 import time
 from collections.abc import Callable

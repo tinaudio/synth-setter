@@ -1,3 +1,5 @@
+"""Lightning module for feed-forward k-sinusoidal parameter prediction."""
+
 from typing import Any
 
 import torch
@@ -8,6 +10,8 @@ from synth_setter.models.components.loss import ChamferLoss
 
 
 class KSinFeedForwardModule(LightningModule):
+    """Feed-forward LightningModule that regresses sinusoidal-synth parameters from audio."""
+
     def __init__(
         self,
         net: torch.nn.Module,

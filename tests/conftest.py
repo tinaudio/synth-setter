@@ -115,7 +115,7 @@ register_resolvers()
 
 @pytest.fixture(scope="package")
 def cfg_train_global() -> DictConfig:
-    """A pytest fixture for setting up a default Hydra DictConfig for training.
+    """Build a default Hydra DictConfig for training.
 
     :return: A DictConfig object containing a default Hydra configuration for training.
     """
@@ -157,7 +157,7 @@ def cfg_train_global() -> DictConfig:
 
 @pytest.fixture(scope="package")
 def cfg_eval_global() -> DictConfig:
-    """A pytest fixture for setting up a default Hydra DictConfig for evaluation.
+    """Build a default Hydra DictConfig for evaluation.
 
     :return: A DictConfig containing a default Hydra configuration for evaluation.
     """
@@ -198,8 +198,7 @@ def cfg_eval_global() -> DictConfig:
 
 @pytest.fixture(scope="function")
 def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
-    """A pytest fixture built on top of the `cfg_train_global()` fixture, which accepts a temporary
-    logging path `tmp_path` for generating a temporary logging path.
+    """Build on top of ``cfg_train_global()`` and redirect logging into ``tmp_path``.
 
     This is called by each test which uses the `cfg_train` arg. Each test generates its own temporary logging path.
 
@@ -220,8 +219,7 @@ def cfg_train(cfg_train_global: DictConfig, tmp_path: Path) -> DictConfig:
 
 @pytest.fixture(scope="function")
 def cfg_eval(cfg_eval_global: DictConfig, tmp_path: Path) -> DictConfig:
-    """A pytest fixture built on top of the `cfg_eval_global()` fixture, which accepts a temporary
-    logging path `tmp_path` for generating a temporary logging path.
+    """Build on top of ``cfg_eval_global()`` and redirect logging into ``tmp_path``.
 
     This is called by each test which uses the `cfg_eval` arg. Each test generates its own temporary logging path.
 
@@ -364,7 +362,7 @@ def _build_surge_xt_smoke_cfg(accelerator: str, param_spec_name: str) -> DictCon
 
 @pytest.fixture(scope="function")
 def cfg_surge_xt_global(accelerator: str, param_spec_name: str) -> DictConfig:
-    """A pytest fixture for a one-step Surge XT training config on the N-sample test fixture.
+    """Build a one-step Surge XT training config on the N-sample test fixture.
 
     Thin wrapper around :func:`_build_surge_xt_smoke_cfg`; the ``accelerator`` fixture
     enforces hardware availability before this fixture composes the config so MPS/GPU

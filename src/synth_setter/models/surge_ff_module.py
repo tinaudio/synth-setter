@@ -1,3 +1,5 @@
+"""Lightning module for feed-forward Surge XT parameter prediction."""
+
 from typing import Any
 
 import torch
@@ -6,6 +8,8 @@ from lightning.pytorch.utilities import grad_norm
 
 
 class SurgeFeedForwardModule(LightningModule):
+    """Feed-forward LightningModule that regresses Surge XT parameters from audio features."""
+
     def __init__(
         self,
         net: torch.nn.Module,

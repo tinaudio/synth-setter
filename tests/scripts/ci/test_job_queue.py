@@ -102,8 +102,10 @@ def test_parse_command_file_returns_empty_list_for_only_comments(tmp_path: Path)
 def test_parse_command_file_strips_leading_whitespace_from_indented_commands(
     tmp_path: Path,
 ) -> None:
-    """Indented commands inside grouped sections are normalized — no leading space leaks into the
-    queued task (else pueue would try to run ``  python x.py`` verbatim).
+    """Normalize indented commands inside grouped sections.
+
+    No leading space leaks into the queued task (else pueue would try to run
+    ``  python x.py`` verbatim).
 
     :param tmp_path: pytest tmp dir fixture.
     """
@@ -222,8 +224,7 @@ def test_ensure_daemon_running_noop_when_status_succeeds() -> None:
 
 
 class _StatefulPueueStatusRunner:
-    """FakeRunner variant where ``pueue status`` flips from failing → succeeding after ``pueued
-    -d``.
+    """FakeRunner where ``pueue status`` flips from failing to succeeding after ``pueued -d``.
 
     Models the real race: status fails before the daemon binds its socket,
     succeeds afterwards. Unlike ``FakeRunner`` this runner does NOT honor

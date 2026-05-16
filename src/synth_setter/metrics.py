@@ -1,3 +1,5 @@
+"""TorchMetrics-based audio and parameter-space distance metrics."""
+
 from collections.abc import Callable
 
 import torch
@@ -14,6 +16,8 @@ def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):
 
 
 class LogSpectralDistance(Metric):
+    """Mean log-spectral distance between predicted and target signals (dBFS magnitude spectra)."""
+
     def __init__(self, eps: float = 1e-8, **kwargs):
         super().__init__(**kwargs)
         self.add_state("lsd", default=torch.tensor(0.0), dist_reduce_fx="sum")
@@ -43,6 +47,8 @@ class LogSpectralDistance(Metric):
 
 
 class SpectralDistance(Metric):
+    """Mean L1 distance between predicted- and target-signal magnitude spectra."""
+
     def __init__(self, eps: float = 1e-8, **kwargs):
         super().__init__(**kwargs)
         self.add_state("sd", default=torch.tensor(0.0), dist_reduce_fx="sum")
@@ -71,6 +77,8 @@ class SpectralDistance(Metric):
 
 
 class ChamferDistance(Metric):
+    """Mean Chamfer distance between predicted and target parameter token sets."""
+
     def __init__(self, params_per_token: int, **kwargs):
         super().__init__(**kwargs)
         self.add_state("chamfer_distance", default=torch.tensor(0.0), dist_reduce_fx="sum")
@@ -86,6 +94,8 @@ class ChamferDistance(Metric):
 
 
 class LinearAssignmentDistance(Metric):
+    """Mean linear-assignment (Hungarian-matched) distance between predicted and target tokens."""
+
     def __init__(self, params_per_token: int, **kwargs):
         super().__init__(**kwargs)
         self.add_state(

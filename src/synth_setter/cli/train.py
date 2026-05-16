@@ -1,3 +1,5 @@
+"""Hydra entrypoint for training and (optionally) test-set evaluation of a Lightning model."""
+
 from typing import Any
 
 import hydra
@@ -31,11 +33,10 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 @task_wrapper
 def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Trains the model. Can additionally evaluate on a testset, using best weights obtained during
-    training.
+    """Train the model and optionally evaluate on a testset using best-checkpoint weights.
 
-    This method is wrapped in optional @task_wrapper decorator, that controls the behavior during
-    failure. Useful for multiruns, saving info about the crash, etc.
+    Wrapped in the optional ``@task_wrapper`` decorator, which controls behaviour on
+    failure — useful for multiruns, saving info about crashes, etc.
 
     :param cfg: A DictConfig configuration composed by Hydra.
     :return: A tuple with metrics and dict with all instantiated objects.
@@ -112,7 +113,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
 @hydra.main(version_base="1.3", config_path="../../../configs", config_name="train.yaml")
 def main(cfg: DictConfig) -> float | None:
-    """Main entry point for training.
+    """Run the training entrypoint.
 
     :param cfg: DictConfig configuration composed by Hydra.
     :return: Optional[float] with optimized metric value.

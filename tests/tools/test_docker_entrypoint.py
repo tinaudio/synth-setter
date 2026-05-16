@@ -1,5 +1,4 @@
-"""Tests for src/synth_setter/tools/docker_entrypoint.py — click-based CLI with per-mode spec
-parsing.
+"""Tests for ``synth_setter.tools.docker_entrypoint`` (click CLI with per-mode spec parsing).
 
 The entrypoint is a click group with five subcommands:
   - idle                → execs ``sleep infinity``
@@ -30,8 +29,7 @@ from synth_setter.tools import docker_entrypoint as _docker_entrypoint_module
 
 @pytest.fixture()
 def _detach_pytest_live_logging_handler() -> Iterator[None]:
-    """Detach pytest's live-logging handler for tests that drive a CliRunner callback whose error
-    path calls ``logger.error(...)``.
+    """Detach pytest's live-logging handler for tests whose CliRunner callback hits an error path.
 
     Why: when ``log_cli=True`` (project default), pytest installs
     ``_LiveLoggingStreamHandler`` on the root logger. Its ``emit()`` opens a
@@ -63,7 +61,7 @@ def _detach_pytest_live_logging_handler() -> Iterator[None]:
 
 @pytest.fixture()
 def entrypoint() -> ModuleType:
-    """The loaded docker_entrypoint module."""
+    """Return the loaded docker_entrypoint module."""
     return _docker_entrypoint_module
 
 
@@ -159,8 +157,7 @@ class TestIdle:
     def test_idle_exec_failure_becomes_click_exception(
         self, runner: CliRunner, entrypoint: ModuleType
     ) -> None:
-        """If ``sleep`` can't be exec'd, the failure surfaces as a ClickException exit, not a
-        traceback."""
+        """Surface ``sleep`` exec failure as a ClickException exit, not a traceback."""
 
         def fake_execvp(program: str, argv: list[str]) -> None:
             raise FileNotFoundError(2, "No such file or directory", program)

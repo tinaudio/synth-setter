@@ -1,3 +1,5 @@
+"""General-purpose utilities: OmegaConf resolvers, task wrappers, and gradient watching."""
+
 import warnings
 from collections.abc import Callable
 from importlib.util import find_spec
@@ -22,7 +24,7 @@ def register_resolvers() -> None:
 
 
 def extras(cfg: DictConfig) -> None:
-    """Applies optional utilities before the task is started.
+    """Apply optional utilities before the task is started.
 
     Utilities:
         - Ignoring python warnings
@@ -57,7 +59,7 @@ def extras(cfg: DictConfig) -> None:
 
 
 def task_wrapper(task_func: Callable) -> Callable:
-    """Optional decorator that controls the failure behavior when executing the task function.
+    """Wrap a task function to control its failure behavior.
 
     This wrapper can be used to:
         - make sure loggers are closed even if the task function raises an exception (prevents multirun failure)

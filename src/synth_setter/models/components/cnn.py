@@ -1,3 +1,5 @@
+"""Convolutional and residual building blocks used by the spectrum encoders."""
+
 from typing import Literal
 
 import torch
@@ -5,6 +7,8 @@ import torch.nn as nn
 
 
 class ResidualMLPBlock(nn.Module):
+    """Two-layer MLP with a learned linear shortcut and LayerNorm front."""
+
     def __init__(
         self,
         in_dim: int,
@@ -36,6 +40,8 @@ class ResidualMLPBlock(nn.Module):
 
 
 class LayerNormConv1dFriendly(nn.LayerNorm):
+    """LayerNorm that normalizes over the channel axis of a ``(B, C, T)`` tensor."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -44,6 +50,8 @@ class LayerNormConv1dFriendly(nn.LayerNorm):
 
 
 class ResidualBlock(nn.Module):
+    """1-D conv residual block with a 1x1-conv shortcut for channel-count changes."""
+
     def __init__(
         self,
         in_dim: int,
@@ -97,6 +105,8 @@ class ResidualBlock(nn.Module):
 
 
 class ConvDownsampler(nn.Module):
+    """1-D conv that halves (or stride-divides) the temporal axis and re-projects channels."""
+
     def __init__(self, in_dim: int, out_dim: int, stride: int, norm: Literal["bn", "ln"] = "bn"):
         super().__init__()
         self.net = nn.Sequential(
@@ -116,6 +126,8 @@ class ConvDownsampler(nn.Module):
 
 
 class ResidualEncoder(nn.Module):
+    """Stack of ResidualBlock + ConvDownsampler layers followed by an MLP head."""
+
     def __init__(
         self,
         in_dim: int,

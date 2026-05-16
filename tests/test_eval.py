@@ -1,3 +1,5 @@
+"""Tests for the ``synth-setter-eval`` CLI entrypoint."""
+
 import math
 import os
 from pathlib import Path
@@ -15,8 +17,7 @@ from tests.helpers.run_if import RunIf
 @RunIf(min_gpus=1)
 @pytest.mark.slow
 def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig) -> None:
-    """Tests training and evaluation by training for 1 epoch with `train.py` then evaluating with
-    `eval.py`.
+    """Train for 1 epoch with ``train.py`` then evaluate the resulting checkpoint with ``eval.py``.
 
     :param tmp_path: The temporary logging path.
     :param cfg_train: A DictConfig containing a valid training configuration.
@@ -51,8 +52,7 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
 @RunIf(min_gpus=1)
 @pytest.mark.slow
 def test_train_validate(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig) -> None:
-    """Tests training and validation by training for 1 epoch with `train.py` then validating with
-    `eval.py` using `mode=validate`.
+    """Train one epoch then validate the checkpoint via ``eval.py`` ``mode=validate``.
 
     :param tmp_path: The temporary logging path.
     :param cfg_train: A DictConfig containing a valid training configuration.

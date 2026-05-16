@@ -1,10 +1,11 @@
+"""Token-based Chamfer and sorted-MSE loss functions for parameter prediction."""
+
 import torch
 import torch.nn as nn
 
 
 def params_to_tokens(params: torch.Tensor, params_per_token: int = 2):
-    """Assuming our model outputs a tensor of shape (batch, 2k), we stack it into a tensor of shape
-    (batch, k, 2) to allow for metric computation."""
+    """Reshape a ``(batch, 2k)`` parameter tensor into ``(batch, k, 2)`` tokens for metric use."""
     units = params.chunk(params_per_token, dim=-1)
     return torch.stack(units, dim=-1)
 
@@ -22,6 +23,8 @@ def chamfer_loss(predicted: torch.Tensor, target: torch.Tensor, params_per_token
 
 
 class ChamferLoss(nn.Module):
+    """Loss wrapper around :func:`chamfer_loss` for use as an ``nn.Module``."""
+
     def __init__(self, params_per_token: int = 2):
         super().__init__()
         self.params_per_token = params_per_token
@@ -31,6 +34,8 @@ class ChamferLoss(nn.Module):
 
 
 class MSESortLoss(nn.Module):
+    """MSE loss after sorting target tokens by their first parameter (frequency assignment)."""
+
     def __init__(self, params_per_token: int = 2):
         super().__init__()
         self.params_per_token = params_per_token

@@ -1,3 +1,5 @@
+"""Tests for ``synth_setter.pipeline.schemas.prefix``."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone

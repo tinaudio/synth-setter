@@ -1,3 +1,5 @@
+"""Positional encodings and an attention-pooling head for sequence embeddings."""
+
 import math
 from typing import Literal
 
@@ -21,6 +23,8 @@ def make_sin_pos_enc(max_len, d_enc):
 
 
 class PosEnc(nn.Module):
+    """Sinusoidal or learned positional encoding added to a ``(B, T, D)`` tensor."""
+
     def __init__(
         self,
         d_enc: int,
@@ -40,6 +44,8 @@ class PosEnc(nn.Module):
 
 
 class EmbeddingPool(nn.Module):
+    """Pool a sequence of embeddings into a single vector via a learned-query cross-attention."""
+
     def __init__(
         self,
         embed_dim: int,

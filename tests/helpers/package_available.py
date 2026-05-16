@@ -1,3 +1,5 @@
+"""Probe-based helpers that report whether optional packages and accelerators are available."""
+
 import platform
 from importlib.metadata import PackageNotFoundError, distribution
 

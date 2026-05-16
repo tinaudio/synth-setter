@@ -57,7 +57,7 @@ class RunIf:
         mlflow: bool = False,
         **kwargs: dict[Any, Any],
     ) -> MarkDecorator:
-        """Creates a new `@RunIf` `MarkDecorator` decorator.
+        """Create a new ``@RunIf`` :class:`MarkDecorator` decorator.
 
         :param min_gpus: Min number of GPUs required to run test.
         :param min_torch: Minimum pytorch version to run test.

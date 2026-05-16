@@ -26,7 +26,7 @@
   "remoteUser": "${localEnv:DEVCONTAINER_USER:root}",
   "updateRemoteUserUID": true,
   "workspaceFolder": "/home/build/synth-setter",
-  "postCreateCommand": ".devcontainer/post-create.sh",
+  "postCreateCommand": ["bash", "/workspaces/${localWorkspaceFolderBasename}/.devcontainer/post-create.sh"],
   "customizations": {
     "vscode": {
       "extensions": [
@@ -66,12 +66,7 @@
           "tmux": {
             "path": "tmux",
             "args": [
-              "-f",
-              "/home/build/synth-setter/.devcontainer/tmux.conf",
-              "new-session",
-              "-A",
-              "-s",
-              "main"
+              "new-session"
             ]
           },
           "bash": {

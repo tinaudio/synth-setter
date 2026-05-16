@@ -1,3 +1,5 @@
+"""Shared pytest fixtures for the ``tests/pipeline`` package."""
+
 from __future__ import annotations
 
 import copy

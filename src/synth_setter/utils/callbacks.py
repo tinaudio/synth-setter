@@ -1,3 +1,5 @@
+"""Lightning callbacks for plotting losses, similarities, projections, and prediction dumps."""
+
 import os
 
 import matplotlib.pyplot as plt
@@ -44,10 +46,10 @@ def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:
 
 
 class PlotLossPerTimestep(Callback):
-    """Takes a batch from the validation dataloader, and runs it through the model at a number of
-    different values for t.
+    """Plot validation loss as a function of the flow-matching timestep ``t``.
 
-    Plots the loss as a function of t.
+    Runs a single validation batch through the model at ``num_timesteps`` different ``t``
+    values and logs a loss-vs-``t`` figure to each attached logger.
     """
 
     def __init__(self, num_timesteps: int = 100):
@@ -117,6 +119,8 @@ def _self_similarity(x):
 
 
 class PlotPositionalEncodingSimilarity(Callback):
+    """Log a cosine-similarity heatmap of the vector field's positional encoding."""
+
     def _compute_similarity(self, pl_module):
         if pl_module.vector_field.pe_type == "initial":
             return _self_similarity(pl_module.vector_field.pe.pe)
@@ -177,6 +181,8 @@ class PlotPositionalEncodingSimilarity(Callback):
 
 
 class PlotLearntProjection(Callback):
+    """Log the learnt parameter-to-token projection matrix as an image."""
+
     def __init__(
         self,
         after_val: bool = True,
@@ -330,6 +336,8 @@ class PlotLearntProjection(Callback):
 
 
 class PredictionWriter(BasePredictionWriter):
+    """Save per-batch and per-epoch predictions plus target tensors to disk."""
+
     def __init__(self, output_dir, write_interval):
         super().__init__(write_interval)
         self.output_dir = output_dir
@@ -368,6 +376,8 @@ class PredictionWriter(BasePredictionWriter):
 
 
 class LogPerParamMSE(Callback):
+    """Log validation-set MSE broken down per parameter dimension of the ParamSpec."""
+
     def __init__(self, param_spec: str = "surge_simple"):
         super().__init__()
         self.param_spec = param_specs[param_spec]

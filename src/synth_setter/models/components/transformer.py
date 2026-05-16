@@ -1,3 +1,5 @@
+"""Transformer-style projections, conditioning blocks, and equivariant building blocks."""
+
 import math
 from typing import Literal
 
@@ -7,6 +9,8 @@ from einops import rearrange
 
 
 class PositionalEncoding(nn.Module):
+    """Learnt positional encoding added to a ``(B, T, D)`` sequence."""
+
     def __init__(self, size: int, num_pos: int, init: Literal["zeros", "norm0.02"] = "zeros"):
         super().__init__()
 
@@ -27,6 +31,8 @@ class PositionalEncoding(nn.Module):
 
 
 class KSinParamToTokenProjection(nn.Module):
+    """Linear forward/backward projection between parameter chunks and per-token vectors."""
+
     def __init__(self, d_model: int, params_per_token: int = 2):
         super().__init__()
         self.forward_proj = nn.Linear(params_per_token, d_model)
@@ -51,6 +57,8 @@ class KSinParamToTokenProjection(nn.Module):
 
 
 class LearntProjection(nn.Module):
+    """Learnt soft-assignment between parameters and tokens with optional per-side FFN heads."""
+
     def __init__(
         self,
         d_model: int,
@@ -131,6 +139,8 @@ class LearntProjection(nn.Module):
 
 
 class AdaptiveLayerNorm(nn.LayerNorm):
+    """LayerNorm whose scale and shift are predicted from a conditioning vector (AdaLN)."""
+
     def __init__(self, dim: int, conditioning_dim: int, *args, **kwargs):
         super().__init__(dim, *args, **kwargs)
         self.shift = nn.Linear(conditioning_dim, dim)
@@ -144,6 +154,8 @@ class AdaptiveLayerNorm(nn.LayerNorm):
 
 
 class DiTransformerBlock(nn.Module):
+    """DiT-style transformer block with AdaLN conditioning, attention, and FFN sublayers."""
+
     def __init__(
         self,
         d_model: int,
@@ -255,11 +267,15 @@ class SinusoidalEncoding(nn.Module):
 
 
 class ConcatConditioning(nn.Module):
+    """Concatenate the time/feature conditioning vector to the input along the last dim."""
+
     def forward(self, z: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return torch.cat([z, t], dim=-1)
 
 
 class SinusoidalConditioning(nn.Module):
+    """Encode a scalar with a sinusoidal basis + MLP and add it to the input vector."""
+
     def __init__(self, d_model: int, d_enc: int):
         super().__init__()
         self.d_model = d_model
@@ -332,6 +348,8 @@ class MutualAttentionProjection(nn.Module):
 
 
 class ApproxEquivTransformer(nn.Module):
+    """Approximately equivariant transformer with DiT blocks and a parameter-token projection."""
+
     def __init__(
         self,
         projection: nn.Module,
@@ -535,8 +553,7 @@ class PatchEmbed(nn.Module):
 
 
 class AudioSpectrogramTransformer(nn.Module):
-    """Based on the AST from https://arxiv.org/abs/2104.01778, but adapted to pre-norm
-    transformer.
+    """Pre-norm adaptation of the Audio Spectrogram Transformer (https://arxiv.org/abs/2104.01778).
 
     Components:
         1. patch split with overlap
@@ -613,8 +630,7 @@ class AudioSpectrogramTransformer(nn.Module):
 
 
 class ASTWithProjectionHead(AudioSpectrogramTransformer):
-    """Based on the AST from https://arxiv.org/abs/2104.01778, but adapted to pre-norm
-    transformer.
+    """Pre-norm AST (https://arxiv.org/abs/2104.01778) with a learned projection head on top.
 
     Components:
         1. patch split with overlap

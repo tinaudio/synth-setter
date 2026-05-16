@@ -1,3 +1,5 @@
+"""Tests for Hydra sweep configurations."""
+
 from pathlib import Path
 
 import pytest

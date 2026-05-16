@@ -1,3 +1,5 @@
+"""Types and helpers for dataset-run R2 prefixes and W&B run IDs."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

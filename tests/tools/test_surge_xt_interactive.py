@@ -27,7 +27,7 @@ def surge_xt_interactive():
 
 @pytest.fixture(scope="module")
 def simple_spec() -> ParamSpec:
-    """The ``surge_simple`` ParamSpec used by the prediction-decoding tests."""
+    """Return the ``surge_simple`` ParamSpec used by the prediction-decoding tests."""
     return param_specs[SURGE_SIMPLE]
 
 
@@ -39,7 +39,7 @@ def simple_spec_total_length(simple_spec: ParamSpec) -> int:
 
 @pytest.fixture
 def simple_pred_tensor(simple_spec_total_length: int) -> torch.Tensor:
-    """A 2-row prediction tensor sized for the surge_simple spec.
+    """Build a 2-row prediction tensor sized for the surge_simple spec.
 
     Row 0 cycles through ``[-1.0, 0.0, 1.0, 2.0]`` to exercise the
     ``(-1..1) -> (0..1)`` rescaling and clipping (``2.0`` is clipped to ``1``).
@@ -152,8 +152,10 @@ class TestPredictionRefType:
             parser.convert(value, None, None)
 
     def test_rejects_negative_batch_idx(self, surge_xt_interactive) -> None:
-        """Negative indices raise ``click.BadParameter`` to match ``decode_prediction_row``'s
-        contract — h5py-style negative indexing would otherwise silently select the last row."""
+        """Reject negative indices to match ``decode_prediction_row``'s contract.
+
+        h5py-style negative indexing would otherwise silently select the last row.
+        """
         parser = surge_xt_interactive.PredictionRefType()
 
         with pytest.raises(click.BadParameter):
@@ -184,8 +186,7 @@ class TestDatasetRefType:
             parser.convert(value, None, None)
 
     def test_rejects_negative_batch_idx(self, surge_xt_interactive) -> None:
-        """Negative indices raise ``click.BadParameter`` — h5py's ``param_array[-1]`` would
-        otherwise silently return the last row instead of failing."""
+        """Reject negative indices to avoid h5py's silent ``param_array[-1]`` last-row fallback."""
         parser = surge_xt_interactive.DatasetRefType()
 
         with pytest.raises(click.BadParameter):
@@ -270,8 +271,7 @@ class TestLoadDatasetSynthParams:
         simple_spec: ParamSpec,
         tmp_path: Path,
     ) -> None:
-        """A ``batch_idx`` past the end of ``param_array`` raises ``IndexError`` or
-        ``ValueError``."""
+        """Raise ``IndexError`` or ``ValueError`` when ``batch_idx`` exceeds ``param_array``."""
         encoded = simple_spec.encode(*simple_spec.sample())
         h5_path = tmp_path / "test.h5"
         _write_param_array_h5(h5_path, encoded[None, :])
@@ -634,8 +634,10 @@ class TestPlayAudioQueueDrain:
         assert stop_event.is_set()
 
     def test_drain_is_capped_at_max_midi_events_per_buffer(self, surge_xt_interactive) -> None:
-        """A queue larger than ``_MAX_MIDI_EVENTS_PER_BUFFER`` drains in chunks across buffers,
-        preventing one realtime callback from stretching to process the full backlog."""
+        """Drain queues larger than ``_MAX_MIDI_EVENTS_PER_BUFFER`` in chunks across buffers.
+
+        Prevents one realtime callback from stretching to process the full backlog.
+        """
         cap = surge_xt_interactive._MAX_MIDI_EVENTS_PER_BUFFER
         stop_event = threading.Event()
         plugin = _RecordingPlugin(
@@ -771,8 +773,10 @@ class TestValidateNoDrift:
 
 
 def _build_keyboard_loop_plugin(simple_spec: ParamSpec) -> tuple["_FakePlugin", dict[str, float]]:
-    """Build a ``_FakePlugin`` carrying every ``surge_simple`` synth param + two non-spec params,
-    plus the matching ``default_params`` dict that ``_validate_no_drift`` checks against.
+    """Build a ``_FakePlugin`` and matching defaults for ``_validate_no_drift`` tests.
+
+    Carries every ``surge_simple`` synth param plus two non-spec params, with the matching
+    ``default_params`` dict that ``_validate_no_drift`` checks against.
 
     Returns ``(plugin, default_params)``.
     """
@@ -783,8 +787,7 @@ def _build_keyboard_loop_plugin(simple_spec: ParamSpec) -> tuple["_FakePlugin", 
 
 
 class TestKeyboardLoop:
-    """``keyboard_loop`` reads keystrokes via the injectable ``keystroke_source`` and snapshots
-    plugin params on ``p`` until ``q``, ``stop_event``, or source exhaustion."""
+    """Read keystrokes via ``keystroke_source`` and snapshot params on ``p`` until exit."""
 
     def test_p_records_patch_q_quits(self, surge_xt_interactive, simple_spec: ParamSpec) -> None:
         """``["p", "q"]`` records exactly one patch with every spec synth-param key, then quits."""
@@ -808,8 +811,7 @@ class TestKeyboardLoop:
         assert stop_event.is_set()
 
     def test_unknown_keys_are_ignored(self, surge_xt_interactive, simple_spec: ParamSpec) -> None:
-        """Keystrokes outside ``{p, q}`` don't record patches, don't set ``stop_event``, and don't
-        raise — the loop simply waits for the next keystroke."""
+        """Ignore keystrokes outside ``{p, q}``: no patch, no ``stop_event``, no raise."""
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         keystrokes = iter(["x", "p", "z", "q"])
@@ -828,8 +830,7 @@ class TestKeyboardLoop:
     def test_stop_event_set_externally_exits_without_consuming_source(
         self, surge_xt_interactive, simple_spec: ParamSpec
     ) -> None:
-        """When ``stop_event`` is already set, the loop returns ``[]`` immediately — the keystroke
-        source is not even polled."""
+        """Return ``[]`` immediately without polling the source when ``stop_event`` is set."""
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         stop_event.set()
@@ -854,8 +855,7 @@ class TestKeyboardLoop:
     def test_source_exhaustion_quits_gracefully_and_sets_stop_event(
         self, surge_xt_interactive, simple_spec: ParamSpec
     ) -> None:
-        """A ``StopIteration`` from the source (no ``q`` pressed) cleanly returns recorded patches
-        and sets ``stop_event`` so downstream threads notice the exit."""
+        """Return recorded patches and set ``stop_event`` on source ``StopIteration``."""
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         stop_event = threading.Event()
         keystrokes = iter(["p"])  # No q — source will raise StopIteration on the second poll.
@@ -874,9 +874,11 @@ class TestKeyboardLoop:
     def test_drift_during_record_raises_valueerror_and_sets_stop_event(
         self, surge_xt_interactive, simple_spec: ParamSpec
     ) -> None:
-        """If a non-spec param has drifted from its default, ``p`` triggers ``_validate_no_drift``
-        which raises ``ValueError``; the loop sets ``stop_event`` and re-raises (so the
-        orchestrator sees the failure instead of silently dropping it)."""
+        """Raise ``ValueError`` via ``_validate_no_drift`` when a non-spec param drifted.
+
+        The loop sets ``stop_event`` and re-raises (so the orchestrator sees the failure
+        instead of silently dropping it).
+        """
         plugin, default_params = _build_keyboard_loop_plugin(simple_spec)
         # Drift the non-spec ``fx_amount`` from its default to trip _validate_no_drift.
         plugin.parameters["fx_amount"].raw_value = 0.99
@@ -900,9 +902,9 @@ def _write_pred_files(
     *,
     pred_tensor_factory=None,
 ) -> None:
-    """Write the per-sample ``pred-{i}.pt`` / ``target-audio-{i}.pt`` / ``target-params-{i}.pt``
-    files ``PredictionWriter`` would emit, populated with finite tensors by default.
+    """Write the per-sample ``pred``/``target-audio``/``target-params`` files for a sample dir.
 
+    Mirrors the files ``PredictionWriter`` emits, populated with finite tensors by default.
     ``pred_tensor_factory`` lets a test override the ``pred-{i}.pt`` payload (e.g. to inject
     NaN/Inf); the target tensors are always finite stubs.
     """
@@ -964,14 +966,15 @@ class _RecordingSubprocessRunner:
 
 
 class TestRunPredict:
-    """``_run_predict`` builds the ``src/synth_setter/cli/eval.py`` invocation with the right Hydra
-    overrides."""
+    """Tests for ``_run_predict``'s eval-CLI invocation and Hydra overrides."""
 
     def test_passes_d_out_override_and_absolute_paths(self, surge_xt_interactive) -> None:
-        """``_run_predict`` overrides ``model.net.d_out`` with the encoded width of
-        ``param_spec_name`` (otherwise the ``???`` sentinel in ``surge/test.yaml`` would error),
-        and resolves all paths to absolute (otherwise Hydra's ``chdir`` would break relative
-        refs)."""
+        """Override ``model.net.d_out`` from ``param_spec_name`` and pass absolute paths.
+
+        ``model.net.d_out`` must be overridden (otherwise the ``???`` sentinel in
+        ``surge/test.yaml`` would error), and all paths must be absolute (otherwise Hydra's
+        ``chdir`` would break relative refs).
+        """
         # Use relative paths so the test fails if .resolve() is dropped.
         ckpt = Path("relative/ckpt.ckpt")
         dataset_root = Path("relative/dataset")
@@ -1087,9 +1090,11 @@ class TestValidateMetricsDf:
             surge_xt_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
     def test_nan_error_reports_offending_row_count_not_full_df(self, surge_xt_interactive) -> None:
-        """Error message reports only the offending row count and rows, not the full DataFrame —
-        otherwise a 1000-row metrics.csv with one bad row dumps a thousand lines into the
-        traceback."""
+        """Error message reports only the offending row count and rows, not the full DataFrame.
+
+        Otherwise a 1000-row metrics.csv with one bad row dumps a thousand lines into the
+        traceback.
+        """
         df = pd.DataFrame(
             {
                 "mss": [0.1, float("nan"), 0.3, 0.4, 0.5],
@@ -1139,8 +1144,7 @@ class TestMaybeEvalCapturedPatches:
     def test_no_checkpoint_skips_replication_and_eval(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """Without ``--checkpoint-path``, no sibling files are created and eval_patches is not
-        invoked."""
+        """Skip sibling-file creation and ``eval_patches`` when ``--checkpoint-path`` is absent."""
         train_path = tmp_path / "train.h5"
         train_path.write_bytes(b"stub")
         runner = _RecordingEvalRunner()
@@ -1162,8 +1166,7 @@ class TestMaybeEvalCapturedPatches:
     def test_replicates_train_h5_to_three_siblings(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """When ``--checkpoint-path`` is given, ``train.h5`` is copied to test/val/predict.h5 and
-        ``param_spec_name`` / ``preset_path`` are forwarded verbatim to the eval runner."""
+        """Copy ``train.h5`` to test/val/predict.h5 and forward args to the eval runner."""
         train_path = tmp_path / "train.h5"
         train_path.write_bytes(b"train-content")
         ckpt_path = tmp_path / "model.ckpt"
@@ -1189,8 +1192,7 @@ class TestMaybeEvalCapturedPatches:
     def test_failed_copy_rolls_back_partial_siblings(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """If a later ``shutil.copyfile`` raises ``OSError``, earlier siblings are removed and
-        eval_runner is not invoked.
+        """Roll back earlier siblings on later ``shutil.copyfile`` ``OSError``; skip eval.
 
         Failure is triggered by a *real* OS error: ``val.h5`` is pre-created as a directory, so
         the second copy fails. The exact subclass varies by platform (``IsADirectoryError`` on
@@ -1247,8 +1249,7 @@ def _write_wav(path: Path, *, silent: bool, sample_rate: int = 44100) -> None:
 
 
 def _populate_audio_dir(audio_dir: Path, num_samples: int, *, silent: bool = False) -> None:
-    """Pre-create the ``sample_{i}`` subdirs that ``_render_predicted_audio`` validates after the
-    subprocess returns, with a full set of per-sample artifacts."""
+    """Pre-create ``sample_{i}`` subdirs with per-sample artifacts for render validation."""
     audio_dir.mkdir(parents=True, exist_ok=True)
     for i in range(num_samples):
         sample_dir = audio_dir / f"sample_{i}"
@@ -1324,9 +1325,11 @@ class TestBuildPredictVstAudioArgv:
     def test_param_spec_and_preset_path_are_forwarded(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """``param_spec_name`` and ``preset_path`` follow their flag tokens in argv (otherwise
-        ``predict_vst_audio.py`` would silently fall back to ``surge_xt`` / ``presets/surge-
-        base.vstpreset`` and decode/render against a mismatched spec)."""
+        """``param_spec_name`` and ``preset_path`` follow their flag tokens in argv.
+
+        Otherwise ``predict_vst_audio.py`` would silently fall back to ``surge_xt`` /
+        ``presets/surge-base.vstpreset`` and decode/render against a mismatched spec.
+        """
         argv = surge_xt_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
@@ -1344,8 +1347,7 @@ class TestBuildPredictVstAudioArgv:
     def test_predictions_and_audio_dirs_appear_as_positional_args(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """The two positional argv entries match the source/destination paths the caller asked for
-        (otherwise rendering would silently target the wrong directory)."""
+        """Match the two positional argv entries to the caller's source/destination paths."""
         preds_dir = tmp_path / "preds"
         audio_dir = tmp_path / "audio"
 
@@ -1405,8 +1407,7 @@ class TestValidateRenderedAudioDir:
     def test_extra_sample_dir_raises_filenotfounderror(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """An extra sample directory (e.g. ``sample_5`` for ``num_samples=2``) raises
-        ``FileNotFoundError`` so a stale leftover doesn't silently pass validation."""
+        """Raise ``FileNotFoundError`` on an extra sample dir to reject stale leftovers."""
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=2)
         # Pollute the dir with an extra leftover.
@@ -1423,9 +1424,11 @@ class TestValidateRenderedAudioDir:
     def test_num_samples_12_does_not_trip_lex_sort(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """Regression: ``num_samples=12`` must not raise just because ``sample_10`` sorts before
-        ``sample_2`` in lexical order. Set comparison + index iteration keeps validation
-        index-based regardless of directory iteration order."""
+        """Regression: ``num_samples=12`` must not raise just because ``sample_10`` sorts before ``sample_2`` in lexical order.
+
+        Set comparison + index iteration keeps validation index-based regardless of directory
+        iteration order.
+        """
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=12)
 
@@ -1442,9 +1445,10 @@ class TestRenderPredictedAudioSubprocessIntegration:
     def test_runner_receives_argv_with_check_and_timeout(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """Orchestrator forwards a populated argv to the runner with ``check=True`` and a positive
-        ``timeout`` — drift on either kwarg would silently turn fatal subprocess errors into
-        successes."""
+        """Forward argv to the runner with ``check=True`` and a positive ``timeout``.
+
+        Drift on either kwarg would silently turn fatal subprocess errors into successes.
+        """
         audio_dir = tmp_path / "audio"
         _populate_audio_dir(audio_dir, num_samples=1)
         runner = _RecordingSubprocessRunner()
@@ -1480,8 +1484,11 @@ class TestPlayAudioRecordedE2E:
     def test_play_audio_recorded_produces_non_silent_wav(
         self, surge_xt_interactive, tmp_path: Path
     ) -> None:
-        """``play_audio_recorded`` against the real Surge XT VST + ``surge-simple.vstpreset``
-        writes a WAV with the expected frame count and audible peak amplitude."""
+        """Render a WAV via real Surge XT + ``surge-simple.vstpreset`` with non-silent audio.
+
+        Verifies ``play_audio_recorded`` writes a file with the expected frame count and an
+        audible peak amplitude.
+        """
         from synth_setter.data.vst.core import load_plugin, load_preset
 
         plugin_path = "plugins/Surge XT.vst3"
@@ -1516,11 +1523,11 @@ class TestPlayAudioRecordedE2E:
 def _write_synthetic_prediction_files(
     pred_dir: Path, num_samples: int, simple_spec: ParamSpec
 ) -> None:
-    """Write synthetic ``pred-{i}.pt`` / ``target-params-{i}.pt`` / ``target-audio-{i}.pt`` so
-    ``predict_vst_audio.py`` can render audio without a model checkpoint.
+    """Write synthetic per-sample pred/target tensors so ``predict_vst_audio.py`` can render.
 
-    Each pred row encodes mid-range params (zeros in the (-1..1) coordinate) so the rendered
-    audio depends only on the preset and a deterministic note pattern.
+    Renders without a model checkpoint. Each pred row encodes mid-range params (zeros in the
+    (-1..1) coordinate) so the rendered audio depends only on the preset and a deterministic
+    note pattern.
     """
     pred_dir.mkdir(parents=True, exist_ok=True)
     total_length = simple_spec.synth_param_length + simple_spec.note_param_length
@@ -1552,9 +1559,7 @@ class TestRenderPredictedAudioE2E:
         tmp_path: Path,
         simple_spec: ParamSpec,
     ) -> None:
-        """``_render_predicted_audio`` invokes the real ``predict_vst_audio.py`` (no
-        ``subprocess_runner`` override) and validates each ``sample_{i}`` directory against non-
-        silent rendered WAVs."""
+        """Invoke the real ``predict_vst_audio.py`` and validate non-silent rendered WAVs."""
         plugin_path = "plugins/Surge XT.vst3"
         preset_path = "presets/surge-simple.vstpreset"
         if not Path(plugin_path).exists():
@@ -1600,8 +1605,11 @@ class TestKeyboardLoopE2E:
     def test_p_q_against_real_plugin_records_one_patch(
         self, surge_xt_interactive, simple_spec: ParamSpec
     ) -> None:
-        """``["p", "q"]`` against the real Surge XT + ``surge-simple.vstpreset`` records one
-        patch whose synth-param values are finite floats matching the post-preset-load state.
+        """Record a patch whose synth-param values match the post-preset-load Surge XT state.
+
+        Drives the real Surge XT VST + ``surge-simple.vstpreset`` with ``["p", "q"]`` and asserts
+        the recorded patch's synth-param values are finite floats matching the post-preset-load
+        defaults.
         """
         from synth_setter.data.vst.core import load_plugin, load_preset
 

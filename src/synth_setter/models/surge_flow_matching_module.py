@@ -1,3 +1,5 @@
+"""Lightning module for flow-matching Surge XT parameter prediction."""
+
 from collections.abc import Callable
 from functools import partial
 from typing import Any, Literal
@@ -38,6 +40,8 @@ def rk4_with_cfg(
 
 
 class SurgeFlowMatchingModule(LightningModule):
+    """Flow-matching LightningModule for Surge XT parameter prediction (CFG + RK4 sampling)."""
+
     def __init__(
         self,
         encoder: torch.nn.Module,

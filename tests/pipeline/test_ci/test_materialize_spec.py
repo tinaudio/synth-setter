@@ -16,6 +16,8 @@ from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 
 
 class TestMaterializeSpecCli:
+    """Tests for the ``materialize_spec`` CLI entrypoint."""
+
     def test_writes_input_spec_json_for_known_experiment(
         self,
         tmp_path: Path,
