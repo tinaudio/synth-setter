@@ -223,9 +223,9 @@ def parse(s: str) -> PredictionRef:
     """
 ```
 
-The summary ``` "Parse a ``PATH:BATCH_IDX`` string into a." ``` ends with a
-stray period after `"a"` and reads as a sentence fragment. The reader
-has to glue the two halves back together to recover the meaning.
+The summary `"Parse a PATH:BATCH_IDX string into a."` ends with a stray
+period after `"a"` and reads as a sentence fragment. The reader has to
+glue the two halves back together to recover the meaning.
 
 Good — full imperative summary, real description block only when needed:
 
