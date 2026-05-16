@@ -53,13 +53,17 @@ from pathlib import Path
 import click
 import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
-import yaml
 from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
+from pydantic import ValidationError
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from synth_setter.pipeline.schemas.compute import (
+    ComputeConfig,
+    load_compute_config_yaml,
+)
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 # Per-launch R2 key for the materialized spec (file_mounts blocked by #749).
@@ -210,52 +214,40 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     return resolved
 
 
-def _detect_provider(template_path: Path) -> str:
-    """Return the cred-bootstrap `--provider` flag for a Task YAML's first cloud.
+def _detect_provider(compute_config: ComputeConfig) -> str:
+    """Return the cred-bootstrap `--provider` flag for a ``ComputeConfig``'s first cloud.
 
-    Reads the YAML directly (rather than going through `sky.Task.from_yaml`) so
-    each rank's task instantiation isn't burdened with an extra detection load
-    and so test fixtures don't need an extra side_effect slot for a probe Task.
-    Handles both the flat `resources: { cloud: X }` shape (RunPod, kubernetes)
-    and the `resources: { any_of: [{ cloud: X }, ...] }` shape (OCI Flex).
+    Reads ``compute_config.resources`` (the validated Pydantic dict) rather than reparsing the
+    source YAML so the detection stays in lockstep with what the launcher ships to SkyPilot.
+    Handles both the flat ``resources: { cloud: X }`` shape (RunPod, kubernetes) and the
+    ``resources: { any_of: [{ cloud: X }, ...] }`` shape (OCI Flex).
     """
-    with template_path.open(encoding="utf-8") as f:
-        doc = yaml.safe_load(f)
-    if not isinstance(doc, dict):
-        raise click.ClickException(
-            f"Could not detect cloud from {template_path}; "
-            "expected a YAML mapping with a `resources` key, got empty/non-mapping content."
-        )
-    resources = doc.get("resources") or {}
-    if not isinstance(resources, dict):
-        raise click.ClickException(
-            f"Could not detect cloud from {template_path}; expected `resources` to be a mapping."
-        )
+    resources = compute_config.resources
     cloud_value = resources.get("cloud")
     if cloud_value is None:
         any_of = resources.get("any_of") or []
         if not isinstance(any_of, list):
             raise click.ClickException(
-                f"Could not detect cloud from {template_path}; "
+                "Could not detect cloud from compute config; "
                 "expected `resources.any_of` to be a list."
             )
         if any_of:
             first = any_of[0]
             if not isinstance(first, dict):
                 raise click.ClickException(
-                    f"Could not detect cloud from {template_path}; "
+                    "Could not detect cloud from compute config; "
                     "expected `resources.any_of[0]` to be a mapping."
                 )
             cloud_value = first.get("cloud")
     if not isinstance(cloud_value, str):
         raise click.ClickException(
-            f"Could not detect cloud from {template_path}; "
+            "Could not detect cloud from compute config; "
             "expected resources.cloud (str) or resources.any_of[0].cloud (str)."
         )
     provider = _CLOUD_TO_PROVIDER.get(cloud_value.strip().lower())
     if provider is None:
         raise click.ClickException(
-            f"Unsupported cloud {cloud_value!r} in {template_path}; cred bootstrap "
+            f"Unsupported cloud {cloud_value!r} in compute config; cred bootstrap "
             "supports runpod, oci, and local (kubernetes) only"
         )
     return provider
@@ -579,8 +571,17 @@ def main(
     local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Materialized spec to {local_spec_path}")
 
+    # Load + validate the SkyPilot Task YAML once, up-front, so a malformed template
+    # surfaces here (one clear ClickException) rather than half-way through provisioning.
+    try:
+        compute_config = load_compute_config_yaml(template_path)
+    except (FileNotFoundError, ValueError, ValidationError) as exc:
+        raise click.ClickException(
+            f"failed to load compute template {template_path}: {exc}"
+        ) from exc
+
     # Local provider (kind) needs no compute creds; CI writes the controller-resource shrink. See #876.
-    provider = _detect_provider(template_path)
+    provider = _detect_provider(compute_config)
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
@@ -613,7 +614,7 @@ def main(
 
     rcs = _run_workers(
         worker_env_base=worker_env,
-        template_path=template_path,
+        compute_config=compute_config,
         job_names=job_names,
         worker_image_tag=worker_image_tag,
         tail=tail,
@@ -657,7 +658,7 @@ def _override_image_id(task: sky.Task, worker_image: str) -> None:
 
 def _run_workers(
     worker_env_base: dict[str, str],
-    template_path: Path,
+    compute_config: ComputeConfig,
     job_names: list[str],
     worker_image_tag: str,
     tail: bool,
@@ -665,7 +666,9 @@ def _run_workers(
     """Dispatch to the tail- or detach-mode runner; return one rc per rank.
 
     :param worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
-    :param template_path: SkyPilot Task YAML to instantiate per rank.
+    :param compute_config: Validated SkyPilot Task config passed to ``sky.Task.from_yaml_config``
+        per rank. Pre-validated by the caller so per-rank instantiation cannot surface a
+        ValidationError.
     :param job_names: One managed-job name per rank; ``len()`` defines the world size.
     :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
     :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
@@ -680,7 +683,7 @@ def _run_workers(
         job_names=job_names,
         worker_env_base=worker_env_base,
         worker_image=worker_image,
-        template_path=template_path,
+        compute_config=compute_config,
     )
     if tail:
         return _run_workers_tail(job_names, launch_get_job_id)
@@ -693,7 +696,7 @@ def _launch_one_rank(
     job_names: list[str],
     worker_env_base: dict[str, str],
     worker_image: str,
-    template_path: Path,
+    compute_config: ComputeConfig,
 ) -> int:
     """Submit rank ``rank``'s managed job and return its ``job_id``.
 
@@ -712,7 +715,9 @@ def _launch_one_rank(
         NUM_WORKERS_ENV_VAR: str(num_workers),
         _WORKER_IMAGE_ENV: worker_image,
     }
-    task = sky.Task.from_yaml(str(template_path))
+    # ``from_yaml_config`` consumes a pre-parsed dict; ``exclude_none=True`` drops
+    # ``setup: None`` so SkyPilot doesn't fault on a Null value where it expects a string.
+    task = sky.Task.from_yaml_config(compute_config.model_dump(exclude_none=True))
     _override_image_id(task, worker_image)
     task.update_envs(env_for_rank)
     click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")

@@ -19,6 +19,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from synth_setter.pipeline.schemas.compute import ComputeConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.skypilot_launch import (
     _WORKER_ENV_KEYS,
@@ -340,7 +341,7 @@ class TestMainCli:
         result = _invoke(experiment, template_yaml, missing, fake_plugin=fake_plugin)
         assert result.exit_code != 0
         assert "No worker env vars resolved" in result.output
-        mock_sky.Task.from_yaml.assert_not_called()
+        mock_sky.Task.from_yaml_config.assert_not_called()
         mock_sky.jobs.launch.assert_not_called()
 
     def test_unknown_experiment_surfaces_as_click_error(
@@ -419,7 +420,7 @@ class TestMainCli:
         result = _invoke(experiment, template_yaml, empty_env, fake_plugin=fake_plugin)
         assert result.exit_code != 0
         assert "No worker env vars resolved" in result.output
-        mock_sky.Task.from_yaml.assert_not_called()
+        mock_sky.Task.from_yaml_config.assert_not_called()
         mock_sky.jobs.launch.assert_not_called()
 
     def test_process_env_resolves_when_env_file_absent(
@@ -447,7 +448,7 @@ class TestMainCli:
         )
         assert result.exit_code == 0, result.output
 
-        task = mock_sky.Task.from_yaml.return_value
+        task = mock_sky.Task.from_yaml_config.return_value
         task.update_envs.assert_called_once()
         forwarded = task.update_envs.call_args.args[0]
         assert forwarded["RCLONE_CONFIG_R2_TYPE"] == "s3"
@@ -506,8 +507,12 @@ class TestMainCli:
         )
         assert result.exit_code == 0, result.output
 
-        task = mock_sky.Task.from_yaml.return_value
-        mock_sky.Task.from_yaml.assert_called_once_with(str(template_yaml))
+        task = mock_sky.Task.from_yaml_config.return_value
+        mock_sky.Task.from_yaml_config.assert_called_once()
+        # `from_yaml_config` consumes a dict (not a YAML path) — the dict must look like
+        # the validated ComputeConfig for the runpod template.
+        passed_config = mock_sky.Task.from_yaml_config.call_args.args[0]
+        assert passed_config["resources"]["cloud"] == "runpod"
         task.update_envs.assert_called_once()
         forwarded = task.update_envs.call_args.args[0]
         assert forwarded["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] == "key"
@@ -546,7 +551,7 @@ class TestMainCli:
         )
         assert result.exit_code == 0, result.output
 
-        task = mock_sky.Task.from_yaml.return_value
+        task = mock_sky.Task.from_yaml_config.return_value
         task.update_envs.assert_called_once()
         forwarded = task.update_envs.call_args.args[0]
         assert (
@@ -1213,7 +1218,7 @@ class TestNoTailMode:
         """
         job_names = [f"smoke-job-1-r{i}" for i in range(3)]
         tasks = {name: MagicMock(name=f"task-{name}") for name in job_names}
-        mock_sky.Task.from_yaml.side_effect = list(tasks.values())
+        mock_sky.Task.from_yaml_config.side_effect = list(tasks.values())
 
         launch_reqs = {name: f"launch-{name}" for name in job_names}
         cancel_reqs = {name: f"cancel-{name}" for name in job_names}
@@ -1309,7 +1314,7 @@ class TestNumWorkersFanOut:
         # exactly one Task per rank inside _launch_and_tail and immediately update_envs's it
         # with the job name in the message — assertions key off the job name in the env, not
         # the Task identity, so call order doesn't matter here.
-        mock_sky.Task.from_yaml.side_effect = list(tasks.values())
+        mock_sky.Task.from_yaml_config.side_effect = list(tasks.values())
 
         # Route jobs.launch + jobs.cancel + stream_and_get by `name` kwarg; route
         # jobs.tail_logs by `job_id` since the launcher passes only job_id (the SDK rejects
@@ -1761,82 +1766,72 @@ class TestOverrideImageId:
 
 
 class TestDetectProvider:
-    """``_detect_provider`` reads ``resources.cloud`` and maps it to a ``--provider`` flag.
+    """``_detect_provider`` reads ``ComputeConfig.resources`` and maps cloud → ``--provider``.
 
-    Reads the Task YAML directly (no ``sky.Task.from_yaml``) so each rank's task instantiation
-    isn't burdened with an extra detection load.
+    Reads the validated Pydantic config rather than reparsing YAML so detection stays in
+    lockstep with what the launcher ships to SkyPilot. Inputs that would fail Pydantic
+    validation (non-mapping ``resources``, empty document, etc.) are covered in
+    ``tests/pipeline/test_schemas/test_compute_config.py``.
     """
 
-    def test_runpod_cloud_detected_as_runpod(self, tmp_path: Path) -> None:
-        """Flat `resources.cloud: runpod` template maps to `--provider runpod`."""
-        path = tmp_path / "runpod.yaml"
-        path.write_text(yaml.dump({"resources": {"cloud": "runpod"}}))
-        assert _real_detect_provider(path) == "runpod"
-
-    def test_oci_any_of_detected_as_oci(self, tmp_path: Path) -> None:
-        """OCI templates use `resources.any_of: [{cloud: oci, ...}, ...]` for shape fan-out."""
-        path = tmp_path / "oci.yaml"
-        path.write_text(
-            yaml.dump({"resources": {"any_of": [{"cloud": "oci", "instance_type": "VM.X"}]}})
+    @staticmethod
+    def _make(resources: dict) -> ComputeConfig:  # noqa: DOC101,DOC103,DOC201,DOC203
+        """Build a minimal ComputeConfig with the supplied ``resources`` block."""
+        return ComputeConfig(
+            resources=resources,
+            envs={},
+            setup="echo setup",
+            run="echo run",
         )
 
-        assert _real_detect_provider(path) == "oci"
+    def test_runpod_cloud_detected_as_runpod(self) -> None:
+        """Flat `resources.cloud: runpod` template maps to `--provider runpod`."""
+        cfg = self._make({"cloud": "runpod"})
+        assert _real_detect_provider(cfg) == "runpod"
 
-    def test_kubernetes_cloud_detected_as_local(self, tmp_path: Path) -> None:
+    def test_oci_any_of_detected_as_oci(self) -> None:
+        """OCI templates use `resources.any_of: [{cloud: oci, ...}, ...]` for shape fan-out."""
+        cfg = self._make({"any_of": [{"cloud": "oci", "instance_type": "VM.X"}]})
+
+        assert _real_detect_provider(cfg) == "oci"
+
+    def test_kubernetes_cloud_detected_as_local(self) -> None:
         """Verify ``cloud: kubernetes`` maps to the internal ``local`` tag.
 
         Used by sky-local-up kind clusters. The ``local`` tag gates skipping the cred bootstrap
         (kind needs no compute creds — see PR #876).
         """
-        path = tmp_path / "local.yaml"
-        path.write_text(yaml.dump({"resources": {"cloud": "kubernetes"}}))
+        cfg = self._make({"cloud": "kubernetes"})
 
-        assert _real_detect_provider(path) == "local"
+        assert _real_detect_provider(cfg) == "local"
 
-    def test_unknown_cloud_raises(self, tmp_path: Path) -> None:
+    def test_unknown_cloud_raises(self) -> None:
         """A cloud the bootstrap doesn't support (e.g. aws) fails loudly with a clear error."""
-        path = tmp_path / "weird.yaml"
-        path.write_text(yaml.dump({"resources": {"cloud": "aws"}}))
+        cfg = self._make({"cloud": "aws"})
         with pytest.raises(click.ClickException, match="(?i)unsupported cloud"):
-            _real_detect_provider(path)
+            _real_detect_provider(cfg)
 
-    def test_missing_cloud_raises(self, tmp_path: Path) -> None:
+    def test_missing_cloud_raises(self) -> None:
         """A template with no detectable `cloud` field raises a launcher misuse error."""
-        path = tmp_path / "no-cloud.yaml"
-        path.write_text(yaml.dump({"resources": {"cpus": "2+"}}))
+        cfg = self._make({"cpus": "2+"})
         with pytest.raises(click.ClickException, match="(?i)could not detect cloud"):
-            _real_detect_provider(path)
+            _real_detect_provider(cfg)
 
-    def test_empty_yaml_raises_click_exception(self, tmp_path: Path) -> None:
-        """Verify an empty template surfaces as a clean ClickException, not AttributeError."""
-        path = tmp_path / "empty.yaml"
-        path.write_text("")
-        with pytest.raises(click.ClickException, match="(?i)could not detect cloud"):
-            _real_detect_provider(path)
+    def test_non_list_any_of_raises_click_exception(self) -> None:
+        """A scalar ``resources.any_of`` raises a clean ClickException.
 
-    def test_non_mapping_resources_raises_click_exception(self, tmp_path: Path) -> None:
-        """Verify a non-mapping ``resources`` key raises a clean ClickException."""
-        path = tmp_path / "scalar-resources.yaml"
-        path.write_text(yaml.dump({"resources": "not-a-mapping"}))
-        with pytest.raises(click.ClickException, match="(?i)resources.*mapping"):
-            _real_detect_provider(path)
-
-    def test_non_list_any_of_raises_click_exception(self, tmp_path: Path) -> None:
-        """Verify a non-list ``resources.any_of`` raises a clean ClickException.
-
-        Defends ``(any_of[0] or {}).get(...)`` against scalar ``any_of``.
+        Pydantic accepts any value under ``resources`` (it's typed ``dict[str, Any]``), so this
+        path is reachable; the launcher rejects it before handing the dict to SkyPilot.
         """
-        path = tmp_path / "scalar-any-of.yaml"
-        path.write_text(yaml.dump({"resources": {"any_of": "not-a-list"}}))
+        cfg = self._make({"any_of": "not-a-list"})
         with pytest.raises(click.ClickException, match="(?i)any_of.*list"):
-            _real_detect_provider(path)
+            _real_detect_provider(cfg)
 
-    def test_non_mapping_any_of_first_entry_raises_click_exception(self, tmp_path: Path) -> None:
+    def test_non_mapping_any_of_first_entry_raises_click_exception(self) -> None:
         """Verify a non-mapping ``resources.any_of[0]`` raises a clean ClickException."""
-        path = tmp_path / "scalar-any-of-entry.yaml"
-        path.write_text(yaml.dump({"resources": {"any_of": ["not-a-mapping"]}}))
+        cfg = self._make({"any_of": ["not-a-mapping"]})
         with pytest.raises(click.ClickException, match="(?i)any_of\\[0\\].*mapping"):
-            _real_detect_provider(path)
+            _real_detect_provider(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -2474,7 +2469,7 @@ class TestLaunchOneRank:
         from synth_setter.pipeline.skypilot_launch import _launch_one_rank
 
         fake_sky = MagicMock()
-        fake_sky.Task.from_yaml.return_value = MagicMock()
+        fake_sky.Task.from_yaml_config.return_value = MagicMock()
         fake_sky.jobs.launch.return_value = "req-1"
         fake_sky.stream_and_get.return_value = ([42], None)
         monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake_sky)
@@ -2484,7 +2479,9 @@ class TestLaunchOneRank:
             job_names=["job-0"],
             worker_env_base={"RCLONE_CONFIG_R2_TYPE": "s3"},
             worker_image="repo:tag",
-            template_path=Path("template.yaml"),
+            compute_config=ComputeConfig(
+                resources={"cloud": "runpod"}, envs={}, setup="echo", run="echo"
+            ),
         )
 
         assert job_id == 42
@@ -2518,7 +2515,7 @@ class TestLaunchOneRank:
         from synth_setter.pipeline.skypilot_launch import _launch_one_rank
 
         fake_sky = MagicMock()
-        fake_sky.Task.from_yaml.return_value = MagicMock()
+        fake_sky.Task.from_yaml_config.return_value = MagicMock()
         fake_sky.jobs.launch.return_value = "req-1"
         fake_sky.stream_and_get.return_value = stream_and_get_return
         monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake_sky)
@@ -2529,7 +2526,9 @@ class TestLaunchOneRank:
                 job_names=["job-0"],
                 worker_env_base={},
                 worker_image="repo:tag",
-                template_path=Path("template.yaml"),
+                compute_config=ComputeConfig(
+                    resources={"cloud": "runpod"}, envs={}, setup="echo", run="echo"
+                ),
             )
 
     def test_returned_job_id_comes_from_stream_and_get_not_from_rank(
@@ -2547,7 +2546,7 @@ class TestLaunchOneRank:
         from synth_setter.pipeline.skypilot_launch import _launch_one_rank
 
         fake_sky = MagicMock()
-        fake_sky.Task.from_yaml.return_value = MagicMock()
+        fake_sky.Task.from_yaml_config.return_value = MagicMock()
         fake_sky.jobs.launch.return_value = "req-1"
         # A job_id deliberately unrelated to any rank-derived value: not rank, not rank+1, not 0.
         fake_sky.stream_and_get.return_value = ([424242], None)
@@ -2558,7 +2557,9 @@ class TestLaunchOneRank:
             job_names=["job-rank-0"],
             worker_env_base={},
             worker_image="repo:tag",
-            template_path=Path("template.yaml"),
+            compute_config=ComputeConfig(
+                resources={"cloud": "runpod"}, envs={}, setup="echo", run="echo"
+            ),
         )
 
         assert job_id == 424242
@@ -2572,7 +2573,7 @@ class TestLaunchOneRank:
 
         fake_task = MagicMock()
         fake_sky = MagicMock()
-        fake_sky.Task.from_yaml.return_value = fake_task
+        fake_sky.Task.from_yaml_config.return_value = fake_task
         fake_sky.jobs.launch.return_value = "req-1"
         fake_sky.stream_and_get.return_value = ([7], None)
         monkeypatch.setattr("synth_setter.pipeline.skypilot_launch.sky", fake_sky)
@@ -2582,7 +2583,9 @@ class TestLaunchOneRank:
             job_names=["a", "b", "c", "d"],
             worker_env_base={"BASE_KEY": "base-value"},
             worker_image="repo:tag",
-            template_path=Path("template.yaml"),
+            compute_config=ComputeConfig(
+                resources={"cloud": "runpod"}, envs={}, setup="echo", run="echo"
+            ),
         )
 
         envs_passed = fake_task.update_envs.call_args.args[0]
@@ -2590,3 +2593,93 @@ class TestLaunchOneRank:
         assert envs_passed[WORKER_RANK_ENV_VAR] == "2"
         assert envs_passed[NUM_WORKERS_ENV_VAR] == "4"
         assert envs_passed[_WORKER_IMAGE_ENV] == "repo:tag"
+
+
+# ---------------------------------------------------------------------------
+# Hydra `skypilot_launch.yaml` entrypoint — composes a compute template name
+# into a ComputeConfig via `compute_config_from_cfg`.
+# ---------------------------------------------------------------------------
+
+
+class TestSkypilotLaunchHydraEntrypoint:
+    """Pin the Hydra-composable entrypoint that mirrors `configs/dataset.yaml`.
+
+    The launcher's Click CLI consumes `--template <path>` directly today (CI workflows depend on
+    the path-based flag); the Hydra entrypoint at `configs/skypilot_launch.yaml` is the parallel
+    composition surface for future use cases that want to pick a compute template by name and drive
+    overrides from a CLI like `compute=oci-cpu-template`.
+    """
+
+    def test_default_compose_resolves_to_runpod_template(self) -> None:
+        """`compose(config_name='skypilot_launch')` defaults compute to runpod-template."""
+        from hydra import compose, initialize_config_dir
+
+        from synth_setter.pipeline.schemas.compute import compute_config_from_cfg
+
+        config_dir = str(Path(__file__).resolve().parents[3] / "configs")
+        compute_dir = Path(config_dir) / "compute"
+
+        with initialize_config_dir(version_base="1.3", config_dir=config_dir):
+            cfg = compose(config_name="skypilot_launch")
+
+        result = compute_config_from_cfg(cfg, compute_dir=compute_dir)
+        assert result.resources["cloud"] == "runpod"
+
+    def test_compute_override_selects_different_template(self) -> None:
+        """`compose(..., overrides=['compute_template=local-template'])` picks the k8s template."""
+        from hydra import compose, initialize_config_dir
+
+        from synth_setter.pipeline.schemas.compute import compute_config_from_cfg
+
+        config_dir = str(Path(__file__).resolve().parents[3] / "configs")
+        compute_dir = Path(config_dir) / "compute"
+
+        with initialize_config_dir(version_base="1.3", config_dir=config_dir):
+            cfg = compose(
+                config_name="skypilot_launch",
+                overrides=["compute_template=local-template"],
+            )
+
+        result = compute_config_from_cfg(cfg, compute_dir=compute_dir)
+        assert result.resources["cloud"] == "kubernetes"
+
+
+# ---------------------------------------------------------------------------
+# Malformed-template handling: load failures in `main()` surface as ClickException.
+# ---------------------------------------------------------------------------
+
+
+class TestMainMalformedTemplate:
+    """Errors loading or validating the compute YAML surface as a clean ClickException."""
+
+    def test_malformed_yaml_surfaces_as_click_exception(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        experiment: str,
+        fake_plugin: Path,
+        env_file: Path,
+        patch_materialize_io: None,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """A template missing required ComputeConfig fields fails with a wrapped error.
+
+        Pydantic ``ValidationError`` is wrapped in ``click.ClickException`` so the user sees a
+        one-line CLI error instead of a Pydantic traceback.
+        """
+        _ = mock_sky
+        bad_template = tmp_path / "bad-template.yaml"
+        # No `run:` field; ComputeConfig rejects this.
+        bad_template.write_text(yaml.dump({"resources": {"cloud": "runpod"}, "envs": {}}))
+
+        result = _invoke(
+            experiment,
+            bad_template,
+            env_file,
+            "--job-name",
+            "smoke-job-bad",
+            fake_plugin=fake_plugin,
+        )
+
+        assert result.exit_code != 0
+        assert "failed to load compute template" in result.output
