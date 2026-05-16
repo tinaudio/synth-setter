@@ -204,7 +204,7 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError, match="r2_prefix must end with"):
             DatasetSpec(**_valid_spec_kwargs(r2_prefix="data/no/slash"))
 
-    def test_split_size_not_multiple_of_batch_per_shard_raises(
+    def test_split_size_not_multiple_of_samples_per_shard_raises(
         self, patch_runtime_io: None
     ) -> None:
         """A split size that doesn't divide evenly into ``samples_per_shard`` raises."""
