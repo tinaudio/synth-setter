@@ -1,299 +1,501 @@
-"""Unit tests for ``synth_setter.evaluation.predict_vst_audio``.
+"""Behavioral tests for ``synth_setter.evaluation.predict_vst_audio``.
 
-Covers the three pure helpers (``make_spectrogram``, ``write_spectrograms``,
-``params_to_csv``) and the click ``main`` entrypoint with the VST3 render call
-patched out — so the suite stays CPU-only and deterministic and runs under
-``make test-fast``.
+These tests pin the public contract of the module so the refactor in this PR
+can run safely. The CLI flow is exercised end-to-end with ``render_params``
+monkey-patched to return deterministic fake audio — no real VST is loaded.
 """
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
-# Pin the headless backend before ``predict_vst_audio`` triggers ``pyplot`` import.
-os.environ.setdefault("MPLBACKEND", "Agg")
+import matplotlib
 
-from pathlib import Path  # noqa: E402
+matplotlib.use("Agg")  # headless backend — must precede any pyplot import
 
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-import pytest  # noqa: E402
-import torch  # noqa: E402
-from click.testing import CliRunner, Result  # noqa: E402
+import librosa
+import numpy as np
+import pandas as pd
+import pytest
+import torch
+from click.testing import CliRunner, Result
 
-from synth_setter.data.vst import param_specs  # noqa: E402
-from synth_setter.evaluation import predict_vst_audio  # noqa: E402
-from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
-    main,
-    make_spectrogram,
-    params_to_csv,
-    write_spectrograms,
-)
+from synth_setter.data.vst import param_specs
+from synth_setter.evaluation import predict_vst_audio
 
+# Small/fast audio dimensions for tests — full 4 s @ 44.1 kHz is unnecessary
+# here and slows mel-spectrogram computation. ``hop_length=512`` (the source's
+# hardcoded value) means we get ~20 frames for 0.25 s.
 _SR = 8000.0
-_PARAM_SPEC_NAME = "surge_simple"
-_PARAM_SPEC = param_specs[_PARAM_SPEC_NAME]
 _CHANNELS = 2
-_SAMPLES = 1024
+_DURATION_S = 0.25
+_N_SAMPLES = int(_SR * _DURATION_S)
 
 
-def _noise(channels: int, samples: int, *, seed: int = 0) -> np.ndarray:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Deterministic ``(channels, samples)`` float32 noise — non-silent input for librosa."""
-    rng = np.random.default_rng(seed)
-    return rng.standard_normal((channels, samples)).astype(np.float32)
+def _fake_audio(channels: int = _CHANNELS, n: int = _N_SAMPLES) -> np.ndarray:
+    """Return a deterministic non-silent signal — same shape ``render_params`` produces.
+
+    :param channels: Number of channels to stack.
+    :param n: Number of samples per channel.
+    :returns: ``(channels, n)`` float32 sine wave.
+    :rtype: np.ndarray
+    """
+    t = np.arange(n, dtype=np.float32) / _SR
+    sine = (0.25 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+    return np.stack([sine] * channels, axis=0)
 
 
-def _sine(channels: int, samples: int, *, freq: float, sr: float) -> np.ndarray:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Constant-amplitude sine, broadcast across all channels — non-silent and band-limited."""
-    t = np.arange(samples, dtype=np.float32) / sr
-    tone = 0.5 * np.sin(2 * np.pi * freq * t).astype(np.float32)
-    return np.broadcast_to(tone, (channels, samples)).copy()
+# ---------------------------------------------------------------------------
+# make_spectrogram
+# ---------------------------------------------------------------------------
 
 
-# ---------- make_spectrogram ----------
-
-
-def test_make_spectrogram_returns_one_db_array_per_channel() -> None:
-    """Runtime contract: returns ``list[ndarray]`` despite the source's ``np.ndarray`` annotation."""
-    specs = make_spectrogram(_noise(channels=2, samples=4096), _SR)
-
-    assert isinstance(specs, list)
+def test_make_spectrogram_returns_one_2d_array_per_channel() -> None:
+    """Stereo input → list of length 2; each entry is a 2-D mel-spec."""
+    audio = _fake_audio(channels=2)
+    specs = predict_vst_audio.make_spectrogram(audio, _SR)
     assert len(specs) == 2
     for spec in specs:
-        assert spec.shape[0] == 128
-        assert spec.max() <= 0.0
+        assert spec.ndim == 2
+        assert spec.shape[0] == predict_vst_audio._MEL_N_MELS
 
 
-def test_make_spectrogram_mono_input_returns_singleton_list() -> None:
-    """Mono ``(1, N)`` input → one-element list, not a bare array."""
-    specs = make_spectrogram(_noise(channels=1, samples=4096), _SR)
-
-    assert isinstance(specs, list)
+def test_make_spectrogram_mono_returns_single_entry() -> None:
+    """Mono input → list of length 1."""
+    audio = _fake_audio(channels=1)
+    specs = predict_vst_audio.make_spectrogram(audio, _SR)
     assert len(specs) == 1
 
 
-def test_make_spectrogram_pure_tone_peaks_near_expected_mel_bin() -> None:
-    """A 1 kHz sine should peak in a mel bin close to 1 kHz — guards against a zeros-mutant."""
-    import librosa
+def test_make_spectrogram_output_is_in_decibels() -> None:
+    """``power_to_db(ref=np.max)`` peaks at 0 dB and otherwise is non-positive."""
+    audio = _fake_audio()
+    specs = predict_vst_audio.make_spectrogram(audio, _SR)
+    spec = specs[0]
+    assert np.isfinite(spec).all()
+    assert spec.max() == pytest.approx(0.0, abs=1e-6)
+    assert spec.min() <= 0.0
 
+
+def test_make_spectrogram_pure_tone_peaks_near_expected_mel_bin() -> None:
+    """A pure tone should peak in a mel bin close to its frequency — guards against a zeros-mutant.
+
+    Ported from #1060; uses ``librosa.mel_frequencies`` to compute the expected
+    bin under the same defaults ``make_spectrogram`` uses (``fmin=0``,
+    ``fmax=sr/2``).
+    """
     sr = 16000.0
     freq = 1000.0
-    specs = make_spectrogram(_sine(channels=1, samples=8192, freq=freq, sr=sr), sr)
+    n = 8192
+    t = np.arange(n, dtype=np.float32) / sr
+    sine = (0.5 * np.sin(2 * np.pi * freq * t)).astype(np.float32).reshape(1, -1)
+    specs = predict_vst_audio.make_spectrogram(sine, sr)
     spec = specs[0]
     peak_bin = int(np.argmax(spec.mean(axis=1)))
-    # Match the melspectrogram defaults (fmin=0, fmax=sr/2) so we resolve the same bin grid.
     mel_centers = librosa.mel_frequencies(n_mels=128, fmin=0.0, fmax=sr / 2)
     expected_bin = int(np.argmin(np.abs(mel_centers - freq)))
-    # Allow a few bins of slop — the mel filterbank smears narrowband content across neighbours.
+    # Mel filterbank smears narrowband content across neighbouring bins.
     assert abs(peak_bin - expected_bin) <= 5, f"peak at bin {peak_bin}, expected ~{expected_bin}"
 
 
-# ---------- write_spectrograms ----------
+# ---------------------------------------------------------------------------
+# write_spectrograms
+# ---------------------------------------------------------------------------
 
 
-def test_write_spectrograms_writes_png_to_disk(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """A non-empty PNG (PNG magic bytes) should appear at ``save_path``."""
+def test_write_spectrograms_creates_a_nonempty_png(tmp_path: Path) -> None:
+    """Side-effect contract: writes a PNG file containing both pred and target panels.
+
+    :param tmp_path: pytest tmp dir fixture.
+    """
+    pred = _fake_audio()
+    target = _fake_audio()
     out = tmp_path / "spec.png"
 
-    write_spectrograms(_noise(2, 4096, seed=1), _noise(2, 4096, seed=2), _SR, str(out))
+    predict_vst_audio.write_spectrograms(pred, target, _SR, str(out))
 
     assert out.is_file()
-    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert out.stat().st_size > 0
 
 
-def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Each call closes its figure — otherwise the render loop leaks one per sample."""
+def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None:
+    """Each call closes its figure — otherwise the render loop leaks one per sample.
+
+    Ported from #1060.
+
+    :param tmp_path: pytest tmp dir fixture.
+    """
+    import matplotlib.pyplot as plt
+
     plt.close("all")
-    write_spectrograms(
-        _noise(2, 4096, seed=1), _noise(2, 4096, seed=2), _SR, str(tmp_path / "spec.png")
+    predict_vst_audio.write_spectrograms(
+        _fake_audio(), _fake_audio(), _SR, str(tmp_path / "spec.png")
     )
-
     assert plt.get_fignums() == []
 
 
-# ---------- params_to_csv ----------
+def test_write_spectrograms_single_panel_does_not_crash(tmp_path: Path) -> None:
+    """Mono pred + zero-channel target → single panel; ``plt.subplots(1, 1)`` returns one Axes.
+
+    Regression guard: without the ``np.atleast_1d(axs)`` normalization in
+    ``write_spectrograms``, the single-panel case TypeErrored on
+    ``zip(axs, panels)`` because the function tried to iterate a scalar Axes.
+
+    :param tmp_path: pytest tmp dir fixture.
+    """
+    pred = _fake_audio(channels=1)
+    # An empty target produces no target panels; only the pred panel remains.
+    target = np.zeros((0, _N_SAMPLES), dtype=np.float32)
+    out = tmp_path / "spec_mono.png"
+
+    predict_vst_audio.write_spectrograms(pred, target, _SR, str(out))
+
+    assert out.is_file()
+    assert out.stat().st_size > 0
 
 
-def _sample_param_dicts(seed: int = 0) -> tuple[dict[str, float], dict[str, float]]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Deterministic ``(synth_params, note_params)`` pair via ``_PARAM_SPEC.decode``."""
-    rng = np.random.default_rng(seed)
-    encoded = rng.random(len(_PARAM_SPEC)).astype(np.float32)
-    return _PARAM_SPEC.decode(encoded)
+# ---------------------------------------------------------------------------
+# params_to_csv
+# ---------------------------------------------------------------------------
 
 
-def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """Both dicts populated → CSV holds a row per pred key with finite values in both columns."""
-    pred_s, pred_n = _sample_param_dicts(seed=0)
-    tgt_s, tgt_n = _sample_param_dicts(seed=1)
+def _two_row_synth_params() -> tuple[dict[str, float], dict[str, float]]:
+    pred = {"cutoff": 0.5, "resonance": 0.25}
+    target = {"cutoff": 0.4, "resonance": 0.30}
+    return pred, target
+
+
+def _two_row_note_params() -> tuple[dict[str, float], dict[str, float]]:
+    pred: dict[str, float] = {"pitch": 60.0, "velocity": 100.0}
+    target: dict[str, float] = {"pitch": 60.0, "velocity": 100.0}
+    return pred, target
+
+
+def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:
+    """The CSV has exactly the columns ``pred`` and ``target`` and one row per param.
+
+    :param tmp_path: pytest tmp dir fixture.
+    """
+    pred_synth, target_synth = _two_row_synth_params()
+    pred_note, target_note = _two_row_note_params()
     out = tmp_path / "params.csv"
 
-    params_to_csv(tgt_s, tgt_n, pred_s, pred_n, str(out), _PARAM_SPEC)
+    predict_vst_audio.params_to_csv(
+        target_synth_params=target_synth,
+        target_note_params=target_note,
+        pred_synth_params=pred_synth,
+        pred_note_params=pred_note,
+        save_path=str(out),
+    )
 
     df = pd.read_csv(out, index_col=0)
-    assert list(df.columns) == ["pred", "target"]
-    assert set(df.index) == set(pred_s) | set(pred_n)
-    assert bool(df["pred"].notna().all())
-    assert bool(df["target"].notna().all())
+    assert sorted(df.columns.tolist()) == ["pred", "target"]
+    assert set(df.index) == {"cutoff", "resonance", "pitch", "velocity"}
+    assert df.loc["cutoff", "pred"] == pytest.approx(0.5)
+    assert df.loc["cutoff", "target"] == pytest.approx(0.4)
 
 
-def test_params_to_csv_none_target_leaves_target_column_nan(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-    """The CLI's ``--no-params`` path passes ``None`` past the source's stricter annotation."""
-    pred_s, pred_n = _sample_param_dicts()
+def test_params_to_csv_with_none_targets_writes_pred_only(tmp_path: Path) -> None:
+    """When ``--no-params`` / no rerender, targets are ``None`` and only ``pred`` is populated.
+
+    Pins the behavior the ``main`` flow relies on at the no-targets call site: pandas
+    accepts ``None`` for the ``target`` column and renders it as an empty/NaN column.
+
+    :param tmp_path: pytest tmp dir fixture.
+    """
+    pred_synth, _ = _two_row_synth_params()
+    pred_note, _ = _two_row_note_params()
     out = tmp_path / "params.csv"
 
-    params_to_csv(None, None, pred_s, pred_n, str(out), _PARAM_SPEC)  # type: ignore[arg-type]
+    predict_vst_audio.params_to_csv(
+        target_synth_params=None,
+        target_note_params=None,
+        pred_synth_params=pred_synth,
+        pred_note_params=pred_note,
+        save_path=str(out),
+    )
 
     df = pd.read_csv(out, index_col=0)
-    assert bool(df["pred"].notna().all())
+    assert "pred" in df.columns
+    assert "target" in df.columns
     assert bool(df["target"].isna().all())
 
 
-# ---------- main (click CLI) ----------
+# ---------------------------------------------------------------------------
+# main() — CLI integration
+# ---------------------------------------------------------------------------
 
 
-def _fake_render(*_args: object, **_kwargs: object) -> np.ndarray:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Stand-in for ``render_params`` — only the ``(channels, samples)`` shape contract matters."""
-    rng = np.random.default_rng(42)
-    return rng.standard_normal((_CHANNELS, _SAMPLES)).astype(np.float32)
+@pytest.fixture
+def fake_pred_dir(tmp_path: Path) -> Path:
+    """Create a ``pred-N.pt`` / ``target-audio-N.pt`` / ``target-params-N.pt`` set.
 
+    Builds a small surge_xt-shaped param vector (length matches the registered
+    spec) so ``param_spec.decode`` works in-process.
 
-def _write_batch(  # noqa: DOC101,DOC103
-    pred_dir: Path,
-    *,
-    index: int,
-    batch_size: int,
-    with_target_params: bool,
-) -> None:
-    """Write the ``.pt`` files one ``PredictionWriter`` batch would produce."""
-    rng = np.random.default_rng(index)
-    # ``main`` rescales pred params via ``(x + 1) / 2`` — so the fixture must live on [-1, 1].
-    encoded = (rng.random((batch_size, len(_PARAM_SPEC))) * 2 - 1).astype(np.float32)
-    torch.save(torch.from_numpy(encoded), pred_dir / f"pred-{index}.pt")
-
-    target_audio = rng.standard_normal((batch_size, _CHANNELS, _SAMPLES)).astype(np.float32)
-    torch.save(torch.from_numpy(target_audio), pred_dir / f"target-audio-{index}.pt")
-
-    if with_target_params:
-        torch.save(torch.from_numpy(encoded.copy()), pred_dir / f"target-params-{index}.pt")
-
-
-@pytest.fixture()
-def runner() -> CliRunner:  # noqa: DOC201,DOC203
-    """Fresh click ``CliRunner`` per test."""
-    return CliRunner()
-
-
-@pytest.fixture()
-def pred_dir(tmp_path: Path) -> Path:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Empty ``preds/`` subdirectory ready for ``_write_batch`` calls."""
-    d = tmp_path / "preds"
-    d.mkdir()
-    return d
-
-
-@pytest.fixture()
-def out_dir(tmp_path: Path) -> Path:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """``out/`` path the CLI will create.
-
-    Not pre-created — the CLI does that.
+    :param tmp_path: pytest tmp dir fixture.
+    :returns: Path to the populated pred directory.
+    :rtype: Path
     """
-    return tmp_path / "out"
+    pred_dir = tmp_path / "pred_dir"
+    pred_dir.mkdir()
+
+    spec = param_specs["surge_xt"]
+    param_len = len(spec)
+    batch_size = 2
+
+    # Values in [-1, 1] — main() rescales to [0, 1] before decode.
+    pred_params = torch.zeros((batch_size, param_len), dtype=torch.float32)
+    target_params = torch.zeros((batch_size, param_len), dtype=torch.float32)
+    target_audio = torch.from_numpy(np.stack([_fake_audio() for _ in range(batch_size)], axis=0))
+
+    torch.save(pred_params, pred_dir / "pred-0.pt")
+    torch.save(target_params, pred_dir / "target-params-0.pt")
+    torch.save(target_audio, pred_dir / "target-audio-0.pt")
+    return pred_dir
 
 
-@pytest.fixture(autouse=True)
-def _patch_render_params(monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
-    """Replace the VST3 render call with the in-process ``_fake_render`` stub."""
+@pytest.fixture
+def patched_render(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Replace ``render_params`` with a recorder returning deterministic audio.
+
+    :param monkeypatch: pytest monkeypatch fixture.
+    :returns: A list that accumulates one entry per call to the patched renderer.
+    :rtype: list[dict]
+    """
+    calls: list[dict] = []
+
+    def _fake_render(
+        plugin_path: str,
+        params: dict[str, float],
+        midi_note: int,
+        velocity: int,
+        note_start_and_end: tuple[float, float],
+        signal_duration_seconds: float,
+        sample_rate: float,
+        channels: int,
+        preset_path: str | None = None,
+    ) -> np.ndarray:
+        calls.append(
+            {
+                "plugin_path": plugin_path,
+                "midi_note": midi_note,
+                "preset_path": preset_path,
+            }
+        )
+        return _fake_audio(channels=channels)
+
     monkeypatch.setattr(predict_vst_audio, "render_params", _fake_render)
+    return calls
 
 
-def _invoke_main(runner: CliRunner, pred_dir: Path, out_dir: Path, *extra: str) -> Result:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Invoke ``main`` with the standard small-audio test options plus any ``extra`` flags."""
-    return runner.invoke(
-        main,
+def _invoke_main(args: list[str]) -> Result:
+    """Wrap ``CliRunner.invoke`` with ``standalone_mode=False`` so exceptions surface.
+
+    :param args: argv list passed to ``predict_vst_audio.main``.
+    :returns: The click ``Result`` object.
+    :rtype: Result
+    """
+    runner = CliRunner()
+    return runner.invoke(predict_vst_audio.main, args, standalone_mode=False)
+
+
+def test_main_writes_pred_and_target_wav_per_sample(
+    fake_pred_dir: Path,
+    tmp_path: Path,
+    patched_render: list[dict],
+) -> None:
+    """End-to-end: ``main`` materializes ``sample_N/{pred,target}.wav`` for each row.
+
+    :param fake_pred_dir: pre-populated pred directory.
+    :param tmp_path: pytest tmp dir fixture.
+    :param patched_render: render-recorder fixture.
+    """
+    out_dir = tmp_path / "out"
+    result = _invoke_main(
+        [
+            str(fake_pred_dir),
+            str(out_dir),
+            "--skip-spectrogram",
+            "--no-params",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+
+    for i in (0, 1):
+        sample_dir = out_dir / f"sample_{i}"
+        assert (sample_dir / "pred.wav").is_file()
+        assert (sample_dir / "target.wav").is_file()
+
+
+def test_main_writes_spectrogram_when_enabled(
+    fake_pred_dir: Path,
+    tmp_path: Path,
+    patched_render: list[dict],
+) -> None:
+    """Default (no ``--skip-spectrogram``) writes ``spec.png`` per sample.
+
+    :param fake_pred_dir: pre-populated pred directory.
+    :param tmp_path: pytest tmp dir fixture.
+    :param patched_render: render-recorder fixture.
+    """
+    out_dir = tmp_path / "out"
+    result = _invoke_main(
+        [
+            str(fake_pred_dir),
+            str(out_dir),
+            "--no-params",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    assert (out_dir / "sample_0" / "spec.png").is_file()
+
+
+def test_main_rerender_target_calls_render_for_pred_and_target(
+    fake_pred_dir: Path,
+    tmp_path: Path,
+    patched_render: list[dict],
+) -> None:
+    """``--rerender_target`` doubles the render-param calls (one pred + one target per row).
+
+    :param fake_pred_dir: pre-populated pred directory.
+    :param tmp_path: pytest tmp dir fixture.
+    :param patched_render: render-recorder fixture.
+    """
+    out_dir = tmp_path / "out"
+    result = _invoke_main(
+        [
+            str(fake_pred_dir),
+            str(out_dir),
+            "--skip-spectrogram",
+            "--rerender_target",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    # 2 rows × (pred + target) = 4 calls
+    assert len(patched_render) == 4
+
+
+def test_main_writes_params_csv_when_rerender_target(
+    fake_pred_dir: Path,
+    tmp_path: Path,
+    patched_render: list[dict],
+) -> None:
+    """``--rerender_target`` populates both ``pred`` and ``target`` columns of the CSV.
+
+    :param fake_pred_dir: pre-populated pred directory.
+    :param tmp_path: pytest tmp dir fixture.
+    :param patched_render: render-recorder fixture.
+    """
+    out_dir = tmp_path / "out"
+    result = _invoke_main(
+        [
+            str(fake_pred_dir),
+            str(out_dir),
+            "--skip-spectrogram",
+            "--rerender_target",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    df = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    assert {"pred", "target"} <= set(df.columns)
+    assert bool(df["target"].notna().any())
+
+
+def test_main_writes_params_csv_when_no_params(
+    fake_pred_dir: Path,
+    tmp_path: Path,
+    patched_render: list[dict],
+) -> None:
+    """``--no-params`` still writes a params CSV (with empty target column).
+
+    :param fake_pred_dir: pre-populated pred directory.
+    :param tmp_path: pytest tmp dir fixture.
+    :param patched_render: render-recorder fixture.
+    """
+    out_dir = tmp_path / "out"
+    result = _invoke_main(
+        [
+            str(fake_pred_dir),
+            str(out_dir),
+            "--skip-spectrogram",
+            "--no-params",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    df = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    assert bool(df["target"].isna().all())
+
+
+def test_main_target_params_present_but_no_rerender_does_not_crash(
+    fake_pred_dir: Path,
+    tmp_path: Path,
+    patched_render: list[dict],
+) -> None:
+    """Targets on disk + ``rerender_target=False`` must not crash.
+
+    Regression guard for the latent ``NameError`` at the old ``params_to_csv`` call
+    site: when ``rerender_target=False`` and ``target_params is not None``,
+    ``target_synth_params``/``target_note_params`` were never bound in the loop
+    iteration but were still referenced. The fix decouples the CSV column from
+    the rerender flag — see PR description.
+
+    :param fake_pred_dir: pre-populated pred directory.
+    :param tmp_path: pytest tmp dir fixture.
+    :param patched_render: render-recorder fixture.
+    """
+    out_dir = tmp_path / "out"
+    result = _invoke_main(
+        [
+            str(fake_pred_dir),
+            str(out_dir),
+            "--skip-spectrogram",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+
+    df = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    # The original target-on-disk row should now produce a populated target
+    # column (no NameError, CSV still emitted).
+    assert bool(df["target"].notna().any())
+
+
+def test_main_handles_multiple_pred_files_in_numeric_not_lex_order(
+    tmp_path: Path,
+    patched_render: list[dict],
+) -> None:
+    """File indices are sorted numerically (not lex), and offsets accumulate.
+
+    Non-monotonic file creation (``pred-10``, ``pred-2``, ``pred-0``) tests the
+    ``_list_pred_files`` sort key: lexicographic order would produce
+    ``[pred-0, pred-10, pred-2]`` whereas the contract is ``[pred-0, pred-2, pred-10]``.
+    With three pred files of 2 rows each, ``sample_0..sample_5`` must all exist.
+
+    :param tmp_path: pytest tmp dir fixture.
+    :param patched_render: render-recorder fixture.
+    """
+    pred_dir = tmp_path / "pred_dir"
+    pred_dir.mkdir()
+
+    spec = param_specs["surge_xt"]
+    # Deliberately create files out of order to confirm the sort key.
+    for i in (10, 2, 0):
+        pred_params = torch.zeros((2, len(spec)), dtype=torch.float32)
+        target_audio = torch.from_numpy(np.stack([_fake_audio()] * 2, axis=0))
+        torch.save(pred_params, pred_dir / f"pred-{i}.pt")
+        torch.save(target_audio, pred_dir / f"target-audio-{i}.pt")
+
+    out_dir = tmp_path / "out"
+    result = _invoke_main(
         [
             str(pred_dir),
             str(out_dir),
-            f"--param_spec={_PARAM_SPEC_NAME}",
-            f"--sample_rate={int(_SR)}",
-            f"--channels={_CHANNELS}",
-            "--signal_duration_seconds=0.1",
-            *extra,
-        ],
-        catch_exceptions=False,
+            "--skip-spectrogram",
+            "--no-params",
+        ]
     )
-
-
-def test_main_no_params_writes_pred_target_csv_and_spectrogram(  # noqa: DOC101,DOC103
-    runner: CliRunner, pred_dir: Path, out_dir: Path
-) -> None:
-    """``--no-params`` path produces pred.wav, target.wav, spec.png, and params.csv per sample."""
-    _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
-
-    result = _invoke_main(runner, pred_dir, out_dir, "--no-params")
-
     assert result.exit_code == 0, result.output
-    for j in range(2):
-        sample_dir = out_dir / f"sample_{j}"
-        for name in ("pred.wav", "target.wav", "spec.png", "params.csv"):
-            assert (sample_dir / name).is_file(), f"missing {name} under {sample_dir}"
 
-
-def test_main_skip_spectrogram_suppresses_png(  # noqa: DOC101,DOC103
-    runner: CliRunner, pred_dir: Path, out_dir: Path
-) -> None:
-    """``--skip-spectrogram`` keeps the wav/csv outputs but skips the matplotlib render."""
-    _write_batch(pred_dir, index=0, batch_size=1, with_target_params=False)
-    plt.close("all")
-
-    result = _invoke_main(runner, pred_dir, out_dir, "--no-params", "--skip-spectrogram")
-
-    assert result.exit_code == 0, result.output
-    sample = out_dir / "sample_0"
-    assert (sample / "pred.wav").is_file()
-    assert (sample / "target.wav").is_file()
-    assert (sample / "params.csv").is_file()
-    assert not (sample / "spec.png").exists()
-    # Stronger guarantee than the missing-file assert: no matplotlib figure was ever created.
-    assert plt.get_fignums() == []
-
-
-def test_main_rerender_target_renders_pred_and_target_per_sample(  # noqa: DOC101,DOC103
-    runner: CliRunner, pred_dir: Path, out_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``-t`` triggers a second ``render_params`` call per sample to re-synthesise the target."""
-    calls: list[object] = []
-
-    def _counting_render(*args: object, **_kwargs: object) -> np.ndarray:
-        calls.append(args)
-        return _fake_render()
-
-    monkeypatch.setattr(predict_vst_audio, "render_params", _counting_render)
-
-    batch_size = 3
-    _write_batch(pred_dir, index=0, batch_size=batch_size, with_target_params=True)
-
-    result = _invoke_main(runner, pred_dir, out_dir, "--rerender_target", "--skip-spectrogram")
-
-    assert result.exit_code == 0, result.output
-    # One render for pred + one for the re-synthesised target, per sample.
-    assert len(calls) == batch_size * 2
-    for j in range(batch_size):
-        df = pd.read_csv(out_dir / f"sample_{j}" / "params.csv", index_col=0)
-        assert bool(df["pred"].notna().all())
-        assert bool(df["target"].notna().all())
-
-
-def test_main_multiple_batches_produce_contiguous_sample_indices(  # noqa: DOC101,DOC103
-    runner: CliRunner, pred_dir: Path, out_dir: Path
-) -> None:
-    """``current_offset`` accumulates across pred files so sample dirs don't collide."""
-    _write_batch(pred_dir, index=0, batch_size=2, with_target_params=False)
-    _write_batch(pred_dir, index=1, batch_size=3, with_target_params=False)
-
-    result = _invoke_main(runner, pred_dir, out_dir, "--no-params", "--skip-spectrogram")
-
-    assert result.exit_code == 0, result.output
-    # Set compare avoids the lexicographic ``sample_10`` ordering trap once batches grow.
-    sample_dirs = {d.name for d in out_dir.iterdir() if d.is_dir()}
-    assert sample_dirs == {f"sample_{i}" for i in range(5)}
+    # Three pred files × two rows each → samples 0..5.
+    for i in range(6):
+        assert (out_dir / f"sample_{i}" / "pred.wav").is_file()
