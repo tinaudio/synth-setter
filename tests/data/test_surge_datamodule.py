@@ -695,17 +695,23 @@ class TestShiftedBatchSampler:
     def test_offset_can_vary_across_epochs(self) -> None:
         """A fresh ``iter()`` redraws the offset — over many epochs we see >1 distinct value."""
         # Seed Python's random + numpy so the test is deterministic but still
-        # exercises the redraw. With 200 epochs the probability that all
-        # batch_size offsets collapse to one value is astronomically small.
-        random.seed(0)
-        np.random.seed(0)
-        batch_size = 4
-        sampler = ShiftedBatchSampler(batch_size=batch_size, num_batches=8)
-        offsets = set()
-        for _ in range(200):
-            start, _ = next(iter(sampler))
-            offsets.add(start % batch_size)
-        assert len(offsets) > 1
+        # exercises the redraw. Save/restore the global states so other tests
+        # in the same pytest-xdist worker don't see a leaked seed.
+        py_state = random.getstate()
+        np_state = np.random.get_state()
+        try:
+            random.seed(0)
+            np.random.seed(0)
+            batch_size = 4
+            sampler = ShiftedBatchSampler(batch_size=batch_size, num_batches=8)
+            offsets = set()
+            for _ in range(200):
+                start, _ = next(iter(sampler))
+                offsets.add(start % batch_size)
+            assert len(offsets) > 1
+        finally:
+            random.setstate(py_state)
+            np.random.set_state(np_state)
 
     def test_iter_visits_each_consecutive_pair_index_once(self) -> None:
         """The ``num_batches - 1`` consecutive-pair indices are each visited exactly once."""
