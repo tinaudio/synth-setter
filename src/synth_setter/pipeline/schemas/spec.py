@@ -342,7 +342,7 @@ class DatasetSpec(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _split_sizes_must_be_multiples_of_samples_per_shard(self) -> DatasetSpec:
+    def _split_sizes_must_be_multiples_of_batch_per_shard(self) -> DatasetSpec:
         """Each split's sample count must divide cleanly into shards.
 
         The renderer writes one shard at a time at ``samples_per_shard`` rows

@@ -736,7 +736,7 @@ class TestBuildGenerateArgs:
 
         assert args[2] == str(tmp_path / "shard-000000.h5")
 
-    def test_samples_per_shard_passed_as_option(self, spec: DatasetSpec) -> None:
+    def test_batch_per_shard_passed_as_option(self, spec: DatasetSpec) -> None:
         """samples_per_shard is emitted as ``--samples_per_shard <count>`` flag.
 
         The CLI no longer takes a positional ``num_samples`` — every renderer
