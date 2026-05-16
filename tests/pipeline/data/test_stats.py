@@ -526,6 +526,42 @@ def test_get_stats_wds_shard_without_mel_members_raises(
         stats_script.get_stats_wds(str(tmp_path))
 
 
+def test_get_stats_wds_shard_with_unextractable_mel_member_raises(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """A matched ``*.mel_spec.npy`` member that is not a regular file raises ``ValueError``.
+
+    ``tarfile.extractfile`` returns ``None`` for directories, symlinks,
+    devices, etc. Silently skipping such a member would let a shard with
+    *some* readable mel members defeat the per-shard ``shard_rows == 0``
+    guard and still write partial stats. The malformed-member error is
+    raised eagerly so any unextractable matched member aborts the run.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    rng = np.random.default_rng(8)
+    mel = rng.normal(size=(2, 2, 2)).astype(np.float32)
+    buf = io.BytesIO()
+    np.save(buf, mel)
+    payload = buf.getvalue()
+
+    shard_path = tmp_path / "shard-000000.tar"
+    with tarfile.open(shard_path, mode="w:") as tar:
+        info = tarfile.TarInfo(name="00000000.mel_spec.npy")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+        # Second matched member is a *directory* entry; ``extractfile`` returns
+        # None for it. A silent ``continue`` would let the readable member
+        # above contribute rows and let the function write partial stats.
+        dir_info = tarfile.TarInfo(name="00000002.mel_spec.npy")
+        dir_info.type = tarfile.DIRTYPE
+        tar.addfile(dir_info)
+
+    with pytest.raises(ValueError, match=r"00000002\.mel_spec\.npy.*not a regular file"):
+        stats_script.get_stats_wds(str(tmp_path))
+
+
 def test_cli_dispatches_directory_of_tar_shards_to_wds_path_with_default_flag(
     stats_script: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

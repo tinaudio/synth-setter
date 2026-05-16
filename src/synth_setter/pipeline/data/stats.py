@@ -244,6 +244,12 @@ def _iter_mel_batches(shard_path: Path) -> Iterator[np.ndarray]:
     :param shard_path: Filesystem path to one ``shard-*.tar``.
     :yields: One ``(rows, *inner)`` mel array per matched tar member.
     :ytype: np.ndarray
+    :raises ValueError: When a matched ``*.mel_spec.npy`` member is not a
+        regular file (``tarfile.extractfile`` returns ``None`` for
+        directories, symlinks, devices, etc.). Treated as a malformed
+        shard so the per-shard guard in :func:`get_stats_wds` cannot be
+        defeated by a mix of readable and unextractable matched members
+        on the same shard.
     """
     with tarfile.open(shard_path, mode="r:") as tar:
         for name in sorted(m.name for m in tar.getmembers()):
@@ -251,7 +257,11 @@ def _iter_mel_batches(shard_path: Path) -> Iterator[np.ndarray]:
                 continue
             extracted = tar.extractfile(name)
             if extracted is None:
-                continue
+                raise ValueError(
+                    f"shard {shard_path.name}: matched member {name!r} is "
+                    f"not a regular file (tarfile.extractfile returned None); "
+                    f"treat as malformed shard rather than silently skip"
+                )
             yield np.load(io.BytesIO(extracted.read()))
 
 
