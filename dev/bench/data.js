@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1778775896302,
+  "lastUpdate": 1778940580298,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -2850,6 +2850,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03346771001815796,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2ec972aafdd2829f8a59b369277a27ab6164a3e9",
+          "message": "chore: clean up docstrings, introduce pydoclint baseline + extend ruff D-family rules (#1044)\n\n* chore(ci): introduce pydoclint baseline + extend ruff D-family rules\n\nCloses the P6 silent-skip lane in the pydoclint hook and raises the\nmust-have-docstring bar — both items came out of the adversarial-probe\nreplay tracked on #938.\n\nP6 fix\n- Generate .pydoclint-baseline.txt with the 1,935 pre-existing violations\n  pinned by (file, function, rule code).\n- Shrink [tool.pydoclint].exclude back to infra-only (.git, .venv, build/,\n  dist/, node_modules/, .claude/, .worktrees/, notebooks/, tests/fixtures/).\n- Set baseline + auto-regenerate-baseline=false so the file changes only\n  on demand via a PR diff that reviewers can audit.\n\nOutcome: every formerly-excluded file is now linted. Existing violations\nare grandfathered; a new function with a broken docstring in any file\nfails the hook. Verified by smoke-testing a deliberately broken function\nadded to src/synth_setter/cli/eval.py (was silently skipped before; now\nfails DOC101/DOC103).\n\nD-family bar\n- Extend [tool.ruff.lint].select with D100 (missing module docstring),\n  D101 (missing class docstring), D205 (blank line between summary and\n  description), D401 (imperative-mood summary).\n- Add the missing module/class docstrings across 60 files. No\n  per-file-ignores added — the rules are *enforced*, not suppressed.\n- 2 D401 noqa entries in tools/docker_entrypoint.py on placeholder\n  command stubs.\n\nBaseline grew from initial generation (1,935 rows) to final state\n(2,042 rows) because the new D101 class docstrings activate pydoclint's\nallow-init-docstring path on __init__ methods, surfacing previously\nlatent arg-doc mismatches. Those mismatches are pre-existing; the\nchunked cleanup plan in #938 unwinds them via baseline-row deletions.\n\nVerification\n- pre-commit run --all-files: green.\n- ruff check src/ tests/ scripts/: 0 errors.\n- pytest -m \"not slow and not gpu and not mps and not requires_vst\":\n  693 passed, 5 skipped.\n- pydoclint smoke test: new broken function in formerly-excluded file\n  fails DOC101/DOC103 (exit 1).\n\nRefs #938\nPart of #27\n\n* chore(ci): rewrite D205-bisected docstrings as self-contained sentences\n\nThe mechanical D205 fix in this PR inserted blank lines mid-sentence in ~85\ndocstrings across src/ and tests/, producing ungrammatical \"summary\" fragments\n(e.g. `\"...into a.\" / \"PredictionRef.\"`) that pass the rule but are unreadable.\nRewrite each as a real single-sentence imperative summary, demoting elaboration\nto a proper body paragraph after a blank line.\n\nAlso addresses Copilot review feedback on this PR:\n\n- pyproject.toml: inline-document `auto-regenerate-baseline = false` posture\n  and the `tests/fixtures/` exclude-list rationale (comments #7, #8).\n- src/synth_setter/models/ksin_flow_matching_module.py: reword Pooladian URL\n  to avoid trailing-period URL-fragment ambiguity (comment #9).\n- src/synth_setter/models/components/residual_mlp.py: disambiguate\n  `ConditionalResidualMLP` summary from `VectorField` (comment #10).\n- src/synth_setter/models/components/{transformer,vae}.py,\n  src/synth_setter/utils/callbacks.py,\n  src/synth_setter/evaluation/compute_audio_metrics.py: fix bisected class /\n  module docstrings (comments #1, #4, #5, #6).\n- scripts/check_no_new_funcs_in_pydoclint_excluded.py: fix bisected module\n  docstring (caught by an AST scan, not flagged inline by Copilot).\n\nNo functional code changes. pytest -m \"not slow and not gpu and not mps and\nnot requires_vst\" passes 696/698 (2 environmental skips). Pre-commit suite\ngreen; pydoclint baseline still valid.\n\nRefs #938\n\n* chore(ci): fix residual D205 noun-phrase splits + URL-period sites\n\nFollow-up to 700af8a addressing the 6 WARNs in the /repo-review-full re-run\n(https://github.com/tinaudio/synth-setter/pull/1044#issuecomment-4467018159):\n\n- src/synth_setter/tools/surge_xt_interactive.py:_validate_predictions —\n  D205 noun-phrase split (\"the expected.\" / \"per-sample files…\"); rewritten\n  as a self-contained summary with a real body paragraph.\n- tests/tools/test_docker_entrypoint.py:1 (module),\n  tests/tools/test_docker_entrypoint.py:_detach_pytest_live_logging_handler,\n  tests/pipeline/test_ci/test_load_image_config.py:1 (module) — same\n  noun-phrase split anti-pattern (summary ended with article governing a\n  body noun); summaries rewritten as complete imperative sentences.\n- src/synth_setter/models/components/vae.py:CustomRealNVP /\n  EncoderBlock / DecoderBlock — URL trailing-period ambiguity (same defect\n  class Copilot flagged on ksin_flow_matching_module.py:243). URLs now\n  wrapped in inline reStructuredText link syntax so the trailing \".\" cannot\n  be parsed as part of the URL fragment.\n\nNo functional code changes. pytest fast suite: 696 passed, 2 env-skipped.\nPre-commit suite green; pydoclint baseline still byte-identical.\n\nRefs #938\n\n* chore(ci): fix two more D205 sentence-bisections caught by Copilot re-review\n\nAfter 84f4a4c addressed the 6 WARNs from the /repo-review-full re-run,\nCopilot's post-push re-review (https://github.com/tinaudio/synth-setter/pull/1044#pullrequestreview-4303703058)\nflagged two additional sentence-bisection sites that the AST heuristic missed:\n\n- tests/tools/test_surge_xt_interactive.py:1605 (test_p_q_against_real_plugin_records_one_patch)\n  — summary ended with \"records one\" + blank line + \"patch whose…\", splitting the\n  noun phrase \"one patch\". Rewritten as a self-contained imperative summary with\n  the elaboration demoted to a body paragraph.\n- tests/pipeline/test_entrypoints/test_skypilot_launch.py:713 (under --tail rc test)\n  — summary ended with \"ended in a non-\" + blank line + \"SUCCEEDED terminal\n  status…\", splitting the hyphenated compound \"non-SUCCEEDED\". Rewritten as a\n  self-contained imperative summary with the explanation moved to a body paragraph.\n\nThe remaining three comments in Copilot's re-review (`_validate_predictions`,\n`test_load_image_config.py` module, `test_docker_entrypoint.py` module +\nfixture) were already fixed in 84f4a4c — Copilot hadn't yet seen that push\nwhen it re-reviewed.\n\nNo functional code changes. pytest fast suite still green.\n\nRefs #938\n\n---------\n\nCo-authored-by: Managed via Tart <admin@Manageds-Virtual-Machine.local>",
+          "timestamp": "2026-05-16T09:56:23-04:00",
+          "tree_id": "cc40e661eb5910b6ca9881235cd2b190605a8729",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2ec972aafdd2829f8a59b369277a27ab6164a3e9"
+        },
+        "date": 1778940579519,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.330013751983643,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.138278543557972,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.0293860025703907,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.027072787284851074,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.3287408351898193,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 10.805669117500003,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.330013751983643,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.386917487327009,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.0293860025703907,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.027441203594207764,
             "unit": "1-cos"
           },
           {
