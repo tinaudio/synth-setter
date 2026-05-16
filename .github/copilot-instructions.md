@@ -31,14 +31,27 @@ assigned issue matches one of these workflows, follow the runbook step by
 step:
 
 - [`.github/agents/lint-cleanup.md`](agents/lint-cleanup.md) — clean up
-  pre-existing lint violations in one legacy file from the lint-exclusion
-  lists tracked in [#25](https://github.com/tinaudio/synth-setter/issues/25).
-  Those lists live in `.pre-commit-config.yaml`'s `exclude:` blocks **and** in
-  `pyproject.toml`'s `[tool.pydoclint].exclude` and
-  `[tool.ruff.lint.per-file-ignores]` — graduating a file means clearing it
-  from every list it appears in. **Trigger:** any issue that references #25
-  as its parent, or whose body says "apply `.github/agents/lint-cleanup.md`
-  to `<file>`".
+  pre-existing lint violations in one legacy file. Two cleanup lanes:
+
+  - **Pydoclint baseline drains** (tracked in
+    [#938](https://github.com/tinaudio/synth-setter/issues/938)): pick a
+    file with rows in `.pydoclint-baseline.txt`, fix the docstring
+    violations, regenerate the baseline with
+    `pydoclint --generate-baseline=1 src/ tests/ scripts/`, and commit
+    the docstring fixes plus the baseline-row deletions together. PR
+    body uses `Refs #938`. **Do not edit `[tool.pydoclint].exclude`** —
+    it is infra-only after
+    [#1044](https://github.com/tinaudio/synth-setter/pull/1044) and must
+    not be touched by this workflow.
+  - **Other exclusion lists** (tracked in
+    [#25](https://github.com/tinaudio/synth-setter/issues/25)): files in
+    `.pre-commit-config.yaml`'s `exclude:` blocks (pyright, interrogate,
+    shellcheck, codespell) and `pyproject.toml`'s
+    `[tool.ruff.lint.per-file-ignores]`. Graduate a file by clearing it
+    from every non-pydoclint list it appears in. PR body uses `Refs #25`.
+
+  **Trigger:** any issue that references #938 or #25 as its parent, or
+  whose body says "apply `.github/agents/lint-cleanup.md` to `<file>`".
 
 When in doubt, if an issue does not match a known runbook, follow the general
 contributor flow from `CLAUDE.md` — branch, commit, run `make test-fast`,
