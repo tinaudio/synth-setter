@@ -6,7 +6,7 @@ import torch
 from lightning import LightningModule
 
 from synth_setter.metrics import ChamferDistance, LinearAssignmentDistance, LogSpectralDistance
-from synth_setter.models.components.loss import ChamferLoss
+from synth_setter.models.components.loss import ChamferLoss, MSESortLoss
 
 
 class KSinFeedForwardModule(LightningModule):
