@@ -518,6 +518,23 @@ class TestSurgeXTDatasetH5Mode:
         mock_match.assert_called_once()
         positional = mock_match.call_args.args
         assert len(positional) == 4
+        # Positional contract: (noise, params, mel_spec, audio). Pin each slot's
+        # shape so a regression that swaps positions is caught — bare arity does
+        # not distinguish `(noise, params, audio, mel_spec)` from the correct order.
+        noise, params, mel_spec, audio = positional
+        assert isinstance(noise, torch.Tensor) and noise.shape == (2, _NUM_PARAMS)
+        assert isinstance(params, torch.Tensor) and params.shape == (2, _NUM_PARAMS)
+        assert isinstance(mel_spec, torch.Tensor) and mel_spec.shape == (
+            2,
+            _MEL_CHANNELS,
+            _MEL_N_MELS,
+            _MEL_N_FRAMES,
+        )
+        assert isinstance(audio, torch.Tensor) and audio.shape == (
+            2,
+            _AUDIO_CHANNELS,
+            _AUDIO_SAMPLES,
+        )
 
     def test_ot_with_disabled_modalities_passes_none_through(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
         """``_hungarian_match`` still receives ``None`` placeholders when modalities are off."""
@@ -787,6 +804,19 @@ class TestSurgeDataModule:
                 assert split.read_mel is False
                 assert split.read_m2l is True
 
+    def test_conditioning_m2l_also_routes_predict_split(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
+        """``predict_dataset`` follows the same conditioning routing as train/val/test."""
+        with _set_up_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            conditioning="m2l",
+            predict_file=str(dataset_root / "test.h5"),
+        ) as module:
+            assert module.predict_dataset is not None
+            assert module.predict_dataset.read_mel is False
+            assert module.predict_dataset.read_m2l is True
+
     def test_train_dataloader_uses_shifted_batch_sampler(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
         """``train_dataloader`` wires the ``ShiftedBatchSampler`` (not the global random one)."""
         with _set_up_module(
@@ -846,6 +876,23 @@ class TestSurgeDataModule:
             loader = module.predict_dataloader()
             assert isinstance(loader, torch.utils.data.DataLoader)
             assert isinstance(loader.sampler, torch.utils.data.SequentialSampler)
+
+    def test_predict_dataloader_propagates_num_workers_and_pin_memory(  # noqa: DOC101,DOC103
+        self, dataset_root: Path
+    ) -> None:
+        """``num_workers`` / ``pin_memory`` reach the predict loader too (separate construction
+        path)."""
+        with _set_up_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            num_workers=2,
+            pin_memory=True,
+            predict_file=str(dataset_root / "test.h5"),
+        ) as module:
+            loader = module.predict_dataloader()
+            assert loader.num_workers == 2
+            assert loader.pin_memory is True
 
     def test_teardown_closes_open_h5_handles(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
         """``teardown`` closes the three split files so the next setup can reopen them."""
