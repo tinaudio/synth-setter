@@ -94,8 +94,8 @@ def _valid_spec_payload() -> dict[str, Any]:
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
-            "sample_batch_size": 32,
-            "batch_per_shard": 10000,
+            "samples_per_render_batch": 32,
+            "samples_per_shard": 10000,
         },
     }
 
@@ -283,7 +283,7 @@ class TestGenerateDataset:
         parsed = captured[0]
         assert parsed.run_id == payload["run_id"]
         assert parsed.r2_bucket == payload["r2_bucket"]
-        assert parsed.render.batch_per_shard == payload["render"]["batch_per_shard"]
+        assert parsed.render.samples_per_shard == payload["render"]["samples_per_shard"]
         assert parsed.shards[0].filename == "shard-000000.h5"
 
     def test_happy_path_calls_os_exit_zero_after_run(

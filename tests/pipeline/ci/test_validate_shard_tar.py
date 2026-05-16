@@ -6,7 +6,7 @@ grew when the tar/wds branch landed alongside the existing HDF5 path:
 - ``.h5`` shards continue to run the HDF5 checks (regression guard).
 - ``.tar`` shards run the new tar/wds branch — ``metadata.json`` presence
   and strict parsing, every ``<batch_key>.<field>.npy`` member loadable as
-  numpy, the summed row count per field equal to ``batch_per_shard``, and
+  numpy, the summed row count per field equal to ``samples_per_shard``, and
   each batch's inner shape (``arr.shape[1:]``) equal to the writer's
   source-of-truth shape helpers in ``synth_setter.data.vst.shapes``.
 - Any other suffix surfaces a clear error naming the supported set.
@@ -84,8 +84,8 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
-            "sample_batch_size": 32,
-            "batch_per_shard": 10,
+            "samples_per_render_batch": 32,
+            "samples_per_shard": 10,
         },  # type: ignore[arg-type]
     )
 
@@ -124,7 +124,7 @@ def _valid_batch_arrays(
     """Return canonical-shape per-field arrays the writer would emit for one batch.
 
     :param n_rows: Number of rows for this batch (sum across batches must equal
-        ``spec.render.batch_per_shard``).
+        ``spec.render.samples_per_shard``).
     :returns: Mapping from field name to a zero-filled ``float32`` array at the writer's
         canonical inner shape.
     :rtype: dict[str, np.ndarray]
@@ -163,7 +163,7 @@ def _make_valid_h5_shard(path: Path, n_rows: int) -> None:
     """Write an HDF5 shard at ``path`` whose datasets match the writer's canonical shapes.
 
     :param path: Filesystem path where the HDF5 shard will be written.
-    :param n_rows: Row count for every dataset; matched against ``batch_per_shard``.
+    :param n_rows: Row count for every dataset; matched against ``samples_per_shard``.
     :returns: ``None``.
     :rtype: None
     """
@@ -191,7 +191,7 @@ class TestSuffixDispatch:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.h5"
-        _make_valid_h5_shard(shard_path, real_spec.render.batch_per_shard)
+        _make_valid_h5_shard(shard_path, real_spec.render.samples_per_shard)
 
         assert validate_shard(shard_path, real_spec) == []
 
@@ -206,7 +206,7 @@ class TestSuffixDispatch:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        _make_valid_tar_bytes(shard_path, [(0, real_spec.render.batch_per_shard)])
+        _make_valid_tar_bytes(shard_path, [(0, real_spec.render.samples_per_shard)])
 
         assert validate_shard(shard_path, real_spec) == []
 
@@ -246,7 +246,7 @@ class TestTarShardValidation:
         """
         shard_path = tmp_path / "shard-000000.tar"
         members: dict[str, bytes] = {}
-        for field, arr in _valid_batch_arrays(real_spec.render.batch_per_shard).items():
+        for field, arr in _valid_batch_arrays(real_spec.render.samples_per_shard).items():
             members[f"00000000.{field}.npy"] = _npy_bytes(arr)
         _make_tar_with(shard_path, members)
 
@@ -266,7 +266,7 @@ class TestTarShardValidation:
         """
         shard_path = tmp_path / "shard-000000.tar"
         members: dict[str, bytes] = {}
-        for field, arr in _valid_batch_arrays(real_spec.render.batch_per_shard).items():
+        for field, arr in _valid_batch_arrays(real_spec.render.samples_per_shard).items():
             members[f"00000000.{field}.npy"] = _npy_bytes(arr)
         bad_metadata = {**_VALID_METADATA, "unexpected_key": "boom"}
         members["metadata.json"] = json.dumps(bad_metadata).encode("utf-8")
@@ -288,7 +288,7 @@ class TestTarShardValidation:
         """
         shard_path = tmp_path / "shard-000000.tar"
         members: dict[str, bytes] = {}
-        for field, arr in _valid_batch_arrays(real_spec.render.batch_per_shard).items():
+        for field, arr in _valid_batch_arrays(real_spec.render.samples_per_shard).items():
             if field == "param_array":
                 continue
             members[f"00000000.{field}.npy"] = _npy_bytes(arr)
@@ -302,7 +302,7 @@ class TestTarShardValidation:
     def test_validate_shard_tar_rejects_wrong_row_count(
         self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
-        """A tar whose summed rows-per-field is not ``batch_per_shard`` surfaces an error.
+        """A tar whose summed rows-per-field is not ``samples_per_shard`` surfaces an error.
 
         :param real_spec: Spec whose render config matches the canonical valid shapes.
         :param tmp_path: pytest-provided temp directory for the shard file.
@@ -310,13 +310,15 @@ class TestTarShardValidation:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        wrong_n = real_spec.render.batch_per_shard - 1
+        wrong_n = real_spec.render.samples_per_shard - 1
         _make_valid_tar_bytes(shard_path, [(0, wrong_n)])
 
         errors = validate_shard(shard_path, real_spec)
 
         assert any(
-            "audio" in err and str(real_spec.render.batch_per_shard) in err and str(wrong_n) in err
+            "audio" in err
+            and str(real_spec.render.samples_per_shard) in err
+            and str(wrong_n) in err
             for err in errors
         )
 
@@ -331,7 +333,7 @@ class TestTarShardValidation:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        n_rows = real_spec.render.batch_per_shard
+        n_rows = real_spec.render.samples_per_shard
         wrong_time = _VALID_AUDIO_SAMPLES_PER_ROW + 1
         members: dict[str, bytes] = {
             "00000000.audio.npy": _npy_bytes(
@@ -356,7 +358,7 @@ class TestTarShardValidation:
     def test_validate_shard_tar_accepts_multi_batch_layout(
         self, real_spec: DatasetSpec, tmp_path: Path
     ) -> None:
-        """Multiple per-batch ``.npy`` groups that sum to ``batch_per_shard`` pass.
+        """Multiple per-batch ``.npy`` groups that sum to ``samples_per_shard`` pass.
 
         :param real_spec: Spec whose render config matches the canonical valid shapes.
         :param tmp_path: pytest-provided temp directory for the shard file.
@@ -364,7 +366,7 @@ class TestTarShardValidation:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        total = real_spec.render.batch_per_shard
+        total = real_spec.render.samples_per_shard
         first = total // 2
         second = total - first
         _make_valid_tar_bytes(shard_path, [(0, first), (first, second)])
@@ -387,7 +389,7 @@ class TestTarShardValidation:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        n_rows = real_spec.render.batch_per_shard
+        n_rows = real_spec.render.samples_per_shard
         arrays = _valid_batch_arrays(n_rows)
         members: dict[str, bytes] = {
             "audio.npy": _npy_bytes(arrays["audio"]),
@@ -418,7 +420,7 @@ class TestTarShardValidation:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        total = real_spec.render.batch_per_shard
+        total = real_spec.render.samples_per_shard
         batch_a_audio = 3
         batch_a_other = total - batch_a_audio
         batch_b_audio = total - batch_a_audio
@@ -454,7 +456,7 @@ class TestTarShardValidation:
         The writer emits one ``.npy`` per ``DATASET_FIELD_NAMES`` for every
         batch key. A shard with two batch keys where one batch is missing
         ``param_array`` (yet the field's overall total still hits
-        ``batch_per_shard`` via the other batch) must still be flagged.
+        ``samples_per_shard`` via the other batch) must still be flagged.
 
         :param real_spec: Spec whose render config matches the canonical valid shapes.
         :param tmp_path: pytest-provided temp directory for the shard file.
@@ -462,7 +464,7 @@ class TestTarShardValidation:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        total = real_spec.render.batch_per_shard
+        total = real_spec.render.samples_per_shard
         first = total // 2
         second = total - first
         members: dict[str, bytes] = {
@@ -500,7 +502,7 @@ class TestTarShardValidation:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        n_rows = real_spec.render.batch_per_shard
+        n_rows = real_spec.render.samples_per_shard
         arrays = _valid_batch_arrays(n_rows)
         npz_buf = io.BytesIO()
         np.savez(npz_buf, audio=arrays["audio"])
@@ -532,7 +534,7 @@ class TestTarShardValidation:
         :rtype: None
         """
         shard_path = tmp_path / "shard-000000.tar"
-        n_rows = real_spec.render.batch_per_shard
+        n_rows = real_spec.render.samples_per_shard
         arrays = _valid_batch_arrays(n_rows)
         members: dict[str, bytes] = {
             "00000000.audio.npy": _npy_bytes(np.array(0.0, dtype=np.float32)),

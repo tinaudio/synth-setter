@@ -1,7 +1,7 @@
 # @package _global_
 
 # WDS-format sibling of ci-materialize-test. Mirrors that experiment's render
-# volume (96 samples → 3 shards at batch_per_shard=32) but writes `.tar`
+# volume (96 samples → 3 shards at samples_per_shard=32) but writes `.tar`
 # instead of `.h5`, so test-dataset-generation.yml's matrix can exercise both
 # formats with the same payload shape.
 
@@ -19,8 +19,4 @@ train_val_test_sizes: [32, 32, 32]
 render:
   sample_rate: 16000
   min_loudness: -50.0
-  # `sample_batch_size` equals `batch_per_shard` here so each shard renders in
-  # one sample batch — matches `smoke-shard.yaml`'s explicit style and pins the
-  # batching shape against the `surge_xt` render-group default of 32.
-  sample_batch_size: 32
-  batch_per_shard: 32
+  samples_per_shard: 32

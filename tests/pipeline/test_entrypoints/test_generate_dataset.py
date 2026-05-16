@@ -88,8 +88,8 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
-            "sample_batch_size": 32,
-            "batch_per_shard": 10000,
+            "samples_per_render_batch": 32,
+            "samples_per_shard": 10000,
         },
     }
     kwargs.update(overrides)
@@ -197,7 +197,7 @@ class TestRun:
         args = mock_check_call.call_args[0][0]
         # args = [VST_HEADLESS_WRAPPER (linux only), python, generate_vst_dataset.py, ...]
         assert any("generate_vst_dataset.py" in a for a in args)
-        assert str(spec.render.batch_per_shard) in args
+        assert str(spec.render.samples_per_shard) in args
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -736,8 +736,8 @@ class TestBuildGenerateArgs:
 
         assert args[2] == str(tmp_path / "shard-000000.h5")
 
-    def test_batch_per_shard_passed_as_option(self, spec: DatasetSpec) -> None:
-        """batch_per_shard is emitted as ``--batch_per_shard <count>`` flag.
+    def test_samples_per_shard_passed_as_option(self, spec: DatasetSpec) -> None:
+        """samples_per_shard is emitted as ``--samples_per_shard <count>`` flag.
 
         The CLI no longer takes a positional ``num_samples`` — every renderer
         config field is exposed as a flag, including the per-shard sample count.
@@ -746,8 +746,8 @@ class TestBuildGenerateArgs:
 
         args = build_generate_args(spec, shard, Path("out"))
 
-        flag_idx = args.index("--batch_per_shard")
-        assert args[flag_idx + 1] == str(spec.render.batch_per_shard)
+        flag_idx = args.index("--samples_per_shard")
+        assert args[flag_idx + 1] == str(spec.render.samples_per_shard)
 
     def test_all_render_config_fields_passed_as_options(self, spec: DatasetSpec) -> None:
         """The flag set equals ``RenderConfig.model_fields`` — auto-derived parity guard."""

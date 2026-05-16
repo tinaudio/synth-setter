@@ -122,7 +122,7 @@ channels: 2
 velocity: 100
 signal_duration_seconds: 4.0
 min_loudness: -50.0
-sample_batch_size: 32
+samples_per_render_batch: 32
 ```
 
 **Run ID derivation:** `dataset_wandb_run_id = {dataset_config_id}-{YYYYMMDDTHHMMSSsssZ}` (e.g., `surge-simple-480k-10k-20260313T100000500Z`). Maps to `run_id` in pipeline code. The `sss` suffix is a zero-padded 3-digit millisecond field.
@@ -263,7 +263,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `param_spec`, `renderer_version`, `output_format` (`"hdf5"` or `"wds"`), `sample_rate`,
   `shard_size`, `base_seed`, `num_params`, `splits`, `plugin_path`, `preset_path`,
   `channels`, `velocity`, `signal_duration_seconds`, `min_loudness`,
-  `sample_batch_size`, `shards` (tuple of `ShardSpec`).
+  `samples_per_render_batch`, `shards` (tuple of `ShardSpec`).
   **Note:** `num_shards` is a derived property (not a stored field).
   `dataset_config_id` is not stored on the spec; it is encoded in `run_id`.
   ID conventions follow [storage-provenance-spec.md §1](storage-provenance-spec.md#1-ids).

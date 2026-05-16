@@ -26,8 +26,8 @@ def _make_dataset_spec_kwargs(plugin_path: str = "plugins/Surge XT.vst3") -> dic
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
-            "sample_batch_size": 32,
-            "batch_per_shard": 10000,
+            "samples_per_render_batch": 32,
+            "samples_per_shard": 10000,
         },
     }
 

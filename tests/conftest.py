@@ -413,8 +413,8 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         f"--velocity={_SURGE_FIXTURE_VELOCITY}",
         f"--signal_duration_seconds={_SURGE_FIXTURE_DURATION_SECONDS}",
         f"--min_loudness={_SURGE_FIXTURE_MIN_LOUDNESS}",
-        f"--sample_batch_size={NUM_FIXTURE_SAMPLES}",
-        f"--batch_per_shard={NUM_FIXTURE_SAMPLES}",
+        f"--samples_per_render_batch={NUM_FIXTURE_SAMPLES}",
+        f"--samples_per_shard={NUM_FIXTURE_SAMPLES}",
     ]
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is

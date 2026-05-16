@@ -13,7 +13,7 @@ to either the HDF5 path (``.h5``) or the wds tar path (``.tar``):
   ``ShardMetadata``; every ``<batch_start_idx:08d>.<field>.npy`` member loads
   as a numpy array whose trailing dims (``arr.shape[1:]``) match the same
   shape helpers; and the summed row count per field equals
-  ``spec.render.batch_per_shard``.
+  ``spec.render.samples_per_shard``.
 
 CLI usage:
     python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
@@ -66,7 +66,7 @@ def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
     :rtype: dict[str, tuple[int, ...]]
     """
     render = spec.render
-    num_samples = render.batch_per_shard
+    num_samples = render.samples_per_shard
     return {
         AUDIO_FIELD: audio_dataset_shape(
             num_samples, render.channels, render.sample_rate, render.signal_duration_seconds
@@ -176,7 +176,7 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
     6. Each per-batch array's trailing dims (``arr.shape[1:]``) match the
        corresponding writer shape (dropping the N dim).
     7. The summed row count per field across all batches equals
-       ``spec.render.batch_per_shard``.
+       ``spec.render.samples_per_shard``.
 
     :param shard_path: Local filesystem path to the tar shard.
     :param spec: Dataset spec the shard is expected to conform to.
@@ -225,7 +225,7 @@ def _validate_tar_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
                 )
 
         errors.extend(_check_per_batch_invariants(rows_by_batch))
-        errors.extend(_check_row_totals(rows_by_batch, spec.render.batch_per_shard))
+        errors.extend(_check_row_totals(rows_by_batch, spec.render.samples_per_shard))
 
     return errors
 
@@ -265,12 +265,14 @@ def _check_per_batch_invariants(rows_by_batch: dict[str, dict[str, int]]) -> lis
     return errors
 
 
-def _check_row_totals(rows_by_batch: dict[str, dict[str, int]], batch_per_shard: int) -> list[str]:
-    """Check each field's summed row count across all batches equals ``batch_per_shard``.
+def _check_row_totals(
+    rows_by_batch: dict[str, dict[str, int]], samples_per_shard: int
+) -> list[str]:
+    """Check each field's summed row count across all batches equals ``samples_per_shard``.
 
     :param rows_by_batch: Mapping ``batch_key -> {field: rows}`` populated while
         iterating tar members.
-    :param batch_per_shard: The writer's per-shard row total each field must sum to.
+    :param samples_per_shard: The writer's per-shard row total each field must sum to.
     :returns: List of error strings (empty = every field's row total matches).
     :rtype: list[str]
     """
@@ -283,10 +285,10 @@ def _check_row_totals(rows_by_batch: dict[str, dict[str, int]], batch_per_shard:
             errors.append(f"missing tar member: '*.{field}.npy'")
             continue
         total = sum(batches_with_field)
-        if total != batch_per_shard:
+        if total != samples_per_shard:
             errors.append(
                 f"field {field!r} summed {total} rows across "
-                f"{len(batches_with_field)} batch(es), expected {batch_per_shard}"
+                f"{len(batches_with_field)} batch(es), expected {samples_per_shard}"
             )
     return errors
 

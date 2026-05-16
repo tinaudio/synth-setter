@@ -73,7 +73,7 @@ def validate_test_values(spec: dict[str, Any]) -> list[str]:
 
     Returns a list of error strings (empty means valid).
     Checks: 3 shards, seeds [42,43,44], filenames zero-padded,
-    config passthrough (param_spec_name, sample_rate, batch_per_shard, base_seed, velocity).
+    config passthrough (param_spec_name, sample_rate, samples_per_shard, base_seed, velocity).
     """
     errors: list[str] = []
 
@@ -105,7 +105,7 @@ def validate_test_values(spec: dict[str, Any]) -> list[str]:
     render_passthrough = {
         "param_spec_name": "surge_simple",
         "sample_rate": 16000,
-        "batch_per_shard": 32,
+        "samples_per_shard": 32,
         "velocity": 100,
     }
     for field, expected in top_passthrough.items():

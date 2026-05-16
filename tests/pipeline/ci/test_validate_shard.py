@@ -70,8 +70,8 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
-            "sample_batch_size": 32,
-            "batch_per_shard": 10,
+            "samples_per_render_batch": 32,
+            "samples_per_shard": 10,
         },  # type: ignore[arg-type]
     )
 
@@ -87,7 +87,7 @@ class TestValidateShard:
     def test_valid_shard_returns_no_errors(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Correct HDF5 with all expected datasets and correct row counts returns []."""
         shard_path = tmp_path / "shard-000000.h5"
-        _create_shard(shard_path, shard_size=real_spec.render.batch_per_shard)
+        _create_shard(shard_path, shard_size=real_spec.render.samples_per_shard)
 
         errors = validate_shard(shard_path, real_spec)
 
@@ -98,10 +98,10 @@ class TestValidateShard:
         shard_path = tmp_path / "shard-000000.h5"
         _create_shard(
             shard_path,
-            shard_size=real_spec.render.batch_per_shard,
+            shard_size=real_spec.render.samples_per_shard,
             datasets={
-                "audio": (real_spec.render.batch_per_shard, 2, 64000),
-                "mel_spec": (real_spec.render.batch_per_shard, 2, 128, 401),
+                "audio": (real_spec.render.samples_per_shard, 2, 64000),
+                "mel_spec": (real_spec.render.samples_per_shard, 2, 128, 401),
                 # param_array intentionally omitted
             },
         )
@@ -114,14 +114,14 @@ class TestValidateShard:
     def test_wrong_row_count_returns_error(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Dataset with wrong shape[0] returns an error mentioning that dataset."""
         shard_path = tmp_path / "shard-000000.h5"
-        wrong_size = real_spec.render.batch_per_shard + 5
+        wrong_size = real_spec.render.samples_per_shard + 5
         _create_shard(
             shard_path,
             shard_size=wrong_size,
             datasets={
                 "audio": (wrong_size, 2, 64000),
-                "mel_spec": (real_spec.render.batch_per_shard, 2, 128, 401),
-                "param_array": (real_spec.render.batch_per_shard, 92),
+                "mel_spec": (real_spec.render.samples_per_shard, 2, 128, 401),
+                "param_array": (real_spec.render.samples_per_shard, 92),
             },
         )
 
@@ -152,7 +152,7 @@ class TestValidateShard:
     def test_extra_datasets_ignored(self, real_spec: DatasetSpec, tmp_path: Path) -> None:
         """Extra datasets in HDF5 beyond the required three do not cause errors."""
         shard_path = tmp_path / "shard-000000.h5"
-        shard_size = real_spec.render.batch_per_shard
+        shard_size = real_spec.render.samples_per_shard
         _create_shard(
             shard_path,
             shard_size=shard_size,
@@ -183,7 +183,7 @@ class TestValidateAllShardsFromR2:
 
         def fake_check_call(args: list[str]) -> None:
             # Simulate rclone copyto: write a valid shard to dest path
-            _create_shard(Path(args[-1]), shard_size=spec.render.batch_per_shard)
+            _create_shard(Path(args[-1]), shard_size=spec.render.samples_per_shard)
 
         with patch(
             "synth_setter.pipeline.r2_io.subprocess.check_call", side_effect=fake_check_call
@@ -242,7 +242,7 @@ class TestMain:
         spec_json_path.write_text(spec.model_dump_json())
 
         def fake_check_call(args: list[str]) -> None:
-            _create_shard(Path(args[-1]), shard_size=spec.render.batch_per_shard)
+            _create_shard(Path(args[-1]), shard_size=spec.render.samples_per_shard)
 
         monkeypatch.setattr(sys, "argv", ["validate_shard", str(spec_json_path)])
         with patch(

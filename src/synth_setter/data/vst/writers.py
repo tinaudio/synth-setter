@@ -231,11 +231,11 @@ def _render_in_batches(
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
     flush_batch: Callable[[list[VSTDataSample], int], None],
 ) -> None:
-    """Render samples from ``start_idx`` to ``render_cfg.batch_per_shard`` in fixed-size batches.
+    """Render samples from ``start_idx`` to ``render_cfg.samples_per_shard`` in fixed-size batches.
 
     The h5 and wds writers share this loop verbatim: only the per-batch flush
     differs (HDF5 dataset slice assignment vs. tar member write). The flush
-    callback is invoked once per full ``sample_batch_size`` batch plus once
+    callback is invoked once per full ``samples_per_render_batch`` batch plus once
     for the trailing remainder, with the batch and its starting row index.
 
     :param render_cfg: Per-shard renderer config from the dataset spec.
@@ -245,7 +245,7 @@ def _render_in_batches(
     :param fixed_note_params_list: Optional pre-set note params, indexed in write order.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
     """
-    num_samples = render_cfg.batch_per_shard
+    num_samples = render_cfg.samples_per_shard
     sample_batch: list[VSTDataSample] = []
     sample_batch_start = start_idx
     for i in trange(start_idx, num_samples):
@@ -266,10 +266,10 @@ def _render_in_batches(
                 fixed_note_params_list=fixed_note_params_list,
             )
         )
-        if len(sample_batch) == render_cfg.sample_batch_size:
+        if len(sample_batch) == render_cfg.samples_per_render_batch:
             flush_batch(sample_batch, sample_batch_start)
             sample_batch = []
-            sample_batch_start += render_cfg.sample_batch_size
+            sample_batch_start += render_cfg.samples_per_render_batch
 
     if sample_batch:
         flush_batch(sample_batch, sample_batch_start)
@@ -302,7 +302,7 @@ def make_hdf5_dataset(
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
 ) -> None:
-    """Render ``render_cfg.batch_per_shard`` samples to an HDF5 file at ``hdf5_file``.
+    """Render ``render_cfg.samples_per_shard`` samples to an HDF5 file at ``hdf5_file``.
 
     Resumable: a partially-written file picks up at the first all-zero row, so
     a crashed worker can re-run with the same args and only the missing tail is
@@ -317,7 +317,7 @@ def make_hdf5_dataset(
         files can resume.
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param fixed_synth_params_list: Optional pre-set synth params for the rows
-        this run will render. Must have length ``batch_per_shard - start_idx``;
+        this run will render. Must have length ``samples_per_shard - start_idx``;
         on a fresh run that's the full shard, on a resumed run that's only the
         tail still to render (``list[0]`` lands at row ``start_idx``). Caller
         is responsible for slicing a full-length list before passing it in.
@@ -330,7 +330,7 @@ def make_hdf5_dataset(
         audio_dataset, mel_dataset, param_dataset, start_idx = (
             create_datasets_and_get_start_idx(
                 hdf5_file=h5,
-                num_samples=render_cfg.batch_per_shard,
+                num_samples=render_cfg.samples_per_shard,
                 channels=render_cfg.channels,
                 sample_rate=render_cfg.sample_rate,
                 signal_duration_seconds=render_cfg.signal_duration_seconds,
@@ -339,7 +339,7 @@ def make_hdf5_dataset(
         )
 
         _validate_fixed_params_lengths(
-            num_samples=render_cfg.batch_per_shard,
+            num_samples=render_cfg.samples_per_shard,
             start_idx=start_idx,
             fixed_synth_params_list=fixed_synth_params_list,
             fixed_note_params_list=fixed_note_params_list,
@@ -368,7 +368,7 @@ def make_wds_dataset(
     fixed_synth_params_list: list[dict[str, float]] | None = None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None = None,
 ) -> None:
-    """Render ``render_cfg.batch_per_shard`` samples to a webdataset tar at ``wds_file``.
+    """Render ``render_cfg.samples_per_shard`` samples to a webdataset tar at ``wds_file``.
 
     Not resumable: ``start_idx`` is pinned to 0 and the file is opened by
     ``wds.TarWriter`` in write mode, so re-running overwrites. Audio is cast to
@@ -380,7 +380,7 @@ def make_wds_dataset(
     :param wds_file: Destination tar path passed to ``webdataset.TarWriter``.
     :param render_cfg: Per-shard renderer config from the dataset spec.
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
-        row this run will render. Must have length ``batch_per_shard``: the
+        row this run will render. Must have length ``samples_per_shard``: the
         wds path is non-resumable (``start_idx = 0``), so the tail is the
         whole shard. ``list[0]`` lands at row 0.
     :param fixed_note_params_list: Optional pre-set note params; same contract
@@ -390,7 +390,7 @@ def make_wds_dataset(
     meta = _shard_metadata_from_render(render_cfg)
     start_idx = 0
     _validate_fixed_params_lengths(
-        num_samples=render_cfg.batch_per_shard,
+        num_samples=render_cfg.samples_per_shard,
         start_idx=start_idx,
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,

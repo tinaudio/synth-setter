@@ -55,7 +55,7 @@ from tests.data.vst.test_generate_vst_dataset import (
 )
 
 
-def _render_cfg(num_samples: int, sample_batch_size: int | None = None) -> RenderConfig:  # noqa: DOC101,DOC103,DOC201,DOC203
+def _render_cfg(num_samples: int, samples_per_render_batch: int | None = None) -> RenderConfig:  # noqa: DOC101,DOC103,DOC201,DOC203
     """Build a ``RenderConfig`` with this module's test defaults."""
     return RenderConfig(
         plugin_path=_PLUGIN_PATH,
@@ -67,8 +67,8 @@ def _render_cfg(num_samples: int, sample_batch_size: int | None = None) -> Rende
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
         min_loudness=_MIN_LOUDNESS,
-        sample_batch_size=sample_batch_size if sample_batch_size is not None else num_samples,
-        batch_per_shard=num_samples,
+        samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
+        samples_per_shard=num_samples,
     )
 
 
@@ -102,7 +102,7 @@ def test_make_wds_dataset_writes_per_batch_npy_members(tmp_path: Path) -> None: 
 
     make_wds_dataset(
         wds_file=out,
-        render_cfg=_render_cfg(num_samples, sample_batch_size=2),
+        render_cfg=_render_cfg(num_samples, samples_per_render_batch=2),
         fixed_synth_params_list=fixed_synth,
         fixed_note_params_list=fixed_note,
     )

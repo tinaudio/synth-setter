@@ -31,8 +31,8 @@ def _valid_render_kwargs(plugin_path: str = "/fake/Plugin.vst3") -> dict[str, An
         "velocity": 100,
         "signal_duration_seconds": 4.0,
         "min_loudness": -55.0,
-        "sample_batch_size": 32,
-        "batch_per_shard": 100,
+        "samples_per_render_batch": 32,
+        "samples_per_shard": 100,
     }
 
 
@@ -100,8 +100,8 @@ class TestRenderConfig:
             ("channels", 0, "channels must be >= 1"),
             ("velocity", 200, r"velocity must be in \[0, 127\]"),
             ("signal_duration_seconds", 0.0, "signal_duration_seconds must be positive"),
-            ("sample_batch_size", 0, "sample_batch_size must be positive"),
-            ("batch_per_shard", 0, "batch_per_shard must be positive"),
+            ("samples_per_render_batch", 0, "samples_per_render_batch must be positive"),
+            ("samples_per_shard", 0, "samples_per_shard must be positive"),
             ("param_spec_name", "   ", "param_spec_name must not be blank"),
             ("renderer_version", "", "renderer_version must not be blank"),
         ],
@@ -204,10 +204,10 @@ class TestDatasetSpecValidators:
         with pytest.raises(ValidationError, match="r2_prefix must end with"):
             DatasetSpec(**_valid_spec_kwargs(r2_prefix="data/no/slash"))
 
-    def test_split_size_not_multiple_of_batch_per_shard_raises(
+    def test_split_size_not_multiple_of_samples_per_shard_raises(
         self, patch_runtime_io: None
     ) -> None:
-        """A split size that doesn't divide evenly into ``batch_per_shard`` raises."""
+        """A split size that doesn't divide evenly into ``samples_per_shard`` raises."""
         with pytest.raises(ValidationError, match="not a multiple"):
             DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[150, 0, 0]))
 
@@ -344,7 +344,7 @@ class TestDatasetSpecComputedFields:
     """Tests for the ``shards`` / ``num_shards`` / ``num_params`` computed fields."""
 
     def test_shards_count_matches_total_size_div_batch(self, patch_runtime_io: None) -> None:
-        """num_shards = sum(train_val_test_sizes) / batch_per_shard."""
+        """num_shards = sum(train_val_test_sizes) / samples_per_shard."""
         spec = DatasetSpec(**_valid_spec_kwargs(train_val_test_sizes=[400, 100, 100]))
         assert spec.num_shards == 6
         assert len(spec.shards) == 6
@@ -567,7 +567,7 @@ class TestSpecConstructionStaysPedalboardFree:
             "        'param_spec_name': 'surge_simple', 'renderer_version': 'v1',\n"
             "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
-            "        'sample_batch_size': 1, 'batch_per_shard': 1,\n"
+            "        'samples_per_render_batch': 1, 'samples_per_shard': 1,\n"
             "    },\n"
             ")\n"
             "_ = spec.num_params\n"
