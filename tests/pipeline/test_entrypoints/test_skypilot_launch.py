@@ -712,10 +712,10 @@ class TestMainCli:
         local_spec_dir: Path,
         mock_sky: MagicMock,
     ) -> None:
-        """Under `--tail`, a non-zero `jobs.tail_logs` rc means the worker job ended in a non-
+        """Surface a non-zero ``jobs.tail_logs`` rc under ``--tail`` as a launcher exit and cancel.
 
-        SUCCEEDED terminal status; the launcher surfaces that as a non-zero exit and still cancels
-        the managed job.
+        A non-zero rc from ``jobs.tail_logs`` means the worker job ended in a non-SUCCEEDED terminal
+        status; the launcher surfaces that as a non-zero exit and still cancels the managed job.
         """
         mock_sky.jobs.tail_logs.return_value = 100
 

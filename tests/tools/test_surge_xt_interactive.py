@@ -1605,9 +1605,11 @@ class TestKeyboardLoopE2E:
     def test_p_q_against_real_plugin_records_one_patch(
         self, surge_xt_interactive, simple_spec: ParamSpec
     ) -> None:
-        """``["p", "q"]`` against the real Surge XT + ``surge-simple.vstpreset`` records one
+        """Record a patch whose synth-param values match the post-preset-load Surge XT state.
 
-        patch whose synth-param values are finite floats matching the post-preset-load state.
+        Drives the real Surge XT VST + ``surge-simple.vstpreset`` with ``["p", "q"]`` and asserts
+        the recorded patch's synth-param values are finite floats matching the post-preset-load
+        defaults.
         """
         from synth_setter.data.vst.core import load_plugin, load_preset
 
