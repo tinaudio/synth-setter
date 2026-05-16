@@ -41,13 +41,13 @@ _RELATIVE_TOLERANCE = 1e-9
 
 def _render_cfg(
     num_samples: int,
-    sample_batch_size: int | None = None,
+    samples_per_render_batch: int | None = None,
     min_loudness: float = _MIN_LOUDNESS,
 ) -> RenderConfig:
     """Build a RenderConfig with this module's test defaults.
 
-    ``batch_per_shard`` is set to ``num_samples`` (one shard = one batch in tests);
-    ``sample_batch_size`` defaults to the same so each test renders in a single batch.
+    ``samples_per_shard`` is set to ``num_samples`` (one shard = one batch in tests);
+    ``samples_per_render_batch`` defaults to the same so each test renders in a single batch.
     ``min_loudness`` defaults to ``_MIN_LOUDNESS`` and can be lowered (e.g. to
     ``-inf``) to disable the loudness gate during replay runs — see #489.
     """
@@ -61,8 +61,8 @@ def _render_cfg(
         velocity=_VELOCITY,
         signal_duration_seconds=_DURATION,
         min_loudness=min_loudness,
-        sample_batch_size=sample_batch_size if sample_batch_size is not None else num_samples,
-        batch_per_shard=num_samples,
+        samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
+        samples_per_shard=num_samples,
     )
 
 # Phase-robust audio similarity thresholds for replayed-params vs. candidates.
@@ -996,7 +996,7 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
 def test_make_dataset_raises_when_fixed_params_list_is_too_short(
     tmp_path: Path,
 ) -> None:
-    """make_hdf5_dataset rejects fixed_*_params_list shorter than batch_per_shard - start_idx."""
+    """make_hdf5_dataset rejects fixed_*_params_list shorter than samples_per_shard - start_idx."""
     out = tmp_path / "should_not_write.h5"
     with pytest.raises(ValueError, match="fixed_synth_params_list has length"):
         make_hdf5_dataset(

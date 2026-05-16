@@ -1,7 +1,7 @@
 # @package _global_
 
 # CI smoke-test config (test-dataset-generation workflow on PR). 12 total
-# samples → 3 shards at batch_per_shard=4, exercising the partitioner without
+# samples → 3 shards at samples_per_shard=4, exercising the partitioner without
 # burning compute.
 
 defaults:
@@ -16,5 +16,5 @@ train_val_test_sizes: [12, 0, 0]
 render:
   sample_rate: 16000
   min_loudness: -50.0
-  sample_batch_size: 4
-  batch_per_shard: 4
+  samples_per_render_batch: 4
+  samples_per_shard: 4

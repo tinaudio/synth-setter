@@ -139,8 +139,8 @@ class RenderConfig(BaseModel):
     velocity: int
     signal_duration_seconds: float
     min_loudness: float
-    sample_batch_size: int
-    batch_per_shard: int
+    samples_per_render_batch: int = 32
+    samples_per_shard: int
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
@@ -153,10 +153,10 @@ class RenderConfig(BaseModel):
             raise ValueError("velocity must be in [0, 127]")
         if self.signal_duration_seconds <= 0:
             raise ValueError("signal_duration_seconds must be positive")
-        if self.sample_batch_size <= 0:
-            raise ValueError("sample_batch_size must be positive")
-        if self.batch_per_shard <= 0:
-            raise ValueError("batch_per_shard must be positive")
+        if self.samples_per_render_batch <= 0:
+            raise ValueError("samples_per_render_batch must be positive")
+        if self.samples_per_shard <= 0:
+            raise ValueError("samples_per_shard must be positive")
         if not self.param_spec_name.strip():
             raise ValueError("param_spec_name must not be blank")
         if not self.renderer_version.strip():
@@ -342,22 +342,22 @@ class DatasetSpec(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _split_sizes_must_be_multiples_of_batch_per_shard(self) -> DatasetSpec:
+    def _split_sizes_must_be_multiples_of_samples_per_shard(self) -> DatasetSpec:
         """Each split's sample count must divide cleanly into shards.
 
-        The renderer writes one shard at a time at ``batch_per_shard`` rows
+        The renderer writes one shard at a time at ``samples_per_shard`` rows
         per shard; a split size that doesn't divide evenly would either drop
         the remainder or ship a ragged final shard — both surprises caught at
         spec-validation time rather than mid-render.
         """
-        bps = self.render.batch_per_shard
+        sps = self.render.samples_per_shard
         for label, size in zip(_SPLIT_LABELS, self.train_val_test_sizes, strict=True):
             if size < 0:
                 raise ValueError(f"train_val_test_sizes[{label}] must be non-negative, got {size}")
-            if size % bps != 0:
+            if size % sps != 0:
                 raise ValueError(
                     f"train_val_test_sizes[{label}]={size} is not a multiple of "
-                    f"render.batch_per_shard={bps}"
+                    f"render.samples_per_shard={sps}"
                 )
         if sum(self.train_val_test_sizes) == 0:
             raise ValueError("train_val_test_sizes must sum to a positive count")
@@ -378,9 +378,9 @@ class DatasetSpec(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def shards(self) -> tuple[ShardSpec, ...]:
-        """Shard identities derived from total sample counts and ``batch_per_shard``."""
-        bps = self.render.batch_per_shard
-        total_shards = sum(self.train_val_test_sizes) // bps
+        """Shard identities derived from total sample counts and ``samples_per_shard``."""
+        sps = self.render.samples_per_shard
+        total_shards = sum(self.train_val_test_sizes) // sps
         ext = OUTPUT_FORMAT_TO_EXTENSION[self.output_format]
         return tuple(
             ShardSpec(

@@ -76,7 +76,7 @@ BUFFER_SIZE = 512
 MAKE_DATASET_VELOCITY = 100
 MAKE_DATASET_SIGNAL_DURATION_SECONDS = 4.0
 MAKE_DATASET_MIN_LOUDNESS = -50.0
-MAKE_DATASET_SAMPLE_BATCH_SIZE = 32
+MAKE_DATASET_SAMPLES_PER_RENDER_BATCH = 32
 
 # Real-time playback rate. Set this to whatever the default output device supports
 # if it differs from ``SAMPLE_RATE`` — ``play_audio`` will resample on the fly.
@@ -1231,8 +1231,8 @@ def main(
         velocity=MAKE_DATASET_VELOCITY,
         signal_duration_seconds=MAKE_DATASET_SIGNAL_DURATION_SECONDS,
         min_loudness=MAKE_DATASET_MIN_LOUDNESS,
-        sample_batch_size=MAKE_DATASET_SAMPLE_BATCH_SIZE,
-        batch_per_shard=len(synth_patches),
+        samples_per_render_batch=MAKE_DATASET_SAMPLES_PER_RENDER_BATCH,
+        samples_per_shard=len(synth_patches),
     )
     make_hdf5_dataset(
         hdf5_file=patch_file_path,

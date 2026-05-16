@@ -44,8 +44,8 @@ def _make_valid_spec(*, output_format: str = "hdf5", **overrides: object) -> dic
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
-            "sample_batch_size": 32,
-            "batch_per_shard": 32,
+            "samples_per_render_batch": 32,
+            "samples_per_shard": 32,
         },
         "shards": [
             {"shard_id": i, "filename": f"shard-{i:06d}{ext}", "seed": 42 + i} for i in range(3)

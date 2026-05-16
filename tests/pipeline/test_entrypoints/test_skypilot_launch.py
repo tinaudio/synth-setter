@@ -65,7 +65,7 @@ def experiment(fake_plugin: Path) -> str:
     launcher's ``--experiment`` flag; ad-hoc Hydra overrides (e.g. ``render.plugin_path=...``) flow
     through ``_invoke``'s positional trailing args.
 
-    Uses ``generate_dataset/smoke-shard`` (12 samples, 3 shards at batch_per_shard=4)
+    Uses ``generate_dataset/smoke-shard`` (12 samples, 3 shards at samples_per_shard=4)
     for fast CI.
     """
     # fake_plugin is a fixture dep so the path is built before tests use it via
@@ -482,7 +482,7 @@ class TestMainCli:
         spec = DatasetSpec.model_validate_json(spec_files[0].read_text())
         assert spec.git_sha == "abc123def456"
         assert spec.is_repo_dirty is False
-        # ``generate_dataset/smoke-shard``: 12 samples / batch_per_shard=4 = 3 shards.
+        # ``generate_dataset/smoke-shard``: 12 samples / samples_per_shard=4 = 3 shards.
         assert spec.num_shards == 3
         assert spec.r2_bucket == "intermediate-data"
 
@@ -1056,8 +1056,8 @@ class TestJobNameValidation:
                     "velocity": 100,
                     "signal_duration_seconds": 4.0,
                     "min_loudness": -55.0,
-                    "sample_batch_size": 1,
-                    "batch_per_shard": 1,
+                    "samples_per_render_batch": 1,
+                    "samples_per_shard": 1,
                 },
             }
         )

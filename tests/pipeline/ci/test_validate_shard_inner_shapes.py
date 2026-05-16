@@ -55,7 +55,7 @@ def _valid_default_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
         full ``(N, ...)`` shape the HDF5 writer is expected to produce.
     :rtype: dict[str, tuple[int, ...]]
     """
-    n = spec.render.batch_per_shard
+    n = spec.render.samples_per_shard
     return {
         "audio": (n, _VALID_AUDIO_CHANNELS, _VALID_AUDIO_SAMPLES_PER_ROW),
         "mel_spec": (n, *_VALID_MEL_INNER_SHAPE),
@@ -75,7 +75,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
     :param monkeypatch: pytest monkeypatch to freeze git/timestamp factories the spec
         validators consult — keeps spec construction deterministic on machines without
         the repo's git metadata available to the schema layer.
-    :returns: A spec whose render's batch_per_shard / channels / sample_rate /
+    :returns: A spec whose render's samples_per_shard / channels / sample_rate /
         signal_duration_seconds match this module's ``_VALID_*`` constants.
     :rtype: DatasetSpec
     """
@@ -104,8 +104,8 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
-            "sample_batch_size": 32,
-            "batch_per_shard": 10,
+            "samples_per_render_batch": 32,
+            "samples_per_shard": 10,
         },  # type: ignore[arg-type]
     )
 
@@ -137,7 +137,7 @@ class TestInnerShapeValidation:
         :rtype: None
         """
         shapes = _valid_default_shapes(real_spec)
-        n = real_spec.render.batch_per_shard
+        n = real_spec.render.samples_per_shard
         shapes["audio"] = (n, 3, _VALID_AUDIO_SAMPLES_PER_ROW)
         shard_path = tmp_path / "shard-000000.h5"
         _write_h5_with_shapes(shard_path, shapes)
@@ -161,7 +161,7 @@ class TestInnerShapeValidation:
         :rtype: None
         """
         shapes = _valid_default_shapes(real_spec)
-        n = real_spec.render.batch_per_shard
+        n = real_spec.render.samples_per_shard
         wrong_time = _VALID_AUDIO_SAMPLES_PER_ROW + 1
         shapes["audio"] = (n, _VALID_AUDIO_CHANNELS, wrong_time)
         shard_path = tmp_path / "shard-000000.h5"
@@ -185,7 +185,7 @@ class TestInnerShapeValidation:
         :rtype: None
         """
         shapes = _valid_default_shapes(real_spec)
-        n = real_spec.render.batch_per_shard
+        n = real_spec.render.samples_per_shard
         valid_channels, valid_n_mels, valid_n_frames = _VALID_MEL_INNER_SHAPE
         wrong_n_frames = valid_n_frames + 1
         shapes["mel_spec"] = (n, valid_channels, valid_n_mels, wrong_n_frames)
@@ -210,7 +210,7 @@ class TestInnerShapeValidation:
         :rtype: None
         """
         shapes = _valid_default_shapes(real_spec)
-        n = real_spec.render.batch_per_shard
+        n = real_spec.render.samples_per_shard
         wrong_width = _VALID_PARAM_LENGTH + 1
         shapes["param_array"] = (n, wrong_width)
         shard_path = tmp_path / "shard-000000.h5"
@@ -238,7 +238,7 @@ class TestInnerShapeValidation:
         :rtype: None
         """
         shapes = _valid_default_shapes(real_spec)
-        wrong_n = real_spec.render.batch_per_shard + 5
+        wrong_n = real_spec.render.samples_per_shard + 5
         shapes["audio"] = (wrong_n, _VALID_AUDIO_CHANNELS, _VALID_AUDIO_SAMPLES_PER_ROW)
         shard_path = tmp_path / "shard-000000.h5"
         _write_h5_with_shapes(shard_path, shapes)
