@@ -26,6 +26,7 @@ drop unused modalities.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import numpy as np
@@ -50,6 +51,22 @@ from synth_setter.data.ot import (
 # permutation" without depending on which permutation it is.
 _NOISE_SWAPPED = torch.tensor([[0.0, 0.0], [1.0, 1.0]])
 _PARAMS_SWAPPED = torch.tensor([[1.0, 1.0], [0.0, 0.0]])
+
+
+@pytest.fixture(autouse=True)
+def _isolate_torch_rng() -> Iterator[None]:
+    """Snapshot+restore the global torch RNG around every test in this module.
+
+    Several tests call ``torch.manual_seed(0)`` to make ``torch.randn_like``
+    deterministic. Without isolation, that seeding would leak into later
+    tests when the full suite runs. ``torch.random.fork_rng()`` snapshots
+    the CPU (and CUDA, if available) RNG state on entry and restores it on
+    exit, so each test sees the same RNG state as if run alone.
+
+    :yields None: Control returns to the test under the forked RNG context.
+    """
+    with torch.random.fork_rng(devices=[]):
+        yield
 
 
 # --------------------------------------------------------------------------- #
@@ -96,13 +113,15 @@ class TestHungarianMatch:
     def test_numpy_noise_converted_to_torch(self) -> None:
         """``np.ndarray`` noise becomes a ``torch.Tensor`` on the way out."""
         noise = _NOISE_SWAPPED.numpy()
-        out_noise, _ = _hungarian_match(noise, _PARAMS_SWAPPED)
+        # _hungarian_match accepts ndarray at runtime (it calls torch.from_numpy);
+        # the source signature is too narrow — see pyrightconfig.json exclude.
+        out_noise, _ = _hungarian_match(noise, _PARAMS_SWAPPED)  # type: ignore[arg-type]
         assert isinstance(out_noise, torch.Tensor)
 
     def test_numpy_params_converted_to_torch(self) -> None:
         """``np.ndarray`` params become a ``torch.Tensor`` on the way out."""
         params = _PARAMS_SWAPPED.numpy()
-        _, out_params = _hungarian_match(_NOISE_SWAPPED, params)
+        _, out_params = _hungarian_match(_NOISE_SWAPPED, params)  # type: ignore[arg-type]
         assert isinstance(out_params, torch.Tensor)
 
     def test_extra_arg_reordered_by_col_ind(self) -> None:
@@ -152,40 +171,46 @@ class TestHungarianMatch:
 
 
 class TestConcatenate:
-    """Type-dispatched dim-0 concat that always returns ``torch.Tensor``."""
+    """Type-dispatched dim-0 concat that always returns ``torch.Tensor``.
+
+    ``concatenate`` is annotated as ``Union[Tensor, ndarray]`` in the source,
+    but the body indexes ``list_of_arrays[0]`` — it really takes a *list*.
+    ``# type: ignore[arg-type]`` acknowledges the mismatch (``ot.py`` is in the
+    pyright exclude list, so we can't widen the source signature in this PR).
+    """
 
     def test_concat_torch_tensors_along_dim_0(self) -> None:
         """``[tensor(2,3), tensor(2,3)] -> tensor(4,3)``."""
-        result = concatenate([torch.zeros(2, 3), torch.ones(2, 3)])
+        result = concatenate([torch.zeros(2, 3), torch.ones(2, 3)])  # type: ignore[arg-type]
         assert isinstance(result, torch.Tensor)
         assert result.shape == (4, 3)
 
     def test_concat_torch_preserves_values(self) -> None:
         """Concatenation preserves block ordering (no shuffling)."""
-        result = concatenate([torch.zeros(2, 3), torch.ones(2, 3)])
+        result = concatenate([torch.zeros(2, 3), torch.ones(2, 3)])  # type: ignore[arg-type]
         assert torch.all(result[:2] == 0.0)
         assert torch.all(result[2:] == 1.0)
 
     def test_concat_numpy_arrays_returns_torch_tensor(self) -> None:
         """``np.ndarray`` list dispatches through ``np.concatenate`` then ``torch.from_numpy``."""
         arrays = [np.zeros((2, 3), dtype=np.float32), np.ones((2, 3), dtype=np.float32)]
-        result = concatenate(arrays)
+        result = concatenate(arrays)  # type: ignore[arg-type]
         assert isinstance(result, torch.Tensor)
         assert result.shape == (4, 3)
 
     def test_concat_torch_preserves_dtype(self) -> None:
         """Float32 inputs come back as float32 (no implicit upcast)."""
-        result = concatenate([torch.zeros(2, 3, dtype=torch.float32)] * 2)
+        result = concatenate([torch.zeros(2, 3, dtype=torch.float32)] * 2)  # type: ignore[arg-type]
         assert result.dtype == torch.float32
 
     def test_concat_single_element_list(self) -> None:
         """One-element input list returns the input shape unchanged."""
-        result = concatenate([torch.zeros(3, 4)])
+        result = concatenate([torch.zeros(3, 4)])  # type: ignore[arg-type]
         assert result.shape == (3, 4)
 
     def test_concat_three_arrays(self) -> None:
         """N-array concat sums the leading axis."""
-        result = concatenate([torch.zeros(2, 4)] * 3)
+        result = concatenate([torch.zeros(2, 4)] * 3)  # type: ignore[arg-type]
         assert result.shape == (6, 4)
 
 
@@ -195,29 +220,32 @@ class TestConcatenate:
 
 
 class TestStack:
-    """Type-dispatched dim-0 stack that always returns ``torch.Tensor``."""
+    """Type-dispatched dim-0 stack that always returns ``torch.Tensor``.
+
+    Same ``# type: ignore[arg-type]`` rationale as ``TestConcatenate``.
+    """
 
     def test_stack_torch_tensors_inserts_new_axis_at_zero(self) -> None:
         """``[tensor(3), tensor(3)] -> tensor(2, 3)``."""
-        result = stack([torch.zeros(3), torch.ones(3)])
+        result = stack([torch.zeros(3), torch.ones(3)])  # type: ignore[arg-type]
         assert isinstance(result, torch.Tensor)
         assert result.shape == (2, 3)
 
     def test_stack_numpy_arrays_returns_torch_tensor(self) -> None:
         """Numpy input goes through ``np.stack`` then ``torch.from_numpy``."""
         arrays = [np.zeros(3, dtype=np.float32), np.ones(3, dtype=np.float32)]
-        result = stack(arrays)
+        result = stack(arrays)  # type: ignore[arg-type]
         assert isinstance(result, torch.Tensor)
         assert result.shape == (2, 3)
 
     def test_stack_torch_preserves_dtype(self) -> None:
         """Float32 inputs come back as float32."""
-        result = stack([torch.zeros(3, dtype=torch.float32)] * 2)
+        result = stack([torch.zeros(3, dtype=torch.float32)] * 2)  # type: ignore[arg-type]
         assert result.dtype == torch.float32
 
     def test_stack_preserves_values(self) -> None:
         """Stacking preserves block ordering."""
-        result = stack([torch.zeros(3), torch.ones(3)])
+        result = stack([torch.zeros(3), torch.ones(3)])  # type: ignore[arg-type]
         assert torch.all(result[0] == 0.0)
         assert torch.all(result[1] == 1.0)
 
@@ -315,8 +343,11 @@ class TestCollateDict:
         """3 items of per-item ``params(4,)`` ⇒ output ``params(3, 4)``."""
         torch.manual_seed(0)
         out = _collate_dict(self._make_batch(num_items=3))
-        assert out["params"].shape == (3, 4)
-        assert out["mel_spec"].shape == (3, 2, 8)
+        params = out["params"]
+        mel_spec = out["mel_spec"]
+        assert params is not None and mel_spec is not None
+        assert params.shape == (3, 4)
+        assert mel_spec.shape == (3, 2, 8)
 
     def test_audio_stacked_when_first_item_has_it(self) -> None:
         """``audio[0] is not None`` ⇒ ``audio`` is stacked; ``None`` is the fall-through."""
@@ -335,8 +366,11 @@ class TestCollateDict:
         """``noise = torch.randn_like(params)`` ⇒ identical shape/dtype."""
         torch.manual_seed(0)
         out = _collate_dict(self._make_batch())
-        assert out["noise"].shape == out["params"].shape
-        assert out["noise"].dtype == out["params"].dtype
+        noise = out["noise"]
+        params = out["params"]
+        assert noise is not None and params is not None
+        assert noise.shape == params.shape
+        assert noise.dtype == params.dtype
 
 
 # --------------------------------------------------------------------------- #
