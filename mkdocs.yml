@@ -30,8 +30,19 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: [.]
+          # PEP src-layout: the ``synth_setter`` package lives under ``src/``,
+          # so mkdocstrings needs ``src`` on its import path. Without this, a
+          # fresh checkout that hasn't run ``pip install -e .`` would fail
+          # ``mkdocs build`` with ``ModuleNotFoundError: synth_setter``.
+          paths: [src]
           options:
+            # griffe-pydantic teaches griffe to surface ``Field(description=...)``
+            # arguments on pydantic BaseModel fields. Without it, the per-field
+            # descriptions in TrainConfig / ModelConfig / OptimizerConfig render
+            # only their type annotations.
+            extensions:
+              - griffe_pydantic:
+                  schema: false
             show_root_heading: true
             show_source: false
             members_order: source
@@ -58,4 +69,6 @@ nav:
   - Home: index.md
   - Config Reference:
       - Dataset Spec: config_reference/dataset_spec.md
+      - Training Config: config_reference/train_config.md
+      - Model Config: config_reference/model_config.md
   - Benchmarks: https://tinaudio.github.io/synth-setter/dev/bench/

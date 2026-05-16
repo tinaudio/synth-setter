@@ -14,6 +14,19 @@ on:
       - "mkdocs.yml"
       - "pyproject.toml"
       - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/schemas/**"
+      - ".github/workflows/docs.yml"
+  # PR builds: same path filter as push, but the job is build-only (no
+  # GitHub Pages deploy) so we catch ``mkdocs build --strict`` failures
+  # before they reach main without granting Pages write to forks. Tracked
+  # alongside the docs-build pytest integration in tests/test_docs_build.py.
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/schemas/**"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
   # Redeploy after the benchmark workflow pushes new chart data to gh-pages.
@@ -38,12 +51,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy-docs:
+  # Build-only smoke check for PRs. Runs ``mkdocs build --strict`` so any
+  # drift between docs/, mkdocs.yml, or the pydantic models that the
+  # config-reference pages render gets caught at PR time. Also runs the
+  # docs-build pytest module so the field-rendering assertions in
+  # ``tests/test_docs_build.py`` actually execute in CI (they skip via
+  # ``importorskip("mkdocs")`` on the default ``[dev]`` install). No Pages
+  # deploy happens here — the deploy-docs job (gated to push/main) owns that.
+  build-docs:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Skip on workflow_run when the upstream run didn't succeed — otherwise
-    # we'd republish stale chart data after a failed bench run.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Checkout docs source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+
+      - name: Install docs and dev extras
+        run: pip install -e '.[docs,dev]'
+
+      - name: Build site (strict)
+        run: mkdocs build --strict
+
+      - name: Run docs-build integration tests
+        run: pytest tests/test_docs_build.py tests/schemas/ -q
+
+  # Skip on pull_request (the build-docs job above already covers PR
+  # validation) and on workflow_run if the upstream run didn't succeed —
+  # otherwise we'd republish stale chart data after a failed bench run.
+  deploy-docs:
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     environment:
       name: github-pages
