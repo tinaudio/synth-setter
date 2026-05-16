@@ -241,26 +241,42 @@ def _iter_mel_batches(shard_path: Path) -> Iterator[np.ndarray]:
     parse errors at the same layer as the validator. Ignores the writer's
     ``metadata.json`` sentinel and other per-row fields.
 
+    Iterates sorted ``TarInfo`` objects (not member names) and extracts
+    by the ``TarInfo`` itself so a malformed archive with duplicate
+    matching names cannot trick ``extractfile`` into returning the same
+    payload twice (tar name lookup resolves to the *last* matching entry
+    regardless of which one we're iterating).
+
     :param shard_path: Filesystem path to one ``shard-*.tar``.
     :yields: One ``(rows, *inner)`` mel array per matched tar member.
     :ytype: np.ndarray
     :raises ValueError: When a matched ``*.mel_spec.npy`` member is not a
-        regular file (``tarfile.extractfile`` returns ``None`` for
-        directories, symlinks, devices, etc.). Treated as a malformed
-        shard so the per-shard guard in :func:`get_stats_wds` cannot be
-        defeated by a mix of readable and unextractable matched members
-        on the same shard.
+        regular file (directory, symlink, hardlink, device, etc.). Hard-
+        and symlinks pointing at another archive member would satisfy
+        ``extractfile != None``, so the check uses ``TarInfo.isfile()``
+        which only returns ``True`` for ``REGTYPE``/``AREGTYPE``. Treated
+        as a malformed shard so the per-shard guard in
+        :func:`get_stats_wds` cannot be defeated by a mix of readable and
+        unreadable matched members on the same shard.
     """
     with tarfile.open(shard_path, mode="r:") as tar:
-        for name in sorted(m.name for m in tar.getmembers()):
-            if not _MEL_SPEC_MEMBER_RE.match(name):
-                continue
-            extracted = tar.extractfile(name)
+        matched = sorted(
+            (m for m in tar.getmembers() if _MEL_SPEC_MEMBER_RE.match(m.name)),
+            key=lambda m: m.name,
+        )
+        for member in matched:
+            if not member.isfile():
+                raise ValueError(
+                    f"shard {shard_path.name}: matched member {member.name!r} is "
+                    f"not a regular file (TarInfo.isfile() is False; rejects "
+                    f"directories, symlinks, hardlinks, and devices); treat as "
+                    f"malformed shard rather than silently skip"
+                )
+            extracted = tar.extractfile(member)
             if extracted is None:
                 raise ValueError(
-                    f"shard {shard_path.name}: matched member {name!r} is "
-                    f"not a regular file (tarfile.extractfile returned None); "
-                    f"treat as malformed shard rather than silently skip"
+                    f"shard {shard_path.name}: matched member {member.name!r} "
+                    f"could not be extracted (tarfile.extractfile returned None)"
                 )
             yield np.load(io.BytesIO(extracted.read()))
 

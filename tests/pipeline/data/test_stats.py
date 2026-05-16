@@ -531,11 +531,10 @@ def test_get_stats_wds_shard_with_unextractable_mel_member_raises(
 ) -> None:
     """A matched ``*.mel_spec.npy`` member that is not a regular file raises ``ValueError``.
 
-    ``tarfile.extractfile`` returns ``None`` for directories, symlinks,
-    devices, etc. Silently skipping such a member would let a shard with
-    *some* readable mel members defeat the per-shard ``shard_rows == 0``
-    guard and still write partial stats. The malformed-member error is
-    raised eagerly so any unextractable matched member aborts the run.
+    A non-regular matched member (directory, symlink, hardlink, device)
+    must be rejected eagerly. Silently skipping such a member would let
+    a shard with *some* readable mel members defeat the per-shard
+    ``shard_rows == 0`` guard and still write partial stats.
 
     :param stats_script: Imported stats module (fixture).
     :param tmp_path: pytest tmp dir used as the synthetic shard directory.
@@ -551,15 +550,86 @@ def test_get_stats_wds_shard_with_unextractable_mel_member_raises(
         info = tarfile.TarInfo(name="00000000.mel_spec.npy")
         info.size = len(payload)
         tar.addfile(info, io.BytesIO(payload))
-        # Second matched member is a *directory* entry; ``extractfile`` returns
-        # None for it. A silent ``continue`` would let the readable member
-        # above contribute rows and let the function write partial stats.
+        # Second matched member is a *directory* entry; ``TarInfo.isfile()``
+        # is False for it. A silent ``continue`` would let the readable
+        # member above contribute rows and write partial stats.
         dir_info = tarfile.TarInfo(name="00000002.mel_spec.npy")
         dir_info.type = tarfile.DIRTYPE
         tar.addfile(dir_info)
 
     with pytest.raises(ValueError, match=r"00000002\.mel_spec\.npy.*not a regular file"):
         stats_script.get_stats_wds(str(tmp_path))
+
+
+def test_get_stats_wds_shard_with_symlink_mel_member_raises(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """A matched ``*.mel_spec.npy`` symlink to another archive member raises ``ValueError``.
+
+    ``tarfile.extractfile`` happily returns a file object for a symlink
+    or hardlink that resolves to another archive member, so a bare
+    ``extractfile is None`` check is not enough. Using
+    ``TarInfo.isfile()`` (matches only ``REGTYPE``/``AREGTYPE``) rejects
+    a link named like a mel batch — otherwise the same payload could be
+    counted multiple times.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    rng = np.random.default_rng(9)
+    mel = rng.normal(size=(2, 2, 2)).astype(np.float32)
+    buf = io.BytesIO()
+    np.save(buf, mel)
+    payload = buf.getvalue()
+
+    shard_path = tmp_path / "shard-000000.tar"
+    with tarfile.open(shard_path, mode="w:") as tar:
+        info = tarfile.TarInfo(name="00000000.mel_spec.npy")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+        sym_info = tarfile.TarInfo(name="00000002.mel_spec.npy")
+        sym_info.type = tarfile.SYMTYPE
+        sym_info.linkname = "00000000.mel_spec.npy"
+        tar.addfile(sym_info)
+
+    with pytest.raises(ValueError, match=r"00000002\.mel_spec\.npy.*not a regular file"):
+        stats_script.get_stats_wds(str(tmp_path))
+
+
+def test_get_stats_wds_shard_with_duplicate_named_mel_members_yields_each_payload(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Two matched members with the same name yield two distinct payloads, not one twice.
+
+    ``tarfile.extractfile(name)`` resolves by name lookup and returns
+    only the *last* matching entry, so iterating ``TarInfo`` objects and
+    extracting each by the ``TarInfo`` itself is required to avoid
+    counting the same payload twice on a malformed (duplicate-name)
+    archive.
+
+    :param stats_script: Imported stats module (fixture).
+    :param tmp_path: pytest tmp dir used as the synthetic shard directory.
+    """
+    payload_a = io.BytesIO()
+    np.save(payload_a, np.zeros((1, 2, 2), dtype=np.float32))
+    bytes_a = payload_a.getvalue()
+    payload_b = io.BytesIO()
+    np.save(payload_b, np.ones((1, 2, 2), dtype=np.float32))
+    bytes_b = payload_b.getvalue()
+
+    shard_path = tmp_path / "shard-000000.tar"
+    with tarfile.open(shard_path, mode="w:") as tar:
+        for raw in (bytes_a, bytes_b):
+            info = tarfile.TarInfo(name="00000000.mel_spec.npy")
+            info.size = len(raw)
+            tar.addfile(info, io.BytesIO(raw))
+
+    arrays = list(stats_script._iter_mel_batches(shard_path))
+    assert len(arrays) == 2
+    # If extractfile resolved by name, both entries would resolve to the
+    # last addfile (all-ones); pin that we see both payloads.
+    sums = sorted(float(a.sum()) for a in arrays)
+    assert sums == [0.0, 4.0]
 
 
 def test_cli_dispatches_directory_of_tar_shards_to_wds_path_with_default_flag(
