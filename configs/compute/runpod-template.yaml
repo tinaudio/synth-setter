@@ -1,6 +1,8 @@
 # SkyPilot task template for RunPod.
 #
-# Loaded by src/synth_setter/pipeline/skypilot_launch.py via sky.Task.from_yaml(...).
+# Loaded by src/synth_setter/pipeline/skypilot_launch.py via
+# load_compute_config_yaml(...) → ComputeConfig (Pydantic trust boundary) →
+# sky.Task.from_yaml_config(...). See src/synth_setter/pipeline/schemas/compute.py.
 # The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`)
 # and injects credentials + the spec URI via task.update_envs(...) before
 # calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch

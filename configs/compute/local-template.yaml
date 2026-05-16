@@ -1,8 +1,9 @@
 # SkyPilot task template for the local Kubernetes (kind) backend.
 #
-# Loaded by src/synth_setter/pipeline/skypilot_launch.py via sky.Task.from_yaml(...)
-# when --template configs/compute/local-template.yaml is passed (the
-# `skypilot-local` row of test-dataset-generation's matrix). Provisioning
+# Loaded by src/synth_setter/pipeline/skypilot_launch.py via
+# load_compute_config_yaml(...) → ComputeConfig (Pydantic trust boundary) →
+# sky.Task.from_yaml_config(...) when --template configs/compute/local-template.yaml
+# is passed (the `skypilot-local` row of test-dataset-generation's matrix). Provisioning
 # expects a `sky local up`-managed kind cluster ("skypilot" kubectl context)
 # already running.
 #
