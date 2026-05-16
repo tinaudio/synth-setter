@@ -137,38 +137,47 @@ class TestHungarianMatchOptimality:
 
         assert hungarian_cost == pytest.approx(brute_force_cost, rel=1e-5)
 
-    def test_beats_random_pairing_in_expectation(self) -> None:
-        """OT-paired cost is strictly less than the random-pairing cost on a typical batch.
+    def test_beats_identity_when_params_is_known_permutation_of_noise(self) -> None:
+        """Construct inputs where identity pairing is provably suboptimal: ``params`` is a
+        non-identity row-permutation of ``noise``, so the true OT cost is zero while the
+        identity-pairing cost is strictly positive. Hungarian must undo the permutation.
 
-        Single deterministic example (seed pinned) avoids flakiness. The claim is conservative: OT
-        improves over random pairing for almost every minibatch, and the seeded example confirms
-        the implementation is actually pairing instead of returning identity.
+        Avoids any RNG dependence — the claim is exact, not statistical.
         """
-        torch.manual_seed(0)
-        noise = torch.randn(8, 4)
-        params = torch.randn(8, 4)
+        noise = torch.tensor(
+            [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]],
+        )
+        permutation = [2, 3, 0, 1]
+        params = noise[permutation].clone()
 
-        random_cost = _total_pairwise_cost(noise, params)
+        identity_cost = _total_pairwise_cost(noise, params)
         matched_noise, matched_params = _hungarian_match(noise.clone(), params.clone())
         ot_cost = _total_pairwise_cost(matched_noise, matched_params)
-        assert ot_cost < random_cost
+
+        assert identity_cost > 0.0
+        assert ot_cost == pytest.approx(0.0, abs=1e-6)
 
 
 class TestHungarianMatchPermutation:
     """The returned ordering must be a bijection over [0, B-1]."""
 
     def test_returned_params_are_a_permutation_of_input(self) -> None:
-        """No row is duplicated or dropped — output params is a row-permutation of input."""
+        """No row is duplicated or dropped — output params is a bijective row-permutation of input.
+
+        A row-equality matrix between input and output rows must be a permutation matrix (exactly
+        one True per row and per column), which rules out duplicates or drops even when input rows
+        happen to be unique.
+        """
         torch.manual_seed(1)
         noise = torch.randn(6, 3)
         params = torch.randn(6, 3)
 
         _, matched_params = _hungarian_match(noise.clone(), params.clone())
 
-        # Stack input and output rows, dedupe; if either side had a duplicate or a row
-        # the other side lacked, ``torch.unique`` would return ≠ 6 rows.
-        combined = torch.cat([params, matched_params], dim=0)
-        assert torch.unique(combined, dim=0).shape[0] == 6
+        # row_match[i, j] is True iff input row i equals output row j.
+        row_match = (params.unsqueeze(1) == matched_params.unsqueeze(0)).all(dim=-1)
+        assert torch.equal(row_match.sum(dim=0), torch.ones(6, dtype=torch.int64))
+        assert torch.equal(row_match.sum(dim=1), torch.ones(6, dtype=torch.int64))
 
     def test_noise_returned_in_identity_order(self) -> None:
         """``row_ind`` from :func:`linear_sum_assignment` on a square matrix is identity.
