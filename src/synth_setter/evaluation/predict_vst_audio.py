@@ -72,14 +72,17 @@ def write_spectrograms(
     axs = np.atleast_1d(axs)
 
     for ax, (spec, title) in zip(axs, panels):
+        # spec is already log-mel dB from make_spectrogram's power_to_db.
+        # Passing through amplitude_to_db a second time double-converts.
         librosa.display.specshow(
-            librosa.amplitude_to_db(spec, ref=np.max),
+            spec,
             sr=sample_rate,
             hop_length=_MEL_HOP_LENGTH,
             x_axis="time",
             y_axis="mel",
             ax=ax,
             cmap="magma",
+            vmax=0,
         )
         ax.set_title(title)
 
@@ -90,17 +93,19 @@ def write_spectrograms(
 
 def params_to_csv(
     target_synth_params: dict[str, float] | None,
-    target_note_params: dict[str, float] | None,
+    target_note_params: dict[str, Any] | None,
     pred_synth_params: dict[str, float],
-    pred_note_params: dict[str, float],
+    pred_note_params: dict[str, Any],
     save_path: str,
 ) -> None:
     """Write the target and predicted parameters to a CSV file.
 
     :param target_synth_params: Target synth params, or ``None`` if unavailable.
-    :param target_note_params: Target note params, or ``None`` if unavailable.
+    :param target_note_params: Target note params (e.g. ``pitch: int``,
+        ``note_start_and_end: tuple[float, float]``) or ``None`` if unavailable.
     :param pred_synth_params: Predicted synth params.
-    :param pred_note_params: Predicted note params.
+    :param pred_note_params: Predicted note params (mixed-value types — see
+        ``target_note_params``).
     :param save_path: Path to write the CSV to.
     """
     synth_df = pd.DataFrame({"pred": pred_synth_params, "target": target_synth_params})
