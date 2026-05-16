@@ -79,8 +79,13 @@ jobs:
       - name: Build site (strict)
         run: mkdocs build --strict
 
+      # ``--noconftest`` skips the top-level ``tests/conftest.py``, which
+      # eagerly imports ``lightning`` via ``synth_setter.utils``. The
+      # build-docs job installs ``[docs,dev]`` (no torch / lightning) to keep
+      # the install lightweight; the docs-build tests don't need that
+      # fixture machinery — each test sets up its own Hydra context.
       - name: Run docs-build integration tests
-        run: pytest tests/test_docs_build.py tests/schemas/ -q
+        run: pytest tests/test_docs_build.py tests/schemas/ -q --noconftest
 
   # Skip on pull_request (the build-docs job above already covers PR
   # validation) and on workflow_run if the upstream run didn't succeed —
