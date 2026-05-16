@@ -148,7 +148,7 @@ def mock_cred_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(
         "synth_setter.pipeline.skypilot_launch._detect_provider",
-        lambda _task: "runpod",
+        lambda *_args, **_kwargs: "runpod",
     )
 
 
@@ -2255,7 +2255,7 @@ class TestDispatchMode:
         )
         monkeypatch.setattr(
             "synth_setter.pipeline.skypilot_launch._detect_provider",
-            lambda _task: "local",
+            lambda *_args, **_kwargs: "local",
         )
 
         result = _invoke(
@@ -2607,7 +2607,9 @@ class TestSkypilotLaunchHydraEntrypoint:
     The launcher's Click CLI consumes `--template <path>` directly today (CI workflows depend on
     the path-based flag); the Hydra entrypoint at `configs/skypilot_launch.yaml` is the parallel
     composition surface for future use cases that want to pick a compute template by name and drive
-    overrides from a CLI like `compute=oci-cpu-template`.
+    overrides from a CLI like `compute_template=oci-cpu-template`. The field is `compute_template`
+    (not `compute`) so Hydra doesn't treat `compute=X` as a defaults-list group override against
+    the `configs/compute/` directory.
     """
 
     def test_default_compose_resolves_to_runpod_template(self) -> None:
@@ -2650,9 +2652,25 @@ class TestSkypilotLaunchHydraEntrypoint:
 
 
 class TestMainMalformedTemplate:
-    """Errors loading or validating the compute YAML surface as a clean ClickException."""
+    """Errors loading or validating the compute YAML surface as a clean ClickException.
 
-    def test_malformed_yaml_surfaces_as_click_exception(  # noqa: DOC101,DOC103
+    Each ``except`` branch in ``main()``'s ``load_compute_config_yaml`` wrapper —
+    ``FileNotFoundError`` (path missing), ``ValueError`` (top-level not a mapping / invalid
+    YAML syntax), ``ValidationError`` (missing required fields) — is pinned independently
+    here so a regression that drops a branch surfaces as a failed assertion, not a Pydantic
+    traceback leaking to stdout.
+    """
+
+    @pytest.mark.parametrize(
+        ("template_factory_kind", "expected_fragment"),
+        [
+            ("missing_required_field", "Field required"),
+            ("invalid_yaml_syntax", "Invalid YAML"),
+            ("non_mapping_top_level", "must be a mapping"),
+        ],
+        ids=["validation_error", "yaml_syntax_error", "non_mapping_yaml"],
+    )
+    def test_compute_template_load_failure_surfaces_as_click_exception(  # noqa: DOC101,DOC103
         self,
         tmp_path: Path,
         experiment: str,
@@ -2661,16 +2679,21 @@ class TestMainMalformedTemplate:
         patch_materialize_io: None,
         local_spec_dir: Path,
         mock_sky: MagicMock,
+        template_factory_kind: str,
+        expected_fragment: str,
     ) -> None:
-        """A template missing required ComputeConfig fields fails with a wrapped error.
-
-        Pydantic ``ValidationError`` is wrapped in ``click.ClickException`` so the user sees a
-        one-line CLI error instead of a Pydantic traceback.
-        """
+        """Each load-failure mode surfaces through ``main()`` as a wrapped ``ClickException``."""
         _ = mock_sky
         bad_template = tmp_path / "bad-template.yaml"
-        # No `run:` field; ComputeConfig rejects this.
-        bad_template.write_text(yaml.dump({"resources": {"cloud": "runpod"}, "envs": {}}))
+        if template_factory_kind == "missing_required_field":
+            # Syntactically valid YAML; ComputeConfig rejects missing `run:`.
+            bad_template.write_text(yaml.dump({"resources": {"cloud": "runpod"}, "envs": {}}))
+        elif template_factory_kind == "invalid_yaml_syntax":
+            # Unclosed bracket — yaml.YAMLError → wrapped as ValueError by the loader.
+            bad_template.write_text("resources: [unclosed\nrun: echo\n")
+        else:  # non_mapping_top_level
+            # Top-level list, not a mapping — the loader rejects this before Pydantic.
+            bad_template.write_text("- this\n- is\n- a list\n")
 
         result = _invoke(
             experiment,
@@ -2683,3 +2706,4 @@ class TestMainMalformedTemplate:
 
         assert result.exit_code != 0
         assert "failed to load compute template" in result.output
+        assert expected_fragment in result.output

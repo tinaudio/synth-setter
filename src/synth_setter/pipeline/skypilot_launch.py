@@ -53,7 +53,6 @@ from pathlib import Path
 import click
 import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
-import yaml
 from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
@@ -215,40 +214,44 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     return resolved
 
 
-def _detect_provider(compute_config: ComputeConfig) -> str:
+def _detect_provider(compute_config: ComputeConfig, template_path: Path | None = None) -> str:
     """Return the cred-bootstrap `--provider` flag for a ``ComputeConfig``'s first cloud.
 
     Reads ``compute_config.resources`` (the validated Pydantic dict) rather than reparsing the
     source YAML so the detection stays in lockstep with what the launcher ships to SkyPilot.
     Handles both the flat ``resources: { cloud: X }`` shape (RunPod, kubernetes) and the
     ``resources: { any_of: [{ cloud: X }, ...] }`` shape (OCI Flex).
+
+    ``template_path`` is woven into error messages when supplied so operators can locate the
+    offending template across the dozen-plus shipped ones (default-None for direct unit-test
+    calls where the path isn't relevant).
     """
+    where = f"compute config ({template_path})" if template_path else "compute config"
     resources = compute_config.resources
     cloud_value = resources.get("cloud")
     if cloud_value is None:
         any_of = resources.get("any_of") or []
         if not isinstance(any_of, list):
             raise click.ClickException(
-                "Could not detect cloud from compute config; "
-                "expected `resources.any_of` to be a list."
+                f"Could not detect cloud from {where}; expected `resources.any_of` to be a list."
             )
         if any_of:
             first = any_of[0]
             if not isinstance(first, dict):
                 raise click.ClickException(
-                    "Could not detect cloud from compute config; "
+                    f"Could not detect cloud from {where}; "
                     "expected `resources.any_of[0]` to be a mapping."
                 )
             cloud_value = first.get("cloud")
     if not isinstance(cloud_value, str):
         raise click.ClickException(
-            "Could not detect cloud from compute config; "
+            f"Could not detect cloud from {where}; "
             "expected resources.cloud (str) or resources.any_of[0].cloud (str)."
         )
     provider = _CLOUD_TO_PROVIDER.get(cloud_value.strip().lower())
     if provider is None:
         raise click.ClickException(
-            f"Unsupported cloud {cloud_value!r} in compute config; cred bootstrap "
+            f"Unsupported cloud {cloud_value!r} in {where}; cred bootstrap "
             "supports runpod, oci, and local (kubernetes) only"
         )
     return provider
@@ -576,13 +579,13 @@ def main(
     # surfaces here (one clear ClickException) rather than half-way through provisioning.
     try:
         compute_config = load_compute_config_yaml(template_path)
-    except (FileNotFoundError, ValueError, ValidationError, yaml.YAMLError) as exc:
+    except (FileNotFoundError, ValueError, ValidationError) as exc:
         raise click.ClickException(
             f"failed to load compute template {template_path}: {exc}"
         ) from exc
 
     # Local provider (kind) needs no compute creds; CI writes the controller-resource shrink. See #876.
-    provider = _detect_provider(compute_config)
+    provider = _detect_provider(compute_config, template_path=template_path)
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 

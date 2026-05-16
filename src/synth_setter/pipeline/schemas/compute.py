@@ -1,14 +1,23 @@
 """SkyPilot compute config schema and Hydra-compose entrypoint.
 
 A ``ComputeConfig`` validates a SkyPilot Task YAML at the launcher's trust boundary,
-mirroring ``DatasetSpec`` for dataset generation and ``ImageConfig`` for image builds:
-Hydra composes the YAML group under ``configs/compute/`` → ``ComputeConfig`` validates
-the composed dict → the launcher dispatches via ``sky.Task.from_yaml_config(model_dump())``.
+mirroring ``DatasetSpec`` for dataset generation and ``ImageConfig`` for image builds.
+The flow:
+
+1. Hydra composes ``configs/skypilot_launch.yaml`` and resolves a ``compute_template``
+   *name* (a string field, not a sub-tree — OmegaConf's interpolation grammar can't parse
+   the literal ``${VAR}`` bash expansions inside the compute YAMLs' ``setup:`` / ``run:``
+   blocks).
+2. ``compute_config_from_cfg`` reads that name and loads
+   ``configs/compute/<name>.yaml`` directly via ``yaml.safe_load`` — sidestepping
+   OmegaConf.
+3. ``ComputeConfig`` validates the parsed dict at the trust boundary.
+4. The launcher dispatches per-rank via ``sky.Task.from_yaml_config(model_dump())``.
 
 The model intentionally stays permissive (``extra="allow"``) because SkyPilot's Task schema
 has many optional fields (``num_nodes``, ``file_mounts``, ``workdir``, ``service``, ...) and
 the goal of this layer is to (a) prove required fields are present at launcher time, (b)
-make compute templates Hydra-composable, and (c) round-trip cleanly to SkyPilot — not to
+make compute templates Hydra-selectable, and (c) round-trip cleanly to SkyPilot — not to
 re-implement SkyPilot's own schema validation.
 """
 
@@ -60,8 +69,20 @@ def load_compute_config_yaml(path: Path) -> ComputeConfig:  # noqa: DOC203
     """
     if not path.is_file():
         raise FileNotFoundError(path)
-    raw = yaml.safe_load(path.read_text()) or {}
+    try:
+        raw = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:
+        # Re-raise as ValueError so the launcher's ``except`` tuple (which can't import
+        # the third-party ``yaml`` exception across module boundaries cleanly) wraps a
+        # syntactically invalid YAML the same way it wraps a non-mapping top-level.
+        raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
+    if raw is None:
+        raw = {}
     if not isinstance(raw, dict):
+        # Normalize ``None`` to ``{}`` above (empty YAML file is acceptable — Pydantic
+        # will surface the missing required fields). Other non-mapping top-levels
+        # (lists, scalars) get a clear error rather than a confusing
+        # ``ComputeConfig.__init__()`` complaint about missing required fields.
         raise ValueError(f"Top-level YAML in {path} must be a mapping, got {type(raw).__name__}")
     return ComputeConfig(**raw)
 

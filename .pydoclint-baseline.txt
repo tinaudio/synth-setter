@@ -490,7 +490,7 @@ src/synth_setter/pipeline/skypilot_launch.py
     DOC501: Function `resolve_worker_env` has raise statements, but the docstring does not have a "Raises" section
     DOC503: Function `resolve_worker_env` exceptions in the "Raises" section in the docstring do not match those in the function body. Raised exceptions in the docstring: []. Raised exceptions in the body: ['click.ClickException'].
     DOC101: Function `_detect_provider`: Docstring contains fewer arguments than in function signature.
-    DOC103: Function `_detect_provider`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [compute_config: ComputeConfig].
+    DOC103: Function `_detect_provider`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [compute_config: ComputeConfig, template_path: Path | None].
     DOC201: Function `_detect_provider` does not have a return section in docstring
     DOC203: Function `_detect_provider` return type(s) in docstring not consistent with the return annotation. Return annotation has 1 type(s); docstring return section has 0 type(s).
     DOC501: Function `_detect_provider` has raise statements, but the docstring does not have a "Raises" section
