@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -31,7 +30,9 @@ from synth_setter.evaluation.compute_audio_metrics import (
     get_stft,
     subdir_matches_pattern,
 )
-from synth_setter.evaluation.compute_audio_metrics import main as compute_audio_metrics_main
+from synth_setter.evaluation.compute_audio_metrics import (
+    main as compute_audio_metrics_main,
+)
 
 _SR = 44100
 
@@ -61,25 +62,14 @@ def _make_sample_dir(  # noqa: DOC101,DOC103,DOC201,DOC203
 
 
 @pytest.fixture(autouse=True)
-def _reset_module_caches() -> Iterator[None]:
-    """Reset module-level caches (``scatter``, ``pesto_model``) per test.
-
-    These globals are populated on first call to ``compute_jtfs`` /
-    ``get_pesto_activations`` and persist across tests, which would otherwise leak
-    state between tests (notably the ``scatter`` cache is keyed only on shape,
-    so a stale entry would silently mask J/Q changes).
-
-    :yields None: Control to the test body between setup and teardown.
-    """
-    cam.scatter = None
-    cam.pesto_model = None
-    yield
-    cam.scatter = None
-    cam.pesto_model = None
+def _reset_module_caches(monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
+    """Reset module-level ``scatter`` and ``pesto_model`` caches per test."""
+    monkeypatch.setattr(cam, "scatter", None, raising=True)
+    monkeypatch.setattr(cam, "pesto_model", None, raising=True)
 
 
 # ---------------------------------------------------------------------------
-# compute_rms — pre-existing regression guards for PR #899. Do not modify.
+# compute_rms — regression guards for #899.
 # ---------------------------------------------------------------------------
 
 
@@ -191,13 +181,24 @@ def test_find_possible_subdirs_empty_dir_returns_empty_list(tmp_path: Path) -> N
 
 
 def test_compute_mel_specs_returns_one_spec_per_mel_param() -> None:
-    """One spec per entry in ``MEL_PARAMS``, with matching ``n_mels`` rows."""
+    """Cardinality contract: one spec per entry in ``MEL_PARAMS``."""
     audio = _sine(seconds=0.5)
     specs = compute_mel_specs(audio[0])
-
     assert len(specs) == len(MEL_PARAMS)
-    for spec, (_window, _hop, n_mels) in zip(specs, MEL_PARAMS):
-        assert spec.shape[-2] == n_mels
+
+
+@pytest.mark.parametrize(
+    ("idx", "expected_n_mels"),
+    [(0, 32), (1, 64), (2, 128)],
+)
+def test_compute_mel_specs_spec_has_expected_n_mels(  # noqa: DOC101,DOC103
+    idx: int, expected_n_mels: int
+) -> None:
+    """Each spec has finite values and the expected number of mel rows."""
+    audio = _sine(seconds=0.5)
+    specs = compute_mel_specs(audio[0])
+    assert specs[idx].shape[-2] == expected_n_mels
+    assert np.isfinite(specs[idx]).all()
 
 
 def test_compute_mel_specs_is_deterministic() -> None:
@@ -242,11 +243,12 @@ def test_compute_mss_is_symmetric() -> None:
 
 
 def test_compute_mfcc_returns_20_coefficients() -> None:
-    """``compute_mfcc`` returns ``(20, n_frames)``."""
+    """``compute_mfcc`` returns a finite ``(20, n_frames)`` array."""
     audio = _sine(seconds=0.5)[0]
     mfcc = compute_mfcc(audio)
     assert mfcc.shape[0] == 20
     assert mfcc.shape[1] > 0
+    assert np.isfinite(mfcc).all()
 
 
 def test_compute_mfcc_is_deterministic() -> None:
@@ -290,13 +292,12 @@ def test_get_stft_returns_2d_magnitude() -> None:
 
 
 def test_get_stft_averages_channels() -> None:
-    """Stereo input is averaged across channels before STFT.
-
-    A two-channel signal that averages to mono ``x`` produces the same STFT as ``x``.
-    """
-    mono = _sine(seconds=0.5)
-    stereo = np.concatenate([mono, mono], axis=0)
-    np.testing.assert_allclose(get_stft(stereo), get_stft(mono), atol=1e-6)
+    """Stereo STFT equals the STFT of the per-sample channel mean."""
+    ch0 = _sine(seconds=0.5, freq=440.0)
+    ch1 = _sine(seconds=0.5, freq=880.0)
+    stereo = np.concatenate([ch0, ch1], axis=0)
+    expected_mono = (ch0 + ch1) / 2
+    np.testing.assert_allclose(get_stft(stereo), get_stft(expected_mono), atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -305,9 +306,9 @@ def test_get_stft_averages_channels() -> None:
 
 
 def test_batched_wasserstein_distance_identical_hists_returns_zero() -> None:
-    """Identical histograms have zero Wasserstein distance."""
+    """Identical histograms have exactly zero Wasserstein distance."""
     hist = np.array([[0.25, 0.25, 0.25, 0.25]])
-    assert batched_wasserstein_distance_np(hist, hist) == pytest.approx(0.0)
+    assert batched_wasserstein_distance_np(hist, hist) == 0.0
 
 
 def test_batched_wasserstein_distance_handcrafted_case() -> None:
