@@ -489,6 +489,33 @@ class TestSurgeXTDatasetH5Mode:
         nested = tmp_path / "shard0" / "data.h5"
         assert SurgeXTDataset.get_stats_file_path(nested) == tmp_path / "shard0" / "stats.npz"
 
+    def test_resolves_relative_to_parent_directory(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """The stats file lives in the dataset file's parent, not next to the cwd."""
+        nested = tmp_path / "nested" / "shards" / "val.h5"
+        nested.parent.mkdir(parents=True)
+        assert SurgeXTDataset.get_stats_file_path(nested) == nested.parent / "stats.npz"
+
+    def test_load_statistics_populates_mean_and_std(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """When ``stats.npz`` is present, ``mean`` and ``std`` attributes load from disk."""
+        h5_path = tmp_path / "train.h5"
+        _write_h5_shard(h5_path, num_rows=4)
+        stats_path = _write_stats(tmp_path, mean=0.25, std=2.0)
+        with np.load(stats_path) as stats:
+            expected_mean = stats["mean"]
+            expected_std = stats["std"]
+        dataset = SurgeXTDataset(
+            h5_path,
+            batch_size=2,
+            ot=False,
+            use_saved_mean_and_variance=True,
+        )
+        try:
+            np.testing.assert_array_equal(dataset.mean, expected_mean)
+            np.testing.assert_array_equal(dataset.std, expected_std)
+        finally:
+            if dataset.dataset_file is not None:
+                dataset.dataset_file.close()
+
     def test_no_ot_does_not_call_hungarian_match(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
         """``ot=False`` short-circuits before ``_hungarian_match`` is invoked."""
         with patch("synth_setter.data.surge_datamodule._hungarian_match") as mock_match:
@@ -669,6 +696,24 @@ class TestShuffledSampler:
         flat = [int(idx) for row in sampler for idx in row]
         assert sorted(flat) == list(range(batch_size * num_batches))
 
+    def test_iter_yields_full_permutation_in_sorted_batches(self) -> None:
+        """Concatenated batches are a permutation of ``range(num_batches*batch_size)``."""
+        np_state = np.random.get_state()
+        try:
+            np.random.seed(0)
+            sampler = ShuffledSampler(batch_size=4, num_batches=6)
+            batches = list(iter(sampler))
+            assert len(batches) == 6
+            flat: list[int] = []
+            for batch in batches:
+                batch_list = list(batch)
+                assert batch_list == sorted(batch_list)
+                assert len(batch_list) == 4
+                flat.extend(batch_list)
+            assert sorted(flat) == list(range(6 * 4))
+        finally:
+            np.random.set_state(np_state)
+
 
 # --------------------------------------------------------------------------- #
 # ShiftedBatchSampler                                                         #
@@ -739,6 +784,26 @@ class TestShiftedBatchSampler:
         )
         assert pair_indices == list(range(num_batches - 1))
 
+    def test_iter_offset_zero_yields_aligned_pairs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``offset=0`` gives back the unshifted batch boundaries.
+
+        :param monkeypatch: pytest monkeypatch fixture used to pin ``random.randint``.
+        """
+        monkeypatch.setattr(random, "randint", lambda a, b: 0)
+        np_state = np.random.get_state()
+        try:
+            np.random.seed(0)
+            batch_size = 3
+            sampler = ShiftedBatchSampler(batch_size=batch_size, num_batches=4)
+            pairs = list(iter(sampler))
+            starts = sorted(start for start, _ in pairs)
+            # batches 0..(num_batches-2) at boundary 0, bs, 2*bs:
+            assert starts == [0, batch_size, 2 * batch_size]
+        finally:
+            np.random.set_state(np_state)
+
 
 # --------------------------------------------------------------------------- #
 # SurgeDataModule                                                             #
@@ -753,6 +818,21 @@ class TestSurgeDataModule:
         module = SurgeDataModule(dataset_root=str(tmp_path))
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
+
+    def test_defaults_are_stored_verbatim(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """Every ``__init__`` default lands on the matching public attribute for hparams
+        logging."""
+        module = SurgeDataModule(dataset_root=tmp_path)
+        assert module.dataset_root == tmp_path
+        assert module.use_saved_mean_and_variance is True
+        assert module.batch_size == 1024
+        assert module.ot is True
+        assert module.num_workers == 0
+        assert module.fake is False
+        assert module.repeat_first_batch is False
+        assert module.predict_file is None
+        assert module.conditioning == "mel"
+        assert module.pin_memory is True
 
     def test_setup_creates_train_val_test_splits(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
         """``setup()`` opens the three required splits and exposes them as attrs."""
