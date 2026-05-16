@@ -225,12 +225,12 @@ def main(
         zip(pred_files, target_param_files, target_audio_files),
         total=len(pred_files),
     ):
-        pred_params = torch.load(pred_file, map_location="cpu")
-        target_audio = torch.load(target_audio_file, map_location="cpu").numpy()
+        pred_params = torch.load(pred_file, map_location="cpu", weights_only=True)
+        target_audio = torch.load(target_audio_file, map_location="cpu", weights_only=True).numpy()
         target_params = (
             None
             if target_param_file is None
-            else torch.load(target_param_file, map_location="cpu")
+            else torch.load(target_param_file, map_location="cpu", weights_only=True)
         )
 
         for j in trange(pred_params.shape[0]):
