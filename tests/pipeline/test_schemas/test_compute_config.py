@@ -173,6 +173,34 @@ class TestComputeConfigFromCfg:
         with pytest.raises(FileNotFoundError):
             compute_config_from_cfg(cfg, compute_dir=tmp_path)
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "../etc/passwd",
+            "subdir/template",
+            "subdir\\template",
+            ".hidden",
+            "..",
+        ],
+    )
+    def test_path_traversing_name_rejected(  # noqa: DOC101,DOC103
+        self, tmp_path: Path, name: str
+    ) -> None:
+        """Names with path separators or leading dots are rejected, not joined to compute_dir."""
+        cfg = OmegaConf.create({"compute_template": name})
+
+        with pytest.raises(ValueError, match="filename stem"):
+            compute_config_from_cfg(cfg, compute_dir=tmp_path)
+
+    def test_trailing_yaml_extension_stripped(self) -> None:
+        """``compute_template=runpod-template.yaml`` resolves the same as without the suffix."""
+        cfg = OmegaConf.create({"compute_template": "runpod-template.yaml"})
+
+        result = compute_config_from_cfg(cfg, compute_dir=COMPUTE_DIR)
+
+        assert isinstance(result, ComputeConfig)
+        assert result.resources["cloud"] == "runpod"
+
 
 class TestComputeConfigDictRoundTrip:
     """model_dump() of a ComputeConfig is acceptable to sky.Task.from_yaml_config."""

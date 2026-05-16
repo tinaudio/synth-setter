@@ -72,9 +72,9 @@ def load_compute_config_yaml(path: Path) -> ComputeConfig:  # noqa: DOC203
     try:
         raw = yaml.safe_load(path.read_text())
     except yaml.YAMLError as exc:
-        # Re-raise as ValueError so the launcher's ``except`` tuple (which can't import
-        # the third-party ``yaml`` exception across module boundaries cleanly) wraps a
-        # syntactically invalid YAML the same way it wraps a non-mapping top-level.
+        # Re-raise as ValueError so callers (notably ``skypilot_launch.py``) can catch
+        # parse and validation failures with the same ``except`` clause without taking a
+        # direct dependency on PyYAML's exception hierarchy.
         raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
     if raw is None:
         raw = {}
@@ -102,12 +102,18 @@ def compute_config_from_cfg(  # noqa: DOC203
     The field is ``compute_template`` (not ``compute``) so Hydra doesn't treat
     ``compute=X`` as a defaults-list override against the ``configs/compute/`` group.
 
+    A trailing ``.yaml`` on the name is tolerated (and stripped) so users can write either
+    ``compute_template=runpod-template`` or ``compute_template=runpod-template.yaml``. Path
+    separators (``/``, ``\\``) and leading dots are rejected so the name can't escape
+    ``compute_dir`` or resolve to a hidden file.
+
     :param cfg: Hydra DictConfig with a string ``compute_template`` field naming the file.
     :param compute_dir: Directory containing ``<name>.yaml`` compute templates.
     :returns: Validated ``ComputeConfig`` populated from
         ``compute_dir/<cfg.compute_template>.yaml``.
     :raises KeyError: ``cfg`` has no ``compute_template`` key.
-    :raises ValueError: ``cfg.compute_template`` is not a non-empty string.
+    :raises ValueError: ``cfg.compute_template`` is not a non-empty filename stem
+        (e.g. contains path separators or a leading dot).
     """
     if "compute_template" not in cfg:
         raise KeyError(
@@ -118,4 +124,10 @@ def compute_config_from_cfg(  # noqa: DOC203
         raise ValueError(
             f"cfg.compute_template must be a non-empty string template name, got {name!r}"
         )
-    return load_compute_config_yaml(compute_dir / f"{name}.yaml")
+    stem = name[: -len(".yaml")] if name.endswith(".yaml") else name
+    if not stem or stem.startswith(".") or any(sep in stem for sep in ("/", "\\")):
+        raise ValueError(
+            f"cfg.compute_template must be a simple filename stem (no path separators or "
+            f"leading dots), got {name!r}"
+        )
+    return load_compute_config_yaml(compute_dir / f"{stem}.yaml")
