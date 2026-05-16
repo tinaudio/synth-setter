@@ -84,6 +84,26 @@ def _set_up_module(**kwargs: object) -> Iterator[SurgeDataModule]:  # noqa: DOC1
             predict_dataset.dataset_file.close()
 
 
+def _read_h5_slice(h5_path: Path, key: str, idx: object) -> np.ndarray:
+    """Open ``h5_path`` and return ``f[key][idx]`` narrowed to :class:`numpy.ndarray`.
+
+    Pyright sees ``h5py.File.__getitem__`` as returning ``Group | Dataset | Datatype``,
+    so plain ``f["param_array"][1:5]`` flags a ``reportIndexIssue``. Tests use this
+    helper to centralize the cast and keep arrange blocks readable.
+
+    :param h5_path: Path to a closed HDF5 file the helper will open read-only.
+    :param key: Dataset name inside the file (``param_array``, ``mel_spec``, ...).
+    :param idx: Any h5py-supported index (slice, list, tuple).
+
+    :return: The raw NumPy slice; the caller is free to compare or transform it.
+    :rtype: np.ndarray
+    """
+    with h5py.File(h5_path, "r") as f:
+        dataset = f[key]
+        assert isinstance(dataset, h5py.Dataset)
+        return dataset[idx]
+
+
 def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
     """Assert ``maybe_tensor`` is non-None and return it as a ``torch.Tensor``.
 
@@ -331,31 +351,54 @@ class TestSurgeXTDatasetH5Mode:
 
     def test_getitem_int_returns_batch_size_slice(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
         """Integer index ``i`` reads rows ``[i*B : i*B+B]`` from each dataset."""
+        # ``rescale_params=True`` (default) applies ``x * 2 - 1`` to params.
+        expected_params = _read_h5_slice(single_h5, "param_array", slice(2, 4)) * 2 - 1
+        expected_mel = _read_h5_slice(single_h5, "mel_spec", slice(2, 4))
         dataset = SurgeXTDataset(
             single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
         item = dataset[1]
-        assert _unwrap(item["params"]).shape[0] == 2
-        assert _unwrap(item["mel_spec"]).shape[0] == 2
+        torch.testing.assert_close(
+            _unwrap(item["params"]), torch.from_numpy(expected_params).to(torch.float32)
+        )
+        torch.testing.assert_close(
+            _unwrap(item["mel_spec"]), torch.from_numpy(expected_mel).to(torch.float32)
+        )
 
     def test_getitem_tuple_returns_explicit_slice(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
         """A 2-tuple index ``(lo, hi)`` selects rows ``[lo:hi]`` directly."""
+        expected_params = _read_h5_slice(single_h5, "param_array", slice(1, 5)) * 2 - 1
+        expected_mel = _read_h5_slice(single_h5, "mel_spec", slice(1, 5))
         dataset = SurgeXTDataset(
             single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
         item = dataset[(1, 5)]
-        assert _unwrap(item["params"]).shape[0] == 4
+        torch.testing.assert_close(
+            _unwrap(item["params"]), torch.from_numpy(expected_params).to(torch.float32)
+        )
+        torch.testing.assert_close(
+            _unwrap(item["mel_spec"]), torch.from_numpy(expected_mel).to(torch.float32)
+        )
 
     def test_getitem_sequence_falls_through_to_ds_fancy_indexing(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
         """A non-int / non-2-tuple index falls through to ``ds[idx]`` fancy indexing."""
+        expected_params = _read_h5_slice(single_h5, "param_array", [0, 2, 4]) * 2 - 1
+        expected_mel = _read_h5_slice(single_h5, "mel_spec", [0, 2, 4])
         dataset = SurgeXTDataset(
             single_h5, batch_size=2, ot=False, use_saved_mean_and_variance=False
         )
         item = dataset[[0, 2, 4]]
-        assert _unwrap(item["params"]).shape[0] == 3
+        torch.testing.assert_close(
+            _unwrap(item["params"]), torch.from_numpy(expected_params).to(torch.float32)
+        )
+        torch.testing.assert_close(
+            _unwrap(item["mel_spec"]), torch.from_numpy(expected_mel).to(torch.float32)
+        )
 
     def test_repeat_first_batch_ignores_idx(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
         """``repeat_first_batch=True`` always returns the first ``batch_size`` rows."""
+        expected_params = _read_h5_slice(single_h5, "param_array", slice(None, 3)) * 2 - 1
+        expected_mel = _read_h5_slice(single_h5, "mel_spec", slice(None, 3))
         dataset = SurgeXTDataset(
             single_h5,
             batch_size=3,
@@ -365,7 +408,18 @@ class TestSurgeXTDatasetH5Mode:
         )
         first = dataset[0]
         later = dataset[2]
-        assert torch.equal(_unwrap(first["params"]), _unwrap(later["params"]))
+        # Both indices return the same prefix slice from disk — pin the actual
+        # values, not just inter-call equality, so a regression that returns
+        # any constant slice is still caught.
+        for batch in (first, later):
+            torch.testing.assert_close(
+                _unwrap(batch["params"]),
+                torch.from_numpy(expected_params).to(torch.float32),
+            )
+            torch.testing.assert_close(
+                _unwrap(batch["mel_spec"]),
+                torch.from_numpy(expected_mel).to(torch.float32),
+            )
 
     def test_returned_tensors_are_float32(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
         """All numeric tensors come back as ``torch.float32`` for AMP compatibility."""
@@ -489,6 +543,33 @@ class TestSurgeXTDatasetH5Mode:
         nested = tmp_path / "shard0" / "data.h5"
         assert SurgeXTDataset.get_stats_file_path(nested) == tmp_path / "shard0" / "stats.npz"
 
+    def test_resolves_relative_to_parent_directory(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """The stats file lives in the dataset file's parent, not next to the cwd."""
+        nested = tmp_path / "nested" / "shards" / "val.h5"
+        nested.parent.mkdir(parents=True)
+        assert SurgeXTDataset.get_stats_file_path(nested) == nested.parent / "stats.npz"
+
+    def test_load_statistics_populates_mean_and_std(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """When ``stats.npz`` is present, ``mean`` and ``std`` attributes load from disk."""
+        h5_path = tmp_path / "train.h5"
+        _write_h5_shard(h5_path, num_rows=4)
+        stats_path = _write_stats(tmp_path, mean=0.25, std=2.0)
+        with np.load(stats_path) as stats:
+            expected_mean = stats["mean"]
+            expected_std = stats["std"]
+        dataset = SurgeXTDataset(
+            h5_path,
+            batch_size=2,
+            ot=False,
+            use_saved_mean_and_variance=True,
+        )
+        try:
+            np.testing.assert_array_equal(dataset.mean, expected_mean)
+            np.testing.assert_array_equal(dataset.std, expected_std)
+        finally:
+            if dataset.dataset_file is not None:
+                dataset.dataset_file.close()
+
     def test_no_ot_does_not_call_hungarian_match(self, single_h5: Path) -> None:  # noqa: DOC101,DOC103
         """``ot=False`` short-circuits before ``_hungarian_match`` is invoked."""
         with patch("synth_setter.data.surge_datamodule._hungarian_match") as mock_match:
@@ -606,15 +687,27 @@ class TestWithinChunkShuffledSampler:
 
     def test_all_indices_unique_when_evenly_divisible(self) -> None:
         """No index is repeated across the full epoch when ``num_batches`` divides cleanly."""
-        sampler = WithinChunkShuffledSampler(batch_size=4, num_batches=6, batches_per_group=2)
-        flat = [idx for row in sampler for idx in row]
-        assert len(flat) == len(set(flat))
+        batch_size, num_batches = 4, 6
+        sampler = WithinChunkShuffledSampler(
+            batch_size=batch_size, num_batches=num_batches, batches_per_group=2
+        )
+        flat = [int(idx) for row in sampler for idx in row]
+        # Strengthen the uniqueness check: the sampler must yield exactly the
+        # expected index range, not just any unique values that pass the
+        # ``len == len(set)`` check (e.g. emitting ``[1000, 1001, ...]`` would
+        # still pass uniqueness while silently skipping rows 0..N-1).
+        assert sorted(flat) == list(range(batch_size * num_batches))
 
     def test_all_indices_unique_with_remainder_group(self) -> None:
         """The remainder group keeps overall uniqueness intact."""
-        sampler = WithinChunkShuffledSampler(batch_size=4, num_batches=7, batches_per_group=3)
-        flat = [idx for row in sampler for idx in row]
-        assert len(flat) == len(set(flat))
+        batch_size, num_batches = 4, 7
+        sampler = WithinChunkShuffledSampler(
+            batch_size=batch_size, num_batches=num_batches, batches_per_group=3
+        )
+        flat = [int(idx) for row in sampler for idx in row]
+        # Same strengthening as ``test_all_indices_unique_when_evenly_divisible``
+        # — pin the actual index range covered, not just uniqueness.
+        assert sorted(flat) == list(range(batch_size * num_batches))
 
     def test_indices_respect_group_boundaries(self) -> None:
         """Each batch's indices live entirely within one ``batches_per_group``-sized window."""
@@ -630,9 +723,26 @@ class TestWithinChunkShuffledSampler:
 
     def test_remainder_group_produces_smaller_groups(self) -> None:
         """When ``num_batches % batches_per_group != 0`` the tail group still emits batches."""
-        sampler = WithinChunkShuffledSampler(batch_size=4, num_batches=5, batches_per_group=3)
+        batch_size, num_batches, batches_per_group = 4, 5, 3
+        sampler = WithinChunkShuffledSampler(
+            batch_size=batch_size,
+            num_batches=num_batches,
+            batches_per_group=batches_per_group,
+        )
         rows = list(sampler)
-        assert len(rows) == 5
+        assert len(rows) == num_batches
+        # Strengthen: also assert the remainder tail keeps the contract that
+        # every dataset row is visited exactly once — a regression that drops
+        # the remainder group entirely would still pass ``len(rows) == 5``.
+        flat = [int(idx) for row in rows for idx in row]
+        assert sorted(flat) == list(range(batch_size * num_batches))
+        # Pin the group-boundary contract on the remainder tail: every batch's
+        # indices live inside one ``batches_per_group``-sized window — including
+        # the tail group, which is smaller than the others.
+        samples_per_group = batch_size * batches_per_group
+        for row in rows:
+            group_ids = {int(idx) // samples_per_group for idx in row}
+            assert len(group_ids) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -668,6 +778,24 @@ class TestShuffledSampler:
         sampler = ShuffledSampler(batch_size=batch_size, num_batches=num_batches)
         flat = [int(idx) for row in sampler for idx in row]
         assert sorted(flat) == list(range(batch_size * num_batches))
+
+    def test_iter_yields_full_permutation_in_sorted_batches(self) -> None:
+        """Concatenated batches are a permutation of ``range(num_batches*batch_size)``."""
+        np_state = np.random.get_state()
+        try:
+            np.random.seed(0)
+            sampler = ShuffledSampler(batch_size=4, num_batches=6)
+            batches = list(iter(sampler))
+            assert len(batches) == 6
+            flat: list[int] = []
+            for batch in batches:
+                batch_list = list(batch)
+                assert batch_list == sorted(batch_list)
+                assert len(batch_list) == 4
+                flat.extend(batch_list)
+            assert sorted(flat) == list(range(6 * 4))
+        finally:
+            np.random.set_state(np_state)
 
 
 # --------------------------------------------------------------------------- #
@@ -739,6 +867,26 @@ class TestShiftedBatchSampler:
         )
         assert pair_indices == list(range(num_batches - 1))
 
+    def test_iter_offset_zero_yields_aligned_pairs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``offset=0`` gives back the unshifted batch boundaries.
+
+        :param monkeypatch: pytest monkeypatch fixture used to pin ``random.randint``.
+        """
+        monkeypatch.setattr(random, "randint", lambda a, b: 0)
+        np_state = np.random.get_state()
+        try:
+            np.random.seed(0)
+            batch_size = 3
+            sampler = ShiftedBatchSampler(batch_size=batch_size, num_batches=4)
+            pairs = list(iter(sampler))
+            starts = sorted(start for start, _ in pairs)
+            # batches 0..(num_batches-2) at boundary 0, bs, 2*bs:
+            assert starts == [0, batch_size, 2 * batch_size]
+        finally:
+            np.random.set_state(np_state)
+
 
 # --------------------------------------------------------------------------- #
 # SurgeDataModule                                                             #
@@ -753,6 +901,21 @@ class TestSurgeDataModule:
         module = SurgeDataModule(dataset_root=str(tmp_path))
         assert module.dataset_root == tmp_path
         assert isinstance(module.dataset_root, Path)
+
+    def test_defaults_are_stored_verbatim(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """Every ``__init__`` default lands on the matching public attribute for hparams
+        logging."""
+        module = SurgeDataModule(dataset_root=tmp_path)
+        assert module.dataset_root == tmp_path
+        assert module.use_saved_mean_and_variance is True
+        assert module.batch_size == 1024
+        assert module.ot is True
+        assert module.num_workers == 0
+        assert module.fake is False
+        assert module.repeat_first_batch is False
+        assert module.predict_file is None
+        assert module.conditioning == "mel"
+        assert module.pin_memory is True
 
     def test_setup_creates_train_val_test_splits(self, dataset_root: Path) -> None:  # noqa: DOC101,DOC103
         """``setup()`` opens the three required splits and exposes them as attrs."""
