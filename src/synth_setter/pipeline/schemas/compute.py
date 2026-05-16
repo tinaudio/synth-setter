@@ -33,6 +33,10 @@ class ComputeConfig(BaseModel):  # noqa: DOC601,DOC603
     touching this schema.
     """
 
+    # ``strict=False`` (not strict=True like DatasetSpec/ImageConfig) because SkyPilot Task
+    # YAMLs carry mixed-type values inside ``resources`` (e.g. ``disk_size: 50`` ints, ``cpus: 1+``
+    # strings, accelerators flow-mapping idioms); ``yaml.safe_load`` already normalizes scalars
+    # by syntax, and SkyPilot owns the final type contract via ``from_yaml_config``.
     model_config = ConfigDict(strict=False, frozen=True, extra="allow")
 
     resources: dict[str, Any]

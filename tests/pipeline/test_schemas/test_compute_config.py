@@ -154,7 +154,7 @@ class TestComputeConfigFromCfg:
         """A cfg without a `compute_template` field is a programming error — surface loudly."""
         cfg = OmegaConf.create({"other": "thing"})
 
-        with pytest.raises((KeyError, AttributeError, ValueError)):
+        with pytest.raises(KeyError, match="compute_template"):
             compute_config_from_cfg(cfg, compute_dir=COMPUTE_DIR)
 
     def test_empty_name_raises(self) -> None:

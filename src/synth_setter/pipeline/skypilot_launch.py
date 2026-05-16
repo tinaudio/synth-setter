@@ -53,6 +53,7 @@ from pathlib import Path
 import click
 import sky
 import sky.jobs  # managed-jobs SDK: sky.jobs.launch / tail_logs / cancel
+import yaml
 from dotenv import dotenv_values
 from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
@@ -575,7 +576,7 @@ def main(
     # surfaces here (one clear ClickException) rather than half-way through provisioning.
     try:
         compute_config = load_compute_config_yaml(template_path)
-    except (FileNotFoundError, ValueError, ValidationError) as exc:
+    except (FileNotFoundError, ValueError, ValidationError, yaml.YAMLError) as exc:
         raise click.ClickException(
             f"failed to load compute template {template_path}: {exc}"
         ) from exc
