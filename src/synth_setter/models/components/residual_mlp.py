@@ -93,7 +93,7 @@ class ConditionalResidualMLPBlock(nn.Module):
 
 
 class ConditionalResidualMLP(nn.Module):
-    """Flow-matching vector field: conditional residual MLP with timestep + audio context."""
+    """Conditional residual MLP for flow matching with timestep and audio context."""
 
     def __init__(
         self,

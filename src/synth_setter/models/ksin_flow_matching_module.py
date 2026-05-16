@@ -240,7 +240,8 @@ class KSinFlowMatchingModule(LightningModule):
     def _sample_x0_and_x1(self, params: torch.Tensor, z: torch.Tensor):
         """Apply the coupling scheme selected by ``self.hparams.coupling``.
 
-        See https://proceedings.mlr.press/v202/pooladian23a/pooladian23a.pdf#page=5.59.
+        Coupling schemes follow Pooladian et al.
+        (https://proceedings.mlr.press/v202/pooladian23a/pooladian23a.pdf#page=5).
         """
         if self.hparams.coupling == "uniform":
             x0, x1 = self._basic_sample(params)

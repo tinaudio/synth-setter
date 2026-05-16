@@ -1,4 +1,4 @@
-"""Runs evaluations in the paper.
+"""Run paper evaluations against rendered audio.
 
 Expects audio in the following folder structure:
 

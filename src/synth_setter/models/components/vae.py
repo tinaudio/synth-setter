@@ -25,9 +25,10 @@ from synth_setter.data.vst.param_spec import (
 
 
 class CustomRealNVP(CompositeTransform):
-    """Taken from https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/flows.py
+    """RealNVP flow adapted from Le Vaillant et al.
 
-    Le Vaillant et al"""
+    Source: https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/flows.py.
+    """
 
     def __init__(
         self,
@@ -80,9 +81,11 @@ class CustomRealNVP(CompositeTransform):
 
 
 class EncoderBlock(nn.Module):
-    """Like https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/encoder.py
+    """Spectrogram encoder block: a Le-Vaillant-et-al-style conv stack with added residual connections.
 
-    but with added residual connections because that's what we do now."""
+    Source for the base architecture:
+    https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/encoder.py.
+    """
 
     def __init__(
         self,
@@ -151,9 +154,11 @@ class Encoder(nn.Module):
 
 
 class DecoderBlock(nn.Module):
-    """Like https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/decoder.py
+    """Spectrogram decoder block: a Le-Vaillant-et-al-style conv stack with added residual connections.
 
-    but with added residual connections because that's what we do now."""
+    Source for the base architecture:
+    https://github.com/gwendal-lv/preset-gen-vae/blob/main/model/decoder.py.
+    """
 
     def __init__(
         self,

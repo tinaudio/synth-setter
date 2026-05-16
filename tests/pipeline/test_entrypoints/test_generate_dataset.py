@@ -207,9 +207,7 @@ class TestRun:
         mock_check_call: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """The VST subprocess is prefixed with docker/ubuntu22_04/run-linux-vst-headless.sh on.
-
-        Linux.
+        """Prefix the VST subprocess with ``run-linux-vst-headless.sh`` on Linux.
 
         X11 bootstrap lives at the audio-rendering boundary (this subprocess) so the
         docker_entrypoint click CLI can stay X11-agnostic — idle and passthrough modes don't pay
@@ -428,10 +426,9 @@ class TestRun:
         mock_check_call: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """When the plugin's actual version disagrees with spec.renderer_version, run() fails.
+        """Fail before any rclone/subprocess work when plugin version disagrees with spec.
 
-        before any rclone/subprocess work happens (prevents emitting a shard tagged with the wrong
-        renderer_version).
+        This prevents emitting a shard tagged with the wrong renderer_version.
         """
         kwargs = _base_spec_kwargs(tmp_path)
         kwargs["render"] = {**kwargs["render"], "renderer_version": "999.999.999"}  # type: ignore[dict-item]

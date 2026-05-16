@@ -46,11 +46,10 @@ def _log_figure(trainer: Trainer, key: str, fig: Figure) -> None:
 
 
 class PlotLossPerTimestep(Callback):
-    """Takes a batch from the validation dataloader, and runs it through the model at a number of.
+    """Plot validation loss as a function of the flow-matching timestep ``t``.
 
-    different values for t.
-
-    Plots the loss as a function of t.
+    Runs a single validation batch through the model at ``num_timesteps`` different ``t``
+    values and logs a loss-vs-``t`` figure to each attached logger.
     """
 
     def __init__(self, num_timesteps: int = 100):

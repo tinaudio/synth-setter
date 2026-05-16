@@ -132,10 +132,7 @@ def test_find_new_defs_ignores_non_excluded_file() -> None:
 
 
 def test_find_new_defs_ignores_in_function_indented_def() -> None:
-    """Nested `def` inside an existing function isn't a new top-level/method declaration to.
-
-    flag.
-    """
+    """Nested `def` inside an existing function isn't a new top-level/method declaration."""
     diff = (
         "diff --git a/src/eval.py b/src/eval.py\n"
         "--- a/src/eval.py\n"
@@ -193,9 +190,9 @@ def test_find_new_defs_ignores_addition_in_test_diff_artifact() -> None:
 
 
 def test_find_new_defs_does_not_count_no_newline_marker_toward_line_numbers() -> None:
-    r"""``\ No newline at end of file`` is diff metadata, not a file line — line numbers after the.
+    r"""``\ No newline at end of file`` is diff metadata, not a file line.
 
-    marker must not be skewed.
+    Line numbers after the marker must not be skewed.
     """
     diff = (
         "diff --git a/src/eval.py b/src/eval.py\n"

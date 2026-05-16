@@ -161,10 +161,7 @@ class TestIdle:
     def test_idle_exec_failure_becomes_click_exception(
         self, runner: CliRunner, entrypoint: ModuleType
     ) -> None:
-        """If ``sleep`` can't be exec'd, the failure surfaces as a ClickException exit, not a.
-
-        traceback.
-        """
+        """Surface ``sleep`` exec failure as a ClickException exit, not a traceback."""
 
         def fake_execvp(program: str, argv: list[str]) -> None:
             raise FileNotFoundError(2, "No such file or directory", program)

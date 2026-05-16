@@ -216,10 +216,7 @@ def _validate_metrics_df(
     metrics_df: pd.DataFrame,
     expected: _MetricsFileSpec,
 ) -> None:
-    """Verify ``metrics_df`` has the expected row count and a superset of expected columns, and.
-
-    that the expected columns are entirely finite.
-    """
+    """Verify ``metrics_df`` row count, column superset, and finite values in expected columns."""
     if len(metrics_df) != expected.rows:
         raise ValueError(f"{metrics_path}: expected {expected.rows} rows, got {len(metrics_df)}")
     missing_columns = expected.columns - set(metrics_df.columns)
@@ -267,10 +264,7 @@ class PredictionRefType(click.ParamType):
         param: click.Parameter | None,
         ctx: click.Context | None,
     ) -> PredictionRef:
-        """Parse a ``PATH:BATCH_IDX`` string (or pass-through ``PredictionRef``) into a.
-
-        ``PredictionRef``.
-        """
+        """Parse ``PATH:BATCH_IDX`` into a ``PredictionRef`` (pass through if already one)."""
         if isinstance(value, PredictionRef):
             return value
         path_str, sep, idx_str = value.rpartition(":")
@@ -296,10 +290,7 @@ class DatasetRefType(click.ParamType):
         param: click.Parameter | None,
         ctx: click.Context | None,
     ) -> DatasetRef:
-        """Parse a ``PATH:DATASET_IDX`` string (or pass-through ``DatasetRef``) into a.
-
-        ``DatasetRef``.
-        """
+        """Parse ``PATH:DATASET_IDX`` into a ``DatasetRef`` (pass through if already one)."""
         if isinstance(value, DatasetRef):
             return value
         path_str, sep, idx_str = value.rpartition(":")
@@ -1269,10 +1260,9 @@ def _maybe_eval_captured_patches(
     *,
     eval_runner: EvalRunner | None = None,
 ) -> None:
-    """Replicate captured patches into the four eval-pipeline splits and run eval_patches if a.
+    """Replicate captured patches into the eval-pipeline splits and run eval_patches.
 
-    checkpoint is provided; no-op otherwise.
-
+    No-op if no checkpoint is provided.
     The Click ``--checkpoint-path`` option already validates ``exists=True``, so when this is
     invoked from ``main`` ``checkpoint_path`` is guaranteed to refer to an existing file.
     ``param_spec_name`` and ``preset_path`` are forwarded to ``eval_patches`` so the predict /

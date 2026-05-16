@@ -268,8 +268,17 @@ native-mode-noqa-location = "definition"
 # used to be on the path exclude list — fail the hook. Audit baseline
 # diffs in PR reviews; cleanup chunks delete rows. See #938.
 baseline = ".pydoclint-baseline.txt"
+# Disabled so pydoclint won't silently shrink the baseline when a contributor
+# fixes a row's underlying violation. Regenerate manually with
+# `pydoclint --generate-baseline=1 src/ tests/ scripts/` and commit the diff.
+# Otherwise a successful fix produces a "no new violations, count unchanged"
+# outcome that's hard to reason about. Tracked under #938.
 auto-regenerate-baseline = false
-# Path-level exclude regex (verbose). Infra-only after the baseline swap.
+# Path-level exclude regex (verbose). Infra-only after the baseline swap —
+# tests/fixtures/ retained because tests/fixtures/baseline_repo and diff_repo
+# are mock-repo data shelled out to by the test suite (conceptually adjacent
+# to notebooks/: code-but-not-production-code), not legacy violations to
+# clean up via the baseline.
 exclude = '''(?x)
     (^|/)\.git(/|$)
   | (^|/)\.tox(/|$)

@@ -100,10 +100,7 @@ class TestDownloadedToTempfile:
     """Tests for the downloaded_to_tempfile context manager."""
 
     def test_yields_local_path_named_after_uri_basename(self) -> None:
-        """The yielded Path's name matches the URI's last path segment, and the tempdir is cleaned.
-
-        on exit.
-        """
+        """Yielded path name matches URI's last segment; tempdir is cleaned on exit."""
         seen: list[Path] = []
 
         def fake_check_call(args: list[str]) -> None:

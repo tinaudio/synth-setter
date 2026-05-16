@@ -553,9 +553,7 @@ class PatchEmbed(nn.Module):
 
 
 class AudioSpectrogramTransformer(nn.Module):
-    """Based on the AST from https://arxiv.org/abs/2104.01778, but adapted to pre-norm
-
-    transformer.
+    """Pre-norm adaptation of the Audio Spectrogram Transformer (https://arxiv.org/abs/2104.01778).
 
     Components:
         1. patch split with overlap
@@ -632,9 +630,7 @@ class AudioSpectrogramTransformer(nn.Module):
 
 
 class ASTWithProjectionHead(AudioSpectrogramTransformer):
-    """Based on the AST from https://arxiv.org/abs/2104.01778, but adapted to pre-norm
-
-    transformer.
+    """Pre-norm AST (https://arxiv.org/abs/2104.01778) with a learned projection head on top.
 
     Components:
         1. patch split with overlap

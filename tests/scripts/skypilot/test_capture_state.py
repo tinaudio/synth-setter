@@ -125,9 +125,9 @@ class TestBaseCaptureFiles:
     """The four base capture files are always written, even when kubectl emits nothing."""
 
     def test_creates_out_dir_and_base_files(self, tmp_path: Path) -> None:
-        """With a no-op kubectl shim, the script still creates ``k8s_state/`` and the four cluster-
+        """Create ``k8s_state/`` and the four cluster-overview files under a no-op kubectl shim.
 
-        overview files (pods, events, nodes, pods-yaml).
+        The four files are pods, events, nodes, and pods-yaml.
 
         :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and
             RUN_METADATA_DIR.
@@ -392,9 +392,10 @@ def test_script_exits_zero_under_various_kubectl_behaviors(
     tmp_path: Path,
     shim_body: str,
 ) -> None:
-    """Whatever kubectl does (success, success-with-output, failure), the script completes.
+    """Script completes successfully under any kubectl behavior.
 
-    successfully — best-effort tolerance is a contract.
+    Whether kubectl returns success, success-with-output, or failure, the script completes — best-
+    effort tolerance is a contract.
 
     :param tmp_path: pytest temp directory fixture; hosts the kubectl shim and RUN_METADATA_DIR.
     :param shim_body: Parametrized bash body installed as the kubectl shim.

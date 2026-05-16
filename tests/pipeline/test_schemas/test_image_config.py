@@ -1,6 +1,4 @@
-"""Tests for src/synth_setter/pipeline/schemas/image_config.py — image creation config schema and.
-
-loader.
+"""Tests for src/synth_setter/pipeline/schemas/image_config.py — image config schema and loader.
 
 Tests are organized around the PUBLIC typed API:
 - load_image_config(): loads YAML config, merges runtime inputs, validates via Pydantic

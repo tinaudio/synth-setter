@@ -223,9 +223,7 @@ def test_train_eval_surge_xt(
     cfg_surge_xt_eval: DictConfig,
     param_spec_name: str,
 ) -> None:
-    """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run
-
-    standalone eval on the saved checkpoint.
+    """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run standalone eval on the saved checkpoint.
 
     :param tmp_path: The temporary logging path.
     :param cfg_surge_xt: Surge XT smoke-test training config.
