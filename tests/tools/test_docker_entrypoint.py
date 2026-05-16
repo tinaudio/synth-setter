@@ -1,6 +1,4 @@
-"""Tests for src/synth_setter/tools/docker_entrypoint.py — click-based CLI with per-mode spec.
-
-parsing.
+"""Tests for ``synth_setter.tools.docker_entrypoint`` (click CLI with per-mode spec parsing).
 
 The entrypoint is a click group with five subcommands:
   - idle                → execs ``sleep infinity``
@@ -31,9 +29,7 @@ from synth_setter.tools import docker_entrypoint as _docker_entrypoint_module
 
 @pytest.fixture()
 def _detach_pytest_live_logging_handler() -> Iterator[None]:
-    """Detach pytest's live-logging handler for tests that drive a CliRunner callback whose error.
-
-    path calls ``logger.error(...)``.
+    """Detach pytest's live-logging handler for tests whose CliRunner callback hits an error path.
 
     Why: when ``log_cli=True`` (project default), pytest installs
     ``_LiveLoggingStreamHandler`` on the root logger. Its ``emit()`` opens a

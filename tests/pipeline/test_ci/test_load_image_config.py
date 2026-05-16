@@ -1,6 +1,4 @@
-"""Tests for src/synth_setter/pipeline/ci/load_image_config.py — GITHUB_OUTPUT writer for image.
-
-config.
+"""Tests for ``synth_setter.pipeline.ci.load_image_config`` (GITHUB_OUTPUT image-config writer).
 
 Tests are organized around the PUBLIC API:
 - main(): parses CLI args, loads config, writes key=value lines to GITHUB_OUTPUT or stdout

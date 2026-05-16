@@ -706,13 +706,12 @@ def _run_predict(
 
 
 def _validate_predictions(predictions_output_dir: Path, num_samples: int) -> None:
-    """Verify ``PredictionWriter`` (``src/synth_setter/utils/callbacks.py``) wrote the expected.
+    """Verify ``PredictionWriter`` wrote the expected per-sample files and finite tensors.
 
-    per-sample ``pred-{i}.pt``, ``target-audio-{i}.pt``, and ``target-params-{i}.pt`` files, and
-    that prediction tensors are finite.
-
-    Tensors are loaded onto CPU regardless of the device they were saved from so this works across
-    mps/cuda/cpu predict runs.
+    Checks for the ``pred-{i}.pt``, ``target-audio-{i}.pt``, and ``target-params-{i}.pt`` files
+    written by ``synth_setter.utils.callbacks.PredictionWriter``, and that every prediction
+    tensor is finite. Tensors are loaded onto CPU regardless of the device they were saved from
+    so this works across mps/cuda/cpu predict runs.
 
     :raises FileNotFoundError: if the expected files are missing or extras are present.
     :raises ValueError: if any ``pred-{i}.pt`` tensor contains NaN/Inf.
