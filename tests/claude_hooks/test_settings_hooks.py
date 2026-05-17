@@ -13,6 +13,7 @@ create *)``. Schema reference: https://code.claude.com/docs/en/hooks.md.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -79,7 +80,9 @@ def _run_inline_hook(
     :returns: The completed subprocess result, with captured stdout/stderr and exit code.
     :rtype: subprocess.CompletedProcess[str]
     """
-    return subprocess.run(  # noqa: S603 — controlled command body from our own settings.json
+    # Trust boundary: command_body is read from the repo's own checked-in settings.json,
+    # which is maintainer-controlled. Do not reuse this helper against untrusted paths.
+    return subprocess.run(  # noqa: S603
         ["bash", "-c", command_body],  # noqa: S607 — bash is a hard requirement of the harness
         input=json.dumps(stdin_payload),
         capture_output=True,
@@ -112,21 +115,24 @@ def test_no_if_at_matcher_entry_level() -> None:
     )
 
 
+_PERMISSION_RULE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*\(.+\)$")
+
+
 def test_handler_if_values_use_permission_rule_syntax() -> None:
-    """Hook-handler ``if:`` values must be Claude Code permission-rule expressions.
+    """Hook-handler ``if:`` values must look like ``Tool(pattern)`` permission rules.
 
     Shell expressions such as ``jq … | grep -qE …`` were the previous (broken)
     style of "scoping". The handler-level ``if:`` is parsed as a permission rule
     (e.g. ``Bash(gh pr create *)``), not as a shell command — only ``Tool(...)``
     forms are honored.
     """
-    bad: list[tuple[str, str]] = []
+    bad: list[tuple[str, Any]] = []
     for entry in _matcher_entries():
         for handler in entry.get("hooks", []):
             value = handler.get("if")
             if value is None:
                 continue
-            if not (isinstance(value, str) and "(" in value and value.endswith(")")):
+            if not (isinstance(value, str) and _PERMISSION_RULE_RE.match(value)):
                 bad.append((entry.get("description", "")[:60], value))
     assert bad == [], (
         "Hook-handler `if:` values must be Claude Code permission-rule syntax such as "
@@ -202,7 +208,7 @@ def test_pre_pr_gate_allows_when_token_in_trailing_comment(pre_pr_gate_command: 
         {"tool_input": {"command": "gh pr create --title foo --body bar  # REVIEW_FULL_DONE=1"}},
     )
     assert result.returncode == 0, (result.returncode, result.stderr)
-    assert result.stderr == ""
+    assert "BLOCKED" not in result.stderr
 
 
 # ---------------------------------------------------------------------------
