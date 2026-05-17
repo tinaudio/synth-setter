@@ -85,9 +85,25 @@ Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `secu
 
 **Comment hygiene (CLAUDE.md "Comment Hygiene" + "No Comments Inside YAML run: Block-Scalars")**
 
-- [comment-hygiene] No comment restates a constant value, count, or list contents (`# 6 samples`, `# three things: a, b, c`).
-- [comment-hygiene] No multi-paragraph essay-comments. If a comment runs more than ~2 lines, replace with a one-line pointer to a GitHub issue.
-- [yaml-bash] **No `#`-comments inside `run: |` or `setup: |` block-scalars** in `.github/workflows/*.{yml,yaml}` or `configs/compute/*.yaml`. Comments belong ABOVE the `run:` key, not inside the bash. This is a HARD project rule — flag every occurrence as BLOCK.
+Rule IDs `C1`–`C12` are the full BLOCK/WARN schema in the plugin's `comment-hygiene` skill (run via `/repo-review-full` or directly when the plugin is available). The MVP repeats the same rule IDs inline so external contributors and plugin-less environments still get coverage; what the MVP omits is the plugin's per-finding `Before / After` rewrites (and the two NIT-severity items C13–C14). When in doubt about a flag, defer to the plugin's per-finding rewrites.
+
+BLOCK items (hard CLAUDE.md rules — always flag):
+
+- [comment-hygiene C1] **No `#`-comments inside `run: |` or `setup: |` block-scalars** in `.github/workflows/*.{yml,yaml}` or `configs/compute/*.yaml`. Comments belong ABOVE the `run:` key, not inside the bash.
+- [comment-hygiene C2] No comment restates a literal constant value next to its assignment (`num = 6  # 6 items`).
+- [comment-hygiene C3] No comment enumerates list contents in prose (`THINGS = [...]  # a, b, c`). The list IS the source of truth.
+- [comment-hygiene C4] No baked-in counts the code already reports (`# 29 comments triaged`, `# 5 metric series`) — belongs in the PR description, not in source.
+
+WARN items (bloat patterns — flag when the diff adds them):
+
+- [comment-hygiene C5] No multi-line comment essay (>2 lines) without a one-line issue/PR pointer alternative.
+- [comment-hygiene C6] No docstring `:param:` / `:return:` / `:raises:` section that only restates the type hint. Pydoclint requires the summary line only; drop the boilerplate.
+- [comment-hygiene C7] No docstring that only restates the function name (`"""Compute the mel spectrogram."""` on `compute_mel_spectrogram`).
+- [comment-hygiene C8] No generic filler opener (`"""This module provides..."""`, `"""Helper function that..."""`, `"""Utility for..."""`, `"""Wrapper around..."""`).
+- [comment-hygiene C9] No decorative banner separator (`# ----- foo -----`, `# === SECTION ===`, `# ###############`).
+- [comment-hygiene C10] No commented-out config block without a rationale comment beside it explaining why it's disabled.
+- [comment-hygiene C11] No tombstone comment for removed code (`# was X`, `# previously Y`, `# removed in #N`). Git log is authoritative.
+- [comment-hygiene C12] No `doc-map.yaml` description that packs 3+ sub-claims, nested parens, internal `§` section pointers, title-restatement, or filler hedges ("various", "several", "general purpose").
 
 **Python (CLAUDE.md "Writing Code" + plugin `python-style` BLOCK items)**
 

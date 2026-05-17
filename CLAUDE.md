@@ -234,6 +234,7 @@ Canonical checklist reference (full content lives in the plugin):
 5. `python-style` — Google Python Style Guide (21 items)
 6. `shell-style` — Google Shell Style Guide (19 items, `.sh` files + bash inside YAML `run:` blocks)
 7. `ml-test` — ML testing (25 items, model/pipeline test code)
+8. `comment-hygiene` — Inline-text hygiene (12 items; `*.py` + `.github/workflows/*.{yml,yaml}` + `configs/**/*.{yml,yaml}` + `docs/doc-map.yaml`: `#`-comments, docstrings, doc-map entries; emits suggested rewrites for every finding). Requires the `tinaudio-synth-setter-skills` plugin to be installed — `/repo-review-full` will fail-loud if the skill isn't resolvable.
 
 Review all changed code against every applicable checklist. Skip style issues (Ruff handles formatting and linting).
 

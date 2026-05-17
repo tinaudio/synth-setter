@@ -57,13 +57,15 @@ Read the file list from Step 1. Map file types → relevant skills:
 | File pattern | Skills to run |
 |---|---|
 | Always | `code-health`, `synth-setter-project-standards` |
-| `*.py` | `python-style`, `tdd-implementation` |
+| `*.py` | `python-style`, `tdd-implementation`, `comment-hygiene` |
 | `*.sh` or bash inside YAML `run:` blocks | `shell-style` |
-| `.github/workflows/*.{yml,yaml}` | `gha-workflow-validator` |
+| `.github/workflows/*.{yml,yaml}` | `gha-workflow-validator`, `comment-hygiene` |
+| Any `*.{yml,yaml}` under `configs/` | `comment-hygiene` |
+| `docs/doc-map.yaml` | `comment-hygiene` |
 | ML model / pipeline / training code under `src/synth_setter/` | `ml-data-pipeline`, `ml-test` |
 | Diff renames or moves files (anything with `R` in `git diff --name-status`) | `tdd-refactor` |
 
-Always run `code-health` and `synth-setter-project-standards`. Other skills opt in based on file extensions in the diff. Note which skills you selected; you'll launch one parallel agent per skill.
+Always run `code-health` and `synth-setter-project-standards`. Other skills opt in based on file extensions in the diff. `comment-hygiene` deduplicates: even if multiple rows above select it, fan out only one parallel agent per skill. Note which skills you selected; you'll launch one parallel agent per skill.
 
 ## Step 4: Launch parallel review agents
 
@@ -111,6 +113,7 @@ Skill → tag (short form for comment body):
 | Plugin skill | Comment-body tag |
 |---|---|
 | `code-health` | `code-health` |
+| `comment-hygiene` | `comment-hygiene` |
 | `shell-style` | `shell-style` |
 | `python-style` | `python-style` |
 | `gha-workflow-validator` | `gha` |
