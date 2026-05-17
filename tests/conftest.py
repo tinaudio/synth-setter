@@ -532,7 +532,7 @@ def cfg_surge_xt(
 ) -> DictConfig:
     """Per-test wrapper around `cfg_surge_xt_global` that sets `tmp_path`-scoped output dirs.
 
-    :param cfg_surge_xt_global: The Surge XT training config (parametrized over accelerator).
+    :param cfg_surge_xt_global: The Surge XT training config (parametrized over accelerator, param_spec_name, and experiment_name).
     :param tmp_path: The temporary logging path.
 
     :return: A DictConfig with output and log dirs pointing at `tmp_path`.
@@ -559,7 +559,7 @@ def cfg_surge_xt_eval(
     Inherits from `cfg_surge_xt_global` and points `ckpt_path` at the checkpoint
     that `cfg_surge_xt`'s training run will write under the same `tmp_path`.
 
-    :param cfg_surge_xt_global: The Surge XT training config (parametrized over accelerator).
+    :param cfg_surge_xt_global: The Surge XT training config (parametrized over accelerator, param_spec_name, and experiment_name).
     :param tmp_path: The temporary logging path (shared with `cfg_surge_xt`).
 
     :return: A DictConfig configured to evaluate a Surge XT checkpoint on the smoke-test

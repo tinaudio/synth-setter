@@ -1,11 +1,12 @@
 # @package _global_
 
 # Smoke-test experiment for Surge XT on MPS. Resolves to the same cfg as
-# ``cfg_surge_xt_global(accelerator="mps", param_spec_name="surge_4")``
-# (tests/conftest.py). The cfg-equality contract is enforced by
-# ``test_test_mps_yaml_matches_cfg_surge_xt_global`` in ``tests/test_configs.py``;
-# adding/removing knobs in the fixture or here will fail that test until both sides
-# stay in lockstep.
+# ``cfg_surge_xt_global(accelerator="mps", param_spec_name="surge_4",
+# experiment_name="surge/fake_oracle")`` (tests/conftest.py). The cfg-equality contract
+# is enforced by ``test_test_mps_yaml_matches_cfg_surge_xt_global`` in
+# ``tests/test_configs.py``; adding/removing knobs in the fixture or here will fail
+# that test until both sides stay in lockstep. The FFN sibling (`test-mps-ffn.yaml`)
+# follows the same contract for ``experiment_name="surge/ffn_full"``.
 
 defaults:
   - surge/base
