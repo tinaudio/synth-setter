@@ -49,6 +49,7 @@ import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 import click
 import sky
@@ -230,8 +231,12 @@ def _detect_provider(compute_config: ComputeConfig, template_path: Path | None =
     resources = compute_config.resources
     cloud_value = resources.get("cloud")
     if cloud_value is None:
-        any_of = resources.get("any_of") or []
-        if not isinstance(any_of, list):
+        # Only ``None`` means "absent"; other falsy values (e.g. ``any_of: 0`` or
+        # ``any_of: ""``) are malformed and should be type-checked, not silently treated
+        # as missing — the launcher must fail loudly rather than fall through to the
+        # generic "expected cloud (str)" error a few lines down.
+        any_of = resources.get("any_of")
+        if any_of is not None and not isinstance(any_of, list):
             raise click.ClickException(
                 f"Could not detect cloud from {where}; expected `resources.any_of` to be a list."
             )
@@ -670,9 +675,8 @@ def _run_workers(
     """Dispatch to the tail- or detach-mode runner; return one rc per rank.
 
     :param worker_env_base: Env dict forwarded to every rank (rank/world keys are added per call).
-    :param compute_config: Validated SkyPilot Task config passed to ``sky.Task.from_yaml_config``
-        per rank. Pre-validated by the caller so per-rank instantiation cannot surface a
-        ValidationError.
+    :param compute_config: Validated SkyPilot Task config — dumped once here and reused across
+        ranks (``ComputeConfig`` is frozen, so the dumped dict is identical for every rank).
     :param job_names: One managed-job name per rank; ``len()`` defines the world size.
     :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
     :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
@@ -682,12 +686,16 @@ def _run_workers(
         ``sky.jobs.tail_logs``).
     """
     worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
+    # Dump the validated ComputeConfig once: it's frozen and the resulting dict is identical
+    # for every rank. ``exclude_none=True`` drops ``setup: None`` so SkyPilot doesn't fault on
+    # a Null value where it expects a string.
+    task_yaml_config = compute_config.model_dump(exclude_none=True)
     launch_get_job_id = functools.partial(
         _launch_one_rank,
         job_names=job_names,
         worker_env_base=worker_env_base,
         worker_image=worker_image,
-        compute_config=compute_config,
+        task_yaml_config=task_yaml_config,
     )
     if tail:
         return _run_workers_tail(job_names, launch_get_job_id)
@@ -700,13 +708,17 @@ def _launch_one_rank(
     job_names: list[str],
     worker_env_base: dict[str, str],
     worker_image: str,
-    compute_config: ComputeConfig,
+    task_yaml_config: dict[str, Any],
 ) -> int:
     """Submit rank ``rank``'s managed job and return its ``job_id``.
 
     Used by ``_run_workers`` to fan out per-rank launches; lives at module level
     rather than as a closure so it can be tested directly without re-running
     the parent ``_run_workers`` setup.
+
+    ``task_yaml_config`` is the pre-dumped ``ComputeConfig`` dict — same dict every rank,
+    so the caller dumps once and threads it through to avoid repeated serialization at
+    scale.
 
     Raises ``click.ClickException`` if ``sky.jobs.launch`` / ``sky.stream_and_get``
     yields no ``job_id``.
@@ -719,9 +731,7 @@ def _launch_one_rank(
         NUM_WORKERS_ENV_VAR: str(num_workers),
         _WORKER_IMAGE_ENV: worker_image,
     }
-    # ``from_yaml_config`` consumes a pre-parsed dict; ``exclude_none=True`` drops
-    # ``setup: None`` so SkyPilot doesn't fault on a Null value where it expects a string.
-    task = sky.Task.from_yaml_config(compute_config.model_dump(exclude_none=True))
+    task = sky.Task.from_yaml_config(task_yaml_config)
     _override_image_id(task, worker_image)
     task.update_envs(env_for_rank)
     click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")

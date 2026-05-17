@@ -1833,6 +1833,20 @@ class TestDetectProvider:
         with pytest.raises(click.ClickException, match="(?i)any_of\\[0\\].*mapping"):
             _real_detect_provider(cfg)
 
+    @pytest.mark.parametrize("falsy_value", [0, "", False])
+    def test_falsy_non_list_any_of_raises_click_exception(  # noqa: DOC101,DOC103
+        self, falsy_value: object
+    ) -> None:
+        """Falsy non-list ``any_of`` values are type-checked, not silently dropped.
+
+        Pins that the sentinel check is ``any_of is None``, not ``not any_of`` — so an accidental
+        ``any_of: 0`` / ``any_of: ""`` template surfaces as a clean "expected a list" error
+        rather than falling through to a generic "expected cloud (str)".
+        """
+        cfg = self._make({"any_of": falsy_value})
+        with pytest.raises(click.ClickException, match="(?i)any_of.*list"):
+            _real_detect_provider(cfg)
+
 
 # ---------------------------------------------------------------------------
 # _run_cred_bootstrap — invokes the script; honors SKYPILOT_API_SERVER_ENDPOINT;
@@ -2479,9 +2493,7 @@ class TestLaunchOneRank:
             job_names=["job-0"],
             worker_env_base={"RCLONE_CONFIG_R2_TYPE": "s3"},
             worker_image="repo:tag",
-            compute_config=ComputeConfig(
-                resources={"cloud": "runpod"}, envs={}, setup="echo", run="echo"
-            ),
+            task_yaml_config={"resources": {"cloud": "runpod"}, "envs": {}, "run": "echo"},
         )
 
         assert job_id == 42
@@ -2526,9 +2538,7 @@ class TestLaunchOneRank:
                 job_names=["job-0"],
                 worker_env_base={},
                 worker_image="repo:tag",
-                compute_config=ComputeConfig(
-                    resources={"cloud": "runpod"}, envs={}, setup="echo", run="echo"
-                ),
+                task_yaml_config={"resources": {"cloud": "runpod"}, "envs": {}, "run": "echo"},
             )
 
     def test_returned_job_id_comes_from_stream_and_get_not_from_rank(
@@ -2557,9 +2567,7 @@ class TestLaunchOneRank:
             job_names=["job-rank-0"],
             worker_env_base={},
             worker_image="repo:tag",
-            compute_config=ComputeConfig(
-                resources={"cloud": "runpod"}, envs={}, setup="echo", run="echo"
-            ),
+            task_yaml_config={"resources": {"cloud": "runpod"}, "envs": {}, "run": "echo"},
         )
 
         assert job_id == 424242
@@ -2583,9 +2591,7 @@ class TestLaunchOneRank:
             job_names=["a", "b", "c", "d"],
             worker_env_base={"BASE_KEY": "base-value"},
             worker_image="repo:tag",
-            compute_config=ComputeConfig(
-                resources={"cloud": "runpod"}, envs={}, setup="echo", run="echo"
-            ),
+            task_yaml_config={"resources": {"cloud": "runpod"}, "envs": {}, "run": "echo"},
         )
 
         envs_passed = fake_task.update_envs.call_args.args[0]
