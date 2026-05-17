@@ -30,20 +30,38 @@ import pytest
 # and griffe-pydantic, which are pinned together in [project.optional-deps].
 pytest.importorskip("mkdocs", reason="docs extras not installed; install with -e '.[docs]'")
 
+from synth_setter.schemas.callbacks_config import CallbackInstance
+from synth_setter.schemas.data_config import DataConfig
+from synth_setter.schemas.extras_config import ExtrasConfig
+from synth_setter.schemas.logger_config import LoggerInstance
 from synth_setter.schemas.model_config import ModelConfig, OptimizerConfig, SchedulerConfig
+from synth_setter.schemas.paths_config import PathsConfig
 from synth_setter.schemas.train_config import TrainConfig
+from synth_setter.schemas.trainer_config import TrainerConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# Pages map to the pydantic classes whose fields they document. The test
-# derives the expected field set from ``model_fields`` at runtime, so a
+# Pages map to the pydantic classes whose typed fields they document. The
+# test derives the expected field set from ``model_fields`` at runtime, so a
 # rename or removal on the schema shows up as a missing anchor in the
 # rendered HTML rather than as a manually-updated constant going stale.
 # ``mkdocs build --strict`` already validates the dataset-spec page renders
 # without warnings, so it doesn't need an entry here.
+#
+# ``CallbacksConfig`` and ``LoggerConfig`` are ``RootModel`` wrappers around
+# ``dict[str, CallbackInstance | LoggerInstance]``; their only declared field
+# is ``root`` and griffe-pydantic doesn't surface it as an anchor heading.
+# The callbacks/logger pages also render the inner instance model, so the
+# per-field assertions exercise that class instead.
 _PAGE_TO_MODELS: dict[str, tuple[type, ...]] = {
     "config_reference/train_config": (TrainConfig,),
+    "config_reference/data_config": (DataConfig,),
     "config_reference/model_config": (ModelConfig, OptimizerConfig, SchedulerConfig),
+    "config_reference/callbacks_config": (CallbackInstance,),
+    "config_reference/logger_config": (LoggerInstance,),
+    "config_reference/trainer_config": (TrainerConfig,),
+    "config_reference/paths_config": (PathsConfig,),
+    "config_reference/extras_config": (ExtrasConfig,),
 }
 
 

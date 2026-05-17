@@ -70,5 +70,11 @@ nav:
   - Config Reference:
       - Dataset Spec: config_reference/dataset_spec.md
       - Training Config: config_reference/train_config.md
+      - Data Config: config_reference/data_config.md
       - Model Config: config_reference/model_config.md
+      - Callbacks Config: config_reference/callbacks_config.md
+      - Logger Config: config_reference/logger_config.md
+      - Trainer Config: config_reference/trainer_config.md
+      - Paths Config: config_reference/paths_config.md
+      - Extras Config: config_reference/extras_config.md
   - Benchmarks: https://tinaudio.github.io/synth-setter/dev/bench/
