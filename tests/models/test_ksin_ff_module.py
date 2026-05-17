@@ -12,27 +12,6 @@ Each section maps to a slice of the module's contract:
 
 The module is exercised in isolation — no ``Trainer.fit``, no Hydra — so the
 file deliberately bypasses ``tests/conftest.py``'s heavy fixtures.
-
-ML-test items not covered here, with rationale:
-
-* MT2 output range — the network's last layer is unconstrained linear; there is
-  no documented output-range contract to assert.
-* MT3 leakage — there is no train/val/test split inside this wrapper module;
-  leakage is a datamodule concern, covered by the datamodule's own tests.
-* MT4 loss-at-init expected value — MSE/Chamfer/MSESort have no closed-form
-  expected value at random init for arbitrary ``(x, y)``; would only restate
-  the criterion's own arithmetic.
-* MT8 input-independent baseline — comparing against a mean predictor requires
-  a real dataset distribution; out of scope for a per-module unit test.
-* MT10 directional expectations — there are no documented directional
-  invariants of ``y`` w.r.t. ``x`` for this wrapper.
-* MT11 metric thresholds — quality thresholds belong to evaluation runs,
-  not module unit tests.
-* MT12 human baseline — N/A for a parameter-regression head.
-* MT13 schema — no persisted schema; the in-memory tuple shape is exercised
-  by Sections B and D.
-* MT19 preproc as pure functions — preprocessing lives in the datamodule,
-  not in this module.
 """
 
 from __future__ import annotations
