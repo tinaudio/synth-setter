@@ -19,6 +19,38 @@ synth-setter: Synth inversion, sound matching and preset exploration tools
   and `__init__` — closes pydoclint's missing-docstring blind spot)
 - Run `make format` before committing
 
+#### Lint Exception Lists Are Closed — Fix The Lint, Don't Suppress It
+
+The following files pin the *existing* legacy lint debt at the moment the baselines were
+captured. They are append-frozen — **no PR may add a new entry to any of them**:
+
+| File                      | Frozen list                                                                     | Cleanup tracker                                             |
+| ------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `.pydoclint-baseline.txt` | every row in the file (one pinned pydoclint violation each)                     | [#938](https://github.com/tinaudio/synth-setter/issues/938) |
+| `pyproject.toml`          | `[tool.ruff.lint.per-file-ignores]` and `[tool.ruff.lint].extend-exclude`       | [#25](https://github.com/tinaudio/synth-setter/issues/25)   |
+| `.pre-commit-config.yaml` | every per-hook `exclude:` regex (interrogate, pydoclint, codespell, mypy, etc.) | [#25](https://github.com/tinaudio/synth-setter/issues/25)   |
+| `pyrightconfig.json`      | every path under `"exclude"`                                                    | [#25](https://github.com/tinaudio/synth-setter/issues/25)   |
+
+**The hard rule.** If your PR's diff *adds* a row, path, glob, or regex to any list
+above, the PR must be rewritten. There are no exceptions for "the file is legacy,"
+"the lint isn't related to my change," "it's a one-line suppression," or "I'll clean
+it up in a follow-up." If a check fails on a file your PR introduces or touches, the
+remediation is to **fix the underlying lint**, not to register the file as exempt.
+
+The *only* allowed edits to these lists are **removals** — graduating a file out of
+exemption as part of the `/lint-cleanup` workflow (one file per PR, `chore(lint):`
+prefix, `Refs #938` for pydoclint baseline rows, `Refs #25` for the other lists). See
+`.claude/agents/lint-cleanup.md` for the canonical workflow.
+
+`[tool.pydoclint].exclude` in `pyproject.toml` is infra-only after
+[#1044](https://github.com/tinaudio/synth-setter/issues/1044) and must not be edited
+at all — pydoclint cleanup happens via baseline-row deletions, never exclude-list
+edits.
+
+If you genuinely believe a new entry is warranted (for example, a vendored third-party
+file that cannot be edited), stop and ask a maintainer before adding it. Do not add the
+entry first and explain after the fact in the PR description.
+
 ### Commit Messages
 
 Conventional commits, enforced by gitlint (`.gitlint` config). Prefix matters for semantic versioning:
@@ -360,6 +392,7 @@ Only skip as "no GPU available" if both probes indicate no usable CUDA GPU: `nvi
 - Don't run `make docker-*` or RunPod commands without asking first.
 - Don't add unnecessary abstractions — only abstract when there are two concrete uses.
 - Don't add comments to code you didn't change.
+- Don't add new entries to lint exception lists to make CI green — `.pydoclint-baseline.txt`, `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]` / `[tool.ruff.lint].extend-exclude`, `.pre-commit-config.yaml` per-hook `exclude:` regexes, and `pyrightconfig.json`'s `"exclude"` are append-frozen. Fix the lint. See [`#### Lint Exception Lists Are Closed`](#lint-exception-lists-are-closed--fix-the-lint-dont-suppress-it).
 
 ## Commands
 
