@@ -297,14 +297,22 @@ def patched_render(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 
 
 def _invoke_main(args: list[str]) -> Result:
-    """Wrap ``CliRunner.invoke`` with ``standalone_mode=False`` so exceptions surface.
+    """Wrap ``CliRunner.invoke`` so click does not swallow exceptions into ``Result``.
+
+    ``standalone_mode=False`` stops click from calling ``sys.exit``, and
+    ``catch_exceptions=False`` propagates any in-CLI exception directly to the
+    test (vs. burying it in ``Result.exception`` with a non-zero ``exit_code``)
+    — so a regressed bug surfaces with a real traceback instead of an opaque
+    ``exit_code == 1`` assertion failure.
 
     :param args: argv list passed to ``predict_vst_audio.main``.
     :returns: The click ``Result`` object.
     :rtype: Result
     """
     runner = CliRunner()
-    return runner.invoke(predict_vst_audio.main, args, standalone_mode=False)
+    return runner.invoke(
+        predict_vst_audio.main, args, standalone_mode=False, catch_exceptions=False
+    )
 
 
 def test_main_writes_pred_and_target_wav_per_sample(
