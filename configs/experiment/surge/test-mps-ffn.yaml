@@ -1,8 +1,8 @@
 # @package _global_
 
-# Sibling of test-mps.yaml for the surge/ffn_full experiment — see that file's header for
-# the lockstep contract with cfg_surge_xt_global; this variant targets surge_ffn instead
-# of surge_fake_oracle.
+# Sibling of test-mps-fake-oracle.yaml for the surge/ffn_full experiment — see that file's
+# header for the lockstep contract with cfg_surge_xt_global; this variant targets surge_ffn
+# instead of surge_fake_oracle.
 
 defaults:
   - surge/base
@@ -52,7 +52,10 @@ trainer:
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: surge_4
+    # Mandatory override — must equal the ``param_spec_name`` the run is wired for
+    # (paired with ``model.net.d_out`` above). The smoke fixture passes ``"surge_4"``;
+    # production callers should supply ``<their-spec>`` via the CLI.
+    param_spec: ???
   plot_proj_ii: null
   model_checkpoint:
     save_last: true

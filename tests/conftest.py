@@ -290,7 +290,7 @@ def experiment_name(request: pytest.FixtureRequest) -> str:
     """Hydra experiment override driving the Surge XT smoke fixtures.
 
     Defaults to ``"surge/fake_oracle"`` (the oracle-baseline smoke experiment, kept in
-    lockstep with ``configs/experiment/surge/test-mps.yaml``). Override per-test via
+    lockstep with ``configs/experiment/surge/test-mps-fake-oracle.yaml``). Override per-test via
     indirect parametrization to exercise other experiments::
 
         @pytest.mark.parametrize("experiment_name", ["surge/ffn_full"], indirect=True)
@@ -382,7 +382,7 @@ def _build_surge_xt_smoke_cfg(
             mc = cfg.callbacks.model_checkpoint
             mc.save_last = True
             # Set rather than delete so the structural cfg matches the equivalent
-            # ``configs/experiment/surge/test-mps.yaml`` (which uses ``lr_monitor: null``
+            # ``configs/experiment/surge/test-mps-*.yaml`` (which use ``lr_monitor: null``
             # in YAML). ``instantiate_callbacks`` skips entries without ``_target_``, so
             # the runtime behavior is identical to a deletion.
             if cfg.get("callbacks") is not None and "lr_monitor" in cfg.callbacks:

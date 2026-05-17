@@ -128,29 +128,30 @@ def _diff_dicts(a: dict[Any, Any], b: dict[Any, Any], prefix: str = "") -> list[
 @pytest.mark.parametrize(
     ("experiment", "test_mps_yaml"),
     [
-        ("surge/fake_oracle", "surge/test-mps"),
+        ("surge/fake_oracle", "surge/test-mps-fake-oracle"),
         ("surge/ffn_full", "surge/test-mps-ffn"),
     ],
     ids=["fake_oracle", "ffn_full"],
 )
 def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yaml: str) -> None:
-    """Each ``surge/test-mps*.yaml`` matches the smoke fixture's MPS cfg for its experiment.
+    """Each ``surge/test-mps-*.yaml`` matches the smoke fixture's MPS cfg for its experiment.
 
     Guard against silent drift: the fixture's open_dict bake-ins and each YAML's
     defaults list / overrides must stay in lockstep, otherwise a test that uses one
-    and an ``experiment=surge/test-mps*`` invocation that uses the other will produce
+    and an ``experiment=surge/test-mps-*`` invocation that uses the other will produce
     different runs without anyone noticing. Builds both configs in-process (no MPS
     hardware needed — only the cfg shape is compared, not runtime behavior).
 
     :param experiment: Hydra ``experiment=...`` override the fixture is built against
         (``"surge/fake_oracle"`` or ``"surge/ffn_full"``).
     :param test_mps_yaml: Sibling smoke YAML the fixture is compared against
-        (``"surge/test-mps"`` or ``"surge/test-mps-ffn"``).
+        (``"surge/test-mps-fake-oracle"`` or ``"surge/test-mps-ffn"``).
     """
     fixture_cfg = _build_surge_xt_smoke_cfg(
         accelerator="mps", param_spec_name="surge_4", experiment=experiment
     )
     fixture_d_out = fixture_cfg.model.net.d_out
+    fixture_param_spec = fixture_cfg.callbacks.log_per_param_mse.param_spec
     GlobalHydra.instance().clear()
 
     with initialize(version_base="1.3", config_path="../configs"):
@@ -160,6 +161,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
             overrides=[
                 f"experiment={test_mps_yaml}",
                 f"model.net.d_out={fixture_d_out}",
+                f"callbacks.log_per_param_mse.param_spec={fixture_param_spec}",
             ],
         )
     GlobalHydra.instance().clear()

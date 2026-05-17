@@ -1,7 +1,7 @@
 # @package _global_
 
-# Smoke-test experiment for Surge XT on MPS. Resolves to the same cfg as
-# ``cfg_surge_xt_global(accelerator="mps", param_spec_name="surge_4",
+# Smoke-test experiment for the Surge XT fake-oracle baseline on MPS. Resolves to the same
+# cfg as ``cfg_surge_xt_global(accelerator="mps", param_spec_name="surge_4",
 # experiment_name="surge/fake_oracle")`` (tests/conftest.py). The cfg-equality contract
 # is enforced by ``test_test_mps_yaml_matches_cfg_surge_xt_global`` in
 # ``tests/test_configs.py``; adding/removing knobs in the fixture or here will fail
@@ -57,7 +57,10 @@ trainer:
 callbacks:
   log_per_param_mse:
     _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: surge_4
+    # Mandatory override — must equal the ``param_spec_name`` the run is wired for
+    # (paired with ``model.net.d_out`` above). The smoke fixture passes ``"surge_4"``;
+    # production callers should supply ``<their-spec>`` via the CLI.
+    param_spec: ???
   plot_proj_ii: null
   model_checkpoint:
     save_last: true
