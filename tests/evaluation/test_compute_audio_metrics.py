@@ -308,7 +308,7 @@ def test_get_stft_averages_channels() -> None:
 def test_batched_wasserstein_distance_identical_hists_returns_zero() -> None:
     """Identical histograms have exactly zero Wasserstein distance."""
     hist = np.array([[0.25, 0.25, 0.25, 0.25]])
-    assert batched_wasserstein_distance_np(hist, hist) == 0.0
+    np.testing.assert_array_equal(batched_wasserstein_distance_np(hist, hist), [0.0])
 
 
 def test_batched_wasserstein_distance_handcrafted_case() -> None:
