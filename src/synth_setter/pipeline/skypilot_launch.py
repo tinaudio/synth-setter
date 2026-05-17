@@ -524,8 +524,73 @@ def main(
 ) -> None:
     """Launch the smoke `generate_dataset` run via SkyPilot (RunPod or OCI per `--template`)."""
     _warn_if_deprecated_cluster_name()
+    spec = _compose_dataset_spec(experiment, list(hydra_overrides))
+
+    # Load + validate the SkyPilot Task YAML once, up-front, so a malformed template
+    # surfaces here (one clear ClickException) rather than half-way through provisioning.
+    try:
+        compute_config = load_compute_config_yaml(template_path)
+    except (FileNotFoundError, ValueError, ValidationError) as exc:
+        raise click.ClickException(
+            f"failed to load compute template {template_path}: {exc}"
+        ) from exc
+
+    dispatch_via_skypilot(
+        spec,
+        compute_config,
+        job_name=job_name,
+        env_file_path=env_file_path,
+        spec_out=spec_out,
+        num_workers=num_workers if num_workers is not None else 1,
+        worker_image_tag=worker_image_tag,
+        tail=tail,
+        api_server=api_server,
+        local=local,
+        template_path=template_path,
+    )
+
+
+def dispatch_via_skypilot(
+    spec: DatasetSpec,
+    compute_config: ComputeConfig,
+    *,
+    job_name: str | None = None,
+    env_file_path: Path | None = None,
+    spec_out: Path | None = None,
+    num_workers: int = 1,
+    worker_image_tag: str = "dev-snapshot",
+    tail: bool = False,
+    api_server: str | None = None,
+    local: bool = False,
+    template_path: Path | None = None,
+) -> None:
+    """Submit ``spec`` as managed SkyPilot jobs against ``compute_config``.
+
+    Shared by the launcher's Click CLI (``main``) and ``generate_dataset``'s
+    ``@hydra.main`` entry — the Click CLI maps its flags to kwargs here, and the Hydra
+    entry calls this with defaults when ``cfg.compute_template`` is set. Defaults match
+    the Click CLI's option defaults so the two dispatch paths behave identically.
+
+    :param spec: Materialized DatasetSpec to submit.
+    :param compute_config: Validated SkyPilot Task config.
+    :param job_name: Managed-job name; defaults to ``synth-setter-smoke-<task_name[:8]>``.
+    :param env_file_path: Optional dotenv file resolved for the worker env.
+    :param spec_out: Where to write the materialized spec JSON locally.
+    :param num_workers: Number of managed jobs to fan out in parallel; must be ``>= 1``.
+    :param worker_image_tag: Docker image tag under ``tinaudio/synth-setter``.
+    :param tail: Tail managed-job logs and unconditionally cancel every job in ``finally``.
+    :param api_server: Remote SkyPilot API server URL; sets ``SKYPILOT_API_SERVER_ENDPOINT``.
+    :param local: Force local SDK dispatch; clears ``SKYPILOT_API_SERVER_ENDPOINT``.
+    :param template_path: Optional source path of ``compute_config``, woven into error
+        messages so operators can locate the offending template.
+    :raises click.ClickException: any validation / submission failure (both CLI and Hydra
+        callers surface this as a plain error message).
+    """
     _apply_dispatch_mode(api_server=api_server, local=local)
 
+    # CLI-flag-style names retained in error messages so the launcher's primary surface
+    # (Click) keeps its existing wording. The Hydra path's defaults never trip these
+    # checks, so this leakage is bounded to the Click CLI's misuse paths.
     if job_name is not None and not _JOB_NAME_RE.fullmatch(job_name):
         raise click.ClickException(
             "--job-name must match [A-Za-z0-9][A-Za-z0-9_-]{0,62} "
@@ -533,7 +598,7 @@ def main(
             f"got {job_name!r}"
         )
 
-    if num_workers is not None and num_workers < 1:
+    if num_workers < 1:
         raise click.ClickException(f"--num-workers must be >= 1, got {num_workers}")
 
     if not _DOCKER_TAG_RE.fullmatch(worker_image_tag):
@@ -555,12 +620,6 @@ def main(
         if key.startswith("RCLONE_CONFIG_R2_"):
             os.environ[key] = value
 
-    spec = _compose_dataset_spec(experiment, list(hydra_overrides))
-
-    # `--num-workers` overrides the launcher default of 1. Worker count is a
-    # launcher concern, no longer baked into the dataset spec.
-    resolved_num_workers = num_workers if num_workers is not None else 1
-
     base_job_name = job_name or f"synth-setter-smoke-{spec.task_name[:8]}"
     # Re-validate the derived default: spec.task_name is only checked for non-blank, so a
     # value containing `/` or `..` would otherwise propagate into the local tempfile path
@@ -579,15 +638,6 @@ def main(
     # Pin encoding so JSON output is locale-independent (workers/CI run with varied locales).
     local_spec_path.write_text(spec.model_dump_json(indent=2), encoding="utf-8")
     click.echo(f"Materialized spec to {local_spec_path}")
-
-    # Load + validate the SkyPilot Task YAML once, up-front, so a malformed template
-    # surfaces here (one clear ClickException) rather than half-way through provisioning.
-    try:
-        compute_config = load_compute_config_yaml(template_path)
-    except (FileNotFoundError, ValueError, ValidationError) as exc:
-        raise click.ClickException(
-            f"failed to load compute template {template_path}: {exc}"
-        ) from exc
 
     # Local provider (kind) needs no compute creds; CI writes the controller-resource shrink. See #876.
     provider = _detect_provider(compute_config, template_path=template_path)
@@ -617,8 +667,8 @@ def main(
     # dashboards that key off it; multi-worker appends -rN per rank.
     job_names = (
         [base_job_name]
-        if resolved_num_workers == 1
-        else [f"{base_job_name}-r{i}" for i in range(resolved_num_workers)]
+        if num_workers == 1
+        else [f"{base_job_name}-r{i}" for i in range(num_workers)]
     )
 
     rcs = _run_workers(
@@ -630,13 +680,11 @@ def main(
     )
 
     failed = [
-        (job_names[i], rcs[i])
-        for i in range(resolved_num_workers)
-        if rcs[i] != _TAIL_LOGS_RC_SUCCESS
+        (job_names[i], rcs[i]) for i in range(num_workers) if rcs[i] != _TAIL_LOGS_RC_SUCCESS
     ]
     if failed:
         raise click.ClickException(
-            f"{len(failed)} of {resolved_num_workers} worker(s) failed: "
+            f"{len(failed)} of {num_workers} worker(s) failed: "
             + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
         )
 

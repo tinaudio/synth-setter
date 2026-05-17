@@ -13,6 +13,18 @@ defaults:
   - hydra: default
   - experiment: ???
 
+# When set to a template name (e.g. `runpod-template`), generate_dataset's
+# @hydra.main entry dispatches the run to that infra via SkyPilot instead of
+# rendering shards in-process. Left null, the entrypoint runs locally. The
+# field is a string *name* (not a Hydra group sub-tree) because the YAMLs
+# under `configs/compute/` carry literal `${VAR}` bash expansions in their
+# `setup:` / `run:` blocks that conflict with OmegaConf's interpolation
+# grammar — see `synth_setter.pipeline.schemas.compute`. The field is
+# `compute_template` (not `compute`) so `compute_template=X` is a value
+# override rather than a Hydra defaults-list group override against the
+# `configs/compute/` directory. Dropped before DatasetSpec construction.
+compute_template: null
+
 task_name: ???
 # ``configs/hydra/default.yaml`` interpolates ``${run_name}`` into ``hydra.run.dir``;
 # dataset experiments don't have a distinct run_name concept (the spec's ``run_id`` is

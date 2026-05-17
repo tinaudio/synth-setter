@@ -35,8 +35,21 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E
 
 # Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
 # sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``
-# is a Hydra-output-dir interpolation source (see ``configs/dataset.yaml``).
-_NON_SPEC_KEYS: tuple[str, ...] = ("data", "r2", "paths", "hydra", "run_name")
+# is a Hydra-output-dir interpolation source (see ``configs/dataset.yaml``);
+# ``compute_template`` is a dispatch knob consumed by ``main`` before DatasetSpec construction.
+_NON_SPEC_KEYS: tuple[str, ...] = (
+    "data",
+    "r2",
+    "paths",
+    "hydra",
+    "run_name",
+    "compute_template",
+)
+
+# Resolves ``cfg.compute_template`` (a name) to a YAML under ``configs/compute/`` when the
+# Hydra entry decides to dispatch via SkyPilot — kept relative to this file so the package
+# remains importable regardless of CWD.
+_COMPUTE_DIR = Path(__file__).resolve().parents[3] / "configs" / "compute"
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
@@ -239,8 +252,25 @@ def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
 
 @hydra.main(version_base="1.3", config_path="../../../configs", config_name="dataset")
 def main(cfg: DictConfig) -> None:
-    """Hydra-composed CLI entry: ``python -m synth_setter.cli.generate_dataset experiment=<id>``."""
-    run(spec_from_cfg(cfg))
+    """Hydra-composed CLI entry: ``python -m synth_setter.cli.generate_dataset experiment=<id>``.
+
+    When ``cfg.compute_template`` is non-empty, the run is dispatched to the named SkyPilot
+    template (one of ``configs/compute/<name>.yaml``) via ``dispatch_via_skypilot`` — same
+    code path as the standalone launcher CLI. Left null (the default), the entrypoint
+    renders shards in-process via ``run``.
+    """
+    spec = spec_from_cfg(cfg)
+    template_name = cfg.get("compute_template")
+    if not template_name:
+        run(spec)
+        return
+
+    # Deferred so the local (no-compute_template) path doesn't pay the SkyPilot import cost.
+    from synth_setter.pipeline.schemas.compute import compute_config_from_cfg
+    from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+    compute_config = compute_config_from_cfg(cfg, compute_dir=_COMPUTE_DIR)
+    dispatch_via_skypilot(spec, compute_config)
 
 
 if __name__ == "__main__":

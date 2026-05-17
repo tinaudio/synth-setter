@@ -822,3 +822,85 @@ class TestSpecFromCfg:
 # PROJECT_ROOT-bootstrap behavior is exercised end-to-end by tests/pipeline/test_configs/
 # test_experiment_yamls.py — those tests fail with an InterpolationResolutionError if the
 # module's import-time `rootutils.setup_root(...)` ever stops setting PROJECT_ROOT.
+
+
+# ---------------------------------------------------------------------------
+# main — compute_template dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestMainComputeTemplateDispatch:
+    """``main(cfg)`` dispatches via SkyPilot when ``cfg.compute_template`` is set; else local."""
+
+    def _make_cfg(  # noqa: DOC101,DOC103,DOC201,DOC203
+        self, valid_dataset_spec_kwargs: dict[str, object], compute_template: object
+    ) -> object:
+        """Build a DictConfig that mirrors what `configs/dataset.yaml` composes."""
+        from omegaconf import OmegaConf
+
+        cfg_dict = dict(valid_dataset_spec_kwargs)
+        cfg_dict["compute_template"] = compute_template
+        return OmegaConf.create(cfg_dict)
+
+    def test_null_compute_template_runs_locally(  # noqa: DOC101,DOC103
+        self, valid_dataset_spec_kwargs: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`compute_template: null` runs the spec via the in-process `run()` path."""
+        from synth_setter.cli import generate_dataset
+
+        run_mock = MagicMock()
+        dispatch_mock = MagicMock()
+        monkeypatch.setattr(generate_dataset, "run", run_mock)
+        # `dispatch_via_skypilot` is imported lazily inside main(); patch on its source module.
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.dispatch_via_skypilot", dispatch_mock
+        )
+
+        cfg = self._make_cfg(valid_dataset_spec_kwargs, compute_template=None)
+        generate_dataset.main.__wrapped__(cfg)
+
+        run_mock.assert_called_once()
+        dispatch_mock.assert_not_called()
+
+    def test_compute_template_dispatches_via_skypilot(  # noqa: DOC101,DOC103
+        self, valid_dataset_spec_kwargs: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-null `compute_template` loads the YAML and calls `dispatch_via_skypilot`."""
+        from synth_setter.cli import generate_dataset
+        from synth_setter.pipeline.schemas.compute import ComputeConfig
+
+        run_mock = MagicMock()
+        dispatch_mock = MagicMock()
+        monkeypatch.setattr(generate_dataset, "run", run_mock)
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.dispatch_via_skypilot", dispatch_mock
+        )
+
+        cfg = self._make_cfg(valid_dataset_spec_kwargs, compute_template="runpod-template")
+        generate_dataset.main.__wrapped__(cfg)
+
+        run_mock.assert_not_called()
+        dispatch_mock.assert_called_once()
+        (passed_spec, passed_compute), _ = dispatch_mock.call_args
+        assert passed_spec.task_name == valid_dataset_spec_kwargs["task_name"]
+        assert isinstance(passed_compute, ComputeConfig)
+        assert passed_compute.resources["cloud"] == "runpod"
+
+    def test_spec_from_cfg_drops_compute_template(  # noqa: DOC101,DOC103
+        self, valid_dataset_spec_kwargs: dict[str, object]
+    ) -> None:
+        """``compute_template`` is a dispatch knob, not a spec field — drop it before validation.
+
+        DatasetSpec uses ``extra="forbid"``; if `compute_template` leaked through, construction
+        would raise on the unknown field. Implicit assertion: spec_from_cfg succeeds.
+        """
+        from omegaconf import OmegaConf
+
+        from synth_setter.cli.generate_dataset import spec_from_cfg
+
+        cfg_dict = dict(valid_dataset_spec_kwargs)
+        cfg_dict["compute_template"] = "runpod-template"
+
+        spec = spec_from_cfg(OmegaConf.create(cfg_dict))
+
+        assert spec.task_name == valid_dataset_spec_kwargs["task_name"]

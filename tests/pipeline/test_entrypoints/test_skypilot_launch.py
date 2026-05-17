@@ -2602,24 +2602,44 @@ class TestLaunchOneRank:
 
 
 # ---------------------------------------------------------------------------
-# Hydra `skypilot_launch.yaml` entrypoint — composes a compute template name
-# into a ComputeConfig via `compute_config_from_cfg`.
+# Hydra `dataset.yaml` entrypoint — composes a compute_template name into a
+# ComputeConfig via `compute_config_from_cfg`. `generate_dataset.main` uses
+# this to decide between local `run(spec)` and SkyPilot dispatch.
 # ---------------------------------------------------------------------------
 
 
-class TestSkypilotLaunchHydraEntrypoint:
-    """Pin the Hydra-composable entrypoint that mirrors `configs/dataset.yaml`.
+class TestDatasetHydraComputeTemplate:
+    """Pin the `compute_template` field on `configs/dataset.yaml`.
 
-    The launcher's Click CLI consumes `--template <path>` directly today (CI workflows depend on
-    the path-based flag); the Hydra entrypoint at `configs/skypilot_launch.yaml` is the parallel
-    composition surface for future use cases that want to pick a compute template by name and drive
-    overrides from a CLI like `compute_template=oci-cpu-template`. The field is `compute_template`
-    (not `compute`) so Hydra doesn't treat `compute=X` as a defaults-list group override against
-    the `configs/compute/` directory.
+    `generate_dataset`'s @hydra.main entry uses `cfg.compute_template` to decide between
+    local in-process execution (null) and SkyPilot dispatch (a template name). The field is
+    `compute_template` (not `compute`) so Hydra doesn't treat `compute=X` as a defaults-list
+    group override against the `configs/compute/` directory.
     """
 
-    def test_default_compose_resolves_to_runpod_template(self) -> None:
-        """`compose(config_name='skypilot_launch')` defaults compute to runpod-template."""
+    def test_default_compose_is_null(  # noqa: DOC101,DOC103
+        self, fake_plugin: Path
+    ) -> None:
+        """`compose(config_name='dataset', experiment=...)` defaults compute_template to null."""
+        from hydra import compose, initialize_config_dir
+
+        config_dir = str(Path(__file__).resolve().parents[3] / "configs")
+
+        with initialize_config_dir(version_base="1.3", config_dir=config_dir):
+            cfg = compose(
+                config_name="dataset",
+                overrides=[
+                    "experiment=generate_dataset/smoke-shard",
+                    f"render.plugin_path={fake_plugin}",
+                ],
+            )
+
+        assert cfg.compute_template is None
+
+    def test_compute_template_override_resolves_to_runpod(  # noqa: DOC101,DOC103
+        self, fake_plugin: Path
+    ) -> None:
+        """`compose(..., overrides=['compute_template=runpod-template'])` loads the runpod YAML."""
         from hydra import compose, initialize_config_dir
 
         from synth_setter.pipeline.schemas.compute import compute_config_from_cfg
@@ -2628,12 +2648,21 @@ class TestSkypilotLaunchHydraEntrypoint:
         compute_dir = Path(config_dir) / "compute"
 
         with initialize_config_dir(version_base="1.3", config_dir=config_dir):
-            cfg = compose(config_name="skypilot_launch")
+            cfg = compose(
+                config_name="dataset",
+                overrides=[
+                    "experiment=generate_dataset/smoke-shard",
+                    f"render.plugin_path={fake_plugin}",
+                    "compute_template=runpod-template",
+                ],
+            )
 
         result = compute_config_from_cfg(cfg, compute_dir=compute_dir)
         assert result.resources["cloud"] == "runpod"
 
-    def test_compute_override_selects_different_template(self) -> None:
+    def test_compute_template_override_selects_local(  # noqa: DOC101,DOC103
+        self, fake_plugin: Path
+    ) -> None:
         """`compose(..., overrides=['compute_template=local-template'])` picks the k8s template."""
         from hydra import compose, initialize_config_dir
 
@@ -2644,8 +2673,12 @@ class TestSkypilotLaunchHydraEntrypoint:
 
         with initialize_config_dir(version_base="1.3", config_dir=config_dir):
             cfg = compose(
-                config_name="skypilot_launch",
-                overrides=["compute_template=local-template"],
+                config_name="dataset",
+                overrides=[
+                    "experiment=generate_dataset/smoke-shard",
+                    f"render.plugin_path={fake_plugin}",
+                    "compute_template=local-template",
+                ],
             )
 
         result = compute_config_from_cfg(cfg, compute_dir=compute_dir)

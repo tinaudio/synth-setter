@@ -4,10 +4,12 @@ A ``ComputeConfig`` validates a SkyPilot Task YAML at the launcher's trust bound
 mirroring ``DatasetSpec`` for dataset generation and ``ImageConfig`` for image builds.
 The flow:
 
-1. Hydra composes ``configs/skypilot_launch.yaml`` and resolves a ``compute_template``
-   *name* (a string field, not a sub-tree — OmegaConf's interpolation grammar can't parse
-   the literal ``${VAR}`` bash expansions inside the compute YAMLs' ``setup:`` / ``run:``
-   blocks).
+1. Hydra composes ``configs/dataset.yaml`` (the ``generate_dataset`` entrypoint) and
+   resolves a ``compute_template`` *name* (a string field, not a sub-tree — OmegaConf's
+   interpolation grammar can't parse the literal ``${VAR}`` bash expansions inside the
+   compute YAMLs' ``setup:`` / ``run:`` blocks). Left null, ``generate_dataset`` runs
+   the spec in-process; set to a name like ``runpod-template``, it dispatches via
+   SkyPilot.
 2. ``compute_config_from_cfg`` reads that name and loads
    ``configs/compute/<name>.yaml`` directly via ``yaml.safe_load`` — sidestepping
    OmegaConf.
@@ -92,10 +94,11 @@ def compute_config_from_cfg(  # noqa: DOC203
 ) -> ComputeConfig:
     """Build a ``ComputeConfig`` by resolving ``cfg.compute_template`` (a name) to a YAML file.
 
-    The launcher's top-level Hydra entrypoint (``configs/skypilot_launch.yaml``) declares
-    ``compute_template: runpod-template`` — a string naming a file under ``compute_dir``.
-    Sub-tree composition is avoided here because the compute YAMLs contain literal ``${VAR}``
-    bash expansions in ``setup:`` / ``run:`` that fail OmegaConf's interpolation grammar at
+    The ``generate_dataset`` Hydra entrypoint (``configs/dataset.yaml``) declares
+    ``compute_template: null`` — when set to a name like ``runpod-template``, the
+    entrypoint dispatches the run via SkyPilot instead of executing locally. Sub-tree
+    composition is avoided here because the compute YAMLs contain literal ``${VAR}`` bash
+    expansions in ``setup:`` / ``run:`` that fail OmegaConf's interpolation grammar at
     DictConfig-load time. Loading the YAML directly with ``yaml.safe_load`` (via
     ``load_compute_config_yaml``) sidesteps that conflict.
 
