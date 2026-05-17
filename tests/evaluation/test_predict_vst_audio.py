@@ -111,7 +111,7 @@ def test_make_spectrogram_pure_tone_peaks_near_expected_mel_bin() -> None:
 
 
 def test_write_spectrograms_creates_a_nonempty_png(tmp_path: Path) -> None:
-    """Side-effect contract: writes a PNG file containing both pred and target panels.
+    """Side-effect contract: writes a real PNG containing both pred and target panels.
 
     :param tmp_path: pytest tmp dir fixture.
     """
@@ -122,7 +122,9 @@ def test_write_spectrograms_creates_a_nonempty_png(tmp_path: Path) -> None:
     predict_vst_audio.write_spectrograms(pred, target, _SR, str(out))
 
     assert out.is_file()
-    assert out.stat().st_size > 0
+    # PNG magic header — a truncated or non-PNG file with non-zero size would
+    # otherwise sneak past a size-only check.
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None:
