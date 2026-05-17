@@ -16,6 +16,7 @@ out of ``validation_step`` / ``test_step`` that
 into a Hydra config requires no caller-side changes.
 """
 
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -63,9 +64,9 @@ class SurgeFakeOracleModule(LightningModule):
     def __init__(
         self,
         net: nn.Module,
-        optimizer: torch.optim.Optimizer,
-        scheduler: torch.optim.lr_scheduler,
-        compile: bool = False,
+        optimizer: Callable[..., torch.optim.Optimizer],
+        scheduler: Callable[..., torch.optim.lr_scheduler.LRScheduler] | None = None,
+        compile: bool = False,  # noqa: A002 — name preserved for SurgeFeedForwardModule config-swap parity
         warmup_steps: int = 0,
     ):
         """Mirror :class:`SurgeFeedForwardModule`'s signature so configs swap cleanly.
@@ -173,6 +174,7 @@ class SurgeFakeOracleModule(LightningModule):
 
         :param stage: Lightning lifecycle stage ("fit", "validate", "test", "predict").
         """
+        del stage
         if not self.hparams.compile:
             return
         self.net = torch.compile(self.net)

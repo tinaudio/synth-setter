@@ -64,7 +64,7 @@ def _make_module() -> SurgeFakeOracleModule:
     """
     net = FakeOracleNet(d_out=_NUM_PARAMS)
     optimizer = partial(torch.optim.Adam, lr=1e-4)
-    return SurgeFakeOracleModule(net=net, optimizer=optimizer, scheduler=None)  # type: ignore[arg-type]
+    return SurgeFakeOracleModule(net=net, optimizer=optimizer, scheduler=None)
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])
@@ -160,6 +160,10 @@ def test_training_step_returns_zero_loss_with_grad(batch_size: int) -> None:
     assert loss.item() == 0.0
     assert loss.requires_grad
     loss.backward()
+    # The dummy parameter is the *only* reason loss carries a grad path — if a
+    # refactor drops the `self.net(mel_spec)` call from model_step, loss.backward()
+    # would still pass on a detached zero tensor, but no grad would land on dummy.
+    assert module.net.dummy.grad is not None
 
 
 @pytest.mark.parametrize("batch_size", [1, 4])
