@@ -52,19 +52,25 @@ def _find_handler(description_substring: str) -> dict[str, Any]:
     :param description_substring: Substring identifying the matcher-entry's ``description`` field.
     :returns: The single handler dict from the matcher-entry's ``hooks`` list.
     :rtype: dict[str, Any]
-    :raises AssertionError: If no matcher entry matches, or the matched entry has !=1 handler.
+    :raises AssertionError: If zero or >1 matcher entries match, or the matched entry has !=1 handler.
     """
-    for entry in _matcher_entries():
-        if description_substring in entry.get("description", ""):
-            handlers = entry.get("hooks", [])
-            assert len(handlers) == 1, (
-                f"expected exactly one handler under matcher entry "
-                f"matching {description_substring!r}, got {len(handlers)}"
-            )
-            return handlers[0]
-    raise AssertionError(
-        f"no matcher entry found with description containing {description_substring!r}"
-    )
+    matches = [
+        entry
+        for entry in _matcher_entries()
+        if description_substring in entry.get("description", "")
+    ]
+    if len(matches) != 1:
+        raise AssertionError(
+            f"expected exactly one matcher entry with description containing "
+            f"{description_substring!r}, found {len(matches)}"
+        )
+    handlers = matches[0].get("hooks", [])
+    if len(handlers) != 1:
+        raise AssertionError(
+            f"expected exactly one handler under matcher entry "
+            f"matching {description_substring!r}, got {len(handlers)}"
+        )
+    return handlers[0]
 
 
 def _run_inline_hook(
