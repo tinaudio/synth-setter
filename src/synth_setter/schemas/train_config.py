@@ -29,10 +29,14 @@ __all__ = ["TrainConfig"]
 class TrainConfig(BaseModel):  # noqa: DOC601,DOC603
     """Top-level training configuration as composed from ``configs/train.yaml``.
 
-    Constructing ``TrainConfig()`` with no kwargs mirrors a fresh ``compose`` of
-    ``train.yaml``. Hydra-managed subtrees are accepted via ``extra="allow"``;
-    per-field descriptions live on the ``Field`` definitions below and render
-    into the auto-generated docs via ``griffe-pydantic``.
+    Only the typed scalar surface is represented here — the defaults below
+    match the corresponding values in ``configs/train.yaml``. Hydra-managed
+    subtrees (``data``, ``model``, ``trainer``, ``callbacks``, ``logger``,
+    ``paths``, ``extras``, ``hydra``, ...) are NOT reconstructed by
+    ``TrainConfig()``; they're accepted via ``extra="allow"`` when validating
+    an externally-composed ``DictConfig`` and must come from real Hydra
+    composition. Per-field descriptions live on the ``Field`` definitions
+    below and render into the auto-generated docs via ``griffe-pydantic``.
     """
 
     model_config = ConfigDict(strict=True, extra="allow")
