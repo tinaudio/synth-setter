@@ -76,15 +76,27 @@ jobs:
       - name: Install docs and dev extras
         run: pip install -e '.[docs,dev]'
 
-      # The docs-build pytest session fixture in ``tests/test_docs_build.py``
-      # runs ``mkdocs build --strict`` itself, so a standalone build step
-      # would just rebuild and double CI wall time. ``--noconftest`` skips
-      # the top-level ``tests/conftest.py`` (which eagerly imports
-      # ``lightning`` via ``synth_setter.utils``); the docs-build tests
-      # don't need that fixture machinery — each test sets up its own
-      # Hydra context.
-      - name: Build site and run docs-build integration tests
-        run: pytest tests/test_docs_build.py tests/schemas/ -q --noconftest
+      # Two invocations because the conftest hygiene differs:
+      #
+      # 1. ``tests/schemas/`` uses ``--confcutdir=tests/schemas`` so pytest
+      #    still loads ``tests/schemas/conftest.py`` (the ``clean_global_hydra``
+      #    autouse fixture) but stops there — it does NOT walk up to
+      #    ``tests/conftest.py``, which eagerly imports ``lightning`` via
+      #    ``synth_setter.utils`` and would crash on this slim ``[docs,dev]``
+      #    install.
+      # 2. ``tests/test_docs_build.py`` uses ``--noconftest`` because the
+      #    test is self-contained (each test sets up its own Hydra context
+      #    via the session fixture) and has no package-local conftest to
+      #    preserve.
+      #
+      # The session fixture in ``tests/test_docs_build.py`` runs
+      # ``mkdocs build --strict`` itself, so no standalone build step is
+      # needed.
+      - name: Run schema tests (preserves tests/schemas/conftest.py)
+        run: pytest tests/schemas/ -q --confcutdir=tests/schemas
+
+      - name: Build site and run docs-build integration test
+        run: pytest tests/test_docs_build.py -q --noconftest
 
   # Skip on pull_request (the build-docs job above already covers PR
   # validation) and on workflow_run if the upstream run didn't succeed —
