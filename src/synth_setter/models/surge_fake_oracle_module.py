@@ -175,7 +175,7 @@ class SurgeFakeOracleModule(LightningModule):
         :param stage: Lightning lifecycle stage ("fit", "validate", "test", "predict").
         """
         del stage
-        if not self.hparams.compile:
+        if not self.hparams["compile"]:
             return
         self.net = torch.compile(self.net)
 
@@ -190,17 +190,17 @@ class SurgeFakeOracleModule(LightningModule):
             ``{"optimizer": opt, "lr_scheduler": {...}}``.
         :rtype: dict[str, Any]
         """
-        optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
+        optimizer = self.hparams["optimizer"](params=self.parameters())
 
+        warmup_steps = self.hparams["warmup_steps"]
+        scheduler_factory = self.hparams["scheduler"]
         warmup_scheduler = (
-            torch.optim.lr_scheduler.LinearLR(optimizer, 1e-10, 1.0, self.hparams.warmup_steps)
-            if self.hparams.warmup_steps > 0
+            torch.optim.lr_scheduler.LinearLR(optimizer, 1e-10, 1.0, warmup_steps)
+            if warmup_steps > 0
             else None
         )
         scheduler = (
-            self.hparams.scheduler(optimizer=optimizer)
-            if self.hparams.scheduler is not None
-            else None
+            scheduler_factory(optimizer=optimizer) if scheduler_factory is not None else None
         )
 
         if warmup_scheduler is not None and scheduler is None:
@@ -209,7 +209,7 @@ class SurgeFakeOracleModule(LightningModule):
             scheduler = torch.optim.lr_scheduler.SequentialLR(
                 optimizer,
                 schedulers=[warmup_scheduler, scheduler],
-                milestones=[self.hparams.warmup_steps],
+                milestones=[warmup_steps],
             )
 
         if scheduler is not None:
