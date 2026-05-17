@@ -3,17 +3,6 @@
 This is a drop-in replacement for
 :class:`synth_setter.models.surge_ff_module.SurgeFeedForwardModule` that
 short-circuits the model and returns the ground-truth parameters as predictions.
-It is used to (a) smoke-test the train/eval pipeline end-to-end without the
-cost of a real model, and (b) establish a performance ceiling for downstream
-audio-metric evaluation — any divergence between oracle and ground truth in
-downstream metrics is necessarily a pipeline issue, not a model issue.
-
-The module preserves the public surface of ``SurgeFeedForwardModule``: same
-``__init__`` signature, same 4-tuple ``model_step`` return shape, same
-``predict_step`` tuple, and the same ``{"param_mse", "per_param_mse"}`` dict
-out of ``validation_step`` / ``test_step`` that
-:class:`synth_setter.utils.callbacks.LogPerParamMSE` reads. Substituting it
-into a Hydra config requires no caller-side changes.
 """
 
 from collections.abc import Callable
