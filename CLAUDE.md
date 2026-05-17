@@ -295,6 +295,18 @@ Example:
 
 The bad version forces the reader to ask "Hydra migration of *what*?" — the project has had several. The good version answers that question in the title.
 
+### Pre-PR Review Gate
+
+Before every `gh pr create`, run `/repo-review-full-no-comments` and iterate on every BLOCK and WARN finding (fix the code, or document in the PR body why the finding is intentional). Open the PR only after the review report comes back clean.
+
+A `PreToolUse` hook in `.claude/settings.json` enforces this — `gh pr create` is blocked unless the command contains the literal `REVIEW_FULL_DONE=1` (anywhere in the line). Recommended form is a trailing comment, which preserves the other `gh pr create` hooks (doc-drift, pr-checkbox, taxonomy verification):
+
+```bash
+gh pr create --title "..." --body "..."  # REVIEW_FULL_DONE=1
+```
+
+The token is honor-system — it forces a pause to invoke the skill, not unbypassable security. If you genuinely don't need a review for this change (rare; usually pure docs touch-ups already exempt from the mandatory skills), the token still has to be present and the PR description should say why review was skipped.
+
 ### PR Readiness
 
 **Hard gate (all four must hold).** A PR is ready iff:
