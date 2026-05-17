@@ -23,6 +23,10 @@ from tests.conftest import (
 )
 from tests.helpers.run_if import RunIf
 
+# Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
+# the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
+_SURGE_SMOKE_EXPERIMENTS = ("surge/fake_oracle", "surge/ffn_full")
+
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 
 
@@ -179,24 +183,34 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     Calls the builder directly (not the ``cfg_surge_xt_global`` fixture) and pins
     ``accelerator="cpu"``: the cfg-shape contract is accelerator-independent and going
     through the fixture would drag in the parametrized ``accelerator`` hardware gate that
-    hardfails on hosts without MPS/CUDA.
+    hardfails on hosts without MPS/CUDA. ``experiment`` is pinned to the fixture default
+    because param-spec propagation is itself experiment-independent — there's no need to
+    cross-product with the experiment axis here.
 
     :param param_spec_name: Spec name driving the cfg builder.
     """
-    cfg = _build_surge_xt_smoke_cfg(accelerator="cpu", param_spec_name=param_spec_name)
+    cfg = _build_surge_xt_smoke_cfg(
+        accelerator="cpu",
+        param_spec_name=param_spec_name,
+        experiment="surge/fake_oracle",
+    )
     assert cfg.model.net.d_out == len(param_specs[param_spec_name])
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
 
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
 def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
-    """Run training of the Surge XT FFN model on the smoke test fixture.
+    """Run training of the Surge XT model on the smoke test fixture, across both experiments.
 
     Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
-    no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not.
+    no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not. The
+    ``surge/fake_oracle`` leg is a wiring smoke check (the oracle's loss is identically
+    zero by construction); meaningful loss-progression coverage comes from the
+    ``surge/ffn_full`` leg.
 
-    :param cfg_surge_xt: Surge XT training config.
+    :param cfg_surge_xt: Surge XT training config (parametrized over experiment).
     """
     HydraConfig().set_config(cfg_surge_xt)
     metric_dict, object_dict = train(cfg_surge_xt)
@@ -217,6 +231,7 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
 def test_train_eval_surge_xt(
     tmp_path: Path,
     cfg_surge_xt: DictConfig,

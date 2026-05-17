@@ -3,6 +3,7 @@
 from typing import Any
 
 import hydra
+import pytest
 from hydra import compose, initialize
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -111,7 +112,7 @@ def _diff_dicts(a: dict[Any, Any], b: dict[Any, Any], prefix: str = "") -> list[
     for key in sorted(set(a) | set(b)):
         path = f"{prefix}.{key}" if prefix else str(key)
         if key not in a:
-            diffs.append(f"  + {path} (only in test-mps): {b[key]!r}")
+            diffs.append(f"  + {path} (only in yaml): {b[key]!r}")
             continue
         if key not in b:
             diffs.append(f"  - {path} (only in fixture): {a[key]!r}")
@@ -120,20 +121,35 @@ def _diff_dicts(a: dict[Any, Any], b: dict[Any, Any], prefix: str = "") -> list[
         if isinstance(va, dict) and isinstance(vb, dict):
             diffs.extend(_diff_dicts(va, vb, path))
         elif va != vb:
-            diffs.append(f"  ~ {path}: fixture={va!r}  test-mps={vb!r}")
+            diffs.append(f"  ~ {path}: fixture={va!r}  yaml={vb!r}")
     return diffs
 
 
-def test_test_mps_yaml_matches_cfg_surge_xt_global() -> None:
-    """Resolve ``surge/test-mps.yaml`` to match the surge smoke fixture's MPS cfg.
+@pytest.mark.parametrize(
+    ("experiment", "test_mps_yaml"),
+    [
+        ("surge/fake_oracle", "surge/test-mps"),
+        ("surge/ffn_full", "surge/test-mps-ffn"),
+    ],
+    ids=["fake_oracle", "ffn_full"],
+)
+def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yaml: str) -> None:
+    """Each ``surge/test-mps*.yaml`` matches the smoke fixture's MPS cfg for its experiment.
 
-    Guard against silent drift: the fixture's open_dict bake-ins and the YAML's defaults
-    list / overrides must stay in lockstep, otherwise a test that uses one and an
-    ``experiment=surge/test-mps`` invocation that uses the other will produce different
-    runs without anyone noticing. Builds both configs in-process (no MPS hardware
-    needed — only the cfg shape is compared, not runtime behavior).
+    Guard against silent drift: the fixture's open_dict bake-ins and each YAML's
+    defaults list / overrides must stay in lockstep, otherwise a test that uses one
+    and an ``experiment=surge/test-mps*`` invocation that uses the other will produce
+    different runs without anyone noticing. Builds both configs in-process (no MPS
+    hardware needed — only the cfg shape is compared, not runtime behavior).
+
+    :param experiment: Hydra ``experiment=...`` override the fixture is built against
+        (``"surge/fake_oracle"`` or ``"surge/ffn_full"``).
+    :param test_mps_yaml: Sibling smoke YAML the fixture is compared against
+        (``"surge/test-mps"`` or ``"surge/test-mps-ffn"``).
     """
-    fixture_cfg = _build_surge_xt_smoke_cfg(accelerator="mps", param_spec_name="surge_4")
+    fixture_cfg = _build_surge_xt_smoke_cfg(
+        accelerator="mps", param_spec_name="surge_4", experiment=experiment
+    )
     fixture_d_out = fixture_cfg.model.net.d_out
     GlobalHydra.instance().clear()
 
@@ -142,7 +158,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global() -> None:
             config_name="train.yaml",
             return_hydra_config=False,
             overrides=[
-                "experiment=surge/test-mps",
+                f"experiment={test_mps_yaml}",
                 f"model.net.d_out={fixture_d_out}",
             ],
         )
@@ -156,5 +172,6 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global() -> None:
 
     diffs = _diff_dicts(fixture_dict, experiment_dict)
     assert not diffs, (
-        "test-mps.yaml drifted from cfg_surge_xt_global(mps, surge_4):\n" + "\n".join(diffs)
+        f"{test_mps_yaml}.yaml drifted from "
+        f"cfg_surge_xt_global(mps, surge_4, {experiment!r}):\n" + "\n".join(diffs)
     )
