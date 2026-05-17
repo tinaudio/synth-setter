@@ -201,16 +201,19 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
-def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
+def test_train_surge_xt(cfg_surge_xt: DictConfig, experiment_name: str) -> None:
     """Run training of the Surge XT model on the smoke test fixture, across both experiments.
 
     Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
     no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not. The
-    ``surge/fake_oracle`` leg is a wiring smoke check (the oracle's loss is identically
-    zero by construction); meaningful loss-progression coverage comes from the
-    ``surge/ffn_full`` leg.
+    ``surge/fake_oracle`` leg additionally pins ``train/loss`` to exactly zero (the
+    oracle constructs its loss as ``0.0 * net(mel_spec).sum()`` — any drift means the
+    oracle stopped being an oracle); meaningful loss-progression coverage comes from
+    the ``surge/ffn_full`` leg.
 
     :param cfg_surge_xt: Surge XT training config (parametrized over experiment).
+    :param experiment_name: Hydra experiment override the cfg was built from — drives
+        the oracle-specific tight bound below.
     """
     HydraConfig().set_config(cfg_surge_xt)
     metric_dict, object_dict = train(cfg_surge_xt)
@@ -228,6 +231,11 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig) -> None:
         loss = metric_dict[key]
         assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
 
+    if experiment_name == "surge/fake_oracle":
+        for key in loss_keys:
+            loss_value = metric_dict[key].item()
+            assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
+
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
@@ -237,6 +245,7 @@ def test_train_eval_surge_xt(
     cfg_surge_xt: DictConfig,
     cfg_surge_xt_eval: DictConfig,
     param_spec_name: str,
+    experiment_name: str,
 ) -> None:
     """End-to-end smoke test: train Surge XT briefly on a small fixture dataset, then run standalone eval on the saved checkpoint.
 
@@ -247,6 +256,8 @@ def test_train_eval_surge_xt(
         wired for — passed to ``predict_vst_audio.py`` so the script's decode layout matches
         the predicted tensor's encoding (mismatched specs go off-the-end and crash with
         ``can only convert an array of size 1 to a Python scalar``).
+    :param experiment_name: Hydra experiment override the cfg was built from — drives
+        the oracle-specific tight audio-metric bounds at the end of the test.
     """
     from click.testing import CliRunner
     from pedalboard.io import AudioFile
@@ -371,3 +382,33 @@ def test_train_eval_surge_xt(
         assert expected["columns"].issubset(metrics_df.columns)
         numeric = metrics_df[sorted(expected["columns"])].to_numpy()
         assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"
+
+    if experiment_name == "surge/fake_oracle":
+        # Oracle predicts ``batch["params"]`` verbatim; ``predict_vst_audio
+        # --rerender_target`` renders both ``target.wav`` and ``pred.wav`` from the
+        # same params through the same VST host. Surge XT still injects per-voice
+        # initialization jitter (oscillator phase, noise seed) between back-to-back
+        # renders, so the per-sample audio metrics don't collapse to zero even though
+        # the input params are bit-identical. Bounds are sized to ~3x the worst-case
+        # observed across eight local sweeps — they absorb the VST jitter, while a
+        # real model regression (an untrained ffn_full gives ``mss`` in the dozens
+        # and ``rms`` near zero) blows through every column.
+        ORACLE_BOUNDS = {
+            "mss": ("upper", 15.0),
+            "wmfcc": ("upper", 30.0),
+            "sot": ("upper", 0.5),
+            "rms": ("lower", 0.95),
+        }
+        per_sample = pd.read_csv(metrics_dir / "metrics.csv")
+        for col, (kind, bound) in ORACLE_BOUNDS.items():
+            values = per_sample[col].tolist()
+            if kind == "upper":
+                worst = float(per_sample[col].max())
+                assert worst < bound, (
+                    f"oracle {col} max={worst:.4f} exceeds {bound} (per-sample: {values})"
+                )
+            else:
+                worst = float(per_sample[col].min())
+                assert worst > bound, (
+                    f"oracle {col} min={worst:.4f} below {bound} (per-sample: {values})"
+                )
