@@ -25,7 +25,8 @@ from tests.helpers.run_if import RunIf
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
-_SURGE_SMOKE_EXPERIMENTS = ("surge/fake_oracle", "surge/ffn_full")
+_ORACLE_EXPERIMENT = "surge/fake_oracle"
+_SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 
 # TODO(#40): add @pytest.mark.ram gate for memory-intensive CPU tests test_train_fast_dev_run
 
@@ -192,7 +193,7 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
     cfg = _build_surge_xt_smoke_cfg(
         accelerator="cpu",
         param_spec_name=param_spec_name,
-        experiment="surge/fake_oracle",
+        experiment=_ORACLE_EXPERIMENT,
     )
     assert cfg.model.net.d_out == len(param_specs[param_spec_name])
     assert cfg.callbacks.log_per_param_mse.param_spec == param_spec_name
@@ -231,7 +232,7 @@ def test_train_surge_xt(cfg_surge_xt: DictConfig, experiment_name: str) -> None:
         loss = metric_dict[key]
         assert torch.isfinite(loss).all(), f"{key} is not finite: {loss}"
 
-    if experiment_name == "surge/fake_oracle":
+    if experiment_name == _ORACLE_EXPERIMENT:
         for key in loss_keys:
             loss_value = metric_dict[key].item()
             assert loss_value == 0.0, f"oracle {key} not exactly zero: {loss_value}"
@@ -300,6 +301,17 @@ def test_train_eval_surge_xt(
     for i in range(NUM_FIXTURE_SAMPLES):
         pred = torch.load(predictions_dir / f"pred-{i}.pt", weights_only=True)
         assert torch.isfinite(pred).all(), f"pred-{i}.pt contains NaN/Inf"
+
+        # The oracle's ``predict_step`` returns ``batch["params"]`` verbatim, so the
+        # saved prediction tensor must be bit-identical to the saved target params.
+        # This is the strongest oracle invariant — pinning it here isolates regressions
+        # in ``predict_step`` from the noisier downstream audio metrics (which absorb
+        # Surge XT's per-voice render jitter and would mask a small deviation).
+        if experiment_name == _ORACLE_EXPERIMENT:
+            target_params = torch.load(
+                predictions_dir / f"target-params-{i}.pt", weights_only=True
+            )
+            assert torch.equal(pred, target_params), f"oracle pred-{i}.pt != target-params-{i}.pt"
 
     # Render predicted params through the Surge XT VST to per-sample audio directories.
     # `-t` (`--rerender_target`) re-synthesizes target.wav from the stored target_params instead
@@ -383,32 +395,14 @@ def test_train_eval_surge_xt(
         numeric = metrics_df[sorted(expected["columns"])].to_numpy()
         assert np.isfinite(numeric).all(), f"{metrics_file} contains NaN/Inf:\n{metrics_df}"
 
-    if experiment_name == "surge/fake_oracle":
-        # Oracle predicts ``batch["params"]`` verbatim; ``predict_vst_audio
-        # --rerender_target`` renders both ``target.wav`` and ``pred.wav`` from the
-        # same params through the same VST host. Surge XT still injects per-voice
-        # initialization jitter (oscillator phase, noise seed) between back-to-back
-        # renders, so the per-sample audio metrics don't collapse to zero even though
-        # the input params are bit-identical. Bounds are sized to ~3x the worst-case
-        # observed across eight local sweeps — they absorb the VST jitter, while a
-        # real model regression (an untrained ffn_full gives ``mss`` in the dozens
-        # and ``rms`` near zero) blows through every column.
-        ORACLE_BOUNDS = {
-            "mss": ("upper", 15.0),
-            "wmfcc": ("upper", 30.0),
-            "sot": ("upper", 0.5),
-            "rms": ("lower", 0.95),
-        }
+    if experiment_name == _ORACLE_EXPERIMENT:
+        # Surge XT injects per-voice render jitter (oscillator phase, noise seed)
+        # even with bit-identical params, so the audio metrics don't collapse to
+        # zero — bounds absorb that jitter while still failing on a real regression.
         per_sample = pd.read_csv(metrics_dir / "metrics.csv")
-        for col, (kind, bound) in ORACLE_BOUNDS.items():
-            values = per_sample[col].tolist()
-            if kind == "upper":
-                worst = float(per_sample[col].max())
-                assert worst < bound, (
-                    f"oracle {col} max={worst:.4f} exceeds {bound} (per-sample: {values})"
-                )
-            else:
-                worst = float(per_sample[col].min())
-                assert worst > bound, (
-                    f"oracle {col} min={worst:.4f} below {bound} (per-sample: {values})"
-                )
+        assert per_sample["mss"].max() < 15.0, f"oracle mss too high: {per_sample['mss'].tolist()}"
+        assert per_sample["wmfcc"].max() < 30.0, (
+            f"oracle wmfcc too high: {per_sample['wmfcc'].tolist()}"
+        )
+        assert per_sample["sot"].max() < 0.5, f"oracle sot too high: {per_sample['sot'].tolist()}"
+        assert per_sample["rms"].min() > 0.95, f"oracle rms too low: {per_sample['rms'].tolist()}"
