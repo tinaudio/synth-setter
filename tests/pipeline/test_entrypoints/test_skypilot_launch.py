@@ -2436,6 +2436,60 @@ class TestWorkerEnvToOsEnvironBridge:
 # ---------------------------------------------------------------------------
 
 
+class TestDispatchViaSkypilotEnvHint:
+    """`dispatch_via_skypilot`'s "no worker env" hint adapts to whether `env_file_path` is set.
+
+    The Hydra entrypoint calls ``dispatch_via_skypilot`` without an env-file path; the Click
+    CLI calls it with ``--env-file`` (or its default). Both surfaces hit the same
+    ``No worker env vars resolved`` error when nothing is configured — the hint at the end of
+    that message must not literally interpolate ``None`` into the user-facing text.
+    """
+
+    @staticmethod
+    def _minimal_compute_config() -> ComputeConfig:  # noqa: DOC201,DOC203
+        """Build a minimal ComputeConfig sufficient to reach the env-resolution branch."""
+        return ComputeConfig(
+            resources={"cloud": "runpod"},
+            envs={},
+            setup="echo setup",
+            run="echo run",
+        )
+
+    def test_env_file_path_none_hint_suggests_passing_flag(self) -> None:
+        """``env_file_path=None`` hint suggests ``--env-file``, not ``populate None``."""
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        with pytest.raises(click.ClickException) as exc_info:
+            dispatch_via_skypilot(
+                spec=MagicMock(),
+                compute_config=self._minimal_compute_config(),
+                env_file_path=None,
+            )
+
+        assert "No worker env vars resolved" in exc_info.value.message
+        assert "populate None" not in exc_info.value.message
+        assert "--env-file" in exc_info.value.message
+
+    def test_env_file_path_set_hint_names_the_path(  # noqa: DOC101,DOC103
+        self, tmp_path: Path
+    ) -> None:
+        """An explicit ``env_file_path`` is named in the hint (operators know where to look)."""
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        empty_env = tmp_path / "empty.env"
+        empty_env.write_text("")
+
+        with pytest.raises(click.ClickException) as exc_info:
+            dispatch_via_skypilot(
+                spec=MagicMock(),
+                compute_config=self._minimal_compute_config(),
+                env_file_path=empty_env,
+            )
+
+        assert "No worker env vars resolved" in exc_info.value.message
+        assert f"populate {empty_env}" in exc_info.value.message
+
+
 class TestSecretWorkerEnvKeys:
     """`_SECRET_WORKER_ENV_KEYS` is the residual subset used to detect unconfigured creds."""
 

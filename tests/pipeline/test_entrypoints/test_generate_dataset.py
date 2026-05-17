@@ -886,6 +886,32 @@ class TestMainComputeTemplateDispatch:
         assert isinstance(passed_compute, ComputeConfig)
         assert passed_compute.resources["cloud"] == "runpod"
 
+    def test_empty_string_compute_template_raises_value_error(  # noqa: DOC101,DOC103
+        self, valid_dataset_spec_kwargs: dict[str, object], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``compute_template=""`` (e.g. mistyped Hydra override) fails loudly, not silently.
+
+        Regression: previously `if not template_name` treated an explicit empty-string
+        override as "unset" and silently dispatched local, masking the typo. The check is
+        now ``is None``, so the empty string falls through to ``compute_config_from_cfg``
+        which raises a ValueError on the empty name.
+        """
+        from synth_setter.cli import generate_dataset
+
+        run_mock = MagicMock()
+        dispatch_mock = MagicMock()
+        monkeypatch.setattr(generate_dataset, "run", run_mock)
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.dispatch_via_skypilot", dispatch_mock
+        )
+
+        cfg = self._make_cfg(valid_dataset_spec_kwargs, compute_template="")
+        with pytest.raises(ValueError, match="compute_template"):
+            generate_dataset.main.__wrapped__(cfg)
+
+        run_mock.assert_not_called()
+        dispatch_mock.assert_not_called()
+
     def test_spec_from_cfg_drops_compute_template(  # noqa: DOC101,DOC103
         self, valid_dataset_spec_kwargs: dict[str, object]
     ) -> None:

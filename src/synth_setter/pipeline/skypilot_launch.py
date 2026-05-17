@@ -609,9 +609,14 @@ def dispatch_via_skypilot(
 
     worker_env = resolve_worker_env(env_file_path)
     if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
+        env_file_hint = (
+            f"populate {env_file_path}"
+            if env_file_path is not None
+            else "pass `--env-file <path>` to point at a dotenv that does"
+        )
         raise click.ClickException(
             "No worker env vars resolved. Set the rclone-R2 keys in process env "
-            f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate {env_file_path}. "
+            f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or {env_file_hint}. "
             f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
         )
 

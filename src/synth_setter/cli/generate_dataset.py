@@ -254,14 +254,16 @@ def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
 def main(cfg: DictConfig) -> None:
     """Hydra-composed CLI entry: ``python -m synth_setter.cli.generate_dataset experiment=<id>``.
 
-    When ``cfg.compute_template`` is non-empty, the run is dispatched to the named SkyPilot
+    When ``cfg.compute_template`` is non-null, the run is dispatched to the named SkyPilot
     template (one of ``configs/compute/<name>.yaml``) via ``dispatch_via_skypilot`` — same
     code path as the standalone launcher CLI. Left null (the default), the entrypoint
-    renders shards in-process via ``run``.
+    renders shards in-process via ``run``. An explicit empty-string override
+    (``compute_template=``) is *not* treated as "unset" — it falls through to
+    ``compute_config_from_cfg`` and raises ``ValueError`` so a mis-typed Hydra override
+    fails loudly instead of silently running locally.
     """
     spec = spec_from_cfg(cfg)
-    template_name = cfg.get("compute_template")
-    if not template_name:
+    if cfg.get("compute_template") is None:
         run(spec)
         return
 
