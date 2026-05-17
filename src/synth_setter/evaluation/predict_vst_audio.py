@@ -50,9 +50,10 @@ def write_spectrograms(
     channels = len(pred_specs) + len(target_specs)
 
     fig, axs = plt.subplots(channels, 1, figsize=(8, 3 * channels))
+    # subplots(1, 1) returns a bare Axes, not a 1-D array — normalize so axs[i] works.
+    axs = np.atleast_1d(axs)
 
     for i, spec in enumerate(pred_specs):
-        spec = librosa.amplitude_to_db(spec, ref=np.max)
         librosa.display.specshow(
             spec,
             sr=sample_rate,
@@ -61,11 +62,11 @@ def write_spectrograms(
             y_axis="mel",
             ax=axs[i],
             cmap="magma",
+            vmax=0,
         )
         axs[i].set_title(f"Pred (Chan {i + 1})")
 
     for i, spec in enumerate(target_specs):
-        spec = librosa.amplitude_to_db(spec, ref=np.max)
         librosa.display.specshow(
             spec,
             sr=sample_rate,
@@ -74,12 +75,13 @@ def write_spectrograms(
             y_axis="mel",
             ax=axs[i + len(pred_specs)],
             cmap="magma",
+            vmax=0,
         )
         axs[i + len(pred_specs)].set_title(f"Target (Chan {i + 1})")
 
     plt.tight_layout()
     plt.savefig(save_path)
-    plt.close()
+    plt.close(fig)
 
 
 def params_to_csv(
@@ -150,13 +152,13 @@ def main(
     for i, (pred_file, target_param_file, target_audio_file) in tqdm(
         enumerate(zip(pred_files, target_param_files, target_audio_files))
     ):
-        pred_params = torch.load(pred_file, map_location="cpu")
-        target_audio = torch.load(target_audio_file, map_location="cpu").numpy()
+        pred_params = torch.load(pred_file, map_location="cpu", weights_only=True)
+        target_audio = torch.load(target_audio_file, map_location="cpu", weights_only=True).numpy()
 
         if target_param_file is None:
             target_params = None
         else:
-            target_params = torch.load(target_param_file, map_location="cpu")
+            target_params = torch.load(target_param_file, map_location="cpu", weights_only=True)
 
         # 5. iterate over its internal rows and render the audio
         for j in trange(pred_params.shape[0]):
@@ -181,13 +183,19 @@ def main(
                 preset_path=preset_path,
             )
 
-            out_target = os.path.join(sample_dir, "target.wav")
-            if rerender_target and target_params is not None:
+            # Decode target params once, outside the rerender branch — params_to_csv below
+            # references these whether or not we re-render, so they must always be bound.
+            if target_params is None:
+                target_synth_params = None
+                target_note_params = None
+            else:
                 target_params_ = target_params[j].numpy()
                 target_params_ = (target_params_ + 1) / 2
                 target_params_ = np.clip(target_params_, 0, 1)
                 target_synth_params, target_note_params = param_spec.decode(target_params_)
 
+            out_target = os.path.join(sample_dir, "target.wav")
+            if rerender_target and target_synth_params is not None:
                 new_target = render_params(
                     plugin_path,
                     target_synth_params,
@@ -219,8 +227,8 @@ def main(
                 )
 
             params_to_csv(
-                target_synth_params if target_params is not None else None,
-                target_note_params if target_params is not None else None,
+                target_synth_params,
+                target_note_params,
                 synth_params,
                 note_params,
                 os.path.join(sample_dir, "params.csv"),

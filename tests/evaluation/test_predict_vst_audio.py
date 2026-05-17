@@ -112,6 +112,22 @@ def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None
     assert plt.get_fignums() == []
 
 
+def test_write_spectrograms_single_panel_does_not_crash(tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+    """One pred + zero target channels → ``plt.subplots(1, 1)`` returns a bare Axes.
+
+    Regression guard: without the ``np.atleast_1d(axs)`` normalization the
+    function indexed ``axs[i]`` against a scalar Axes and TypeErrored.
+    """
+    pred = _noise(channels=1, samples=4096)
+    target = np.zeros((0, 4096), dtype=np.float32)
+    out = tmp_path / "spec_single.png"
+
+    write_spectrograms(pred, target, _SR, str(out))
+
+    assert out.is_file()
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 # ---------- params_to_csv ----------
 
 
@@ -282,6 +298,29 @@ def test_main_rerender_target_renders_pred_and_target_per_sample(  # noqa: DOC10
         df = pd.read_csv(out_dir / f"sample_{j}" / "params.csv", index_col=0)
         assert bool(df["pred"].notna().all())
         assert bool(df["target"].notna().all())
+
+
+def test_main_target_params_present_but_no_rerender_does_not_crash(  # noqa: DOC101,DOC103
+    runner: CliRunner, pred_dir: Path, out_dir: Path
+) -> None:
+    """Targets on disk + ``rerender_target=False`` must not crash.
+
+    Regression guard for the latent ``UnboundLocalError`` at the ``params_to_csv`` call
+    site: when ``rerender_target=False`` and ``target_params is not None``,
+    ``target_synth_params``/``target_note_params`` were never bound in the loop iteration
+    but were still referenced. The fix decouples the CSV target column from the
+    rerender flag — decoded once outside the rerender branch.
+    """
+    _write_batch(pred_dir, index=0, batch_size=2, with_target_params=True)
+
+    # Note: no ``--rerender_target`` flag — this is the path that previously crashed.
+    result = _invoke_main(runner, pred_dir, out_dir, "--skip-spectrogram")
+
+    assert result.exit_code == 0, result.output
+    # The CSV's ``target`` column should be populated from the decoded target params.
+    df = pd.read_csv(out_dir / "sample_0" / "params.csv", index_col=0)
+    assert bool(df["pred"].notna().all())
+    assert bool(df["target"].notna().any())
 
 
 def test_main_multiple_batches_produce_contiguous_sample_indices(  # noqa: DOC101,DOC103
