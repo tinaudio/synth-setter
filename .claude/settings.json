@@ -30,7 +30,7 @@
       },
       {
         "matcher": "Bash",
-        "if": "jq -r '.tool_input.command // \"\"' | grep -qE '(^|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'",
+        "if": "jq -r '.tool_input.command // \"\"' | grep -qE '(^|[;|&`(][[:space:]]*)([[:alpha:]_][[:alnum:]_]*=[^[:space:]]+[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'",
         "description": "Pre-PR review gate: blocks gh pr create unless the command contains REVIEW_FULL_DONE=1 (anywhere in the command — recommended as a trailing comment so other gh-pr-create hooks still fire). Forces Claude to invoke /repo-review-full-no-comments and iterate on findings before opening a PR. The acknowledgment token is intentionally Claude-supplied — the gate is a circuit-breaker that forces a pause, not unbypassable security.",
         "hooks": [
           {
