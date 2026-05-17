@@ -85,7 +85,7 @@ Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `secu
 
 **Comment hygiene (CLAUDE.md "Comment Hygiene" + "No Comments Inside YAML run: Block-Scalars")**
 
-Rule IDs `C1`–`C12` are the full schema in the plugin's `comment-hygiene` skill (run via `/repo-review-full` or directly when the plugin is available). The MVP repeats the highest-signal subset inline so external contributors and plugin-less environments still get coverage. When in doubt about a flag, defer to the plugin's per-finding `Before / After` rewrites.
+Rule IDs `C1`–`C12` are the full BLOCK/WARN schema in the plugin's `comment-hygiene` skill (run via `/repo-review-full` or directly when the plugin is available). The MVP repeats the same rule IDs inline so external contributors and plugin-less environments still get coverage; what the MVP omits is the plugin's per-finding `Before / After` rewrites (and the two NIT-severity items C13–C14). When in doubt about a flag, defer to the plugin's per-finding rewrites.
 
 BLOCK items (hard CLAUDE.md rules — always flag):
 
