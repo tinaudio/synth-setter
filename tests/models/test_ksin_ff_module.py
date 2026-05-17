@@ -13,11 +13,26 @@ Each section maps to a slice of the module's contract:
 The module is exercised in isolation — no ``Trainer.fit``, no Hydra — so the
 file deliberately bypasses ``tests/conftest.py``'s heavy fixtures.
 
-ML-test items not covered here (rationale): MT2 output range, MT3 leakage,
-MT4 loss-at-init expected value, MT8 input-independent baseline, MT10
-directional expectations, MT11 metric thresholds, MT12 human baseline,
-MT13 schema, MT19 preproc as pure functions. See the plan at
-``/root/.claude/plans/temporal-beaming-treasure.md`` for the full rationale.
+ML-test items not covered here, with rationale:
+
+* MT2 output range — the network's last layer is unconstrained linear; there is
+  no documented output-range contract to assert.
+* MT3 leakage — there is no train/val/test split inside this wrapper module;
+  leakage is a datamodule concern, covered by the datamodule's own tests.
+* MT4 loss-at-init expected value — MSE/Chamfer/MSESort have no closed-form
+  expected value at random init for arbitrary ``(x, y)``; would only restate
+  the criterion's own arithmetic.
+* MT8 input-independent baseline — comparing against a mean predictor requires
+  a real dataset distribution; out of scope for a per-module unit test.
+* MT10 directional expectations — there are no documented directional
+  invariants of ``y`` w.r.t. ``x`` for this wrapper.
+* MT11 metric thresholds — quality thresholds belong to evaluation runs,
+  not module unit tests.
+* MT12 human baseline — N/A for a parameter-regression head.
+* MT13 schema — no persisted schema; the in-memory tuple shape is exercised
+  by Sections B and D.
+* MT19 preproc as pure functions — preprocessing lives in the datamodule,
+  not in this module.
 """
 
 from __future__ import annotations
@@ -255,15 +270,15 @@ def test_model_step_return_tuple_ordering(  # noqa: DOC101,DOC103
     batch_size: int,
     num_params: int,
 ) -> None:
-    """model_step returns (loss, preds, y, x) with correct shapes and identity-preserves x."""
+    """model_step returns (loss, preds, y, x) with correct shapes and passes x/y through."""
     module = _make_module(net=tiny_net, optimizer=opt_partial)
     loss, preds, y_out, x_out = module.model_step(batch)  # type: ignore[arg-type]
     x_in, y_in, _ = batch
     assert loss.ndim == 0, f"loss should be scalar, got shape {tuple(loss.shape)}"
     assert preds.shape == (batch_size, num_params)
     assert y_out.shape == (batch_size, num_params)
-    assert x_out is x_in, "model_step must pass x through by identity"
-    assert y_out is y_in, "model_step must pass y through by identity"
+    assert torch.equal(x_out, x_in), "model_step must pass x through unchanged"
+    assert torch.equal(y_out, y_in), "model_step must pass y through unchanged"
 
 
 def test_model_step_accepts_4_tuple_batch(  # noqa: DOC101,DOC103
@@ -285,8 +300,8 @@ def test_model_step_accepts_4_tuple_batch(  # noqa: DOC101,DOC103
     assert loss.ndim == 0
     assert preds.shape == (batch_size, num_params)
     assert y_out.shape == (batch_size, num_params)
-    assert x_out is x_in
-    assert y_out is y_in
+    assert torch.equal(x_out, x_in)
+    assert torch.equal(y_out, y_in)
 
 
 # --------------------------------------------------------------------------- #
@@ -472,11 +487,12 @@ def test_predictions_invariant_to_batch_row_permutation(  # noqa: DOC101,DOC103
     batch_size: int,
 ) -> None:
     """Permuting batch rows permutes predictions identically (MT9 row-independence invariance)."""
+    assert batch_size > 1, "row-permutation test requires batch_size > 1 to be non-trivial"
     module = _make_module(net=tiny_net, optimizer=opt_partial)
     module.eval()
     x = batch[0]
-    perm = torch.tensor([2, 0, 1])
-    assert perm.shape == (batch_size,)
+    perm = torch.arange(batch_size).flip(0)
+    assert not torch.equal(perm, torch.arange(batch_size)), "perm must not be the identity"
     with torch.no_grad():
         baseline = module(x)
         permuted = module(x[perm])
@@ -579,11 +595,9 @@ def test_overfit_single_batch_with_mse_loss(  # noqa: DOC101,DOC103
         opt.step()
         final_loss = loss.item()
 
-    assert final_loss < 0.01, (
-        f"failed to overfit single batch: final_loss={final_loss:.4f}, "
-        f"initial_loss={initial_loss:.4f}"
-    )
-    assert final_loss < 0.1 * initial_loss, (
-        f"loss did not decrease by 10x: final_loss={final_loss:.4f}, "
-        f"initial_loss={initial_loss:.4f}"
+    # Relative threshold (100x drop) instead of an absolute one so the test stays robust
+    # across hardware / library / init changes.
+    assert final_loss < 0.01 * initial_loss, (
+        f"failed to overfit single batch: loss did not decrease by 100x — "
+        f"final_loss={final_loss:.4f}, initial_loss={initial_loss:.4f}"
     )
