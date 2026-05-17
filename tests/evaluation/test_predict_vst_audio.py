@@ -7,21 +7,28 @@ monkey-patched to return deterministic fake audio — no real VST is loaded.
 
 from __future__ import annotations
 
-from pathlib import Path
+import os
 
-import matplotlib
+# Pin the headless backend before ``predict_vst_audio`` (or any sibling test
+# module via collection order — e.g. ``tests/test_callbacks.py`` pulls in
+# ``synth_setter.utils.callbacks`` which imports pyplot at module load) can
+# trigger ``matplotlib.pyplot`` initialization. ``matplotlib.use("Agg")`` raises
+# ``ValueError`` if pyplot is already imported; setting ``MPLBACKEND`` first
+# is the safe equivalent. ``setdefault`` respects a CI-provided override.
+os.environ.setdefault("MPLBACKEND", "Agg")
 
-matplotlib.use("Agg")  # headless backend — must precede any pyplot import
+from pathlib import Path  # noqa: E402
 
-import librosa
-import numpy as np
-import pandas as pd
-import pytest
-import torch
-from click.testing import CliRunner, Result
+import librosa  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
+import torch  # noqa: E402
+from click.testing import CliRunner, Result  # noqa: E402
 
-from synth_setter.data.vst import param_specs
-from synth_setter.evaluation import predict_vst_audio
+from synth_setter.data.vst import param_specs  # noqa: E402
+from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 
 # Small/fast audio dimensions for tests — full 4 s @ 44.1 kHz is unnecessary
 # here and slows mel-spectrogram computation. ``hop_length=512`` (the source's
@@ -78,7 +85,7 @@ def test_make_spectrogram_output_is_in_decibels() -> None:
 
 
 def test_make_spectrogram_pure_tone_peaks_near_expected_mel_bin() -> None:
-    """A pure tone should peak in a mel bin close to its frequency — guards against a zeros-mutant.
+    """A pure tone peaks in a mel bin close to its frequency — guards a zeros-mutant.
 
     Ported from #1060; uses ``librosa.mel_frequencies`` to compute the expected
     bin under the same defaults ``make_spectrogram`` uses (``fmin=0``,
@@ -125,8 +132,6 @@ def test_write_spectrograms_closes_figure_to_avoid_leaks(tmp_path: Path) -> None
 
     :param tmp_path: pytest tmp dir fixture.
     """
-    import matplotlib.pyplot as plt
-
     plt.close("all")
     predict_vst_audio.write_spectrograms(
         _fake_audio(), _fake_audio(), _SR, str(tmp_path / "spec.png")
