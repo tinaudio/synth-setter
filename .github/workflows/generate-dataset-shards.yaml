@@ -407,17 +407,22 @@ jobs:
       # The launcher's `upload_spec_to_r2` writes the spec at a deterministic
       # key derived from `cluster_name`. Surface that URI as a job/workflow
       # output so validate-dataset-shards.yaml can pull it directly from R2
-      # instead of via the run-metadata artifact.
+      # instead of via the run-metadata artifact. The helper runs inside the
+      # synth-setter image so the URI shape stays in the same Python module
+      # (`synth_setter.tools.spec_uri`) as `upload_spec_to_r2`.
       - name: Compute spec_uri output
         id: spec_uri
         env:
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
         run: |
           set -euo pipefail
-          SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
-          R2_BUCKET=
-          R2_BUCKET=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['r2_bucket'])" "${SPEC_PATH}")
-          SPEC_URI="r2://${R2_BUCKET}/skypilot-launcher-specs/${CLUSTER_NAME}.json"
+          SPEC_URI=$(docker run --rm \
+            -v "${RUN_METADATA_DIR}:/run-metadata" \
+            -e CLUSTER_NAME \
+            "${IMAGE}" \
+            synth-setter-spec-uri \
+              --spec /run-metadata/input_spec.json \
+              --job-name "$CLUSTER_NAME")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
 
