@@ -1,10 +1,12 @@
 """Reshard a directory of HDF5 shards into train/val/test virtual datasets.
 
-The split sizes come from ``DatasetSpec.train_val_test_sizes`` in
+Both the split sizes *and* the exact shard filenames come from
 ``<dataset_root>/input_spec.json`` (written once by the launcher at
-``@hydra.main`` and uploaded alongside the shards). Per-split shard counts
-are ``size // render.samples_per_shard`` — the spec is the single source of
-truth so reshard never drifts from what the workers actually wrote.
+``@hydra.main`` and uploaded alongside the shards). Per-split shard
+counts are ``size // render.samples_per_shard``, and the source files
+are exactly ``spec.shards`` in order — no glob, so a stale or extra
+``shard-NNNNNN.h5`` next to the dataset cannot silently displace a
+canonical one.
 """
 
 from pathlib import Path
@@ -112,7 +114,7 @@ def main(
     :param shard_size: Optional override for the per-shard sample count;
         must equal ``spec.render.samples_per_shard``.
     :raises click.ClickException: If the spec disagrees with the requested
-        ``--shard-size`` or with the shard files actually on disk.
+        ``--shard-size``.
     """
     resolved_spec_path = spec_path if spec_path is not None else dataset_root / INPUT_SPEC_FILENAME
     spec = _load_spec(resolved_spec_path)
@@ -125,13 +127,7 @@ def main(
             f"regenerate the spec"
         )
 
-    files = sorted(dataset_root.glob("shard-*.h5"))
-    expected_total = sum(spec.train_val_test_sizes) // sps
-    if len(files) != expected_total:
-        raise click.ClickException(
-            f"found {len(files)} shard-*.h5 files in {dataset_root}, "
-            f"spec expects {expected_total}"
-        )
+    files = [dataset_root / shard.filename for shard in spec.shards]
 
     cursor = 0
     for split_name, split_size in zip(_SPLIT_NAMES, spec.train_val_test_sizes, strict=True):

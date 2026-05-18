@@ -205,6 +205,31 @@ class TestResharSpecDriven:
         assert (tmp_path / "test.h5").exists()
 
 
+class TestResharSpecShardsAreAuthoritative:
+    """Reshard reads exactly the filenames in ``spec.shards``, no glob."""
+
+    def test_missing_canonical_shard_fails_loud(
+        self,
+        tmp_path: Path,
+        patch_runtime_io: None,
+        runner: CliRunner,
+    ) -> None:
+        """A spec.shards filename missing on disk exits non-zero, even with a stale neighbor.
+
+        :param tmp_path: Pytest tmp_path fixture for the dataset root.
+        :param patch_runtime_io: Spec runtime-factory stub fixture.
+        :param runner: Click test runner fixture.
+        """
+        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
+        _materialize_dataset(tmp_path, spec)
+        (tmp_path / spec.shards[0].filename).unlink()
+        (tmp_path / "shard-999999.h5").touch()
+
+        result = runner.invoke(_reshard_module.main, [str(tmp_path)])
+
+        assert result.exit_code != 0
+
+
 class TestResharSpecPath:
     """Reshard reads the spec from ``<dataset_root>/input_spec.json`` by default."""
 
