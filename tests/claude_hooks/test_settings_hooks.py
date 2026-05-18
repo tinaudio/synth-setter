@@ -73,15 +73,16 @@ def _find_handler(description_substring: str) -> dict[str, Any]:
     return handlers[0]
 
 
-def _run_inline_hook(
+def _run_hook_command(
     command_body: str, stdin_payload: dict[str, Any]
 ) -> subprocess.CompletedProcess[str]:
-    """Run an inline hook ``command`` body the same way Claude Code does.
+    """Run a hook ``command`` body the same way Claude Code does.
 
     Claude Code invokes the body via the shell and pipes the tool-call JSON to stdin. Tests
-    reproduce that contract.
+    reproduce that contract. The body is sometimes an inline shell snippet and sometimes a
+    one-line ``bash …/some-hook.sh`` wrapper — either form runs through this helper.
 
-    :param command_body: The inline shell command from a hook handler.
+    :param command_body: The shell command body from a hook handler.
     :param stdin_payload: JSON payload sent to the hook on stdin.
     :returns: The completed subprocess result, with captured stdout/stderr and exit code.
     :rtype: subprocess.CompletedProcess[str]
@@ -183,9 +184,12 @@ def test_named_handlers_carry_expected_if_scope(
 
 @pytest.fixture(scope="module")
 def pre_pr_gate_command() -> str:
-    """Yield the inline shell ``command`` body of the gh-pr-create PreToolUse gate.
+    """Yield the shell ``command`` body of the gh-pr-create PreToolUse gate.
 
-    :returns: The inline shell command string.
+    Currently a one-line wrapper that invokes ``.claude/hooks/pre-pr-review-gate.sh``;
+    the helper runs it via ``bash -c`` so the wrapper re-enters the script transparently.
+
+    :returns: The shell command string from the gate handler.
     :rtype: str
     """
     return _find_handler("Pre-PR review gate")["command"]
@@ -194,9 +198,9 @@ def pre_pr_gate_command() -> str:
 def test_pre_pr_gate_blocks_when_token_absent(pre_pr_gate_command: str) -> None:
     """Gate exits 2 with ``BLOCKED`` in stderr when ``REVIEW_FULL_DONE=1`` is missing.
 
-    :param pre_pr_gate_command: The inline shell command from the pre-PR review gate.
+    :param pre_pr_gate_command: The shell command body from the pre-PR review gate handler.
     """
-    result = _run_inline_hook(
+    result = _run_hook_command(
         pre_pr_gate_command,
         {"tool_input": {"command": "gh pr create --title foo --body bar"}},
     )
@@ -207,9 +211,9 @@ def test_pre_pr_gate_blocks_when_token_absent(pre_pr_gate_command: str) -> None:
 def test_pre_pr_gate_allows_when_token_in_trailing_comment(pre_pr_gate_command: str) -> None:
     """Gate exits 0 when ``REVIEW_FULL_DONE=1`` is present (typically as a trailing comment).
 
-    :param pre_pr_gate_command: The inline shell command from the pre-PR review gate.
+    :param pre_pr_gate_command: The shell command body from the pre-PR review gate handler.
     """
-    result = _run_inline_hook(
+    result = _run_hook_command(
         pre_pr_gate_command,
         {"tool_input": {"command": "gh pr create --title foo --body bar  # REVIEW_FULL_DONE=1"}},
     )
@@ -230,7 +234,7 @@ def test_branch_print_hook_announces_current_branch() -> None:
     mirror how Claude Code invokes it.
     """
     handler = _find_handler("Branch safety")
-    result = _run_inline_hook(
+    result = _run_hook_command(
         handler["command"],
         {"tool_input": {"command": "git commit -m test"}},
     )
