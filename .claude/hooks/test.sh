@@ -275,6 +275,18 @@ else
   fail "gh pr create with token" "$out"
 fi
 
+# 15. REGRESSION: leading whitespace before `gh pr create` must still gate.
+#     The original `^` anchor required no whitespace, so an indented
+#     `  gh pr create ...` would fall through with exit 0 — a fail-open.
+reset_sandbox
+stderr_file="$TEST_DIR/gate_stderr.txt"
+out=$(echo '{"tool_input":{"command":"  gh pr create --title x --body y"}}' | bash .claude/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+if [[ "$out" == *"EXIT:2"* ]] && grep -q "BLOCKED" "$stderr_file"; then
+  pass "leading-whitespace gh pr create without token → still blocked"
+else
+  fail "leading-whitespace gh pr create without token" "exit=$out stderr=$(cat "$stderr_file")"
+fi
+
 # -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------

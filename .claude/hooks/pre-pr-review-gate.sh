@@ -30,13 +30,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/_lib.sh"
 
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null <<<"$INPUT" || true)
 
-if ! echo "$COMMAND" | grep -qE '(^|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'; then
+# Here-string (not `echo |`) so SIGPIPE under pipefail can't fail-open. Allow
+# leading whitespace at line start so `  gh pr create` is still gated.
+if ! grep -qE '(^[[:space:]]*|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)' <<<"$COMMAND"; then
   exit 0
 fi
 
-if echo "$COMMAND" | grep -q 'REVIEW_FULL_DONE=1'; then
+if grep -q 'REVIEW_FULL_DONE=1' <<<"$COMMAND"; then
   log "token present, allowing"
   exit 0
 fi
