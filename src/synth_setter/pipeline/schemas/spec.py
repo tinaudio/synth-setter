@@ -120,14 +120,12 @@ _PluginReloadCadence = Literal["once", "render"]
 
 
 def _default_gui_toggle_cadence() -> _GuiToggleCadence:  # noqa: DOC201,DOC203
-    """Return ``"never"`` on Darwin (validator rejects ``"render"`` — #714), else ``"once"``.
+    """Return ``"never"`` on Darwin (validator rejects ``"render"`` — #714), else ``"render"``.
 
-    ``"once"`` is the safer per-shard default on non-Darwin (one ``show_editor``
-    warm-up per shard rather than per render). The historical pre-cadence
-    behaviour ("warm up on every load") corresponds to ``"render"`` and is
-    available as an opt-in.
+    Non-Darwin keeps the historical per-render warm-up so this config switch
+    doesn't change production behaviour; ``"once"`` is opt-in.
     """
-    return "never" if _current_platform() == "darwin" else "once"
+    return "never" if _current_platform() == "darwin" else "render"
 
 
 class ShardSpec(BaseModel):
@@ -204,10 +202,10 @@ class RenderConfig(BaseModel):
         default_factory=_default_gui_toggle_cadence,
         description=(
             'How often to run the ``show_editor`` warm-up on the plugin: ``"never"`` '
-            'skips it entirely, ``"once"`` runs it once per shard (default on non-Darwin), '
-            '``"render"`` runs it before every render. Darwin rejects ``"render"`` '
-            '(SIGTRAP after ~3-4 calls, #714); the default factory yields ``"never"`` on '
-            "Darwin."
+            'skips it entirely, ``"once"`` runs it once per shard, ``"render"`` runs '
+            "it before every render (default on non-Darwin, matching historical "
+            'per-render warm-up). Darwin rejects ``"render"`` (SIGTRAP after ~3-4 '
+            'calls, #714); the default factory yields ``"never"`` on Darwin.'
         ),
     )
 

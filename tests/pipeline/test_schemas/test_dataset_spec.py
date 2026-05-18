@@ -122,13 +122,13 @@ class TestRenderConfig:
     def test_cadence_defaults_off_darwin(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Off Darwin: plugin_reload defaults to "render"; gui_toggle defaults to "once"."""
+        """Off Darwin: both cadences default to "render" (historical per-render behaviour)."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
         )
         cfg = RenderConfig(**_valid_render_kwargs())
         assert cfg.plugin_reload_cadence == "render"
-        assert cfg.gui_toggle_cadence == "once"
+        assert cfg.gui_toggle_cadence == "render"
 
     def test_gui_toggle_default_is_never_on_darwin(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
