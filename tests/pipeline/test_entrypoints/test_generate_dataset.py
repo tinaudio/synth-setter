@@ -117,7 +117,7 @@ def _multi_shard_spec(tmp_path: Path, n: int = 3) -> DatasetSpec:
 
 
 class TestRun:
-    """Run() orchestrates: serialize → upload spec → generate → upload shard."""
+    """Run() orchestrates per-shard generate → upload (no spec re-upload by the worker)."""
 
     @pytest.fixture(autouse=True)
     def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
