@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
 
 import h5py
 import numpy as np
@@ -351,3 +352,94 @@ class TestResharLegacyFlagsRemoved:
 
         assert result.exit_code != 0
         assert "no such option" in result.output.lower()
+
+
+class TestResharR2SpecUri:
+    """``--spec r2://...`` is loaded via ``load_spec_from_uri`` (no real R2 I/O)."""
+
+    def test_r2_spec_uri_is_loaded_via_load_spec_from_uri(
+        self,
+        tmp_path: Path,
+        patch_runtime_io: None,
+        runner: CliRunner,
+    ) -> None:
+        """``--spec r2://...`` delegates to ``load_spec_from_uri`` (mocked).
+
+        :param tmp_path: Pytest tmp_path fixture for the dataset root.
+        :param patch_runtime_io: Spec runtime-factory stub fixture.
+        :param runner: Click test runner fixture.
+        """
+        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
+        _materialize_dataset(tmp_path, spec)
+        # Remove the local fallback so the test fails if the URI isn't honored.
+        (tmp_path / INPUT_SPEC_FILENAME).unlink()
+        spec_uri = "r2://intermediate-data/data/foo/input_spec.json"
+
+        with mock.patch.object(
+            _reshard_module, "load_spec_from_uri", return_value=spec
+        ) as loader:
+            result = runner.invoke(
+                _reshard_module.main,
+                [str(tmp_path), "--spec", spec_uri],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        loader.assert_called_once_with(spec_uri)
+        assert (tmp_path / "train.h5").exists()
+
+
+class TestResharVirtualDatasetIdentity:
+    """Virtual-dataset rows actually surface the right source-shard bytes, in spec order."""
+
+    def test_split_files_concatenate_source_shards_in_spec_order(
+        self,
+        tmp_path: Path,
+        patch_runtime_io: None,
+        runner: CliRunner,
+    ) -> None:
+        """Each split's audio[i*sps:(i+1)*sps] equals the i-th source shard's bytes.
+
+        :param tmp_path: Pytest tmp_path fixture for the dataset root.
+        :param patch_runtime_io: Spec runtime-factory stub fixture.
+        :param runner: Click test runner fixture.
+        """
+        sps = 3
+        spec = DatasetSpec(**_spec_kwargs(sps * 2, sps * 1, sps * 1, samples_per_shard=sps))
+        tmp_path.mkdir(exist_ok=True)
+        (tmp_path / INPUT_SPEC_FILENAME).write_text(spec.model_dump_json())
+        # Write shard `i` filled with `float(i + 1)` so each source's bytes are traceable.
+        for i, shard in enumerate(spec.shards):
+            fill = float(i + 1)
+            with h5py.File(tmp_path / shard.filename, "w") as f:
+                f.create_dataset(
+                    "audio", data=np.full((sps, 2, 64), fill, dtype=np.float32)
+                )
+                f.create_dataset(
+                    "mel_spec", data=np.full((sps, 2, 8, 8), fill, dtype=np.float32)
+                )
+                f.create_dataset(
+                    "param_array", data=np.full((sps, 12), fill, dtype=np.float32)
+                )
+
+        result = runner.invoke(_reshard_module.main, [str(tmp_path)], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        with h5py.File(tmp_path / "train.h5", "r") as f:
+            audio = cast(h5py.Dataset, f["audio"])[:]
+            params = cast(h5py.Dataset, f["param_array"])[:]
+        np.testing.assert_array_equal(audio[:sps], np.full((sps, 2, 64), 1.0, dtype=np.float32))
+        np.testing.assert_array_equal(audio[sps:], np.full((sps, 2, 64), 2.0, dtype=np.float32))
+        np.testing.assert_array_equal(params[:sps], np.full((sps, 12), 1.0, dtype=np.float32))
+        np.testing.assert_array_equal(params[sps:], np.full((sps, 12), 2.0, dtype=np.float32))
+
+        with h5py.File(tmp_path / "val.h5", "r") as f:
+            np.testing.assert_array_equal(
+                cast(h5py.Dataset, f["audio"])[:],
+                np.full((sps, 2, 64), 3.0, dtype=np.float32),
+            )
+        with h5py.File(tmp_path / "test.h5", "r") as f:
+            np.testing.assert_array_equal(
+                cast(h5py.Dataset, f["audio"])[:],
+                np.full((sps, 2, 64), 4.0, dtype=np.float32),
+            )

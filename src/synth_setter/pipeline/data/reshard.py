@@ -15,21 +15,10 @@ import click
 import h5py
 import numpy as np
 
+from synth_setter.cli.generate_dataset import load_spec_from_uri
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
-from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 _SPLIT_NAMES: tuple[str, str, str] = ("train", "val", "test")
-
-
-def _load_spec(spec_path: Path) -> DatasetSpec:
-    """Read a JSON-serialized DatasetSpec from disk.
-
-    :param spec_path: Filesystem path to the ``input_spec.json`` produced by
-        the launcher.
-    :returns: The validated :class:`DatasetSpec`.
-    :rtype: DatasetSpec
-    """
-    return DatasetSpec.model_validate_json(spec_path.read_text())
 
 
 def _build_virtual_split(
@@ -82,11 +71,12 @@ def _build_virtual_split(
 @click.argument("dataset_root", type=click.Path(file_okay=False, path_type=Path))
 @click.option(
     "--spec",
-    "spec_path",
-    type=click.Path(dir_okay=False, path_type=Path),
+    "spec_uri",
+    type=str,
     default=None,
     help=(
-        f"Path to the materialized DatasetSpec JSON. "
+        "Local path or ``r2://bucket/key`` URI of the materialized DatasetSpec JSON "
+        "(``r2://`` is downloaded via rclone — ``RCLONE_CONFIG_R2_*`` env vars must be set). "
         f"Defaults to ``<dataset_root>/{INPUT_SPEC_FILENAME}``."
     ),
 )
@@ -103,21 +93,21 @@ def _build_virtual_split(
 )
 def main(
     dataset_root: Path,
-    spec_path: Path | None,
+    spec_uri: str | None,
     shard_size: int | None,
 ) -> None:
     """Split ``shard-*.h5`` files into ``{train,val,test}.h5`` virtual datasets.
 
     :param dataset_root: Directory containing the ``shard-*.h5`` files to combine.
-    :param spec_path: Optional explicit path to the DatasetSpec JSON; defaults
-        to ``<dataset_root>/input_spec.json``.
+    :param spec_uri: Optional explicit local path or ``r2://`` URI for the spec;
+        defaults to ``<dataset_root>/input_spec.json``.
     :param shard_size: Optional override for the per-shard sample count;
         must equal ``spec.render.samples_per_shard``.
     :raises click.ClickException: If the spec disagrees with the requested
         ``--shard-size``.
     """
-    resolved_spec_path = spec_path if spec_path is not None else dataset_root / INPUT_SPEC_FILENAME
-    spec = _load_spec(resolved_spec_path)
+    resolved_spec_uri = spec_uri if spec_uri is not None else str(dataset_root / INPUT_SPEC_FILENAME)
+    spec = load_spec_from_uri(resolved_spec_uri)
 
     sps = spec.render.samples_per_shard
     if shard_size is not None and shard_size != sps:
