@@ -22,6 +22,7 @@ import pytest
 # griffe-pydantic from the same ``[docs]`` extras group.
 pytest.importorskip("mkdocs", reason="docs extras not installed; install with -e '.[docs]'")
 
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.schemas.callbacks_config import CallbackInstance
 from synth_setter.schemas.data_config import DataConfig
 from synth_setter.schemas.extras_config import ExtrasConfig
@@ -39,6 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # RootModel wrappers (CallbacksConfig, LoggerConfig) expose only `root`; we
 # document the per-instance class on those pages instead.
 _PAGE_TO_MODELS: dict[str, tuple[type, ...]] = {
+    "config_reference/dataset_spec": (DatasetSpec,),
     "config_reference/train_config": (TrainConfig,),
     "config_reference/data_config": (DataConfig,),
     "config_reference/model_config": (ModelConfig, OptimizerConfig, SchedulerConfig),

@@ -1,13 +1,15 @@
 """Pydantic schemas for the YAMLs under ``configs/callbacks/``.
 
-After Hydra composes, ``cfg.callbacks`` is a flat ``name → instance`` dict
-that ``synth_setter.utils.instantiate_callbacks`` iterates over (skipping
-entries that lack ``_target_``).
+After Hydra composes, ``cfg.callbacks`` is a flat ``name → instance`` dict.
+The schema requires every value to carry ``_target_``; the runtime helper
+``synth_setter.utils.instantiate_callbacks`` is more lenient and skips
+non-``_target_`` entries, but that path is reserved for raw DictConfigs that
+bypass schema validation.
 """
 
 from __future__ import annotations
 
-from pydantic import Field, RootModel
+from pydantic import ConfigDict, Field, RootModel
 
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
@@ -32,3 +34,5 @@ class CallbacksConfig(RootModel[dict[NonBlankStr, CallbackInstance]]):  # noqa: 
     ``configs/callbacks/none.yaml`` resolves to ``None``, not ``{}``, and is
     handled by ``instantiate_callbacks`` short-circuiting on a falsy config.
     """
+
+    model_config = ConfigDict(strict=True)

@@ -7,7 +7,7 @@ Mirrors the callbacks-config layout: composed ``cfg.logger`` is a flat
 
 from __future__ import annotations
 
-from pydantic import Field, RootModel
+from pydantic import ConfigDict, Field, RootModel
 
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
@@ -33,3 +33,5 @@ class LoggerConfig(RootModel[dict[NonBlankStr, LoggerInstance]]):  # noqa: DOC60
     ``instantiate_loggers`` short-circuits on a falsy ``cfg.logger`` (empty
     or ``None``), so that case bypasses this schema.
     """
+
+    model_config = ConfigDict(strict=True)
