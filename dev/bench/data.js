@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779117199485,
+  "lastUpdate": 1779117202285,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -5469,6 +5469,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 13.808277546700037,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2060b53fe08bfd70ae9a48481bf5370b6ba4ef18",
+          "message": "internal-feat(pipeline): Hydra-driven generate_dataset SkyPilot dispatch + CI migration (#1083)\n\n* internal-feat(pipeline): Hydra-driven generate_dataset SkyPilot dispatch\n\nAdd a single user-facing entry point that composes the dataset cfg from sys.argv\noverrides and dispatches the run either in-process (default) or via SkyPilot when\ncfg.skypilot_launch.compute_template is set.\n\n- New SkypilotLaunchConfig Pydantic schema (compute_template / cmd / env_file /\n  job_name / num_workers / worker_image_tag / tail / api_server / local).\n- New configs/skypilot_launch/default.yaml Hydra group; wired into dataset.yaml.\n- Split synth_setter.cli.generate_dataset into:\n    * main()       — new console script (synth-setter-generate-dataset),\n                     programmatic compose + branch on compute_template.\n    * from_hydra() — renamed @hydra.main entry, exposed as the new\n                     synth-setter-generate-dataset-from-hydra script and\n                     invoked as the worker-side cmd.\n- New dispatch_via_skypilot(spec, sky_cfg) in\n  synth_setter.pipeline.skypilot_launch: loads the compute YAML, refuses to\n  silently drop an existing run: block when cmd is set, injects cmd as run:,\n  and fans out per-rank via sky.Task.from_yaml_config + existing helpers.\n- Click CLI in skypilot_launch.py is unchanged so its existing tests/CI flow\n  keep passing.\n\nTests: SkypilotLaunchConfig validation, _load_compute_template_with_cmd cmd-vs-run\nconflict guard, _detect_provider_from_doc, dispatch_via_skypilot happy path +\nfailure modes, main() local vs SkyPilot branches, _build_worker_cmd shell-quoting.\n\nRefs #922\n\n* review: address iteration-1 /repo-review-full-no-comments findings\n\n- Reject operator-supplied skypilot_launch.cmd in _sky_cfg_from_dataset_cfg\n  (defense-in-depth: Hydra struct-mode already rejects undeclared keys, but\n  +skypilot_launch.cmd=... bypasses that — explicit guard catches the injection\n  surface the schema's cmd field exposes).\n- Trim configs/skypilot_launch/default.yaml header (6 lines → 3) and the\n  dispatch_via_skypilot ASCII banner (12 lines → 1) per comment-hygiene.\n- Rewrite _build_worker_cmd's .rstrip() trick as an explicit conditional join.\n- Trim _NON_SPEC_KEYS prose and the _REPO_ROOT 'parents[3] climbs ...' enumeration.\n\nTests:\n- TestBuildWorkerCmd.test_cmd_handles_empty_overrides now pins cd-prefix +\n  exec-segment + no trailing whitespace.\n- TestMainDispatchBranches.test_compute_template_set_calls_dispatch_via_skypilot\n  asserts every override (not just experiment=...) round-trips into the worker\n  cmd; new test_operator_supplied_cmd_is_rejected pins the +-override guard.\n- Replace lambda+generator-throw run-stub with a named _run_must_not_fire helper.\n- TestDetectProviderFromDoc collapses to a single parametrized happy-path test\n  covering runpod, oci, kubernetes, k8s alias, and case-insensitive matching.\n- TestDispatchViaSkypilot gains:\n    * test_multi_worker_fans_out_one_task_per_rank (per-rank fan-out + env\n      injection with num_workers=3),\n    * test_input_validation_raises_before_disk_or_network (parametrized\n      job_name + worker_image_tag malformed inputs),\n    * test_api_server_and_local_are_mutually_exclusive,\n    * test_missing_worker_env_raises now monkeypatches.delenv each\n      _SECRET_WORKER_ENV_KEYS rather than relying on the autouse stripper.\n- Schema validation tests now parametrize over multiple bad inputs (0/-1/-100\n  for num_workers; '', '   ', '\\t\\n' for api_server) and pin the offending\n  field name in the extra-fields-rejected error.\n\nRefs #922\n\n* review: address iteration-2 /repo-review-full-no-comments findings\n\nComment-hygiene trims:\n- from_hydra docstring: 6 lines → 1 line (was essay-restating main's docstring).\n- dispatch_via_skypilot docstring: 25 lines → 9 lines (drop 6-step numbered\n  procedure that restated the function body; keep caller invariants + raises).\n- main docstring: drop redundant final paragraph restating the if/else branch.\n- SkypilotLaunchConfig class docstring: 7 lines → 1 line.\n- Schema module docstring: 11 lines → 5 lines.\n- Trim 'paths.*' workaround comment from 5 lines to 2.\n- Trim 'sky+click pull in heavy provider SDKs' second clause (redundant).\n\nTest contracts:\n- test_compute_template_null_calls_run_locally now asserts isinstance(spec,\n  DatasetSpec) and that spec.render.plugin_path round-trips, instead of just\n  pinning that run was called.\n- test_operator_supplied_cmd_is_rejected now monkeypatches both gd.run and\n  dispatch_via_skypilot to AssertionError-raising stubs so a future regression\n  that flips the guard order is caught.\n- test_yaml_run_block_conflicts_with_cmd asserts\n  mock_sky.jobs.launch.assert_not_called() to pin the no-side-effect half\n  of the conflict-guard contract.\n- New test_job_name_falls_back_to_task_name_prefix_when_unset covers the\n  base_job_name derivation branch when sky_cfg.job_name=None.\n\nRefs #922\n\n* review: drop banner above dispatch_via_skypilot section\n\niter-3 comment-hygiene flagged the C9 decorative banner above\ndispatch_via_skypilot as out-of-style for src/synth_setter/pipeline/skypilot_launch.py\n(no other banner separators exist in that file). The test files have established\nbanner conventions per their existing 7-banner pattern, so banners there are\nkept for local-style consistency.\n\nRefs #922\n\n* internal-feat(ci): drive generate-dataset-shards via synth-setter-generate-dataset\n\nMigrate the reusable `.github/workflows/generate-dataset-shards.yaml` from\nthe click CLI (`python -m synth_setter.pipeline.skypilot_launch`) to the\nHydra-first `synth-setter-generate-dataset` entrypoint introduced earlier in\nthis PR. The skypilot-local and runpod rows now drive dispatch through\n`skypilot_launch.*` Hydra overrides; OCI keeps the click CLI because its\nsub-docker template `run:` block (forced by the OCI backend's rejection of\n`image_id: docker:<image>`) can't be replaced by the new dispatch's cmd\ninjection without further work.\n\nTo make the migration actually work end-to-end:\n\n- Anchor `_build_worker_cmd`'s `cd` target on the worker image's WORKDIR\n  (`/home/build/synth-setter`), not the launcher's `_REPO_ROOT`. The two\n  paths only coincide when the launcher itself runs inside dev-snapshot;\n  for the skypilot-local row the launcher runs on the bare GH-actions\n  runner and `_REPO_ROOT` resolves to `/home/runner/...`, which doesn't\n  exist on the kind worker pod.\n- Inline `bash scripts/sync_worker_checkout.sh` into the worker cmd so\n  PR-CI workers fetch the PR head over the image-baked checkout (the\n  bake-lag bypass the existing templates' `run:` blocks did manually).\n- Strip the `run:` block from `configs/compute/local-template.yaml` and\n  `configs/compute/runpod-template.yaml` — `_load_compute_template_with_cmd`\n  refuses to silently shadow a template's existing `run:` when the\n  dispatcher has a `cmd` to inject. `oci-cpu-template.yaml` keeps its\n  `run:` (the OCI sub-docker shim).\n- Materialize the spec via `synth_setter.pipeline.ci.materialize_spec`\n  before dispatch so the downstream `Compute spec_uri output` step still\n  has an `input_spec.json` from which to read `r2_bucket`.\n\nTests: extend `TestBuildWorkerCmd` with two assertions pinning the new\ncd target and the sync-before-exec ordering.\n\n* internal-fix(pipeline): pin worker created_at + ${WORKER_CMD} substitution for OCI\n\nTwo fixes that together let every provider in generate-dataset-shards.yaml\ndrive the new Hydra entrypoint:\n\n1) `_build_worker_cmd(overrides, spec)` now injects\n   `+created_at='<launcher_spec.created_at.isoformat()>'` into the worker\n   overrides. Without it, the worker's `from_hydra` re-compose hits\n   `DatasetSpec.created_at`'s `default_factory=lambda: _utc_now()` and lands\n   on a different `r2_prefix` than the launcher's spec — the cause of the\n   `validate-shards` failures on the prior CI run (launcher spec wrote\n   `data/smoke-shard/smoke-shard-20260518T130455778Z/`, worker uploaded to\n   `data/smoke-shard/smoke-shard-20260518T130800988Z/`). `run_id` and\n   `r2_prefix` derive from `created_at` in `DatasetSpec`'s default factories,\n   so pinning just that one field is sufficient.\n\n2) `_load_compute_template_with_cmd` gains a third branch: if the template's\n   existing `run:` block contains the literal `${WORKER_CMD}` sentinel, the\n   launcher's cmd substitutes into the sentinel and the surrounding shell\n   scaffolding survives. Without the sentinel, a non-empty `run:` still\n   refuses (unchanged). `configs/compute/oci-cpu-template.yaml`'s sub-docker\n   `run:` now uses `bash -c \"${WORKER_CMD}\"`, which means OCI runs the same\n   `synth-setter-generate-dataset` flow as runpod / skypilot-local — the\n   OCI workflow row in `generate-dataset-shards.yaml` folds back into the\n   runpod row, both calling `synth-setter-generate-dataset` with\n   `skypilot_launch.compute_template=configs/compute/<provider>-template.yaml`.\n\nTests:\n\n- `TestBuildWorkerCmd::test_cmd_pins_spec_created_at_via_hydra_override` —\n  the pinned `+created_at=` override appears in the worker cmd.\n- `TestLoadComputeTemplateWithCmd::test_sentinel_in_run_block_substitutes_cmd` —\n  the sentinel-substitution path lands cmd in place and leaves surrounding\n  scaffolding intact.\n- `TestLoadComputeTemplateWithCmd::test_existing_run_block_without_sentinel_raises` —\n  refusal path renamed and still active.\n- `TestLoadComputeTemplateWithCmd::test_non_string_run_block_raises` —\n  malformed templates raise before substitute attempts.\n\n* chore(comments): tighten comment hygiene across the dispatch + workflow surface\n\nSweep of new/modified comments and docstrings against the project's\ncomment-hygiene rules:\n\n- Drop multi-paragraph essays from module/function docstrings where the\n  rationale was either already in the code or task-stale (\"Mirrors X / Lives\n  at module level so tests can exercise it\" patterns).\n- Collapse 17- and 7-line comment blocks (e.g. the module docstring of\n  src/synth_setter/cli/generate_dataset.py and the _WORKER_REPO_ROOT header)\n  into the WHY-only lines that aren't already obvious from the code.\n- Compress the runpod / local / oci compute-template headers — the prior\n  versions restated facts that _load_compute_template_with_cmd already\n  enforces in code (no-`run:` / sentinel / refuse).\n- Trim docstring restatements in the matching test files.\n\nNet diff: −195 / +120 across 9 files; load-bearing WHY-comments (the\n`created_at` pinning rationale in _build_worker_cmd, the OCI template's\ncloud-init / apt-lock setup notes, and the workflow's 20-min SIGKILL note)\nare preserved. No code or behavior changes.\n\nmake format clean; tests/pipeline + tests/tools 577 passed / 4 skipped.",
+          "timestamp": "2026-05-18T10:59:38-04:00",
+          "tree_id": "e47ae1aa980fcb1919b5e808da7d00f9dbb3f251",
+          "url": "https://github.com/tinaudio/synth-setter/commit/2060b53fe08bfd70ae9a48481bf5370b6ba4ef18"
+        },
+        "date": 1779117201870,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 2.444617986679077,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 2.8746401708573104,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.017627902328968048,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.03595447540283203,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.8547166585922241,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 15.52750480520001,
             "unit": "seconds"
           }
         ]
