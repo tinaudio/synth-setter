@@ -250,7 +250,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/prefix.py"
         covers: "DatasetConfigId, DatasetRunId, R2Prefix, make_r2_prefix()"
       - pattern: "src/synth_setter/pipeline/constants.py"
-        covers: "R2 bucket name, INPUT_SPEC_FILENAME constant"
+        covers: "INPUT_SPEC_FILENAME constant"
 
   # ── Testing primer ──────────────────────────────────────────────
   - doc: docs/reference/testing.md

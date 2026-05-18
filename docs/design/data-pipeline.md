@@ -1425,7 +1425,7 @@ src/
       validate_shard.py # Shard validation (valid HDF5, full per-dataset shapes via synth_setter.data.vst.shapes — not just row count); iterates spec.shards via R2
       load_image_config.py # Resolve Docker image configuration for the launcher
 
-    constants.py        # Well-known filenames and paths (R2_BUCKET, etc.)
+    constants.py        # Well-known filenames (INPUT_SPEC_FILENAME); R2 bucket lives in configs/r2/default.yaml
     r2_io.py            # rclone-backed R2 helpers (URI handling, download, upload, size probe)
     skypilot_launch.py  # Click CLI wrapping SkyPilot launch; composes a DatasetSpec via `--experiment <id>` + ad-hoc Hydra overrides
 
