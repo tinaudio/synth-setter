@@ -10,26 +10,11 @@ instead of producing a confusing runtime error inside
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import pytest
-from hydra import compose, initialize
-from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.schemas.extras_config import ExtrasConfig
-
-
-def _compose_extras_cfg() -> dict[str, Any]:  # noqa: DOC201,DOC203
-    """Compose a full train config and return its ``extras`` subtree as a dict."""
-    with initialize(version_base="1.3", config_path="../../configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            overrides=["data=ksin", "model=ffn", "trainer=cpu"],
-        )
-    extras_subtree = OmegaConf.to_container(cfg.extras, resolve=False)
-    assert isinstance(extras_subtree, dict)
-    return cast("dict[str, Any]", extras_subtree)
+from tests.schemas.conftest import compose_subtree
 
 
 class TestExtrasConfigAcceptsDefault:
@@ -37,7 +22,7 @@ class TestExtrasConfigAcceptsDefault:
 
     def test_default_validates(self) -> None:
         """All four toggles land on the parsed model with the YAML values."""
-        extras_subtree = _compose_extras_cfg()
+        extras_subtree = compose_subtree("extras", "default")
         parsed = ExtrasConfig.model_validate(extras_subtree)
         assert parsed.ignore_warnings is False
         assert parsed.enforce_tags is True

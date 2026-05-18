@@ -18,19 +18,14 @@ The two schemas here mirror that shape:
 
 from __future__ import annotations
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    RootModel,
-)
+from pydantic import Field, RootModel
 
-from synth_setter.schemas._types import NonBlankStr
+from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["CallbackInstance", "CallbacksConfig"]
 
 
-class CallbackInstance(BaseModel):  # noqa: DOC601,DOC603
+class CallbackInstance(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """One entry of the ``cfg.callbacks`` dict.
 
     Only ``_target_`` is typed at this layer; callback-class kwargs
@@ -39,8 +34,6 @@ class CallbackInstance(BaseModel):  # noqa: DOC601,DOC603
     on those kwargs live on the upstream Lightning / project-local callback
     class signatures rather than being duplicated here.
     """
-
-    model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)
 
     target_: NonBlankStr = Field(
         alias="_target_",

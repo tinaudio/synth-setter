@@ -16,19 +16,14 @@ The two schemas here mirror that shape:
 
 from __future__ import annotations
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    RootModel,
-)
+from pydantic import Field, RootModel
 
-from synth_setter.schemas._types import NonBlankStr
+from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["LoggerConfig", "LoggerInstance"]
 
 
-class LoggerInstance(BaseModel):  # noqa: DOC601,DOC603
+class LoggerInstance(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """One entry of the ``cfg.logger`` dict.
 
     Only ``_target_`` is typed at this layer; logger-class kwargs
@@ -36,8 +31,6 @@ class LoggerInstance(BaseModel):  # noqa: DOC601,DOC603
     and pass through via ``extra="allow"``. The constraints on those kwargs
     live on the upstream logger class signatures.
     """
-
-    model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)
 
     target_: NonBlankStr = Field(
         alias="_target_",

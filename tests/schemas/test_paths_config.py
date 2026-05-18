@@ -8,26 +8,11 @@ broken paths into half a dozen downstream YAMLs and must fail early.
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import pytest
-from hydra import compose, initialize
-from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.schemas.paths_config import PathsConfig
-
-
-def _compose_paths_cfg() -> dict[str, Any]:  # noqa: DOC201,DOC203
-    """Compose a full train config and return its ``paths`` subtree as a dict."""
-    with initialize(version_base="1.3", config_path="../../configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            overrides=["data=ksin", "model=ffn", "trainer=cpu"],
-        )
-    paths_subtree = OmegaConf.to_container(cfg.paths, resolve=False)
-    assert isinstance(paths_subtree, dict)
-    return cast("dict[str, Any]", paths_subtree)
+from tests.schemas.conftest import compose_subtree
 
 
 class TestPathsConfigAcceptsDefault:
@@ -35,7 +20,7 @@ class TestPathsConfigAcceptsDefault:
 
     def test_default_validates(self) -> None:
         """All five string fields land on the parsed model."""
-        paths_subtree = _compose_paths_cfg()
+        paths_subtree = compose_subtree("paths", "default")
         parsed = PathsConfig.model_validate(paths_subtree)
         # The values are unresolved interpolation templates; we only assert
         # they're non-blank strings, which is what the schema actually

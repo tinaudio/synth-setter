@@ -10,16 +10,28 @@ documented.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
-from hydra import compose, initialize
-from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.schemas.model_config import ModelConfig, OptimizerConfig
+from tests.schemas.conftest import compose_subtree
 
 _MODEL_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "model"
+
+# Reused as a placeholder ``_target_`` across the negative-path cases — the
+# exact dotted path doesn't matter for the validators under test, but
+# centralising it stops the negative tests from looking like they each
+# probe a different module.
+_VALID_TARGET = "synth_setter.models.X"
+
+# Minimal optimizer-config fixture reused by the negative-path cases; defined
+# once so a new constraint adds one row, not a new boilerplate dict.
+_VALID_OPTIMIZER = {
+    "_target_": "torch.optim.Adam",
+    "_partial_": True,
+    "lr": 1e-4,
+}
 
 
 def _all_model_config_names() -> list[str]:  # noqa: DOC201,DOC203
@@ -33,26 +45,15 @@ def _all_model_config_names() -> list[str]:  # noqa: DOC201,DOC203
     return names
 
 
-def _compose_model_cfg(model_name: str) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Compose a full train config with ``model=<model_name>`` selected."""
-    with initialize(version_base="1.3", config_path="../../configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            overrides=[f"model={model_name}", "data=ksin", "trainer=cpu"],
-        )
-    model_subtree = OmegaConf.to_container(cfg.model, resolve=False)
-    assert isinstance(model_subtree, dict)
-    return cast("dict[str, Any]", model_subtree)
-
-
 class TestModelConfigAcceptsEveryConfig:
     """Every shipped model YAML must validate against ``ModelConfig``."""
 
     @pytest.mark.parametrize("model_name", _all_model_config_names())
     def test_model_yaml_validates(self, model_name: str) -> None:  # noqa: DOC101,DOC103
         """The composed ``model`` subtree validates as ``ModelConfig``."""
-        model_subtree = _compose_model_cfg(model_name)
-        ModelConfig.model_validate(model_subtree)
+        model_subtree = compose_subtree("model", model_name)
+        parsed = ModelConfig.model_validate(model_subtree)
+        assert parsed.target_
 
 
 class TestModelConfigCommonFields:
@@ -60,7 +61,7 @@ class TestModelConfigCommonFields:
 
     def test_common_fields_typed(self) -> None:
         """``_target_``, ``optimizer``, ``compile`` come through with the right types."""
-        model_subtree = _compose_model_cfg("ffn")
+        model_subtree = compose_subtree("model", "ffn")
         parsed = ModelConfig.model_validate(model_subtree)
         assert parsed.target_.endswith("KSinFeedForwardModule")
         assert isinstance(parsed.optimizer, OptimizerConfig)
@@ -68,18 +69,9 @@ class TestModelConfigCommonFields:
 
     def test_scheduler_optional_none(self) -> None:
         """``scheduler: null`` in YAML parses to ``None`` on the model."""
-        model_subtree = _compose_model_cfg("ffn")
+        model_subtree = compose_subtree("model", "ffn")
         parsed = ModelConfig.model_validate(model_subtree)
         assert parsed.scheduler is None
-
-
-# Minimal optimizer-config fixture reused by the negative-path cases; defined
-# once so a new constraint adds one row, not a new boilerplate dict.
-_VALID_OPTIMIZER = {
-    "_target_": "torch.optim.Adam",
-    "_partial_": True,
-    "lr": 1e-4,
-}
 
 
 class TestModelConfigRejectsBadInputs:
@@ -100,7 +92,7 @@ class TestModelConfigRejectsBadInputs:
         with pytest.raises(ValidationError):
             ModelConfig.model_validate(
                 {
-                    "_target_": "synth_setter.models.X",
+                    "_target_": _VALID_TARGET,
                     "optimizer": {"_target_": "torch.optim.Adam", "_partial_": True},
                 }
             )
@@ -110,7 +102,7 @@ class TestModelConfigRejectsBadInputs:
         with pytest.raises(ValidationError, match="greater than 0"):
             ModelConfig.model_validate(
                 {
-                    "_target_": "synth_setter.models.X",
+                    "_target_": _VALID_TARGET,
                     "optimizer": {**_VALID_OPTIMIZER, "lr": -1.0},
                 }
             )
@@ -120,7 +112,7 @@ class TestModelConfigRejectsBadInputs:
         with pytest.raises(ValidationError, match="greater than or equal to 0"):
             ModelConfig.model_validate(
                 {
-                    "_target_": "synth_setter.models.X",
+                    "_target_": _VALID_TARGET,
                     "optimizer": {**_VALID_OPTIMIZER, "weight_decay": -0.1},
                 }
             )
@@ -130,7 +122,7 @@ class TestModelConfigRejectsBadInputs:
         with pytest.raises(ValidationError, match="at least 1 character"):
             ModelConfig.model_validate(
                 {
-                    "_target_": "synth_setter.models.X",
+                    "_target_": _VALID_TARGET,
                     "optimizer": _VALID_OPTIMIZER,
                     "scheduler": {"_target_": "  ", "_partial_": True},
                 }

@@ -14,20 +14,18 @@ pydantic ``BaseModel``. The alias ``_target_`` is preserved on input/output.
 from __future__ import annotations
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
     Field,
     NonNegativeFloat,
     PositiveFloat,
     StrictBool,
 )
 
-from synth_setter.schemas._types import NonBlankStr
+from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["ModelConfig", "OptimizerConfig", "SchedulerConfig"]
 
 
-class OptimizerConfig(BaseModel):  # noqa: DOC601,DOC603
+class OptimizerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """Partial torch optimizer config injected at fit-time with model parameters.
 
     ``_partial_: true`` means ``hydra.utils.instantiate`` returns a
@@ -35,8 +33,6 @@ class OptimizerConfig(BaseModel):  # noqa: DOC601,DOC603
     LightningModule binds the model parameters at the call site. Per-field
     descriptions live on the ``Field`` definitions below.
     """
-
-    model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -54,15 +50,13 @@ class OptimizerConfig(BaseModel):  # noqa: DOC601,DOC603
     )
 
 
-class SchedulerConfig(BaseModel):  # noqa: DOC601,DOC603
+class SchedulerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """Partial torch LR scheduler config injected at fit-time with the optimizer.
 
     Several configs ship ``scheduler: null``; in those cases the YAML maps to
     ``ModelConfig.scheduler = None`` rather than this model. Per-field
     descriptions live on the ``Field`` definitions below.
     """
-
-    model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -75,7 +69,7 @@ class SchedulerConfig(BaseModel):  # noqa: DOC601,DOC603
     )
 
 
-class ModelConfig(BaseModel):  # noqa: DOC601,DOC603
+class ModelConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """Per-model Hydra config (one of the YAMLs under ``configs/model/``).
 
     The typed fields are the common surface area; variant-specific keys are
@@ -83,8 +77,6 @@ class ModelConfig(BaseModel):  # noqa: DOC601,DOC603
     schema edit. Per-field descriptions live on the ``Field`` definitions
     below.
     """
-
-    model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -103,10 +95,8 @@ class ModelConfig(BaseModel):  # noqa: DOC601,DOC603
             "scheduler. See ``SchedulerConfig``."
         ),
     )
+    # Field name mirrors the YAML key; shadows the ``compile()`` builtin in cfg.model.compile.
     compile: StrictBool = Field(
         default=True,
-        description=(
-            "Whether to wrap the module in ``torch.compile`` at setup time. "
-            "Overridden to ``False`` in CI / smoke fixtures for speed."
-        ),
+        description="Whether to wrap the module in ``torch.compile`` at setup time.",
     )

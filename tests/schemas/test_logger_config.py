@@ -15,14 +15,12 @@ is the composition that pulls in several at once.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
-from hydra import compose, initialize
-from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.schemas.logger_config import LoggerConfig, LoggerInstance
+from tests.schemas.conftest import compose_subtree
 
 _LOGGER_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "logger"
 
@@ -34,35 +32,19 @@ def _all_logger_config_names() -> list[str]:  # noqa: DOC201,DOC203
     return names
 
 
-def _compose_logger_cfg(logger_name: str) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Compose a full train config with ``logger=<logger_name>`` selected."""
-    with initialize(version_base="1.3", config_path="../../configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            overrides=[
-                f"logger={logger_name}",
-                "data=ksin",
-                "model=ffn",
-                "trainer=cpu",
-            ],
-        )
-    logger_subtree = OmegaConf.to_container(cfg.logger, resolve=False)
-    assert isinstance(logger_subtree, dict)
-    return cast("dict[str, Any]", logger_subtree)
-
-
 class TestLoggerConfigAcceptsEveryComposition:
     """Every shipped logger group must validate against ``LoggerConfig``."""
 
     @pytest.mark.parametrize("logger_name", _all_logger_config_names())
     def test_logger_yaml_validates(self, logger_name: str) -> None:  # noqa: DOC101,DOC103
         """The composed ``logger`` subtree validates as ``LoggerConfig``."""
-        logger_subtree = _compose_logger_cfg(logger_name)
-        LoggerConfig.model_validate(logger_subtree)
+        logger_subtree = compose_subtree("logger", logger_name)
+        parsed = LoggerConfig.model_validate(logger_subtree)
+        assert parsed.root
 
     def test_many_loggers_yields_multiple_entries(self) -> None:
         """``many_loggers.yaml`` composes more than one logger entry."""
-        logger_subtree = _compose_logger_cfg("many_loggers")
+        logger_subtree = compose_subtree("logger", "many_loggers")
         parsed = LoggerConfig.model_validate(logger_subtree)
         assert len(parsed.root) > 1
 

@@ -12,30 +12,11 @@ The pydantic model documents the shape of ``configs/train.yaml`` plus its
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import pytest
-from hydra import compose, initialize
-from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.schemas.train_config import TrainConfig
-
-
-def _composed_train_cfg_dict(  # noqa: DOC101,DOC103,DOC201,DOC203
-    *,
-    return_hydra_config: bool = False,
-) -> dict[str, Any]:
-    """Compose ``configs/train.yaml`` for testing and return it as a plain dict."""
-    with initialize(version_base="1.3", config_path="../../configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            return_hydra_config=return_hydra_config,
-            overrides=["data=ksin", "model=ffn", "trainer=cpu"],
-        )
-    container = OmegaConf.to_container(cfg, resolve=False)
-    assert isinstance(container, dict)
-    return cast("dict[str, Any]", container)
+from tests.schemas.conftest import compose_train_cfg
 
 
 class TestTrainConfigAcceptsLiveCompose:
@@ -43,26 +24,31 @@ class TestTrainConfigAcceptsLiveCompose:
 
     def test_default_composition_validates(self) -> None:
         """The default ``train.yaml`` composition validates without error."""
-        cfg_dict = _composed_train_cfg_dict()
-        TrainConfig.model_validate(cfg_dict)
+        cfg_dict = compose_train_cfg()
+        parsed = TrainConfig.model_validate(cfg_dict)
+        assert isinstance(parsed, TrainConfig)
 
     def test_default_composition_with_hydra_subtree_validates(self) -> None:
         """``return_hydra_config=True`` adds a ``hydra`` key; the model accepts it."""
-        cfg_dict = _composed_train_cfg_dict(return_hydra_config=True)
-        TrainConfig.model_validate(cfg_dict)
+        cfg_dict = compose_train_cfg(return_hydra_config=True)
+        parsed = TrainConfig.model_validate(cfg_dict)
+        assert isinstance(parsed, TrainConfig)
 
     def test_typed_scalars_survive_round_trip(self) -> None:
-        """Every typed scalar lands on the model with the value the YAML declares."""
-        cfg_dict = _composed_train_cfg_dict()
+        """Every typed scalar lands on the model with the right type / shape."""
+        cfg_dict = compose_train_cfg()
         model = TrainConfig.model_validate(cfg_dict)
-        assert model.task_name == "train"
-        assert model.tags == ["dev"]
-        assert model.train is True
-        assert model.test is True
-        assert model.ckpt_path is None
-        assert model.seed is None
-        assert model.optimized_metric is None
-        assert model.watch_gradients is None
+        # Assert property — typed scalars, not literal YAML values — so the
+        # test doesn't bake the train.yaml defaults into a second source of
+        # truth that drifts whenever the defaults shift.
+        assert isinstance(model.task_name, str) and model.task_name
+        assert all(isinstance(t, str) for t in model.tags)
+        assert isinstance(model.train, bool)
+        assert isinstance(model.test, bool)
+        assert model.ckpt_path is None or isinstance(model.ckpt_path, str)
+        assert model.seed is None or (isinstance(model.seed, int) and model.seed >= 0)
+        assert model.optimized_metric is None or isinstance(model.optimized_metric, str)
+        assert model.watch_gradients is None or isinstance(model.watch_gradients, bool)
 
 
 class TestTrainConfigRejectsBadInputs:
@@ -87,3 +73,13 @@ class TestTrainConfigRejectsBadInputs:
         """``tags`` is consumed as ``list[str]`` by the run-id helpers."""
         with pytest.raises(ValidationError):
             TrainConfig.model_validate({"task_name": "train", "tags": "dev"})
+
+    def test_blank_ckpt_path_rejected(self) -> None:
+        """``ckpt_path`` is ``NonBlankStr | None`` — whitespace must not pass."""
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            TrainConfig.model_validate({"task_name": "train", "ckpt_path": "   "})
+
+    def test_blank_optimized_metric_rejected(self) -> None:
+        """``optimized_metric`` is ``NonBlankStr | None`` — whitespace must not pass."""
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            TrainConfig.model_validate({"task_name": "train", "optimized_metric": "   "})

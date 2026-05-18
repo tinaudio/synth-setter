@@ -11,18 +11,14 @@ datamodule ships without a schema edit.
 
 from __future__ import annotations
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-)
+from pydantic import Field
 
-from synth_setter.schemas._types import NonBlankStr
+from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["DataConfig"]
 
 
-class DataConfig(BaseModel):  # noqa: DOC601,DOC603
+class DataConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """Per-datamodule Hydra config (one of the YAMLs under ``configs/data/``).
 
     Only ``_target_`` is typed at this layer — that's the single key
@@ -33,8 +29,6 @@ class DataConfig(BaseModel):  # noqa: DOC601,DOC603
     ``extra="allow"``; their constraints live on the datamodule's
     ``__init__`` signature rather than being re-stated here.
     """
-
-    model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)
 
     target_: NonBlankStr = Field(
         alias="_target_",

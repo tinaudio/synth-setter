@@ -11,23 +11,26 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StrictBool,
-)
+from pydantic import Field, StrictBool
+
+from synth_setter.schemas._types import StrictAllowExtraModel
 
 __all__ = ["ExtrasConfig"]
 
 
-class ExtrasConfig(BaseModel):  # noqa: DOC601,DOC603
+# Allowed values for ``torch.set_float32_matmul_precision`` — kept as a named
+# constant so the docs and the type annotation share one source of truth.
+# Note: the ``Literal[*tuple]`` unpacking syntax requires Python 3.11+ and
+# this project pins ``python_requires = ">=3.10"``, so the type annotation
+# below restates the values explicitly.
+_FLOAT32_MATMUL_PRECISIONS: tuple[str, ...] = ("highest", "high", "medium")
+
+
+class ExtrasConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """Run-time toggles read at the top of ``cli/train.py``.
 
     Per-field descriptions live on the ``Field`` definitions below.
     """
-
-    model_config = ConfigDict(strict=True, extra="allow")
 
     ignore_warnings: StrictBool = Field(
         default=False,

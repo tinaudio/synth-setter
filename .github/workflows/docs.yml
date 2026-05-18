@@ -83,22 +83,7 @@ jobs:
       - name: Install docs and dev extras
         run: pip install -e '.[docs,dev]'
 
-      # Two invocations because the conftest hygiene differs:
-      #
-      # 1. ``tests/schemas/`` uses ``--confcutdir=tests/schemas`` so pytest
-      #    still loads ``tests/schemas/conftest.py`` (the ``clean_global_hydra``
-      #    autouse fixture) but stops there — it does NOT walk up to
-      #    ``tests/conftest.py``, which eagerly imports ``lightning`` via
-      #    ``synth_setter.utils`` and would crash on this slim ``[docs,dev]``
-      #    install.
-      # 2. ``tests/test_docs_build.py`` uses ``--noconftest`` because the
-      #    test is self-contained (each test sets up its own Hydra context
-      #    via the session fixture) and has no package-local conftest to
-      #    preserve.
-      #
-      # The session fixture in ``tests/test_docs_build.py`` runs
-      # ``mkdocs build --strict`` itself, so no standalone build step is
-      # needed.
+      # Two pytest invocations because the conftest hygiene differs per path — see PR #1065.
       - name: Run schema tests (preserves tests/schemas/conftest.py)
         run: pytest tests/schemas/ -q --confcutdir=tests/schemas
 
@@ -108,8 +93,10 @@ jobs:
   # Skip on pull_request (the build-docs job above already covers PR
   # validation) and on workflow_run if the upstream run didn't succeed —
   # otherwise we'd republish stale chart data after a failed bench run.
+  # workflow_dispatch is restricted to main so a manual run from a feature
+  # branch can't publish feature-branch docs to Pages.
   deploy-docs:
-    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Pages publishing + OIDC token live on this job only — the build-docs
@@ -132,6 +119,7 @@ jobs:
         with:
           python-version: "3.10"
           cache: "pip"
+          cache-dependency-path: pyproject.toml
 
       - name: Install docs extras
         run: pip install -e '.[docs]'

@@ -10,18 +10,14 @@ typed as :data:`~synth_setter.schemas._types.NonBlankStr` rather than plain
 
 from __future__ import annotations
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-)
+from pydantic import Field
 
-from synth_setter.schemas._types import NonBlankStr
+from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["PathsConfig"]
 
 
-class PathsConfig(BaseModel):  # noqa: DOC601,DOC603
+class PathsConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """Path layout consumed via ``${paths.<name>}`` interpolation across configs.
 
     These resolve via OmegaConf interpolation in lots of downstream YAMLs
@@ -30,8 +26,6 @@ class PathsConfig(BaseModel):  # noqa: DOC601,DOC603
     dozen places. Per-field descriptions live on the ``Field`` definitions
     below.
     """
-
-    model_config = ConfigDict(strict=True, extra="allow")
 
     root_dir: NonBlankStr = Field(
         description=(

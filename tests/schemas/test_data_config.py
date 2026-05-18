@@ -20,10 +20,13 @@ from typing import Any, cast
 
 import pytest
 from hydra import compose, initialize
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.schemas.data_config import DataConfig
+from synth_setter.schemas.paths_config import PathsConfig
+from tests.schemas.conftest import compose_subtree
 
 _DATA_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "data"
 
@@ -35,32 +38,61 @@ def _all_data_config_names() -> list[str]:  # noqa: DOC201,DOC203
     return names
 
 
-def _compose_data_cfg(data_name: str) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Compose a full train config with ``data=<data_name>`` selected."""
-    with initialize(version_base="1.3", config_path="../../configs"):
-        cfg = compose(
-            config_name="train.yaml",
-            overrides=[f"data={data_name}", "model=ffn", "trainer=cpu"],
-        )
-    data_subtree = OmegaConf.to_container(cfg.data, resolve=False)
-    assert isinstance(data_subtree, dict)
-    return cast("dict[str, Any]", data_subtree)
-
-
 class TestDataConfigAcceptsEveryConfig:
     """Every shipped data YAML must validate against ``DataConfig``."""
 
     @pytest.mark.parametrize("data_name", _all_data_config_names())
     def test_data_yaml_validates(self, data_name: str) -> None:  # noqa: DOC101,DOC103
         """The composed ``data`` subtree validates as ``DataConfig``."""
-        data_subtree = _compose_data_cfg(data_name)
-        DataConfig.model_validate(data_subtree)
+        data_subtree = compose_subtree("data", data_name)
+        parsed = DataConfig.model_validate(data_subtree)
+        assert parsed.target_
 
     def test_target_field_typed(self) -> None:
         """``_target_`` lands on ``target_`` with the expected datamodule path."""
-        data_subtree = _compose_data_cfg("ksin")
+        data_subtree = compose_subtree("data", "ksin")
         parsed = DataConfig.model_validate(data_subtree)
         assert parsed.target_.endswith("KSinDataModule")
+
+
+class TestPathsConfigResolvedInterpolation:
+    """A real resolved ``PROJECT_ROOT`` must round-trip through ``NonBlankStr``."""
+
+    def test_paths_resolved_with_env_var(  # noqa: DOC101,DOC103
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``${oc.env:PROJECT_ROOT}`` resolves to a real path and validates as non-blank."""
+        # PROJECT_ROOT is the only env-var interpolation in paths/default.yaml;
+        # validating against the resolved value (not the literal ${oc.env:...}
+        # template) is what ``NonBlankStr`` actually guards in production.
+        monkeypatch.setenv("PROJECT_ROOT", "/tmp/x")  # noqa: S108
+        # ``return_hydra_config=True`` + ``HydraConfig.instance().set_config``
+        # registers the ``hydra`` subtree so ``${hydra:...}`` resolvers can
+        # fire. ``paths.output_dir`` / ``paths.work_dir`` are overridden
+        # explicitly because Hydra's ``runtime.output_dir`` / ``runtime.cwd``
+        # are only populated at fit time, not at compose time. The point of
+        # the test is ``${oc.env:PROJECT_ROOT}`` round-tripping through
+        # ``NonBlankStr``, not the hydra runtime keys.
+        with initialize(version_base="1.3", config_path="../../configs"):
+            cfg = compose(
+                config_name="train.yaml",
+                return_hydra_config=True,
+                overrides=[
+                    "data=ksin",
+                    "model=ffn",
+                    "trainer=cpu",
+                    "paths.output_dir=/tmp/x/out",  # noqa: S108
+                    "paths.work_dir=/tmp/x",  # noqa: S108
+                ],
+            )
+            HydraConfig.instance().set_config(cfg)
+            resolved_paths = cast(
+                "dict[str, Any]", OmegaConf.to_container(cfg.paths, resolve=True)
+            )
+        parsed = PathsConfig.model_validate(resolved_paths)
+        assert parsed.root_dir == "/tmp/x"  # noqa: S108
+        assert parsed.data_dir.startswith("/tmp/x")  # noqa: S108
 
 
 class TestDataConfigRejectsBadInputs:

@@ -11,21 +11,18 @@ override that comes along — passes through via ``extra="allow"``.
 from __future__ import annotations
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
     Field,
     PositiveFloat,
     PositiveInt,
     StrictBool,
-    StrictStr,
 )
 
-from synth_setter.schemas._types import NonBlankStr
+from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["TrainerConfig"]
 
 
-class TrainerConfig(BaseModel):  # noqa: DOC601,DOC603
+class TrainerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """Per-trainer Hydra config (one of the YAMLs under ``configs/trainer/``).
 
     Typed fields cover the keys the shipped trainer variants actually set;
@@ -35,8 +32,6 @@ class TrainerConfig(BaseModel):  # noqa: DOC601,DOC603
     upstream at lightning.ai.
     """
 
-    model_config = ConfigDict(strict=True, extra="allow", populate_by_name=True)
-
     target_: NonBlankStr = Field(
         alias="_target_",
         description=(
@@ -45,7 +40,7 @@ class TrainerConfig(BaseModel):  # noqa: DOC601,DOC603
             "``cli/train.py``."
         ),
     )
-    default_root_dir: StrictStr = Field(
+    default_root_dir: NonBlankStr = Field(
         description=(
             "Where Lightning writes logs and checkpoints when no logger overrides "
             "it. Defaults to ``${paths.output_dir}``, which is Hydra's per-run "
@@ -67,21 +62,14 @@ class TrainerConfig(BaseModel):  # noqa: DOC601,DOC603
     )
     log_every_n_steps: PositiveInt = Field(
         description=(
-            "Logging cadence for training metrics. ``100`` across all shipped "
-            "variants — passed straight to ``Trainer``."
+            "Logging cadence (steps) for training metrics; passed straight to ``Trainer``."
         ),
     )
     val_check_interval: PositiveInt = Field(
-        description=(
-            "Run the validation loop every N training steps. Set to ``10_000`` "
-            "across the shipped variants."
-        ),
+        description="Cadence of validation runs; passed straight to ``Trainer``.",
     )
     gradient_clip_val: PositiveFloat = Field(
-        description=(
-            "Global-norm gradient-clipping value. ``1.0`` across all shipped "
-            "variants; raise for noisy losses, lower to debug divergence."
-        ),
+        description="Maximum gradient L2 norm before clipping; passed straight to ``Trainer``.",
     )
     check_val_every_n_epoch: PositiveInt | None = Field(
         default=None,

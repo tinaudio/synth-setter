@@ -7,26 +7,35 @@ and are validated by ``hydra.utils.instantiate`` at call time.
 
 Intentionally documentation-first: tests assert the live composed DictConfig
 validates against ``TrainConfig``, but the entrypoint continues to consume
-the raw ``DictConfig``.
+the raw ``DictConfig``. Currently validated only by the test suite
+(``tests/schemas/test_train_config.py``); the training entrypoint
+(``cli/train.py``) does not call ``TrainConfig.model_validate`` at runtime.
 """
 
 from __future__ import annotations
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
     Field,
     NonNegativeInt,
     StrictBool,
     StrictStr,
 )
 
-from synth_setter.schemas._types import NonBlankStr
+from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["TrainConfig"]
 
 
-class TrainConfig(BaseModel):  # noqa: DOC601,DOC603
+def _default_tags() -> list[str]:
+    """Return the default ``tags`` list for a fresh ``TrainConfig``.
+
+    :returns: A one-element list containing the placeholder ``"dev"`` tag.
+    :rtype: list[str]
+    """
+    return ["dev"]
+
+
+class TrainConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
     """Top-level training configuration as composed from ``configs/train.yaml``.
 
     Only the typed scalar surface is represented here — the defaults below
@@ -39,8 +48,6 @@ class TrainConfig(BaseModel):  # noqa: DOC601,DOC603
     below and render into the auto-generated docs via ``griffe-pydantic``.
     """
 
-    model_config = ConfigDict(strict=True, extra="allow")
-
     task_name: NonBlankStr = Field(
         default="train",
         description=(
@@ -49,7 +56,7 @@ class TrainConfig(BaseModel):  # noqa: DOC601,DOC603
         ),
     )
     tags: list[StrictStr] = Field(
-        default_factory=lambda: ["dev"],
+        default_factory=_default_tags,
         description=(
             "Free-form tags propagated to the logger (wandb / TensorBoard). "
             "Overwrite from the command line with ``tags='[first, second]'``."
@@ -66,7 +73,7 @@ class TrainConfig(BaseModel):  # noqa: DOC601,DOC603
             "the best checkpoint via the ``model_checkpoint`` callback."
         ),
     )
-    ckpt_path: StrictStr | None = Field(
+    ckpt_path: NonBlankStr | None = Field(
         default=None,
         description=(
             "Path to a Lightning checkpoint. If set, ``trainer.fit`` resumes from "
@@ -80,7 +87,7 @@ class TrainConfig(BaseModel):  # noqa: DOC601,DOC603
             "and Python's ``random``. ``None`` means non-deterministic."
         ),
     )
-    optimized_metric: StrictStr | None = Field(
+    optimized_metric: NonBlankStr | None = Field(
         default=None,
         description=(
             "Name of the callback metric returned to Hydra for hyperparameter "
