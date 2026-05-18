@@ -8,7 +8,7 @@ would otherwise form a launcher-side import cycle.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ShardMetadata(BaseModel):
@@ -28,11 +28,21 @@ class ShardMetadata(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    velocity: int
-    signal_duration_seconds: float
-    sample_rate: int
-    channels: int
-    min_loudness: float
+    velocity: int = Field(
+        description="MIDI velocity used for every render in this shard (0-127); mirrors RenderConfig.velocity.",
+    )
+    signal_duration_seconds: float = Field(
+        description="Duration of each rendered audio sample, in seconds; mirrors RenderConfig.signal_duration_seconds.",
+    )
+    sample_rate: int = Field(
+        description="Audio sample rate in Hz; mirrors RenderConfig.sample_rate.",
+    )
+    channels: int = Field(
+        description="Audio channel count (>= 1); mirrors RenderConfig.channels.",
+    )
+    min_loudness: float = Field(
+        description="Per-sample loudness floor used during rendering; mirrors RenderConfig.min_loudness.",
+    )
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> ShardMetadata:

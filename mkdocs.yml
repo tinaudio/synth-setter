@@ -64,6 +64,8 @@ nav:
   - Home: index.md
   - Config Reference:
       - Dataset Spec: config_reference/dataset_spec.md
+      - Image Config: config_reference/image_config.md
+      - Shard Metadata: config_reference/shard_metadata.md
       - Training Config: config_reference/train_config.md
       - Data Config: config_reference/data_config.md
       - Model Config: config_reference/model_config.md
