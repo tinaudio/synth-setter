@@ -160,7 +160,7 @@ class TestRun:
         # into the prefix directory preserves the basename → final object
         # key is `{prefix}{INPUT_SPEC_FILENAME}`.
         assert spec_src.endswith(INPUT_SPEC_FILENAME)
-        assert spec_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
+        assert spec_dest == spec.r2.rclone_prefix()
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -241,7 +241,7 @@ class TestRun:
         assert len(rclone_calls) == 2
         shard_src, shard_dest = rclone_calls[1][0]
         assert "shard-000000.h5" in shard_src
-        assert shard_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
+        assert shard_dest == spec.r2.rclone_prefix()
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -639,9 +639,7 @@ class TestRun:
 
         run(spec)
 
-        assert probed_uris == [
-            f"r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}" for shard in spec.shards
-        ]
+        assert probed_uris == [spec.r2.uri(shard.filename) for shard in spec.shards]
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -800,11 +798,13 @@ class TestSpecFromCfg:
     def test_resolves_interpolations_before_dropping_groups(
         self, valid_dataset_spec_kwargs: dict[str, object]
     ) -> None:
-        """``${r2.bucket}`` interpolation is resolved before the ``r2`` group is dropped.
+        """``${r2.bucket}`` interpolation is resolved before any consumer reads it.
 
         Mirrors the production composition: ``configs/dataset.yaml`` has
-        ``r2_bucket: ${r2.bucket}`` and the ``r2`` group is only present for that interpolation.
-        Dropping ``r2`` before resolving would lose the bucket value.
+        ``r2_bucket: ${r2.bucket}`` (flat key, promoted to nested ``r2`` by
+        ``DatasetSpec._normalize_r2``). The ``r2`` Hydra-group is *not* dropped
+        before resolving — it carries the interpolation target — so the spec's
+        ``r2.bucket`` ends up populated with the resolved value.
         """
         from omegaconf import OmegaConf
 
@@ -816,7 +816,7 @@ class TestSpecFromCfg:
 
         spec = spec_from_cfg(OmegaConf.create(kwargs))
 
-        assert spec.r2_bucket == "interpolated-bucket"
+        assert spec.r2.bucket == "interpolated-bucket"
 
 
 # PROJECT_ROOT-bootstrap behavior is exercised end-to-end by tests/pipeline/test_configs/

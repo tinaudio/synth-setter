@@ -130,24 +130,6 @@ class TestDownloadedToTempfile:
         assert not seen[0].exists()
 
 
-class TestShardUri:
-    """Tests for shard_uri — canonical R2 URI builder for shards."""
-
-    def test_constructs_full_uri_from_bucket_prefix_filename(self) -> None:
-        """The URI follows the r2://{bucket}/{prefix}{filename} convention exactly."""
-        assert (
-            r2_io.shard_uri("intermediate-data", "data/run-x/", "shard-000007.h5")
-            == "r2://intermediate-data/data/run-x/shard-000007.h5"
-        )
-
-    def test_preserves_nested_prefix(self) -> None:
-        """Multi-segment prefixes are joined verbatim (caller controls trailing slash)."""
-        assert (
-            r2_io.shard_uri("bucket", "a/b/c/", "shard-000000.h5")
-            == "r2://bucket/a/b/c/shard-000000.h5"
-        )
-
-
 class TestObjectSize:
     """Tests for object_size — existence + size probe via `rclone lsf --format=s`."""
 

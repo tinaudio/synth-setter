@@ -483,7 +483,7 @@ class TestMainCli:
         assert spec.is_repo_dirty is False
         # ``generate_dataset/smoke-shard``: 12 samples / samples_per_shard=4 = 3 shards.
         assert spec.num_shards == 3
-        assert spec.r2_bucket == "intermediate-data"
+        assert spec.r2.bucket == "intermediate-data"
 
     def test_worker_env_is_forwarded_to_task(
         self,
@@ -2627,25 +2627,27 @@ def _write_runpod_yaml(  # noqa: DOC101,DOC103,DOC201,DOC203
 
 def _build_spec(fake_plugin: Path) -> DatasetSpec:  # noqa: DOC101,DOC103,DOC201,DOC203
     """Build a DatasetSpec wired to ``fake_plugin`` for the dispatch tests."""
-    return DatasetSpec(
-        task_name="test-dispatch",
-        train_val_test_sizes=(10000, 0, 0),
-        output_format="hdf5",
-        base_seed=42,
-        r2_bucket="intermediate-data",
-        render={  # type: ignore[arg-type]
-            "plugin_path": str(fake_plugin),
-            "preset_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
-            "sample_rate": 16000,
-            "channels": 2,
-            "velocity": 100,
-            "signal_duration_seconds": 4.0,
-            "min_loudness": -55.0,
-            "samples_per_render_batch": 32,
-            "samples_per_shard": 10000,
-        },
+    return DatasetSpec.model_validate(
+        {
+            "task_name": "test-dispatch",
+            "train_val_test_sizes": (10000, 0, 0),
+            "output_format": "hdf5",
+            "base_seed": 42,
+            "r2_bucket": "intermediate-data",
+            "render": {
+                "plugin_path": str(fake_plugin),
+                "preset_path": "presets/surge-base.vstpreset",
+                "param_spec_name": "surge_simple",
+                "renderer_version": "1.3.4",
+                "sample_rate": 16000,
+                "channels": 2,
+                "velocity": 100,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_render_batch": 32,
+                "samples_per_shard": 10000,
+            },
+        }
     )
 
 

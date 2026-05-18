@@ -129,14 +129,14 @@ class TestDatasetSpecConstruction:
     """Tests for DatasetSpec construction and runtime-field auto-fill."""
 
     def test_fresh_construction_fills_runtime_fields(self, patch_runtime_io: None) -> None:
-        """Default construction populates git_sha, created_at, run_id, r2_prefix from factories."""
+        """Default construction populates git_sha, created_at, run_id, r2.prefix from factories."""
         spec = DatasetSpec(**_valid_spec_kwargs())
 
         assert spec.git_sha == "abc123def456"
         assert spec.is_repo_dirty is False
         assert spec.created_at == FIXED_NOW
         assert spec.run_id == "ci-smoke-test-20260328T120000000Z"
-        assert spec.r2_prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
+        assert spec.r2.prefix == "data/ci-smoke-test/ci-smoke-test-20260328T120000000Z/"
 
     def test_run_id_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
         """An explicit run_id in the input dict passes through instead of being regenerated."""
@@ -144,19 +144,52 @@ class TestDatasetSpecConstruction:
         assert spec.run_id == "custom-run-id-001"
 
     def test_r2_prefix_uses_explicit_value_when_present(self, patch_runtime_io: None) -> None:
-        """An explicit r2_prefix in the input dict passes through instead of being recomputed."""
+        """An explicit r2_prefix in the input dict passes through (legacy flat shape)."""
         spec = DatasetSpec(**_valid_spec_kwargs(r2_prefix="custom/prefix/here/"))
-        assert spec.r2_prefix == "custom/prefix/here/"
+        assert spec.r2.prefix == "custom/prefix/here/"
 
     def test_r2_prefix_root_default_is_data(self, patch_runtime_io: None) -> None:
-        """Default ``r2_prefix_root`` produces a prefix beginning with ``data/``."""
+        """Default ``r2.prefix_root`` produces a prefix beginning with ``data/``."""
         spec = DatasetSpec(**_valid_spec_kwargs())
-        assert spec.r2_prefix.startswith("data/")
+        assert spec.r2.prefix.startswith("data/")
 
     def test_r2_prefix_root_custom_threads_through(self, patch_runtime_io: None) -> None:
-        """A custom ``r2_prefix_root`` threads through into the materialized prefix."""
+        """A custom legacy ``r2_prefix_root`` threads through into the materialized prefix."""
         spec = DatasetSpec(**_valid_spec_kwargs(r2_prefix_root="experiments"))
-        assert spec.r2_prefix.startswith("experiments/")
+        assert spec.r2.prefix.startswith("experiments/")
+
+    def test_explicit_nested_r2_passes_through(self, patch_runtime_io: None) -> None:
+        """An explicit nested ``r2`` dict bypasses the legacy-flat back-compat shim entirely.
+
+        :param patch_runtime_io: pytest fixture stubbing git / timestamp factories so DatasetSpec
+            construction is deterministic.
+        """
+        kwargs = _valid_spec_kwargs()
+        kwargs.pop("r2_bucket", None)
+        kwargs["r2"] = {
+            "bucket": "explicit-bucket",
+            "prefix_root": "explicit-root",
+            "prefix": "explicit-root/explicit-prefix/",
+        }
+        spec = DatasetSpec(**kwargs)
+        assert spec.r2.bucket == "explicit-bucket"
+        assert spec.r2.prefix == "explicit-root/explicit-prefix/"
+
+    def test_legacy_flat_keys_promote_to_nested_r2(self, patch_runtime_io: None) -> None:
+        """Pre-PR materialized specs in R2 (flat keys) deserialize into the nested model.
+
+        :param patch_runtime_io: pytest fixture stubbing git / timestamp factories so DatasetSpec
+            construction is deterministic.
+        """
+        payload = {
+            **_valid_spec_kwargs(),
+            "r2_prefix": "data/legacy/legacy-20260101T000000000Z/",
+            "r2_prefix_root": "data",
+        }
+        spec = DatasetSpec(**payload)
+        assert spec.r2.bucket == "intermediate-data"
+        assert spec.r2.prefix_root == "data"
+        assert spec.r2.prefix == "data/legacy/legacy-20260101T000000000Z/"
 
     def test_dataset_spec_strict_rejects_extra_fields(self, patch_runtime_io: None) -> None:
         """Unknown top-level keys are rejected at the trust boundary."""
@@ -178,30 +211,30 @@ class TestDatasetSpecValidators:
     """Tests for DatasetSpec field-level and cross-field validators."""
 
     def test_r2_bucket_blank_raises(self, patch_runtime_io: None) -> None:
-        """Blank or whitespace-only r2_bucket raises (rclone would receive a malformed URI)."""
+        """Blank or whitespace-only bucket raises (rclone would receive a malformed URI)."""
         for blank in ("", "   ", "\t\n"):
-            with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
+            with pytest.raises(ValidationError, match="bucket must not be blank"):
                 DatasetSpec(**_valid_spec_kwargs(r2_bucket=blank))
 
     def test_task_name_blank_raises(self, patch_runtime_io: None) -> None:
-        """Blank task_name raises (derived run_id / r2_prefix would be empty-prefixed)."""
+        """Blank task_name raises (derived run_id / r2.prefix would be empty-prefixed)."""
         with pytest.raises(ValidationError, match="task_name must not be blank"):
             DatasetSpec(**_valid_spec_kwargs(task_name="   "))
 
     def test_r2_prefix_root_blank_raises(self, patch_runtime_io: None) -> None:
-        """Blank ``r2_prefix_root`` raises.
+        """Blank ``prefix_root`` raises.
 
-        Prevents derived ``r2_prefix`` from starting with a stray ``/``.
+        Prevents derived ``prefix`` from starting with a stray ``/``.
         """
         for blank in ("", "   ", "\t\n"):
-            with pytest.raises(ValidationError, match="r2_prefix_root must not be blank"):
+            with pytest.raises(ValidationError, match="prefix_root must not be blank"):
                 DatasetSpec(**_valid_spec_kwargs(r2_prefix_root=blank))
 
     def test_explicit_r2_prefix_missing_trailing_slash_raises(
         self, patch_runtime_io: None
     ) -> None:
         """An explicit r2_prefix lacking the trailing ``/`` raises (rclone path concat trap)."""
-        with pytest.raises(ValidationError, match="r2_prefix must end with"):
+        with pytest.raises(ValidationError, match="prefix must end with"):
             DatasetSpec(**_valid_spec_kwargs(r2_prefix="data/no/slash"))
 
     def test_split_size_not_multiple_of_samples_per_shard_raises(
@@ -275,11 +308,11 @@ class TestDatasetSpecValidators:
         assert spec.train_val_test_seeds is None
 
     def test_explicit_empty_r2_prefix_raises(self, patch_runtime_io: None) -> None:
-        """Empty ``r2_prefix`` raises via the ``_r2_prefix_must_end_with_slash`` validator.
+        """Empty ``r2_prefix`` raises via ``R2Location``'s trailing-slash validator.
 
-        The default_factory is bypassed when a value is supplied.
+        The default derivation from task_name/run_id is bypassed when a value is supplied.
         """
-        with pytest.raises(ValidationError, match="r2_prefix must end with"):
+        with pytest.raises(ValidationError, match="prefix must end with"):
             DatasetSpec(**_valid_spec_kwargs(r2_prefix=""))
 
     def test_z_suffixed_created_at_string_parses(self, patch_runtime_io: None) -> None:
@@ -390,7 +423,7 @@ class TestDatasetSpecRoundTrip:
     """Tests for ``model_dump_json`` → ``model_validate_json`` round-trip preservation."""
 
     def test_json_round_trip_preserves_runtime_fields(self, patch_runtime_io: None) -> None:
-        """git_sha, is_repo_dirty, created_at, run_id, r2_prefix all survive a JSON round-trip."""
+        """git_sha, is_repo_dirty, created_at, run_id, r2 all survive a JSON round-trip."""
         spec = DatasetSpec(**_valid_spec_kwargs())
         json_str = spec.model_dump_json()
         restored = DatasetSpec.model_validate_json(json_str)
@@ -399,7 +432,7 @@ class TestDatasetSpecRoundTrip:
         assert restored.is_repo_dirty == spec.is_repo_dirty
         assert restored.created_at == spec.created_at
         assert restored.run_id == spec.run_id
-        assert restored.r2_prefix == spec.r2_prefix
+        assert restored.r2 == spec.r2
 
     def test_json_round_trip_preserves_shards(self, patch_runtime_io: None) -> None:
         """Computed ``shards`` / ``num_shards`` round-trip identically through JSON."""

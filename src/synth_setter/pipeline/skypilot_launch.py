@@ -59,12 +59,18 @@ from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
+from synth_setter.pipeline.constants import (
+    LAUNCHER_SPEC_R2_PREFIX,
+    R2_URI_SCHEME,
+    RCLONE_REMOTE,
+)
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
-# Per-launch R2 key for the materialized spec (file_mounts blocked by #749).
-_LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
+# Re-exported under the module-private name for backwards compatibility with
+# test code that asserts on this attribute.
+_LAUNCHER_SPEC_R2_PREFIX = LAUNCHER_SPEC_R2_PREFIX
 _WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
@@ -331,17 +337,22 @@ def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
     """Upload `spec` to R2 under a per-job key; return the `r2://bucket/key` URI.
 
     Uses `rclone copyto` (configured via `RCLONE_CONFIG_R2_*` in process env)
-    to put the spec at `r2:{spec.r2_bucket}/skypilot-launcher-specs/{job_name}.json`.
+    to put the spec at `<RCLONE_REMOTE>:{spec.r2.bucket}/skypilot-launcher-specs/{job_name}.json`.
     The worker pod's env will get `WORKER_SPEC_URI` pointing at the same URI;
     the worker downloads via `load_spec_from_uri` before parsing.
+
+    The URI lives outside ``spec.r2.prefix`` (different keyspace, one-per-job
+    rather than one-per-run), so we build it inline against the central
+    ``RCLONE_REMOTE`` / ``R2_URI_SCHEME`` constants — ``R2Location``'s
+    methods address the run's own prefix, not this launcher staging area.
 
     Workaround for #749: SkyPilot's RunPod backend rejects programmatic
     `task.update_file_mounts(...)` with a pubkey-overflow at pod-create time,
     so the launcher ships the spec via R2 instead.
     """
     spec_key = f"{_LAUNCHER_SPEC_R2_PREFIX}/{job_name}.json"
-    rclone_dest = f"r2:{spec.r2_bucket}/{spec_key}"
-    spec_uri = f"r2://{spec.r2_bucket}/{spec_key}"
+    rclone_dest = f"{RCLONE_REMOTE}:{spec.r2.bucket}/{spec_key}"
+    spec_uri = f"{R2_URI_SCHEME}{spec.r2.bucket}/{spec_key}"
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
         f.write(spec.model_dump_json(indent=2))
         local_path = f.name

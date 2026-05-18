@@ -4,6 +4,10 @@ Wraps `rclone` with a small set of typed helpers so worker, launcher, and CI
 validation code can share one implementation. Resolution of `r2:` is left to
 the caller's environment — the standard `RCLONE_CONFIG_R2_*` vars must be set
 when any of these functions runs.
+
+URI construction itself lives on ``R2Location`` in
+``synth_setter.pipeline.schemas.r2_location`` so the URI shape stays in one
+place across the bucket / prefix / per-object surface.
 """
 
 from __future__ import annotations
@@ -14,7 +18,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-R2_URI_SCHEME = "r2://"
+from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
+
+__all__ = [
+    "R2_URI_SCHEME",
+    "download_to_path",
+    "downloaded_to_tempfile",
+    "is_r2_uri",
+    "object_size",
+    "upload_to_uri",
+]
 
 
 def is_r2_uri(uri: str) -> bool:
@@ -30,7 +43,7 @@ def _to_rclone_path(r2_uri: str) -> str:
     """
     if not is_r2_uri(r2_uri):
         raise ValueError(f"not an r2:// URI: {r2_uri!r}")
-    return "r2:" + r2_uri[len(R2_URI_SCHEME) :]
+    return f"{RCLONE_REMOTE}:" + r2_uri[len(R2_URI_SCHEME) :]
 
 
 def download_to_path(r2_uri: str, dest_path: Path) -> None:
@@ -70,16 +83,6 @@ def upload_to_uri(local_path: Path, r2_uri: str) -> None:
         _to_rclone_path(r2_uri),
     ]
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
-
-
-def shard_uri(bucket: str, prefix: str, shard_filename: str) -> str:
-    """Build the canonical R2 URI for a shard object: ``r2://{bucket}/{prefix}{filename}``.
-
-    Centralizes the convention so the worker's skip-existing probe, the worker's upload, and the
-    CI validator agree on one URI shape — protects resumability and reconciliation from
-    prefix-format drift.
-    """
-    return f"{R2_URI_SCHEME}{bucket}/{prefix}{shard_filename}"
 
 
 def object_size(r2_uri: str) -> int | None:

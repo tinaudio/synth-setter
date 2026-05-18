@@ -3,10 +3,14 @@
 ``DatasetSpec`` is the only spec model — there is no separate YAML-shaped
 config or runtime-materialized artifact. Hydra composes a dict from groups;
 the entrypoint constructs ``DatasetSpec`` directly from that dict on line 1
-of ``main``. Runtime fields (``git_sha``, ``created_at``, ``run_id``,
-``r2_prefix``) auto-fill via ``default_factory`` when missing and pass through
-when present (worker reconstruction from JSON). ``shards``/``num_shards``/
-``num_params`` are computed deterministically from layout + render fields.
+of ``main``. Runtime fields (``git_sha``, ``created_at``, ``run_id``) auto-fill
+via ``default_factory`` when missing and pass through when present (worker
+reconstruction from JSON). The nested ``r2`` location is built by the
+``_normalize_r2`` before-validator from either explicit nested input,
+flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` keys (legacy /
+Hydra-flat input), or the ``task_name`` + ``run_id`` defaults.
+``shards``/``num_shards``/``num_params`` are computed deterministically
+from layout + render fields.
 """
 
 from __future__ import annotations
@@ -31,11 +35,13 @@ from synth_setter.pipeline.schemas.prefix import (
     make_dataset_wandb_run_id,
     make_r2_prefix,
 )
+from synth_setter.pipeline.schemas.r2_location import R2Location
 
 __all__ = [
     "EXTENSION_TO_OUTPUT_FORMAT",
     "OUTPUT_FORMAT_TO_EXTENSION",
     "DatasetSpec",
+    "R2Location",
     "RenderConfig",
     "ShardSpec",
 ]
@@ -197,20 +203,20 @@ class RenderConfig(BaseModel):
 # Names paired with ``train_val_test_sizes`` indices in error messages.
 _SPLIT_LABELS: tuple[str, str, str] = ("train", "val", "test")
 
+# Back-compat: legacy flat ``r2_*`` keys (in pre-nesting materialized specs and
+# in Hydra-flat ``configs/dataset.yaml``) promote to nested ``R2Location``
+# attributes via ``DatasetSpec._normalize_r2``.
+_R2_LEGACY_KEY_MAP: dict[str, str] = {
+    "r2_bucket": "bucket",
+    "r2_prefix_root": "prefix_root",
+    "r2_prefix": "prefix",
+}
+
 
 def _default_run_id(data: dict[str, Any]) -> str:
     """Compute a deterministic run_id from already-validated layout fields."""
     return make_dataset_wandb_run_id(
         DatasetConfigId(data["task_name"]), timestamp=data["created_at"]
-    )
-
-
-def _default_r2_prefix(data: dict[str, Any]) -> str:
-    """Compute the R2 object prefix from already-validated layout fields."""
-    return make_r2_prefix(
-        DatasetConfigId(data["task_name"]),
-        data["run_id"],
-        prefix_root=data["r2_prefix_root"],
     )
 
 
@@ -220,9 +226,12 @@ class DatasetSpec(BaseModel):
     Construction story:
 
     - Hydra composes a dict from groups.
-    - ``DatasetSpec(**dict)`` runs validation; runtime fields (git_sha,
-      created_at, run_id, r2_prefix, is_repo_dirty) auto-fill via
-      ``default_factory`` when missing and pass through when present.
+    - ``DatasetSpec(**dict)`` runs validation; runtime fields (``git_sha``,
+      ``created_at``, ``run_id``, ``is_repo_dirty``) auto-fill via
+      ``default_factory`` when missing and pass through when present. The
+      nested ``r2`` location is built by ``_normalize_r2`` (legacy flat
+      ``r2_*`` keys are promoted to nested attributes; defaults derive from
+      ``task_name`` + ``run_id``).
     - Workers re-validate ``model_dump_json()`` from R2 and get an equal model.
 
     Strict mode is on (the model is a trust boundary for JSON-from-R2);
@@ -236,7 +245,7 @@ class DatasetSpec(BaseModel):
     task_name: str = Field(
         description=(
             "Dataset config identifier; becomes the prefix of ``run_id`` and the "
-            "config-id path segment of ``r2_prefix`` (``<root>/<task_name>/<run_id>/``)."
+            "config-id path segment of ``r2.prefix`` (``<root>/<task_name>/<run_id>/``)."
         )
     )
     output_format: Literal["hdf5", "wds"] = Field(
@@ -261,12 +270,13 @@ class DatasetSpec(BaseModel):
     base_seed: int = Field(
         description="Seed used to derive per-shard ``ShardSpec.seed`` values (``base_seed + shard_id``)."
     )
-    r2_bucket: str = Field(
-        description="Cloudflare R2 bucket name where shards and metadata are written."
-    )
-    r2_prefix_root: str = Field(
-        default=DEFAULT_R2_PREFIX_ROOT,
-        description="Top-level prefix segment under the bucket; slashes are stripped by ``make_r2_prefix``.",
+    r2: R2Location = Field(
+        description=(
+            "Nested R2 location (bucket + prefix_root + prefix). Built by the "
+            "``_normalize_r2`` before-validator from explicit nested input, "
+            "legacy flat ``r2_bucket``/``r2_prefix_root``/``r2_prefix`` keys, or "
+            "the ``task_name``/``run_id``-derived defaults."
+        ),
     )
 
     render: RenderConfig = Field(
@@ -301,10 +311,6 @@ class DatasetSpec(BaseModel):
         default_factory=_default_run_id,
         description="Deterministic W&B run ID derived from ``task_name`` and ``created_at``.",
     )
-    r2_prefix: str = Field(
-        default_factory=_default_r2_prefix,
-        description="Full R2 object prefix (``<root>/<task_name>/<run_id>/``); must end with ``/``.",
-    )
 
     @model_validator(mode="before")
     @classmethod
@@ -337,6 +343,126 @@ class DatasetSpec(BaseModel):
             for computed_key in cls.model_computed_fields:
                 data.pop(computed_key, None)
         return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_r2(cls, data: Any) -> Any:
+        """Build the nested ``r2`` field from explicit nested input, legacy flat keys, or defaults.
+
+        Three input shapes converge here:
+
+        1. ``data["r2"]`` already a dict or ``R2Location`` — pass through; any
+           lingering flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` keys
+           would trip ``extra="forbid"`` so they're rejected later by pydantic.
+        2. No ``r2`` key but legacy flat keys present — back-compat shim for
+           pre-PR materialized specs in R2 and Hydra-flat input from
+           ``configs/dataset.yaml``. Promote each flat key to the matching
+           nested attribute; the per-field name maps live in
+           ``_R2_LEGACY_KEY_MAP``.
+        3. Neither — derive ``prefix`` from ``task_name`` + ``run_id`` (or the
+           ``run_id`` we'd derive from ``task_name`` + ``created_at``).
+
+        Runs in ``mode="before"`` so the nested ``R2Location`` constructor sees
+        a clean dict. Because ``mode="before"`` fires *before* pydantic resolves
+        ``default_factory`` for missing fields, we replicate the ``run_id`` /
+        ``created_at`` factory chain locally when those keys are absent.
+
+        :param data: Raw input dict (or non-dict, which passes through).
+        :returns: Input mapping with nested ``r2`` populated; non-dict inputs
+            return unchanged.
+        :rtype: Any
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        nested = data.get("r2")
+        if isinstance(nested, (dict, R2Location)):
+            return data
+
+        flat = cls._harvest_legacy_r2_keys(data)
+        flat.setdefault("prefix_root", DEFAULT_R2_PREFIX_ROOT)
+        # Only derive the prefix when none was supplied — explicit empty / blank
+        # values pass through to ``R2Location._prefix_must_end_with_slash`` so
+        # the error attribution stays at the prefix field.
+        if "prefix" not in flat:
+            cls._derive_prefix(data, flat)
+        data["r2"] = flat
+        return data
+
+    @classmethod
+    def _derive_prefix(cls, data: dict[str, Any], flat: dict[str, Any]) -> None:
+        """Fill ``flat['prefix']`` from ``task_name`` + (explicit or derived) ``run_id``.
+
+        Skips silently when inputs aren't usable (blank ``prefix_root``, missing
+        ``task_name``, or a malformed ``created_at`` string) — those cases
+        surface as the dedicated downstream validation error
+        (``R2Location._prefix_root_must_not_be_blank``, ``task_name`` validator,
+        ``_parse_iso_datetime``) instead of being masked by an opaque
+        ``make_r2_prefix`` failure here.
+
+        :param data: Raw input dict, read-only here.
+        :param flat: Partially-built ``R2Location`` kwargs dict; ``prefix`` is
+            populated in place on success.
+        """
+        task_name = data.get("task_name")
+        if not isinstance(task_name, str) or not task_name.strip():
+            return
+        if not isinstance(flat["prefix_root"], str) or not flat["prefix_root"].strip():
+            return
+        try:
+            run_id = cls._resolve_run_id_for_prefix(data, task_name)
+        except (ValueError, TypeError):
+            return
+        flat["prefix"] = make_r2_prefix(
+            DatasetConfigId(task_name),
+            run_id,
+            prefix_root=flat["prefix_root"],
+        )
+
+    @classmethod
+    def _harvest_legacy_r2_keys(cls, data: dict[str, Any]) -> dict[str, Any]:
+        """Pop legacy flat ``r2_*`` keys from ``data`` and return the nested-shape dict.
+
+        :param data: Input dict; flat keys are removed via ``pop`` so subsequent
+            ``extra="forbid"`` validation doesn't see them.
+        :returns: Mapping with the nested-attribute names (per
+            ``_R2_LEGACY_KEY_MAP``) for the legacy keys that were present.
+        :rtype: dict[str, Any]
+        """
+        flat: dict[str, Any] = {}
+        for legacy_key, nested_key in _R2_LEGACY_KEY_MAP.items():
+            if legacy_key in data:
+                flat[nested_key] = data.pop(legacy_key)
+        return flat
+
+    @classmethod
+    def _resolve_run_id_for_prefix(cls, data: dict[str, Any], task_name: str) -> str:
+        """Return ``data['run_id']`` if present, else derive it locally.
+
+        Replicates the ``run_id`` default_factory chain inside the ``mode="before"``
+        validator, which fires before pydantic resolves field defaults. The
+        derived value is *not* written back to ``data``; pydantic's own
+        ``_default_run_id`` factory will fire later on the same inputs and
+        produce the same string.
+
+        :param data: Input dict, queried for ``run_id`` / ``created_at``.
+        :param task_name: Already-validated dataset config identifier.
+        :returns: The run_id to use when building ``r2.prefix``.
+        :rtype: str
+        """
+        run_id = data.get("run_id")
+        if run_id is not None:
+            return run_id
+        created_at = data.get("created_at")
+        if created_at is None:
+            created_at = _utc_now()
+        elif isinstance(created_at, str):
+            created_at = (
+                datetime.fromisoformat(created_at[:-1] + "+00:00")
+                if created_at.endswith("Z")
+                else datetime.fromisoformat(created_at)
+            )
+        return make_dataset_wandb_run_id(DatasetConfigId(task_name), timestamp=created_at)
 
     @field_validator("train_val_test_sizes", mode="before")
     @classmethod
@@ -385,34 +511,10 @@ class DatasetSpec(BaseModel):
                 )
         return value
 
-    @field_validator("r2_prefix")
-    @classmethod
-    def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
-        """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
-        if not value.endswith("/"):
-            raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
-        return value
-
-    @field_validator("r2_bucket")
-    @classmethod
-    def _r2_bucket_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
-        if not value.strip():
-            raise ValueError("r2_bucket must not be blank")
-        return value
-
-    @field_validator("r2_prefix_root")
-    @classmethod
-    def _r2_prefix_root_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank prefix roots so derived ``r2_prefix`` doesn't start with a stray ``/``."""
-        if not value.strip():
-            raise ValueError("r2_prefix_root must not be blank")
-        return value
-
     @field_validator("task_name")
     @classmethod
     def _task_name_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank ``task_name`` so derived run_id / r2_prefix are never empty-prefixed."""
+        """Reject blank ``task_name`` so derived run_id / r2.prefix are never empty-prefixed."""
         if not value.strip():
             raise ValueError("task_name must not be blank")
         return value

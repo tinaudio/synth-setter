@@ -5,13 +5,12 @@
 defaults:
   - override /data: surge_simple
   - override /render: surge_simple
+  - override /r2: experiments
   - _self_
 
 task_name: 10-1k-shards
 
 train_val_test_sizes: [10000, 0, 0]
-
-r2_bucket: experiments
 
 render:
   sample_rate: 44100

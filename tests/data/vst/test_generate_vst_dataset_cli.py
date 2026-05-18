@@ -56,13 +56,15 @@ def _smoke_spec() -> DatasetSpec:
         samples_per_render_batch=32,
         samples_per_shard=10000,
     )
-    return DatasetSpec(
-        task_name="ci-smoke-test",
-        output_format="hdf5",
-        train_val_test_sizes=(440000, 20000, 20000),
-        base_seed=42,
-        r2_bucket="intermediate-data",
-        render=render_cfg,
+    return DatasetSpec.model_validate(
+        {
+            "task_name": "ci-smoke-test",
+            "output_format": "hdf5",
+            "train_val_test_sizes": (440000, 20000, 20000),
+            "base_seed": 42,
+            "r2_bucket": "intermediate-data",
+            "render": render_cfg,
+        }
     )
 
 

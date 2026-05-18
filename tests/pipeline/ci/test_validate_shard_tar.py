@@ -68,25 +68,27 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
     contents.mkdir(parents=True)
     (contents / "moduleinfo.json").write_text('{"Version": "1.3.4"}')
 
-    return DatasetSpec(
-        task_name="test-dataset",
-        output_format="wds",
-        train_val_test_sizes=(10, 0, 0),
-        base_seed=42,
-        r2_bucket="intermediate-data",
-        render={
-            "plugin_path": str(tmp_path / "FakePlugin.vst3"),
-            "preset_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
-            "sample_rate": 16000,
-            "channels": _VALID_AUDIO_CHANNELS,
-            "velocity": 100,
-            "signal_duration_seconds": 4.0,
-            "min_loudness": -55.0,
-            "samples_per_render_batch": 32,
-            "samples_per_shard": 10,
-        },  # type: ignore[arg-type]
+    return DatasetSpec.model_validate(
+        {
+            "task_name": "test-dataset",
+            "output_format": "wds",
+            "train_val_test_sizes": (10, 0, 0),
+            "base_seed": 42,
+            "r2_bucket": "intermediate-data",
+            "render": {
+                "plugin_path": str(tmp_path / "FakePlugin.vst3"),
+                "preset_path": "presets/surge-base.vstpreset",
+                "param_spec_name": "surge_simple",
+                "renderer_version": "1.3.4",
+                "sample_rate": 16000,
+                "channels": _VALID_AUDIO_CHANNELS,
+                "velocity": 100,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_render_batch": 32,
+                "samples_per_shard": 10,
+            },
+        }
     )
 
 
