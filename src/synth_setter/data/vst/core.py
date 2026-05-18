@@ -73,7 +73,7 @@ def warmup_plugin(plugin: VST3Plugin) -> None:
 
     :param plugin: A loaded VST3 plugin; ``show_editor`` is invoked once on it.
     """
-    logger.info("Preparing plugin for preset load...")
+    logger.info("Warming up plugin via show_editor (commit-handler state)...")
     close_editor = threading.Event()
     timer = threading.Timer(_EDITOR_INIT_DELAY_SECONDS, close_editor.set)
     timer.daemon = True
