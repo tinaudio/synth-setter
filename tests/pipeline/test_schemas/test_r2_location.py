@@ -56,6 +56,19 @@ class TestR2LocationConstruction:
             ):
                 R2Location(bucket="b", prefix_root=slash_only, prefix="data/x/y/")
 
+    def test_whitespace_wrapped_slash_only_prefix_root_raises(self) -> None:
+        """Whitespace-wrapped slash-only values (e.g. ``" / "``) are also rejected.
+
+        Regression: the prior validator stripped slashes before whitespace, so
+        ``" / "`` would strip to ``" / "`` then ``"/"`` and pass. Stripping
+        whitespace first closes the gap.
+        """
+        for value in (" / ", "\t//\n", "  ///  "):
+            with pytest.raises(
+                ValidationError, match=r"r2\.prefix_root must not be blank or slash-only"
+            ):
+                R2Location(bucket="b", prefix_root=value, prefix="data/x/y/")
+
     def test_prefix_must_end_with_slash(self) -> None:
         """Prefix without trailing ``/`` would concatenate to ``.../prefixfilename``."""
         with pytest.raises(ValidationError, match=r"r2\.prefix must end with"):

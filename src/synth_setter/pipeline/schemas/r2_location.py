@@ -76,10 +76,13 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
 
         ``make_r2_prefix`` strips leading/trailing ``/`` and then rejects an empty
         result, so a value like ``"////"`` would otherwise survive this validator
-        and crash later inside the prefix factory. Catching it here keeps error
-        attribution at the ``r2.prefix_root`` boundary.
+        and crash later inside the prefix factory. Whitespace is stripped *first*
+        so values like ``" / "`` (whitespace around a lone slash) are also caught;
+        otherwise ``strip("/")`` would leave the spaces, then ``strip()`` would
+        collapse to ``"/"`` and pass. Catching it here keeps error attribution at
+        the ``r2.prefix_root`` boundary.
         """
-        if not value.strip("/").strip():
+        if not value.strip().strip("/"):
             raise ValueError("r2.prefix_root must not be blank or slash-only")
         return value
 
