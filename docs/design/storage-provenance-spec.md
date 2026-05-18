@@ -44,29 +44,29 @@ ______________________________________________________________________
 
 ### 3a. Data Generation
 
-> **Implementation status:** The layout below is the target architecture. The current MVP uses a flat structure: spec and all shards upload directly to `data/{config_id}/{run_id}/`.
+> **Implementation status:** The layout below is the target architecture. The current MVP uses a flat structure: spec and all shards upload directly to `data/{config_id}/{run_id}/`. The `metadata/workers/` staging prefix and the `finalize` promotion step are **future state** — see [#406](https://github.com/tinaudio/synth-setter/issues/406).
 
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/
-├── shards/
+├── shards/                  # Future state — current workers write shards directly here (no shards/ subdir). #406
 │   ├── shard-000000.h5
 │   └── ...
-├── metadata/
+├── metadata/                # Future state — current `input_spec.json` lives flat at the run prefix root. #385
 │   ├── config.yaml          # Frozen pipeline config (provenance copy)
-│   ├── input_spec.json      # Frozen input specification (authoritative)
+│   ├── input_spec.json      # Frozen input specification (authoritative; currently at `<run_prefix>/input_spec.json`)
 │   ├── dataset.json         # Self-describing dataset card
 │   ├── dataset.complete     # Completion marker
-│   └── workers/             # Worker staging area
+│   └── workers/             # Future state — worker staging area; current workers write shards directly to `data/{config_id}/{run_id}/`. #406
 │       ├── shards/{shard_id}/{worker_id}-{attempt_uuid}.*
 │       └── attempts/{worker_id}-{attempt_uuid}/report.json
 ├── train.h5, val.h5, test.h5  # Split virtual datasets
 └── stats.npz                   # Normalization statistics
 ```
 
-- Workers may only write under `metadata/workers/`
-- `shards/` is written only by finalize
+- Workers may only write under `metadata/workers/` *(future state — current workers write directly to `data/{config_id}/{run_id}/`; see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
+- `shards/` is written only by finalize *(future state — current workers write directly into the run prefix; finalize stage does not yet exist, see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
 - All `rclone` operations use `--checksum`
-- Datasets are immutable once `dataset.complete` exists. New versions require a new `dataset_wandb_run_id`.
+- Datasets are immutable once `dataset.complete` exists. New versions require a new `dataset_wandb_run_id`. *(future state — completion-marker handling lands with finalize, [#406](https://github.com/tinaudio/synth-setter/issues/406))*
 
 ### 3b. Training
 

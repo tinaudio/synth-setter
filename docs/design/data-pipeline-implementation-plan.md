@@ -6,6 +6,17 @@
 > are not yet created. Phases 3-6 are not started. Storage layer, validation,
 > reconciliation, compute backend, and CLI modules do not exist yet.
 >
+> **`metadata/workers/` + finalize are future state.** Every reference to the
+> `metadata/workers/` staging prefix, the shard-lifecycle markers
+> (`.rendering` / `.valid` / `.invalid` / `.promoted`), and the
+> `pipeline.cli finalize` promotion step in this document describes the target
+> architecture, not current behavior. The MVP worker
+> (`src/synth_setter/cli/generate_dataset.py`) writes shards directly to
+> `data/<task_name>/<run_id>/` with no staging or finalize. Tracked in
+> [#406](https://github.com/tinaudio/synth-setter/issues/406) (CLAUDE.md /
+> design-doc reconciliation) and [#72](https://github.com/tinaudio/synth-setter/issues/72)
+> (Phase 5 Pipeline CLI).
+>
 > **Canonical design:** [data-pipeline.md](data-pipeline.md)
 > **Tracking:** #74
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
