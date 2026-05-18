@@ -206,6 +206,32 @@ class TestDatasetSpecConstruction:
         assert set(round_trip) == before_keys
         assert {"shards", "num_shards", "num_params"}.issubset(round_trip)
 
+    def test_default_created_at_and_run_id_agree_with_r2_prefix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``r2.prefix``, ``created_at``, and ``run_id`` share one timestamp when all default.
+
+        ``_normalize_r2`` (model-validator, ``mode="before"``) runs before the
+        ``created_at`` and ``run_id`` ``default_factory`` callables. If
+        ``_utc_now`` is called twice — once by the validator to seed the prefix,
+        once by the field factory — a sub-millisecond gap is enough to emit a
+        ``run_id`` that disagrees with the one baked into ``r2.prefix``. Pin the
+        guarantee by patching ``_utc_now`` to advance one second per call.
+
+        :param monkeypatch: pytest monkeypatch fixture, used to patch
+            ``_get_git_sha`` / ``_is_repo_dirty`` / ``_utc_now`` in
+            ``synth_setter.pipeline.schemas.spec``.
+        """
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec._get_git_sha", lambda: "deadbeef")
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec._is_repo_dirty", lambda: False)
+        clock = iter(datetime(2026, 3, 28, 12, 0, i, tzinfo=timezone.utc) for i in range(10))
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec._utc_now", lambda: next(clock))
+
+        spec = DatasetSpec(**_valid_spec_kwargs())
+
+        assert spec.r2.prefix.endswith(f"/{spec.run_id}/")
+        assert spec.run_id.endswith(spec.created_at.strftime("%Y%m%dT%H%M%S000Z"))
+
 
 class TestDatasetSpecValidators:
     """Tests for DatasetSpec field-level and cross-field validators."""

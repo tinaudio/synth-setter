@@ -437,15 +437,18 @@ class DatasetSpec(BaseModel):
 
     @classmethod
     def _resolve_run_id_for_prefix(cls, data: dict[str, Any], task_name: str) -> str:
-        """Return ``data['run_id']`` if present, else derive it locally.
+        """Return ``data['run_id']`` if present, else derive it and cache it on ``data``.
 
         Replicates the ``run_id`` default_factory chain inside the ``mode="before"``
-        validator, which fires before pydantic resolves field defaults. The
-        derived value is *not* written back to ``data``; pydantic's own
-        ``_default_run_id`` factory will fire later on the same inputs and
-        produce the same string.
+        validator, which fires before pydantic resolves field defaults. Writes the
+        resolved ``created_at`` and ``run_id`` back onto ``data`` so pydantic's
+        field-level ``default_factory`` resolution skips re-derivation — without
+        this, a second ``_utc_now()`` call from the ``created_at`` factory can
+        cross a millisecond boundary and emit a ``run_id`` that disagrees with
+        the one already baked into ``r2.prefix``.
 
-        :param data: Input dict, queried for ``run_id`` / ``created_at``.
+        :param data: Input dict, queried for ``run_id`` / ``created_at``; the
+            resolved values are written back so pydantic's field defaults see them.
         :param task_name: Already-validated dataset config identifier.
         :returns: The run_id to use when building ``r2.prefix``.
         :rtype: str
@@ -462,7 +465,10 @@ class DatasetSpec(BaseModel):
                 if created_at.endswith("Z")
                 else datetime.fromisoformat(created_at)
             )
-        return make_dataset_wandb_run_id(DatasetConfigId(task_name), timestamp=created_at)
+        data["created_at"] = created_at
+        run_id = make_dataset_wandb_run_id(DatasetConfigId(task_name), timestamp=created_at)
+        data["run_id"] = run_id
+        return run_id
 
     @field_validator("train_val_test_sizes", mode="before")
     @classmethod
