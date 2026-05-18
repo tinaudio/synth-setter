@@ -409,7 +409,11 @@ jobs:
       # output so validate-dataset-shards.yaml can pull it directly from R2
       # instead of via the run-metadata artifact. The helper runs inside the
       # synth-setter image so the URI shape stays in the same Python module
-      # (`synth_setter.tools.spec_uri`) as `upload_spec_to_r2`.
+      # (`synth_setter.tools.spec_uri`) as `upload_spec_to_r2`. The PR
+      # checkout is mounted on top of the baked /home/build/synth-setter so
+      # `python -m synth_setter.tools.spec_uri` resolves against the PR's
+      # source even when `IMAGE` points at a baked tag (e.g. `dev-snapshot`)
+      # that pre-dates this entry point.
       - name: Compute spec_uri output
         id: spec_uri
         env:
@@ -417,10 +421,12 @@ jobs:
         run: |
           set -euo pipefail
           SPEC_URI=$(docker run --rm \
+            -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v "${RUN_METADATA_DIR}:/run-metadata" \
             -e CLUSTER_NAME \
+            -w /home/build/synth-setter \
             "${IMAGE}" \
-            synth-setter-spec-uri \
+            python -m synth_setter.tools.spec_uri \
               --spec /run-metadata/input_spec.json \
               --job-name "$CLUSTER_NAME")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
