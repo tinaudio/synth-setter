@@ -1,10 +1,18 @@
 # SkyPilot task template for RunPod.
 #
-# Loaded by src/synth_setter/pipeline/skypilot_launch.py via sky.Task.from_yaml(...).
-# The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<cluster>.json`)
+# Loaded by src/synth_setter/pipeline/skypilot_launch.py's
+# dispatch_via_skypilot via sky.Task.from_yaml_config(...).
+# The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<job>.json`)
 # and injects credentials + the spec URI via task.update_envs(...) before
 # calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
 # (not sky.jobs.launch) — RunPod has no managed-jobs controller backend.
+#
+# No `run:` block: the launcher injects the worker-side cmd
+# (`cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh &&
+#  exec synth-setter-generate-dataset-from-hydra <overrides>`) at dispatch
+# time via _build_worker_cmd in src/synth_setter/cli/generate_dataset.py.
+# Adding a run: here would be rejected by _load_compute_template_with_cmd's
+# conflict guard.
 #
 # Spec ships via R2 (not file_mounts) because programmatic `task.update_file_mounts(...)`
 # triggers a SkyPilot RunPod-backend pubkey-overflow rejection at pod-create
@@ -13,7 +21,7 @@
 # Image: `tinaudio/synth-setter:<worker-image-tag>` must exist on Docker Hub
 # (e.g. `make docker-build-dev-snapshot` then `docker push` for the default
 # `dev-snapshot` tag) before launch. `image_id` is set per-launch by the
-# launcher from --worker-image-tag.
+# launcher from skypilot_launch.worker_image_tag.
 
 resources:
   cloud: runpod
@@ -34,15 +42,14 @@ resources:
   disk_size: 50
 
 # Placeholders. Real values are injected by the launcher via update_envs.
-# WORKER_SPEC_URI is set per-cluster by the launcher to the r2:// URI of the
-# uploaded spec; the worker downloads from there via load_spec_from_uri.
+# WORKER_GIT_REF is forwarded so sync_worker_checkout.sh can fetch the PR
+# head over the image-baked checkout when set (PR-CI bake-lag bypass).
 envs:
   RCLONE_CONFIG_R2_TYPE: ""
   RCLONE_CONFIG_R2_PROVIDER: ""
   RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
-  WORKER_SPEC_URI: ""
   WORKER_GIT_REF: ""
   # Per-rank partition env. Source of truth: src/synth_setter/pipeline/partitioning.py.
   SYNTH_SETTER_WORKER_RANK: ""
@@ -51,14 +58,3 @@ envs:
 setup: |
   set -euo pipefail
   echo "synth-setter worker ready (host: $(hostname))"
-
-# sync_worker_checkout.sh handles the WORKER_GIT_REF PR-CI bake-lag bypass.
-# The synced checkout's src/synth_setter/tools/docker_entrypoint.py is invoked directly so
-# entrypoint changes on the PR head land before main rebuilds dev-snapshot —
-# /usr/local/bin/entrypoint.py is the baked copy and lags by one main rebuild.
-run: |
-  set -euo pipefail
-  cd /home/build/synth-setter
-  echo "skypilot-run-cwd: $(pwd)"
-  bash scripts/sync_worker_checkout.sh
-  exec python -m synth_setter.tools.docker_entrypoint generate_dataset --spec "$WORKER_SPEC_URI"

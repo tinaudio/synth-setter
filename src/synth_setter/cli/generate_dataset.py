@@ -61,6 +61,15 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CONFIG_DIR = _REPO_ROOT / "configs"
 
+# Path of the synth-setter checkout *inside the worker container*. Matches the
+# dev-snapshot image's baked checkout (see docker/ubuntu22_04/Dockerfile —
+# WORKDIR /home/build/synth-setter) and the `cd /home/build/synth-setter` line
+# every configs/compute/*-template.yaml's legacy `run:` block hardcoded. The
+# launcher's own ``_REPO_ROOT`` is the path on the *launcher* filesystem (e.g.
+# /home/runner/work/... on a bare GH-actions runner) — it does not necessarily
+# exist on the worker, so the worker-side cmd must use this constant.
+_WORKER_REPO_ROOT = "/home/build/synth-setter"
+
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
     """Load a DatasetSpec from a local path or `r2://bucket/key` URI.
@@ -295,16 +304,20 @@ def _build_worker_cmd(overrides: list[str]) -> str:  # noqa: DOC203
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
     Each override is shell-quoted individually so values with spaces or special
-    chars survive the bash interpretation inside ``sky.Task.run``. Worker image
-    WORKDIR matches the launcher's repo root, so the leading ``cd`` keeps the
-    cmd cwd-independent on both sides of the dispatch.
+    chars survive the bash interpretation inside ``sky.Task.run``. The leading
+    ``cd`` targets :data:`_WORKER_REPO_ROOT` (the dev-snapshot image's checkout
+    path), not the launcher's ``_REPO_ROOT`` — those paths only coincide when
+    the launcher itself runs inside dev-snapshot. ``sync_worker_checkout.sh``
+    runs between cd and exec so PR-CI workers fetch the PR head over the
+    image-baked checkout (see #735 / #841 for the bake-lag bypass).
 
     :param overrides: The launcher's ``sys.argv[1:]`` — the operator's Hydra
         overrides, replayed verbatim on the worker.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
     """
     parts = [
-        f"cd {shlex.quote(str(_REPO_ROOT))}",
+        f"cd {shlex.quote(_WORKER_REPO_ROOT)}",
+        "bash scripts/sync_worker_checkout.sh",
         "exec synth-setter-generate-dataset-from-hydra",
     ]
     if overrides:

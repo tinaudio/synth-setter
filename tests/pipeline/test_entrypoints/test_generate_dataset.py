@@ -840,6 +840,25 @@ class TestBuildWorkerCmd:
         assert "synth-setter-generate-dataset-from-hydra" in cmd
         assert "experiment=foo" in cmd
 
+    def test_cmd_cds_to_worker_repo_root_not_launcher_repo(self) -> None:
+        """Cd target is the worker checkout, not the launcher's path."""
+        from synth_setter.cli.generate_dataset import _WORKER_REPO_ROOT, _build_worker_cmd
+
+        cmd = _build_worker_cmd([])
+        assert cmd.startswith(f"cd {_WORKER_REPO_ROOT}")
+        assert _WORKER_REPO_ROOT == "/home/build/synth-setter"
+
+    def test_cmd_runs_sync_worker_checkout_before_exec(self) -> None:
+        """sync_worker_checkout.sh bypasses dev-snapshot bake-lag when WORKER_GIT_REF is set."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd([])
+        sync_idx = cmd.find("bash scripts/sync_worker_checkout.sh")
+        exec_idx = cmd.find("exec synth-setter-generate-dataset-from-hydra")
+        assert sync_idx != -1, f"sync step missing from cmd: {cmd!r}"
+        assert exec_idx != -1, f"exec step missing from cmd: {cmd!r}"
+        assert sync_idx < exec_idx, "sync_worker_checkout must run before exec"
+
     def test_cmd_shell_quotes_overrides_with_spaces(self) -> None:
         """Spaces and special chars in an override survive bash interpretation in run:."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
@@ -850,7 +869,7 @@ class TestBuildWorkerCmd:
         assert "'task_name=value with space'" in cmd
 
     def test_cmd_handles_empty_overrides(self) -> None:
-        """No overrides → bash one-liner is just cd + exec entry-point, no trailing space."""
+        """No overrides → bash one-liner is just cd + sync + exec, no trailing space."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
         cmd = _build_worker_cmd([])
