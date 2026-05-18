@@ -30,12 +30,14 @@
       },
       {
         "matcher": "Bash",
-        "description": "Pre-PR review gate: blocks gh pr create unless the command contains REVIEW_FULL_DONE=1 (recommended as a trailing comment so other gh-pr-create hooks still fire). Forces Claude to invoke /repo-review-full-no-comments and iterate on findings before opening a PR. The acknowledgment token is intentionally Claude-supplied — the gate is a circuit-breaker that forces a pause, not unbypassable security.",
+        "description": "Pre-PR review gate: on gh pr create, blocks the command unless it contains the literal token REVIEW_FULL_DONE=1 (recommended as a trailing comment so other gh-pr-create hooks still fire). Forces Claude to invoke /repo-review-full-no-comments and iterate on findings before opening a PR. The `if` guard scopes the hook to gh pr create at the handler level; pre-pr-review-gate.sh re-validates the command itself so non-matching commands fall through. The acknowledgment token is honor-system — the gate is a circuit-breaker that forces a pause, not unbypassable security.",
         "hooks": [
           {
             "type": "command",
             "if": "Bash(gh pr create *)",
-            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); if echo \"$cmd\" | grep -q 'REVIEW_FULL_DONE=1'; then exit 0; else echo 'BLOCKED: gh pr create requires running /repo-review-full-no-comments first. Run that skill, address every BLOCK/WARN finding (or document why each is intentional), then re-run with REVIEW_FULL_DONE=1 included in the command — recommended as a trailing comment so other hooks still fire: gh pr create --title ... --body ... # REVIEW_FULL_DONE=1' >&2; exit 2; fi"
+            "timeout": 10,
+            "statusMessage": "Checking pre-PR review gate...",
+            "command": "bash .claude/hooks/pre-pr-review-gate.sh"
           }
         ]
       }

@@ -25,6 +25,7 @@ trap cleanup EXIT
 SANDBOX="$TEST_DIR/repo"
 mkdir -p "$SANDBOX/.claude/hooks"
 cp .claude/hooks/_lib.sh .claude/hooks/doc-drift.sh .claude/hooks/pr-review-resolver.sh \
+  .claude/hooks/pre-pr-review-gate.sh \
   "$SANDBOX/.claude/hooks/"
 cd "$SANDBOX"
 git init -q
@@ -224,6 +225,54 @@ if [ "$bg_exit" = "0" ] && ! compgen -G ".agent-reviews/pr-review-resolver-*.md"
 else
   report_glob=$(compgen -G ".agent-reviews/pr-review-resolver-*.md" 2>/dev/null || true)
   fail "lockfile dedupe" "bg_exit=$bg_exit, report=$report_glob"
+fi
+
+# -----------------------------------------------------------------------------
+# pre-pr-review-gate.sh
+# -----------------------------------------------------------------------------
+echo "== pre-pr-review-gate.sh =="
+unset RESOLVER_SLEEP_SECS RESOLVER_DRY_RUN GH_STUB_PR DOC_DRIFT_DRY_RUN CLAUDE_STUB_FAIL
+
+# 11. REGRESSION: a non-`gh pr create` command must fall through with exit 0.
+#     The original inline hook used only the handler-level `if` guard, which
+#     was silently not applied, so the gate fired on every Bash command and
+#     blocked anything lacking REVIEW_FULL_DONE=1. This test would have caught
+#     that: feeding a plain `git rev-parse HEAD` must not be blocked.
+reset_sandbox
+out=$(echo '{"tool_input":{"command":"git rev-parse HEAD"}}' | bash .claude/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
+if [[ "$out" == *"EXIT:0"* ]] && [[ "$out" != *"BLOCKED"* ]]; then
+  pass "non-gh-pr-create command falls through with exit 0 (no BLOCKED message)"
+else
+  fail "non-gh-pr-create command falls through" "$out"
+fi
+
+# 12. REGRESSION: a `gh pr create` substring inside an echo string must NOT
+#     trigger the gate. Same word-boundary protection as doc-drift / resolver.
+reset_sandbox
+out=$(echo '{"tool_input":{"command":"echo testing the gh pr create matcher"}}' | bash .claude/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
+if [[ "$out" == *"EXIT:0"* ]] && [[ "$out" != *"BLOCKED"* ]]; then
+  pass "quoted 'gh pr create' substring inside echo does NOT trigger the gate"
+else
+  fail "quoted substring should not trigger gate" "$out"
+fi
+
+# 13. gh pr create WITHOUT the token → exit 2 with BLOCKED on stderr.
+reset_sandbox
+stderr_file="$TEST_DIR/gate_stderr.txt"
+out=$(echo '{"tool_input":{"command":"gh pr create --title x --body y"}}' | bash .claude/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+if [[ "$out" == *"EXIT:2"* ]] && grep -q "BLOCKED" "$stderr_file" && grep -q "REVIEW_FULL_DONE=1" "$stderr_file"; then
+  pass "gh pr create without token → exit 2 with BLOCKED + token name on stderr"
+else
+  fail "gh pr create without token" "exit=$out stderr=$(cat "$stderr_file")"
+fi
+
+# 14. gh pr create WITH the token (trailing comment form) → exit 0.
+reset_sandbox
+out=$(echo '{"tool_input":{"command":"gh pr create --title x --body y  # REVIEW_FULL_DONE=1"}}' | bash .claude/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
+if [[ "$out" == *"EXIT:0"* ]] && [[ "$out" != *"BLOCKED"* ]]; then
+  pass "gh pr create with REVIEW_FULL_DONE=1 trailing comment → exit 0"
+else
+  fail "gh pr create with token" "$out"
 fi
 
 # -----------------------------------------------------------------------------
