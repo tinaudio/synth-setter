@@ -235,8 +235,8 @@ class DatasetSpec(BaseModel):
     # Splits stored as immutable tuples; JSON lists are coerced by _splits_list_to_tuple.
     task_name: str = Field(
         description=(
-            "Dataset config identifier; becomes the leading path component of "
-            "``r2_prefix`` and ``run_id``."
+            "Dataset config identifier; becomes the prefix of ``run_id`` and the "
+            "config-id path segment of ``r2_prefix`` (``<root>/<task_name>/<run_id>/``)."
         )
     )
     output_format: Literal["hdf5", "wds"] = Field(
