@@ -1,11 +1,11 @@
 """Tests for synth_setter.cli.generate_dataset — spec-driven run.
 
-The entrypoint's public surface is a single ``run(spec)`` function that:
-  1. Serializes the spec to a tempfile.
-  2. Uploads the spec to R2 at ``r2:{bucket}/{prefix}/input_spec.json``.
-  3. For each shard in ``spec.shards``, shells out to ``generate_vst_dataset.py``
-     to render it, uploads to R2 at ``r2:{bucket}/{prefix}/``, and unlinks the
-     local file.
+The entrypoint's public surface is a single ``run(spec)`` function that, for
+each shard in ``spec.shards``, shells out to ``generate_vst_dataset.py`` to
+render it, uploads to R2 at ``r2:{bucket}/{prefix}/``, and unlinks the local
+file. The spec itself is uploaded by the launcher (see
+``synth_setter.pipeline.skypilot_launch.upload_spec_to_r2``); the worker does
+not re-upload it.
 
 Tests monkeypatch ``_rclone_copy`` and ``subprocess.check_call`` and assert on
 recorded call args + ordering.
@@ -143,43 +143,30 @@ class TestRun:
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_uploads_spec_to_r2_at_expected_path(
+    def test_worker_does_not_re_upload_spec(  # noqa: DOC101,DOC103
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """Spec upload copies spec_path into the prefix directory (rclone preserves basename)."""
+        """Worker uploads shards only; the launcher owns the spec upload.
+
+        Pinned to ensure the worker never re-uploads ``input_spec.json`` to
+        ``{spec.r2_prefix}input_spec.json``. The launcher's
+        ``upload_spec_to_r2`` writes the spec to
+        ``skypilot-launcher-specs/<job_name>.json``; the worker-side copy
+        served no consumer.
+        """
         mock_check_call.side_effect = _materialize_shard
         run(spec)
 
         rclone_calls = mock_rclone.call_args_list
-        assert len(rclone_calls) == 2
-        spec_src, spec_dest = rclone_calls[0][0]
-        # Local spec file is already named INPUT_SPEC_FILENAME; `rclone copy`
-        # into the prefix directory preserves the basename → final object
-        # key is `{prefix}{INPUT_SPEC_FILENAME}`.
-        assert spec_src.endswith(INPUT_SPEC_FILENAME)
-        assert spec_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
-
-    @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
-    @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_spec_upload_precedes_shard_generation(
-        self,
-        mock_rclone: MagicMock,
-        mock_check_call: MagicMock,
-        spec: DatasetSpec,
-    ) -> None:
-        """Spec is uploaded to R2 before the shard-generating subprocess runs."""
-        mock_check_call.side_effect = _materialize_shard
-        manager = MagicMock()
-        manager.attach_mock(mock_rclone, "rclone")
-        manager.attach_mock(mock_check_call, "check_call")
-
-        run(spec)
-
-        call_names = [c[0] for c in manager.mock_calls]
-        assert call_names.index("rclone") < call_names.index("check_call")
+        # Exactly one upload: the shard. No spec upload.
+        assert len(rclone_calls) == 1
+        for src, _dest in (c[0] for c in rclone_calls):
+            assert not src.endswith(INPUT_SPEC_FILENAME), (
+                f"worker must not re-upload spec; got rclone src={src!r}"
+            )
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -233,13 +220,13 @@ class TestRun:
         mock_check_call: MagicMock,
         spec: DatasetSpec,
     ) -> None:
-        """Second rclone call uploads the shard to r2:{bucket}/{prefix}/."""
+        """The single rclone call uploads the shard to r2:{bucket}/{prefix}/."""
         mock_check_call.side_effect = _materialize_shard
         run(spec)
 
         rclone_calls = mock_rclone.call_args_list
-        assert len(rclone_calls) == 2
-        shard_src, shard_dest = rclone_calls[1][0]
+        assert len(rclone_calls) == 1
+        shard_src, shard_dest = rclone_calls[0][0]
         assert "shard-000000.h5" in shard_src
         assert shard_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
 
@@ -266,6 +253,8 @@ class TestRun:
         spec: DatasetSpec,
     ) -> None:
         """CalledProcessError from rclone propagates to caller."""
+        # The renderer must succeed so we reach the shard-upload rclone call.
+        mock_check_call.side_effect = _materialize_shard
         mock_rclone.side_effect = subprocess.CalledProcessError(1, "rclone")
 
         with pytest.raises(subprocess.CalledProcessError):
@@ -295,23 +284,23 @@ class TestRun:
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_spec_uploaded_exactly_once_for_multi_shard_run(
+    def test_multi_shard_run_uploads_once_per_shard_and_no_spec(  # noqa: DOC101,DOC103
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Spec is uploaded once per run; remaining rclone calls are per-shard uploads."""
+        """Every rclone call is a shard upload; the worker never re-uploads the spec."""
         spec = _multi_shard_spec(tmp_path, n=3)
         mock_check_call.side_effect = _materialize_shard
 
         run(spec)
 
-        assert mock_rclone.call_count == 1 + 3
+        assert mock_rclone.call_count == 3
         spec_uploads = [
             call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
         ]
-        assert len(spec_uploads) == 1
+        assert spec_uploads == []
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -331,9 +320,8 @@ class TestRun:
         run(spec)
 
         call_names = [c[0] for c in manager.mock_calls]
-        # First call is the spec upload; thereafter check_call/rclone alternate per shard.
+        # check_call/rclone alternate per shard (no leading spec upload).
         assert call_names == [
-            "rclone",  # spec upload
             "check_call",  # render shard 0
             "rclone",  # upload shard 0
             "check_call",  # render shard 1
@@ -363,9 +351,10 @@ class TestRun:
 
         run(spec)
 
-        shard_uploads = [p for p in uploaded_paths if p.name != INPUT_SPEC_FILENAME]
-        assert len(shard_uploads) == 3
-        for shard_path in shard_uploads:
+        # All uploads are shards now (the worker no longer re-uploads the spec).
+        assert len(uploaded_paths) == 3
+        for shard_path in uploaded_paths:
+            assert shard_path.name != INPUT_SPEC_FILENAME
             assert not shard_path.exists(), f"shard file still on disk after run: {shard_path}"
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
@@ -415,8 +404,9 @@ class TestRun:
         with pytest.raises(RuntimeError, match="did not write expected shard file"):
             run(spec)
 
-        # Spec was uploaded (1 rclone call), but no shard upload was attempted.
-        assert mock_rclone.call_count == 1
+        # No rclone calls: the worker no longer re-uploads the spec, and the
+        # missing-shard check fires before the shard upload would have run.
+        assert mock_rclone.call_count == 0
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -515,14 +505,14 @@ class TestRun:
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_spec_uploaded_exactly_once_independent_of_partition(
+    def test_no_spec_upload_regardless_of_partition(  # noqa: DOC101,DOC103
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Spec upload is partition-independent: every worker uploads it exactly once."""
+        """No worker re-uploads the spec, regardless of rank/world."""
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "1")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "2")
         spec = _multi_shard_spec(tmp_path, n=3)
@@ -533,21 +523,21 @@ class TestRun:
         spec_uploads = [
             call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
         ]
-        assert len(spec_uploads) == 1
+        assert spec_uploads == []
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
-    def test_excess_worker_renders_no_shards_but_still_uploads_spec(
+    def test_excess_worker_exits_cleanly_without_rendering_or_uploading(  # noqa: DOC101,DOC103
         self,
         mock_rclone: MagicMock,
         mock_check_call: MagicMock,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """When world > num_shards, the excess workers exit cleanly without rendering.
+        """When world > num_shards, the excess workers exit cleanly with zero uploads.
 
-        A 4-node partition over 3 shards leaves worker 3 with an empty range — it must still upload
-        the spec (idempotent) but render zero shards.
+        A 4-node partition over 3 shards leaves worker 3 with an empty range — it renders nothing
+        and (since the worker spec re-upload is gone) makes zero rclone calls.
         """
         monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "3")
         monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "4")
@@ -556,10 +546,7 @@ class TestRun:
         run(spec)
 
         mock_check_call.assert_not_called()
-        spec_uploads = [
-            call for call in mock_rclone.call_args_list if call[0][0].endswith(INPUT_SPEC_FILENAME)
-        ]
-        assert len(spec_uploads) == 1
+        mock_rclone.assert_not_called()
 
     # Skip-existing-shards — see #750.
 
@@ -578,9 +565,9 @@ class TestRun:
         run(spec)
 
         mock_check_call.assert_not_called()
-        # Spec is still uploaded; no per-shard upload happens because the shard is already there.
-        assert mock_rclone.call_count == 1
-        assert mock_rclone.call_args_list[0][0][0].endswith(INPUT_SPEC_FILENAME)
+        # No rclone calls: the shard is already in R2 and the worker no
+        # longer re-uploads the spec.
+        mock_rclone.assert_not_called()
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")

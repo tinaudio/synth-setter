@@ -29,7 +29,6 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
 from synth_setter.data.vst.core import extract_renderer_version  # noqa: E402
 from synth_setter.pipeline import r2_io  # noqa: E402
-from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME  # noqa: E402
 from synth_setter.pipeline.partitioning import (  # noqa: E402
     get_my_shards,
     read_rank_world_from_env,
@@ -138,17 +137,21 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
 
 
 def run(spec: DatasetSpec) -> None:
-    """Upload the spec to R2 once, then render+upload each owned shard in turn.
+    """Render+upload each owned shard in turn.
 
-    Spec serialization, spec upload, and the renderer-version constraint check
-    happen once pre-loop. Each shard is rendered, uploaded, and unlinked before
-    moving on — bounding local disk to one shard at a time. Subprocesses
-    fail-fast: later shards are not attempted on subprocess error.
+    The renderer-version constraint check happens once pre-loop. Each shard is
+    rendered, uploaded, and unlinked before moving on — bounding local disk to
+    one shard at a time. Subprocesses fail-fast: later shards are not attempted
+    on subprocess error.
 
     Before each render, R2 is probed for the shard's destination object: if it already exists with
     non-zero size, the shard is skipped (resumability MVP — see #750). The probe uses
     ``check=True``, so a non-zero rclone exit (auth, network) propagates as a hard failure rather
     than degrading silently into a re-render.
+
+    The spec is uploaded by the launcher (see
+    ``synth_setter.pipeline.skypilot_launch.upload_spec_to_r2``), not the
+    worker — workers must not re-upload the spec.
 
     The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
     ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard
@@ -182,15 +185,6 @@ def run(spec: DatasetSpec) -> None:
 
     with tempfile.TemporaryDirectory() as work_dir_str:
         work_dir = Path(work_dir_str)
-        # rclone copy preserves the source basename, and the local file is already
-        # named INPUT_SPEC_FILENAME — so the prefix-directory destination lands at
-        # `{prefix}{INPUT_SPEC_FILENAME}` without a double-name.
-        spec_path = work_dir / INPUT_SPEC_FILENAME
-        spec_path.write_text(spec.model_dump_json(indent=2))
-        logger.info(f"spec written: {spec_path}")
-        _rclone_copy(str(spec_path), r2_dest_prefix)
-        logger.info(f"spec uploaded -> {r2_dest_prefix}")
-
         rendered = 0
         skipped = 0
         for shard_id in my_range:
