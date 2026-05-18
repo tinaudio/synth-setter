@@ -30,8 +30,15 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: [.]
+          # PEP src-layout: ``synth_setter`` lives under ``src/`` so griffe
+          # needs ``src`` on its import path without an editable install.
+          paths: [src]
           options:
+            # griffe-pydantic surfaces ``Field(description=...)`` strings;
+            # without it the docs render only the type annotations.
+            extensions:
+              - griffe_pydantic:
+                  schema: false
             show_root_heading: true
             show_source: false
             members_order: source
@@ -40,9 +47,8 @@ plugins:
             separate_signature: true
             show_signature_annotations: true
 
-# Only surface the config-reference site for now; existing engineering docs
-# under docs/ (architecture, design, guides, etc.) are kept out of the build
-# so this scaffolding can grow incrementally without pulling them in.
+# Only the config-reference site is surfaced for now; the rest of docs/
+# grows into the build incrementally.
 exclude_docs: |
   architecture.md
   doc-map.yaml
@@ -58,4 +64,12 @@ nav:
   - Home: index.md
   - Config Reference:
       - Dataset Spec: config_reference/dataset_spec.md
+      - Training Config: config_reference/train_config.md
+      - Data Config: config_reference/data_config.md
+      - Model Config: config_reference/model_config.md
+      - Callbacks Config: config_reference/callbacks_config.md
+      - Logger Config: config_reference/logger_config.md
+      - Trainer Config: config_reference/trainer_config.md
+      - Paths Config: config_reference/paths_config.md
+      - Extras Config: config_reference/extras_config.md
   - Benchmarks: https://tinaudio.github.io/synth-setter/dev/bench/
