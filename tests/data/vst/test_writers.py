@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from synth_setter.data.vst import writers
+from synth_setter.data.vst.generate_vst_dataset import VSTDataSample
 from synth_setter.data.vst.writers import _render_in_batches, _shard_metadata_from_render
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -40,7 +40,7 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:  # noqa: DOC101,DOC1
         "samples_per_render_batch": 2,
         "samples_per_shard": 4,
         # Darwin-portable (#714).
-        "open_gui_every_render": False,
+        "gui_toggle_cadence": "never",
     }
     kwargs.update(overrides)
     return RenderConfig(**kwargs)  # type: ignore[arg-type]
@@ -128,8 +128,8 @@ def _cli_argv(data_file: str) -> list[str]:  # noqa: DOC101,DOC103,DOC201,DOC203
         "--samples_per_shard",
         "4",
         # Mirror _smoke_render_cfg (#714).
-        "--open_gui_every_render",
-        "False",
+        "--gui_toggle_cadence",
+        "never",
     ]
 
 
@@ -182,18 +182,27 @@ def test_main_rejects_unknown_suffix(tmp_path: Path) -> None:  # noqa: DOC101,DO
 
 
 def _stub_render_dependencies(  # noqa: DOC101,DOC103,DOC201,DOC203
-    monkeypatch: pytest.MonkeyPatch, *, load_plugin_calls: list[Any], load_preset_calls: list[Any]
-) -> list[dict[str, Any]]:
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    load_plugin_calls: list[dict[str, object]],
+    load_preset_calls: list[dict[str, object]],
+    cached_plugin_holder: list[object] | None = None,
+) -> list[dict[str, object]]:
     """Patch ``load_plugin``, ``load_preset``, and ``generate_sample`` for the writer loop.
 
-    Returns the kwargs captured from each ``generate_sample`` call so tests can
-    assert which path was taken (plugin supplied vs. None).
+    Returns the kwargs captured from each ``generate_sample`` call. If
+    ``cached_plugin_holder`` is supplied, the MagicMock returned by the fake
+    ``load_plugin`` is appended to it so tests can assert identity-equality
+    against the instance threaded into per-render calls.
     """
-    captured: list[dict[str, Any]] = []
+    captured: list[dict[str, object]] = []
 
-    def _fake_load_plugin(path: str, **kwargs: object) -> MagicMock:
-        load_plugin_calls.append({"path": path, **kwargs})
-        return MagicMock(name="cached_plugin")
+    def _fake_load_plugin(path: str) -> MagicMock:
+        plugin = MagicMock(name="cached_plugin")
+        load_plugin_calls.append({"path": path})
+        if cached_plugin_holder is not None:
+            cached_plugin_holder.append(plugin)
+        return plugin
 
     def _fake_load_preset(plugin: object, preset: str) -> None:
         load_preset_calls.append({"plugin": plugin, "preset": preset})
@@ -208,27 +217,28 @@ def _stub_render_dependencies(  # noqa: DOC101,DOC103,DOC201,DOC203
     return captured
 
 
-def test_render_in_batches_caches_plugin_when_reload_is_false(  # noqa: DOC101,DOC103
+def test_render_in_batches_caches_plugin_when_reload_cadence_is_once(  # noqa: DOC101,DOC103
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``reload_plugin_every_render=False`` loads the plugin once and reuses it for every
-    sample."""
+    """``plugin_reload_cadence="once"`` loads the plugin once and reuses the same instance."""
     n = 4
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
         samples_per_render_batch=n,
-        reload_plugin_every_render=False,
-        open_gui_every_render=False,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="never",
     )
-    load_plugin_calls: list[Any] = []
-    load_preset_calls: list[Any] = []
+    load_plugin_calls: list[dict[str, object]] = []
+    load_preset_calls: list[dict[str, object]] = []
+    cached_plugin_holder: list[object] = []
     captured = _stub_render_dependencies(
         monkeypatch,
         load_plugin_calls=load_plugin_calls,
         load_preset_calls=load_preset_calls,
+        cached_plugin_holder=cached_plugin_holder,
     )
 
-    flushed: list[tuple[list[Any], int]] = []
+    flushed: list[tuple[list[VSTDataSample], int]] = []
     _render_in_batches(
         render_cfg=render_cfg,
         param_spec=MagicMock(name="param_spec"),
@@ -240,26 +250,27 @@ def test_render_in_batches_caches_plugin_when_reload_is_false(  # noqa: DOC101,D
 
     assert len(load_plugin_calls) == 1
     assert load_plugin_calls[0]["path"] == render_cfg.plugin_path
-    assert load_plugin_calls[0]["open_gui"] is False
     assert len(load_preset_calls) == 1
     assert len(captured) == n
+    cached = cached_plugin_holder[0]
     for call_kwargs in captured:
-        assert call_kwargs["plugin"] is not None
+        assert call_kwargs["plugin"] is cached
+    assert sum(len(batch) for batch, _ in flushed) == n
 
 
-def test_render_in_batches_reloads_plugin_per_render_when_reload_is_true(  # noqa: DOC101,DOC103
+def test_render_in_batches_reloads_plugin_per_render_when_reload_cadence_is_render(  # noqa: DOC101,DOC103
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``reload_plugin_every_render=True`` (default) leaves the plugin to be loaded per call."""
+    """``plugin_reload_cadence="render"`` (default) leaves the plugin to be loaded per call."""
     n = 3
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
         samples_per_render_batch=n,
-        reload_plugin_every_render=True,
-        open_gui_every_render=False,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="never",
     )
-    load_plugin_calls: list[Any] = []
-    load_preset_calls: list[Any] = []
+    load_plugin_calls: list[dict[str, object]] = []
+    load_preset_calls: list[dict[str, object]] = []
     captured = _stub_render_dependencies(
         monkeypatch,
         load_plugin_calls=load_plugin_calls,
@@ -275,11 +286,98 @@ def test_render_in_batches_reloads_plugin_per_render_when_reload_is_true(  # noq
         flush_batch=lambda batch, _start: None,
     )
 
-    # No shard-level load when reload_plugin_every_render=True; each render_params
-    # call reloads on its own (which is mocked out via the generate_sample stub).
+    # Per-render reload hides behind the generate_sample stub, so writers sees no load.
     assert load_plugin_calls == []
     assert load_preset_calls == []
     assert len(captured) == n
     for call_kwargs in captured:
         assert call_kwargs["plugin"] is None
-        assert call_kwargs["open_gui"] is False
+        assert call_kwargs["warmup"] is False
+
+
+def test_render_in_batches_warmup_once_runs_first_render_only(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``gui_toggle_cadence="once"`` sets warmup=True on the first render only."""
+    n = 4
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="once",
+    )
+    captured = _stub_render_dependencies(
+        monkeypatch,
+        load_plugin_calls=[],
+        load_preset_calls=[],
+    )
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    warmup_flags = [c["warmup"] for c in captured]
+    assert warmup_flags == [True, False, False, False]
+
+
+def test_render_in_batches_warmup_render_runs_every_render(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``gui_toggle_cadence="render"`` sets warmup=True on every render."""
+    n = 3
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="render",
+    )
+    captured = _stub_render_dependencies(
+        monkeypatch,
+        load_plugin_calls=[],
+        load_preset_calls=[],
+    )
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert all(c["warmup"] is True for c in captured)
+
+
+def test_render_in_batches_warmup_never_skips_all_renders(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``gui_toggle_cadence="never"`` keeps warmup=False on every render."""
+    n = 3
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="never",
+    )
+    captured = _stub_render_dependencies(
+        monkeypatch,
+        load_plugin_calls=[],
+        load_preset_calls=[],
+    )
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert all(c["warmup"] is False for c in captured)

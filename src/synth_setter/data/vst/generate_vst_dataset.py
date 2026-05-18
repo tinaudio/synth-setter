@@ -80,7 +80,7 @@ def generate_sample(
     fixed_note_params: dict[str, int | tuple[float, float]] | None = None,
     *,
     plugin: VST3Plugin | None = None,
-    open_gui: bool = True,
+    warmup: bool = False,
 ) -> VSTDataSample:
     """Render a single VST sample.
 
@@ -93,14 +93,10 @@ def generate_sample(
     ``min_loudness`` and the loop would run forever. When only ``fixed_note_params``
     is supplied, the synth is re-sampled each retry and the loop remains meaningful.
 
-    :param plugin: Optional pre-loaded plugin instance threaded through to
-        ``render_params``. When supplied, ``plugin_path`` / ``preset_path`` are
-        ignored on the render path (caller already loaded the plugin and applied
-        the preset). The shard-level cached-plugin path in ``writers._render_in_batches``
-        uses this; per-call callers leave it ``None``.
-    :param open_gui: Forwarded to ``render_params`` (and from there to
-        ``load_plugin``) on the per-call reload path. Ignored when ``plugin``
-        is supplied because the caller chose the warm-up policy when loading.
+    :param plugin: Forwarded to ``render_params``; when set, the renderer
+        skips ``load_plugin``/``load_preset``.
+    :param warmup: Forwarded to ``render_params``; runs the ``show_editor``
+        warm-up on the plugin used for this render (newly loaded or cached).
     """
     while True:
         if fixed_synth_params is None or fixed_note_params is None:
@@ -125,7 +121,7 @@ def generate_sample(
             channels,
             preset_path=preset_path,
             plugin=plugin,
-            open_gui=open_gui,
+            warmup=warmup,
         )
 
         meter = Meter(sample_rate)

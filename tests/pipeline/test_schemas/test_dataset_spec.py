@@ -119,88 +119,91 @@ class TestRenderConfig:
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
 
-    def test_reload_defaults_true_open_gui_defaults_true_off_darwin(  # noqa: DOC101,DOC103
+    def test_cadence_defaults_off_darwin(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Off Darwin both flags default to ``True`` (historical render_params behavior)."""
+        """Off Darwin: plugin_reload defaults to "render"; gui_toggle defaults to "once"."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
         )
         cfg = RenderConfig(**_valid_render_kwargs())
-        assert cfg.reload_plugin_every_render is True
-        assert cfg.open_gui_every_render is True
+        assert cfg.plugin_reload_cadence == "render"
+        assert cfg.gui_toggle_cadence == "once"
 
-    def test_open_gui_default_is_false_on_darwin(  # noqa: DOC101,DOC103
+    def test_gui_toggle_default_is_never_on_darwin(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Default factory yields False on Darwin so bare RenderConfig() constructs (#714)."""
+        """Default factory yields "never" on Darwin so bare RenderConfig() constructs (#714)."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
         cfg = RenderConfig(**_valid_render_kwargs())
-        assert cfg.open_gui_every_render is False
-        assert cfg.reload_plugin_every_render is True
+        assert cfg.gui_toggle_cadence == "never"
+        assert cfg.plugin_reload_cadence == "render"
 
-    def test_open_gui_and_reload_both_false_accepted(self) -> None:
-        """``(False, False)`` — the "skip both per-call costs" mode — constructs cleanly."""
+    def test_once_reload_with_never_warmup_accepted(self) -> None:
+        """``("once", "never")`` — the "load once, skip warm-up" mode — constructs cleanly."""
         cfg = RenderConfig(
             **{
                 **_valid_render_kwargs(),
-                "reload_plugin_every_render": False,
-                "open_gui_every_render": False,
+                "plugin_reload_cadence": "once",
+                "gui_toggle_cadence": "never",
             }
         )
-        assert cfg.reload_plugin_every_render is False
-        assert cfg.open_gui_every_render is False
+        assert cfg.plugin_reload_cadence == "once"
+        assert cfg.gui_toggle_cadence == "never"
 
-    def test_open_gui_every_render_true_rejected_on_darwin(  # noqa: DOC101,DOC103
+    def test_gui_toggle_render_rejected_on_darwin(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``open_gui_every_render=True`` on Darwin raises (SIGTRAP after ~3-4 reloads — #714)."""
+        """``gui_toggle_cadence="render"`` on Darwin raises (SIGTRAP after ~3-4 calls — #714)."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
         with pytest.raises(
-            ValidationError, match="open_gui_every_render=True is not supported on Darwin"
+            ValidationError,
+            match=r'gui_toggle_cadence="render" is not supported on Darwin',
         ):
-            RenderConfig(**{**_valid_render_kwargs(), "open_gui_every_render": True})
+            RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": "render"})
 
-    def test_open_gui_every_render_false_accepted_on_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("cadence", ["never", "once"])
+    def test_gui_toggle_never_and_once_accepted_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
     ) -> None:
-        """``open_gui_every_render=False`` is the only valid setting on Darwin."""
+        """``"never"`` and ``"once"`` are the only valid gui_toggle settings on Darwin."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
-        cfg = RenderConfig(**{**_valid_render_kwargs(), "open_gui_every_render": False})
-        assert cfg.open_gui_every_render is False
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": cadence})
+        assert cfg.gui_toggle_cadence == cadence
 
-    def test_open_gui_every_render_true_accepted_off_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("cadence", ["never", "once", "render"])
+    def test_gui_toggle_all_values_accepted_off_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
     ) -> None:
-        """``open_gui_every_render=True`` is fine on Linux/Windows — the gate is darwin-only."""
+        """All three gui_toggle values are accepted on Linux/Windows — gate is darwin-only."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
         )
-        cfg = RenderConfig(**{**_valid_render_kwargs(), "open_gui_every_render": True})
-        assert cfg.open_gui_every_render is True
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": cadence})
+        assert cfg.gui_toggle_cadence == cadence
 
-    @pytest.mark.parametrize("reload_flag", [True, False])
-    def test_reload_plugin_every_render_both_values_accepted_on_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch, reload_flag: bool
+    @pytest.mark.parametrize("cadence", ["once", "render"])
+    def test_plugin_reload_cadence_both_values_accepted_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, cadence: str
     ) -> None:
-        """``reload_plugin_every_render`` accepts both True and False on Darwin."""
+        """``plugin_reload_cadence`` accepts both "once" and "render" on Darwin."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
         cfg = RenderConfig(
             **{
                 **_valid_render_kwargs(),
-                "reload_plugin_every_render": reload_flag,
-                "open_gui_every_render": False,
+                "plugin_reload_cadence": cadence,
+                "gui_toggle_cadence": "never",
             }
         )
-        assert cfg.reload_plugin_every_render is reload_flag
+        assert cfg.plugin_reload_cadence == cadence
 
 
 # ---------------------------------------------------------------------------
@@ -651,7 +654,7 @@ class TestSpecConstructionStaysPedalboardFree:
             "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
             "        'samples_per_render_batch': 1, 'samples_per_shard': 1,\n"
-            "        'open_gui_every_render': False,\n"
+            "        'gui_toggle_cadence': 'never',\n"
             "    },\n"
             ")\n"
             "_ = spec.num_params\n"

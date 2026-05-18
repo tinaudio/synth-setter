@@ -69,8 +69,8 @@ def _render_cfg(num_samples: int, samples_per_render_batch: int | None = None) -
         min_loudness=_MIN_LOUDNESS,
         samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
         samples_per_shard=num_samples,
-        # Darwin-portable: skip the editor warm-up (#714).
-        open_gui_every_render=False,
+        # Darwin-portable: never run the editor warm-up (#714).
+        gui_toggle_cadence="never",
     )
 
 

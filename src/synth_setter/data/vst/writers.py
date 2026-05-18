@@ -188,7 +188,7 @@ def _generate_sample_for_index(
     fixed_synth_params_list: list[dict[str, float]] | None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
     plugin: VST3Plugin | None = None,
-    open_gui: bool = True,
+    warmup: bool = False,
 ) -> VSTDataSample:
     """Render the ``i``-th sample, picking up the ``(i - start_idx)``-th fixed-params entry.
 
@@ -205,7 +205,7 @@ def _generate_sample_for_index(
     :param fixed_synth_params_list: Optional pre-set synth params, indexed by ``i - start_idx``.
     :param fixed_note_params_list: Optional pre-set note params, indexed by ``i - start_idx``.
     :param plugin: Optional pre-loaded plugin reused across the shard's renders.
-    :param open_gui: Forwarded to per-render reloads; ignored when ``plugin`` is supplied.
+    :param warmup: Run ``warmup_plugin`` on the plugin used for this render.
     :returns: The freshly rendered sample.
     :rtype: VSTDataSample
     """
@@ -226,7 +226,7 @@ def _generate_sample_for_index(
             fixed_note_params_list[fixed_idx] if fixed_note_params_list is not None else None
         ),
         plugin=plugin,
-        open_gui=open_gui,
+        warmup=warmup,
     )
 
 
@@ -256,18 +256,18 @@ def _render_in_batches(
     num_samples = render_cfg.samples_per_shard
     sample_batch: list[VSTDataSample] = []
     sample_batch_start = start_idx
-    # When ``reload_plugin_every_render`` is False, load the plugin and apply the
-    # preset once for the whole shard; each render reuses the cached instance.
-    # When True, ``cached_plugin`` stays None and each ``render_params`` call
-    # reloads — the historical behaviour preserved as the default per #489.
+    # plugin_reload_cadence="once": load + preset once per shard, reuse instance (#705).
+    # "render" (default): cached_plugin stays None; each render reloads (#489 historical).
     cached_plugin: VST3Plugin | None = None
-    if not render_cfg.reload_plugin_every_render:
-        cached_plugin = load_plugin(
-            render_cfg.plugin_path, open_gui=render_cfg.open_gui_every_render
-        )
+    if render_cfg.plugin_reload_cadence == "once":
+        cached_plugin = load_plugin(render_cfg.plugin_path)
         load_preset(cached_plugin, render_cfg.preset_path)
+    warmup_done = False
     for i in trange(start_idx, num_samples):
         logger.info(f"Making sample {i}")
+        warmup_this_render = render_cfg.gui_toggle_cadence == "render" or (
+            render_cfg.gui_toggle_cadence == "once" and not warmup_done
+        )
         sample_batch.append(
             _generate_sample_for_index(
                 i,
@@ -283,9 +283,11 @@ def _render_in_batches(
                 fixed_synth_params_list=fixed_synth_params_list,
                 fixed_note_params_list=fixed_note_params_list,
                 plugin=cached_plugin,
-                open_gui=render_cfg.open_gui_every_render,
+                warmup=warmup_this_render,
             )
         )
+        if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
+            warmup_done = True
         if len(sample_batch) == render_cfg.samples_per_render_batch:
             flush_batch(sample_batch, sample_batch_start)
             sample_batch = []

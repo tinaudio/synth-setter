@@ -90,7 +90,7 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 10000,
-            "open_gui_every_render": False,
+            "gui_toggle_cadence": "never",
         },
     }
     kwargs.update(overrides)

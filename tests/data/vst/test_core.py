@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import plistlib
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -13,6 +12,7 @@ from synth_setter.data.vst.core import (
     extract_renderer_version,
     load_plugin,
     render_params,
+    warmup_plugin,
 )
 
 
@@ -62,44 +62,31 @@ class TestExtractRendererVersion:
             extract_renderer_version(plugin)
 
 
-class TestLoadPluginOpenGui:
-    """``load_plugin`` honours the ``open_gui`` kwarg on non-Darwin hosts."""
+class TestLoadPluginNoWarmup:
+    """``load_plugin`` is a pure loader — never calls ``show_editor`` by itself."""
 
-    def test_open_gui_true_invokes_show_editor_warmup_on_non_darwin(  # noqa: DOC101,DOC103
+    def test_load_plugin_does_not_call_show_editor(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Default ``open_gui=True`` runs the ``show_editor`` warm-up on non-Darwin."""
+        """``load_plugin`` only constructs ``VST3Plugin``; warm-up lives in ``warmup_plugin``."""
         fake_plugin = MagicMock()
         monkeypatch.setattr(core, "VST3Plugin", lambda _path: fake_plugin)
-        monkeypatch.setattr(sys, "platform", "linux")
 
         load_plugin("plugins/Surge XT.vst3")
 
+        fake_plugin.show_editor.assert_not_called()
+
+
+class TestWarmupPlugin:
+    """``warmup_plugin`` runs ``show_editor`` on the passed-in plugin once."""
+
+    def test_warmup_plugin_calls_show_editor(self) -> None:
+        """``warmup_plugin`` invokes ``show_editor`` exactly once on the supplied plugin."""
+        fake_plugin = MagicMock()
+
+        warmup_plugin(fake_plugin)
+
         fake_plugin.show_editor.assert_called_once()
-
-    def test_open_gui_false_skips_show_editor_warmup_on_non_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``open_gui=False`` skips the warm-up even on non-Darwin hosts."""
-        fake_plugin = MagicMock()
-        monkeypatch.setattr(core, "VST3Plugin", lambda _path: fake_plugin)
-        monkeypatch.setattr(sys, "platform", "linux")
-
-        load_plugin("plugins/Surge XT.vst3", open_gui=False)
-
-        fake_plugin.show_editor.assert_not_called()
-
-    def test_open_gui_true_is_still_skipped_on_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Even ``open_gui=True`` does not call ``show_editor`` on Darwin (#714 guardrail)."""
-        fake_plugin = MagicMock()
-        monkeypatch.setattr(core, "VST3Plugin", lambda _path: fake_plugin)
-        monkeypatch.setattr(sys, "platform", "darwin")
-
-        load_plugin("plugins/Surge XT.vst3", open_gui=True)
-
-        fake_plugin.show_editor.assert_not_called()
 
 
 class TestRenderParamsPreloadedPlugin:
@@ -185,19 +172,18 @@ class TestRenderParamsPreloadedPlugin:
         assert load_calls == ["plugins/Surge XT.vst3"]
         assert preset_calls == [(fake_plugin, "presets/surge-base.vstpreset")]
 
-    def test_open_gui_flag_threads_into_load_plugin(  # noqa: DOC101,DOC103
+    def test_warmup_kwarg_runs_warmup_plugin_after_load(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``open_gui`` kwarg is forwarded to ``load_plugin`` when no plugin is supplied."""
-        captured: dict[str, object] = {}
+        """``warmup=True`` calls ``warmup_plugin`` on the freshly-loaded plugin."""
+        fake_plugin = self._fake_plugin(audio_shape=(2, 16))
+        warmup_calls: list[object] = []
 
-        def _capture_load(path: str, **kwargs: object) -> MagicMock:
-            captured["path"] = path
-            captured.update(kwargs)
-            return self._fake_plugin(audio_shape=(2, 16))
-
-        monkeypatch.setattr(core, "load_plugin", _capture_load)
+        monkeypatch.setattr(core, "load_plugin", lambda _path: fake_plugin)
         monkeypatch.setattr(core, "load_preset", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            core, "warmup_plugin", lambda plugin: warmup_calls.append(plugin)
+        )
 
         render_params(
             "plugins/Surge XT.vst3",
@@ -209,7 +195,34 @@ class TestRenderParamsPreloadedPlugin:
             sample_rate=16000,
             channels=2,
             preset_path="presets/surge-base.vstpreset",
-            open_gui=False,
+            warmup=True,
         )
 
-        assert captured == {"path": "plugins/Surge XT.vst3", "open_gui": False}
+        assert warmup_calls == [fake_plugin]
+
+    def test_warmup_kwarg_runs_warmup_on_supplied_plugin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``warmup=True`` with a cached plugin warms the cached instance, not a fresh load."""
+        cached = self._fake_plugin(audio_shape=(2, 16))
+        warmup_calls: list[object] = []
+
+        monkeypatch.setattr(
+            core, "warmup_plugin", lambda plugin: warmup_calls.append(plugin)
+        )
+
+        render_params(
+            "plugins/Surge XT.vst3",
+            params={},
+            midi_note=60,
+            velocity=100,
+            note_start_and_end=(0.0, 1.0),
+            signal_duration_seconds=1.0,
+            sample_rate=16000,
+            channels=2,
+            preset_path="presets/surge-base.vstpreset",
+            plugin=cached,
+            warmup=True,
+        )
+
+        assert warmup_calls == [cached]

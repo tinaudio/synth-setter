@@ -115,9 +115,19 @@ def _current_platform() -> str:  # noqa: DOC201,DOC203
     return sys.platform
 
 
-def _default_open_gui_every_render() -> bool:  # noqa: DOC201,DOC203
-    """Return ``False`` on Darwin (the validator rejects ``True`` — #714), ``True`` elsewhere."""
-    return _current_platform() != "darwin"
+_GuiToggleCadence = Literal["never", "once", "render"]
+_PluginReloadCadence = Literal["once", "render"]
+
+
+def _default_gui_toggle_cadence() -> _GuiToggleCadence:  # noqa: DOC201,DOC203
+    """Return ``"never"`` on Darwin (validator rejects ``"render"`` — #714), else ``"once"``.
+
+    ``"once"`` is the safer per-shard default on non-Darwin (one ``show_editor``
+    warm-up per shard rather than per render). The historical pre-cadence
+    behaviour ("warm up on every load") corresponds to ``"render"`` and is
+    available as an opt-in.
+    """
+    return "never" if _current_platform() == "darwin" else "once"
 
 
 class ShardSpec(BaseModel):
@@ -152,10 +162,13 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int = 32
     samples_per_shard: int
-    # Per-render lifecycle knobs; see _default_open_gui_every_render and the
-    # darwin-rejection validator below (#714).
-    reload_plugin_every_render: bool = True
-    open_gui_every_render: bool = Field(default_factory=_default_open_gui_every_render)
+    # Per-shard lifecycle cadences. ``plugin_reload_cadence`` defaults to ``"render"``
+    # (historical per-render reload, #489). ``gui_toggle_cadence`` defaults to ``"once"``
+    # on non-Darwin / ``"never"`` on Darwin via the default factory; the validator
+    # below rejects ``"render"`` on Darwin (SIGTRAP after ~3-4 ``show_editor`` calls,
+    # #714).
+    plugin_reload_cadence: _PluginReloadCadence = "render"
+    gui_toggle_cadence: _GuiToggleCadence = Field(default_factory=_default_gui_toggle_cadence)
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
@@ -179,16 +192,18 @@ class RenderConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _open_gui_every_render_forbidden_on_darwin(self) -> RenderConfig:  # noqa: DOC201,DOC203,DOC501,DOC503
-        """Reject ``open_gui_every_render=True`` on Darwin (SIGTRAP after ~3-4 reloads, #714)."""
-        if self.open_gui_every_render and _current_platform() == "darwin":
+    def _gui_toggle_cadence_forbids_render_on_darwin(self) -> RenderConfig:  # noqa: DOC201,DOC203,DOC501,DOC503
+        """Reject ``gui_toggle_cadence="render"`` on Darwin (SIGTRAP after ~3-4 calls, #714).
+
+        ``"once"`` is permitted because a single ``show_editor`` call sits below
+        the empirical SIGTRAP threshold.
+        """
+        if self.gui_toggle_cadence == "render" and _current_platform() == "darwin":
             raise ValueError(
-                "open_gui_every_render=True is not supported on Darwin: "
+                'gui_toggle_cadence="render" is not supported on Darwin: '
                 "show_editor accumulates AppKit/CGS commit-handler state per "
                 "call in unbundled python and triggers SIGTRAP after ~3-4 "
-                "plugin reloads (#714). Set open_gui_every_render=False on "
-                "Darwin — the post-load process() flush in render_params is "
-                "sufficient to commit preset state."
+                'plugin reloads (#714). Use "once" or "never" on Darwin.'
             )
         return self
 

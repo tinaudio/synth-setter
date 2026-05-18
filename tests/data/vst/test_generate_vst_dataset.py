@@ -19,7 +19,7 @@ import pytest
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.evaluation.compute_audio_metrics import compute_mss, compute_rms, compute_sot, compute_wmfcc
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import render_params
+from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.data.vst.writers import make_hdf5_dataset
 
@@ -63,8 +63,8 @@ def _render_cfg(
         min_loudness=min_loudness,
         samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
         samples_per_shard=num_samples,
-        # Darwin-portable: skip the editor warm-up (#714).
-        open_gui_every_render=False,
+        # Darwin-portable: never run the editor warm-up (#714).
+        gui_toggle_cadence="never",
     )
 
 # Phase-robust audio similarity thresholds for replayed-params vs. candidates.
@@ -999,17 +999,10 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
 @pytest.mark.requires_vst
 @skip_no_vst
 def test_reload_per_render_matches_cached_plugin() -> None:
-    """Rendering with a cached plugin matches reloading per render to within audio thresholds.
+    """Cached-plugin renders match reload-per-render renders within audio thresholds.
 
-    Pins the safety claim behind ``reload_plugin_every_render=False``: the
-    cached-plugin path produces audio equivalent (under the same phase-robust
-    thresholds the round-trip tests use) to the historical reload-per-render
-    path on the surge_xt path. If this fails for a future synth, the test is
-    the early-warning that ``#705``'s "load once per shard" optimisation needs
-    a per-synth opt-in.
+    Safety pin for ``plugin_reload_cadence="once"`` on the surge_xt path (#705).
     """
-    from synth_setter.data.vst.core import load_plugin, load_preset
-
     n_renders = 3
     pitch = _HARDCODED_NOTE_PARAMS["pitch"]
     note_window = _HARDCODED_NOTE_PARAMS["note_start_and_end"]
@@ -1033,7 +1026,7 @@ def test_reload_per_render_matches_cached_plugin() -> None:
         ]
 
     def _render_n_cached() -> list[np.ndarray]:
-        plugin = load_plugin(_PLUGIN_PATH, open_gui=False)
+        plugin = load_plugin(_PLUGIN_PATH)
         load_preset(plugin, _PRESET_PATH)
         return [
             render_params(
@@ -1053,6 +1046,13 @@ def test_reload_per_render_matches_cached_plugin() -> None:
 
     reloaded = _render_n_reload()
     cached = _render_n_cached()
+
+    for label, batch in (("reloaded", reloaded), ("cached", cached)):
+        for k, audio in enumerate(batch):
+            assert np.isfinite(audio).all(), f"{label}[{k}] contains NaN/Inf"
+            assert np.abs(audio).max() > _AUDIO_PEAK_SILENCE_FLOOR, (
+                f"{label}[{k}] is silent (peak {np.abs(audio).max():.2e})"
+            )
 
     for i, target in enumerate(reloaded):
         for j, pred in enumerate(cached):

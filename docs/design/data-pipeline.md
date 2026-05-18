@@ -1200,12 +1200,14 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int
     samples_per_shard: int
-    reload_plugin_every_render: bool = True
-    # Platform-aware default via Field(default_factory=...): False on Darwin
-    # (show_editor SIGTRAPs after ~3-4 reloads, #714), True elsewhere. An
-    # explicit open_gui_every_render=True is still rejected on Darwin by a
+    plugin_reload_cadence: Literal["once", "render"] = "render"
+    # Platform-aware default via Field(default_factory=...): "never" on Darwin
+    # (show_editor SIGTRAPs after ~3-4 calls, #714), "once" elsewhere. An
+    # explicit gui_toggle_cadence="render" is still rejected on Darwin by a
     # model_validator.
-    open_gui_every_render: bool = Field(default_factory=_default_open_gui_every_render)
+    gui_toggle_cadence: Literal["never", "once", "render"] = Field(
+        default_factory=_default_gui_toggle_cadence
+    )
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""
