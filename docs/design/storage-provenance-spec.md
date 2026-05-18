@@ -35,8 +35,11 @@ ______________________________________________________________________
 intermediate-data/
 ├── data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
-└── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+├── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
+└── skypilot-launcher-specs/{job_name}.json   # Transport-only; not part of the dataset footprint. See §3a "Materialized spec: two destinations".
 ```
+
+The first three prefixes (`data/`, `train/`, `eval/`) are the canonical per-run dataset footprint. `skypilot-launcher-specs/` is a transport-only queue used by the SkyPilot launcher to ship the materialized `DatasetSpec` into the worker pod (workaround for [#749](https://github.com/tinaudio/synth-setter/issues/749)); it is documented for completeness here but does not belong to any single dataset and is not consumed by training or evaluation.
 
 ______________________________________________________________________
 
