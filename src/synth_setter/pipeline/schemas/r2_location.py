@@ -7,37 +7,19 @@ one URI shape (see ``r2_io.shard_uri`` for the historical helper). The methods
 on this model are the only sanctioned way to build R2 URIs for the dataset
 layout — callers must not concatenate ``self.prefix`` with filename literals.
 
-Canonical R2 layout under ``self.prefix`` (= ``<root>/<task_name>/<run_id>/``)::
+The canonical R2 object layout (paths, filenames, and the flat → nested
+migration plan #385 / #406) is defined in
+``docs/design/storage-provenance-spec.md`` §2 + §3a — that doc is the
+authoritative source. The per-helper docstrings below name the specific
+file each method targets and the helper API stays stable across the
+flat → nested migration.
 
-    data/{dataset_config_id}/{dataset_wandb_run_id}/
-    ├── shards/                       # Future state — see #406; today shards live flat
-    │   └── shard-NNNNNN.{h5,tar}
-    ├── metadata/                     # Future state — see #385; today metadata is flat
-    │   ├── config.yaml               # Frozen Hydra config (provenance copy)
-    │   ├── input_spec.json           # Frozen DatasetSpec (authoritative)
-    │   ├── dataset.json              # Self-describing dataset card (#74)
-    │   ├── dataset.complete          # Completion marker
-    │   └── workers/                  # Future state — see #406; staging area
-    │       ├── shards/{shard_id}/{worker_id}-{attempt_uuid}.*
-    │       └── attempts/{worker_id}-{attempt_uuid}/report.json
-    ├── {train,val,test}.h5           # Split virtual datasets (post-reshard)
-    └── stats.npz                     # Normalization statistics
-
-The URI-helper methods below return the **current** canonical location for
-each well-known object. The flat→nested migrations for ``shards/`` (#406)
-and ``metadata/`` (#385) will move bodies under their parent dirs without
-changing the API, so call sites that go through these helpers stay correct
-across the transition.
-
-``prefix`` is a required field on this model — when the caller omits it,
-``DatasetSpec``'s own ``model_validator(mode="before")`` derives it via the
-same ``make_r2_prefix`` callers used through the prior
-``DatasetSpec._default_r2_prefix`` factory and injects it into the nested
-dict before ``R2Location`` validation runs. That same ``before`` validator
-also promotes the flat-form ``{r2_bucket, r2_prefix_root, r2_prefix}`` input
-dict into the nested ``r2: R2Location`` shape so JSON specs already written
-to R2 continue to parse. Constructing ``R2Location`` directly bypasses both
-shims — callers must supply ``prefix`` explicitly.
+``prefix`` is required. When constructed via ``DatasetSpec`` it is
+auto-derived and the legacy flat ``{r2_bucket, r2_prefix_root, r2_prefix}``
+input shape is promoted to ``r2: R2Location`` — see ``DatasetSpec``'s
+``_normalize_r2_input`` model_validator and ``_default_r2_location`` /
+``_fill_default_r2_prefix`` in ``spec.py`` for the mechanics. Constructing
+``R2Location`` directly bypasses both shims; callers must supply ``prefix``.
 """
 
 from __future__ import annotations
