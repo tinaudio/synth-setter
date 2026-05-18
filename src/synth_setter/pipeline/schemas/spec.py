@@ -111,27 +111,12 @@ def _utc_now() -> datetime:
 
 
 def _current_platform() -> str:  # noqa: DOC201,DOC203
-    """Return ``sys.platform`` via a patchable indirection.
-
-    Reading ``sys.platform`` directly inside ``RenderConfig`` validators forces
-    tests to ``monkeypatch.setattr("...sys.platform", ...)`` — but ``spec.sys``
-    is the real ``sys`` module, so that mutation leaks into every other
-    consumer of ``sys.platform`` in the same interpreter (e.g. the
-    ``surge_xt_smoke_datasets`` fixture's headless-wrapper decision).
-    Routing through this helper keeps platform overrides local to ``spec``.
-    """
+    """Return ``sys.platform`` via a patchable indirection (tests patch this, not ``sys``)."""
     return sys.platform
 
 
 def _default_open_gui_every_render() -> bool:  # noqa: DOC201,DOC203
-    """Return the platform-aware default for ``RenderConfig.open_gui_every_render``.
-
-    Returns ``False`` on Darwin so a bare ``RenderConfig()`` constructor and a bare
-    Hydra render-config payload (e.g. ``configs/render/surge_xt.yaml``) construct
-    cleanly on macOS without tripping ``_open_gui_every_render_forbidden_on_darwin``
-    (#714). Returns ``True`` everywhere else to preserve the historical
-    render_params per-call show_editor warm-up.
-    """
+    """Return ``False`` on Darwin (the validator rejects ``True`` — #714), ``True`` elsewhere."""
     return _current_platform() != "darwin"
 
 
@@ -167,11 +152,8 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int = 32
     samples_per_shard: int
-    # Per-render plugin lifecycle knobs. ``reload_plugin_every_render`` defaults
-    # to ``True`` to preserve the historical render_params behavior.
-    # ``open_gui_every_render`` defaults platform-aware (``True`` on Linux,
-    # ``False`` on Darwin) so bare Hydra render configs construct cleanly on
-    # macOS; explicit ``True`` on Darwin is still rejected (#714).
+    # Per-render lifecycle knobs; see _default_open_gui_every_render and the
+    # darwin-rejection validator below (#714).
     reload_plugin_every_render: bool = True
     open_gui_every_render: bool = Field(default_factory=_default_open_gui_every_render)
 

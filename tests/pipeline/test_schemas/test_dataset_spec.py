@@ -133,12 +133,7 @@ class TestRenderConfig:
     def test_open_gui_default_is_false_on_darwin(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """On Darwin the default factory yields ``False`` so bare ``RenderConfig()`` constructs.
-
-        Without the platform-aware default a bare Hydra render config that omits the
-        field would fail the ``_open_gui_every_render_forbidden_on_darwin`` validator
-        on macOS — see #714.
-        """
+        """Default factory yields False on Darwin so bare RenderConfig() constructs (#714)."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )
@@ -191,10 +186,10 @@ class TestRenderConfig:
         assert cfg.open_gui_every_render is True
 
     @pytest.mark.parametrize("reload_flag", [True, False])
-    def test_reload_plugin_every_render_is_platform_independent_on_darwin(  # noqa: DOC101,DOC103
+    def test_reload_plugin_every_render_both_values_accepted_on_darwin(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch, reload_flag: bool
     ) -> None:
-        """``reload_plugin_every_render`` is independent of platform — both values accepted."""
+        """``reload_plugin_every_render`` accepts both True and False on Darwin."""
         monkeypatch.setattr(
             "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
         )

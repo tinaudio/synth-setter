@@ -458,8 +458,8 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         f"--samples_per_shard={NUM_FIXTURE_SAMPLES}",
     ]
     if sys.platform == "darwin":
-        # Darwin rejects open_gui_every_render=True at RenderConfig
-        # construction — see #714 / spec._open_gui_every_render_forbidden_on_darwin.
+        # Pass open_gui_every_render=False through the CLI so the subprocess's
+        # RenderConfig validator doesn't reject the default on Darwin (#714).
         generate_dataset_args.append("--open_gui_every_render=False")
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
