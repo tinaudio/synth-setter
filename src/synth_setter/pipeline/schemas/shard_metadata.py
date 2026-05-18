@@ -28,21 +28,13 @@ class ShardMetadata(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    velocity: int = Field(
-        description="MIDI velocity used for every render in this shard (0-127); mirrors RenderConfig.velocity.",
-    )
+    velocity: int = Field(description="MIDI velocity used for every render (0-127).")
     signal_duration_seconds: float = Field(
-        description="Duration of each rendered audio sample, in seconds; mirrors RenderConfig.signal_duration_seconds.",
+        description="Duration of each rendered audio sample, in seconds."
     )
-    sample_rate: int = Field(
-        description="Audio sample rate in Hz; mirrors RenderConfig.sample_rate.",
-    )
-    channels: int = Field(
-        description="Audio channel count (>= 1); mirrors RenderConfig.channels.",
-    )
-    min_loudness: float = Field(
-        description="Per-sample loudness floor used during rendering; mirrors RenderConfig.min_loudness.",
-    )
+    sample_rate: int = Field(description="Audio sample rate in Hz.")
+    channels: int = Field(description="Audio channel count.")
+    min_loudness: float = Field(description="Per-sample loudness floor used during rendering.")
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> ShardMetadata:

@@ -155,11 +155,11 @@ class RenderConfig(BaseModel):
     renderer_version: str = Field(
         description="Renderer code-path version stamp recorded in shard provenance."
     )
-    sample_rate: int = Field(description="Audio sample rate in Hz; must be positive.")
-    channels: int = Field(description="Audio channel count; must be >= 1.")
+    sample_rate: int = Field(description="Audio sample rate in Hz.")
+    channels: int = Field(description="Audio channel count.")
     velocity: int = Field(description="MIDI velocity used for every render in this run (0-127).")
     signal_duration_seconds: float = Field(
-        description="Duration of each rendered audio sample, in seconds; must be positive."
+        description="Duration of each rendered audio sample, in seconds."
     )
     min_loudness: float = Field(
         description="Per-sample loudness floor; renders quieter than this are rejected/retried."
@@ -169,7 +169,7 @@ class RenderConfig(BaseModel):
         description="Batch size the renderer uses inside a shard.",
     )
     samples_per_shard: int = Field(
-        description="Samples written per shard; must divide each split size evenly."
+        description="Samples written per shard; each split size must be a multiple of this."
     )
 
     @model_validator(mode="after")
@@ -232,9 +232,7 @@ class DatasetSpec(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    # Layout fields. Splits are stored as immutable tuples so the frozen-model
-    # guarantee carries through to the contents; JSON-loaded values arrive as
-    # lists and get coerced via ``_splits_list_to_tuple`` below.
+    # Splits stored as immutable tuples; JSON lists are coerced by _splits_list_to_tuple.
     task_name: str = Field(
         description=(
             "Dataset config identifier; becomes the leading path component of "
@@ -252,9 +250,7 @@ class DatasetSpec(BaseModel):
             "``render.samples_per_shard``."
         )
     )
-    # Reserved for per-sample seeding (#884); not implemented. Accepts only
-    # ``None`` — any non-None value (yaml, JSON, or in-process) raises
-    # ``NotImplementedError`` at construction. See ``_reject_train_val_test_seeds``.
+    # Enforced by _reject_train_val_test_seeds.
     train_val_test_seeds: tuple[int, int, int] | None = Field(
         default=None,
         description=(
@@ -270,22 +266,17 @@ class DatasetSpec(BaseModel):
     )
     r2_prefix_root: str = Field(
         default=DEFAULT_R2_PREFIX_ROOT,
-        description=(
-            "Top-level prefix segment under the bucket (default ``data``); "
-            "leading/trailing slashes are stripped by ``make_r2_prefix``."
-        ),
+        description="Top-level prefix segment under the bucket; slashes are stripped by ``make_r2_prefix``.",
     )
 
-    # Sub-model
     render: RenderConfig = Field(
         description="Nested ``RenderConfig`` carrying every per-shard renderer input."
     )
 
-    # Auto-filled runtime fields. The factory runs only when the field is
-    # missing on input — JSON-loaded specs preserve the materialization-time
-    # values workers must reuse. The lambdas around ``_get_git_sha`` etc.
-    # defer the lookup to call time so tests that ``monkeypatch.setattr`` on
-    # the module attribute reach this resolution path.
+    # Auto-filled runtime fields: factories fire only when the value is missing on
+    # input, so JSON-loaded specs preserve materialization-time values. The lambda
+    # wrappers defer lookup so ``monkeypatch.setattr`` on the module attr is
+    # honored at call time.
     git_sha: str = Field(
         default_factory=lambda: _get_git_sha(),
         description=(

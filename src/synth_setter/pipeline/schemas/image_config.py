@@ -16,14 +16,9 @@ _HEX_CHARS = frozenset("0123456789abcdef")
 
 
 class ImageConfig(BaseModel, strict=True, extra="forbid"):
-    """Validated image creation config: static settings + runtime build inputs.
+    """Validated image creation config: static YAML settings + runtime build inputs from the caller."""
 
-    Static fields come from the YAML config file.
-    Runtime fields (github_sha, issue_number) come from the caller.
-    image_config_id is derived from the config filename stem.
-    """
-
-    # --- Static fields (from YAML config, all required) ---
+    # Static fields (from YAML)
     dockerfile: str = Field(description="Repo-relative path to the Dockerfile to build.")
     image: str = Field(description="Final image reference (`registry/repo:tag`) the build pushes.")
     base_image: str = Field(
@@ -39,29 +34,21 @@ class ImageConfig(BaseModel, strict=True, extra="forbid"):
         )
     )
     target_platform: Literal["linux/amd64", "linux/arm64"] = Field(
-        description="Docker BuildKit target platform (`linux/amd64` or `linux/arm64`)."
+        description="Docker BuildKit target platform."
     )
     torch_backend: str = Field(
-        description=(
-            "Torch wheel selector (e.g. `cu121`, `cpu`) used by the build to pick the right "
-            "PyTorch index."
-        )
+        description="Torch wheel selector (e.g. `cu121`, `cpu`) that picks the PyTorch index."
     )
 
-    # --- Runtime fields (from caller, no defaults) ---
+    # Runtime fields (from caller)
     github_sha: str = Field(
-        description=(
-            "40-char lowercase commit SHA the build is tied to (provenance label and tag input)."
-        )
+        description="Commit SHA the build is tied to (provenance label and tag input)."
     )
     issue_number: int = Field(
-        description="GitHub issue this build is associated with (used in tagging/labelling)."
+        description="GitHub issue this build is tied to; appears in image tags and OCI labels."
     )
     image_config_id: str = Field(
-        description=(
-            "Identifier derived from the YAML config filename stem; uniquely names this image "
-            "config."
-        )
+        description="Derived from the YAML config filename stem (e.g. `runpod-h100.yaml` → `runpod-h100`)."
     )
 
     @field_validator("github_sha")
