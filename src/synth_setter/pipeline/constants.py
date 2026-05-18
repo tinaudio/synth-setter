@@ -13,6 +13,6 @@ INPUT_SPEC_FILENAME = "input_spec.json"
 RCLONE_REMOTE = "r2"
 
 # Canonical R2 URI scheme. Worker, launcher, and CI validation agree on
-# ``r2://bucket/key``; ``r2_io._to_rclone_path`` translates to rclone's
+# ``r2://bucket/key``; ``r2_io.to_rclone_path`` translates to rclone's
 # ``r2:bucket/key`` form at the subprocess boundary.
 R2_URI_SCHEME = f"{RCLONE_REMOTE}://"

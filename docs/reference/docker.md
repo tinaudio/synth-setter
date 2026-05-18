@@ -26,7 +26,7 @@ ______________________________________________________________________
   - `WANDB_API_KEY` (W&B credential)
 
 The target R2 bucket is **not** an env var — it is a required field on
-`DatasetSpec.r2_bucket` and flows into the container via the materialized
+`DatasetSpec.r2.bucket` and flows into the container via the materialized
 spec passed to `generate_dataset --spec`.
 
 ```bash
@@ -57,9 +57,9 @@ that callers may override are listed under
 rclone's native env-var config automatically builds the `r2` remote
 inside the container from the `RCLONE_CONFIG_R2_*` variables — no
 `rclone.conf` file is read or written. The bucket name is **not** part
-of the rclone remote config: it lives in `DatasetSpec.r2_bucket`
-and `generate_dataset.py` interpolates it into upload paths
-(`r2:${spec.r2_bucket}/...`).
+of the rclone remote config: it lives in `DatasetSpec.r2.bucket` and
+`generate_dataset.py` interpolates it into upload paths via
+`spec.r2.rclone_prefix()` (`r2:${spec.r2.bucket}/${spec.r2.prefix}`).
 
 The build uses **no** BuildKit secrets. The repository is public, so
 source fetches (both the tarball and the in-image git clone) happen
@@ -242,7 +242,7 @@ audio-rendering boundary, wrapping only the generator subprocess — so
 
 Pass the materialized spec via `--spec <path>`. All dataset-run
 configuration, including the target R2 bucket, lives in that spec
-(`DatasetSpec.r2_bucket`).
+(`DatasetSpec.r2.bucket`).
 
 **Required env vars:** See § Runtime environment variables above. For
 this subcommand you need the 5 `RCLONE_CONFIG_R2_*` vars (for rclone
@@ -293,7 +293,7 @@ jq . input_spec.json
 grep -c "Saving sample" generate.log
 
 # Find the R2 location for this run
-jq .r2_prefix input_spec.json
+jq -r .r2.prefix input_spec.json
 ```
 
 **Retention:** 7 days (GitHub Actions default).
