@@ -386,3 +386,247 @@ def test_render_in_batches_warmup_never_skips_all_renders(  # noqa: DOC101,DOC10
     )
 
     assert all(c["warmup"] is False for c in captured)
+
+
+def test_render_in_batches_once_once_warms_once_and_caches_plugin(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``("once","once")`` — load + warm once, reuse the same plugin instance throughout."""
+    n = 4
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="once",
+    )
+    load_plugin_calls: list[dict[str, object]] = []
+    load_preset_calls: list[dict[str, object]] = []
+    cached_plugin_holder: list[object] = []
+    captured = _stub_render_dependencies(
+        monkeypatch,
+        load_plugin_calls=load_plugin_calls,
+        load_preset_calls=load_preset_calls,
+        cached_plugin_holder=cached_plugin_holder,
+    )
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert len(load_plugin_calls) == 1
+    assert len(load_preset_calls) == 1
+    cached = cached_plugin_holder[0]
+    assert sum(1 for c in captured if c["warmup"] is True) == 1
+    for call_kwargs in captured:
+        assert call_kwargs["plugin"] is cached
+
+
+def test_render_in_batches_once_render_warms_every_render_with_cached_plugin(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``("once","render")`` — cached plugin, warmup on every render across the shard."""
+    monkeypatch.setattr(
+        "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+    )
+    n = 3
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="once",
+        gui_toggle_cadence="render",
+    )
+    load_plugin_calls: list[dict[str, object]] = []
+    load_preset_calls: list[dict[str, object]] = []
+    cached_plugin_holder: list[object] = []
+    captured = _stub_render_dependencies(
+        monkeypatch,
+        load_plugin_calls=load_plugin_calls,
+        load_preset_calls=load_preset_calls,
+        cached_plugin_holder=cached_plugin_holder,
+    )
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=MagicMock(name="param_spec"),
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert len(load_plugin_calls) == 1
+    cached = cached_plugin_holder[0]
+    assert sum(1 for c in captured if c["warmup"] is True) == n
+    for call_kwargs in captured:
+        assert call_kwargs["plugin"] is cached
+
+
+# Writer-level cross-cut: the previous tests stub ``generate_sample`` itself,
+# so they observe the ``warmup=`` kwarg the writer hands in but not what
+# happens inside ``generate_sample``'s loudness-retry loop. The two tests
+# below let the real ``generate_sample`` execute and stub one level deeper —
+# at ``render_params`` — so they catch a regression in the retry-loop's
+# ``warmup = False`` reset that the writer-level kwarg checks would miss.
+
+
+_RENDERER_FAKE_AUDIO_SHAPE = (2, 16000 * 4)
+
+
+def _silent_render() -> object:  # noqa: DOC201,DOC203
+    """Return a silent stereo render shaped for the test ``_smoke_render_cfg``."""
+    import numpy as np
+
+    return np.zeros(_RENDERER_FAKE_AUDIO_SHAPE, dtype=np.float32)
+
+
+def _loud_render() -> object:  # noqa: DOC201,DOC203
+    """Return a loud stereo render shaped for the test ``_smoke_render_cfg``.
+
+    A 440 Hz sine at half-scale comfortably clears the ``-55 dB`` loudness gate.
+    """
+    import numpy as np
+
+    n = _RENDERER_FAKE_AUDIO_SHAPE[1]
+    t = np.arange(n) / 16000.0
+    sine = (0.5 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+    return np.stack([sine, sine], axis=0)
+
+
+def _install_writer_level_fakes(  # noqa: DOC203
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    retry_on_first_sample: int,
+) -> tuple[MagicMock, MagicMock]:
+    """Patch the renderer's seams so the writer loop runs without a real plugin.
+
+    The fake ``render_params`` returns silent audio for the first
+    ``retry_on_first_sample`` calls (driving the loudness-retry loop in
+    ``generate_sample``) then loud audio thereafter; whenever it receives
+    ``warmup=True`` it invokes a tracked ``warmup_plugin`` mock so callers
+    can assert on the observable side effect rather than the kwarg
+    passthrough.
+
+    Returns a ``(warmup_mock, fake_spec)`` pair — the spec is meant to be
+    handed directly to ``_render_in_batches`` so the test doesn't depend on
+    the registry lookup that ``make_hdf5_dataset`` would normally perform.
+
+    :param monkeypatch: Active monkeypatch fixture from the calling test.
+    :param retry_on_first_sample: Number of silent renders before the first
+        loud render — drives the loudness-retry loop inside the first
+        ``generate_sample`` call.
+    :returns: ``(warmup_mock, fake_spec)``.
+    """
+    import numpy as np
+
+    from synth_setter.data.vst import generate_vst_dataset
+
+    warmup_mock = MagicMock(name="warmup_plugin")
+    silent_remaining = [retry_on_first_sample]
+
+    def _fake_render_params(*_args: object, **kwargs: object) -> object:
+        if kwargs.get("warmup"):
+            warmup_mock()
+        if silent_remaining[0] > 0:
+            silent_remaining[0] -= 1
+            return _silent_render()
+        return _loud_render()
+
+    fake_spec_payload = (
+        {"a_amp_eg_attack": 0.5},
+        {"pitch": 64, "note_start_and_end": (0.1, 0.9)},
+    )
+    fake_spec = MagicMock(name="param_spec")
+    fake_spec.sample.return_value = fake_spec_payload
+    fake_spec.encode.return_value = np.zeros((4,), dtype=np.float32)
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", _fake_render_params)
+    monkeypatch.setattr(
+        generate_vst_dataset,
+        "make_spectrogram",
+        lambda *_a, **_kw: np.zeros((2, 128, 401), dtype=np.float32),
+    )
+    return warmup_mock, fake_spec
+
+
+def test_render_in_batches_once_cadence_survives_intra_sample_retries(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``gui_toggle_cadence="once"`` warms exactly once even when sample 0 retries twice.
+
+    Cross-cut for #714: the writer's ``warmup_done`` flag only flips after a
+    successful render attempt, but ``generate_sample``'s loudness retry can
+    issue multiple ``render_params`` calls per attempt. Without the
+    ``warmup = False`` reset inside the retry loop, those internal retries
+    would re-warm and silently blow past the per-shard budget. Asserts the
+    observable side effect (``warmup_plugin`` call count) across the full
+    shard, not the kwarg the writer hands to ``generate_sample``.
+    """
+    n = 3
+    retries = 2
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="once",
+    )
+    warmup_mock, fake_spec = _install_writer_level_fakes(
+        monkeypatch, retry_on_first_sample=retries
+    )
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=fake_spec,
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    assert warmup_mock.call_count == 1
+
+
+def test_render_in_batches_render_cadence_warms_once_per_generate_sample_call(  # noqa: DOC101,DOC103
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``gui_toggle_cadence="render"`` warms once per ``generate_sample`` call, not per retry.
+
+    Symmetric pin to ``..._once_cadence_survives_intra_sample_retries``: under
+    ``"render"`` cadence the writer hands ``warmup=True`` to every
+    ``generate_sample`` call, so warm-up fires once per sample. ``generate_sample``'s
+    internal ``warmup = False`` reset (line 129 of ``generate_vst_dataset.py``)
+    is cadence-agnostic, so sample 0's silent retries do NOT re-warm — total
+    warm-ups equals the sample count, not the render-attempt count.
+    """
+    monkeypatch.setattr(
+        "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+    )
+    n = 3
+    retries = 2
+    render_cfg = _smoke_render_cfg(
+        samples_per_shard=n,
+        samples_per_render_batch=n,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="render",
+    )
+    warmup_mock, fake_spec = _install_writer_level_fakes(
+        monkeypatch, retry_on_first_sample=retries
+    )
+
+    _render_in_batches(
+        render_cfg=render_cfg,
+        param_spec=fake_spec,
+        start_idx=0,
+        fixed_synth_params_list=None,
+        fixed_note_params_list=None,
+        flush_batch=lambda _batch, _start: None,
+    )
+
+    # One warm per sample (n) — the retry-loop reset drops warmup to False
+    # after the first attempt of each ``generate_sample`` call, so sample 0's
+    # silent retries do NOT add to the count.
+    assert warmup_mock.call_count == n
