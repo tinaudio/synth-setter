@@ -1213,21 +1213,21 @@ class DatasetSpec(BaseModel):
     train_val_test_sizes: tuple[int, int, int]
     train_val_test_seeds: tuple[int, int, int]
     base_seed: int
-    r2_bucket: str
-    r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
+    r2: R2Location   # nested {bucket, prefix_root, prefix}; built by _normalize_r2 below
 
     # Sub-model
     render: RenderConfig
 
-    # Runtime fields. All five auto-fill via ``default_factory`` when missing on
-    # input; ``run_id`` / ``r2_prefix`` use the data-aware factories that derive
-    # from already-validated ``task_name`` + ``created_at``. JSON-loaded values
+    # Runtime fields. ``git_sha`` / ``is_repo_dirty`` / ``created_at`` / ``run_id``
+    # auto-fill via ``default_factory`` when missing on input. The nested ``r2``
+    # is populated by the ``_normalize_r2`` model-level before-validator (which
+    # also promotes legacy flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix``
+    # keys for back-compat with materialized specs in R2). JSON-loaded values
     # pass through unchanged (workers reuse materialization-time values).
     git_sha: str = Field(default_factory=lambda: _get_git_sha())
     is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
     created_at: datetime = Field(default_factory=lambda: _utc_now())
     run_id: str = Field(default_factory=_default_run_id)
-    r2_prefix: str = Field(default_factory=_default_r2_prefix)
 
     # Computed: @computed_field + @cached_property — emitted by model_dump and
     # stripped on input (see _strip_computed_field_keys) so JSON round-trip works.
@@ -1361,9 +1361,9 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 
 1. Hydra composes the experiment against `configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
-3. Runtime fields (`run_id`, `r2_prefix`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2_prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
+3. Runtime fields (`run_id`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision). The nested `r2` is built by the `_normalize_r2` model-level before-validator (also promotes legacy flat `r2_bucket` / `r2_prefix_root` / `r2_prefix` keys for back-compat); `r2.prefix` defaults to `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
-5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2_prefix>/input_spec.json`).
+5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2.prefix>/input_spec.json`).
 6. Proceed with reconciliation.
 
 **Dirty repo handling (planned):** `is_repo_dirty` is captured in the spec, but the design's auto-upload of `git diff` to `metadata/run_diff.patch` is not yet implemented in `generate_dataset` — captured here as the intended behavior so a dirty repo's exact code state can be reconstructed during rapid ML research iteration.
@@ -1396,6 +1396,7 @@ src/
       spec.py           # DatasetSpec (unified config + runtime; built by spec_from_cfg in cli/generate_dataset.py), RenderConfig, ShardSpec; OUTPUT_FORMAT_TO_EXTENSION / EXTENSION_TO_OUTPUT_FORMAT inverse-pair dispatch maps (no consumer yet — shard writers/validators dispatch in PR-13)
       shard_metadata.py # ShardMetadata — wds tar metadata.json sidecar (leaf module, no project imports)
       prefix.py         # DatasetConfigId, DatasetRunId, R2Prefix helpers
+      r2_location.py    # R2Location — nested {bucket, prefix_root, prefix} with uri() / rclone_prefix() helpers
       image_config.py   # Docker image configuration
 
     ci/                 # CI validation scripts (implemented)
