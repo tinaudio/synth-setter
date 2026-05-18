@@ -162,27 +162,6 @@ class TestResharSpecDriven:
         assert _audio_rows(tmp_path / "val.h5") == 10
         assert _audio_rows(tmp_path / "test.h5") == 10
 
-    def test_assigns_shards_in_sorted_order(
-        self,
-        tmp_path: Path,
-        patch_runtime_io: None,
-        runner: CliRunner,
-    ) -> None:
-        """Train gets the first N shards, val the next, test the rest — in sorted order.
-
-        :param tmp_path: Pytest tmp_path fixture for the dataset root.
-        :param patch_runtime_io: Spec runtime-factory stub fixture.
-        :param runner: Click test runner fixture.
-        """
-        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
-        _materialize_dataset(tmp_path, spec)
-
-        result = runner.invoke(_reshard_module.main, [str(tmp_path)])
-
-        assert result.exit_code == 0, result.output
-        for split, expected_total in (("train", 20), ("val", 10), ("test", 10)):
-            assert _audio_rows(tmp_path / f"{split}.h5") == expected_total
-
     def test_zero_sized_split_is_skipped(
         self,
         tmp_path: Path,
@@ -280,58 +259,16 @@ class TestResharSpecPath:
         assert result.exit_code != 0
 
 
-class TestResharShardSizeConflict:
-    """``--shard-size`` must agree with ``spec.render.samples_per_shard`` or fail loudly."""
+class TestResharRemovedFlagsRejected:
+    """Flags that used to exist on reshard (``--train-samples`` / ``--val-samples`` / ``--test-
+    samples`` from the original CLI; ``--shard-size`` from the interim parent #1092) must be
+    rejected — the spec is now the single source of truth."""
 
-    def test_explicit_shard_size_matching_spec_is_ok(
-        self,
-        tmp_path: Path,
-        patch_runtime_io: None,
-        runner: CliRunner,
-    ) -> None:
-        """Passing ``--shard-size`` matching the spec value runs normally.
-
-        :param tmp_path: Pytest tmp_path fixture for the dataset root.
-        :param patch_runtime_io: Spec runtime-factory stub fixture.
-        :param runner: Click test runner fixture.
-        """
-        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
-        _materialize_dataset(tmp_path, spec)
-
-        result = runner.invoke(
-            _reshard_module.main, [str(tmp_path), "--shard-size", "10"]
-        )
-
-        assert result.exit_code == 0, result.output
-
-    def test_explicit_shard_size_mismatching_spec_errors(
-        self,
-        tmp_path: Path,
-        patch_runtime_io: None,
-        runner: CliRunner,
-    ) -> None:
-        """Passing ``--shard-size`` different from the spec is rejected.
-
-        :param tmp_path: Pytest tmp_path fixture for the dataset root.
-        :param patch_runtime_io: Spec runtime-factory stub fixture.
-        :param runner: Click test runner fixture.
-        """
-        spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
-        _materialize_dataset(tmp_path, spec)
-
-        result = runner.invoke(
-            _reshard_module.main, [str(tmp_path), "--shard-size", "9999"]
-        )
-
-        assert result.exit_code != 0
-        assert "shard-size" in result.output.lower() or "samples_per_shard" in result.output
-
-
-class TestResharLegacyFlagsRemoved:
-    """The legacy ``--train-samples`` / ``--val-samples`` / ``--test-samples`` are gone."""
-
-    @pytest.mark.parametrize("flag", ["--train-samples", "--val-samples", "--test-samples"])
-    def test_legacy_flag_is_rejected(
+    @pytest.mark.parametrize(
+        "flag",
+        ["--train-samples", "--val-samples", "--test-samples", "--shard-size"],
+    )
+    def test_removed_flag_is_rejected(
         self,
         tmp_path: Path,
         patch_runtime_io: None,
@@ -343,7 +280,7 @@ class TestResharLegacyFlagsRemoved:
         :param tmp_path: Pytest tmp_path fixture for the dataset root.
         :param patch_runtime_io: Spec runtime-factory stub fixture.
         :param runner: Click test runner fixture.
-        :param flag: Parametrized legacy flag name under test.
+        :param flag: Parametrized removed flag name under test.
         """
         spec = DatasetSpec(**_spec_kwargs(20, 10, 10, samples_per_shard=10))
         _materialize_dataset(tmp_path, spec)
