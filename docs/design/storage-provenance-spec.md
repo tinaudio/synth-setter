@@ -53,7 +53,7 @@ data/{dataset_config_id}/{dataset_wandb_run_id}/
 │   └── ...
 ├── metadata/                # Future state — current `input_spec.json` lives flat at the run prefix root. #385
 │   ├── config.yaml          # Frozen pipeline config (provenance copy)
-│   ├── input_spec.json      # Frozen input specification (authoritative; currently at `<run_prefix>/input_spec.json`)
+│   ├── input_spec.json      # Frozen input specification (authoritative; currently at `<run_prefix>input_spec.json` — `r2_prefix` already ends in `/`)
 │   ├── dataset.json         # Self-describing dataset card
 │   ├── dataset.complete     # Completion marker
 │   └── workers/             # Future state — worker staging area; current workers write shards directly to `data/{config_id}/{run_id}/`. #406
