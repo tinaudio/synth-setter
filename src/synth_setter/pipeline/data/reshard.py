@@ -15,7 +15,7 @@ import numpy as np
 @click.option(
     "--shard-size",
     "-s",
-    type=int,
+    type=click.IntRange(min=1),
     default=10_000,
     help="Number of samples per input shard (rows along the leading axis of each shard-*.h5).",
 )
