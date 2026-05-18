@@ -1004,9 +1004,9 @@ class TestMainDispatchBranches:
     ) -> None:
         """A `+skypilot_launch.cmd=…` override is rejected before any dispatch fires.
 
-        Hydra's struct-mode already rejects `skypilot_launch.cmd=…` (the key isn't in
-        configs/skypilot_launch/default.yaml), so the guard runs on `+skypilot_launch.cmd=…`, which
-        is Hydra's syntax for adding a previously-undeclared key.
+        Uses Hydra's `+key=value` add-syntax because the key isn't in
+        configs/skypilot_launch/default.yaml (struct-mode would otherwise reject it before our
+        guard runs).
         """
         import synth_setter.cli.generate_dataset as gd
         import synth_setter.pipeline.skypilot_launch as sl

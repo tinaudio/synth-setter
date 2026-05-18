@@ -1,21 +1,12 @@
 """Spec-driven generate_dataset runner.
 
-This module exposes two console-script surfaces:
+Two console-script surfaces:
 
-- ``synth-setter-generate-dataset`` → :func:`main` — user-facing entry. Composes
-  the dataset config from ``sys.argv`` Hydra overrides, builds the
-  ``DatasetSpec``, and either renders the spec in-process (when
-  ``cfg.skypilot_launch.compute_template`` is ``null``) or dispatches the same
-  argv to a SkyPilot worker via ``dispatch_via_skypilot``.
-- ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker-side
-  entry. Pure ``@hydra.main`` composition + ``run(spec)``; this is the command
-  the SkyPilot launcher injects as each ``sky.Task`` ``run:`` block so the
-  worker reproduces the operator's composition without re-entering the
-  dispatch branch.
-
-The click CLI in ``src/synth_setter/tools/docker_entrypoint.py`` is a separate
-SkyPilot-worker entry kept for the legacy WORKER_SPEC_URI flow consumed by the
-``configs/compute/*-template.yaml`` templates' ``run:`` blocks.
+- ``synth-setter-generate-dataset`` → :func:`main` — operator entry; runs the
+  spec in-process or dispatches it to SkyPilot based on
+  ``cfg.skypilot_launch.compute_template``.
+- ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker
+  entry; pure ``@hydra.main`` re-compose so launcher/worker share argv.
 """
 
 from __future__ import annotations
@@ -61,13 +52,8 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CONFIG_DIR = _REPO_ROOT / "configs"
 
-# Path of the synth-setter checkout *inside the worker container*. Matches the
-# dev-snapshot image's baked checkout (see docker/ubuntu22_04/Dockerfile —
-# WORKDIR /home/build/synth-setter) and the `cd /home/build/synth-setter` line
-# every configs/compute/*-template.yaml's legacy `run:` block hardcoded. The
-# launcher's own ``_REPO_ROOT`` is the path on the *launcher* filesystem (e.g.
-# /home/runner/work/... on a bare GH-actions runner) — it does not necessarily
-# exist on the worker, so the worker-side cmd must use this constant.
+# Worker-side checkout path — baked WORKDIR of the dev-snapshot image, not the
+# launcher's _REPO_ROOT (which may not exist on the worker filesystem).
 _WORKER_REPO_ROOT = "/home/build/synth-setter"
 
 
@@ -272,19 +258,13 @@ def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
 def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:  # noqa: DOC203
     """Validate the ``skypilot_launch`` sub-tree of a composed dataset cfg.
 
-    Resolves interpolations so any ``${oc.env:…}`` defaults are concrete by the
-    time the launcher reads them; raises if the sub-tree isn't a mapping (which
-    would mean a defaults-list misconfig at the YAML layer, not user input).
+    Rejects operator-supplied ``cmd`` — it is launcher-internal (built from
+    argv by :func:`main`), so a CLI override would shadow that construction
+    and bypass the trust boundary.
 
-    Operator-supplied ``skypilot_launch.cmd`` is rejected loudly here: ``cmd``
-    is launcher-internal (the worker-side bash one-liner :func:`main` builds
-    from argv), so a CLI override would silently shadow that construction and
-    is exactly the kind of injection vector the trust boundary exists to catch.
-
-    :param cfg: Composed dataset cfg whose ``skypilot_launch`` sub-tree carries
-        the launcher knobs (compute_template, num_workers, …).
-    :return: Validated ``SkypilotLaunchConfig`` with ``cmd`` unset (the entrypoint
-        populates ``cmd`` later via ``model_copy(update=...)``).
+    :param cfg: Composed dataset cfg.
+    :return: Validated config with ``cmd`` unset; the entrypoint populates it
+        later via ``model_copy(update=...)``.
     :raises TypeError: ``cfg.skypilot_launch`` did not resolve to a mapping.
     :raises ValueError: operator supplied ``skypilot_launch.cmd`` from Hydra.
     """
@@ -303,28 +283,20 @@ def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:  # noqa:
 def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:  # noqa: DOC203
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
-    Each override is shell-quoted individually so values with spaces or special
-    chars survive the bash interpretation inside ``sky.Task.run``. The leading
-    ``cd`` targets :data:`_WORKER_REPO_ROOT` (the dev-snapshot image's checkout
-    path), not the launcher's ``_REPO_ROOT`` — those paths only coincide when
-    the launcher itself runs inside dev-snapshot. ``sync_worker_checkout.sh``
-    runs between cd and exec so PR-CI workers fetch the PR head over the
-    image-baked checkout (see #735 / #841 for the bake-lag bypass).
+    Each override is shell-quoted individually so spaces/metachars survive bash
+    interpretation. ``sync_worker_checkout.sh`` runs between cd and exec for
+    the PR-CI bake-lag bypass (see #735 / #841).
 
-    ``DatasetSpec.created_at`` is pinned via a ``+created_at='<iso>'`` Hydra
-    override so the worker's re-compose lands on the same ``r2_prefix`` as the
-    launcher's spec (otherwise ``default_factory=lambda: _utc_now()`` fires
-    twice and worker shards land at a different prefix than the validate step
-    expects). ``run_id`` / ``r2_prefix`` derive from ``created_at`` via
-    ``DatasetSpec``'s default factories, so pinning only ``created_at`` is
-    sufficient — see ``_default_run_id`` / ``_default_r2_prefix`` in
-    ``synth_setter.pipeline.schemas.spec``.
+    ``spec.created_at`` is pinned as a Hydra override so the worker's
+    re-compose lands on the same ``r2_prefix`` as the launcher (the
+    ``default_factory`` that produces it would otherwise fire twice and the
+    derived ``run_id`` / ``r2_prefix`` would diverge — see
+    ``_default_run_id`` / ``_default_r2_prefix`` in
+    ``synth_setter.pipeline.schemas.spec``).
 
-    :param overrides: The launcher's ``sys.argv[1:]`` — the operator's Hydra
-        overrides, replayed verbatim on the worker.
-    :param spec: The launcher's already-constructed ``DatasetSpec``; runtime
-        fields populated by ``default_factory`` here are pinned into the
-        worker overrides to keep the launcher / worker composes deterministic.
+    :param overrides: Operator's Hydra overrides (launcher's ``sys.argv[1:]``).
+    :param spec: Launcher's ``DatasetSpec``; runtime fields are pinned into
+        the worker overrides for compose determinism.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
     """
     pinned_overrides = [f"+created_at={spec.created_at.isoformat()}"]
@@ -345,21 +317,20 @@ def from_hydra(cfg: DictConfig) -> None:  # noqa: DOC101,DOC103
 
 
 def main() -> None:
-    """User-facing CLI: compose dataset cfg from argv, dispatch local or via SkyPilot.
+    """Operator CLI: compose dataset cfg from argv, then run locally or dispatch to SkyPilot.
 
-    Programmatic ``initialize_config_dir`` + ``compose`` instead of ``@hydra.main``
-    so we can inspect ``cfg.skypilot_launch.compute_template`` and pick the dispatch
-    branch before Hydra would otherwise hand the cfg straight to the body. Trailing
-    argv items are replayed verbatim on the worker via :func:`from_hydra` so the
-    composition matches byte-for-byte across the launcher/worker boundary.
+    Uses programmatic compose (not ``@hydra.main``) so the dispatch branch can
+    be picked from ``cfg.skypilot_launch.compute_template`` before Hydra would
+    hand the cfg straight to the body. Overrides are replayed verbatim on the
+    worker so the launcher/worker composition matches byte-for-byte.
     """
     overrides = list(sys.argv[1:])
 
     with initialize_config_dir(version_base="1.3", config_dir=str(_CONFIG_DIR)):
         cfg = compose(config_name="dataset", overrides=overrides)
 
-    # Pin paths.* so spec_from_cfg's resolve step doesn't trip on the
-    # unset ${hydra:runtime.output_dir} interpolation under programmatic compose.
+    # Programmatic compose leaves ${hydra:runtime.output_dir} unset; pin paths.*
+    # so spec_from_cfg's resolve step doesn't trip on the unresolved interpolation.
     cfg.paths.root_dir = str(_REPO_ROOT)
     cfg.paths.output_dir = str(_REPO_ROOT)
     cfg.paths.work_dir = str(_REPO_ROOT)
@@ -371,7 +342,7 @@ def main() -> None:
         run(spec)
         return
 
-    # Deferred — SkyPilot / click pull in heavy provider SDKs on import.
+    # Deferred import — SkyPilot pulls heavy provider SDKs on import.
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
     sky_cfg = sky_cfg.model_copy(update={"cmd": _build_worker_cmd(overrides, spec)})

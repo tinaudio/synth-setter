@@ -2,13 +2,11 @@
 # Sibling of runpod-template.yaml — see docs/design/skypilot-compute-integration.md.
 #
 # OCI-specific: the worker image is pulled and run as a sub-docker invocation
-# inside the run: block because SkyPilot's OCI backend rejects `image_id: docker:<image>`.
-# This template uses the ${WORKER_CMD} sentinel: dispatch_via_skypilot's
-# _load_compute_template_with_cmd substitutes the launcher's worker cmd
-# (cd / sync_worker_checkout.sh / exec synth-setter-generate-dataset-from-hydra)
-# into the inner `bash -c` body. The outer `sudo docker run` scaffolding stays
-# YAML-owned because it can't live in the cmd (it must run on the OCI VM host,
-# not inside the worker container).
+# inside the run: block — SkyPilot's OCI backend rejects `image_id: docker:<image>`.
+# Uses the ${WORKER_CMD} sentinel so _load_compute_template_with_cmd can
+# substitute the launcher's worker cmd into the inner `bash -c` body; the
+# outer `sudo docker run` must run on the OCI VM host, not inside the worker
+# container, so it stays YAML-owned.
 # Region intentionally not pinned — `~/.oci/config` is the single source of truth.
 
 resources:
@@ -65,10 +63,9 @@ setup: |
 
 # run: launches the worker container ourselves (OCI backend can't ingest a
 # docker image_id). --privileged + --ulimit nofile is the expedient hammer
-# for the Xvfb/dbus stack — follow-up to find the minimal cap set: #776. No
-# bind-mount: image is source of truth, and the worker cmd (substituted into
-# ${WORKER_CMD} by the launcher) runs sync_worker_checkout.sh inside the
-# container for the WORKER_GIT_REF PR-CI bake-lag bypass.
+# for the Xvfb/dbus stack — minimal-cap follow-up: #776. No bind-mount:
+# image is source of truth; the substituted ${WORKER_CMD} runs
+# sync_worker_checkout.sh inside the container for the PR-CI bake-lag bypass.
 run: |
   set -euo pipefail
   : "${WORKER_IMAGE:?WORKER_IMAGE must be set by the launcher; refusing to docker run an unset image}"

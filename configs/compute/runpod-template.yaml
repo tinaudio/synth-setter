@@ -1,27 +1,19 @@
 # SkyPilot task template for RunPod.
 #
-# Loaded by src/synth_setter/pipeline/skypilot_launch.py's
-# dispatch_via_skypilot via sky.Task.from_yaml_config(...).
-# The launcher uploads the materialized spec to R2 (`r2://<bucket>/skypilot-launcher-specs/<job>.json`)
-# and injects credentials + the spec URI via task.update_envs(...) before
-# calling sky.launch(task, cluster_name=..., down=True). Unmanaged launch
-# (not sky.jobs.launch) — RunPod has no managed-jobs controller backend.
+# Loaded by dispatch_via_skypilot via sky.Task.from_yaml_config(...).
+# The launcher uploads the materialized spec to R2 and injects creds + the
+# spec URI via task.update_envs(...) before calling sky.launch(...). Unmanaged
+# launch — RunPod has no managed-jobs controller backend.
 #
-# No `run:` block: the launcher injects the worker-side cmd
-# (`cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh &&
-#  exec synth-setter-generate-dataset-from-hydra <overrides>`) at dispatch
-# time via _build_worker_cmd in src/synth_setter/cli/generate_dataset.py.
-# Adding a run: here would be rejected by _load_compute_template_with_cmd's
-# conflict guard.
+# No `run:` block — the launcher's _build_worker_cmd injects one. Adding a
+# `run:` here would be rejected by _load_compute_template_with_cmd.
 #
-# Spec ships via R2 (not file_mounts) because programmatic `task.update_file_mounts(...)`
-# triggers a SkyPilot RunPod-backend pubkey-overflow rejection at pod-create
-# time (see #749 for evidence + investigation status).
+# Spec ships via R2 (not file_mounts) — RunPod backend rejects programmatic
+# task.update_file_mounts(...) with a pubkey-overflow error. See #749.
 #
-# Image: `tinaudio/synth-setter:<worker-image-tag>` must exist on Docker Hub
-# (e.g. `make docker-build-dev-snapshot` then `docker push` for the default
-# `dev-snapshot` tag) before launch. `image_id` is set per-launch by the
-# launcher from skypilot_launch.worker_image_tag.
+# Image: `tinaudio/synth-setter:<worker-image-tag>` must be pushed to Docker
+# Hub before launch. `image_id` is set per-launch by the launcher from
+# skypilot_launch.worker_image_tag.
 
 resources:
   cloud: runpod

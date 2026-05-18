@@ -2711,7 +2711,7 @@ class TestLoadComputeTemplateWithCmd:
 
 
 class TestDetectProviderFromDoc:
-    """``_detect_provider_from_doc`` mirrors ``_detect_provider`` but operates on a parsed dict."""
+    """``_detect_provider_from_doc`` maps a parsed compute YAML to a cred-bootstrap provider."""
 
     @pytest.mark.parametrize(
         "doc, expected_provider",
@@ -2860,7 +2860,7 @@ class TestDispatchViaSkypilot:
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
-        # Even in --no-tail mode, a launch raising leaves the rank with a failure rc.
+        # A launch raising leaves the rank with a failure rc even when not tailing logs.
         mock_sky.stream_and_get.side_effect = RuntimeError("boom")
 
         template = _write_runpod_yaml(tmp_path)
@@ -2994,7 +2994,7 @@ class TestDispatchViaSkypilot:
         mock_sky: MagicMock,
         patch_materialize_io: None,  # noqa: ARG002
     ) -> None:
-        """Setting both api_server and local raises before launch — same as the click CLI guard."""
+        """Setting both api_server and local raises before any launch — opposite dispatch modes."""
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 

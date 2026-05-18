@@ -2,27 +2,21 @@ name: Generate Dataset Shards
 
 # Reusable workflow that owns one provider's generate_dataset invocation.
 # Callers fan out across providers (see test-dataset-generation.yml) and pass
-# per-provider values via inputs. All three providers drive the Hydra-first
-# `synth-setter-generate-dataset` entrypoint via `skypilot_launch.compute_template=...`
-# Hydra overrides; OCI's compute template uses the `${WORKER_CMD}` sentinel
-# (substituted by `_load_compute_template_with_cmd`) so the launcher's worker
-# cmd lands inside the OCI sub-docker invocation that the OCI backend forces
-# (SkyPilot's OCI backend rejects `image_id: docker:<image>`).
+# per-provider values via inputs. All providers drive `synth-setter-generate-dataset`
+# with a `skypilot_launch.compute_template=...` Hydra override.
 #
 # Provider-specific behavior:
 #   * `skypilot-local` — provisions a kind cluster on the runner via
 #     `sky local up`, loads the dev-snapshot image into kind, writes the
 #     managed-jobs controller-resource shrink into ~/.sky/config.yaml so the
-#     controller pod fits on kind, and invokes `synth-setter-generate-dataset`
-#     with `skypilot_launch.compute_template=configs/compute/local-template.yaml`.
-#     The launcher detects `cloud: kubernetes` and skips its cred bootstrap.
-#     Always tears down kind in `if: always()`.
-#   * `runpod` / `oci` — in-container invocation of `synth-setter-generate-dataset`
-#     against the matching `configs/compute/*-template.yaml`. The launcher's
-#     `_run_cred_bootstrap` writes provider creds inside the container; if
-#     SKYPILOT_API_SERVER_ENDPOINT is set, the bootstrap is skipped (the remote
-#     API server holds creds). OCI's template uses `${WORKER_CMD}`; runpod's
-#     template has no `run:` (cmd is injected directly).
+#     controller pod fits on kind, then invokes against
+#     `configs/compute/local-template.yaml`. The launcher detects
+#     `cloud: kubernetes` and skips its cred bootstrap. Always tears down
+#     kind in `if: always()`.
+#   * `runpod` / `oci` — in-container invocation against the matching
+#     `configs/compute/*-template.yaml`. The launcher's `_run_cred_bootstrap`
+#     writes provider creds inside the container; if SKYPILOT_API_SERVER_ENDPOINT
+#     is set, the bootstrap is skipped (the remote API server holds creds).
 #
 # Required secrets (callers should `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -238,23 +232,20 @@ jobs:
           chmod 600 "${HOME}/.sky/config.yaml"
 
       # `skypilot_launch.local=true` flips the launcher's local-vs-remote dispatch
-      # (#841); today's skypilot-local caller sets it to clear any inherited
+      # (#841); the skypilot-local caller sets it to clear any inherited
       # SKYPILOT_API_SERVER_ENDPOINT. `skypilot_launch.num_workers=1` overrides
       # the config default because the kind cluster can't host parallel workers
       # (#843). The override array is built conditionally so optional flags
       # don't expand to empty strings.
       #
-      # materialize_spec runs first to write input_spec.json — the launcher's
-      # entrypoint doesn't have a `--spec-out` equivalent (Hydra-internal),
-      # so this gives the downstream `Compute spec_uri output` step its r2_bucket
-      # source and provides a debug artifact via the run-metadata upload.
+      # materialize_spec runs first to produce input_spec.json for the
+      # downstream `Compute spec_uri output` step (the Hydra entrypoint has no
+      # `--spec-out` equivalent) and as a run-metadata debug artifact.
       #
-      # 20-min step cap: if the launcher (sky.jobs SDK) hangs, fail-fast and
-      # let the `if: always()` `Snapshot sky logs` step run, instead of
-      # burning the full 60-min job timeout before logs are uploaded.
-      # NOTE: step-level timeout sends SIGKILL — Python `finally` blocks in the
-      # launcher are bypassed. Operators may need `sky jobs cancel --name <job-name>`
-      # manually after a timeout. See #876.
+      # 20-min step cap caps a hung launcher so the `if: always()` log-snapshot
+      # step still runs. NOTE: step-level timeout sends SIGKILL — `finally`
+      # blocks are bypassed; operators may need to `sky jobs cancel` manually.
+      # See #876.
       - name: Run synth-setter-generate-dataset against local-template (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 20
@@ -331,16 +322,13 @@ jobs:
           du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
 
       # ----- runpod / oci row: in-container synth-setter-generate-dataset
-      # Both cloud providers drive the new Hydra entrypoint; OCI's template
-      # uses ${WORKER_CMD} substitution in its run: block so the launcher's
-      # cmd lands inside the OCI sub-docker invocation (configs/compute/oci-cpu-template.yaml).
-      # Optional launcher flags are pre-rendered into env-var strings on the
-      # outer step (so GHA expression evaluation stays out of the bash
+      # Optional Hydra overrides are pre-rendered into env-var strings at the
+      # outer step (keeping GHA expression evaluation out of the bash
       # block-scalar) and expanded unquoted inside docker so empty values
-      # disappear. SKYPILOT_API_SERVER_ENDPOINT (when the secret is set)
-      # routes the launcher to the remote API server; pass `local: true` to
-      # override. materialize_spec runs first inside the container to write
-      # /run-metadata/input_spec.json for the spec_uri output step.
+      # disappear. SKYPILOT_API_SERVER_ENDPOINT (when set) routes the launcher
+      # to the remote API server; pass `local: true` to override. materialize_spec
+      # runs first inside the container to write /run-metadata/input_spec.json
+      # for the spec_uri output step.
       - name: Run synth-setter-generate-dataset (runpod / oci row; in container)
         if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         env:

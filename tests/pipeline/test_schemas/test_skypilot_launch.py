@@ -24,11 +24,11 @@ class TestDefaults:
         assert SkypilotLaunchConfig().num_workers == 1
 
     def test_default_worker_image_tag_is_dev_snapshot(self) -> None:
-        """Matches the launcher's --worker-image-tag default."""
+        """Worker image tag defaults to the dev-snapshot rolling tag."""
         assert SkypilotLaunchConfig().worker_image_tag == "dev-snapshot"
 
     def test_default_tail_is_false(self) -> None:
-        """Detach by default; --tail is opt-in."""
+        """Detach by default; ``tail`` is opt-in."""
         assert SkypilotLaunchConfig().tail is False
 
     def test_default_local_is_false(self) -> None:

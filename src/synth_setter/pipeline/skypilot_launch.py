@@ -814,16 +814,13 @@ def _cancel_job(job_name: str) -> None:
 def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:  # noqa: DOC203
     """Detect the cred-bootstrap provider from an already-parsed YAML mapping.
 
-    Mirrors ``_detect_provider``'s rules (flat ``resources.cloud`` vs.
-    ``resources.any_of[0].cloud``) but operates on an in-memory dict so
-    ``dispatch_via_skypilot`` doesn't re-read the template after the cmd-injection
-    edit.
+    In-memory counterpart of ``_detect_provider``; same rules (flat
+    ``resources.cloud`` vs. ``resources.any_of[0].cloud``) without re-reading
+    the template from disk.
 
     :param doc: Parsed top-level YAML mapping for a SkyPilot Task.
-    :param source: Filesystem path the doc was loaded from, used only in error
-        messages so the operator can locate the offending file.
-    :return: ``"runpod" | "oci" | "local"`` — the ``--provider`` flag to pass to
-        the cred-bootstrap script.
+    :param source: Path the doc was loaded from; used only in error messages.
+    :return: ``--provider`` flag for the cred-bootstrap script.
     :raises ValueError: ``resources`` is missing/malformed or names an
         unsupported cloud.
     """
@@ -867,25 +864,18 @@ _WORKER_CMD_SENTINEL = "${WORKER_CMD}"
 def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:  # noqa: DOC203
     """Load ``template_path`` as YAML and inject ``cmd`` into the ``run:`` block.
 
-    Three branches based on the template's existing ``run:`` value:
+    Three branches based on the template's existing ``run:``:
 
-    * **No ``run:``** — set ``run = cmd`` directly (the happy path; templates
-      whose ``run:`` semantics are exactly "exec the worker cmd").
-    * **``run:`` contains** ``${WORKER_CMD}`` — substitute ``cmd`` into the
-      sentinel and keep the template's surrounding shell scaffolding intact
-      (e.g. OCI's ``sudo docker run … bash -c "${WORKER_CMD}"``). Opt-in per
-      template: the author places the sentinel where the worker cmd should
-      land. Caller is responsible for shell-quoting the sentinel context so
-      the substituted string lands as a single bash argv item.
-    * **Non-empty ``run:`` without the sentinel** — refuse. The template
-      author wrote a complete ``run:`` and didn't ask for cmd injection, so
-      silently dropping their ``run:`` (the old behavior) was the wrong call.
-      Strip the YAML's ``run:`` to opt into the no-run injection path or add
-      the sentinel to opt into the substitution path.
+    * **Empty/missing** — set ``run = cmd``.
+    * **Contains** ``${WORKER_CMD}`` — substitute ``cmd`` into the sentinel,
+      preserving surrounding scaffolding (e.g. OCI's ``sudo docker run …
+      bash -c "${WORKER_CMD}"``). Caller must shell-quote the context so the
+      substituted string lands as a single argv item.
+    * **Non-empty without sentinel** — refuse, rather than silently dropping
+      the template's ``run:``. Strip ``run:`` or add the sentinel to opt in.
 
     :param template_path: Path to a SkyPilot Task YAML.
-    :param cmd: Bash command to inject (either as the full ``run:`` body or
-        substituted into the sentinel).
+    :param cmd: Bash command to inject.
     :return: The parsed YAML dict with ``run`` populated.
     :raises FileNotFoundError: ``template_path`` does not point to a file.
     :raises ValueError: top-level YAML is not a mapping, or the template's
@@ -929,11 +919,10 @@ def _launch_one_rank_from_doc(  # noqa: DOC203
     worker_image: str,
     task_doc: dict[str, object],
 ) -> int:
-    """Per-rank submission variant that builds the ``sky.Task`` from a YAML dict.
+    """Submit one rank, building the ``sky.Task`` from an in-memory YAML dict.
 
-    Mirrors ``_launch_one_rank`` but uses ``sky.Task.from_yaml_config`` so the
-    cmd-injected dict from ``dispatch_via_skypilot`` doesn't need a roundtrip
-    through disk. Lives at module level so tests can exercise it directly.
+    Uses ``sky.Task.from_yaml_config`` so a cmd-injected dict skips the
+    disk roundtrip.
 
     :param rank: This rank's index into ``job_names``.
     :param job_names: One managed-job name per rank; ``len()`` defines the world size.
@@ -975,10 +964,9 @@ def _run_workers_from_doc(  # noqa: DOC203
     worker_image_tag: str,
     tail: bool,
 ) -> list[int]:
-    """``_run_workers`` variant that fans out from a pre-built YAML dict.
+    """Fan out one rank per ``job_names`` entry from a pre-built YAML dict.
 
-    Shares the tail / detach runners with the click CLI — only the per-rank
-    launch helper differs (``_launch_one_rank_from_doc`` vs. ``_launch_one_rank``).
+    Shares the tail / detach runners with the click CLI fan-out path.
 
     :param worker_env_base: Env dict forwarded to every rank (rank/world keys added per call).
     :param task_doc: Parsed compute YAML dict (with ``run`` already injected).
@@ -1025,8 +1013,8 @@ def dispatch_via_skypilot(spec: DatasetSpec, sky_cfg: SkypilotLaunchConfig) -> N
 
     env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
 
-    # Mirrors click main()'s mutual-exclusion check, but raises a plain Exception so
-    # Hydra callers don't get a click-formatted message.
+    # api_server and local express opposite dispatch modes — accepting both
+    # would leave the resolved SKYPILOT_API_SERVER_ENDPOINT non-deterministic.
     if sky_cfg.api_server is not None and sky_cfg.local:
         raise ValueError("api_server and local are mutually exclusive")
     if sky_cfg.api_server is not None:

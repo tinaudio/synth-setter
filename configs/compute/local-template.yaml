@@ -1,31 +1,20 @@
 # SkyPilot task template for the local Kubernetes (kind) backend.
 #
-# Loaded by src/synth_setter/pipeline/skypilot_launch.py's
-# dispatch_via_skypilot via sky.Task.from_yaml_config(...) when
-# cfg.skypilot_launch.compute_template points at this file (e.g. for the
-# `skypilot-local` row of test-dataset-generation's matrix). Provisioning
-# expects a `sky local up`-managed kind cluster ("skypilot" kubectl context)
-# already running.
+# Loaded by dispatch_via_skypilot via sky.Task.from_yaml_config(...).
+# Provisioning expects a `sky local up`-managed kind cluster ("skypilot"
+# kubectl context) already running.
 #
-# No `run:` block: the launcher injects the worker-side cmd
-# (`cd /home/build/synth-setter && bash scripts/sync_worker_checkout.sh &&
-#  exec synth-setter-generate-dataset-from-hydra <overrides>`) at dispatch
-# time via _build_worker_cmd in src/synth_setter/cli/generate_dataset.py.
-# Adding a run: here would be rejected by _load_compute_template_with_cmd's
-# conflict guard.
+# No `run:` block — the launcher's _build_worker_cmd injects one. Adding a
+# `run:` here would be rejected by _load_compute_template_with_cmd.
 #
 # The launcher detects `cloud: kubernetes` and SKIPS its cred bootstrap —
-# kind needs no compute creds (R2 env vars are forwarded into the pod via
-# task.update_envs) and the CI workflow writes the managed-jobs controller-
-# resource shrink directly to ~/.sky/config.yaml before launch (the SkyPilot
-# defaults of cpus=4+/mem=4x/disk_size=50 don't fit on GHA's kind cluster,
-# and k8s rejects disk_size). See PR #876.
+# kind needs no compute creds. The CI workflow writes a managed-jobs
+# controller-resource shrink to ~/.sky/config.yaml before launch so the
+# controller fits on GHA's kind cluster — see PR #876.
 #
 # Image: `tinaudio/synth-setter:<worker-image-tag>` is loaded into the kind
-# cluster via `kind load docker-image` ahead of launch (CI does this; for
-# local dev `kind load docker-image tinaudio/synth-setter:dev-snapshot --name skypilot`
-# pulls from the local docker daemon). `image_id` is set per-launch by the
-# launcher from skypilot_launch.worker_image_tag.
+# cluster via `kind load docker-image` ahead of launch. `image_id` is set
+# per-launch by the launcher from skypilot_launch.worker_image_tag.
 
 resources:
   cloud: kubernetes
