@@ -1384,7 +1384,7 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 2. `spec_from_cfg(cfg)` flattens the composed groups and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) in one shot — the same model used for the on-R2 artifact.
 3. Runtime fields (`run_id`, `r2_prefix`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2_prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
-5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2_prefix>/input_spec.json`).
+5. The launcher uploads the JSON-serialized `DatasetSpec` to R2 once at `r2://<r2_bucket>/skypilot-launcher-specs/<job_name>.json` (`synth_setter.pipeline.skypilot_launch.upload_spec_to_r2`); workers re-read it via the `WORKER_SPEC_URI` env var. Workers do not re-upload the spec.
 6. Proceed with reconciliation.
 
 **Dirty repo handling (planned):** `is_repo_dirty` is captured in the spec, but the design's auto-upload of `git diff` to `metadata/run_diff.patch` is not yet implemented in `generate_dataset` — captured here as the intended behavior so a dirty repo's exact code state can be reconstructed during rapid ML research iteration.
