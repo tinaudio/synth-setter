@@ -131,7 +131,15 @@ def test_docs_page_renders_pydantic_field_anchor(  # noqa: DOC101,DOC103
     built_site: Path, page: str, model: type, field: str
 ) -> None:
     """Every typed field on every documented model gets its own anchor heading."""
-    page_html = (built_site / page / "index.html").read_text(encoding="utf-8")
+    # Assert the file exists before reading so a missing page surfaces as a
+    # clear pytest assertion (with the page name) rather than the raw
+    # FileNotFoundError that ``read_text`` would raise — the dedicated
+    # ``test_docs_page_emitted`` case still owns the per-page emission check.
+    page_html_path = built_site / page / "index.html"
+    assert page_html_path.is_file(), (
+        f"{page_html_path} missing from built site — see test_docs_page_emitted"
+    )
+    page_html = page_html_path.read_text(encoding="utf-8")
     pattern = _anchor_pattern(model, field)
     assert pattern.search(page_html), (
         f"anchor {pattern.pattern!r} missing from {page} — "

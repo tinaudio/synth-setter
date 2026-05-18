@@ -1,10 +1,14 @@
 """Behavioural tests for the ``CallbacksConfig`` / ``CallbackInstance`` models.
 
-Every YAML under ``configs/callbacks/`` that composes into a non-empty dict
-must validate against ``CallbacksConfig`` (a RootModel wrapping
-``dict[str, CallbackInstance]``). ``none.yaml`` is intentionally empty —
-Hydra resolves it to ``None`` and ``instantiate_callbacks`` short-circuits
-on a falsy config, so it's outside the schema's responsibility.
+Every YAML under ``configs/callbacks/`` is a valid ``callbacks=<name>``
+selection — both the multi-callback compositions (``default``,
+``default_surge``, ``eval_surge``) and the individual callback leaves
+(``model_checkpoint``, ``early_stopping``, ``plot_pos_enc``, ...). Every
+one of those that composes into a non-empty dict must validate against
+``CallbacksConfig`` (a RootModel wrapping ``dict[str, CallbackInstance]``).
+``none.yaml`` is intentionally empty — Hydra resolves it to ``None`` and
+``instantiate_callbacks`` short-circuits on a falsy config, so it's
+outside the schema's responsibility.
 
 Callback-class-specific kwargs (``monitor``, ``dirpath``, ``patience``, ...)
 live under ``extra="allow"`` on ``CallbackInstance``; only ``_target_`` is
@@ -25,24 +29,31 @@ from synth_setter.schemas.callbacks_config import CallbackInstance, CallbacksCon
 
 _CALLBACKS_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "callbacks"
 
-# ``none.yaml`` is empty and composes to ``None``; ``instantiate_callbacks``
-# handles that pathway outside the schema. Skip it here.
-_NON_EMPTY_CALLBACK_CONFIGS = frozenset({"default", "default_surge", "eval_surge"})
+# Hydra resolves ``configs/callbacks/none.yaml`` to ``None`` because the
+# file is empty; ``instantiate_callbacks`` short-circuits on the falsy
+# value, so it's outside this schema's responsibility. Every other YAML in
+# the group — both the multi-callback compositions (``default``,
+# ``default_surge``, ``eval_surge``) and the individual callback leaves
+# (``model_checkpoint``, ``early_stopping``, ``plot_pos_enc``, ...) — is
+# selectable via ``callbacks=<name>`` and must validate.
+_NON_DICT_CALLBACK_CONFIGS = frozenset({"none"})
 
 
 def _composable_callback_config_names() -> list[str]:  # noqa: DOC201,DOC203
-    """Return callback-group YAML stems that compose into a non-empty dict.
+    """Return every callback YAML stem that composes into a non-empty dict.
 
-    Only the multi-callback compositions (``default``, ``default_surge``,
-    ``eval_surge``) are valid top-level selections under ``callbacks=...``;
-    the individual callback YAMLs (``model_checkpoint``, ``lr_monitor``,
-    ``rich_progress_bar``, ...) are leaves consumed by ``defaults:`` and
-    aren't themselves group-selectable.
+    Includes both the multi-callback compositions and the individual
+    callback leaves — Hydra accepts any YAML in the group as a
+    ``callbacks=<name>`` selection, so the leaf YAMLs are valid
+    top-level configs too (they compose to a single-entry dict like
+    ``{"model_checkpoint": {"_target_": ...}}``). Only ``none.yaml`` is
+    excluded — it composes to ``None`` and ``instantiate_callbacks``
+    handles that pathway outside the schema.
     """
     available = {p.stem for p in _CALLBACKS_CONFIG_DIR.glob("*.yaml")}
-    selected = sorted(_NON_EMPTY_CALLBACK_CONFIGS & available)
+    selected = sorted(available - _NON_DICT_CALLBACK_CONFIGS)
     assert selected, (
-        f"none of {_NON_EMPTY_CALLBACK_CONFIGS} found under {_CALLBACKS_CONFIG_DIR} — "
+        f"no composable callback YAMLs found under {_CALLBACKS_CONFIG_DIR} — "
         "has the callbacks composition layout changed?"
     )
     return selected
@@ -66,7 +77,7 @@ def _compose_callbacks_cfg(callbacks_name: str) -> dict[str, Any]:  # noqa: DOC1
 
 
 class TestCallbacksConfigAcceptsEveryComposition:
-    """Every non-empty callbacks group must validate against ``CallbacksConfig``."""
+    """Every ``callbacks=<name>``-selectable YAML must validate against ``CallbacksConfig``."""
 
     @pytest.mark.parametrize("callbacks_name", _composable_callback_config_names())
     def test_callbacks_yaml_validates(self, callbacks_name: str) -> None:  # noqa: DOC101,DOC103

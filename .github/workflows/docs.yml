@@ -39,10 +39,12 @@ on:
     types: [completed]
     branches: [main]
 
+# Default to the minimum any job needs (a checkout). The Pages-write /
+# OIDC token grants live on ``deploy-docs`` only — ``build-docs`` runs on
+# PRs (including from forks) and never publishes, so least privilege keeps
+# Pages write off the PR path entirely.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Serialize Pages deploys: cancel-in-progress: false lets an in-flight deploy
 # finish (avoids a half-published site) while still queuing the next one.
@@ -62,6 +64,11 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Inherits the workflow-level ``contents: read`` and adds nothing — the
+    # PR job has no business with Pages write or OIDC. Pinned explicitly so
+    # a future workflow-level grant can't silently re-broaden this job.
+    permissions:
+      contents: read
     steps:
       - name: Checkout docs source
         uses: actions/checkout@v6
@@ -105,6 +112,12 @@ jobs:
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Pages publishing + OIDC token live on this job only — the build-docs
+    # PR job runs with the default ``contents: read`` and can't reach Pages.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
 
     environment:
       name: github-pages
