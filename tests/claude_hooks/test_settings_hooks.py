@@ -1,4 +1,4 @@
-"""Tests that ``.claude/settings.json`` hooks are scoped to the intended commands.
+"""Tests that Claude hook settings are scoped to the intended commands.
 
 Regression coverage for the bug where ``if:`` was placed on the matcher-entry
 object (sibling of ``matcher``/``hooks``/``description``). Claude Code silently
@@ -158,6 +158,12 @@ _EXPECTED_HANDLER_SCOPES: list[tuple[str, str]] = [
     ("PR review resolver", "Bash(git push *)"),
 ]
 
+_EXPECTED_SHARED_HOOK_COMMANDS: list[tuple[str, str]] = [
+    ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
+    ("Doc-drift advisory review", "bash agent/hooks/doc-drift.sh"),
+    ("PR review resolver", "bash agent/hooks/pr-review-resolver.sh"),
+]
+
 
 @pytest.mark.parametrize(("description_substring", "expected_if"), _EXPECTED_HANDLER_SCOPES)
 def test_named_handlers_carry_expected_if_scope(
@@ -174,6 +180,21 @@ def test_named_handlers_carry_expected_if_scope(
         f"got {handler.get('if')!r} (missing or wrong scope means this hook fires on "
         "every Bash call)"
     )
+
+
+@pytest.mark.parametrize(
+    ("description_substring", "expected_command"), _EXPECTED_SHARED_HOOK_COMMANDS
+)
+def test_named_handlers_use_shared_agent_hook_paths(
+    description_substring: str, expected_command: str
+) -> None:
+    """Claude settings invoke shared agent hook implementations where available.
+
+    :param description_substring: Substring identifying the matcher-entry's description.
+    :param expected_command: The shared hook command the handler must execute.
+    """
+    handler = _find_handler(description_substring)
+    assert handler.get("command") == expected_command
 
 
 # ---------------------------------------------------------------------------

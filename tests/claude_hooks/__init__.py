@@ -1,1 +1,1 @@
-"""Tests for .claude/settings.json hook scoping and behavior."""
+"""Tests for Claude hook settings scoping and behavior."""
