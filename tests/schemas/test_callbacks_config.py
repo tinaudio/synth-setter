@@ -53,7 +53,6 @@ class TestCallbacksConfigAcceptsEveryComposition:
                 f"({type(callbacks_subtree).__name__}); schema covers dict form only"
             )
         parsed = CallbacksConfig.model_validate(callbacks_subtree)
-        # No truthiness assert: ``none.yaml`` validates as an empty RootModel.
         assert isinstance(parsed, CallbacksConfig)
 
 

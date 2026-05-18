@@ -22,7 +22,11 @@ _DEFAULT_OVERRIDES = ["data=ksin", "model=ffn", "trainer=cpu"]
 
 @pytest.fixture(autouse=True)
 def clean_global_hydra() -> Iterator[None]:
-    """Clear Hydra's global singleton before and after every test in this package."""
+    """Clear Hydra's singleton before the test; assert (don't clear) after.
+
+    Teardown only asserts the singleton is clean — leaking state must surface as a loud failure,
+    not get silently swept away.
+    """
     if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
     yield

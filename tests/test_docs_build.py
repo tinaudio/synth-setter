@@ -104,10 +104,24 @@ def built_site(  # noqa: DOC101,DOC103,DOC201,DOC203
     return site_dir
 
 
+def _read_page_html(built_site: Path, page: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203
+    """Read ``<built_site>/<page>/index.html`` with an actionable miss message.
+
+    Pre-asserts ``is_file()`` so a missing page surfaces as a readable
+    assertion instead of a bare ``FileNotFoundError`` from ``read_text``.
+    """
+    page_html = built_site / page / "index.html"
+    assert page_html.is_file(), (
+        f"{page_html} missing from built site — mkdocs did not emit "
+        f"{page} (see test_docs_page_emitted for the per-page check)"
+    )
+    return page_html.read_text()
+
+
 @pytest.fixture(scope="session")
 def page_html_cache(built_site: Path) -> dict[str, str]:  # noqa: DOC101,DOC103,DOC201,DOC203
     """Memoised HTML text for each config-reference page."""
-    return {page: (built_site / page / "index.html").read_text() for page in _PAGE_TO_MODELS}
+    return {page: _read_page_html(built_site, page) for page in _PAGE_TO_MODELS}
 
 
 @pytest.mark.parametrize("page", list(_PAGE_TO_MODELS))
