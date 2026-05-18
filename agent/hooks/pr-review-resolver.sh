@@ -67,13 +67,13 @@ log "sleeping ${SLEEP_SECS}s"
 sleep "$SLEEP_SECS"
 
 CURRENT_TOKEN=$(cat "$LOCKFILE" 2>/dev/null || true)
-if [ "$CURRENT_TOKEN" != "$TOKEN" ]; then
+if [[ "$CURRENT_TOKEN" != "$TOKEN" ]]; then
   log "superseded by newer push (lock now ${CURRENT_TOKEN}), exiting"
   exit 0
 fi
 
 PR=$(gh pr view --json number -q .number 2>/dev/null || true)
-if [ -z "$PR" ]; then
+if [[ -z "$PR" ]]; then
   log "no PR for branch ${BRANCH}, exiting"
   exit 0
 fi
@@ -90,7 +90,7 @@ REVIEW_ID=$(gen_id)
 REVIEW_FILE="${REVIEWS_DIR}/pr-review-resolver-${REVIEW_ID}.md"
 STDERR_FILE="${REVIEWS_DIR}/pr-review-resolver-${REVIEW_ID}.stderr"
 
-if [ "${RESOLVER_DRY_RUN:-0}" = "1" ]; then
+if [[ "${RESOLVER_DRY_RUN:-0}" == "1" ]]; then
   log "DRY_RUN: writing stub report"
   printf '# pr-review-resolver (dry-run)\nPR: #%s\nBranch: %s\n\n## Prompt\n%s\n' \
     "$PR" "$BRANCH" "$PROMPT" > "$REVIEW_FILE"

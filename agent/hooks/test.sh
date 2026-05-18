@@ -37,7 +37,7 @@ STUBS="$TEST_DIR/stubs"
 mkdir -p "$STUBS"
 cat > "$STUBS/claude" <<'EOF'
 #!/usr/bin/env bash
-if [ "${AGENT_STUB_FAIL:-0}" = "1" ]; then
+if [[ "${AGENT_STUB_FAIL:-0}" == "1" ]]; then
   echo "simulated headless agent auth failure" >&2
   exit 3
 fi
@@ -47,8 +47,8 @@ EOF
 cat > "$STUBS/gh" <<'EOF'
 #!/usr/bin/env bash
 # $GH_STUB_PR governs what `gh pr view` returns. Empty = no PR.
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  if [ -n "${GH_STUB_PR:-}" ]; then
+if [[ "$1" == "pr" && "$2" == "view" ]]; then
+  if [[ -n "${GH_STUB_PR:-}" ]]; then
     echo "${GH_STUB_PR}"
     exit 0
   fi
@@ -77,7 +77,7 @@ echo "== doc-drift.sh =="
 # 1. Non-matching command → exit 0, no report.
 reset_sandbox
 out=$(echo '{"tool_input":{"command":"echo hello"}}' | bash agent/hooks/doc-drift.sh 2>&1; echo "EXIT:$?")
-if [[ "$out" == *"EXIT:0"* ]] && [ ! -d .agent-reviews ]; then
+if [[ "$out" == *"EXIT:0"* ]] && [[ ! -d .agent-reviews ]]; then
   pass "non-matching command exits 0 silently"
 else
   fail "non-matching command exits 0 silently" "$out"
@@ -87,7 +87,7 @@ fi
 reset_sandbox
 export GH_STUB_PR=42
 out=$(echo '{"tool_input":{"command":"echo testing the gh pr create matcher"}}' | bash agent/hooks/doc-drift.sh 2>&1; echo "EXIT:$?")
-if [[ "$out" == *"EXIT:0"* ]] && [ ! -d .agent-reviews ]; then
+if [[ "$out" == *"EXIT:0"* ]] && [[ ! -d .agent-reviews ]]; then
   pass "quoted 'gh pr create' substring inside echo does NOT trigger (word-boundary match)"
 else
   fail "quoted substring should not trigger" "$out"
@@ -110,7 +110,7 @@ export GH_STUB_PR=42 DOC_DRIFT_DRY_RUN=1
 stderr_file="$TEST_DIR/stderr.txt"
 out=$(echo '{"tool_input":{"command":"gh pr create --title x"}}' | bash agent/hooks/doc-drift.sh 2>"$stderr_file"; echo "EXIT:$?")
 report=$(find .agent-reviews -maxdepth 1 -name 'doc-drift-*.md' 2>/dev/null | head -1)
-if [[ "$out" == *"EXIT:2"* ]] && [ -n "$report" ] && grep -q "PR #42" "$stderr_file"; then
+if [[ "$out" == *"EXIT:2"* ]] && [[ -n "$report" ]] && grep -q "PR #42" "$stderr_file"; then
   pass "gh pr create with PR → exit 2, report written, stderr points to it"
 else
   fail "gh pr create with PR" "exit=$out report=$report stderr=$(cat "$stderr_file")"
@@ -129,7 +129,7 @@ export GH_STUB_PR=42 AGENT_STUB_FAIL=1
 unset DOC_DRIFT_DRY_RUN
 out=$(echo '{"tool_input":{"command":"gh pr create --title x"}}' | bash agent/hooks/doc-drift.sh 2>&1; echo "EXIT:$?")
 report=$(find .agent-reviews -maxdepth 1 -name 'doc-drift-*.md' 2>/dev/null | head -1)
-if [[ "$out" == *"EXIT:2"* ]] && [ -n "$report" ] \
+if [[ "$out" == *"EXIT:2"* ]] && [[ -n "$report" ]] \
    && grep -q "FAILED" "$report" \
    && grep -q "exit code" "$report" \
    && grep -q "simulated headless agent auth failure" "$report"; then
@@ -150,7 +150,7 @@ export RESOLVER_SLEEP_SECS=1 RESOLVER_DRY_RUN=1
 # 5. Non-matching command → exit 0.
 reset_sandbox
 out=$(echo '{"tool_input":{"command":"git commit -m x"}}' | bash agent/hooks/pr-review-resolver.sh 2>&1; echo "EXIT:$?")
-if [[ "$out" == *"EXIT:0"* ]] && [ ! -d .agent-reviews ]; then
+if [[ "$out" == *"EXIT:0"* ]] && [[ ! -d .agent-reviews ]]; then
   pass "non-matching command exits 0 silently"
 else
   fail "non-matching command exits 0 silently" "$out"
@@ -159,7 +159,7 @@ fi
 # 5b. Commit message containing 'git push' substring → no match.
 reset_sandbox
 out=$(echo '{"tool_input":{"command":"git commit -m \"fix git push bug\""}}' | bash agent/hooks/pr-review-resolver.sh 2>&1; echo "EXIT:$?")
-if [[ "$out" == *"EXIT:0"* ]] && [ ! -d .agent-reviews ]; then
+if [[ "$out" == *"EXIT:0"* ]] && [[ ! -d .agent-reviews ]]; then
   pass "quoted 'git push' substring inside commit message does NOT trigger"
 else
   fail "quoted substring should not trigger resolver" "$out"
@@ -171,7 +171,7 @@ git checkout -q -b main 2>/dev/null || git checkout -q main
 start=$(date +%s)
 out=$(echo '{"tool_input":{"command":"git push origin main"}}' | bash agent/hooks/pr-review-resolver.sh 2>&1; echo "EXIT:$?")
 elapsed=$(($(date +%s) - start))
-if [[ "$out" == *"EXIT:0"* ]] && [ "$elapsed" -lt 2 ] && [ ! -d .agent-reviews ]; then
+if [[ "$out" == *"EXIT:0"* ]] && [[ "$elapsed" -lt 2 ]] && [[ ! -d .agent-reviews ]]; then
   pass "git push on main → exits 0 before sleeping"
 else
   fail "git push on main" "exit=$out elapsed=${elapsed}s"
@@ -194,7 +194,7 @@ export GH_STUB_PR=99
 stderr_file="$TEST_DIR/stderr.txt"
 out=$(echo '{"tool_input":{"command":"git push"}}' | bash agent/hooks/pr-review-resolver.sh 2>"$stderr_file"; echo "EXIT:$?")
 report=$(find .agent-reviews -maxdepth 1 -name 'pr-review-resolver-*.md' 2>/dev/null | head -1)
-if [[ "$out" == *"EXIT:2"* ]] && [ -n "$report" ] && grep -q "PR #99" "$stderr_file"; then
+if [[ "$out" == *"EXIT:2"* ]] && [[ -n "$report" ]] && grep -q "PR #99" "$stderr_file"; then
   pass "feature branch push with PR → exit 2, report written"
 else
   fail "feature branch push with PR" "exit=$out report=$report"
@@ -219,7 +219,7 @@ mkdir -p .agent-reviews
 echo "intruder-token" > .agent-reviews/.resolver-feature-x.lock
 wait "$bg_pid"
 bg_exit=$(cat "$TEST_DIR/bg_exit")
-if [ "$bg_exit" = "0" ] && ! compgen -G ".agent-reviews/pr-review-resolver-*.md" >/dev/null; then
+if [[ "$bg_exit" == "0" ]] && ! compgen -G ".agent-reviews/pr-review-resolver-*.md" >/dev/null; then
   pass "lockfile dedupe: superseded run exits 0 with no report"
 else
   report_glob=$(compgen -G ".agent-reviews/pr-review-resolver-*.md" 2>/dev/null || true)
@@ -233,4 +233,4 @@ echo
 echo "== Summary =="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"
-[ "$FAIL" -eq 0 ]
+[[ "$FAIL" -eq 0 ]]

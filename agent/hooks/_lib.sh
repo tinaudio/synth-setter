@@ -34,7 +34,7 @@ gen_id() {
   # Portable unique ID for report filenames and lock tokens.
   if command -v uuidgen >/dev/null 2>&1; then
     uuidgen
-  elif [ -r /proc/sys/kernel/random/uuid ]; then
+  elif [[ -r /proc/sys/kernel/random/uuid ]]; then
     cat /proc/sys/kernel/random/uuid
   else
     printf '%s-%s' "$(date +%s)" "$$"
@@ -49,7 +49,7 @@ default_branch() {
   #   4. 'main' (final fallback)
   local ref
   ref=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)
-  if [ -n "$ref" ]; then
+  if [[ -n "$ref" ]]; then
     echo "${ref##*/}"
     return 0
   fi
@@ -71,16 +71,16 @@ has_skill() {
     "agent/skills/${name}/SKILL.md"
     ".claude/skills/${name}/SKILL.md"
   )
-  if [ -n "$home" ]; then
+  if [[ -n "$home" ]]; then
     paths+=(
       "${home}/.claude/skills/${name}/SKILL.md"
       "${home}/.codex/skills/${name}/SKILL.md"
     )
   fi
   local common_dir repo_root
-  if common_dir=$(git rev-parse --git-common-dir 2>/dev/null) && [ -n "$common_dir" ]; then
+  if common_dir=$(git rev-parse --git-common-dir 2>/dev/null) && [[ -n "$common_dir" ]]; then
     repo_root=$(cd "$common_dir/.." 2>/dev/null && pwd)
-    if [ -n "$repo_root" ]; then
+    if [[ -n "$repo_root" ]]; then
       paths+=(
         "${repo_root}/agent/skills/${name}/SKILL.md"
         "${repo_root}/.claude/skills/${name}/SKILL.md"
@@ -88,14 +88,14 @@ has_skill() {
     fi
   fi
   for p in "${paths[@]}"; do
-    [ -f "$p" ] && return 0
+    [[ -f "$p" ]] && return 0
   done
-  if [ -n "$home" ]; then
+  if [[ -n "$home" ]]; then
     for p in "${home}"/.claude/plugins/*/skills/"${name}"/SKILL.md; do
-      [ -f "$p" ] && return 0
+      [[ -f "$p" ]] && return 0
     done
     for p in "${home}"/.codex/plugins/*/skills/"${name}"/SKILL.md; do
-      [ -f "$p" ] && return 0
+      [[ -f "$p" ]] && return 0
     done
   fi
   return 1
@@ -103,9 +103,9 @@ has_skill() {
 
 run_agent_prompt() {
   local prompt="$1"
-  if [ "${AGENT_HEADLESS:-}" = "codex" ]; then
+  if [[ "${AGENT_HEADLESS:-}" == "codex" ]]; then
     codex exec "$prompt"
-  elif [ "${AGENT_HEADLESS:-}" = "claude" ]; then
+  elif [[ "${AGENT_HEADLESS:-}" == "claude" ]]; then
     claude -p "$prompt"
   elif command -v claude >/dev/null 2>&1; then
     claude -p "$prompt"

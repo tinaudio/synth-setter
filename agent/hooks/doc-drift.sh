@@ -44,7 +44,7 @@ log "matched: ${COMMAND}"
 BRANCH=$(git branch --show-current 2>/dev/null || true)
 PR=$(gh pr view --json number -q .number 2>/dev/null || true)
 
-if [ -z "$PR" ]; then
+if [[ -z "$PR" ]]; then
   log "no PR found for branch ${BRANCH:-?}, skipping"
   exit 0
 fi
@@ -71,7 +71,7 @@ REVIEW_ID=$(gen_id)
 REVIEW_FILE="${REVIEWS_DIR}/doc-drift-${REVIEW_ID}.md"
 STDERR_FILE="${REVIEWS_DIR}/doc-drift-${REVIEW_ID}.stderr"
 
-if [ "${DOC_DRIFT_DRY_RUN:-0}" = "1" ]; then
+if [[ "${DOC_DRIFT_DRY_RUN:-0}" == "1" ]]; then
   log "DRY_RUN: writing stub report"
   printf '# doc-drift (dry-run)\nPR: #%s\nBranch: %s\nBase: %s\n\n## Prompt\n%s\n' \
     "$PR" "$BRANCH" "$BASE_BRANCH" "$PROMPT" > "$REVIEW_FILE"

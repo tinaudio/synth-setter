@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in *.env|*.env.*|*.pem|*.key) echo 'BLOCKED: Cannot edit credential/secret files (.env, .pem, .key)' >&2; exit 1;; *) exit 0;; esac"
+            "command": "bash agent/hooks/edit-write.sh credential-protect"
           }
         ]
       },
@@ -24,7 +24,7 @@
           {
             "type": "command",
             "if": "Bash(git commit *)",
-            "command": "branch=$(git branch --show-current 2>/dev/null || true); if [ -z \"$branch\" ]; then branch=\"DETACHED HEAD\"; fi; echo \"Committing to branch: $branch\" >&2"
+            "command": "branch=$(git branch --show-current 2>/dev/null || true); if [[ -z \"$branch\" ]]; then branch=\"DETACHED HEAD\"; fi; echo \"Committing to branch: $branch\" >&2"
           }
         ]
       },
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in *.py) ruff check --fix --quiet \"$file_path\" 2>/dev/null; ruff format --quiet \"$file_path\" 2>/dev/null;; *.md) pre-commit run mdformat --files \"$file_path\" >/dev/null 2>&1 || true;; *.yaml|*.yml) pre-commit run prettier --files \"$file_path\" >/dev/null 2>&1 || true;; esac; exit 0"
+            "command": "bash agent/hooks/edit-write.sh format"
           }
         ]
       },
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "file_path=$(echo \"$CLAUDE_TOOL_INPUT\" | grep -oE '\"file_path\"\\s*:\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); case \"$file_path\" in */src/*|*/scripts/*) base=$(basename \"$file_path\" .py); test_file=\"tests/test_${base}.py\"; if [ -f \"$test_file\" ]; then echo \"Running $test_file\" >&2; pytest \"$test_file\" -x -q --no-header --tb=short 2>&1 | tail -5 >&2; fi;; */tests/*) echo \"Running $file_path\" >&2; pytest \"$file_path\" -x -q --no-header --tb=short 2>&1 | tail -5 >&2;; esac; exit 0"
+            "command": "bash agent/hooks/edit-write.sh test"
           }
         ]
       },

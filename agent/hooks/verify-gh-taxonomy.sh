@@ -111,14 +111,14 @@ TOOL_RESPONSE=$(echo "$INPUT" | jq -r '.tool_response // empty')
 # includes "Shell cwd was reset to .../synth-setter" when cwd changes.
 # For addSubIssue mutations, check the GraphQL query in the command string.
 # ---------------------------------------------------------------------------
-if [ "$MODE" = "hierarchy" ]; then
+if [[ "$MODE" == "hierarchy" ]]; then
   if ! echo "$COMMAND" | grep -qE 'owner.*synth-setter|repo.*synth-setter'; then
     exit 0
   fi
 else
   # Extract the GitHub URL (PR or issue) and check if it's synth-setter
   GITHUB_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/(pull|issues)/[0-9]+' | head -1)
-  if [ -z "$GITHUB_URL" ]; then exit 0; fi
+  if [[ -z "$GITHUB_URL" ]]; then exit 0; fi
   if ! echo "$GITHUB_URL" | grep -q 'synth-setter'; then
     exit 0
   fi
@@ -171,9 +171,9 @@ query_issue_metadata() {
 # ---------------------------------------------------------------------------
 check_ci_minimum() {
   local missing=""
-  [ -z "$ISSUE_TYPE" ] && missing="${missing} issue-type"
-  [ "$HAS_DOMAIN" = "false" ] && missing="${missing} domain-label"
-  [ -z "$MILESTONE" ] && missing="${missing} milestone"
+  [[ -z "$ISSUE_TYPE" ]] && missing="${missing} issue-type"
+  [[ "$HAS_DOMAIN" == "false" ]] && missing="${missing} domain-label"
+  [[ -z "$MILESTONE" ]] && missing="${missing} milestone"
   echo "$missing"
 }
 
@@ -197,7 +197,7 @@ check_project_fields() {
   ' -f owner="$OWNER" -f repo="$REPO" -F number="$issue_num" \
     --jq '.data.repository.issue.id' 2>/dev/null || echo "")
 
-  if [ -z "$node_id" ]; then
+  if [[ -z "$node_id" ]]; then
     echo " project-board priority"
     return
   fi
@@ -232,7 +232,7 @@ check_project_fields() {
   on_board=$(echo "$project_result" | jq -r '.data.node.projectItems.nodes | length' 2>/dev/null || echo "0")
 
   local missing=""
-  if [ "$on_board" = "0" ]; then
+  if [[ "$on_board" == "0" ]]; then
     missing="${missing} project-board priority"
   else
     # Check if Priority field is set on any project item
@@ -241,7 +241,7 @@ check_project_fields() {
       [.data.node.projectItems.nodes[].fieldValues.nodes[]
         | select(.field.name == "Priority")
         | .name] | length' 2>/dev/null || echo "0")
-    if [ "$has_priority" = "0" ]; then
+    if [[ "$has_priority" == "0" ]]; then
       missing="${missing} priority"
     fi
   fi
@@ -260,7 +260,7 @@ check_epic_lineage() {
   local current="$issue_num"
   local depth=0
 
-  while [ "$depth" -lt 4 ]; do
+  while [[ "$depth" -lt 4 ]]; do
     local result
     # shellcheck disable=SC2016
     result=$(gh api graphql -f query='
@@ -280,14 +280,14 @@ check_epic_lineage() {
 
     local type
     type=$(echo "$result" | jq -r '.issueType.name // empty' 2>/dev/null) || type=""
-    if [ "$type" = "Epic" ]; then
+    if [[ "$type" == "Epic" ]]; then
       echo "ok"
       return
     fi
 
     local parent_num
     parent_num=$(echo "$result" | jq -r '.parent.number // empty' 2>/dev/null) || parent_num=""
-    if [ -z "$parent_num" ] || [ "$parent_num" = "null" ]; then
+    if [[ -z "$parent_num" || "$parent_num" == "null" ]]; then
       break
     fi
     current="$parent_num"
@@ -301,10 +301,10 @@ check_epic_lineage() {
 # ===========================================================================
 # MODE: pr — runs after `gh pr create`
 # ===========================================================================
-if [ "$MODE" = "pr" ]; then
+if [[ "$MODE" == "pr" ]]; then
   # Step 1: Extract PR number from the tool response URL.
   PR_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1)
-  if [ -z "$PR_URL" ]; then exit 0; fi
+  if [[ -z "$PR_URL" ]]; then exit 0; fi
   PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$')
 
   # Step 2: Check the PR body for issue references (Fixes/Closes/Refs #N).
@@ -314,17 +314,11 @@ if [ "$MODE" = "pr" ]; then
 
   # Fallback: check for any #N reference in the body (matches bare #N and
   # markdown hyperlinks like [#399](url)), same as pr-metadata-gate.yaml.
-  if [ -z "$ISSUE_NUMS" ]; then
+  if [[ -z "$ISSUE_NUMS" ]]; then
     ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${PR_NUM}$" || true)
   fi
 
-  # Fallback: check for any #N reference in the body (matches bare #N and
-  # markdown hyperlinks like [#399](url)), same as pr-metadata-gate.yaml.
-  if [ -z "$ISSUE_NUMS" ]; then
-    ISSUE_NUMS=$(echo "$PR_BODY" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${PR_NUM}$" || true)
-  fi
-
-  if [ -z "$ISSUE_NUMS" ]; then
+  if [[ -z "$ISSUE_NUMS" ]]; then
     echo '{"decision":"block","reason":"PR has no linked issue reference. Acceptable patterns include Fixes #N / Closes #N / Refs #N or any bare #N reference in the PR body. The pr-metadata-gate CI check will fail."}'
     exit 0
   fi
@@ -336,26 +330,26 @@ if [ "$MODE" = "pr" ]; then
     query_issue_metadata "$ISSUE_NUM"
     CI_MISSING=$(check_ci_minimum)
 
-    if [ -n "$CI_MISSING" ]; then
+    if [[ -n "$CI_MISSING" ]]; then
       echo "{\"decision\":\"block\",\"reason\":\"Issue #${ISSUE_NUM} is missing taxonomy metadata:${CI_MISSING}. Fix before the pr-metadata-gate CI check fails.\"}"
       exit 0
     fi
 
     # Check epic lineage — the pr-metadata-gate CI workflow requires it.
     LINEAGE=$(check_epic_lineage "$ISSUE_NUM")
-    if [ "$LINEAGE" != "ok" ]; then
+    if [[ "$LINEAGE" != "ok" ]]; then
       echo "{\"decision\":\"block\",\"reason\":\"Issue #${ISSUE_NUM} does not trace to any Epic. Add it as a sub-issue of the appropriate Phase/Epic — the pr-metadata-gate epic lineage check will fail.\"}"
       exit 0
     fi
 
     # CI gate will pass, but check the full taxonomy lifecycle too.
     PROJECT_MISSING=$(check_project_fields "$ISSUE_NUM")
-    if [ -n "$PROJECT_MISSING" ]; then
+    if [[ -n "$PROJECT_MISSING" ]]; then
       WARNINGS="${WARNINGS}Issue #${ISSUE_NUM} is missing:${PROJECT_MISSING}. "
     fi
   done
 
-  if [ -n "$WARNINGS" ]; then
+  if [[ -n "$WARNINGS" ]]; then
     echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Taxonomy check passed (CI gate OK), but full lifecycle incomplete: ${WARNINGS}Add to project board and set priority before merging.\"}}"
   else
     echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Taxonomy check passed: linked issue(s) have issue type, domain label, and milestone."}}'
@@ -365,10 +359,10 @@ if [ "$MODE" = "pr" ]; then
 # ===========================================================================
 # MODE: issue — runs after `gh issue create`
 # ===========================================================================
-elif [ "$MODE" = "issue" ]; then
+elif [[ "$MODE" == "issue" ]]; then
   # Extract the issue number from the tool response URL.
   ISSUE_URL=$(echo "$TOOL_RESPONSE" | grep -oE 'https://github.com/[^/]+/[^/]+/issues/[0-9]+' | head -1)
-  if [ -z "$ISSUE_URL" ]; then exit 0; fi
+  if [[ -z "$ISSUE_URL" ]]; then exit 0; fi
   ISSUE_NUM=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
 
   # Check the CI minimum three. At this point, issue type is often not yet
@@ -377,7 +371,7 @@ elif [ "$MODE" = "issue" ]; then
   query_issue_metadata "$ISSUE_NUM"
   CI_MISSING=$(check_ci_minimum)
 
-  if [ -n "$CI_MISSING" ]; then
+  if [[ -n "$CI_MISSING" ]]; then
     echo "{\"decision\":\"block\",\"reason\":\"Issue #${ISSUE_NUM} is missing taxonomy metadata:${CI_MISSING}. Set these now before proceeding. Then add to sub-issue hierarchy, project board, and set priority.\"}"
     exit 0
   fi
@@ -388,13 +382,13 @@ elif [ "$MODE" = "issue" ]; then
 # ===========================================================================
 # MODE: hierarchy — runs after `addSubIssue` GraphQL mutation
 # ===========================================================================
-elif [ "$MODE" = "hierarchy" ]; then
+elif [[ "$MODE" == "hierarchy" ]]; then
   # Validate that Tasks/Bugs/Features are attached to Phases, not directly
   # to Epics. The taxonomy hierarchy is: Epic → Phase → Task/Bug/Feature.
   #
   # Extract issue node IDs (format: I_kw...) from the GraphQL mutation command.
   NODE_IDS=$(echo "$COMMAND" | grep -oE 'I_kw[A-Za-z0-9_/+=.-]+' || true)
-  if [ -z "$NODE_IDS" ]; then exit 0; fi
+  if [[ -z "$NODE_IDS" ]]; then exit 0; fi
 
   PARENT_TYPE=""
   PARENT_NUM=""
@@ -430,7 +424,7 @@ elif [ "$MODE" = "hierarchy" ]; then
   done
 
   # Block if a leaf issue is attached directly to an Epic (must go under a Phase).
-  if [ "$PARENT_TYPE" = "Epic" ] && [ -n "$CHILD_TYPE" ]; then
+  if [[ "$PARENT_TYPE" == "Epic" && -n "$CHILD_TYPE" ]]; then
     echo "{\"decision\":\"block\",\"reason\":\"${CHILD_TYPE} #${CHILD_NUM} cannot be a direct child of Epic #${PARENT_NUM}. Task/Bug/Feature issues must be sub-issues of a Phase, not an Epic. Add it under the appropriate Phase instead.\"}"
     exit 0
   fi

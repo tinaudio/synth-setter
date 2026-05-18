@@ -159,6 +159,9 @@ _EXPECTED_HANDLER_SCOPES: list[tuple[str, str]] = [
 ]
 
 _EXPECTED_SHARED_HOOK_COMMANDS: list[tuple[str, str]] = [
+    ("Credential protection", "bash agent/hooks/edit-write.sh credential-protect"),
+    ("Auto-format", "bash agent/hooks/edit-write.sh format"),
+    ("Auto-test", "bash agent/hooks/edit-write.sh test"),
     ("Taxonomy verification", "bash agent/hooks/verify-gh-taxonomy.sh"),
     ("Doc-drift advisory review", "bash agent/hooks/doc-drift.sh"),
     ("PR review resolver", "bash agent/hooks/pr-review-resolver.sh"),
@@ -195,6 +198,43 @@ def test_named_handlers_use_shared_agent_hook_paths(
     """
     handler = _find_handler(description_substring)
     assert handler.get("command") == expected_command
+
+
+def test_edit_write_handlers_do_not_parse_file_path_with_grep() -> None:
+    """Edit/Write handlers must delegate JSON parsing to the shared jq-based hook."""
+    for description_substring, _expected_command in _EXPECTED_SHARED_HOOK_COMMANDS[:3]:
+        command = _find_handler(description_substring)["command"]
+        assert "grep -oE" not in command
+        assert "CLAUDE_TOOL_INPUT" not in command
+
+
+def test_credential_guard_uses_tool_input_file_path_not_embedded_text() -> None:
+    """Credential guard keys off ``.tool_input.file_path`` only.
+
+    This covers quoted ``file_path`` text inside edit payload content, which broke
+    the old grep/head/sed extraction.
+    """
+    command = _find_handler("Credential protection")["command"]
+    payload = {
+        "tool_input": {
+            "file_path": "src/example.py",
+            "old_string": '"file_path": ".env"',
+            "new_string": '"file_path": "secrets.pem"',
+        }
+    }
+
+    result = _run_inline_hook(command, payload)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_credential_guard_blocks_secret_file_path() -> None:
+    """Credential guard still blocks the actual ``.tool_input.file_path`` target."""
+    command = _find_handler("Credential protection")["command"]
+    result = _run_inline_hook(command, {"tool_input": {"file_path": ".env.local"}})
+
+    assert result.returncode == 1
+    assert "BLOCKED" in result.stderr
 
 
 # ---------------------------------------------------------------------------

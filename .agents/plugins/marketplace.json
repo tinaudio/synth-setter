@@ -1,0 +1,20 @@
+{
+  "name": "tinaudio",
+  "interface": {
+    "displayName": "Tinaudio"
+  },
+  "plugins": [
+    {
+      "name": "skills",
+      "source": {
+        "source": "github",
+        "repo": "tinaudio/skills"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

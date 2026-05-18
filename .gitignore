@@ -161,7 +161,7 @@ audio/
 checkpoints/
 
 # VST3
-plugins/
+/plugins/
 
 # Claude Code
 .claude/
