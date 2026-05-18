@@ -1200,6 +1200,8 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int
     samples_per_shard: int
+    reload_plugin_every_render: bool = True
+    open_gui_every_render: bool = True  # darwin-gated (#714)
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""

@@ -110,6 +110,31 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _current_platform() -> str:  # noqa: DOC201,DOC203
+    """Return ``sys.platform`` via a patchable indirection.
+
+    Reading ``sys.platform`` directly inside ``RenderConfig`` validators forces
+    tests to ``monkeypatch.setattr("...sys.platform", ...)`` — but ``spec.sys``
+    is the real ``sys`` module, so that mutation leaks into every other
+    consumer of ``sys.platform`` in the same interpreter (e.g. the
+    ``surge_xt_smoke_datasets`` fixture's headless-wrapper decision).
+    Routing through this helper keeps platform overrides local to ``spec``.
+    """
+    return sys.platform
+
+
+def _default_open_gui_every_render() -> bool:  # noqa: DOC201,DOC203
+    """Return the platform-aware default for ``RenderConfig.open_gui_every_render``.
+
+    Returns ``False`` on Darwin so a bare ``RenderConfig()`` constructor and a bare
+    Hydra render-config payload (e.g. ``configs/render/surge_xt.yaml``) construct
+    cleanly on macOS without tripping ``_open_gui_every_render_forbidden_on_darwin``
+    (#714). Returns ``True`` everywhere else to preserve the historical
+    render_params per-call show_editor warm-up.
+    """
+    return _current_platform() != "darwin"
+
+
 class ShardSpec(BaseModel):
     """Per-shard identity and pre-computed derived values."""
 
@@ -142,13 +167,13 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int = 32
     samples_per_shard: int
-    # Per-render plugin lifecycle knobs. Both default to ``True`` to preserve
-    # the historical render_params behavior (reload + warm-up editor every
-    # call); set either to ``False`` once a synth is known stable to skip the
-    # per-call cost. ``open_gui_every_render=True`` is rejected on Darwin —
-    # see ``_open_gui_every_render_forbidden_on_darwin``.
+    # Per-render plugin lifecycle knobs. ``reload_plugin_every_render`` defaults
+    # to ``True`` to preserve the historical render_params behavior.
+    # ``open_gui_every_render`` defaults platform-aware (``True`` on Linux,
+    # ``False`` on Darwin) so bare Hydra render configs construct cleanly on
+    # macOS; explicit ``True`` on Darwin is still rejected (#714).
     reload_plugin_every_render: bool = True
-    open_gui_every_render: bool = True
+    open_gui_every_render: bool = Field(default_factory=_default_open_gui_every_render)
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
@@ -172,19 +197,9 @@ class RenderConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _open_gui_every_render_forbidden_on_darwin(self) -> RenderConfig:
-        """Reject ``open_gui_every_render=True`` when running on Darwin.
-
-        show_editor accumulates AppKit/CGS commit-handler state per call in unbundled python and
-        triggers SIGTRAP after ~3-4 plugin reloads on Darwin (#714). The post-load process() flush
-        in render_params is sufficient to commit Surge XT's preset state — see preset-coverage
-        audit on #714 for the empirical justification.
-
-        :return: ``self`` unchanged when the combination is allowed.
-        :rtype: RenderConfig
-        :raises ValueError: ``open_gui_every_render=True`` on Darwin.
-        """
-        if self.open_gui_every_render and sys.platform == "darwin":
+    def _open_gui_every_render_forbidden_on_darwin(self) -> RenderConfig:  # noqa: DOC201,DOC203,DOC501,DOC503
+        """Reject ``open_gui_every_render=True`` on Darwin (SIGTRAP after ~3-4 reloads, #714)."""
+        if self.open_gui_every_render and _current_platform() == "darwin":
             raise ValueError(
                 "open_gui_every_render=True is not supported on Darwin: "
                 "show_editor accumulates AppKit/CGS commit-handler state per "

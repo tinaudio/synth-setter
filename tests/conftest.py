@@ -49,21 +49,6 @@ _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 NUM_FIXTURE_SAMPLES = 5
 
 
-@pytest.fixture(autouse=True)
-def _force_non_darwin_render_config_platform(monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
-    """Pin the schema module's ``sys.platform`` to ``"linux"`` for every test.
-
-    ``RenderConfig.open_gui_every_render`` defaults to ``True``; on Darwin the
-    ``_open_gui_every_render_forbidden_on_darwin`` model_validator rejects that
-    combination (#714). Every test that builds a ``RenderConfig`` or
-    ``DatasetSpec`` without overriding the flag would fail on a Darwin host
-    without this patch. Tests that specifically exercise the darwin gate
-    re-override ``synth_setter.pipeline.schemas.spec.sys.platform`` with their
-    own ``monkeypatch.setattr``.
-    """
-    monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "linux")
-
-
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
 # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
 # X11 wrapping lives at the audio-rendering boundary (the subprocess call),

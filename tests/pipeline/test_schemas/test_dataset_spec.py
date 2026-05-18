@@ -119,23 +119,52 @@ class TestRenderConfig:
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
 
-    def test_reload_and_open_gui_default_true(self, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
-        """Both per-render lifecycle flags default to True — historical render_params behavior.
-
-        Patch ``sys.platform`` to a non-darwin value so the default
-        ``open_gui_every_render=True`` is accepted regardless of the host
-        running the test suite.
-        """
-        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "linux")
+    def test_reload_defaults_true_open_gui_defaults_true_off_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Off Darwin both flags default to ``True`` (historical render_params behavior)."""
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
         cfg = RenderConfig(**_valid_render_kwargs())
         assert cfg.reload_plugin_every_render is True
         assert cfg.open_gui_every_render is True
+
+    def test_open_gui_default_is_false_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On Darwin the default factory yields ``False`` so bare ``RenderConfig()`` constructs.
+
+        Without the platform-aware default a bare Hydra render config that omits the
+        field would fail the ``_open_gui_every_render_forbidden_on_darwin`` validator
+        on macOS — see #714.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.open_gui_every_render is False
+        assert cfg.reload_plugin_every_render is True
+
+    def test_open_gui_and_reload_both_false_accepted(self) -> None:
+        """``(False, False)`` — the "skip both per-call costs" mode — constructs cleanly."""
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "reload_plugin_every_render": False,
+                "open_gui_every_render": False,
+            }
+        )
+        assert cfg.reload_plugin_every_render is False
+        assert cfg.open_gui_every_render is False
 
     def test_open_gui_every_render_true_rejected_on_darwin(  # noqa: DOC101,DOC103
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``open_gui_every_render=True`` on Darwin raises (SIGTRAP after ~3-4 reloads — #714)."""
-        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "darwin")
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
         with pytest.raises(
             ValidationError, match="open_gui_every_render=True is not supported on Darwin"
         ):
@@ -145,7 +174,9 @@ class TestRenderConfig:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``open_gui_every_render=False`` is the only valid setting on Darwin."""
-        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "darwin")
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
         cfg = RenderConfig(**{**_valid_render_kwargs(), "open_gui_every_render": False})
         assert cfg.open_gui_every_render is False
 
@@ -153,24 +184,28 @@ class TestRenderConfig:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``open_gui_every_render=True`` is fine on Linux/Windows — the gate is darwin-only."""
-        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "linux")
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
         cfg = RenderConfig(**{**_valid_render_kwargs(), "open_gui_every_render": True})
         assert cfg.open_gui_every_render is True
 
-    def test_reload_plugin_every_render_false_accepted_on_darwin(  # noqa: DOC101,DOC103
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("reload_flag", [True, False])
+    def test_reload_plugin_every_render_is_platform_independent_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch, reload_flag: bool
     ) -> None:
         """``reload_plugin_every_render`` is independent of platform — both values accepted."""
-        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "darwin")
-        for reload_flag in (True, False):
-            cfg = RenderConfig(
-                **{
-                    **_valid_render_kwargs(),
-                    "reload_plugin_every_render": reload_flag,
-                    "open_gui_every_render": False,
-                }
-            )
-            assert cfg.reload_plugin_every_render is reload_flag
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(
+            **{
+                **_valid_render_kwargs(),
+                "reload_plugin_every_render": reload_flag,
+                "open_gui_every_render": False,
+            }
+        )
+        assert cfg.reload_plugin_every_render is reload_flag
 
 
 # ---------------------------------------------------------------------------
