@@ -185,7 +185,7 @@ The block-scalar should contain only commands. The reader who wants to know *why
     - `schemas/` — Pydantic models (`DatasetSpec` + `RenderConfig` in `spec.py`, `prefix`, `image_config`; planned: report, card, sample — [#74](https://github.com/tinaudio/synth-setter/issues/74))
     - `ci/` — CI validation scripts (materialize_spec, validate_shard, validate_spec, load_image_config)
     - `data/` — dataset-shaping utilities (reshard, rewrite_to_latest, stats, r2_report; Phase 4, [#1005](https://github.com/tinaudio/synth-setter/issues/1005))
-    - `constants.py` — shared constants (R2 bucket, spec filename)
+    - `constants.py` — shared constants (spec filename; R2 bucket lives in `configs/r2/default.yaml`)
     - `skypilot_launch.py` — SkyPilot launcher CLI for the distributed pipeline
     - `stages/` — generate and finalize stage logic (planned — [#72](https://github.com/tinaudio/synth-setter/issues/72))
     - `backends/` — compute providers: local, RunPod (planned — [#71](https://github.com/tinaudio/synth-setter/issues/71))
