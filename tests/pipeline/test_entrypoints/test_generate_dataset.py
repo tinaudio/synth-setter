@@ -879,11 +879,12 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """compute_template=null routes to run(spec); dispatch_via_skypilot stays unused."""
+        """compute_template=null routes to run(spec) with a DatasetSpec; dispatch stays unused."""
         import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
 
-        # Compose for a real experiment so cfg.skypilot_launch resolves; override the plugin path
-        # to TEST_PLUGIN_VST3 so the version-check in run() (which we will mock out) doesn't matter.
+        # Use a real experiment so cfg.skypilot_launch resolves; override the plugin path
+        # to the test VST3 so run() — which we replace below — sees the right spec shape.
         argv = [
             "synth-setter-generate-dataset",
             "experiment=generate_dataset/smoke-shard",
@@ -896,18 +897,17 @@ class TestMainDispatchBranches:
         def _fake_run(spec: object) -> None:
             recorded["spec"] = spec
 
-        monkeypatch.setattr(gd, "run", _fake_run)
-        # Sentinel ensures dispatch_via_skypilot is not even imported on the local branch.
-        import synth_setter.pipeline.skypilot_launch as sl
-
-        def _explode(*args: object, **kwargs: object) -> None:
+        def _dispatch_must_not_fire(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("dispatch_via_skypilot must not be called on the local branch")
 
-        monkeypatch.setattr(sl, "dispatch_via_skypilot", _explode)
+        monkeypatch.setattr(gd, "run", _fake_run)
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
 
         gd.main()
 
-        assert "spec" in recorded, "run(spec) was not called"
+        spec = recorded.get("spec")
+        assert isinstance(spec, DatasetSpec)
+        assert spec.render.plugin_path == str(TEST_PLUGIN_VST3)
 
     def test_compute_template_set_calls_dispatch_via_skypilot(  # noqa: DOC101,DOC103
         self,
@@ -960,13 +960,14 @@ class TestMainDispatchBranches:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A `+skypilot_launch.cmd=…` override is rejected loudly — cmd is launcher-internal.
+        """A `+skypilot_launch.cmd=…` override is rejected before any dispatch fires.
 
         Hydra's struct-mode already rejects `skypilot_launch.cmd=…` (the key isn't in
         configs/skypilot_launch/default.yaml), so the guard runs on `+skypilot_launch.cmd=…`, which
         is Hydra's syntax for adding a previously-undeclared key.
         """
         import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
 
         argv = [
             "synth-setter-generate-dataset",
@@ -975,6 +976,15 @@ class TestMainDispatchBranches:
             "+skypilot_launch.cmd=rm -rf /",
         ]
         monkeypatch.setattr("sys.argv", argv)
+
+        def _run_must_not_fire(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("run must not be called when cmd is rejected")
+
+        def _dispatch_must_not_fire(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("dispatch_via_skypilot must not be called when cmd is rejected")
+
+        monkeypatch.setattr(gd, "run", _run_must_not_fire)
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _dispatch_must_not_fire)
 
         with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
             gd.main()

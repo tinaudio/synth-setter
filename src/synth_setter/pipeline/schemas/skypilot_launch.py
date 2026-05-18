@@ -1,14 +1,9 @@
 """SkyPilot launcher config schema.
 
-``SkypilotLaunchConfig`` is the Pydantic-validated payload that
-``synth_setter.pipeline.skypilot_launch.dispatch_via_skypilot`` consumes. It
-mirrors the click CLI's option set so the Hydra-driven entrypoint
-(``synth_setter.cli.generate_dataset.main``) and the legacy click CLI dispatch
-through the same launcher code path.
-
-The model intentionally captures *launcher* knobs only — anything the worker
-itself needs (R2 creds, WORKER_GIT_REF, etc.) is resolved separately via
-``resolve_worker_env`` from the ``.env`` file at ``env_file``.
+``SkypilotLaunchConfig`` is the Pydantic-validated payload consumed by
+``synth_setter.pipeline.skypilot_launch.dispatch_via_skypilot``. Captures
+*launcher* knobs only; worker-side secrets (R2 creds, WORKER_GIT_REF) are
+resolved separately via ``resolve_worker_env``.
 """
 
 from __future__ import annotations
@@ -17,15 +12,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class SkypilotLaunchConfig(BaseModel):  # noqa: DOC601,DOC603
-    """Validated SkyPilot launch parameters.
-
-    ``compute_template`` is the only field that actually selects whether to
-    dispatch — left None it signals to the Hydra entrypoint that this run
-    stays in-process. ``cmd`` is the bash command to inject as the
-    ``sky.Task`` ``run:`` block; populated by the Hydra entrypoint at dispatch
-    time from the current ``sys.argv`` overrides so the worker re-enters the
-    same Hydra composition via ``synth-setter-generate-dataset-from-hydra``.
-    """
+    """Validated SkyPilot launch parameters consumed by dispatch_via_skypilot."""
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 

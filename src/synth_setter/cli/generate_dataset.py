@@ -313,45 +313,27 @@ def _build_worker_cmd(overrides: list[str]) -> str:  # noqa: DOC203
 
 
 @hydra.main(version_base="1.3", config_path="../../../configs", config_name="dataset")
-def from_hydra(cfg: DictConfig) -> None:
-    """Worker-side ``@hydra.main`` entry: build the spec and render it in-process.
-
-    Exposed as the ``synth-setter-generate-dataset-from-hydra`` console script
-    and injected by :func:`main` as the ``run:`` block of each dispatched
-    ``sky.Task``. Re-enters the same Hydra composition the operator typed
-    locally so the worker's spec matches byte-for-byte; the ``skypilot_launch``
-    sub-tree is left composed but unread (it's a no-op on the worker side).
-
-    :param cfg: The Hydra-composed dataset cfg passed by ``@hydra.main``.
-    """
+def from_hydra(cfg: DictConfig) -> None:  # noqa: DOC101,DOC103
+    """Worker-side @hydra.main entry: build the spec and render it in-process."""
     run(spec_from_cfg(cfg))
 
 
 def main() -> None:
     """User-facing CLI: compose dataset cfg from argv, dispatch local or via SkyPilot.
 
-    Programmatic ``initialize_config_dir`` + ``compose`` instead of
-    ``@hydra.main`` so we can inspect ``cfg.skypilot_launch.compute_template``
-    and choose the dispatch branch before Hydra would otherwise hand the cfg
-    straight to the body. Trailing argv items are forwarded verbatim as Hydra
-    overrides (``experiment=foo data=ksin skypilot_launch.compute_template=…``);
-    when the worker re-enters via :func:`from_hydra`, the same argv is replayed
-    so the composition matches byte-for-byte across the launcher/worker boundary.
-
-    When ``cfg.skypilot_launch.compute_template`` is ``None`` the spec runs in
-    this process via :func:`run`; otherwise the spec is dispatched to the named
-    SkyPilot template via :func:`dispatch_via_skypilot`.
+    Programmatic ``initialize_config_dir`` + ``compose`` instead of ``@hydra.main``
+    so we can inspect ``cfg.skypilot_launch.compute_template`` and pick the dispatch
+    branch before Hydra would otherwise hand the cfg straight to the body. Trailing
+    argv items are replayed verbatim on the worker via :func:`from_hydra` so the
+    composition matches byte-for-byte across the launcher/worker boundary.
     """
     overrides = list(sys.argv[1:])
 
     with initialize_config_dir(version_base="1.3", config_dir=str(_CONFIG_DIR)):
         cfg = compose(config_name="dataset", overrides=overrides)
 
-    # Programmatic ``compose()`` doesn't populate ``hydra.runtime.output_dir``,
-    # so ``paths.output_dir = ${hydra:runtime.output_dir}`` would otherwise raise
-    # at the resolve step inside ``spec_from_cfg``. Pin to the repo root — the
-    # spec doesn't read these fields, but ``OmegaConf.to_container(resolve=True)``
-    # eagerly resolves every interpolation in the tree.
+    # Pin paths.* so spec_from_cfg's resolve step doesn't trip on the
+    # unset ${hydra:runtime.output_dir} interpolation under programmatic compose.
     cfg.paths.root_dir = str(_REPO_ROOT)
     cfg.paths.output_dir = str(_REPO_ROOT)
     cfg.paths.work_dir = str(_REPO_ROOT)
@@ -363,8 +345,7 @@ def main() -> None:
         run(spec)
         return
 
-    # Deferred so the local path doesn't pay the SkyPilot / click import cost
-    # (sky + click pull in heavy provider SDKs on import).
+    # Deferred — SkyPilot / click pull in heavy provider SDKs on import.
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
     sky_cfg = sky_cfg.model_copy(update={"cmd": _build_worker_cmd(overrides)})

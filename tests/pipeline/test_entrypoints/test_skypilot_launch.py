@@ -2731,8 +2731,13 @@ class TestDispatchViaSkypilot:
         with pytest.raises(ValueError, match="cmd"):
             dispatch_via_skypilot(spec, sky_cfg)
 
-    def test_yaml_run_block_conflicts_with_cmd(self, tmp_path: Path, fake_plugin: Path) -> None:  # noqa: DOC101,DOC103
-        """End-to-end conflict guard: YAML's run: + sky_cfg.cmd both present → raise before any side effect."""
+    def test_yaml_run_block_conflicts_with_cmd(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        mock_sky: MagicMock,
+    ) -> None:
+        """End-to-end conflict guard: YAML run + sky_cfg.cmd raises before any SkyPilot side effect."""
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
@@ -2741,6 +2746,7 @@ class TestDispatchViaSkypilot:
         sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
         with pytest.raises(ValueError, match="has a `run:` block"):
             dispatch_via_skypilot(spec, sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
 
     def test_missing_worker_env_raises(  # noqa: DOC101,DOC103
         self,
@@ -2912,6 +2918,35 @@ class TestDispatchViaSkypilot:
         with pytest.raises(ValueError, match=match):
             dispatch_via_skypilot(spec, sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
+
+    def test_job_name_falls_back_to_task_name_prefix_when_unset(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        patch_materialize_io: None,  # noqa: ARG002
+    ) -> None:
+        """job_name=None derives the synth-setter-smoke-<task_name[:8]> fallback."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name=None,
+        )
+
+        dispatch_via_skypilot(spec, sky_cfg)
+
+        submitted = mock_sky.jobs.launch.call_args.kwargs["name"]
+        assert submitted.startswith("synth-setter-smoke-")
+        # spec.task_name=="test-dispatch" → first 8 chars round-trip into the suffix.
+        assert submitted.endswith(spec.task_name[:8])
 
     def test_api_server_and_local_are_mutually_exclusive(  # noqa: DOC101,DOC103
         self,

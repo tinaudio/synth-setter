@@ -984,32 +984,15 @@ def _run_workers_from_doc(  # noqa: DOC203
 def dispatch_via_skypilot(spec: DatasetSpec, sky_cfg: SkypilotLaunchConfig) -> None:
     """Dispatch ``spec`` to the SkyPilot template named in ``sky_cfg``.
 
-    Caller invariants:
-    - ``sky_cfg.compute_template`` is a non-empty path to a SkyPilot Task YAML.
-      ``None`` is the "don't dispatch" sentinel and is the Hydra entrypoint's
-      responsibility; calling this function with ``None`` is a bug.
-    - ``sky_cfg.cmd`` is a non-empty bash command. It is injected as each
-      ``sky.Task`` ``run:`` block. If the YAML at ``compute_template`` already
-      has a ``run:`` block, this function raises rather than silently dropping
-      either value.
-
-    The function:
-    1. Loads the compute YAML and overlays ``cmd`` as its ``run:`` block.
-    2. Resolves worker env from ``sky_cfg.env_file`` and forwards the rclone
-       keys into the process env so the spec upload below picks them up.
-    3. Materializes a per-launch ``base_job_name`` (from ``sky_cfg.job_name`` or
-       the spec's ``task_name``), validates it against ``_JOB_NAME_RE``.
-    4. Bootstraps provider creds (skipped for the kubernetes ``local`` provider
-       and when ``SKYPILOT_API_SERVER_ENDPOINT`` is set).
-    5. Uploads the spec to R2 at ``skypilot-launcher-specs/<base_job_name>.json``
-       and forwards ``WORKER_SPEC_URI`` into the worker env so cmd-side code
-       that wants the spec by URI can still find it.
-    6. Fans out one managed job per rank.
+    ``sky_cfg.compute_template`` and ``sky_cfg.cmd`` must both be set;
+    ``None`` is the Hydra entrypoint's "don't dispatch" sentinel. If the
+    compute YAML already defines ``run:``, this function raises rather than
+    silently dropping either side.
 
     :param spec: Validated dataset spec to render on the worker(s).
     :param sky_cfg: Validated launcher configuration (compute_template + cmd required).
-    :raises ValueError: ``sky_cfg`` is missing required fields or has a conflicting
-        ``cmd``/``run:`` pair, or worker env vars are unresolved.
+    :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run:`` pair,
+        or unresolved worker env vars.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
     """
     if not sky_cfg.compute_template:
