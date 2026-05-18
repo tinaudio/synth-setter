@@ -382,7 +382,7 @@ ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq
 
 WORKDIR /home/build/synth-setter
 
@@ -432,7 +432,6 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       curl \
-      jq \
       tmux \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
