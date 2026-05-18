@@ -17,9 +17,11 @@ import h5py
 import numpy as np
 import webdataset as wds
 from loguru import logger
+from pedalboard import VST3Plugin
 from tqdm import trange
 
 from synth_setter.data.vst import param_specs
+from synth_setter.data.vst.core import load_plugin, load_preset
 from synth_setter.data.vst.generate_vst_dataset import (
     VSTDataSample,
     create_datasets_and_get_start_idx,
@@ -185,13 +187,15 @@ def _generate_sample_for_index(
     param_spec: ParamSpec,
     fixed_synth_params_list: list[dict[str, float]] | None,
     fixed_note_params_list: list[dict[str, int | tuple[float, float]]] | None,
+    plugin: VST3Plugin | None = None,
+    open_gui: bool = True,
 ) -> VSTDataSample:
     """Render the ``i``-th sample, picking up the ``(i - start_idx)``-th fixed-params entry.
 
     :param i: Absolute row index this call is rendering.
     :param start_idx: Row index of the first sample in this run (offset for resume).
-    :param plugin_path: Path to the VST3 bundle to load.
-    :param preset_path: Path to the ``.vstpreset`` to apply.
+    :param plugin_path: Path to the VST3 bundle to load (ignored when ``plugin`` is supplied).
+    :param preset_path: Path to the ``.vstpreset`` to apply (ignored when ``plugin`` is supplied).
     :param velocity: MIDI velocity in ``[0, 127]``.
     :param signal_duration_seconds: Duration of the rendered clip in seconds.
     :param sample_rate: Sample rate of the rendered clip in Hz.
@@ -200,6 +204,8 @@ def _generate_sample_for_index(
     :param param_spec: Parameter spec used to sample/encode parameters.
     :param fixed_synth_params_list: Optional pre-set synth params, indexed by ``i - start_idx``.
     :param fixed_note_params_list: Optional pre-set note params, indexed by ``i - start_idx``.
+    :param plugin: Optional pre-loaded plugin reused across the shard's renders.
+    :param open_gui: Forwarded to per-render reloads; ignored when ``plugin`` is supplied.
     :returns: The freshly rendered sample.
     :rtype: VSTDataSample
     """
@@ -219,6 +225,8 @@ def _generate_sample_for_index(
         fixed_note_params=(
             fixed_note_params_list[fixed_idx] if fixed_note_params_list is not None else None
         ),
+        plugin=plugin,
+        open_gui=open_gui,
     )
 
 
@@ -248,6 +256,16 @@ def _render_in_batches(
     num_samples = render_cfg.samples_per_shard
     sample_batch: list[VSTDataSample] = []
     sample_batch_start = start_idx
+    # When ``reload_plugin_every_render`` is False, load the plugin and apply the
+    # preset once for the whole shard; each render reuses the cached instance.
+    # When True, ``cached_plugin`` stays None and each ``render_params`` call
+    # reloads — the historical behaviour preserved as the default per #489.
+    cached_plugin: VST3Plugin | None = None
+    if not render_cfg.reload_plugin_every_render:
+        cached_plugin = load_plugin(
+            render_cfg.plugin_path, open_gui=render_cfg.open_gui_every_render
+        )
+        load_preset(cached_plugin, render_cfg.preset_path)
     for i in trange(start_idx, num_samples):
         logger.info(f"Making sample {i}")
         sample_batch.append(
@@ -264,6 +282,8 @@ def _render_in_batches(
                 param_spec=param_spec,
                 fixed_synth_params_list=fixed_synth_params_list,
                 fixed_note_params_list=fixed_note_params_list,
+                plugin=cached_plugin,
+                open_gui=render_cfg.open_gui_every_render,
             )
         )
         if len(sample_batch) == render_cfg.samples_per_render_batch:

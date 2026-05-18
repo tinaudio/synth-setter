@@ -995,6 +995,72 @@ def test_show_editor_warmup_does_not_change_rendered_audio() -> None:
             )
 
 
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@skip_no_vst
+def test_reload_per_render_matches_cached_plugin() -> None:
+    """Rendering with a cached plugin matches reloading per render to within audio thresholds.
+
+    Pins the safety claim behind ``reload_plugin_every_render=False``: the
+    cached-plugin path produces audio equivalent (under the same phase-robust
+    thresholds the round-trip tests use) to the historical reload-per-render
+    path on the surge_xt path. If this fails for a future synth, the test is
+    the early-warning that ``#705``'s "load once per shard" optimisation needs
+    a per-synth opt-in.
+    """
+    from synth_setter.data.vst.core import load_plugin, load_preset
+
+    n_renders = 3
+    pitch = _HARDCODED_NOTE_PARAMS["pitch"]
+    note_window = _HARDCODED_NOTE_PARAMS["note_start_and_end"]
+    assert isinstance(pitch, int)
+    assert isinstance(note_window, tuple)
+
+    def _render_n_reload() -> list[np.ndarray]:
+        return [
+            render_params(
+                _PLUGIN_PATH,
+                _HARDCODED_SYNTH_PARAMS,
+                pitch,
+                _VELOCITY,
+                note_window,
+                _DURATION,
+                _SAMPLE_RATE,
+                _CHANNELS,
+                preset_path=_PRESET_PATH,
+            )
+            for _ in range(n_renders)
+        ]
+
+    def _render_n_cached() -> list[np.ndarray]:
+        plugin = load_plugin(_PLUGIN_PATH, open_gui=False)
+        load_preset(plugin, _PRESET_PATH)
+        return [
+            render_params(
+                _PLUGIN_PATH,
+                _HARDCODED_SYNTH_PARAMS,
+                pitch,
+                _VELOCITY,
+                note_window,
+                _DURATION,
+                _SAMPLE_RATE,
+                _CHANNELS,
+                preset_path=_PRESET_PATH,
+                plugin=plugin,
+            )
+            for _ in range(n_renders)
+        ]
+
+    reloaded = _render_n_reload()
+    cached = _render_n_cached()
+
+    for i, target in enumerate(reloaded):
+        for j, pred in enumerate(cached):
+            _assert_audio_metrics_within_thresholds(
+                target, pred, label=f"reloaded[{i}] vs cached[{j}]"
+            )
+
+
 def test_make_dataset_raises_when_fixed_params_list_is_too_short(
     tmp_path: Path,
 ) -> None:

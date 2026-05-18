@@ -8,6 +8,7 @@ import librosa
 import numpy as np
 import rootutils
 from loguru import logger
+from pedalboard import VST3Plugin
 from pyloudnorm import Meter
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 
@@ -77,6 +78,9 @@ def generate_sample(
     preset_path: str,
     fixed_synth_params: dict[str, float] | None = None,
     fixed_note_params: dict[str, int | tuple[float, float]] | None = None,
+    *,
+    plugin: VST3Plugin | None = None,
+    open_gui: bool = True,
 ) -> VSTDataSample:
     """Render a single VST sample.
 
@@ -88,6 +92,15 @@ def generate_sample(
     so re-sampling note params alone almost never lifts a silent patch above
     ``min_loudness`` and the loop would run forever. When only ``fixed_note_params``
     is supplied, the synth is re-sampled each retry and the loop remains meaningful.
+
+    :param plugin: Optional pre-loaded plugin instance threaded through to
+        ``render_params``. When supplied, ``plugin_path`` / ``preset_path`` are
+        ignored on the render path (caller already loaded the plugin and applied
+        the preset). The shard-level cached-plugin path in ``writers._render_in_batches``
+        uses this; per-call callers leave it ``None``.
+    :param open_gui: Forwarded to ``render_params`` (and from there to
+        ``load_plugin``) on the per-call reload path. Ignored when ``plugin``
+        is supplied because the caller chose the warm-up policy when loading.
     """
     while True:
         if fixed_synth_params is None or fixed_note_params is None:
@@ -111,6 +124,8 @@ def generate_sample(
             sample_rate,
             channels,
             preset_path=preset_path,
+            plugin=plugin,
+            open_gui=open_gui,
         )
 
         meter = Meter(sample_rate)
