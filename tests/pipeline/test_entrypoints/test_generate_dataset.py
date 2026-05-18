@@ -850,12 +850,15 @@ class TestBuildWorkerCmd:
         assert "'task_name=value with space'" in cmd
 
     def test_cmd_handles_empty_overrides(self) -> None:
-        """No overrides → no trailing arguments after the entry-point name."""
+        """No overrides → bash one-liner is just cd + exec entry-point, no trailing space."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
         cmd = _build_worker_cmd([])
-        # No stray whitespace at the end; bash would tolerate it but it's a smell.
+        assert cmd.startswith("cd ")
+        assert " && exec synth-setter-generate-dataset-from-hydra" in cmd
         assert cmd.endswith("synth-setter-generate-dataset-from-hydra")
+        # No bash-interpretable trailing whitespace that would surface as an empty argv item.
+        assert cmd == cmd.rstrip()
 
 
 # ---------------------------------------------------------------------------
@@ -934,21 +937,44 @@ class TestMainDispatchBranches:
             recorded["sky_cfg"] = sky_cfg
 
         monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
-        # ``run`` must NOT be invoked on the dispatch branch.
-        monkeypatch.setattr(
-            gd,
-            "run",
-            lambda *_a, **_k: (_ for _ in ()).throw(
-                AssertionError("run must not be called on the dispatch branch")
-            ),
-        )
+
+        def _run_must_not_fire(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("run must not be called on the dispatch branch")
+
+        monkeypatch.setattr(gd, "run", _run_must_not_fire)
 
         gd.main()
 
         assert "sky_cfg" in recorded
         sky_cfg = recorded["sky_cfg"]
-        # cmd is built by _build_worker_cmd from the same overrides — sanity-check the shape.
         assert sky_cfg.compute_template == str(template)  # type: ignore[attr-defined]
         assert sky_cfg.cmd is not None  # type: ignore[attr-defined]
-        assert "synth-setter-generate-dataset-from-hydra" in sky_cfg.cmd  # type: ignore[attr-defined]
-        assert "experiment=generate_dataset/smoke-shard" in sky_cfg.cmd  # type: ignore[attr-defined]
+        # Every operator-supplied override (sans argv[0]) round-trips into the worker cmd
+        # so the worker reproduces this composition byte-for-byte.
+        for override in argv[1:]:
+            assert override in sky_cfg.cmd, (  # type: ignore[attr-defined]
+                f"override {override!r} missing from worker cmd: {sky_cfg.cmd!r}"  # type: ignore[attr-defined]
+            )
+
+    def test_operator_supplied_cmd_is_rejected(  # noqa: DOC101,DOC103
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A `+skypilot_launch.cmd=…` override is rejected loudly — cmd is launcher-internal.
+
+        Hydra's struct-mode already rejects `skypilot_launch.cmd=…` (the key isn't in
+        configs/skypilot_launch/default.yaml), so the guard runs on `+skypilot_launch.cmd=…`, which
+        is Hydra's syntax for adding a previously-undeclared key.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            "+skypilot_launch.cmd=rm -rf /",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
+            gd.main()

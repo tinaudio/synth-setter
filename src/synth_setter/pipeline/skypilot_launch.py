@@ -811,18 +811,7 @@ def _cancel_job(job_name: str) -> None:
         click.echo(f"[{job_name}] cancel failed: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# dispatch_via_skypilot — Hydra-driven entrypoint surface
-#
-# The click ``main`` above stays the operator-facing rich CLI. ``dispatch_via_skypilot``
-# is the parallel entrypoint that ``synth_setter.cli.generate_dataset.main`` calls when
-# ``cfg.skypilot_launch.compute_template`` is set, sharing the launcher's worker-env
-# resolution, R2 spec upload, per-rank fan-out, and provider-aware cred bootstrap — but
-# building each rank's ``sky.Task`` from a YAML dict whose ``run:`` block has been
-# replaced with ``sky_cfg.cmd``. Cmd injection is the only deliberate departure from
-# the click flow: the worker re-enters Hydra via ``synth-setter-generate-dataset-from-hydra``
-# rather than the WORKER_SPEC_URI / docker_entrypoint path the file-based templates use.
-# ---------------------------------------------------------------------------
+# --- Hydra-driven dispatch surface (see dispatch_via_skypilot docstring) ---
 
 
 def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:  # noqa: DOC203

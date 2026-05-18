@@ -46,11 +46,8 @@ from synth_setter.pipeline.partitioning import (  # noqa: E402
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig  # noqa: E402
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
 
-# Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
-# sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``
-# is a Hydra-output-dir interpolation source (see ``configs/dataset.yaml``); and
-# ``skypilot_launch`` is a dispatch-mode sub-tree consumed by :func:`main` before spec
-# construction.
+# Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
+# runtime, dispatch-mode sub-trees). See configs/dataset.yaml for the live set.
 _NON_SPEC_KEYS: tuple[str, ...] = (
     "data",
     "r2",
@@ -60,8 +57,7 @@ _NON_SPEC_KEYS: tuple[str, ...] = (
     "skypilot_launch",
 )
 
-# Resolved relative to this file so the entry-point runs from any cwd. ``parents[3]``
-# climbs ``cli/`` → ``synth_setter/`` → ``src/`` → repo root.
+# Resolve repo root from this file so the entry-point is cwd-independent.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CONFIG_DIR = _REPO_ROOT / "configs"
 
@@ -271,38 +267,49 @@ def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:  # noqa:
     time the launcher reads them; raises if the sub-tree isn't a mapping (which
     would mean a defaults-list misconfig at the YAML layer, not user input).
 
+    Operator-supplied ``skypilot_launch.cmd`` is rejected loudly here: ``cmd``
+    is launcher-internal (the worker-side bash one-liner :func:`main` builds
+    from argv), so a CLI override would silently shadow that construction and
+    is exactly the kind of injection vector the trust boundary exists to catch.
+
     :param cfg: Composed dataset cfg whose ``skypilot_launch`` sub-tree carries
         the launcher knobs (compute_template, num_workers, …).
     :return: Validated ``SkypilotLaunchConfig`` with ``cmd`` unset (the entrypoint
         populates ``cmd`` later via ``model_copy(update=...)``).
     :raises TypeError: ``cfg.skypilot_launch`` did not resolve to a mapping.
+    :raises ValueError: operator supplied ``skypilot_launch.cmd`` from Hydra.
     """
     raw: object = OmegaConf.to_container(cfg.skypilot_launch, resolve=True)
     if not isinstance(raw, dict):
         raise TypeError(f"cfg.skypilot_launch must compose to a mapping; got {type(raw).__name__}")
     sky_kwargs: dict[str, Any] = {k: v for k, v in raw.items() if isinstance(k, str)}
+    if sky_kwargs.get("cmd") is not None:
+        raise ValueError(
+            "skypilot_launch.cmd is launcher-internal and cannot be set from Hydra; "
+            "the worker-side bash one-liner is built from argv by main()."
+        )
     return SkypilotLaunchConfig(**sky_kwargs)
 
 
 def _build_worker_cmd(overrides: list[str]) -> str:  # noqa: DOC203
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
-    The cd into ``_REPO_ROOT`` is for the worker image (whose WORKDIR is
-    ``/home/build/synth-setter``); both sides of the dispatch share the same
-    repo path, so passing ``_REPO_ROOT`` from the launcher keeps the cmd
-    independent of where the operator launched from. Each override is shell-
-    quoted individually so values with spaces or special chars survive the
-    bash interpretation inside ``sky.Task.run``.
+    Each override is shell-quoted individually so values with spaces or special
+    chars survive the bash interpretation inside ``sky.Task.run``. Worker image
+    WORKDIR matches the launcher's repo root, so the leading ``cd`` keeps the
+    cmd cwd-independent on both sides of the dispatch.
 
     :param overrides: The launcher's ``sys.argv[1:]`` — the operator's Hydra
         overrides, replayed verbatim on the worker.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
     """
-    quoted = " ".join(shlex.quote(o) for o in overrides)
-    return (
-        f"cd {shlex.quote(str(_REPO_ROOT))} && "
-        f"exec synth-setter-generate-dataset-from-hydra {quoted}".rstrip()
-    )
+    parts = [
+        f"cd {shlex.quote(str(_REPO_ROOT))}",
+        "exec synth-setter-generate-dataset-from-hydra",
+    ]
+    if overrides:
+        parts[-1] += " " + " ".join(shlex.quote(o) for o in overrides)
+    return " && ".join(parts)
 
 
 @hydra.main(version_base="1.3", config_path="../../../configs", config_name="dataset")

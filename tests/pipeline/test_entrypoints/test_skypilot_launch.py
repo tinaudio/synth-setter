@@ -2676,26 +2676,27 @@ class TestLoadComputeTemplateWithCmd:
 class TestDetectProviderFromDoc:
     """``_detect_provider_from_doc`` mirrors ``_detect_provider`` but operates on a parsed dict."""
 
-    def test_flat_resources_cloud(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """``resources.cloud: runpod`` → ``runpod`` provider."""
+    @pytest.mark.parametrize(
+        "doc, expected_provider",
+        [
+            ({"resources": {"cloud": "runpod"}}, "runpod"),
+            ({"resources": {"any_of": [{"cloud": "oci"}]}}, "oci"),
+            ({"resources": {"cloud": "kubernetes"}}, "local"),
+            ({"resources": {"cloud": "k8s"}}, "local"),
+            ({"resources": {"cloud": "RunPod"}}, "runpod"),
+        ],
+        ids=["flat-runpod", "any-of-oci", "kubernetes-as-local", "k8s-alias", "case-insensitive"],
+    )
+    def test_supported_clouds_map_to_provider(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        doc: dict[str, object],
+        expected_provider: str,
+    ) -> None:
+        """Each supported `resources.cloud` shape maps to the expected cred-bootstrap provider."""
         from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
 
-        doc: dict[str, object] = {"resources": {"cloud": "runpod"}}
-        assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == "runpod"
-
-    def test_any_of_resources(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """``resources.any_of[0].cloud: oci`` → ``oci`` provider."""
-        from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
-
-        doc: dict[str, object] = {"resources": {"any_of": [{"cloud": "oci"}]}}
-        assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == "oci"
-
-    def test_kubernetes_maps_to_local(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """``cloud: kubernetes`` collapses to the ``local`` provider — same as the k8s alias."""
-        from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
-
-        doc: dict[str, object] = {"resources": {"cloud": "kubernetes"}}
-        assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == "local"
+        assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == expected_provider
 
     def test_unknown_cloud_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
         """An unsupported cloud surfaces as a ValueError naming the offending value."""
@@ -2746,10 +2747,22 @@ class TestDispatchViaSkypilot:
         tmp_path: Path,
         fake_plugin: Path,
         local_spec_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """No rclone creds in env → fail loudly rather than launching a task that can't upload."""
+        """No rclone creds in env → fail loudly rather than launching a task that can't upload.
+
+        The autouse ``clear_worker_env_from_process`` fixture already strips these keys,
+        but re-asserting via ``monkeypatch.delenv`` keeps the contract explicit if that
+        fixture ever changes.
+        """
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
-        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+        from synth_setter.pipeline.skypilot_launch import (
+            _SECRET_WORKER_ENV_KEYS,
+            dispatch_via_skypilot,
+        )
+
+        for key in _SECRET_WORKER_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
 
         template = _write_runpod_yaml(tmp_path)
         spec = _build_spec(fake_plugin)
@@ -2804,7 +2817,7 @@ class TestDispatchViaSkypilot:
         from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
         from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
-        # Even in --no-tail mode, a launch raising → rank gets rc=-1 in the failed list.
+        # Even in --no-tail mode, a launch raising leaves the rank with a failure rc.
         mock_sky.stream_and_get.side_effect = RuntimeError("boom")
 
         template = _write_runpod_yaml(tmp_path)
@@ -2818,3 +2831,110 @@ class TestDispatchViaSkypilot:
 
         with pytest.raises(RuntimeError, match="worker.* failed"):
             dispatch_via_skypilot(spec, sky_cfg)
+
+    def test_multi_worker_fans_out_one_task_per_rank(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        patch_materialize_io: None,  # noqa: ARG002
+    ) -> None:
+        """`num_workers=N` builds N tasks with -rN job-name suffixes, per the fan-out contract."""
+        from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="fan-out",
+            num_workers=3,
+        )
+
+        dispatch_via_skypilot(spec, sky_cfg)
+
+        # 3 ranks → 3 sky.Task.from_yaml_config calls with the same cmd-injected doc.
+        assert mock_sky.Task.from_yaml_config.call_count == 3
+        # Job names per rank carry the -rN suffix; submission order isn't guaranteed (threads).
+        submitted_names = sorted(
+            call.kwargs["name"] for call in mock_sky.jobs.launch.call_args_list
+        )
+        assert submitted_names == ["fan-out-r0", "fan-out-r1", "fan-out-r2"]
+        # Each rank's update_envs received its own WORKER_RANK / NUM_WORKERS values.
+        ranks_seen = sorted(
+            call.args[0][WORKER_RANK_ENV_VAR]
+            for call in mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
+        )
+        assert ranks_seen == ["0", "1", "2"]
+        for call in mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list:
+            assert call.args[0][NUM_WORKERS_ENV_VAR] == "3"
+
+    @pytest.mark.parametrize(
+        "field, value, match",
+        [
+            ("job_name", "has/slash", "job_name must match"),
+            ("worker_image_tag", "bad tag", "worker_image_tag must match OCI"),
+        ],
+        ids=["job-name-with-slash", "image-tag-with-space"],
+    )
+    def test_input_validation_raises_before_disk_or_network(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        patch_materialize_io: None,  # noqa: ARG002
+        field: str,
+        value: str,
+        match: str,
+    ) -> None:
+        """Malformed launcher params surface as ValueError before any SkyPilot submission."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        kwargs: dict[str, object] = {
+            "compute_template": str(template),
+            "cmd": "echo",
+            "env_file": str(env_file),
+            "job_name": "ok-name",
+            field: value,
+        }
+        sky_cfg = SkypilotLaunchConfig(**kwargs)  # type: ignore[arg-type]
+
+        with pytest.raises(ValueError, match=match):
+            dispatch_via_skypilot(spec, sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()
+
+    def test_api_server_and_local_are_mutually_exclusive(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        patch_materialize_io: None,  # noqa: ARG002
+    ) -> None:
+        """Setting both api_server and local raises before launch — same as the click CLI guard."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            api_server="https://api.example.com",
+            local=True,
+        )
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            dispatch_via_skypilot(spec, sky_cfg)
+        mock_sky.jobs.launch.assert_not_called()

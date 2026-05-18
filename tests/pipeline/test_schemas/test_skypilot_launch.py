@@ -39,24 +39,26 @@ class TestDefaults:
 class TestValidation:
     """Pydantic field validators reject invalid combinations early."""
 
-    def test_negative_num_workers_rejected(self) -> None:
-        """Zero or negative worker counts surface as ValidationError."""
+    @pytest.mark.parametrize("bad", [0, -1, -100])
+    def test_non_positive_num_workers_rejected(self, bad: int) -> None:  # noqa: DOC101,DOC103
+        """Any worker count below 1 surfaces as ValidationError naming the offending value."""
         with pytest.raises(ValidationError, match="num_workers must be >= 1"):
-            SkypilotLaunchConfig(num_workers=0)
+            SkypilotLaunchConfig(num_workers=bad)
 
-    def test_blank_api_server_rejected(self) -> None:
-        """Whitespace-only api_server is rejected to surface typos loudly."""
+    @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+    def test_blank_api_server_rejected(self, blank: str) -> None:  # noqa: DOC101,DOC103
+        """Empty or whitespace-only api_server is rejected to surface typos loudly."""
         with pytest.raises(ValidationError, match="api_server must be a non-empty URL"):
-            SkypilotLaunchConfig(api_server="   ")
+            SkypilotLaunchConfig(api_server=blank)
 
     def test_api_server_is_stripped(self) -> None:
         """Surrounding whitespace is trimmed so the eventual env-export round-trips cleanly."""
         cfg = SkypilotLaunchConfig(api_server="  https://api.example.com  ")
         assert cfg.api_server == "https://api.example.com"
 
-    def test_extra_fields_rejected(self) -> None:
-        """``extra='forbid'`` catches misspelled Hydra overrides loudly."""
-        with pytest.raises(ValidationError):
+    def test_extra_fields_rejected_naming_the_offender(self) -> None:
+        """``extra='forbid'`` catches misspelled Hydra overrides loudly and names the bad field."""
+        with pytest.raises(ValidationError, match="compute_templat"):
             SkypilotLaunchConfig(compute_templat="typo.yaml")  # type: ignore[call-arg]
 
     def test_frozen_after_construction(self) -> None:
