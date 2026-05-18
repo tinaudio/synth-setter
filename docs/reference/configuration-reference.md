@@ -41,6 +41,7 @@ configs/experiment/generate_dataset/{id}.yaml → Hydra compose against configs/
 - Spec is the reproducibility unit and reconciliation target
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2_prefix}/input_spec.json` (no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
+- **Launcher transport copy:** The SkyPilot launcher additionally writes a second copy of the same spec to `r2://{bucket}/skypilot-launcher-specs/{job_name}.json` and injects that URI as `WORKER_SPEC_URI` into the worker pod's env (workaround for [#749](https://github.com/tinaudio/synth-setter/issues/749), where SkyPilot's RunPod backend rejects programmatic `task.update_file_mounts`). The launcher copy is **transport only** — the canonical provenance copy is the worker's `{r2_prefix}/input_spec.json`. See `storage-provenance-spec.md` §3a "Materialized spec: two destinations" for the consumer table.
 
 Reference: `data-pipeline.md` §14.5
 
