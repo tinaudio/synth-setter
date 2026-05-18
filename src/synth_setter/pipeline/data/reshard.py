@@ -1,4 +1,11 @@
-"""Reshard a directory of HDF5 shards into train/val/test virtual datasets."""
+"""Reshard a directory of HDF5 shards into train/val/test virtual datasets.
+
+The split sizes come from ``DatasetSpec.train_val_test_sizes`` in
+``<dataset_root>/input_spec.json`` (written once by the launcher at
+``@hydra.main`` and uploaded alongside the shards). Per-split shard counts
+are ``size // render.samples_per_shard`` — the spec is the single source of
+truth so reshard never drifts from what the workers actually wrote.
+"""
 
 from pathlib import Path
 
@@ -6,82 +13,135 @@ import click
 import h5py
 import numpy as np
 
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
+from synth_setter.pipeline.schemas.spec import DatasetSpec
+
+_SPLIT_NAMES: tuple[str, str, str] = ("train", "val", "test")
+
+
+def _load_spec(spec_path: Path) -> DatasetSpec:
+    """Read a JSON-serialized DatasetSpec from disk.
+
+    :param spec_path: Filesystem path to the ``input_spec.json`` produced by
+        the launcher.
+    :returns: The validated :class:`DatasetSpec`.
+    :rtype: DatasetSpec
+    """
+    return DatasetSpec.model_validate_json(spec_path.read_text())
+
+
+def _build_virtual_split(
+    split_files: list[Path],
+    split_path: Path,
+    shard_size: int,
+) -> None:
+    """Write a single split's virtual-dataset HDF5 file pointing at ``split_files``.
+
+    :param split_files: Ordered list of source shard files for this split.
+    :param split_path: Destination path for the ``{split}.h5`` virtual dataset.
+    :param shard_size: Number of samples per source shard.
+    """
+    split_len = len(split_files) * shard_size
+
+    with h5py.File(split_files[0], "r") as f:
+        audio_shape = f["audio"].shape[1:]
+        mel_shape = f["mel_spec"].shape[1:]
+        param_shape = f["param_array"].shape[1:]
+
+    vl_audio = h5py.VirtualLayout(shape=(split_len, *audio_shape), dtype=np.float32)
+    vl_mel = h5py.VirtualLayout(shape=(split_len, *mel_shape), dtype=np.float32)
+    vl_param = h5py.VirtualLayout(shape=(split_len, *param_shape), dtype=np.float32)
+
+    for i, file in enumerate(split_files):
+        vs_audio = h5py.VirtualSource(
+            file, "audio", dtype=np.float32, shape=(shard_size, *audio_shape)
+        )
+        vs_mel = h5py.VirtualSource(
+            file, "mel_spec", dtype=np.float32, shape=(shard_size, *mel_shape)
+        )
+        vs_param = h5py.VirtualSource(
+            file, "param_array", dtype=np.float32, shape=(shard_size, *param_shape)
+        )
+
+        range_start = i * shard_size
+        range_end = (i + 1) * shard_size
+
+        vl_audio[range_start:range_end, :, :] = vs_audio
+        vl_mel[range_start:range_end, :, :, :] = vs_mel
+        vl_param[range_start:range_end, :] = vs_param
+
+    with h5py.File(split_path, "w") as f:
+        f.create_virtual_dataset("audio", vl_audio)
+        f.create_virtual_dataset("mel_spec", vl_mel)
+        f.create_virtual_dataset("param_array", vl_param)
+
 
 @click.command()
-@click.argument("dataset_root", type=str)
-@click.option("--train-samples", "-t", type=int, default=200)
-@click.option("--val-samples", "-v", type=int, default=4)
-@click.option("--test-samples", "-e", type=int, default=1)
+@click.argument("dataset_root", type=click.Path(file_okay=False, path_type=Path))
+@click.option(
+    "--spec",
+    "spec_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        f"Path to the materialized DatasetSpec JSON. "
+        f"Defaults to ``<dataset_root>/{INPUT_SPEC_FILENAME}``."
+    ),
+)
 @click.option(
     "--shard-size",
     "-s",
     type=click.IntRange(min=1),
-    default=10_000,
-    help="Number of samples per input shard (rows along the leading axis of each shard-*.h5).",
+    default=None,
+    help=(
+        "Override the per-shard sample count. Must match "
+        "``spec.render.samples_per_shard`` exactly; mismatches abort. "
+        "Defaults to the value from the spec."
+    ),
 )
 def main(
-    dataset_root: str,
-    train_samples: int = 200,
-    val_samples: int = 4,
-    test_samples: int = 1,
-    shard_size: int = 10_000,
-):
-    """Split `shard-*.h5` files into `{train,val,test}.h5` HDF5 virtual datasets.
+    dataset_root: Path,
+    spec_path: Path | None,
+    shard_size: int | None,
+) -> None:
+    """Split ``shard-*.h5`` files into ``{train,val,test}.h5`` virtual datasets.
 
-    :param dataset_root: Directory containing the `shard-*.h5` files to combine.
-    :param train_samples: Number of input shards to include in the train split.
-    :param val_samples: Number of input shards to include in the val split.
-    :param test_samples: Number of input shards to include in the test split.
-    :param shard_size: Number of samples per input shard (rows along the leading axis).
+    :param dataset_root: Directory containing the ``shard-*.h5`` files to combine.
+    :param spec_path: Optional explicit path to the DatasetSpec JSON; defaults
+        to ``<dataset_root>/input_spec.json``.
+    :param shard_size: Optional override for the per-shard sample count;
+        must equal ``spec.render.samples_per_shard``.
+    :raises click.ClickException: If the spec disagrees with the requested
+        ``--shard-size`` or with the shard files actually on disk.
     """
-    dataset_root = Path(dataset_root)
-    files = dataset_root.glob("shard-*.h5")
-    files = sorted(list(files))
-    assert len(files) == train_samples + val_samples + test_samples
+    resolved_spec_path = spec_path if spec_path is not None else dataset_root / INPUT_SPEC_FILENAME
+    spec = _load_spec(resolved_spec_path)
 
-    splits = {
-        "train": files[:train_samples],
-        "val": files[train_samples : train_samples + val_samples],
-        "test": files[train_samples + val_samples :],
-    }
+    sps = spec.render.samples_per_shard
+    if shard_size is not None and shard_size != sps:
+        raise click.ClickException(
+            f"--shard-size={shard_size} disagrees with "
+            f"spec.render.samples_per_shard={sps}; remove the override or "
+            f"regenerate the spec"
+        )
 
-    for split, files in splits.items():
-        print(split)
-        split_len = len(files) * shard_size
+    files = sorted(dataset_root.glob("shard-*.h5"))
+    expected_total = sum(spec.train_val_test_sizes) // sps
+    if len(files) != expected_total:
+        raise click.ClickException(
+            f"found {len(files)} shard-*.h5 files in {dataset_root}, "
+            f"spec expects {expected_total}"
+        )
 
-        with h5py.File(files[0], "r") as f:
-            audio_shape = f["audio"].shape[1:]
-            mel_shape = f["mel_spec"].shape[1:]
-            param_shape = f["param_array"].shape[1:]
-
-        vl_audio = h5py.VirtualLayout(shape=(split_len, *audio_shape), dtype=np.float32)
-        vl_mel = h5py.VirtualLayout(shape=(split_len, *mel_shape), dtype=np.float32)
-        vl_param = h5py.VirtualLayout(shape=(split_len, *param_shape), dtype=np.float32)
-
-        for i, file in enumerate(files):
-            vs_audio = h5py.VirtualSource(
-                file, "audio", dtype=np.float32, shape=(shard_size, *audio_shape)
-            )
-            vs_mel = h5py.VirtualSource(
-                file, "mel_spec", dtype=np.float32, shape=(shard_size, *mel_shape)
-            )
-            vs_param = h5py.VirtualSource(
-                file, "param_array", dtype=np.float32, shape=(shard_size, *param_shape)
-            )
-
-            range_start = i * shard_size
-            range_end = (i + 1) * shard_size
-
-            print(range_start, range_end)
-            vl_audio[range_start:range_end, :, :] = vs_audio
-            vl_mel[range_start:range_end, :, :, :] = vs_mel
-            vl_param[range_start:range_end, :] = vs_param
-
-        split_file = str(dataset_root / f"{split}.h5")
-        with h5py.File(split_file, "w") as f:
-            f.create_virtual_dataset("audio", vl_audio)
-            f.create_virtual_dataset("mel_spec", vl_mel)
-            f.create_virtual_dataset("param_array", vl_param)
+    cursor = 0
+    for split_name, split_size in zip(_SPLIT_NAMES, spec.train_val_test_sizes, strict=True):
+        n_shards = split_size // sps
+        if n_shards == 0:
+            continue
+        split_files = files[cursor : cursor + n_shards]
+        cursor += n_shards
+        _build_virtual_split(split_files, dataset_root / f"{split_name}.h5", sps)
+        click.echo(f"{split_name}: wrote {split_size} samples across {n_shards} shards")
 
 
 if __name__ == "__main__":
