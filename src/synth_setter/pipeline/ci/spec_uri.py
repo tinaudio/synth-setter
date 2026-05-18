@@ -22,13 +22,17 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from synth_setter.pipeline.constants import LAUNCHER_SPEC_R2_PREFIX
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
-# Mirrors ``synth_setter.pipeline.skypilot_launch._LAUNCHER_SPEC_R2_PREFIX``.
-# Duplicated here because importing skypilot_launch pulls the heavy SkyPilot
-# SDK; this CLI must stay launcher-light for the GitHub Actions step that
-# invokes it on every run.
-_LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
+# Distinct exit codes so a GitHub Actions log scanner (or a human reading the
+# step output) can tell argv / fs / parse failures apart without grepping the
+# stderr message text.
+_EXIT_USAGE = 1
+_EXIT_MISSING_FILE = 2
+_EXIT_INVALID_SPEC = 3
 
 
 def compute_spec_uri(spec_path: Path, cluster_name: str) -> str:  # noqa: DOC203
@@ -43,20 +47,29 @@ def compute_spec_uri(spec_path: Path, cluster_name: str) -> str:  # noqa: DOC203
     :returns: ``r2://<bucket>/skypilot-launcher-specs/<cluster>.json`` URI string.
     """
     spec = DatasetSpec.model_validate_json(spec_path.read_text())
-    return spec.r2.uri(f"{_LAUNCHER_SPEC_R2_PREFIX}/{cluster_name}.json")
+    return spec.r2.uri(f"{LAUNCHER_SPEC_R2_PREFIX}/{cluster_name}.json")
 
 
 def main() -> None:
     """CLI entry: ``synth-setter-spec-uri <spec.json> <cluster_name>``."""
     if len(sys.argv) != 3:
         sys.stderr.write(f"Usage: {sys.argv[0]} <input_spec.json> <cluster_name>\n")
-        sys.exit(1)
+        sys.exit(_EXIT_USAGE)
     spec_path = Path(sys.argv[1])
     cluster_name = sys.argv[2]
     if not spec_path.is_file():
         sys.stderr.write(f"error: spec file not found: {spec_path}\n")
-        sys.exit(2)
-    sys.stdout.write(compute_spec_uri(spec_path, cluster_name) + "\n")
+        sys.exit(_EXIT_MISSING_FILE)
+    try:
+        uri = compute_spec_uri(spec_path, cluster_name)
+    except (OSError, ValueError, ValidationError) as exc:
+        # ValueError covers Pydantic's JSON decode error; OSError covers
+        # read-time fs failures (permission denied, mid-read truncation).
+        # Collapse the traceback into one stderr line so the GitHub Actions
+        # step output is interpretable at a glance.
+        sys.stderr.write(f"error: failed to parse spec {spec_path}: {exc}\n")
+        sys.exit(_EXIT_INVALID_SPEC)
+    sys.stdout.write(uri + "\n")
 
 
 if __name__ == "__main__":

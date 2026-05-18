@@ -6,12 +6,15 @@ worker upload, the launcher spec upload, and the CI shard validator agree on
 one URI shape (see ``r2_io.shard_uri`` for the historical helper). The methods
 are the only sanctioned way to build an R2 URI from a bucket+prefix pair.
 
-The default ``prefix`` factory is the same ``make_r2_prefix`` callers used
-through ``DatasetSpec._default_r2_prefix``; promotion of the flat-form
-``{r2_bucket, r2_prefix_root, r2_prefix}`` input dict into the nested
-``r2: R2Location`` shape happens on ``DatasetSpec`` via a
-``model_validator(mode="before")`` shim so JSON specs already written to R2
-continue to parse.
+``prefix`` is a required field on this model — when the caller omits it,
+``DatasetSpec``'s own ``model_validator(mode="before")`` derives it via the
+same ``make_r2_prefix`` callers used through the prior
+``DatasetSpec._default_r2_prefix`` factory and injects it into the nested
+dict before ``R2Location`` validation runs. That same ``before`` validator
+also promotes the flat-form ``{r2_bucket, r2_prefix_root, r2_prefix}`` input
+dict into the nested ``r2: R2Location`` shape so JSON specs already written
+to R2 continue to parse. Constructing ``R2Location`` directly bypasses both
+shims — callers must supply ``prefix`` explicitly.
 """
 
 from __future__ import annotations

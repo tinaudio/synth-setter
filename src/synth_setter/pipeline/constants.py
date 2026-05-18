@@ -16,3 +16,10 @@ RCLONE_REMOTE = "r2"
 # ``r2://bucket/key``; ``r2_io.to_rclone_path`` translates to rclone's
 # ``r2:bucket/key`` form at the subprocess boundary.
 R2_URI_SCHEME = f"{RCLONE_REMOTE}://"
+
+# Per-launch R2 key prefix where ``skypilot_launch.upload_spec_to_r2`` writes
+# the materialized ``input_spec.json`` (workaround for #749 file_mounts).
+# Shared with ``pipeline.ci.spec_uri`` so the launcher and the CI helper that
+# reconstructs ``WORKER_SPEC_URI`` stay in lockstep without ``spec_uri``
+# importing the heavy SkyPilot SDK.
+LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"

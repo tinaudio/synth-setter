@@ -108,3 +108,37 @@ class TestMainCli:
             main()
         assert exc.value.code == 2
         assert str(missing) in capsys.readouterr().err
+
+    def test_invalid_json_exits_three_without_traceback(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Malformed JSON surfaces as exit 3 + one-line stderr (no traceback)."""
+        bad = tmp_path / "broken.json"
+        bad.write_text("{not-json")
+        monkeypatch.setattr("sys.argv", ["synth-setter-spec-uri", str(bad), "cluster-b"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 3
+        err = capsys.readouterr().err
+        assert str(bad) in err
+        assert "Traceback" not in err
+
+    def test_schema_violation_exits_three_without_traceback(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """JSON that parses but fails DatasetSpec validation also exits 3."""
+        bad = tmp_path / "invalid.json"
+        bad.write_text('{"task_name": "t"}')
+        monkeypatch.setattr("sys.argv", ["synth-setter-spec-uri", str(bad), "cluster-c"])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 3
+        err = capsys.readouterr().err
+        assert str(bad) in err
+        assert "Traceback" not in err

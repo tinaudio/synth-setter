@@ -59,13 +59,12 @@ from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
+from synth_setter.pipeline.constants import LAUNCHER_SPEC_R2_PREFIX
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.r2_io import to_rclone_path
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
-# Per-launch R2 key for the materialized spec (file_mounts blocked by #749).
-_LAUNCHER_SPEC_R2_PREFIX = "skypilot-launcher-specs"
 _WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
@@ -340,7 +339,7 @@ def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
     `task.update_file_mounts(...)` with a pubkey-overflow at pod-create time,
     so the launcher ships the spec via R2 instead.
     """
-    spec_key = f"{_LAUNCHER_SPEC_R2_PREFIX}/{job_name}.json"
+    spec_key = f"{LAUNCHER_SPEC_R2_PREFIX}/{job_name}.json"
     spec_uri = spec.r2.uri(spec_key)
     rclone_dest = to_rclone_path(spec_uri)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:

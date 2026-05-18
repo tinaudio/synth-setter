@@ -218,16 +218,18 @@ def _default_run_id(data: dict[str, Any]) -> str:
 
 
 def _default_r2_location(data: dict[str, Any]) -> dict[str, Any]:  # noqa: DOC203
-    """Build a complete ``R2Location`` dict when the ``r2`` field was omitted.
+    """Build a partial ``r2`` dict (no ``bucket``) when the ``r2`` field was omitted.
 
     The DatasetSpec model_validator promotes the legacy flat keys and fills
     partial ``r2`` dicts before this factory ever fires — this path covers the
-    "no ``r2`` block at all" case. Bucket is left absent so ``R2Location``'s
-    own validator emits the canonical missing-required-field error.
+    "no ``r2`` block at all" case. ``bucket`` is intentionally omitted so the
+    nested ``R2Location`` validator fails with Pydantic's standard missing-
+    required-field error on ``r2.bucket`` (rather than this factory inventing
+    a placeholder that would mask the real misconfiguration).
 
     :param data: Already-validated DatasetSpec field data exposed to the factory.
-    :returns: Dict shaped like ``R2Location.model_fields`` minus ``bucket``; the
-        nested validator surfaces the missing-bucket error.
+    :returns: Dict shaped like ``R2Location.model_fields`` minus ``bucket``;
+        ``R2Location`` validation then raises the missing-field error.
     """
     return {
         "prefix_root": DEFAULT_R2_PREFIX_ROOT,
