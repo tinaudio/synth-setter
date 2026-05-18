@@ -415,9 +415,7 @@ jobs:
         run: |
           set -euo pipefail
           SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
-          R2_BUCKET=
-          R2_BUCKET=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['r2_bucket'])" "${SPEC_PATH}")
-          SPEC_URI="r2://${R2_BUCKET}/skypilot-launcher-specs/${CLUSTER_NAME}.json"
+          SPEC_URI=$(synth-setter-spec-uri "${SPEC_PATH}" "${CLUSTER_NAME}")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
 

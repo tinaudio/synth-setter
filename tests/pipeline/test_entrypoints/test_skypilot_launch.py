@@ -483,7 +483,7 @@ class TestMainCli:
         assert spec.is_repo_dirty is False
         # ``generate_dataset/smoke-shard``: 12 samples / samples_per_shard=4 = 3 shards.
         assert spec.num_shards == 3
-        assert spec.r2_bucket == "intermediate-data"
+        assert spec.r2.bucket == "intermediate-data"
 
     def test_worker_env_is_forwarded_to_task(
         self,
@@ -1052,7 +1052,7 @@ class TestJobNameValidation:
                 "output_format": "hdf5",
                 "train_val_test_sizes": [1, 0, 0],
                 "base_seed": 0,
-                "r2_bucket": "intermediate-data",
+                "r2": {"bucket": "intermediate-data"},
                 "render": {
                     "plugin_path": str(fake_plugin),
                     "preset_path": "presets/surge-base.vstpreset",
@@ -1471,7 +1471,7 @@ class TestNumWorkersFanOut:
     ) -> None:
         """Verify spec is uploaded to R2 once and shared across all ranks via one prefix.
 
-        Single ``r2_prefix`` so the partition is one logical dataset, not three.
+        Single ``r2.prefix`` so the partition is one logical dataset, not three.
         """
         self._setup_n_workers_mock(mock_sky, n=3)
         rclone_invocations: list[list[str]] = []
@@ -2632,7 +2632,7 @@ def _build_spec(fake_plugin: Path) -> DatasetSpec:  # noqa: DOC101,DOC103,DOC201
         train_val_test_sizes=(10000, 0, 0),
         output_format="hdf5",
         base_seed=42,
-        r2_bucket="intermediate-data",
+        r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]
         render={  # type: ignore[arg-type]
             "plugin_path": str(fake_plugin),
             "preset_path": "presets/surge-base.vstpreset",

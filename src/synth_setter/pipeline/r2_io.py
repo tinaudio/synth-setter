@@ -14,7 +14,18 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-R2_URI_SCHEME = "r2://"
+from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
+
+__all__ = [
+    "R2_URI_SCHEME",
+    "download_to_path",
+    "downloaded_to_tempfile",
+    "is_r2_uri",
+    "object_size",
+    "shard_uri",
+    "to_rclone_path",
+    "upload_to_uri",
+]
 
 
 def is_r2_uri(uri: str) -> bool:
@@ -22,7 +33,7 @@ def is_r2_uri(uri: str) -> bool:
     return uri.startswith(R2_URI_SCHEME)
 
 
-def _to_rclone_path(r2_uri: str) -> str:
+def to_rclone_path(r2_uri: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203,DOC501,DOC503
     """Convert an `r2://bucket/key` URI to rclone's `r2:bucket/key` syntax.
 
     Raises ValueError if `r2_uri` is not an r2:// URI — callers should branch
@@ -30,7 +41,11 @@ def _to_rclone_path(r2_uri: str) -> str:
     """
     if not is_r2_uri(r2_uri):
         raise ValueError(f"not an r2:// URI: {r2_uri!r}")
-    return "r2:" + r2_uri[len(R2_URI_SCHEME) :]
+    return f"{RCLONE_REMOTE}:" + r2_uri[len(R2_URI_SCHEME) :]
+
+
+# Backward-compatible alias for the previously-private translator.
+_to_rclone_path = to_rclone_path
 
 
 def download_to_path(r2_uri: str, dest_path: Path) -> None:

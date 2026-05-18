@@ -60,6 +60,7 @@ from hydra.errors import HydraException
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from synth_setter.pipeline.r2_io import to_rclone_path
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
@@ -331,7 +332,7 @@ def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
     """Upload `spec` to R2 under a per-job key; return the `r2://bucket/key` URI.
 
     Uses `rclone copyto` (configured via `RCLONE_CONFIG_R2_*` in process env)
-    to put the spec at `r2:{spec.r2_bucket}/skypilot-launcher-specs/{job_name}.json`.
+    to put the spec at `r2:{spec.r2.bucket}/skypilot-launcher-specs/{job_name}.json`.
     The worker pod's env will get `WORKER_SPEC_URI` pointing at the same URI;
     the worker downloads via `load_spec_from_uri` before parsing.
 
@@ -340,8 +341,8 @@ def upload_spec_to_r2(spec: DatasetSpec, job_name: str) -> str:
     so the launcher ships the spec via R2 instead.
     """
     spec_key = f"{_LAUNCHER_SPEC_R2_PREFIX}/{job_name}.json"
-    rclone_dest = f"r2:{spec.r2_bucket}/{spec_key}"
-    spec_uri = f"r2://{spec.r2_bucket}/{spec_key}"
+    spec_uri = spec.r2.uri(spec_key)
+    rclone_dest = to_rclone_path(spec_uri)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
         f.write(spec.model_dump_json(indent=2))
         local_path = f.name

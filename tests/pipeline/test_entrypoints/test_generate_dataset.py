@@ -70,14 +70,16 @@ def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "task_name": "test-dataset",
         "run_id": "test-dataset-20260328T120000000Z",
-        "r2_prefix": "data/test-dataset/test-dataset-20260328T120000000Z/",
         "created_at": datetime(2026, 3, 28, 12, 0, 0, tzinfo=timezone.utc),
         "git_sha": "a" * 40,
         "is_repo_dirty": False,
         "output_format": "hdf5",
         "train_val_test_sizes": [10000, 0, 0],
         "base_seed": 42,
-        "r2_bucket": "intermediate-data",
+        "r2": {
+            "bucket": "intermediate-data",
+            "prefix": "data/test-dataset/test-dataset-20260328T120000000Z/",
+        },
         "render": {
             "plugin_path": str(TEST_PLUGIN_VST3),
             "preset_path": "presets/surge-base.vstpreset",
@@ -160,7 +162,7 @@ class TestRun:
         # into the prefix directory preserves the basename → final object
         # key is `{prefix}{INPUT_SPEC_FILENAME}`.
         assert spec_src.endswith(INPUT_SPEC_FILENAME)
-        assert spec_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
+        assert spec_dest == f"r2:{spec.r2.bucket}/{spec.r2.prefix}"
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -241,7 +243,7 @@ class TestRun:
         assert len(rclone_calls) == 2
         shard_src, shard_dest = rclone_calls[1][0]
         assert "shard-000000.h5" in shard_src
-        assert shard_dest == f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
+        assert shard_dest == f"r2:{spec.r2.bucket}/{spec.r2.prefix}"
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
     @patch("synth_setter.cli.generate_dataset._rclone_copy")
@@ -626,7 +628,7 @@ class TestRun:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Probe is called once per assigned shard with the full object URI under r2_prefix."""
+        """Probe is called once per assigned shard with the full object URI under r2.prefix."""
         spec = _multi_shard_spec(tmp_path, n=3)
         probed_uris: list[str] = []
 
@@ -640,7 +642,7 @@ class TestRun:
         run(spec)
 
         assert probed_uris == [
-            f"r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}" for shard in spec.shards
+            f"r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}" for shard in spec.shards
         ]
 
     @patch("synth_setter.cli.generate_dataset.subprocess.check_call")
@@ -777,11 +779,12 @@ class TestSpecFromCfg:
     """``spec_from_cfg`` drops Hydra-only groups and constructs a DatasetSpec."""
 
     def test_drops_non_spec_groups(self, valid_dataset_spec_kwargs: dict[str, object]) -> None:
-        """``data``, ``r2``, ``paths``, ``hydra`` are dropped so strict validation passes.
+        """``data``, ``paths``, ``hydra`` are dropped so strict validation passes.
 
         DatasetSpec is configured with ``extra="forbid"``; if any of these groups leaked through,
         construction would raise on the unknown field. The assertion is implicit in the absence
-        of a ValidationError.
+        of a ValidationError. After the ``R2Location`` migration ``r2`` is *not* dropped —
+        it composes from ``configs/r2/default.yaml`` directly into ``DatasetSpec.r2``.
         """
         from omegaconf import OmegaConf
 
@@ -789,7 +792,6 @@ class TestSpecFromCfg:
 
         cfg_dict: dict[str, object] = dict(valid_dataset_spec_kwargs)
         cfg_dict["data"] = {"sample_rate": 16000}
-        cfg_dict["r2"] = {"bucket": "intermediate-data", "prefix_root": "data/"}
         cfg_dict["paths"] = {"root_dir": "/fake-root"}
         cfg_dict["hydra"] = {"runtime": {"output_dir": "/fake-out"}}
 
@@ -797,26 +799,27 @@ class TestSpecFromCfg:
 
         assert spec.task_name == valid_dataset_spec_kwargs["task_name"]
 
-    def test_resolves_interpolations_before_dropping_groups(
+    def test_r2_group_flows_into_nested_r2_field(  # noqa: DOC101,DOC103
         self, valid_dataset_spec_kwargs: dict[str, object]
     ) -> None:
-        """``${r2.bucket}`` interpolation is resolved before the ``r2`` group is dropped.
+        """The ``r2`` group composes directly into ``DatasetSpec.r2`` (no flat-key indirection).
 
-        Mirrors the production composition: ``configs/dataset.yaml`` has
-        ``r2_bucket: ${r2.bucket}`` and the ``r2`` group is only present for that interpolation.
-        Dropping ``r2`` before resolving would lose the bucket value.
+        Mirrors the production composition after the ``R2Location`` migration:
+        ``configs/dataset.yaml`` no longer interpolates flat ``r2_bucket`` /
+        ``r2_prefix_root`` keys — the group's content lands at ``cfg.r2`` and
+        passes through to ``DatasetSpec.r2``.
         """
         from omegaconf import OmegaConf
 
         from synth_setter.cli.generate_dataset import spec_from_cfg
 
         kwargs = dict(valid_dataset_spec_kwargs)
-        kwargs["r2_bucket"] = "${r2.bucket}"
-        kwargs["r2"] = {"bucket": "interpolated-bucket"}
+        kwargs["r2"] = {"bucket": "from-group-bucket", "prefix_root": "data"}
 
         spec = spec_from_cfg(OmegaConf.create(kwargs))
 
-        assert spec.r2_bucket == "interpolated-bucket"
+        assert spec.r2.bucket == "from-group-bucket"
+        assert spec.r2.prefix_root == "data"
 
 
 # PROJECT_ROOT-bootstrap behavior is exercised end-to-end by tests/pipeline/test_configs/
@@ -871,7 +874,7 @@ class TestBuildWorkerCmd:
     def test_cmd_pins_spec_created_at_via_hydra_override(  # noqa: DOC101,DOC103
         self, spec: DatasetSpec
     ) -> None:
-        """Worker compose must inherit launcher's created_at to land on the same r2_prefix."""
+        """Worker compose must inherit launcher's created_at to land on the same r2.prefix."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
         cmd = _build_worker_cmd([], spec)

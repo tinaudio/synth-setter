@@ -19,7 +19,7 @@ CLI usage:
     python3 -m synth_setter.pipeline.ci.validate_shard <spec.json|r2://bucket/spec.json>
 
 Iterates `spec.shards` and downloads each shard from R2 (under
-`r2://{spec.r2_bucket}/{spec.r2_prefix}{shard.filename}`) before validating.
+`r2://{spec.r2.bucket}/{spec.r2.prefix}{shard.filename}`) before validating.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ from synth_setter.data.vst.shapes import (
     mel_dataset_shape,
     param_array_dataset_shape,
 )
-from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri, shard_uri
+from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import EXTENSION_TO_OUTPUT_FORMAT, DatasetSpec
 
@@ -340,14 +340,14 @@ def validate_all_shards_from_r2(spec: DatasetSpec) -> list[str]:
     """Validate every shard in ``spec.shards`` by downloading from R2.
 
     :param spec: Dataset spec whose ``shards`` list drives the iteration; each
-        listed shard is fetched from R2 under ``r2://{spec.r2_bucket}/{spec.r2_prefix}``.
+        listed shard is fetched from R2 under ``r2://{spec.r2.bucket}/{spec.r2.prefix}``.
     :returns: Aggregated error strings across all shards (empty = all valid). Each
         error is prefixed with the shard filename so the source is obvious.
     :rtype: list[str]
     """
     errors: list[str] = []
     for shard in spec.shards:
-        shard_object_uri = shard_uri(spec.r2_bucket, spec.r2_prefix, shard.filename)
+        shard_object_uri = spec.r2.shard_uri(shard)
         with downloaded_to_tempfile(shard_object_uri) as local_shard:
             shard_errors = validate_shard(local_shard, spec)
         for err in shard_errors:

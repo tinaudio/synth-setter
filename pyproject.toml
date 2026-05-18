@@ -89,6 +89,7 @@ synth-setter-train = "synth_setter.cli.train:main"
 synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
 synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
+synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 
 
 

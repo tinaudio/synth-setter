@@ -61,7 +61,7 @@ def _smoke_spec() -> DatasetSpec:
         output_format="hdf5",
         train_val_test_sizes=(440000, 20000, 20000),
         base_seed=42,
-        r2_bucket="intermediate-data",
+        r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]
         render=render_cfg,
     )
 

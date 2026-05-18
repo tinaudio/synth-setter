@@ -31,14 +31,26 @@ from synth_setter.pipeline.schemas.prefix import (
     make_dataset_wandb_run_id,
     make_r2_prefix,
 )
+from synth_setter.pipeline.schemas.r2_location import R2Location
 
 __all__ = [
     "EXTENSION_TO_OUTPUT_FORMAT",
     "OUTPUT_FORMAT_TO_EXTENSION",
     "DatasetSpec",
+    "R2Location",
     "RenderConfig",
     "ShardSpec",
 ]
+
+# Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
+# Maps the legacy top-level key → the nested ``R2Location`` field. Anchored
+# here (not on ``DatasetSpec``) so the dict literal is the source of truth and
+# can't drift from the validator that consumes it.
+_LEGACY_FLAT_R2_KEYS: dict[str, str] = {
+    "r2_bucket": "bucket",
+    "r2_prefix_root": "prefix_root",
+    "r2_prefix": "prefix",
+}
 
 # Source-of-truth mapping from ``output_format`` to shard filename suffix.
 # Adding a format means adding a row here; missing entries surface as KeyError
@@ -205,16 +217,116 @@ def _default_run_id(data: dict[str, Any]) -> str:
     )
 
 
-def _default_r2_prefix(data: dict[str, Any]) -> str:
-    """Compute the R2 object prefix from already-validated layout fields."""
-    return make_r2_prefix(
+def _default_r2_location(data: dict[str, Any]) -> dict[str, Any]:  # noqa: DOC203
+    """Build a complete ``R2Location`` dict when the ``r2`` field was omitted.
+
+    The DatasetSpec model_validator promotes the legacy flat keys and fills
+    partial ``r2`` dicts before this factory ever fires — this path covers the
+    "no ``r2`` block at all" case. Bucket is left absent so ``R2Location``'s
+    own validator emits the canonical missing-required-field error.
+
+    :param data: Already-validated DatasetSpec field data exposed to the factory.
+    :returns: Dict shaped like ``R2Location.model_fields`` minus ``bucket``; the
+        nested validator surfaces the missing-bucket error.
+    """
+    return {
+        "prefix_root": DEFAULT_R2_PREFIX_ROOT,
+        "prefix": make_r2_prefix(
+            DatasetConfigId(data["task_name"]),
+            data["run_id"],
+            prefix_root=DEFAULT_R2_PREFIX_ROOT,
+        ),
+    }
+
+
+def _coerce_created_at_to_datetime(value: Any) -> datetime | None:  # noqa: DOC203
+    """Best-effort parse of ``created_at`` for pre-validation prefix derivation.
+
+    The ``mode='before'`` model validator sees raw input — Python datetimes for
+    in-process construction, ISO strings for JSON-loaded specs.
+
+    :param value: Raw ``created_at`` input from the user dict (datetime, string, or other).
+    :returns: A tz-aware UTC datetime when parsing succeeds, else ``None``. ``None``
+        signals the caller to fall back to the field's ``default_factory`` so the
+        ``created_at`` field validator can surface the proper error attribution.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed
+
+
+def _fill_default_r2_prefix(  # noqa: DOC203
+    data: dict[str, Any], r2: dict[str, Any]
+) -> dict[str, Any]:
+    """Return a copy of ``r2`` with ``prefix`` derived from layout fields when missing.
+
+    Mirrors the prior ``_default_r2_prefix`` factory exactly:
+    ``<prefix_root>/<task_name>/<run_id>/``. ``run_id`` and ``created_at`` are
+    materialized in ``data`` when absent (using the same factories the field
+    defaults would have used), so the worker's JSON-round-trip preservation
+    contract holds end-to-end: any value derived here is observed by the
+    field validators too. The shim falls back to the caller's ``r2`` unchanged
+    whenever it can't safely build a prefix — every such path leaves a
+    downstream validator (on ``created_at``, ``task_name``, ``prefix_root``)
+    in charge of the error attribution.
+
+    :param data: Raw input dict to ``DatasetSpec`` (mutated in-place when run_id /
+        created_at need filling so the field defaults observe the same value).
+    :param r2: Raw nested ``r2`` sub-dict (may be missing ``prefix``).
+    :returns: A ``r2`` dict either filled with a derived ``prefix`` or returned
+        verbatim when prefix derivation is not safely available.
+    """
+    if not _can_derive_prefix(data, r2):
+        return r2
+    if data.get("created_at") is None:
+        data["created_at"] = _utc_now()
+    if not data.get("run_id"):
+        created_at = _coerce_created_at_to_datetime(data["created_at"])
+        if created_at is None:
+            return r2
+        data["run_id"] = make_dataset_wandb_run_id(
+            DatasetConfigId(data["task_name"]), timestamp=created_at
+        )
+    filled = dict(r2)
+    filled["prefix"] = make_r2_prefix(
         DatasetConfigId(data["task_name"]),
         data["run_id"],
-        prefix_root=data["r2_prefix_root"],
+        prefix_root=filled.get("prefix_root", DEFAULT_R2_PREFIX_ROOT),
     )
+    return filled
 
 
-class DatasetSpec(BaseModel):
+def _can_derive_prefix(data: dict[str, Any], r2: dict[str, Any]) -> bool:  # noqa: DOC203
+    """Return True when layout fields can produce a derived ``prefix`` cleanly.
+
+    Defers cases that would otherwise trip ``make_r2_prefix`` (blank task_name,
+    blank prefix_root) to the field validators downstream so the right boundary
+    surfaces the error.
+
+    :param data: Raw input dict to ``DatasetSpec``.
+    :param r2: Raw nested ``r2`` sub-dict.
+    :returns: ``True`` iff prefix derivation will succeed without raising.
+    """
+    task_name = data.get("task_name")
+    if not isinstance(task_name, str) or not task_name.strip():
+        return False
+    prefix_root = r2.get("prefix_root", DEFAULT_R2_PREFIX_ROOT)
+    if not isinstance(prefix_root, str) or not prefix_root.strip("/").strip():
+        return False
+    return True
+
+
+class DatasetSpec(BaseModel):  # noqa: DOC601,DOC603
     """Unified dataset specification — config + materialized runtime in one model.
 
     Construction story:
@@ -230,7 +342,7 @@ class DatasetSpec(BaseModel):
     Frozen so the materialized artifact is immutable post-construction.
     """
 
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid", validate_default=True)
 
     # Splits stored as immutable tuples; JSON lists are coerced by _splits_list_to_tuple.
     task_name: str = Field(
@@ -260,13 +372,6 @@ class DatasetSpec(BaseModel):
     )
     base_seed: int = Field(
         description="Seed used to derive per-shard ``ShardSpec.seed`` values (``base_seed + shard_id``)."
-    )
-    r2_bucket: str = Field(
-        description="Cloudflare R2 bucket name where shards and metadata are written."
-    )
-    r2_prefix_root: str = Field(
-        default=DEFAULT_R2_PREFIX_ROOT,
-        description="Top-level prefix segment under the bucket; slashes are stripped by ``make_r2_prefix``.",
     )
 
     render: RenderConfig = Field(
@@ -301,10 +406,56 @@ class DatasetSpec(BaseModel):
         default_factory=_default_run_id,
         description="Deterministic W&B run ID derived from ``task_name`` and ``created_at``.",
     )
-    r2_prefix: str = Field(
-        default_factory=_default_r2_prefix,
-        description="Full R2 object prefix (``<root>/<task_name>/<run_id>/``); must end with ``/``.",
+    r2: R2Location = Field(
+        # Returns a dict that Pydantic re-validates as R2Location via
+        # ``validate_default=True``; pyright doesn't see the coercion.
+        default_factory=_default_r2_location,  # type: ignore[arg-type]
+        description=(
+            "Nested R2 storage location (bucket + prefix_root + materialized prefix). "
+            "Replaces the legacy flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` "
+            "fields; the model validator promotes legacy-form input dicts into this shape."
+        ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_r2_input(cls, data: Any) -> Any:  # noqa: DOC203
+        """Promote legacy flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` into ``r2``.
+
+        Back-compat shim for materialized ``input_spec.json`` files already
+        written to R2 before the nested ``R2Location`` migration. Mixed input
+        (any legacy key AND an explicit ``r2``) is rejected — promotion would
+        otherwise have to pick a precedence rule with no good answer. After
+        promotion the missing ``prefix`` is filled from layout fields the same
+        way the previous flat ``_default_r2_prefix`` factory did.
+
+        :param data: Raw input to the validator (typically a dict; pass-through otherwise).
+        :returns: Same input unchanged if no normalization is needed; otherwise a
+            new dict with legacy keys promoted under ``r2`` and ``prefix`` filled.
+        :raises ValueError: ``data`` contains both nested ``r2`` AND any legacy flat
+            ``r2_*`` key — that combination is ambiguous and must be rewritten.
+        """
+        if not isinstance(data, dict):
+            return data
+        legacy_present = {k for k in _LEGACY_FLAT_R2_KEYS if k in data}
+        if legacy_present and "r2" in data:
+            raise ValueError(
+                f"DatasetSpec received both nested 'r2' and legacy flat keys "
+                f"{sorted(legacy_present)}; pass one shape, not both"
+            )
+        if not legacy_present and "r2" not in data:
+            return data
+        data = dict(data)
+        if legacy_present:
+            promoted: dict[str, Any] = {}
+            for legacy_key, nested_key in _LEGACY_FLAT_R2_KEYS.items():
+                if legacy_key in data:
+                    promoted[nested_key] = data.pop(legacy_key)
+            data["r2"] = promoted
+        r2 = data["r2"]
+        if isinstance(r2, dict) and "prefix" not in r2:
+            data["r2"] = _fill_default_r2_prefix(data, r2)
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -383,30 +534,6 @@ class DatasetSpec(BaseModel):
                 raise ValueError(
                     f"created_at must be UTC (offset 0); got offset {value.utcoffset()}"
                 )
-        return value
-
-    @field_validator("r2_prefix")
-    @classmethod
-    def _r2_prefix_must_end_with_slash(cls, value: str) -> str:
-        """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
-        if not value.endswith("/"):
-            raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
-        return value
-
-    @field_validator("r2_bucket")
-    @classmethod
-    def _r2_bucket_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
-        if not value.strip():
-            raise ValueError("r2_bucket must not be blank")
-        return value
-
-    @field_validator("r2_prefix_root")
-    @classmethod
-    def _r2_prefix_root_must_not_be_blank(cls, value: str) -> str:
-        """Reject blank prefix roots so derived ``r2_prefix`` doesn't start with a stray ``/``."""
-        if not value.strip():
-            raise ValueError("r2_prefix_root must not be blank")
         return value
 
     @field_validator("task_name")

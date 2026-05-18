@@ -59,7 +59,7 @@ def real_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DatasetSpec:
         output_format="hdf5",
         train_val_test_sizes=(10, 0, 0),
         base_seed=42,
-        r2_bucket="intermediate-data",
+        r2={"bucket": "intermediate-data"},  # type: ignore[arg-type]
         render={
             "plugin_path": str(tmp_path / "FakePlugin.vst3"),
             "preset_path": "presets/surge-base.vstpreset",

@@ -39,9 +39,10 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E
 
 # Composed-config keys that aren't DatasetSpec fields (interpolation sources, Hydra
 # runtime, dispatch-mode sub-trees). See configs/dataset.yaml for the live set.
+# ``r2`` is *not* listed: it composes from ``configs/r2/default.yaml`` directly
+# into the spec's nested ``R2Location`` field after the migration.
 _NON_SPEC_KEYS: tuple[str, ...] = (
     "data",
-    "r2",
     "paths",
     "hydra",
     "run_name",
@@ -178,7 +179,7 @@ def run(spec: DatasetSpec) -> None:
         f"({len(my_range)} of {spec.num_shards} shards)"
     )
 
-    r2_dest_prefix = f"r2:{spec.r2_bucket}/{spec.r2_prefix}"
+    r2_dest_prefix = spec.r2.rclone_prefix()
 
     with tempfile.TemporaryDirectory() as work_dir_str:
         work_dir = Path(work_dir_str)
@@ -195,7 +196,7 @@ def run(spec: DatasetSpec) -> None:
         skipped = 0
         for shard_id in my_range:
             shard = spec.shards[shard_id]
-            shard_object_uri = r2_io.shard_uri(spec.r2_bucket, spec.r2_prefix, shard.filename)
+            shard_object_uri = spec.r2.shard_uri(shard)
             existing_size = r2_io.object_size(shard_object_uri)
             if existing_size is not None and existing_size > 0:
                 logger.info(
@@ -288,10 +289,10 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:  # noqa: 
     the PR-CI bake-lag bypass (see #735 / #841).
 
     ``spec.created_at`` is pinned as a Hydra override so the worker's
-    re-compose lands on the same ``r2_prefix`` as the launcher (the
+    re-compose lands on the same ``r2.prefix`` as the launcher (the
     ``default_factory`` that produces it would otherwise fire twice and the
-    derived ``run_id`` / ``r2_prefix`` would diverge — see
-    ``_default_run_id`` / ``_default_r2_prefix`` in
+    derived ``run_id`` / ``r2.prefix`` would diverge — see
+    ``_default_run_id`` / ``_fill_default_r2_prefix`` in
     ``synth_setter.pipeline.schemas.spec``).
 
     :param overrides: Operator's Hydra overrides (launcher's ``sys.argv[1:]``).
