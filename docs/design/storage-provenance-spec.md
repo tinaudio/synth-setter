@@ -44,7 +44,16 @@ ______________________________________________________________________
 
 ### 3a. Data Generation
 
-> **Implementation status:** The layout below is the target architecture. The current MVP uses a flat structure: spec and all shards upload directly to `data/{config_id}/{run_id}/`.
+> **Status: Proposed.** Current production behavior writes shards directly to
+> `data/{dataset_config_id}/{dataset_wandb_run_id}/<shard_filename>` from the
+> generate-stage worker (`src/synth_setter/cli/generate_dataset.py`). The
+> `metadata/workers/` staging layout and the finalize stage that promotes
+> staged shards to `shards/` and writes `train.h5`/`val.h5`/`test.h5`,
+> `stats.npz`, `dataset.json`, and `dataset.complete` are the planned target
+> state — tracked under
+> [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5: Pipeline
+> CLI) and [#408](https://github.com/tinaudio/synth-setter/issues/408)
+> (port `finalize_shards` from experiment to main).
 
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/

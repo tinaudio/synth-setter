@@ -283,6 +283,16 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 
 ### R2 File Structure
 
+> **Status: Proposed.** Current production behavior writes shards directly to
+> `data/{dataset_config_id}/{dataset_wandb_run_id}/<shard_filename>` from the
+> generate-stage worker (`src/synth_setter/cli/generate_dataset.py`). The
+> two-prefix staging layout described below — workers under
+> `metadata/workers/`, finalize-only writes to `shards/` — is the planned
+> target state. Tracking:
+> [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5: Pipeline
+> CLI) and [#408](https://github.com/tinaudio/synth-setter/issues/408)
+> (port `finalize_shards` from experiment to main).
+
 The canonical R2 bucket layout — root path, top-level prefixes, and per-workflow contents — is defined in [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout) and [§3a](storage-provenance-spec.md#3a-data-generation). The data pipeline writes under `data/{dataset_config_id}/{dataset_wandb_run_id}/`: workers stage shards and per-attempt artifacts under `metadata/workers/`, and `finalize` is the only writer to `shards/`, `train.h5`/`val.h5`/`test.h5` (or `*.tar` for WebDataset), `stats.npz`, and `metadata/dataset.{json,complete}`. Datasets are immutable once `metadata/dataset.complete` exists; new versions require a new `dataset_wandb_run_id`.
 
 Pipeline-specific staging conventions (per-attempt shard filenames, lifecycle markers, quarantine layout) are additive detail — see [Artifact Taxonomy](#artifact-taxonomy) below.
@@ -381,6 +391,17 @@ $ rclone ls r2:bucket/{run_id}/metadata/workers/shards/shard-000042/
 ## 7. Design Decisions
 
 ### 7.1 Storage as the Source of Truth
+
+> **Status: Proposed (two-prefix variant).** Current production behavior
+> writes shards directly to
+> `data/{dataset_config_id}/{dataset_wandb_run_id}/<shard_filename>` —
+> there is no staging prefix or finalize-stage promotion step yet. The
+> staging-vs-canonical separation described below is the planned target
+> state. Tracking:
+> [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5:
+> Pipeline CLI) and
+> [#408](https://github.com/tinaudio/synth-setter/issues/408) (port
+> `finalize_shards` from experiment to main).
 
 The pipeline uses R2 as both the data layer and the coordination layer. Integrity is guaranteed by content hashes. Workers write shard files and markers to a **staging prefix** (`metadata/workers/shards/`). Finalize validates staged shards and **promotes** them to the **canonical prefix** (`data/shards/`). This separation ensures workers never write to the canonical data path, and finalized data is stable once promoted.
 
