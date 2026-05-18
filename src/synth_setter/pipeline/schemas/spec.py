@@ -135,9 +135,16 @@ class ShardSpec(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    shard_id: int
-    filename: str
-    seed: int
+    shard_id: int = Field(
+        description="Logical shard index (0-based), independent of compute infrastructure."
+    )
+    filename: str = Field(
+        description=(
+            "Shard filename including the format-specific suffix "
+            "(``shard-NNNNNN.h5`` or ``shard-NNNNNN.tar``)."
+        )
+    )
+    seed: int = Field(description="Per-shard RNG seed, derived as ``base_seed + shard_id``.")
 
 
 class RenderConfig(BaseModel):
@@ -151,24 +158,58 @@ class RenderConfig(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str
-    preset_path: str
-    param_spec_name: str
-    renderer_version: str
-    sample_rate: int
-    channels: int
-    velocity: int
-    signal_duration_seconds: float
-    min_loudness: float
-    samples_per_render_batch: int = 32
-    samples_per_shard: int
-    # Per-shard lifecycle cadences. ``plugin_reload_cadence`` defaults to ``"render"``
-    # (historical per-render reload, #489). ``gui_toggle_cadence`` defaults to ``"once"``
-    # on non-Darwin / ``"never"`` on Darwin via the default factory; the validator
-    # below rejects ``"render"`` on Darwin (SIGTRAP after ~3-4 ``show_editor`` calls,
-    # #714).
-    plugin_reload_cadence: _PluginReloadCadence = "render"
-    gui_toggle_cadence: _GuiToggleCadence = Field(default_factory=_default_gui_toggle_cadence)
+    plugin_path: str = Field(
+        description="Filesystem path to the VST3 plugin bundle the worker loads."
+    )
+    preset_path: str = Field(
+        description=(
+            "Filesystem path to the ``.fxp``/``.vstpreset`` baseline preset loaded before "
+            "random parameter override."
+        )
+    )
+    param_spec_name: str = Field(
+        description=(
+            "Key into the in-process param-spec registry; resolved inside the worker, "
+            "not the launcher."
+        )
+    )
+    renderer_version: str = Field(
+        description="Renderer code-path version stamp recorded in shard provenance."
+    )
+    sample_rate: int = Field(description="Audio sample rate in Hz.")
+    channels: int = Field(description="Audio channel count.")
+    velocity: int = Field(description="MIDI velocity used for every render in this run (0-127).")
+    signal_duration_seconds: float = Field(
+        description="Duration of each rendered audio sample, in seconds."
+    )
+    min_loudness: float = Field(
+        description="Per-sample loudness floor; renders quieter than this are rejected/retried."
+    )
+    samples_per_render_batch: int = Field(
+        default=32,
+        description="Batch size the renderer uses inside a shard.",
+    )
+    samples_per_shard: int = Field(
+        description="Samples written per shard; each split size must be a multiple of this."
+    )
+    plugin_reload_cadence: _PluginReloadCadence = Field(
+        default="render",
+        description=(
+            'How often to reload the plugin within a shard: ``"once"`` loads + applies '
+            'the preset once per shard and reuses the cached instance; ``"render"`` '
+            "(default, historical per-#489 behaviour) reloads on every render."
+        ),
+    )
+    gui_toggle_cadence: _GuiToggleCadence = Field(
+        default_factory=_default_gui_toggle_cadence,
+        description=(
+            'How often to run the ``show_editor`` warm-up on the plugin: ``"never"`` '
+            'skips it entirely, ``"once"`` runs it once per shard (default on non-Darwin), '
+            '``"render"`` runs it before every render. Darwin rejects ``"render"`` '
+            '(SIGTRAP after ~3-4 calls, #714); the default factory yields ``"never"`` on '
+            "Darwin."
+        ),
+    )
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
@@ -246,33 +287,79 @@ class DatasetSpec(BaseModel):
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    # Layout fields. Splits are stored as immutable tuples so the frozen-model
-    # guarantee carries through to the contents; JSON-loaded values arrive as
-    # lists and get coerced via ``_splits_list_to_tuple`` below.
-    task_name: str
-    output_format: Literal["hdf5", "wds"]
-    train_val_test_sizes: tuple[int, int, int]
-    # Reserved for per-sample seeding (#884); not implemented. Accepts only
-    # ``None`` — any non-None value (yaml, JSON, or in-process) raises
-    # ``NotImplementedError`` at construction. See ``_reject_train_val_test_seeds``.
-    train_val_test_seeds: tuple[int, int, int] | None = None
-    base_seed: int
-    r2_bucket: str
-    r2_prefix_root: str = DEFAULT_R2_PREFIX_ROOT
+    # Splits stored as immutable tuples; JSON lists are coerced by _splits_list_to_tuple.
+    task_name: str = Field(
+        description=(
+            "Dataset config identifier; becomes the prefix of ``run_id`` and the "
+            "config-id path segment of ``r2_prefix`` (``<root>/<task_name>/<run_id>/``)."
+        )
+    )
+    output_format: Literal["hdf5", "wds"] = Field(
+        description=(
+            "Shard container format; ``hdf5`` writes ``.h5``, ``wds`` writes WebDataset ``.tar``."
+        )
+    )
+    train_val_test_sizes: tuple[int, int, int] = Field(
+        description=(
+            "Sample counts per split; each entry must be a multiple of "
+            "``render.samples_per_shard``."
+        )
+    )
+    # Enforced by _reject_train_val_test_seeds.
+    train_val_test_seeds: tuple[int, int, int] | None = Field(
+        default=None,
+        description=(
+            "Reserved for per-sample seeding (#884); must be ``None`` until implemented — "
+            "any non-None value raises ``NotImplementedError`` at construction."
+        ),
+    )
+    base_seed: int = Field(
+        description="Seed used to derive per-shard ``ShardSpec.seed`` values (``base_seed + shard_id``)."
+    )
+    r2_bucket: str = Field(
+        description="Cloudflare R2 bucket name where shards and metadata are written."
+    )
+    r2_prefix_root: str = Field(
+        default=DEFAULT_R2_PREFIX_ROOT,
+        description="Top-level prefix segment under the bucket; slashes are stripped by ``make_r2_prefix``.",
+    )
 
-    # Sub-model
-    render: RenderConfig
+    render: RenderConfig = Field(
+        description="Nested ``RenderConfig`` carrying every per-shard renderer input."
+    )
 
-    # Auto-filled runtime fields. The factory runs only when the field is
-    # missing on input — JSON-loaded specs preserve the materialization-time
-    # values workers must reuse. The lambdas around ``_get_git_sha`` etc.
-    # defer the lookup to call time so tests that ``monkeypatch.setattr`` on
-    # the module attribute reach this resolution path.
-    git_sha: str = Field(default_factory=lambda: _get_git_sha())
-    is_repo_dirty: bool = Field(default_factory=lambda: _is_repo_dirty())
-    created_at: datetime = Field(default_factory=lambda: _utc_now())
-    run_id: str = Field(default_factory=_default_run_id)
-    r2_prefix: str = Field(default_factory=_default_r2_prefix)
+    # Auto-filled runtime fields: factories fire only when the value is missing on
+    # input, so JSON-loaded specs preserve materialization-time values. The lambda
+    # wrappers defer lookup so ``monkeypatch.setattr`` on the module attr is
+    # honored at call time.
+    git_sha: str = Field(
+        default_factory=lambda: _get_git_sha(),
+        description=(
+            "Commit SHA of the launcher's working tree at construction; sentinel "
+            "``git-unavailable`` when not in a git repo."
+        ),
+    )
+    is_repo_dirty: bool = Field(
+        default_factory=lambda: _is_repo_dirty(),
+        description=(
+            "Whether the launcher's working tree had uncommitted changes at construction."
+        ),
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: _utc_now(),
+        description=(
+            "UTC timestamp when the spec was first constructed; preserved across "
+            "worker round-trips via JSON."
+        ),
+    )
+    run_id: str = Field(
+        default_factory=_default_run_id,
+        description="Deterministic W&B run ID derived from ``task_name`` and ``created_at``.",
+    )
+    r2_prefix: str = Field(
+        default_factory=_default_r2_prefix,
+        description="Full R2 object prefix (``<root>/<task_name>/<run_id>/``); must end with ``/``.",
+    )
 
     @model_validator(mode="before")
     @classmethod

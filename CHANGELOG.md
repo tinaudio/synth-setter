@@ -1,6 +1,429 @@
 # CHANGELOG
 
 
+## v5.1.1 (2026-05-18)
+
+### Bug Fixes
+
+- **docker**: Install jq in dev-base so claude-hooks pytest tests pass
+  ([#1082](https://github.com/tinaudio/synth-setter/pull/1082),
+  [`ac48e4f`](https://github.com/tinaudio/synth-setter/commit/ac48e4f113dfb73bf951da4bb38df16c7bb7a9ea))
+
+The pre-PR review gate hook in `.claude/settings.json` invokes `jq` to extract the tool-call command
+  from stdin. The behavioural tests in `tests/claude_hooks/test_settings_hooks.py` re-run the inline
+  hook body via `bash -c`, so the test environment must provide `jq`.
+
+`pytest -k "not slow"` runs in the Docker `dev-base` stage, which only installed `git
+  ca-certificates`. `jq` arrived one stage later in `devcontainer-tools`, so the unit-test step in
+  CI saw `jq: command not found`, the cmd-extraction substitution silently produced an empty string,
+  and the gate's BLOCKED branch fired — failing
+  `test_pre_pr_gate_allows_when_token_in_trailing_comment` with rc=2.
+
+Install jq in dev-base instead. devcontainer-tools still inherits it via `FROM dev-base`, so the
+  duplicate entry there is dropped.
+
+Refs #1081
+
+### Chores
+
+- **claude-md**: Gate gh pr create behind /repo-review-full
+  ([#1073](https://github.com/tinaudio/synth-setter/pull/1073),
+  [`843b058`](https://github.com/tinaudio/synth-setter/commit/843b05806aa3970a41e1835b3c0ae660a0e3dc8f))
+
+* chore(claude-md): add pre-PR review gate hook
+
+Add a PreToolUse hook on `gh pr create` (.claude/settings.json) that blocks PR creation unless the
+  command line contains the literal `REVIEW_FULL_DONE=1`. The token is intentionally honor-system —
+  it forces a pause to invoke `/repo-review-full-no-comments` and iterate on its BLOCK/WARN findings
+  before opening a PR.
+
+The `if` filter uses the same regex as the existing doc-drift hook so both fire on the same set of
+  commands. The acknowledgment is matched anywhere in the command (substring) rather than just at
+  start, so the recommended form is a trailing comment — that keeps `gh pr create ...` at the start
+  of the line and preserves the existing doc-drift, pr-checkbox, and taxonomy-verification
+  PostToolUse hooks:
+
+gh pr create --title ... --body ... # REVIEW_FULL_DONE=1
+
+Also adds a `### Pre-PR Review Gate` sub-section in CLAUDE.md so the convention is discoverable to
+  other contributors.
+
+Refs #151
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+---------
+
+- **claude-md**: Place hook if: inside handler to scope Bash gates
+  ([#1079](https://github.com/tinaudio/synth-setter/pull/1079),
+  [`8efd0f9`](https://github.com/tinaudio/synth-setter/commit/8efd0f99ca586bd2d2da3a6fb7f52b58c01a0333))
+
+* chore(claude-md): place hook if: inside handler to scope Bash gates
+
+The `if:` field at the matcher-entry level is silently ignored by Claude Code — it is only honored
+  inside a hook handler (sibling of `type`/ `command`). As a result, three Bash hooks intended to
+  gate `gh pr create`, `git push`, and `git commit` were firing on every Bash tool call. In
+  particular, the pre-PR review gate blocked even read-only commands like `gh pr view` and `ls`.
+
+Move each `if:` inside its hook handler and switch the two shell-grep-style values to Claude Code
+  permission-rule syntax (`Bash(gh pr create *)`, `Bash(git push *)`), which is the only form
+  honored at the handler level.
+
+Add `tests/claude_hooks/test_settings_hooks.py`: * schema regression — no matcher-entry-level `if:`
+  (the bug) * defensive type check on handler `if:` values * parameterised assertion that the four
+  scoped handlers carry their expected permission-rule scopes * behavioural tests on the
+  pre-PR-create gate body (blocks without the REVIEW_FULL_DONE=1 token, allows with it as a trailing
+  comment) and on the branch-print hook body.
+
+* chore(claude-md): apply pre-PR review polish
+
+Address WARNs surfaced by the parallel-fan-out review against the local diff (zero BLOCKs across
+  code-health, synth-setter-project-standards, python-style, tdd-implementation, comment-hygiene):
+
+* test_handler_if_values_use_permission_rule_syntax: tighten the shape check from "(" in value and
+  value.endswith(")") to a regex matching Tool(pattern). Catches typos like "(foo bar)" or "Bash"
+  that the loose check would have passed. * test_pre_pr_gate_allows_when_token_in_trailing_comment:
+  swap the exact stderr == "" assertion for the looser "BLOCKED" not in stderr, so the test pins the
+  negative behaviour the gate actually contracts for, not the bonus property of writing nothing on
+  the pass path. * _run_inline_hook: move the noqa rationale into a comment spelling out the trust
+  boundary (settings.json is maintainer-controlled; do not reuse against untrusted paths). *
+  .claude/settings.json doc-drift and pr-review-resolver descriptions: drop the bare "asyncRewake."
+  sentence fragment (the JSON key is the source of truth) and the "re-validates with its own regex"
+  implementation-detail bake-in that would rot if either script switched matching strategies.
+
+* chore(claude-md): tighten _find_handler to assert exactly one matcher hit
+
+Address Copilot review on PR 1079: the previous helper returned the first matcher entry whose
+  description contained the lookup substring, silently masking duplicates. Switch to
+  collect-then-raise-if-not-1 so copy/paste or overly broad descriptions fail loudly in tests.
+
+Use explicit ``raise AssertionError`` (not ``assert``) so pydoclint's DOC502 stays happy with the
+  ``:raises AssertionError:`` docstring entry.
+
+Refs #1078
+
+- **lint**: Clean up embed_pool.py ([#1037](https://github.com/tinaudio/synth-setter/pull/1037),
+  [`525b520`](https://github.com/tinaudio/synth-setter/commit/525b520ecf2c1419d07e2784dce4039e94af023b))
+
+### Documentation
+
+- **claude-md**: Freeze lint exception lists; require fixing lint over suppressing it
+  ([#1070](https://github.com/tinaudio/synth-setter/pull/1070),
+  [`ff001f9`](https://github.com/tinaudio/synth-setter/commit/ff001f985e5792237b469b230e455dc8f18d5813))
+
+* docs(claude-md): freeze lint exception lists; require fixing lint over suppressing it
+
+Adds a hard rule under "Formatting & Linting" forbidding new entries to the four lint exception
+  surfaces:
+
+- .pydoclint-baseline.txt - pyproject.toml's [tool.ruff.lint.per-file-ignores] / extend-exclude -
+  .pre-commit-config.yaml per-hook exclude: regexes - pyrightconfig.json "exclude" paths
+
+These lists pin the existing legacy debt at baseline-capture time and are append-frozen. The only
+  allowed edits are removals via the /lint-cleanup workflow (tracked by #25 and #938). Also adds a
+  cross-reference bullet to the "Don't" section so the rule surfaces in the same place as the other
+  hard rules.
+
+Refs #25 Refs #938
+
+* docs(claude-md): address Copilot review feedback on lint-freeze section
+
+Per PR #1070 review:
+
+- Fix [tool.ruff].extend-exclude path (was incorrectly nested under [tool.ruff.lint]) in both the
+  freeze table and the Don't bullet. - Replace inaccurate pre-commit hook examples (mypy doesn't
+  exist; pydoclint's exclude lives in pyproject.toml, not as a per-hook exclude) with real hooks:
+  pyright/interrogate/shellcheck/mdformat/ codespell. - Point at .github/agents/lint-cleanup.md (the
+  canonical runbook) instead of the .claude/agents/lint-cleanup.md stub, and note the shim
+  relationship. - Use /pull/1044 (the PR) instead of /issues/1044 to match the rest of the repo's
+  references. - Make the maintainer-escalation paragraph an explicit, single escalation path
+  (pre-approval recorded on the tracking issue *before* the PR is opened) so it no longer
+  contradicts the absolute "only removals" rule.
+
+- **claude-md**: Wire comment-hygiene skill into repo-review
+  ([#1075](https://github.com/tinaudio/synth-setter/pull/1075),
+  [`40413c8`](https://github.com/tinaudio/synth-setter/commit/40413c8a877bacdbeb35f8c4ccfcc8b4920eed8b))
+
+* feat(claude-md): wire comment-hygiene skill into repo-review
+
+Wires the new tinaudio-synth-setter-skills:comment-hygiene plugin skill (tinaudio/skills#83) into
+  the three places the repo-review workflow needs to know about it:
+
+1. CLAUDE.md "Code Review" canonical checklist — adds the skill as item #8, alongside the existing
+  seven, with its scope (12 items, *.py + *.{yml,yaml} + docs/doc-map.yaml) and its distinguishing
+  feature (emits suggested rewrites, not just diagnostics).
+
+2. .claude/skills/_shared/repo-review-full-analysis.md - Step 3 selection table: file-pattern ->
+  skill rows now route *.py, .github/workflows/*.{yml,yaml}, configs/*.{yml,yaml}, and
+  docs/doc-map.yaml through comment-hygiene. A dedup note is added since multiple rows can select
+  the same skill but should only spawn one fan-out agent. - Step 5 tag table: adds the
+  comment-hygiene short-form tag for the [<skill>:<severity>] comment-body prefix.
+
+3. .claude/skills/repo-review/SKILL.md (MVP) - the existing inline [comment-hygiene] block had two
+  rules; expanded to mirror the plugin's C1-C12 schema so external contributors and plugin-less
+  environments get the same checklist surface (without bloating the MVP - defer per-finding
+  Before/After rewrites to the plugin).
+
+No code edits to existing comments/docstrings in this PR - that cleanup sweep is a follow-up once
+  the skill starts firing in CI.
+
+Refs #1074
+
+* fix(claude-md): doc-drift cleanup — narrow comment-hygiene YAML scope
+
+Two real drifts surfaced by /doc-drift on the prior commit:
+
+1. CLAUDE.md entry #8 said the skill applies to "*.py + *.{yml,yaml} + docs/doc-map.yaml", but the
+  analysis.md selection table only covers .github/workflows/*.{yml,yaml} + configs/**/*.{yml,yaml} +
+  docs/doc-map.yaml. A reader would expect repo-root YAMLs like .pre-commit-config.yaml to be in
+  scope — they aren't. Narrowed the parenthetical to match the analysis-table rules.
+
+2. .claude/skills/repo-review/SKILL.md called the MVP listing a "highest-signal subset" but it
+  enumerates all 12 BLOCK/WARN rules. The actual omission is the plugin's per-finding Before/After
+  rewrites and the two NIT-severity items. Reworded to reflect that.
+
+Also added a one-line coordination note to CLAUDE.md #8 that the plugin must be installed for
+  /repo-review-full to actually fan out the agent (the wiring is intentionally ahead of the plugin's
+  GA, so this is forward-looking documentation).
+
+### Testing
+
+- **datamodule**: Add behavioral coverage for surge_datamodule
+  ([#1047](https://github.com/tinaudio/synth-setter/pull/1047),
+  [`2c0bacf`](https://github.com/tinaudio/synth-setter/commit/2c0bacf2389db8f6fbade416ae6e26f25da76e70))
+
+- **datamodule**: Add tests for ot module (hungarian matching + collate fns)
+  ([#1052](https://github.com/tinaudio/synth-setter/pull/1052),
+  [`f75c525`](https://github.com/tinaudio/synth-setter/commit/f75c525233448a4663cc06d25c4ea7f44b82b7be))
+
+- **eval**: Add test coverage for compute_audio_metrics
+  ([#1064](https://github.com/tinaudio/synth-setter/pull/1064),
+  [`0f54f55`](https://github.com/tinaudio/synth-setter/commit/0f54f555cd06c6b555de9f52d870a4c374dc42b7))
+
+* test(eval): add behavioral coverage for compute_audio_metrics
+
+Extend the existing compute_rms tests with end-to-end behavioral coverage of every public function
+  in src/synth_setter/evaluation/compute_audio_metrics.py.
+
+Fast tests cover: subdir_matches_pattern, find_possible_subdirs, compute_mel_specs, compute_mss,
+  compute_mfcc, compute_wmfcc, get_stft, batched_wasserstein_distance_np, compute_sot,
+  compute_metrics_on_dir, and compute_metrics.
+
+Slow tests (@pytest.mark.slow) exercise the real models / CLI: compute_jtfs, compute_jtfs_distance,
+  get_pesto_activations, compute_f0, and the click CLI main. An autouse fixture resets the
+  module-level scatter / pesto_model caches per test, and one slow test pins the shape-only key
+  behavior of the scatter cache so any future refactor that re-keys it trips loudly.
+
+* test(eval): address review findings on compute_audio_metrics tests
+
+Addresses prioritized WARNs from /repo-review-full-no-comments:
+
+- P1.1: replace manual module-global mutation with monkeypatch.setattr fixture (raising=True traps
+  future renames). - P1.3: consolidate compute_audio_metrics imports into a single block; ruff/isort
+  then split main-as-alias into its own block. - P1.4: parametrize compute_mel_specs shape test by
+  (idx, expected_n_mels) so each n_mels gets a named failure; keep a separate cardinality test. -
+  P2.6: trim "Do not modify" banner to a one-line pointer to #899. - P2.7: rewrite
+  test_get_stft_averages_channels to use two different mono signals so the test actually exercises
+  channel averaging. - P2.8: use exact == 0.0 (not pytest.approx) for identical Wasserstein hists. -
+  P2.10: add np.isfinite assertions to compute_mel_specs and compute_mfcc tests.
+
+* test(eval): use array-aware assertion for identical-hists Wasserstein
+
+Addresses Copilot review on #1064 line 311 — replace `assert batched_wasserstein_distance_np(hist,
+  hist) == 0.0` with `np.testing.assert_array_equal(..., [0.0])` to match the sibling batch-dim
+  test's idiom and avoid relying on numpy's implicit 1-element-array-to-scalar bool conversion
+  (which would silently break if hist gained a second row).
+
+Refs #1067
+
+- **eval**: Add test coverage for predict_vst_audio
+  ([#1060](https://github.com/tinaudio/synth-setter/pull/1060),
+  [`ebbf745`](https://github.com/tinaudio/synth-setter/commit/ebbf745b1c91f7eecd9304a3963cdbe0566557c9))
+
+Adds tests for the three pure helpers (make_spectrogram, write_spectrograms, params_to_csv) plus the
+  click main entrypoint with render_params patched out, so the suite runs CPU-only under test-fast.
+
+Refs #1047
+
+- **training**: Add SurgeFakeOracleModule for oracle-baseline smoke tests
+  ([#1069](https://github.com/tinaudio/synth-setter/pull/1069),
+  [`5c67c1a`](https://github.com/tinaudio/synth-setter/commit/5c67c1a381294f0dd03a2ff2d92aa53db649e6a3))
+
+* feat(training): add SurgeFakeOracleModule for oracle-baseline smoke tests
+
+Drop-in replacement for SurgeFeedForwardModule that returns batch["params"] as its prediction —
+  perfect inversion by construction. Two uses:
+
+1. Smoke-tests the train/eval pipeline end-to-end at trivial cost (no real model forward), and is
+  now the experiment behind the cfg_surge_xt_global fixture (tests/conftest.py) so
+  test_train_surge_xt / test_train_eval_surge_xt exercise the oracle instead of the AST-based
+  ffn_full. 2. Establishes a downstream-metrics ceiling — any divergence between oracle audio and
+  ground truth in compute_audio_metrics is necessarily a pipeline issue, not a model issue.
+
+The module preserves SurgeFeedForwardModule's public surface so swapping it in via Hydra (override
+  /model: surge_fake_oracle) requires no caller-side changes: same __init__ signature (incl.
+  compile/scheduler/warmup_steps), same 4-tuple model_step shape, same (preds, batch) tuple from
+  predict_step (unpacked by PredictionWriter.write_on_batch_end), and the same {"param_mse",
+  "per_param_mse"} dict from validation_step / test_step that LogPerParamMSE.on_validation_batch_end
+  reads.
+
+The fake net carries one nn.Parameter so configure_optimizers has something to optimize and
+  loss.backward() succeeds; the loss is 0.0 * net(mel).sum(), which is zero but grad-bearing.
+  compile defaults to false (torch.compile on a trivial net is wasteful and adds CI flake risk).
+
+configs/experiment/surge/test-mps.yaml is updated in lockstep so the
+  test_test_mps_yaml_matches_cfg_surge_xt_global drift guard stays green. The new module is added to
+  pyrightconfig.json / .pre-commit-config.yaml pyright excludes, matching the existing
+  surge_ff_module convention (self.hparams attribute access).
+
+* docs(testing): update conftest+testing.md to refer to fake_oracle smoke fixture
+
+Updates three stale references introduced by the surge/ffn_full → surge/fake_oracle smoke-fixture
+  swap: - tests/conftest.py: _build_surge_xt_smoke_cfg docstring now names the fake_oracle
+  experiment, not ffn_full. - docs/reference/testing.md §4: rewrite the 'Surge XT FFN tests' /
+  experiment=surge/ffn_full bullet to describe the oracle stand-in and why it isolates the smoke
+  tests from real-model state. - docs/reference/testing.md §2 (test-mps.yml row): drop the
+  FFN-forward-pass framing; the MPS lane now hosts the oracle, not the FFN.
+
+* internal-fix(training): tighten SurgeFakeOracleModule annotations + pin grad-path invariant
+
+Address review findings from /repo-review-full-no-comments on PR #1069:
+
+- Type annotations: optimizer/scheduler were annotated as instances, but the Hydra _partial_ wiring
+  passes factories. Fix to Callable[..., torch.optim.Optimizer] / Callable[...,
+  torch.optim.lr_scheduler.LRScheduler] | None and drop the matching # type: ignore[arg-type] in the
+  test helper. - compile=False: keep the parameter name (parity with SurgeFeedForwardModule so Hydra
+  config-swap works without an alias layer) but document the builtin-shadow with a # noqa: A002
+  comment. - setup(stage): del stage to match the explicit unused-param pattern used by
+  validation_step/test_step/FakeOracleNet.forward elsewhere in the module. -
+  test_training_step_returns_zero_loss_with_grad now asserts module.net.dummy.grad is not None after
+  .backward() — pins the grad-path invariant that the loss = 0.0 * self.net(mel_spec).sum()
+  expression exists to satisfy. A refactor that silently drops self.net from model_step would
+  produce a detached zero loss that still passes backward(), but would land no grad on the dummy
+  parameter; this assertion catches that.
+
+* internal-fix(training): drop SurgeFakeOracleModule from pyright exclude list
+
+Address Copilot review of PR #1069 (commit 460cee1):
+
+The new module was added to pyright's exclude in both pyrightconfig.json and .pre-commit-config.yaml
+  to match the legacy pattern set by SurgeFeedForwardModule (Lightning's self.hparams.foo attribute
+  access trips pyright). Copilot correctly flagged this as silently shrinking the type-check surface
+  for a brand-new file.
+
+Fix in this file alone (sister modules unchanged): - Switch self.hparams.X to self.hparams["X"]
+  indexing — equivalent at runtime, but pyright sees a plain dict access rather than the
+  AttributeDict's typed-as-MutableMapping attribute set. - Replace self.trainer.model.parameters()
+  with self.parameters(). The module owns self.net, so this is the same set of parameters without
+  the Optional[Trainer.model] None-check pyright otherwise demands. - Hoist
+  self.hparams["warmup_steps"] and self.hparams["scheduler"] into local variables once at the top of
+  configure_optimizers so the branch logic reads cleanly.
+
+Result: pyright is clean on the file with no excludes, no type: ignore, and no behavioral changes
+  (verified with test_train_surge_xt[cpu] and the full unit suite).
+
+* Update surge_fake_oracle_module.py
+
+- **training**: Assert on fake oracle model eval losses
+  ([#1080](https://github.com/tinaudio/synth-setter/pull/1080),
+  [`ffd6359`](https://github.com/tinaudio/synth-setter/commit/ffd635945f6eb4355b8aa9fd94de828dad38613d))
+
+* test(training): assert oracle eval losses + audio metrics are near-zero
+
+`SurgeFakeOracleModule` is a perfect-inversion oracle by construction: `train/loss = 0.0 *
+  net(mel_spec).sum() == 0` exactly, and its prediction is `batch["params"]` verbatim (so
+  `pred_params == target_params` bit-for-bit). The existing smoke tests only assert those values are
+  *finite* — a future regression that silently breaks the oracle (e.g. dummy-param drift, params no
+  longer aliased) could leave the tests green.
+
+Tighten the `surge/fake_oracle` legs of both parametrized smoke tests:
+
+- `test_train_surge_xt`: pin every `train/loss*` metric to exactly `0.0`. -
+  `test_train_eval_surge_xt`: read the per-sample audio metrics (`mss`, `wmfcc`, `sot`, `rms` from
+  `metrics.csv`) and assert each column stays within bounds the oracle should comfortably hit
+  (mss/wmfcc/sot upper-bound, rms cosine-sim lower-bound). Bounds are sized to ~3x the worst-case
+  observed across eight local sweeps — they absorb Surge XT's per-voice initialization jitter
+  (oscillator phase, noise seed), while a real-model regression blows through every column.
+
+Both legs continue to run for both experiments; the new tight assertions are gated on
+  `experiment_name == "surge/fake_oracle"` so the `surge/ffn_full` leg (untrained real net) is
+  unaffected.
+
+Refs #30
+
+* test(training): address review feedback for oracle-bounds test
+
+- Add `_ORACLE_EXPERIMENT` constant so the in-test gate strings stay in lockstep with
+  `_SURGE_SMOKE_EXPERIMENTS` (rename safety: a future experiment rename can't leave the oracle-only
+  `if` branches as silently-dead code). - Move the strongest oracle invariant (`pred-i.pt`
+  bit-equals `target-params-i.pt`) next to where the prediction tensors are loaded, so an
+  `predict_step` regression fails before the noisier downstream VST-render metrics get a chance to
+  mask it. - Flatten the `("upper"|"lower", bound)` dispatch table to four explicit per-metric
+  assertions — no test logic to harbor its own bugs. - Trim the rationale comment to keep the WHY
+  (VST jitter) and drop the perishable PR-description numbers (sweep count, headroom multiplier,
+  observed ffn_full magnitudes).
+
+* docs(testing): update surge_xt smoke-test description for oracle invariants
+
+The `surge/fake_oracle` leg of `test_train_*_surge_xt` is no longer a bare "wiring smoke check" — it
+  now asserts exact-zero `train/loss`, bit-identical `pred-{i}.pt` vs `target-params-{i}.pt`, and
+  tight per-sample audio-metric bounds. Update the parenthetical so the reference doc matches what
+  the parametrized test actually pins.
+
+- **training**: Parametrize surge_xt smoke fixture over experiment_name
+  ([#1071](https://github.com/tinaudio/synth-setter/pull/1071),
+  [`c2dc7ac`](https://github.com/tinaudio/synth-setter/commit/c2dc7ac39a9e9989ac0df55031cea19696b45df1))
+
+* test(training): parametrize surge_xt smoke fixture over experiment_name
+
+Add an indirect-opt-in `experiment_name` fixture (mirroring the existing `param_spec_name` pattern)
+  so the Surge XT smoke fixture composes its cfg against either `surge/fake_oracle` or
+  `surge/ffn_full`. `test_train_surge_xt` and `test_train_eval_surge_xt` now run once per experiment
+  via `@pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)`; other
+  consumers of `cfg_surge_xt` are unaffected.
+
+Adds `configs/experiment/surge/test-mps-ffn.yaml` as the lockstep YAML sibling to `test-mps.yaml`
+  for the FFN experiment, and parametrizes `test_test_mps_yaml_matches_cfg_surge_xt_global` over
+  `(experiment, yaml)` pairs so the cfg-shape drift guard covers both experiments.
+
+Refs #1068
+
+* docs(testing): document experiment_name parametrize axis in testing primer
+
+Doc-drift fixes surfaced by the doc-drift advisory after parametrizing the Surge XT smoke fixture
+  over experiment_name:
+
+- docs/reference/testing.md: list experiment_name alongside accelerator and param_spec_name as a
+  third indirect axis; reframe the oracle gloss as describing the default leg; mention
+  surge/ffn_full coverage. - docs/doc-map.yaml: add `experiment_name parametrize` to the conftest.py
+  covers list so doc-drift owns this fixture's documentation. - tests/conftest.py: update :param
+  cfg_surge_xt_global: docstrings on cfg_surge_xt and cfg_surge_xt_eval to name all three indirect
+  axes. - configs/experiment/surge/test-mps.yaml: spell out experiment_name in the header signature;
+  cross-reference test-mps-ffn.yaml as the FFN sibling.
+
+* refactor(configs): rename test-mps.yaml to test-mps-fake-oracle.yaml; require param_spec override
+
+Two cfg-hygiene fixes for the MPS smoke YAMLs:
+
+1. `param_spec: ???` in both YAMLs. Previously the YAMLs baked
+  `callbacks.log_per_param_mse.param_spec: surge_4` even though `_build_surge_xt_smoke_cfg` always
+  overwrites it from the run's `param_spec_name`. Promoting to a mandatory override makes the YAML's
+  contract symmetric with `model.net.d_out: ???`: production callers must supply both; smoke fixture
+  supplies both. The cfg-equality test now reads the resolved value from the fixture and passes it
+  as a Hydra override.
+
+2. Rename `configs/experiment/surge/test-mps.yaml` → `test-mps-fake-oracle.yaml`. The file's
+  `override /model: surge_fake_oracle` and `run_name: fake_oracle` / `tags: [surge, oracle]` content
+  was misleading under the generic-looking `test-mps` name. Now both MPS smoke YAMLs are clearly
+  experiment-suffixed (`test-mps-fake-oracle.yaml`, `test-mps-ffn.yaml`), mirroring the
+  parametrize-pair names in `test_test_mps_yaml_matches_cfg_surge_xt_global`.
+
+Updates: cfg-equality test parametrize pair, conftest.py docstring + inline comment refs,
+  docs/reference/testing.md, the FFN sibling's cross-reference header.
+
+
 ## v5.1.0 (2026-05-16)
 
 ### Chores

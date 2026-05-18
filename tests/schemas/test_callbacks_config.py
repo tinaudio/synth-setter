@@ -1,0 +1,90 @@
+"""Behavioural tests for ``CallbacksConfig`` / ``CallbackInstance``.
+
+Every ``callbacks=<name>`` selection that composes to a non-empty dict must
+validate. ``none.yaml`` composes to ``None`` and is handled outside the
+schema (``instantiate_callbacks`` short-circuits on falsy).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from synth_setter.schemas.callbacks_config import CallbackInstance, CallbacksConfig
+from tests.schemas.conftest import compose_train_cfg
+
+_CALLBACKS_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "callbacks"
+
+
+def _all_callback_config_names() -> list[str]:  # noqa: DOC201,DOC203
+    """Return every callback YAML stem under ``configs/callbacks/``."""
+    names = sorted(p.stem for p in _CALLBACKS_CONFIG_DIR.glob("*.yaml"))
+    assert names, (
+        f"no callback YAMLs found under {_CALLBACKS_CONFIG_DIR} — "
+        "has the callbacks composition layout changed?"
+    )
+    return names
+
+
+def _compose_callbacks_subtree(  # noqa: DOC101,DOC103,DOC201,DOC203
+    callbacks_name: str,
+) -> dict[str, object] | None:
+    """Compose with ``callbacks=<name>``; returns dict, or ``None`` for ``none.yaml``."""
+    cfg_dict = compose_train_cfg(overrides=[f"callbacks={callbacks_name}"])
+    return cfg_dict["callbacks"]
+
+
+class TestCallbacksConfigAcceptsEveryComposition:
+    """Every ``callbacks=<name>``-selectable YAML must validate against ``CallbacksConfig``.
+
+    Non-dict composes (today only ``none.yaml`` → ``None``) emit pytest skips
+    so a future addition surfaces visibly rather than as a deep ValidationError.
+    """
+
+    @pytest.mark.parametrize("callbacks_name", _all_callback_config_names())
+    def test_callbacks_yaml_validates(self, callbacks_name: str) -> None:  # noqa: DOC101,DOC103
+        """The composed ``callbacks`` subtree validates as ``CallbacksConfig``."""
+        callbacks_subtree = _compose_callbacks_subtree(callbacks_name)
+        if not isinstance(callbacks_subtree, dict):
+            pytest.skip(
+                f"callbacks={callbacks_name} composes to non-dict "
+                f"({type(callbacks_subtree).__name__}); schema covers dict form only"
+            )
+        parsed = CallbacksConfig.model_validate(callbacks_subtree)
+        assert isinstance(parsed, CallbacksConfig)
+
+
+_VALID_CALLBACK = {
+    "_target_": "lightning.pytorch.callbacks.ModelCheckpoint",
+    "dirpath": "/tmp/ckpt",  # noqa: S108
+}
+
+
+class TestCallbacksConfigRejectsBadInputs:
+    """Validators must catch obvious mistakes on the typed fields."""
+
+    def test_missing_target_in_instance_rejected(self) -> None:
+        """Each callback instance must carry ``_target_``; reject if absent."""
+        with pytest.raises(ValidationError):
+            CallbacksConfig.model_validate({"model_checkpoint": {"dirpath": "/tmp"}})  # noqa: S108
+
+    def test_blank_target_rejected(self) -> None:
+        """A blank ``_target_`` would crash ``hydra.utils.instantiate`` mid-fit."""
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            CallbacksConfig.model_validate({"cb": {"_target_": "  "}})
+
+    def test_blank_callback_name_rejected(self) -> None:
+        """RootModel key is ``NonBlankStr`` — empty callback names are rejected."""
+        with pytest.raises(ValidationError, match="at least 1 character"):
+            CallbacksConfig.model_validate({"   ": _VALID_CALLBACK})
+
+
+class TestCallbackInstanceDirect:
+    """Direct ``CallbackInstance`` validation works for individual entries."""
+
+    def test_valid_instance_parses(self) -> None:
+        """A minimal valid callback dict parses cleanly."""
+        parsed = CallbackInstance.model_validate(_VALID_CALLBACK)
+        assert parsed.target_ == "lightning.pytorch.callbacks.ModelCheckpoint"
