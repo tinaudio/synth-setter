@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
 
@@ -289,6 +290,38 @@ class TestResharRemovedFlagsRejected:
 
         assert result.exit_code != 0
         assert "no such option" in result.output.lower()
+
+
+class TestResharSplitDivisibility:
+    """``train_val_test_sizes`` must be perfectly divisible by ``samples_per_shard``."""
+
+    def test_non_divisible_split_size_raises_at_runtime(
+        self,
+        tmp_path: Path,
+        runner: CliRunner,
+    ) -> None:
+        """A stale spec whose split size has a non-zero remainder is rejected loudly.
+
+        Normally ``DatasetSpec._split_sizes_must_be_multiples_of_samples_per_shard``
+        catches this at parse time; this test bypasses model validation (via
+        ``SimpleNamespace``) to exercise the defensive guard inside ``main()``,
+        protecting against a stale R2 spec that predates the model validator.
+
+        :param tmp_path: Pytest tmp_path fixture for the dataset root.
+        :param runner: Click test runner fixture.
+        """
+        tmp_path.mkdir(exist_ok=True)
+        bad_spec = SimpleNamespace(
+            render=SimpleNamespace(samples_per_shard=10),
+            train_val_test_sizes=(15, 10, 10),  # 15 % 10 != 0
+            shards=(),
+        )
+
+        with mock.patch.object(_reshard_module, "load_spec_from_uri", return_value=bad_spec):
+            result = runner.invoke(_reshard_module.main, [str(tmp_path)])
+
+        assert result.exit_code != 0
+        assert "divisible" in result.output.lower() or "samples_per_shard" in result.output
 
 
 class TestResharR2SpecUri:
