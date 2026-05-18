@@ -1,0 +1,12 @@
+# SkyPilot dispatch knobs for synth-setter-generate-dataset.
+# compute_template stays null → run in-process; point it at a configs/compute/*.yaml
+# to dispatch via SkyPilot. See generate_dataset.main for dispatch semantics.
+
+compute_template: null
+env_file: .env
+job_name: null
+num_workers: 1
+worker_image_tag: dev-snapshot
+tail: false
+api_server: null
+local: false

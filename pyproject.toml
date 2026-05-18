@@ -88,6 +88,7 @@ all = [
 synth-setter-train = "synth_setter.cli.train:main"
 synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
+synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:from_hydra"
 
 
 

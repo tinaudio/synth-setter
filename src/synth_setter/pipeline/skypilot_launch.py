@@ -60,6 +60,7 @@ from hydra.errors import HydraException
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
+from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 # Per-launch R2 key for the materialized spec (file_mounts blocked by #749).
@@ -808,6 +809,290 @@ def _cancel_job(job_name: str) -> None:
     # SDK-internal); blanket except keeps teardown robust across all of them.
     except Exception as exc:  # noqa: BLE001
         click.echo(f"[{job_name}] cancel failed: {exc}")
+
+
+def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:  # noqa: DOC203
+    """Detect the cred-bootstrap provider from an already-parsed YAML mapping.
+
+    In-memory counterpart of ``_detect_provider``; same rules (flat
+    ``resources.cloud`` vs. ``resources.any_of[0].cloud``) without re-reading
+    the template from disk.
+
+    :param doc: Parsed top-level YAML mapping for a SkyPilot Task.
+    :param source: Path the doc was loaded from; used only in error messages.
+    :return: ``--provider`` flag for the cred-bootstrap script.
+    :raises ValueError: ``resources`` is missing/malformed or names an
+        unsupported cloud.
+    """
+    resources = doc.get("resources") or {}
+    if not isinstance(resources, dict):
+        raise ValueError(
+            f"Could not detect cloud from {source}; expected `resources` to be a mapping."
+        )
+    cloud_value = resources.get("cloud")
+    if cloud_value is None:
+        any_of = resources.get("any_of") or []
+        if not isinstance(any_of, list):
+            raise ValueError(
+                f"Could not detect cloud from {source}; expected `resources.any_of` to be a list."
+            )
+        if any_of:
+            first = any_of[0]
+            if not isinstance(first, dict):
+                raise ValueError(
+                    f"Could not detect cloud from {source}; "
+                    "expected `resources.any_of[0]` to be a mapping."
+                )
+            cloud_value = first.get("cloud")
+    if not isinstance(cloud_value, str):
+        raise ValueError(
+            f"Could not detect cloud from {source}; "
+            "expected resources.cloud (str) or resources.any_of[0].cloud (str)."
+        )
+    provider = _CLOUD_TO_PROVIDER.get(cloud_value.strip().lower())
+    if provider is None:
+        raise ValueError(
+            f"Unsupported cloud {cloud_value!r} in {source}; cred bootstrap "
+            "supports runpod, oci, and local (kubernetes) only"
+        )
+    return provider
+
+
+_WORKER_CMD_SENTINEL = "${WORKER_CMD}"
+
+
+def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:  # noqa: DOC203
+    """Load ``template_path`` as YAML and inject ``cmd`` into the ``run:`` block.
+
+    Three branches based on the template's existing ``run:``:
+
+    * **Empty/missing** — set ``run = cmd``.
+    * **Contains** ``${WORKER_CMD}`` — substitute ``cmd`` into the sentinel,
+      preserving surrounding scaffolding (e.g. OCI's ``sudo docker run …
+      bash -c "${WORKER_CMD}"``). Caller must shell-quote the context so the
+      substituted string lands as a single argv item.
+    * **Non-empty without sentinel** — refuse, rather than silently dropping
+      the template's ``run:``. Strip ``run:`` or add the sentinel to opt in.
+
+    :param template_path: Path to a SkyPilot Task YAML.
+    :param cmd: Bash command to inject.
+    :return: The parsed YAML dict with ``run`` populated.
+    :raises FileNotFoundError: ``template_path`` does not point to a file.
+    :raises ValueError: top-level YAML is not a mapping, or the template's
+        ``run:`` is non-empty and lacks the sentinel.
+    """
+    if not template_path.is_file():
+        raise FileNotFoundError(f"compute template not found: {template_path}")
+    with template_path.open(encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    if doc is None:
+        doc = {}
+    if not isinstance(doc, dict):
+        raise ValueError(
+            f"Top-level YAML in {template_path} must be a mapping, got {type(doc).__name__}"
+        )
+    existing_run = doc.get("run")
+    if existing_run in (None, ""):
+        doc["run"] = cmd
+        return doc
+    if not isinstance(existing_run, str):
+        raise ValueError(
+            f"compute template {template_path} `run:` must be a string, "
+            f"got {type(existing_run).__name__}"
+        )
+    if _WORKER_CMD_SENTINEL in existing_run:
+        doc["run"] = existing_run.replace(_WORKER_CMD_SENTINEL, cmd)
+        return doc
+    raise ValueError(
+        f"compute template {template_path} has a non-empty `run:` block, but "
+        "skypilot_launch.cmd is also set — cmd cannot be silently dropped. "
+        f"Strip the YAML's `run:` section, or substitute {_WORKER_CMD_SENTINEL} "
+        "where the worker cmd should land, to opt into the Hydra cmd-injection flow."
+    )
+
+
+def _launch_one_rank_from_doc(  # noqa: DOC203
+    rank: int,
+    *,
+    job_names: list[str],
+    worker_env_base: dict[str, str],
+    worker_image: str,
+    task_doc: dict[str, object],
+) -> int:
+    """Submit one rank, building the ``sky.Task`` from an in-memory YAML dict.
+
+    Uses ``sky.Task.from_yaml_config`` so a cmd-injected dict skips the
+    disk roundtrip.
+
+    :param rank: This rank's index into ``job_names``.
+    :param job_names: One managed-job name per rank; ``len()`` defines the world size.
+    :param worker_env_base: Env dict forwarded to the rank (rank/world keys added here).
+    :param worker_image: Resolved ``repo:tag`` Docker image reference.
+    :param task_doc: Parsed compute YAML dict (with ``run`` already injected).
+    :return: SkyPilot-assigned ``job_id`` for this rank.
+    :raises RuntimeError: ``sky.jobs.launch`` / ``sky.stream_and_get`` yielded
+        no ``job_id``.
+    """
+    num_workers = len(job_names)
+    job_name = job_names[rank]
+    env_for_rank = {
+        **worker_env_base,
+        WORKER_RANK_ENV_VAR: str(rank),
+        NUM_WORKERS_ENV_VAR: str(num_workers),
+        _WORKER_IMAGE_ENV: worker_image,
+    }
+    task = sky.Task.from_yaml_config(task_doc)
+    _override_image_id(task, worker_image)
+    task.update_envs(env_for_rank)
+    click.echo(f"[{job_name}] submitting rank={rank}/{num_workers}")
+    launch_request_id = sky.jobs.launch(task, name=job_name)
+    launch_result = sky.stream_and_get(launch_request_id)
+    if launch_result is None:
+        raise RuntimeError(f"[{job_name}] sky.jobs.launch returned None (no submission handle)")
+    job_ids = launch_result[0]
+    if not job_ids or job_ids[0] is None:
+        raise RuntimeError(
+            f"[{job_name}] sky.jobs.launch returned no job_id (empty/null job_ids list)"
+        )
+    return job_ids[0]
+
+
+def _run_workers_from_doc(  # noqa: DOC203
+    worker_env_base: dict[str, str],
+    task_doc: dict[str, object],
+    job_names: list[str],
+    worker_image_tag: str,
+    tail: bool,
+) -> list[int]:
+    """Fan out one rank per ``job_names`` entry from a pre-built YAML dict.
+
+    Shares the tail / detach runners with the click CLI fan-out path.
+
+    :param worker_env_base: Env dict forwarded to every rank (rank/world keys added per call).
+    :param task_doc: Parsed compute YAML dict (with ``run`` already injected).
+    :param job_names: One managed-job name per rank; ``len()`` defines the world size.
+    :param worker_image_tag: Docker image tag under tinaudio/synth-setter to inject.
+    :param tail: If True, tail logs and cancel all jobs. If False, detach after launch.
+    :return: List with one rc per rank in ``job_names`` order — ``0`` = success,
+        non-zero = failure (``-1`` for a half-submitted launch).
+    """
+    worker_image = f"{_WORKER_IMAGE_REPO}:{worker_image_tag}"
+    launch_get_job_id = functools.partial(
+        _launch_one_rank_from_doc,
+        job_names=job_names,
+        worker_env_base=worker_env_base,
+        worker_image=worker_image,
+        task_doc=task_doc,
+    )
+    if tail:
+        return _run_workers_tail(job_names, launch_get_job_id)
+    return _run_workers_detached(job_names, launch_get_job_id)
+
+
+def dispatch_via_skypilot(spec: DatasetSpec, sky_cfg: SkypilotLaunchConfig) -> None:
+    """Dispatch ``spec`` to the SkyPilot template named in ``sky_cfg``.
+
+    ``sky_cfg.compute_template`` and ``sky_cfg.cmd`` must both be set;
+    ``None`` is the Hydra entrypoint's "don't dispatch" sentinel. If the
+    compute YAML already defines ``run:``, this function raises rather than
+    silently dropping either side.
+
+    :param spec: Validated dataset spec to render on the worker(s).
+    :param sky_cfg: Validated launcher configuration (compute_template + cmd required).
+    :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run:`` pair,
+        or unresolved worker env vars.
+    :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
+    """
+    if not sky_cfg.compute_template:
+        raise ValueError("dispatch_via_skypilot requires sky_cfg.compute_template to be set")
+    if not sky_cfg.cmd:
+        raise ValueError("dispatch_via_skypilot requires sky_cfg.cmd to be set")
+
+    template_path = Path(sky_cfg.compute_template).expanduser().resolve()
+    task_doc = _load_compute_template_with_cmd(template_path, sky_cfg.cmd)
+
+    env_file_path = Path(sky_cfg.env_file).expanduser() if sky_cfg.env_file else None
+
+    # api_server and local express opposite dispatch modes — accepting both
+    # would leave the resolved SKYPILOT_API_SERVER_ENDPOINT non-deterministic.
+    if sky_cfg.api_server is not None and sky_cfg.local:
+        raise ValueError("api_server and local are mutually exclusive")
+    if sky_cfg.api_server is not None:
+        os.environ[_SKYPILOT_API_SERVER_ENV] = sky_cfg.api_server
+    elif sky_cfg.local:
+        os.environ.pop(_SKYPILOT_API_SERVER_ENV, None)
+
+    if sky_cfg.job_name is not None and not _JOB_NAME_RE.fullmatch(sky_cfg.job_name):
+        raise ValueError(
+            f"job_name must match {_JOB_NAME_RE.pattern} (alphanumerics, underscore, dash; "
+            f"≤63 chars; no path separators); got {sky_cfg.job_name!r}"
+        )
+
+    if not _DOCKER_TAG_RE.fullmatch(sky_cfg.worker_image_tag):
+        raise ValueError(
+            f"worker_image_tag must match OCI tag grammar {_DOCKER_TAG_RE.pattern}; "
+            f"got {sky_cfg.worker_image_tag!r}"
+        )
+
+    worker_env = resolve_worker_env(env_file_path)
+    if not any(k in worker_env for k in _SECRET_WORKER_ENV_KEYS):
+        raise ValueError(
+            "No worker env vars resolved. Set the rclone-R2 keys in process env "
+            f"(e.g. via `docker run -e RCLONE_CONFIG_R2_*=...`) or populate "
+            f"{env_file_path if env_file_path is not None else '<env_file not set>'}. "
+            f"Expected at least one of: {', '.join(_SECRET_WORKER_ENV_KEYS)}."
+        )
+
+    # rclone subprocess inherits os.environ; mirror launcher-resolved values so .env wins.
+    for key, value in worker_env.items():
+        if key.startswith("RCLONE_CONFIG_R2_"):
+            os.environ[key] = value
+
+    base_job_name = sky_cfg.job_name or f"synth-setter-smoke-{spec.task_name[:8]}"
+    if not _JOB_NAME_RE.fullmatch(base_job_name):
+        raise ValueError(
+            f"derived job name {base_job_name!r} must match {_JOB_NAME_RE.pattern} "
+            "(spec.task_name contains characters not allowed in a job name; "
+            "set skypilot_launch.job_name explicitly or fix spec.task_name)"
+        )
+
+    provider = _detect_provider_from_doc(task_doc, source=template_path)
+    if provider != "local":
+        _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
+
+    spec_uri = upload_spec_to_r2(spec, job_name=base_job_name)
+    click.echo(f"Spec uploaded to {spec_uri}")
+    worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
+
+    if provider == "local":
+        import sky.check
+
+        sky.check.check(clouds=["kubernetes"], quiet=False)
+
+    job_names = (
+        [base_job_name]
+        if sky_cfg.num_workers == 1
+        else [f"{base_job_name}-r{i}" for i in range(sky_cfg.num_workers)]
+    )
+
+    rcs = _run_workers_from_doc(
+        worker_env_base=worker_env,
+        task_doc=task_doc,
+        job_names=job_names,
+        worker_image_tag=sky_cfg.worker_image_tag,
+        tail=sky_cfg.tail,
+    )
+
+    failed = [
+        (job_names[i], rcs[i])
+        for i in range(sky_cfg.num_workers)
+        if rcs[i] != _TAIL_LOGS_RC_SUCCESS
+    ]
+    if failed:
+        raise RuntimeError(
+            f"{len(failed)} of {sky_cfg.num_workers} worker(s) failed: "
+            + ", ".join(f"{name}(rc={rc})" for name, rc in failed)
+        )
 
 
 if __name__ == "__main__":
