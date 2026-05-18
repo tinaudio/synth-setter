@@ -811,9 +811,6 @@ def _cancel_job(job_name: str) -> None:
         click.echo(f"[{job_name}] cancel failed: {exc}")
 
 
-# --- Hydra-driven dispatch surface (see dispatch_via_skypilot docstring) ---
-
-
 def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:  # noqa: DOC203
     """Detect the cred-bootstrap provider from an already-parsed YAML mapping.
 
