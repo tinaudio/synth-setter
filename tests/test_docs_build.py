@@ -1,19 +1,12 @@
 """Integration tests for the mkdocs documentation build.
 
-Runs ``mkdocs build --strict`` in a tmp directory and asserts the rendered
-HTML for each auto-generated config-reference page contains the field
-anchors mkdocstrings emits for every typed field on the corresponding
-pydantic model. A model field rename / removal without a doc update is
-caught here at PR time rather than silently dropping from the published
-site.
+Runs ``mkdocs build --strict`` once per session and asserts each
+config-reference page renders an anchor for every typed pydantic field on
+its documented model. Field names are derived from ``model_fields`` at test
+time so a rename surfaces as a missing anchor without a parallel list.
 
-Expected field names are derived from ``model.model_fields`` at test time
-(not hard-coded) so a schema rename surfaces as a missing anchor in the
-rendered HTML without anyone having to remember to update a parallel list.
-
-``mkdocs`` is in the ``[docs]`` optional dependency group; the whole module
-skips cleanly when the import fails so a developer with only ``[dev]``
-installed can still run the suite.
+Whole module skips on a minimal ``[dev]`` install via
+``pytest.importorskip("mkdocs")``.
 """
 
 from __future__ import annotations
@@ -25,12 +18,8 @@ from pathlib import Path
 
 import pytest
 
-# Skip the whole module if the docs extras are not installed. mkdocs is the
-# minimum surface; the strict build wires in mkdocs-material, mkdocstrings,
-# and griffe-pydantic, which are pinned together in [project.optional-deps].
-# The schemas imports immediately below transitively require those extras
-# (griffe-pydantic introspects model_fields at render time), so the skip
-# must precede them.
+# Skip precedes the schemas imports because they transitively require
+# griffe-pydantic from the same ``[docs]`` extras group.
 pytest.importorskip("mkdocs", reason="docs extras not installed; install with -e '.[docs]'")
 
 from synth_setter.schemas.callbacks_config import CallbackInstance
@@ -42,15 +31,13 @@ from synth_setter.schemas.paths_config import PathsConfig
 from synth_setter.schemas.train_config import TrainConfig
 from synth_setter.schemas.trainer_config import TrainerConfig
 
-# End-to-end mkdocs build is heavyweight (subprocess + mkdocs + mkdocstrings +
-# griffe + every schemas module imported); marker keeps `make test-fast` fast.
+# mkdocs subprocess + griffe walk is heavyweight; keeps `make test-fast` fast.
 pytestmark = pytest.mark.slow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# Maps each config-reference page to the pydantic class(es) whose typed fields
-# it documents. RootModel wrappers (CallbacksConfig, LoggerConfig) expose only
-# `root`; the per-instance class is documented instead.
+# RootModel wrappers (CallbacksConfig, LoggerConfig) expose only `root`; we
+# document the per-instance class on those pages instead.
 _PAGE_TO_MODELS: dict[str, tuple[type, ...]] = {
     "config_reference/train_config": (TrainConfig,),
     "config_reference/data_config": (DataConfig,),
@@ -77,17 +64,11 @@ assert _PAGE_TO_MODELS, "_PAGE_TO_MODELS is empty — config-reference page map 
 assert _expected_field_anchors(), "_expected_field_anchors() is empty — no fields to verify"
 
 
-def _anchor_pattern(model: type, field_name: str) -> re.Pattern[str]:
-    """Build the regex matching the heading-anchor ``id`` mkdocstrings emits for a field.
+def _anchor_pattern(model: type, field_name: str) -> re.Pattern[str]:  # noqa: DOC101,DOC103,DOC201,DOC203
+    """Compile a regex for the ``id="<module>.<Class>.<field>"`` anchor mkdocstrings emits.
 
-    Targeting the structural anchor (``id="module.Class.field"``) instead of a
-    bare substring avoids false positives from short field names appearing in
-    HTML/CSS/JS context (``lr``, ``test``, ``train``).
-
-    :param model: The pydantic class whose field anchor we expect to find.
-    :param field_name: The field attribute name on ``model``.
-    :returns: Compiled regex anchored on ``id="<module>.<Class>.<field>"``.
-    :rtype: re.Pattern[str]
+    Matches the structural anchor (not a bare substring) so short field names
+    (``lr``, ``test``, ``train``) don't false-positive on HTML/CSS/JS context.
     """
     fqn = re.escape(f"{model.__module__}.{model.__name__}.{field_name}")
     return re.compile(rf'id="{fqn}"')

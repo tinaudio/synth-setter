@@ -1,27 +1,16 @@
-"""Pydantic schemas that document and validate the project's Hydra configs.
+"""Pydantic schemas for the training-time Hydra configs.
 
-These models are the source of truth for the published mkdocs config-reference
-pages (``mkdocstrings`` + ``griffe-pydantic`` renders their field tables) and
-a sanity check that the training-time YAMLs stay in sync with what the
-entrypoints expect.
+Source of truth for the mkdocs config-reference pages (rendered by
+``mkdocstrings`` + ``griffe-pydantic``) and a validation harness that pins
+the shipped YAMLs against what the entrypoints expect.
 
-Training-time schemas live in this package; distributed-pipeline schemas
-(``DatasetSpec``, ``ImageConfig``, and friends) live in
-``synth_setter.pipeline.schemas`` so the two trust boundaries can evolve
-their strictness independently.
+Distributed-pipeline schemas live in ``synth_setter.pipeline.schemas`` —
+that's a different trust boundary (closed-shape ``extra="forbid"``) and is
+intentionally separate.
 
-The schemas use ``strict=True`` to refuse type-coercion at the trust
-boundary, and ``extra="allow"`` so subtrees that Hydra owns the shape of
-pass through unchanged.
-
-Each composition group under ``configs/`` is covered by one schema module
-in this package, plus ``train_config`` for the top-level ``configs/train.yaml``.
-The ``hydra`` composition group (``configs/hydra/default.yaml``) only sets
-partial overrides on Hydra's own internal config and is intentionally not
-modeled here — Hydra owns that schema.
+The ``hydra`` composition group is not modeled here; Hydra owns that schema.
 """
 
-# _types is a private module; only the names re-exported here are public.
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 from synth_setter.schemas.callbacks_config import CallbackInstance, CallbacksConfig
 from synth_setter.schemas.data_config import DataConfig

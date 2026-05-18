@@ -1,10 +1,7 @@
 """Behavioural tests for the ``TrainerConfig`` pydantic model.
 
-Every YAML under ``configs/trainer/`` must validate against ``TrainerConfig``
-once Hydra finishes composing it onto ``default.yaml``. Variant-specific
-``Trainer`` kwargs (``strategy``, ``precision``, ``min_steps``, ``max_steps``,
-...) live under ``extra="allow"``; the typed surface here covers the keys
-all shipped variants set.
+Every YAML under ``configs/trainer/`` must validate; variant ``Trainer``
+kwargs ride ``extra="allow"``.
 """
 
 from __future__ import annotations

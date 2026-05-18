@@ -1,19 +1,8 @@
-"""Pydantic schemas for Lightning callback configs under ``configs/callbacks/``.
+"""Pydantic schemas for the YAMLs under ``configs/callbacks/``.
 
-Each YAML under ``configs/callbacks/`` either defines a single named callback
-(``model_checkpoint.yaml`` → ``{"model_checkpoint": {"_target_": ...}}``) or
-composes several via ``defaults:`` plus per-callback overrides
-(``default.yaml``). Once Hydra has finished composing, ``cfg.callbacks`` is a
-flat mapping from callback-name → callback-instance dict, which
-``synth_setter.utils.instantiate_callbacks`` then iterates over —
-``hydra.utils.instantiate`` is called only on values that contain
-``_target_``, so unrelated keys are silently skipped.
-
-The two schemas here mirror that shape:
-
-* :class:`CallbackInstance` is what each value in the dict must satisfy.
-* :class:`CallbacksConfig` is the top-level :class:`~pydantic.RootModel`
-  that validates the whole dict at once.
+After Hydra composes, ``cfg.callbacks`` is a flat ``name → instance`` dict
+that ``synth_setter.utils.instantiate_callbacks`` iterates over (skipping
+entries that lack ``_target_``).
 """
 
 from __future__ import annotations
@@ -26,14 +15,7 @@ __all__ = ["CallbackInstance", "CallbacksConfig"]
 
 
 class CallbackInstance(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """One entry of the ``cfg.callbacks`` dict.
-
-    Only ``_target_`` is typed at this layer; callback-class kwargs
-    (``monitor``, ``dirpath``, ``patience``, ``every_n_train_steps``, ...)
-    vary per callback and pass through via ``extra="allow"``. The constraints
-    on those kwargs live on the upstream Lightning / project-local callback
-    class signatures rather than being duplicated here.
-    """
+    """One entry of ``cfg.callbacks``; callback kwargs pass through via ``extra="allow"``."""
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -45,13 +27,8 @@ class CallbackInstance(StrictAllowExtraModel):  # noqa: DOC601,DOC603
 
 
 class CallbacksConfig(RootModel[dict[NonBlankStr, CallbackInstance]]):  # noqa: DOC601,DOC603
-    """Top-level shape of ``cfg.callbacks`` — a mapping of name → instance.
+    """Shape of ``cfg.callbacks`` — a ``name → CallbackInstance`` mapping.
 
-    The keys are callback names (``model_checkpoint``, ``lr_monitor``,
-    ``plot_proj_ii``, ...). Each value validates against
-    :class:`CallbackInstance`. ``configs/callbacks/none.yaml`` is an empty
-    document and Hydra resolves it to ``None`` rather than ``{}``; that
-    pathway bypasses this schema entirely and is handled by
-    ``synth_setter.utils.instantiate_callbacks`` (it short-circuits on a
-    falsy config).
+    ``configs/callbacks/none.yaml`` resolves to ``None``, not ``{}``, and is
+    handled by ``instantiate_callbacks`` short-circuiting on a falsy config.
     """

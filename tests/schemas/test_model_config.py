@@ -1,10 +1,7 @@
 """Behavioural tests for the ``ModelConfig`` pydantic model.
 
-Every YAML under ``configs/model/`` must validate against ``ModelConfig`` —
-that's the contract the published docs assert. Variant-specific keys live
-under ``extra="allow"`` so a new model module can ship its own fields
-without re-touching the schema; the common shape stays typed and
-documented.
+Every YAML under ``configs/model/`` must validate; variant kwargs ride
+``extra="allow"``.
 """
 
 from __future__ import annotations
@@ -19,14 +16,8 @@ from tests.schemas.conftest import compose_subtree
 
 _MODEL_CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs" / "model"
 
-# Reused as a placeholder ``_target_`` across the negative-path cases — the
-# exact dotted path doesn't matter for the validators under test, but
-# centralising it stops the negative tests from looking like they each
-# probe a different module.
 _VALID_TARGET = "synth_setter.models.X"
 
-# Minimal optimizer-config fixture reused by the negative-path cases; defined
-# once so a new constraint adds one row, not a new boilerplate dict.
 _VALID_OPTIMIZER = {
     "_target_": "torch.optim.Adam",
     "_partial_": True,
@@ -35,11 +26,7 @@ _VALID_OPTIMIZER = {
 
 
 def _all_model_config_names() -> list[str]:  # noqa: DOC201,DOC203
-    """Return the YAML stem of every direct model config under ``configs/model/``.
-
-    Subgroups (``configs/model/encoder/`` and similar) compose into a parent
-    via ``defaults:`` and are not top-level model configs; they're excluded.
-    """
+    """Return YAML stems for every top-level model config (skipping subgroup dirs)."""
     names = sorted(p.stem for p in _MODEL_CONFIG_DIR.glob("*.yaml"))
     assert names, f"no model YAMLs found under {_MODEL_CONFIG_DIR} — has the layout changed?"
     return names

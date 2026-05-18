@@ -1,11 +1,8 @@
-"""Pydantic schema for per-trainer Hydra configs under ``configs/trainer/``.
+"""Pydantic schema for the YAMLs under ``configs/trainer/``.
 
-Every YAML under ``configs/trainer/`` composes onto ``default.yaml`` and
-overrides the subset of ``lightning.pytorch.trainer.Trainer`` kwargs that
-matters for the target accelerator (CPU smoke runs, single-GPU jobs,
-DDP, MPS). The typed surface here covers the keys actually set across the
-shipped variants; the rest of ``Trainer``'s constructor — and any future
-override that comes along — passes through via ``extra="allow"``.
+Variants compose onto ``default.yaml``. The typed surface covers the keys
+shipped variants set; other ``Trainer`` kwargs pass through via
+``extra="allow"``.
 """
 
 from __future__ import annotations
@@ -23,14 +20,7 @@ __all__ = ["TrainerConfig"]
 
 
 class TrainerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Per-trainer Hydra config (one of the YAMLs under ``configs/trainer/``).
-
-    Typed fields cover the keys the shipped trainer variants actually set;
-    any other ``Trainer`` kwarg (``precision``, ``min_steps``, ``max_steps``,
-    ``strategy``, ``num_nodes``, ``sync_batchnorm``, ...) passes through
-    via ``extra="allow"``. The full constructor surface is documented
-    upstream at lightning.ai.
-    """
+    """One of the YAMLs under ``configs/trainer/``; other kwargs ride ``extra="allow"``."""
 
     target_: NonBlankStr = Field(
         alias="_target_",

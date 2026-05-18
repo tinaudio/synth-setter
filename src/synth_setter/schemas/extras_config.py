@@ -1,10 +1,7 @@
-"""Pydantic schema for the run-time extras under ``configs/extras/``.
+"""Pydantic schema for the startup toggles under ``configs/extras/``.
 
-Toggles consumed by ``synth_setter.utils.extras()`` (the helper invoked
-from ``cli/train.py`` at startup) and by ``torch.set_float32_matmul_precision``.
-The shipped composition is ``configs/extras/default.yaml``; the schema names
-each toggle so a YAML rename surfaces here at validation time rather than
-silently dropping the override.
+Read by ``synth_setter.utils.extras()`` and by
+``torch.set_float32_matmul_precision`` at the top of ``cli/train.py``.
 """
 
 from __future__ import annotations
@@ -18,19 +15,13 @@ from synth_setter.schemas._types import StrictAllowExtraModel
 __all__ = ["ExtrasConfig"]
 
 
-# Allowed values for ``torch.set_float32_matmul_precision`` — kept as a named
-# constant so the docs and the type annotation share one source of truth.
-# Note: the ``Literal[*tuple]`` unpacking syntax requires Python 3.11+ and
-# this project pins ``python_requires = ">=3.10"``, so the type annotation
-# below restates the values explicitly.
+# Restated in the Literal annotation below because Literal[*tuple] unpacking
+# needs Python 3.11+ and the project pins ``python_requires = ">=3.10"``.
 _FLOAT32_MATMUL_PRECISIONS: tuple[str, ...] = ("highest", "high", "medium")
 
 
 class ExtrasConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Run-time toggles read at the top of ``cli/train.py``.
-
-    Per-field descriptions live on the ``Field`` definitions below.
-    """
+    """Startup toggles consumed by ``synth_setter.utils.extras(cfg)``."""
 
     ignore_warnings: StrictBool = Field(
         default=False,

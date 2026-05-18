@@ -1,9 +1,7 @@
 """Behavioural tests for the ``PathsConfig`` pydantic model.
 
-The shipped ``paths: default`` composition is the only one in the repo and
-it must validate against ``PathsConfig``. The negative cases pin the
-``NonBlankStr`` contract — empty / whitespace overrides would propagate
-broken paths into half a dozen downstream YAMLs and must fail early.
+Pins that ``paths/default.yaml`` validates and that whitespace overrides on
+any field are rejected by ``NonBlankStr``.
 """
 
 from __future__ import annotations
@@ -22,9 +20,7 @@ class TestPathsConfigAcceptsDefault:
         """All five string fields land on the parsed model."""
         paths_subtree = compose_subtree("paths", "default")
         parsed = PathsConfig.model_validate(paths_subtree)
-        # The values are unresolved interpolation templates; we only assert
-        # they're non-blank strings, which is what the schema actually
-        # enforces.
+        # Values here are unresolved interpolation templates; assert non-blank only.
         assert parsed.root_dir
         assert parsed.data_dir
         assert parsed.log_dir

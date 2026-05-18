@@ -1,16 +1,8 @@
 """Behavioural tests for the ``DataConfig`` pydantic model.
 
-Every YAML under ``configs/data/`` must validate against ``DataConfig`` —
-that's the contract the published docs assert. Datamodule-specific keys
-live under ``extra="allow"`` so a new datamodule can ship without
-re-touching the schema; the common shape (``_target_``) stays typed.
-
-Some shipped YAMLs declare Hydra ``???`` mandatory-override sentinels for
-fields like ``dataset_root`` / ``stats_file`` / ``predict_file``. OmegaConf
-preserves those as the literal string ``"???"`` under
-``to_container(resolve=False)``; they only fail at attribute access /
-``hydra.utils.instantiate`` time, which is the intended behaviour, so the
-schema sees them as ordinary extras and accepts them.
+Hydra ``???`` mandatory-override sentinels survive ``to_container(resolve=False)``
+as the literal string ``"???"``; the schema sees them as ordinary extras
+and accepts them, deferring the failure to ``hydra.utils.instantiate``.
 """
 
 from __future__ import annotations
@@ -63,17 +55,9 @@ class TestPathsConfigResolvedInterpolation:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """``${oc.env:PROJECT_ROOT}`` resolves to a real path and validates as non-blank."""
-        # PROJECT_ROOT is the only env-var interpolation in paths/default.yaml;
-        # validating against the resolved value (not the literal ${oc.env:...}
-        # template) is what ``NonBlankStr`` actually guards in production.
         monkeypatch.setenv("PROJECT_ROOT", "/tmp/x")  # noqa: S108
-        # ``return_hydra_config=True`` + ``HydraConfig.instance().set_config``
-        # registers the ``hydra`` subtree so ``${hydra:...}`` resolvers can
-        # fire. ``paths.output_dir`` / ``paths.work_dir`` are overridden
-        # explicitly because Hydra's ``runtime.output_dir`` / ``runtime.cwd``
-        # are only populated at fit time, not at compose time. The point of
-        # the test is ``${oc.env:PROJECT_ROOT}`` round-tripping through
-        # ``NonBlankStr``, not the hydra runtime keys.
+        # output_dir / work_dir overridden because ``${hydra:runtime.*}`` is
+        # only populated at fit time, not at compose time.
         with initialize(version_base="1.3", config_path="../../configs"):
             cfg = compose(
                 config_name="train.yaml",

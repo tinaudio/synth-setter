@@ -1,18 +1,8 @@
-"""Behavioural tests for the ``CallbacksConfig`` / ``CallbackInstance`` models.
+"""Behavioural tests for ``CallbacksConfig`` / ``CallbackInstance``.
 
-Every YAML under ``configs/callbacks/`` is a valid ``callbacks=<name>``
-selection — both the multi-callback compositions (``default``,
-``default_surge``, ``eval_surge``) and the individual callback leaves
-(``model_checkpoint``, ``early_stopping``, ``plot_pos_enc``, ...). Every
-one of those that composes into a non-empty dict must validate against
-``CallbacksConfig`` (a RootModel wrapping ``dict[str, CallbackInstance]``).
-``none.yaml`` is intentionally empty — Hydra resolves it to ``None`` and
-``instantiate_callbacks`` short-circuits on a falsy config, so it's
-outside the schema's responsibility.
-
-Callback-class-specific kwargs (``monitor``, ``dirpath``, ``patience``, ...)
-live under ``extra="allow"`` on ``CallbackInstance``; only ``_target_`` is
-typed at this layer.
+Every ``callbacks=<name>`` selection that composes to a non-empty dict must
+validate. ``none.yaml`` composes to ``None`` and is handled outside the
+schema (``instantiate_callbacks`` short-circuits on falsy).
 """
 
 from __future__ import annotations
@@ -41,11 +31,7 @@ def _all_callback_config_names() -> list[str]:  # noqa: DOC201,DOC203
 def _compose_callbacks_subtree(  # noqa: DOC101,DOC103,DOC201,DOC203
     callbacks_name: str,
 ) -> dict[str, object] | None:
-    """Compose a full train config with ``callbacks=<callbacks_name>`` selected.
-
-    Returns the raw composed subtree (typically a dict, but for the
-    intentionally-empty ``none.yaml`` it composes to ``None``).
-    """
+    """Compose with ``callbacks=<name>``; returns dict, or ``None`` for ``none.yaml``."""
     cfg_dict = compose_train_cfg(overrides=[f"callbacks={callbacks_name}"])
     return cfg_dict["callbacks"]
 
@@ -53,10 +39,8 @@ def _compose_callbacks_subtree(  # noqa: DOC101,DOC103,DOC201,DOC203
 class TestCallbacksConfigAcceptsEveryComposition:
     """Every ``callbacks=<name>``-selectable YAML must validate against ``CallbacksConfig``.
 
-    Any callback YAML that composes to a non-dict (today only ``none.yaml``,
-    which Hydra resolves to ``None``) is *recorded as a skip with rationale*
-    so a future ``none2.yaml`` surfaces as a noticed skip rather than a
-    silent ``ValidationError`` deep in an assertion stack.
+    Non-dict composes (today only ``none.yaml`` → ``None``) emit pytest skips
+    so a future addition surfaces visibly rather than as a deep ValidationError.
     """
 
     @pytest.mark.parametrize("callbacks_name", _all_callback_config_names())
@@ -69,9 +53,7 @@ class TestCallbacksConfigAcceptsEveryComposition:
                 f"({type(callbacks_subtree).__name__}); schema covers dict form only"
             )
         parsed = CallbacksConfig.model_validate(callbacks_subtree)
-        # ``none.yaml`` composes to ``{}`` and validates as an empty RootModel —
-        # that's the intended ``instantiate_callbacks`` no-op pathway and we
-        # don't want to assert truthiness here.
+        # No truthiness assert: ``none.yaml`` validates as an empty RootModel.
         assert isinstance(parsed, CallbacksConfig)
 
 

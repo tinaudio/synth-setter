@@ -1,13 +1,7 @@
 """Behavioural tests for the ``TrainConfig`` pydantic model.
 
-The pydantic model documents the shape of ``configs/train.yaml`` plus its
-``defaults:`` composition. The tests assert two things:
-
-1. The model accepts the live composed config — so the published docs stay
-   honest about what the entrypoint receives at runtime.
-2. The model rejects obvious mistakes (wrong types, blank ``task_name``,
-   negative ``seed``) so the doc-vs-reality contract is enforced at
-   validation time, not just at import.
+Pins both directions: the live composed ``train.yaml`` validates, and
+obvious mistakes (wrong types, blank ``task_name``, negative ``seed``) fail.
 """
 
 from __future__ import annotations
@@ -38,9 +32,7 @@ class TestTrainConfigAcceptsLiveCompose:
         """Every typed scalar lands on the model with the right type / shape."""
         cfg_dict = compose_train_cfg()
         model = TrainConfig.model_validate(cfg_dict)
-        # Assert property — typed scalars, not literal YAML values — so the
-        # test doesn't bake the train.yaml defaults into a second source of
-        # truth that drifts whenever the defaults shift.
+        # Property-based asserts so this test doesn't shadow train.yaml's defaults.
         assert isinstance(model.task_name, str) and model.task_name
         assert all(isinstance(t, str) for t in model.tags)
         assert isinstance(model.train, bool)

@@ -1,16 +1,8 @@
-"""Shared fixtures and helpers for the ``tests/schemas/`` module.
+"""Shared fixtures and helpers for ``tests/schemas/``.
 
-The Hydra global-state dance (``GlobalHydra.instance().clear()`` before each
-``initialize`` block) belongs in a fixture rather than copy-pasted into every
-helper — that way an xdist-parallelised run can't race on the singleton, and
-a mid-compose exception in one test can't leak initialised state into the
-next.
-
-This conftest must NOT chain into ``tests/conftest.py``'s heavy imports
-(``lightning``, ``torch``, ``h5py``) — composing Hydra configs is a
-documentation-layer concern and we want the suite to stay importable on a
-minimal install. Run as ``pytest tests/schemas/ --confcutdir=tests/schemas``
-(matches ``.github/workflows/docs.yml``).
+Must NOT chain into ``tests/conftest.py``'s ``lightning``/``torch``/``h5py``
+imports — the schemas suite stays importable on a minimal install. Run as
+``pytest tests/schemas/ --confcutdir=tests/schemas``.
 """
 
 from __future__ import annotations
@@ -34,20 +26,13 @@ def clean_global_hydra() -> Iterator[None]:
     if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
     yield
-    # Defense against a test that forgot to use ``initialize()`` as a context
-    # manager and leaked initialised state into the next test in the package.
     assert not GlobalHydra.instance().is_initialized(), (
         "Hydra leaked from a test in tests/schemas/"
     )
 
 
 def _to_dict(node: Any) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Resolve an OmegaConf node to a typed ``dict[str, Any]`` for pydantic.
-
-    Centralises the ``Any`` boundary so individual test modules don't need
-    to import ``cast`` just to convert an OmegaConf container to a plain
-    dict that ``model_validate`` accepts.
-    """
+    """Resolve an OmegaConf node to ``dict[str, Any]`` for ``model_validate``."""
     return cast("dict[str, Any]", OmegaConf.to_container(node, resolve=False))
 
 
@@ -58,15 +43,9 @@ def compose_train_cfg(  # noqa: DOC101,DOC103,DOC201,DOC203
 ) -> dict[str, Any]:
     """Compose ``configs/train.yaml`` and return it as a plain dict.
 
-    The default overrides pin ``data``, ``model``, and ``trainer`` to
-    composable leaves so the suite doesn't depend on the ``???``
-    mandatory-override sentinels in the root config. Caller-supplied
-    overrides are appended after the defaults so the caller can switch
-    one composition group without re-spelling the others.
-
-    The ``clean_global_hydra`` autouse fixture owns the
-    ``GlobalHydra.instance().clear()`` lifecycle, so this helper just
-    calls ``initialize`` directly inside its own context manager.
+    Default overrides pin ``data=ksin model=ffn trainer=cpu`` so the suite
+    doesn't depend on root-config ``???`` sentinels; caller overrides are
+    appended after.
     """
     selected_overrides = list(_DEFAULT_OVERRIDES)
     if overrides is not None:
@@ -81,13 +60,10 @@ def compose_train_cfg(  # noqa: DOC101,DOC103,DOC201,DOC203
 
 
 def compose_subtree(group: str, name: str) -> dict[str, Any]:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Compose one Hydra group at a specific name and return its subtree.
+    """Compose ``train.yaml`` with ``<group>=<name>`` selected and return that subtree.
 
-    Example: ``compose_subtree("data", "ksin")`` returns the ``data``
-    subtree from ``train.yaml`` with ``data=ksin`` selected. The subtree
-    must be a dict (groups that compose to ``None``, e.g. an empty
-    ``callbacks/none.yaml``, are not supported here — callers test those
-    via the parametrized discovery helper).
+    The subtree must be a dict; groups that compose to ``None`` (e.g.
+    ``callbacks/none.yaml``) are unsupported and surfaced via assertion.
     """
     cfg_dict = compose_train_cfg(overrides=[f"{group}={name}"])
     subtree = cfg_dict[group]

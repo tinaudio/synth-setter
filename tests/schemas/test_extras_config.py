@@ -1,11 +1,8 @@
 """Behavioural tests for the ``ExtrasConfig`` pydantic model.
 
-``configs/extras/default.yaml`` is the only composition in the repo. The
-positive case asserts it validates and the typed scalars survive the round
-trip; the negative cases pin the ``StrictBool`` / ``Literal`` constraints
-so a stray ``"yes"`` or unknown precision value fails at compose time
-instead of producing a confusing runtime error inside
-``synth_setter.utils.extras``.
+Pins both directions on the only shipped composition
+(``configs/extras/default.yaml``): valid YAML round-trips, and
+``StrictBool`` / ``Literal`` reject ``"yes"`` / unknown precisions.
 """
 
 from __future__ import annotations

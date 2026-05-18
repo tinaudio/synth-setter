@@ -30,16 +30,12 @@ plugins:
       default_handler: python
       handlers:
         python:
-          # PEP src-layout: the ``synth_setter`` package lives under ``src/``,
-          # so mkdocstrings needs ``src`` on its import path. Without this, a
-          # fresh checkout that hasn't run ``pip install -e .`` would fail
-          # ``mkdocs build`` with ``ModuleNotFoundError: synth_setter``.
+          # PEP src-layout: ``synth_setter`` lives under ``src/`` so griffe
+          # needs ``src`` on its import path without an editable install.
           paths: [src]
           options:
-            # griffe-pydantic teaches griffe to surface ``Field(description=...)``
-            # arguments on pydantic BaseModel fields. Without it, the per-field
-            # descriptions in TrainConfig / ModelConfig / OptimizerConfig render
-            # only their type annotations.
+            # griffe-pydantic surfaces ``Field(description=...)`` strings;
+            # without it the docs render only the type annotations.
             extensions:
               - griffe_pydantic:
                   schema: false
@@ -51,9 +47,8 @@ plugins:
             separate_signature: true
             show_signature_annotations: true
 
-# Only surface the config-reference site for now; existing engineering docs
-# under docs/ (architecture, design, guides, etc.) are kept out of the build
-# so this scaffolding can grow incrementally without pulling them in.
+# Only the config-reference site is surfaced for now; the rest of docs/
+# grows into the build incrementally.
 exclude_docs: |
   architecture.md
   doc-map.yaml

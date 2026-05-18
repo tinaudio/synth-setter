@@ -1,14 +1,8 @@
-"""Pydantic schemas for per-model Hydra configs under ``configs/model/``.
+"""Pydantic schemas for the YAMLs under ``configs/model/``.
 
-Every YAML under ``configs/model/`` declares: the LightningModule target, a
-partial torch optimizer, an optional partial LR scheduler, and a ``compile``
-flag. Variant-specific fields vary per model module and are accepted via
-``extra="allow"`` — adding a new model YAML does not require touching this
-schema.
-
-``_target_`` is exposed on the Python model as ``target_`` (trailing
-underscore) because leading-underscore field names are not addressable on a
-pydantic ``BaseModel``. The alias ``_target_`` is preserved on input/output.
+``_target_`` is exposed as ``target_`` (trailing underscore) because
+leading-underscore field names are not addressable on a pydantic
+``BaseModel``; the ``_target_`` alias is preserved on input/output.
 """
 
 from __future__ import annotations
@@ -26,13 +20,7 @@ __all__ = ["ModelConfig", "OptimizerConfig", "SchedulerConfig"]
 
 
 class OptimizerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Partial torch optimizer config injected at fit-time with model parameters.
-
-    ``_partial_: true`` means ``hydra.utils.instantiate`` returns a
-    ``functools.partial`` instead of a fully-constructed optimizer; the
-    LightningModule binds the model parameters at the call site. Per-field
-    descriptions live on the ``Field`` definitions below.
-    """
+    """Partial torch optimizer; the LightningModule binds model params at call time."""
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -51,12 +39,7 @@ class OptimizerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
 
 
 class SchedulerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Partial torch LR scheduler config injected at fit-time with the optimizer.
-
-    Several configs ship ``scheduler: null``; in those cases the YAML maps to
-    ``ModelConfig.scheduler = None`` rather than this model. Per-field
-    descriptions live on the ``Field`` definitions below.
-    """
+    """Partial torch LR scheduler; ``scheduler: null`` maps to ``None`` instead."""
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -70,13 +53,7 @@ class SchedulerConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
 
 
 class ModelConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Per-model Hydra config (one of the YAMLs under ``configs/model/``).
-
-    The typed fields are the common surface area; variant-specific keys are
-    accepted via ``extra="allow"`` so a new model module ships without a
-    schema edit. Per-field descriptions live on the ``Field`` definitions
-    below.
-    """
+    """One of the YAMLs under ``configs/model/``; variant kwargs via ``extra="allow"``."""
 
     target_: NonBlankStr = Field(
         alias="_target_",
@@ -95,7 +72,6 @@ class ModelConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
             "scheduler. See ``SchedulerConfig``."
         ),
     )
-    # Field name mirrors the YAML key; shadows the ``compile()`` builtin in cfg.model.compile.
     compile: StrictBool = Field(
         default=True,
         description="Whether to wrap the module in ``torch.compile`` at setup time.",

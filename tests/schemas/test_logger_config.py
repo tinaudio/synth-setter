@@ -1,15 +1,7 @@
-"""Behavioural tests for the ``LoggerConfig`` / ``LoggerInstance`` models.
+"""Behavioural tests for ``LoggerConfig`` / ``LoggerInstance``.
 
-Each YAML under ``configs/logger/`` that selects one or more loggers must
-validate against ``LoggerConfig`` (a RootModel wrapping
-``dict[str, LoggerInstance]``). Logger-class-specific kwargs vary per
-backend and live under ``extra="allow"`` on ``LoggerInstance``; only
-``_target_`` is typed at this layer.
-
-The leaf logger YAMLs (``wandb``, ``tensorboard``, ``mlflow``, ``csv``,
-``aim``, ``comet``, ``neptune``) are also legal group selections — they
-each declare a single named logger at the top level. ``many_loggers.yaml``
-is the composition that pulls in several at once.
+Every ``configs/logger/`` YAML must validate; logger kwargs ride
+``extra="allow"`` on ``LoggerInstance``.
 """
 
 from __future__ import annotations

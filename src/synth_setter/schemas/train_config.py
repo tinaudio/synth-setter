@@ -1,15 +1,8 @@
-"""Pydantic schema for the top-level training configuration.
+"""Pydantic schema for the top-level ``configs/train.yaml``.
 
-Documents the scalar fields the training entrypoint reads from
-``configs/train.yaml`` and treats the Hydra-composed subtrees as opaque
-dicts — those subtrees have their own composition groups under ``configs/``
-and are validated by ``hydra.utils.instantiate`` at call time.
-
-Intentionally documentation-first: tests assert the live composed DictConfig
-validates against ``TrainConfig``, but the entrypoint continues to consume
-the raw ``DictConfig``. Currently validated only by the test suite
-(``tests/schemas/test_train_config.py``); the training entrypoint
-(``cli/train.py``) does not call ``TrainConfig.model_validate`` at runtime.
+Documentation-first: validated by ``tests/schemas/test_train_config.py``
+against the live composed DictConfig; ``cli/train.py`` continues to consume
+the raw ``DictConfig`` rather than calling ``model_validate``.
 """
 
 from __future__ import annotations
@@ -26,26 +19,17 @@ from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 __all__ = ["TrainConfig"]
 
 
-def _default_tags() -> list[str]:
-    """Return the default ``tags`` list for a fresh ``TrainConfig``.
-
-    :returns: A one-element list containing the placeholder ``"dev"`` tag.
-    :rtype: list[str]
-    """
+def _default_tags() -> list[str]:  # noqa: DOC201,DOC203
+    """Return the placeholder ``["dev"]`` tag list."""
     return ["dev"]
 
 
 class TrainConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Top-level training configuration as composed from ``configs/train.yaml``.
+    """Top-level training config composed from ``configs/train.yaml``.
 
-    Only the typed scalar surface is represented here — the defaults below
-    match the corresponding values in ``configs/train.yaml``. Hydra-managed
-    subtrees (``data``, ``model``, ``trainer``, ``callbacks``, ``logger``,
-    ``paths``, ``extras``, ``hydra``, ...) are NOT reconstructed by
-    ``TrainConfig()``; they're accepted via ``extra="allow"`` when validating
-    an externally-composed ``DictConfig`` and must come from real Hydra
-    composition. Per-field descriptions live on the ``Field`` definitions
-    below and render into the auto-generated docs via ``griffe-pydantic``.
+    Defaults below mirror ``configs/train.yaml``. Hydra-managed subtrees
+    (``data``, ``model``, ``trainer``, ...) pass through via ``extra="allow"``
+    — ``TrainConfig()`` does not reconstruct them on its own.
     """
 
     task_name: NonBlankStr = Field(

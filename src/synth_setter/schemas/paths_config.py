@@ -1,11 +1,8 @@
-"""Pydantic schema for the path layout under ``configs/paths/``.
+"""Pydantic schema for ``configs/paths/default.yaml``.
 
-Every shipped composition selects ``paths: default``, so the schema models
-``configs/paths/default.yaml``. The five string fields are all interpolated
-elsewhere (``${paths.output_dir}/checkpoints``, ``${paths.log_dir}/mlflow``)
-and a blank value would silently produce a broken run directory; they're
-typed as :data:`~synth_setter.schemas._types.NonBlankStr` rather than plain
-``str`` so the validator rejects whitespace-only overrides at compose time.
+Fields are typed ``NonBlankStr`` so a whitespace-only override is caught
+here rather than propagating as a broken path through every
+``${paths.<name>}`` interpolation downstream.
 """
 
 from __future__ import annotations
@@ -18,14 +15,7 @@ __all__ = ["PathsConfig"]
 
 
 class PathsConfig(StrictAllowExtraModel):  # noqa: DOC601,DOC603
-    """Path layout consumed via ``${paths.<name>}`` interpolation across configs.
-
-    These resolve via OmegaConf interpolation in lots of downstream YAMLs
-    (logger save-dirs, callback dirpaths, the trainer's ``default_root_dir``,
-    etc.), so any blank value here propagates as a broken path into half a
-    dozen places. Per-field descriptions live on the ``Field`` definitions
-    below.
-    """
+    """Path layout consumed via ``${paths.<name>}`` interpolation across configs."""
 
     root_dir: NonBlankStr = Field(
         description=(
