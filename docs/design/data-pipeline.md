@@ -1201,7 +1201,11 @@ class RenderConfig(BaseModel):
     samples_per_render_batch: int
     samples_per_shard: int
     reload_plugin_every_render: bool = True
-    open_gui_every_render: bool = True  # default False on Darwin; explicit True rejected (#714)
+    # Platform-aware default via Field(default_factory=...): False on Darwin
+    # (show_editor SIGTRAPs after ~3-4 reloads, #714), True elsewhere. An
+    # explicit open_gui_every_render=True is still rejected on Darwin by a
+    # model_validator.
+    open_gui_every_render: bool = Field(default_factory=_default_open_gui_every_render)
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""
