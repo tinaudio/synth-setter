@@ -48,7 +48,7 @@ ______________________________________________________________________
 
 ```
 data/{dataset_config_id}/{dataset_wandb_run_id}/
-├── shards/                  # Future state — current workers write shards directly here (no shards/ subdir). #406
+├── shards/                  # Future state — no shards/ subdir exists yet; current workers upload shard files directly under the run prefix root. #406
 │   ├── shard-000000.h5
 │   └── ...
 ├── metadata/                # Future state — current `input_spec.json` lives flat at the run prefix root. #385

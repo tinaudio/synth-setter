@@ -210,7 +210,7 @@ What if reconciliation itself has a bug — e.g., it validates a corrupt shard a
 
 ## 5. Stage Definitions
 
-> **Implementation status — future state.** The two-stage `generate` → `finalize` model, the `metadata/workers/` staging prefix, the shard-lifecycle markers (`.rendering` / `.valid` / `.invalid` / `.promoted`), and the `data/shards/` canonical-promotion step are all **planned design**, not current behavior. The MVP worker (`src/synth_setter/cli/generate_dataset.py`) writes shards directly to `data/<task_name>/<run_id>/` and there is no finalize stage. Tracked in [#406](https://github.com/tinaudio/synth-setter/issues/406) (CLAUDE.md / design-doc reconciliation) and [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI). Treat the rest of this section, §6 R2 File Structure, and §7 Design Decisions as the target architecture.
+> **Implementation status — future state.** The two-stage `generate` → `finalize` model, the `metadata/workers/` staging prefix, the shard-lifecycle markers (`.rendering` / `.valid` / `.invalid` / `.promoted`), and the canonical-promotion step into `data/{dataset_config_id}/{dataset_wandb_run_id}/shards/` (see [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation) for the authoritative path) are all **planned design**, not current behavior. The MVP worker (`src/synth_setter/cli/generate_dataset.py`) writes shards directly to `data/<task_name>/<run_id>/` and there is no finalize stage. Tracked in [#406](https://github.com/tinaudio/synth-setter/issues/406) (CLAUDE.md / design-doc reconciliation) and [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5 Pipeline CLI). Treat the rest of this section, §6 R2 File Structure, and §7 Design Decisions as the target architecture.
 
 The pipeline has two stages. Each is an independent command with well-defined inputs and outputs.
 
@@ -285,7 +285,7 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 
 ### R2 File Structure
 
-> **Future state — current workers write directly to `data/<task_name>/<run_id>/`; the `metadata/workers/` staging prefix and the `finalize`-driven `data/shards/` promotion do not yet exist in code. See [#406](https://github.com/tinaudio/synth-setter/issues/406).**
+> **Future state — current workers write directly to `data/<task_name>/<run_id>/`; the `metadata/workers/` staging prefix and the `finalize`-driven promotion into `data/{dataset_config_id}/{dataset_wandb_run_id}/shards/` (see [storage-provenance-spec.md §3a](storage-provenance-spec.md#3a-data-generation) for the authoritative path) do not yet exist in code. See [#406](https://github.com/tinaudio/synth-setter/issues/406).**
 
 The canonical R2 bucket layout — root path, top-level prefixes, and per-workflow contents — is defined in [storage-provenance-spec.md §2](storage-provenance-spec.md#2-r2-bucket-layout) and [§3a](storage-provenance-spec.md#3a-data-generation). The data pipeline writes under `data/{dataset_config_id}/{dataset_wandb_run_id}/`: workers stage shards and per-attempt artifacts under `metadata/workers/`, and `finalize` is the only writer to `shards/`, `train.h5`/`val.h5`/`test.h5` (or `*.tar` for WebDataset), `stats.npz`, and `metadata/dataset.{json,complete}`. Datasets are immutable once `metadata/dataset.complete` exists; new versions require a new `dataset_wandb_run_id`.
 
