@@ -2590,3 +2590,231 @@ class TestLaunchOneRank:
         assert envs_passed[WORKER_RANK_ENV_VAR] == "2"
         assert envs_passed[NUM_WORKERS_ENV_VAR] == "4"
         assert envs_passed[_WORKER_IMAGE_ENV] == "repo:tag"
+
+
+# ---------------------------------------------------------------------------
+# dispatch_via_skypilot — Hydra-driven launcher surface
+# ---------------------------------------------------------------------------
+
+
+def _write_runpod_yaml(tmp_path: Path, *, include_run: bool = False) -> Path:  # noqa: DOC101,DOC103,DOC201,DOC203
+    """Write a minimal RunPod-shaped compute template; ``include_run=True`` adds a run: block."""
+    yaml_text = (
+        "resources:\n"
+        "  cloud: runpod\n"
+        "  accelerators: {RTX3070: 1}\n"
+        "envs:\n"
+        "  RCLONE_CONFIG_R2_TYPE: ''\n"
+    )
+    if include_run:
+        yaml_text += "run: |\n  echo existing\n"
+    path = tmp_path / "compute.yaml"
+    path.write_text(yaml_text)
+    return path
+
+
+def _build_spec(fake_plugin: Path) -> DatasetSpec:  # noqa: DOC101,DOC103,DOC201,DOC203
+    """Build a DatasetSpec wired to ``fake_plugin`` for the dispatch tests."""
+    return DatasetSpec(
+        task_name="test-dispatch",
+        train_val_test_sizes=(10000, 0, 0),
+        output_format="hdf5",
+        base_seed=42,
+        r2_bucket="intermediate-data",
+        render={  # type: ignore[arg-type]
+            "plugin_path": str(fake_plugin),
+            "preset_path": "presets/surge-base.vstpreset",
+            "param_spec_name": "surge_simple",
+            "renderer_version": "1.3.4",
+            "sample_rate": 16000,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_render_batch": 32,
+            "samples_per_shard": 10000,
+        },
+    )
+
+
+class TestLoadComputeTemplateWithCmd:
+    """``_load_compute_template_with_cmd`` injects cmd as run and rejects pre-existing runs."""
+
+    def test_cmd_is_injected_when_yaml_has_no_run(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """Without a pre-existing run: block, the loaded doc's run: equals cmd."""
+        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
+
+        template = _write_runpod_yaml(tmp_path, include_run=False)
+        doc = _load_compute_template_with_cmd(template, "echo hello")
+        assert doc["run"] == "echo hello"
+
+    def test_existing_run_block_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """A pre-existing run: + non-empty cmd is a conflict, not a silent override."""
+        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
+
+        template = _write_runpod_yaml(tmp_path, include_run=True)
+        with pytest.raises(ValueError, match="has a `run:` block"):
+            _load_compute_template_with_cmd(template, "echo hello")
+
+    def test_missing_template_raises_file_not_found(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """Mistyped path surfaces a FileNotFoundError, not a confusing parse error downstream."""
+        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
+
+        with pytest.raises(FileNotFoundError):
+            _load_compute_template_with_cmd(tmp_path / "missing.yaml", "x")
+
+    def test_non_mapping_top_level_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """A YAML whose top level is a list, not a mapping, is rejected at load time."""
+        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
+
+        path = tmp_path / "bad.yaml"
+        path.write_text("- not\n- a\n- mapping\n")
+        with pytest.raises(ValueError, match="must be a mapping"):
+            _load_compute_template_with_cmd(path, "x")
+
+
+class TestDetectProviderFromDoc:
+    """``_detect_provider_from_doc`` mirrors ``_detect_provider`` but operates on a parsed dict."""
+
+    def test_flat_resources_cloud(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """``resources.cloud: runpod`` → ``runpod`` provider."""
+        from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
+
+        doc: dict[str, object] = {"resources": {"cloud": "runpod"}}
+        assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == "runpod"
+
+    def test_any_of_resources(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """``resources.any_of[0].cloud: oci`` → ``oci`` provider."""
+        from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
+
+        doc: dict[str, object] = {"resources": {"any_of": [{"cloud": "oci"}]}}
+        assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == "oci"
+
+    def test_kubernetes_maps_to_local(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """``cloud: kubernetes`` collapses to the ``local`` provider — same as the k8s alias."""
+        from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
+
+        doc: dict[str, object] = {"resources": {"cloud": "kubernetes"}}
+        assert _detect_provider_from_doc(doc, source=tmp_path / "x.yaml") == "local"
+
+    def test_unknown_cloud_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """An unsupported cloud surfaces as a ValueError naming the offending value."""
+        from synth_setter.pipeline.skypilot_launch import _detect_provider_from_doc
+
+        doc: dict[str, object] = {"resources": {"cloud": "aws"}}
+        with pytest.raises(ValueError, match="Unsupported cloud"):
+            _detect_provider_from_doc(doc, source=tmp_path / "x.yaml")
+
+
+class TestDispatchViaSkypilot:
+    """``dispatch_via_skypilot`` rejects degenerate cfgs and threads per-rank fanout through."""
+
+    def test_missing_compute_template_raises(self, fake_plugin: Path) -> None:  # noqa: DOC101,DOC103
+        """``compute_template=None`` is the "don't dispatch" sentinel — calling here is a bug."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(compute_template=None, cmd="echo")
+        with pytest.raises(ValueError, match="compute_template"):
+            dispatch_via_skypilot(spec, sky_cfg)
+
+    def test_missing_cmd_raises(self, tmp_path: Path, fake_plugin: Path) -> None:  # noqa: DOC101,DOC103
+        """No cmd → no run block on the worker → we refuse to launch a no-op task."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd=None)
+        with pytest.raises(ValueError, match="cmd"):
+            dispatch_via_skypilot(spec, sky_cfg)
+
+    def test_yaml_run_block_conflicts_with_cmd(self, tmp_path: Path, fake_plugin: Path) -> None:  # noqa: DOC101,DOC103
+        """End-to-end conflict guard: YAML's run: + sky_cfg.cmd both present → raise before any side effect."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        template = _write_runpod_yaml(tmp_path, include_run=True)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
+        with pytest.raises(ValueError, match="has a `run:` block"):
+            dispatch_via_skypilot(spec, sky_cfg)
+
+    def test_missing_worker_env_raises(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        local_spec_dir: Path,
+    ) -> None:
+        """No rclone creds in env → fail loudly rather than launching a task that can't upload."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="exec synth-setter-generate-dataset-from-hydra experiment=foo",
+            env_file=None,
+        )
+        with pytest.raises(ValueError, match="No worker env vars resolved"):
+            dispatch_via_skypilot(spec, sky_cfg)
+
+    def test_end_to_end_dispatch_uses_cmd_as_run_block(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        patch_materialize_io: None,  # noqa: ARG002
+    ) -> None:
+        """Happy-path dispatch: sky.Task.from_yaml_config receives a doc whose ``run`` is sky_cfg.cmd."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        cmd = "exec synth-setter-generate-dataset-from-hydra experiment=foo"
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd=cmd,
+            env_file=str(env_file),
+            job_name="dispatch-smoke",
+        )
+
+        dispatch_via_skypilot(spec, sky_cfg)
+
+        # The launcher should have built one Task per rank from a dict whose run: was cmd.
+        mock_sky.Task.from_yaml_config.assert_called()
+        passed_doc = mock_sky.Task.from_yaml_config.call_args.args[0]
+        assert passed_doc["run"] == cmd
+
+    def test_dispatch_failure_raises_runtime_error(  # noqa: DOC101,DOC103
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        patch_materialize_io: None,  # noqa: ARG002
+    ) -> None:
+        """A non-success tail rc surfaces as a RuntimeError naming the failed rank."""
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        # Even in --no-tail mode, a launch raising → rank gets rc=-1 in the failed list.
+        mock_sky.stream_and_get.side_effect = RuntimeError("boom")
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="dispatch-fail",
+        )
+
+        with pytest.raises(RuntimeError, match="worker.* failed"):
+            dispatch_via_skypilot(spec, sky_cfg)

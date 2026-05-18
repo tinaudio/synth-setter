@@ -1,15 +1,26 @@
 """Spec-driven generate_dataset runner.
 
-``main(cfg)`` is the Hydra-composed CLI entry, invoked via
-``python -m synth_setter.cli.generate_dataset experiment=<id>`` (or the
-``synth-setter-generate-dataset`` console script).
+This module exposes two console-script surfaces:
 
-The click CLI in ``src/synth_setter/tools/docker_entrypoint.py`` is the SkyPilot-worker entry that reads a
-pre-materialized spec from R2 via ``load_spec_from_uri``.
+- ``synth-setter-generate-dataset`` → :func:`main` — user-facing entry. Composes
+  the dataset config from ``sys.argv`` Hydra overrides, builds the
+  ``DatasetSpec``, and either renders the spec in-process (when
+  ``cfg.skypilot_launch.compute_template`` is ``null``) or dispatches the same
+  argv to a SkyPilot worker via ``dispatch_via_skypilot``.
+- ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker-side
+  entry. Pure ``@hydra.main`` composition + ``run(spec)``; this is the command
+  the SkyPilot launcher injects as each ``sky.Task`` ``run:`` block so the
+  worker reproduces the operator's composition without re-entering the
+  dispatch branch.
+
+The click CLI in ``src/synth_setter/tools/docker_entrypoint.py`` is a separate
+SkyPilot-worker entry kept for the legacy WORKER_SPEC_URI flow consumed by the
+``configs/compute/*-template.yaml`` templates' ``run:`` blocks.
 """
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -18,6 +29,7 @@ from typing import Any
 
 import hydra
 import rootutils
+from hydra import compose, initialize_config_dir
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
@@ -31,12 +43,27 @@ from synth_setter.pipeline.partitioning import (  # noqa: E402
     get_my_shards,
     read_rank_world_from_env,
 )
+from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig  # noqa: E402
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec  # noqa: E402
 
 # Composed-config keys that aren't DatasetSpec fields: ``data`` / ``r2`` are interpolation
 # sources for top-level keys; ``paths`` / ``hydra`` exist only for Hydra runtime; ``run_name``
-# is a Hydra-output-dir interpolation source (see ``configs/dataset.yaml``).
-_NON_SPEC_KEYS: tuple[str, ...] = ("data", "r2", "paths", "hydra", "run_name")
+# is a Hydra-output-dir interpolation source (see ``configs/dataset.yaml``); and
+# ``skypilot_launch`` is a dispatch-mode sub-tree consumed by :func:`main` before spec
+# construction.
+_NON_SPEC_KEYS: tuple[str, ...] = (
+    "data",
+    "r2",
+    "paths",
+    "hydra",
+    "run_name",
+    "skypilot_launch",
+)
+
+# Resolved relative to this file so the entry-point runs from any cwd. ``parents[3]``
+# climbs ``cli/`` → ``synth_setter/`` → ``src/`` → repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_CONFIG_DIR = _REPO_ROOT / "configs"
 
 
 def load_spec_from_uri(spec_uri: str) -> DatasetSpec:
@@ -237,10 +264,104 @@ def spec_from_cfg(cfg: DictConfig) -> DatasetSpec:
     return DatasetSpec(**spec_kwargs)
 
 
+def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:  # noqa: DOC203
+    """Validate the ``skypilot_launch`` sub-tree of a composed dataset cfg.
+
+    Resolves interpolations so any ``${oc.env:…}`` defaults are concrete by the
+    time the launcher reads them; raises if the sub-tree isn't a mapping (which
+    would mean a defaults-list misconfig at the YAML layer, not user input).
+
+    :param cfg: Composed dataset cfg whose ``skypilot_launch`` sub-tree carries
+        the launcher knobs (compute_template, num_workers, …).
+    :return: Validated ``SkypilotLaunchConfig`` with ``cmd`` unset (the entrypoint
+        populates ``cmd`` later via ``model_copy(update=...)``).
+    :raises TypeError: ``cfg.skypilot_launch`` did not resolve to a mapping.
+    """
+    raw: object = OmegaConf.to_container(cfg.skypilot_launch, resolve=True)
+    if not isinstance(raw, dict):
+        raise TypeError(f"cfg.skypilot_launch must compose to a mapping; got {type(raw).__name__}")
+    sky_kwargs: dict[str, Any] = {k: v for k, v in raw.items() if isinstance(k, str)}
+    return SkypilotLaunchConfig(**sky_kwargs)
+
+
+def _build_worker_cmd(overrides: list[str]) -> str:  # noqa: DOC203
+    """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
+
+    The cd into ``_REPO_ROOT`` is for the worker image (whose WORKDIR is
+    ``/home/build/synth-setter``); both sides of the dispatch share the same
+    repo path, so passing ``_REPO_ROOT`` from the launcher keeps the cmd
+    independent of where the operator launched from. Each override is shell-
+    quoted individually so values with spaces or special chars survive the
+    bash interpretation inside ``sky.Task.run``.
+
+    :param overrides: The launcher's ``sys.argv[1:]`` — the operator's Hydra
+        overrides, replayed verbatim on the worker.
+    :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
+    """
+    quoted = " ".join(shlex.quote(o) for o in overrides)
+    return (
+        f"cd {shlex.quote(str(_REPO_ROOT))} && "
+        f"exec synth-setter-generate-dataset-from-hydra {quoted}".rstrip()
+    )
+
+
 @hydra.main(version_base="1.3", config_path="../../../configs", config_name="dataset")
-def main(cfg: DictConfig) -> None:
-    """Hydra-composed CLI entry: ``python -m synth_setter.cli.generate_dataset experiment=<id>``."""
+def from_hydra(cfg: DictConfig) -> None:
+    """Worker-side ``@hydra.main`` entry: build the spec and render it in-process.
+
+    Exposed as the ``synth-setter-generate-dataset-from-hydra`` console script
+    and injected by :func:`main` as the ``run:`` block of each dispatched
+    ``sky.Task``. Re-enters the same Hydra composition the operator typed
+    locally so the worker's spec matches byte-for-byte; the ``skypilot_launch``
+    sub-tree is left composed but unread (it's a no-op on the worker side).
+
+    :param cfg: The Hydra-composed dataset cfg passed by ``@hydra.main``.
+    """
     run(spec_from_cfg(cfg))
+
+
+def main() -> None:
+    """User-facing CLI: compose dataset cfg from argv, dispatch local or via SkyPilot.
+
+    Programmatic ``initialize_config_dir`` + ``compose`` instead of
+    ``@hydra.main`` so we can inspect ``cfg.skypilot_launch.compute_template``
+    and choose the dispatch branch before Hydra would otherwise hand the cfg
+    straight to the body. Trailing argv items are forwarded verbatim as Hydra
+    overrides (``experiment=foo data=ksin skypilot_launch.compute_template=…``);
+    when the worker re-enters via :func:`from_hydra`, the same argv is replayed
+    so the composition matches byte-for-byte across the launcher/worker boundary.
+
+    When ``cfg.skypilot_launch.compute_template`` is ``None`` the spec runs in
+    this process via :func:`run`; otherwise the spec is dispatched to the named
+    SkyPilot template via :func:`dispatch_via_skypilot`.
+    """
+    overrides = list(sys.argv[1:])
+
+    with initialize_config_dir(version_base="1.3", config_dir=str(_CONFIG_DIR)):
+        cfg = compose(config_name="dataset", overrides=overrides)
+
+    # Programmatic ``compose()`` doesn't populate ``hydra.runtime.output_dir``,
+    # so ``paths.output_dir = ${hydra:runtime.output_dir}`` would otherwise raise
+    # at the resolve step inside ``spec_from_cfg``. Pin to the repo root — the
+    # spec doesn't read these fields, but ``OmegaConf.to_container(resolve=True)``
+    # eagerly resolves every interpolation in the tree.
+    cfg.paths.root_dir = str(_REPO_ROOT)
+    cfg.paths.output_dir = str(_REPO_ROOT)
+    cfg.paths.work_dir = str(_REPO_ROOT)
+
+    spec = spec_from_cfg(cfg)
+    sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
+
+    if sky_cfg.compute_template is None:
+        run(spec)
+        return
+
+    # Deferred so the local path doesn't pay the SkyPilot / click import cost
+    # (sky + click pull in heavy provider SDKs on import).
+    from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+    sky_cfg = sky_cfg.model_copy(update={"cmd": _build_worker_cmd(overrides)})
+    dispatch_via_skypilot(spec, sky_cfg)
 
 
 if __name__ == "__main__":

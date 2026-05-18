@@ -11,6 +11,7 @@ defaults:
   - r2: default
   - paths: default
   - hydra: default
+  - skypilot_launch: default
   - experiment: ???
 
 task_name: ???

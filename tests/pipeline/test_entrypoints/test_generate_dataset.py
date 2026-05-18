@@ -822,3 +822,133 @@ class TestSpecFromCfg:
 # PROJECT_ROOT-bootstrap behavior is exercised end-to-end by tests/pipeline/test_configs/
 # test_experiment_yamls.py — those tests fail with an InterpolationResolutionError if the
 # module's import-time `rootutils.setup_root(...)` ever stops setting PROJECT_ROOT.
+
+
+# ---------------------------------------------------------------------------
+# _build_worker_cmd — shell-quoted cmd injection for sky.Task.run
+# ---------------------------------------------------------------------------
+
+
+class TestBuildWorkerCmd:
+    """The worker cmd reconstructs the operator's Hydra invocation under bash."""
+
+    def test_cmd_uses_from_hydra_console_script(self) -> None:
+        """The worker reproduces the composition by re-entering the from_hydra entry point."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd(["experiment=foo"])
+        assert "synth-setter-generate-dataset-from-hydra" in cmd
+        assert "experiment=foo" in cmd
+
+    def test_cmd_shell_quotes_overrides_with_spaces(self) -> None:
+        """Spaces and special chars in an override survive bash interpretation in run:."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd(["task_name=value with space"])
+        # shlex.quote wraps the whole assignment in single quotes; the bare-word form
+        # would be split into two argv items by bash.
+        assert "'task_name=value with space'" in cmd
+
+    def test_cmd_handles_empty_overrides(self) -> None:
+        """No overrides → no trailing arguments after the entry-point name."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd([])
+        # No stray whitespace at the end; bash would tolerate it but it's a smell.
+        assert cmd.endswith("synth-setter-generate-dataset-from-hydra")
+
+
+# ---------------------------------------------------------------------------
+# main — dispatching CLI entry: local vs SkyPilot
+# ---------------------------------------------------------------------------
+
+
+class TestMainDispatchBranches:
+    """``main()`` composes the dataset cfg from argv, then dispatches local or via SkyPilot."""
+
+    @pytest.fixture(autouse=True)
+    def _set_default_skypilot_env(self, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
+        """Set single-worker rank/world env so the local branch's run() succeeds."""
+        monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+        monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+
+    def test_compute_template_null_calls_run_locally(  # noqa: DOC101,DOC103
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """compute_template=null routes to run(spec); dispatch_via_skypilot stays unused."""
+        import synth_setter.cli.generate_dataset as gd
+
+        # Compose for a real experiment so cfg.skypilot_launch resolves; override the plugin path
+        # to TEST_PLUGIN_VST3 so the version-check in run() (which we will mock out) doesn't matter.
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        recorded: dict[str, object] = {}
+
+        def _fake_run(spec: object) -> None:
+            recorded["spec"] = spec
+
+        monkeypatch.setattr(gd, "run", _fake_run)
+        # Sentinel ensures dispatch_via_skypilot is not even imported on the local branch.
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        def _explode(*args: object, **kwargs: object) -> None:
+            raise AssertionError("dispatch_via_skypilot must not be called on the local branch")
+
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _explode)
+
+        gd.main()
+
+        assert "spec" in recorded, "run(spec) was not called"
+
+    def test_compute_template_set_calls_dispatch_via_skypilot(  # noqa: DOC101,DOC103
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """compute_template=<path> routes through dispatch_via_skypilot with cmd populated."""
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        # A bare-minimum compute YAML the loader will accept (resources + envs, no run:).
+        template = tmp_path / "template.yaml"
+        template.write_text("resources:\n  cloud: runpod\nenvs:\n  X: ''\n")
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"render.plugin_path={TEST_PLUGIN_VST3}",
+            f"skypilot_launch.compute_template={template}",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+
+        recorded: dict[str, object] = {}
+
+        def _fake_dispatch(spec: object, sky_cfg: object) -> None:
+            recorded["spec"] = spec
+            recorded["sky_cfg"] = sky_cfg
+
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
+        # ``run`` must NOT be invoked on the dispatch branch.
+        monkeypatch.setattr(
+            gd,
+            "run",
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                AssertionError("run must not be called on the dispatch branch")
+            ),
+        )
+
+        gd.main()
+
+        assert "sky_cfg" in recorded
+        sky_cfg = recorded["sky_cfg"]
+        # cmd is built by _build_worker_cmd from the same overrides — sanity-check the shape.
+        assert sky_cfg.compute_template == str(template)  # type: ignore[attr-defined]
+        assert sky_cfg.cmd is not None  # type: ignore[attr-defined]
+        assert "synth-setter-generate-dataset-from-hydra" in sky_cfg.cmd  # type: ignore[attr-defined]
+        assert "experiment=generate_dataset/smoke-shard" in sky_cfg.cmd  # type: ignore[attr-defined]

@@ -1,0 +1,15 @@
+# Default SkyPilot dispatch settings consumed by
+# ``synth_setter.cli.generate_dataset.main``. ``compute_template: null`` means
+# the run stays in-process — set it to a YAML path under ``configs/compute/``
+# (e.g. ``skypilot_launch.compute_template=configs/compute/runpod-template.yaml``)
+# to dispatch the render through SkyPilot via
+# ``synth_setter.pipeline.skypilot_launch.dispatch_via_skypilot``.
+
+compute_template: null
+env_file: .env
+job_name: null
+num_workers: 1
+worker_image_tag: dev-snapshot
+tail: false
+api_server: null
+local: false
