@@ -69,6 +69,16 @@ class TestR2LocationConstruction:
             ):
                 R2Location(bucket="b", prefix_root=value, prefix="data/x/y/")
 
+    def test_prefix_root_strips_surrounding_whitespace(self) -> None:
+        """Leading/trailing whitespace is stripped from the stored value.
+
+        Regression: a value like ``" data "`` would otherwise survive into
+        ``make_r2_prefix`` (which only strips slashes, not whitespace) and
+        produce a malformed prefix like ``" data /task/run/"``.
+        """
+        loc = R2Location(bucket="b", prefix_root="  data  ", prefix="data/x/y/")
+        assert loc.prefix_root == "data"
+
     def test_prefix_must_end_with_slash(self) -> None:
         """Prefix without trailing ``/`` would concatenate to ``.../prefixfilename``."""
         with pytest.raises(ValidationError, match=r"r2\.prefix must end with"):

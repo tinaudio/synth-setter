@@ -408,14 +408,22 @@ jobs:
       # key derived from `cluster_name`. Surface that URI as a job/workflow
       # output so validate-dataset-shards.yaml can pull it directly from R2
       # instead of via the run-metadata artifact.
+      #
+      # The console script lives in the project package, which isn't installed
+      # on the runner for runpod/oci (only the skypilot-local row installs it).
+      # Invoke it inside the already-pulled image — it's installed there for
+      # every provider — and mount the run-metadata dir read-only so the
+      # container can read input_spec.json.
       - name: Compute spec_uri output
         id: spec_uri
         env:
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
         run: |
           set -euo pipefail
-          SPEC_PATH="${RUN_METADATA_DIR}/input_spec.json"
-          SPEC_URI=$(synth-setter-spec-uri "${SPEC_PATH}" "${CLUSTER_NAME}")
+          SPEC_URI=$(docker run --rm \
+            -v "${RUN_METADATA_DIR}:/run-metadata:ro" \
+            "${IMAGE}" \
+            synth-setter-spec-uri /run-metadata/input_spec.json "${CLUSTER_NAME}")
           echo "spec_uri=${SPEC_URI}" >> "${GITHUB_OUTPUT}"
           echo "spec_uri: ${SPEC_URI}"
 
