@@ -1,3 +1,5 @@
+"""Reshard a directory of HDF5 shards into train/val/test virtual datasets."""
+
 from pathlib import Path
 
 import click
@@ -10,12 +12,28 @@ import numpy as np
 @click.option("--train-samples", "-t", type=int, default=200)
 @click.option("--val-samples", "-v", type=int, default=4)
 @click.option("--test-samples", "-e", type=int, default=1)
+@click.option(
+    "--shard-size",
+    "-s",
+    type=int,
+    default=10_000,
+    help="Number of samples per input shard (rows along the leading axis of each shard-*.h5).",
+)
 def main(
     dataset_root: str,
     train_samples: int = 200,
     val_samples: int = 4,
     test_samples: int = 1,
+    shard_size: int = 10_000,
 ):
+    """Split `shard-*.h5` files into `{train,val,test}.h5` HDF5 virtual datasets.
+
+    :param dataset_root: Directory containing the `shard-*.h5` files to combine.
+    :param train_samples: Number of input shards to include in the train split.
+    :param val_samples: Number of input shards to include in the val split.
+    :param test_samples: Number of input shards to include in the test split.
+    :param shard_size: Number of samples per input shard (rows along the leading axis).
+    """
     dataset_root = Path(dataset_root)
     files = dataset_root.glob("shard-*.h5")
     files = sorted(list(files))
@@ -29,7 +47,7 @@ def main(
 
     for split, files in splits.items():
         print(split)
-        split_len = len(files) * 10_000
+        split_len = len(files) * shard_size
 
         with h5py.File(files[0], "r") as f:
             audio_shape = f["audio"].shape[1:]
@@ -42,17 +60,17 @@ def main(
 
         for i, file in enumerate(files):
             vs_audio = h5py.VirtualSource(
-                file, "audio", dtype=np.float32, shape=(10_000, *audio_shape)
+                file, "audio", dtype=np.float32, shape=(shard_size, *audio_shape)
             )
             vs_mel = h5py.VirtualSource(
-                file, "mel_spec", dtype=np.float32, shape=(10_000, *mel_shape)
+                file, "mel_spec", dtype=np.float32, shape=(shard_size, *mel_shape)
             )
             vs_param = h5py.VirtualSource(
-                file, "param_array", dtype=np.float32, shape=(10_000, *param_shape)
+                file, "param_array", dtype=np.float32, shape=(shard_size, *param_shape)
             )
 
-            range_start = i * 10_000
-            range_end = (i + 1) * 10_000
+            range_start = i * shard_size
+            range_end = (i + 1) * shard_size
 
             print(range_start, range_end)
             vl_audio[range_start:range_end, :, :] = vs_audio
