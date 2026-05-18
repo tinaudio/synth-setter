@@ -1,13 +1,13 @@
 """Tests for ``synth_setter.pipeline.data.reshard``.
 
-The reshard CLI consumes a ``DatasetSpec`` to determine train/val/test split
-sizes instead of taking sample-count CLI flags. These tests pin three contracts:
+The reshard CLI consumes a ``DatasetSpec`` to determine split sizes and the
+exact shard filenames to read. These tests pin three contracts:
 
 1. Per-split shard counts are derived from ``spec.train_val_test_sizes`` and
-   ``spec.render.samples_per_shard`` and the globbed shard list is sliced
-   accordingly.
-2. When the on-disk shard count drifts from the spec's expected total the CLI
-   fails loud with a message naming both totals.
+   ``spec.render.samples_per_shard``.
+2. The CLI builds its shard list from ``spec.shards`` (not a filesystem glob),
+   so it reads the canonical filenames defined by the spec and fails loud when
+   one is missing.
 3. The CLI accepts ``r2://`` spec URIs via ``load_spec_from_uri``.
 """
 
@@ -35,24 +35,26 @@ def _write_fake_shard(path: Path, rows: int) -> None:  # noqa: DOC101, DOC103
 
 
 def _make_spec(  # noqa: DOC101, DOC103, DOC201, DOC203
-    kwargs: dict[str, Any], *, sizes: tuple[int, int, int]
+    kwargs: dict[str, Any],
+    *,
+    sizes: tuple[int, int, int],
+    samples_per_shard: int | None = None,
 ) -> DatasetSpec:
-    """Build a DatasetSpec from fixture kwargs with the given split sizes."""
+    """Build a DatasetSpec from fixture kwargs, optionally overriding samples_per_shard."""
     kwargs = dict(kwargs)
     kwargs["train_val_test_sizes"] = list(sizes)
+    if samples_per_shard is not None:
+        render = dict(kwargs["render"])
+        render["samples_per_shard"] = samples_per_shard
+        kwargs["render"] = render
     return DatasetSpec(**kwargs)
 
 
-def _make_shards(  # noqa: DOC101, DOC103, DOC201, DOC203
-    root: Path, count: int, rows: int
-) -> list[Path]:
-    """Write ``count`` fake shards under ``root`` and return their paths."""
-    paths: list[Path] = []
-    for i in range(count):
-        path = root / f"shard-{i:06d}.h5"
-        _write_fake_shard(path, rows)
-        paths.append(path)
-    return paths
+def _materialize_shards_for(spec: DatasetSpec, root: Path) -> None:  # noqa: DOC101, DOC103
+    """Write the exact shard files ``spec.shards`` names under ``root``."""
+    rows = spec.render.samples_per_shard
+    for shard in spec.shards:
+        _write_fake_shard(root / shard.filename, rows)
 
 
 def test_split_shard_counts_matches_spec(  # noqa: DOC101, DOC103
@@ -64,40 +66,14 @@ def test_split_shard_counts_matches_spec(  # noqa: DOC101, DOC103
     assert reshard.split_shard_counts(spec) == (3, 2, 1)
 
 
-def test_assign_shards_to_splits_slices_in_spec_order(  # noqa: DOC101, DOC103
-    valid_dataset_spec_kwargs: dict[str, Any],
-) -> None:
-    """Sorted shards are sliced train|val|test in order, no overlap."""
-    spec = _make_spec(valid_dataset_spec_kwargs, sizes=(30000, 20000, 10000))
-    shard_paths = [Path(f"shard-{i:06d}.h5") for i in range(6)]
-
-    splits = reshard.assign_shards_to_splits(shard_paths, spec)
-
-    assert splits["train"] == shard_paths[:3]
-    assert splits["val"] == shard_paths[3:5]
-    assert splits["test"] == shard_paths[5:]
-
-
-def test_assign_shards_to_splits_fails_loud_on_count_mismatch(  # noqa: DOC101, DOC103
-    valid_dataset_spec_kwargs: dict[str, Any],
-) -> None:
-    """An on-disk shard count != spec's expected total raises with both numbers."""
-    spec = _make_spec(valid_dataset_spec_kwargs, sizes=(30000, 20000, 10000))
-    # Spec expects 6 shards; supply 5 to provoke drift.
-    too_few = [Path(f"shard-{i:06d}.h5") for i in range(5)]
-
-    with pytest.raises(ValueError, match=r"expected.*6.*observed.*5"):
-        reshard.assign_shards_to_splits(too_few, spec)
-
-
 def test_cli_writes_split_files_using_spec(  # noqa: DOC101, DOC103
     tmp_path: Path, valid_dataset_spec_kwargs: dict[str, Any]
 ) -> None:
-    """End-to-end: CLI consumes a local spec, slices shards, and writes split files."""
+    """End-to-end: CLI consumes a local spec, reads spec.shards, writes split files."""
     rows = valid_dataset_spec_kwargs["render"]["samples_per_shard"]
     spec = _make_spec(valid_dataset_spec_kwargs, sizes=(rows * 3, rows * 2, rows * 1))
 
-    _make_shards(tmp_path, count=6, rows=rows)
+    _materialize_shards_for(spec, tmp_path)
     spec_path = tmp_path / "input_spec.json"
     spec_path.write_text(spec.model_dump_json())
 
@@ -120,15 +96,73 @@ def test_cli_writes_split_files_using_spec(  # noqa: DOC101, DOC103
                 assert dataset.shape[0] == expected_rows
 
 
-def test_cli_fails_loud_when_shards_disagree_with_spec(  # noqa: DOC101, DOC103
+def test_cli_skips_empty_split(  # noqa: DOC101, DOC103
     tmp_path: Path, valid_dataset_spec_kwargs: dict[str, Any]
 ) -> None:
-    """Globbed-vs-spec mismatch is a fail-loud ValueError, not a silent slice."""
+    """A zero-sized split (e.g. ``test=0``) writes no file and exits zero."""
+    rows = valid_dataset_spec_kwargs["render"]["samples_per_shard"]
+    spec = _make_spec(valid_dataset_spec_kwargs, sizes=(rows * 3, rows * 1, 0))
+
+    _materialize_shards_for(spec, tmp_path)
+    spec_path = tmp_path / "input_spec.json"
+    spec_path.write_text(spec.model_dump_json())
+
+    result = CliRunner().invoke(
+        reshard.main,
+        [str(tmp_path), "--spec", str(spec_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "train.h5").exists()
+    assert (tmp_path / "val.h5").exists()
+    assert not (tmp_path / "test.h5").exists()
+
+
+def test_cli_uses_spec_samples_per_shard_not_a_hardcoded_value(  # noqa: DOC101, DOC103
+    tmp_path: Path, valid_dataset_spec_kwargs: dict[str, Any]
+) -> None:
+    """Resharded VDS rows-per-split track ``spec.render.samples_per_shard``, not 10k."""
+    non_default = 7  # deliberately tiny and != fixture default to catch hardcoded sizes
+    spec = _make_spec(
+        valid_dataset_spec_kwargs,
+        sizes=(non_default * 3, non_default * 2, non_default * 1),
+        samples_per_shard=non_default,
+    )
+
+    _materialize_shards_for(spec, tmp_path)
+    spec_path = tmp_path / "input_spec.json"
+    spec_path.write_text(spec.model_dump_json())
+
+    result = CliRunner().invoke(
+        reshard.main,
+        [str(tmp_path), "--spec", str(spec_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    for split, expected_rows in (
+        ("train", non_default * 3),
+        ("val", non_default * 2),
+        ("test", non_default * 1),
+    ):
+        with h5py.File(tmp_path / f"{split}.h5", "r") as f:
+            dataset = f["audio"]
+            assert isinstance(dataset, h5py.Dataset)
+            assert dataset.shape[0] == expected_rows
+
+
+def test_cli_fails_loud_when_spec_filename_is_missing(  # noqa: DOC101, DOC103
+    tmp_path: Path, valid_dataset_spec_kwargs: dict[str, Any]
+) -> None:
+    """If a filename in ``spec.shards`` is absent on disk, the CLI fails (not silent)."""
     rows = valid_dataset_spec_kwargs["render"]["samples_per_shard"]
     spec = _make_spec(valid_dataset_spec_kwargs, sizes=(rows * 3, rows * 2, rows * 1))
 
-    # Spec expects 6 shards; write only 5.
-    _make_shards(tmp_path, count=5, rows=rows)
+    _materialize_shards_for(spec, tmp_path)
+    # Delete one canonical shard; a stale extra file is intentionally left.
+    (tmp_path / spec.shards[0].filename).unlink()
+    (tmp_path / "shard-999999.h5").touch()
     spec_path = tmp_path / "input_spec.json"
     spec_path.write_text(spec.model_dump_json())
 
@@ -138,9 +172,6 @@ def test_cli_fails_loud_when_shards_disagree_with_spec(  # noqa: DOC101, DOC103
     )
 
     assert result.exit_code != 0
-    message = (result.output or "") + (str(result.exception) if result.exception else "")
-    assert "expected" in message
-    assert "6" in message and "5" in message
 
 
 def test_cli_accepts_r2_spec_uri(  # noqa: DOC101, DOC103
@@ -150,7 +181,7 @@ def test_cli_accepts_r2_spec_uri(  # noqa: DOC101, DOC103
     rows = valid_dataset_spec_kwargs["render"]["samples_per_shard"]
     spec = _make_spec(valid_dataset_spec_kwargs, sizes=(rows * 3, rows * 2, rows * 1))
 
-    _make_shards(tmp_path, count=6, rows=rows)
+    _materialize_shards_for(spec, tmp_path)
     spec_uri = "r2://intermediate-data/data/foo/input_spec.json"
 
     with mock.patch.object(reshard, "load_spec_from_uri", return_value=spec) as loader:
