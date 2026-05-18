@@ -149,9 +149,13 @@ def run(spec: DatasetSpec) -> None:
     ``check=True``, so a non-zero rclone exit (auth, network) propagates as a hard failure rather
     than degrading silently into a re-render.
 
-    The spec is uploaded by the launcher (see
-    ``synth_setter.pipeline.skypilot_launch.upload_spec_to_r2``), not the
-    worker — workers must not re-upload the spec.
+    This function does not upload the spec to R2. On the SkyPilot-dispatched
+    path the launcher persists the spec to
+    ``r2://{bucket}/skypilot-launcher-specs/{job_name}.json`` before workers
+    start (see ``synth_setter.pipeline.skypilot_launch.upload_spec_to_r2``).
+    On the operator-local path (``main()`` when
+    ``cfg.skypilot_launch.compute_template is None``) the spec is not
+    persisted to R2 — it lives only in the operator's invocation cfg.
 
     The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
     ``configs/render/<spec>.yaml``; this is where the worker — which has pedalboard

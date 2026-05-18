@@ -47,9 +47,15 @@ ______________________________________________________________________
 > **Status: Proposed.** Current production behavior writes shards directly to
 > `data/{dataset_config_id}/{dataset_wandb_run_id}/<shard_filename>` from the
 > generate-stage worker (`src/synth_setter/cli/generate_dataset.py`). The
-> `metadata/workers/` staging layout and the finalize stage that promotes
+> spec is *not* stored under `data/{...}/metadata/input_spec.json` today —
+> on SkyPilot-dispatched runs the launcher uploads it to
+> `r2://{bucket}/skypilot-launcher-specs/<job_name>.json` (see
+> `synth_setter.pipeline.skypilot_launch.upload_spec_to_r2`); on
+> operator-local runs the spec is not persisted to R2 at all.
+> The `metadata/workers/` staging layout, the finalize stage that promotes
 > staged shards to `shards/` and writes `train.h5`/`val.h5`/`test.h5`,
-> `stats.npz`, `dataset.json`, and `dataset.complete` are the planned target
+> `stats.npz`, `dataset.json`, and `dataset.complete`, and the
+> `metadata/input_spec.json` location for the spec are the planned target
 > state — tracked under
 > [#72](https://github.com/tinaudio/synth-setter/issues/72) (Phase 5: Pipeline
 > CLI) and [#408](https://github.com/tinaudio/synth-setter/issues/408)
