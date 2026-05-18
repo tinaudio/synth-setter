@@ -191,7 +191,7 @@ class TestDatasetSpecValidators:
     def test_r2_bucket_blank_raises(self, patch_runtime_io: None) -> None:
         """Blank or whitespace-only ``r2.bucket`` raises (rclone would receive a malformed URI)."""
         for blank in ("", "   ", "\t\n"):
-            with pytest.raises(ValidationError, match="r2_bucket must not be blank"):
+            with pytest.raises(ValidationError, match=r"r2\.bucket must not be blank"):
                 DatasetSpec(**_valid_spec_kwargs(r2={"bucket": blank}))
 
     def test_task_name_blank_raises(self, patch_runtime_io: None) -> None:
@@ -205,7 +205,9 @@ class TestDatasetSpecValidators:
         Prevents derived ``r2.prefix`` from starting with a stray ``/``.
         """
         for blank in ("", "   ", "\t\n"):
-            with pytest.raises(ValidationError, match="r2_prefix_root must not be blank"):
+            with pytest.raises(
+                ValidationError, match=r"r2\.prefix_root must not be blank or slash-only"
+            ):
                 DatasetSpec(
                     **_valid_spec_kwargs(r2={"bucket": "intermediate-data", "prefix_root": blank})
                 )
@@ -214,7 +216,7 @@ class TestDatasetSpecValidators:
         self, patch_runtime_io: None
     ) -> None:
         """An explicit ``r2.prefix`` missing the trailing ``/`` raises (concat trap)."""
-        with pytest.raises(ValidationError, match="r2_prefix must end with"):
+        with pytest.raises(ValidationError, match=r"r2\.prefix must end with"):
             DatasetSpec(
                 **_valid_spec_kwargs(r2={"bucket": "intermediate-data", "prefix": "data/no/slash"})
             )
@@ -294,7 +296,7 @@ class TestDatasetSpecValidators:
 
         The default_factory is bypassed when a value is supplied.
         """
-        with pytest.raises(ValidationError, match="r2_prefix must end with"):
+        with pytest.raises(ValidationError, match=r"r2\.prefix must end with"):
             DatasetSpec(**_valid_spec_kwargs(r2={"bucket": "intermediate-data", "prefix": ""}))
 
     def test_z_suffixed_created_at_string_parses(self, patch_runtime_io: None) -> None:

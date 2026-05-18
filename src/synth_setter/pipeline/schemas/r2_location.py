@@ -4,7 +4,30 @@ Replaces the three flat ``r2_bucket`` / ``r2_prefix_root`` / ``r2_prefix`` field
 that previously lived on ``DatasetSpec``. Centralizes URI construction so the
 worker upload, the launcher spec upload, and the CI shard validator agree on
 one URI shape (see ``r2_io.shard_uri`` for the historical helper). The methods
-are the only sanctioned way to build an R2 URI from a bucket+prefix pair.
+on this model are the only sanctioned way to build R2 URIs for the dataset
+layout — callers must not concatenate ``self.prefix`` with filename literals.
+
+Canonical R2 layout under ``self.prefix`` (= ``<root>/<task_name>/<run_id>/``)::
+
+    data/{dataset_config_id}/{dataset_wandb_run_id}/
+    ├── shards/                       # Future state — see #406; today shards live flat
+    │   └── shard-NNNNNN.{h5,tar}
+    ├── metadata/                     # Future state — see #385; today metadata is flat
+    │   ├── config.yaml               # Frozen Hydra config (provenance copy)
+    │   ├── input_spec.json           # Frozen DatasetSpec (authoritative)
+    │   ├── dataset.json              # Self-describing dataset card (#74)
+    │   ├── dataset.complete          # Completion marker
+    │   └── workers/                  # Future state — see #406; staging area
+    │       ├── shards/{shard_id}/{worker_id}-{attempt_uuid}.*
+    │       └── attempts/{worker_id}-{attempt_uuid}/report.json
+    ├── {train,val,test}.h5           # Split virtual datasets (post-reshard)
+    └── stats.npz                     # Normalization statistics
+
+The URI-helper methods below return the **current** canonical location for
+each well-known object. The flat→nested migrations for ``shards/`` (#406)
+and ``metadata/`` (#385) will move bodies under their parent dirs without
+changing the API, so call sites that go through these helpers stay correct
+across the transition.
 
 ``prefix`` is a required field on this model — when the caller omits it,
 ``DatasetSpec``'s own ``model_validator(mode="before")`` derives it via the
@@ -23,7 +46,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from synth_setter.pipeline.constants import R2_URI_SCHEME, RCLONE_REMOTE
+from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME, R2_URI_SCHEME, RCLONE_REMOTE
 from synth_setter.pipeline.schemas.prefix import DEFAULT_R2_PREFIX_ROOT
 
 if TYPE_CHECKING:
@@ -61,15 +84,21 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
     def _bucket_must_not_be_blank(cls, value: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203,DOC501,DOC503
         """Reject blank buckets so rclone never receives a malformed ``r2:/...`` destination."""
         if not value.strip():
-            raise ValueError("r2_bucket must not be blank")
+            raise ValueError("r2.bucket must not be blank")
         return value
 
     @field_validator("prefix_root")
     @classmethod
     def _prefix_root_must_not_be_blank(cls, value: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203,DOC501,DOC503
-        """Reject blank prefix roots so derived ``prefix`` doesn't start with a stray ``/``."""
-        if not value.strip():
-            raise ValueError("r2_prefix_root must not be blank")
+        """Reject blank or slash-only prefix roots so derived ``prefix`` isn't malformed.
+
+        ``make_r2_prefix`` strips leading/trailing ``/`` and then rejects an empty
+        result, so a value like ``"////"`` would otherwise survive this validator
+        and crash later inside the prefix factory. Catching it here keeps error
+        attribution at the ``r2.prefix_root`` boundary.
+        """
+        if not value.strip("/").strip():
+            raise ValueError("r2.prefix_root must not be blank or slash-only")
         return value
 
     @field_validator("prefix")
@@ -77,7 +106,7 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
     def _prefix_must_end_with_slash(cls, value: str) -> str:  # noqa: DOC101,DOC103,DOC201,DOC203,DOC501,DOC503
         """Reject prefixes lacking a trailing ``/`` so rclone never gets ".../prefixfilename"."""
         if not value.endswith("/"):
-            raise ValueError(f"r2_prefix must end with '/' (got: {value!r})")
+            raise ValueError(f"r2.prefix must end with '/' (got: {value!r})")
         return value
 
     def uri(self, key: str) -> str:  # noqa: DOC203
@@ -101,11 +130,118 @@ class R2Location(BaseModel):  # noqa: DOC601,DOC603
         """
         return f"{RCLONE_REMOTE}:{self.bucket}/{self.prefix}"
 
+    def _under_prefix(self, name: str) -> str:  # noqa: DOC203
+        """Build ``r2://<bucket>/<prefix><name>`` — the canonical under-prefix URI shape.
+
+        :param name: Relative key under ``self.prefix`` (may contain ``/``).
+        :returns: ``r2://<bucket>/<prefix><name>`` URI string.
+        """
+        return f"{R2_URI_SCHEME}{self.bucket}/{self.prefix}{name}"
+
     def shard_uri(self, shard: ShardSpec) -> str:  # noqa: DOC203
         """Return the canonical R2 URI for ``shard``: ``r2://<bucket>/<prefix><filename>``.
 
         :param shard: A ``ShardSpec`` whose ``filename`` lives directly under
-            this location's ``prefix``.
+            this location's ``prefix``. Future state (#406) will relocate
+            shards under a ``shards/`` subdirectory; this helper's API stays
+            stable across that migration.
         :returns: ``r2://<bucket>/<prefix><shard.filename>`` URI string.
         """
-        return f"{R2_URI_SCHEME}{self.bucket}/{self.prefix}{shard.filename}"
+        return self._under_prefix(shard.filename)
+
+    def input_spec_uri(self) -> str:  # noqa: DOC203
+        """R2 URI of the frozen ``input_spec.json`` (the materialized ``DatasetSpec``).
+
+        Currently lives flat at ``<prefix>input_spec.json``; future state (#385)
+        relocates it under ``<prefix>metadata/input_spec.json``.
+
+        :returns: ``r2://<bucket>/<prefix>input_spec.json`` URI string.
+        """
+        return self._under_prefix(INPUT_SPEC_FILENAME)
+
+    def config_yaml_uri(self) -> str:  # noqa: DOC203
+        """R2 URI of the frozen Hydra-pipeline-config provenance copy (``config.yaml``).
+
+        Currently flat; future state (#385) places it under ``metadata/``.
+
+        :returns: ``r2://<bucket>/<prefix>config.yaml`` URI string.
+        """
+        return self._under_prefix("config.yaml")
+
+    def dataset_card_uri(self) -> str:  # noqa: DOC203
+        """R2 URI of the self-describing dataset card (``dataset.json``, planned — #74).
+
+        Currently flat; future state (#385) places it under ``metadata/``.
+
+        :returns: ``r2://<bucket>/<prefix>dataset.json`` URI string.
+        """
+        return self._under_prefix("dataset.json")
+
+    def dataset_complete_marker_uri(self) -> str:  # noqa: DOC203
+        """R2 URI of the ``dataset.complete`` completion marker (written last by finalize).
+
+        Currently flat; future state (#385) places it under ``metadata/``.
+
+        :returns: ``r2://<bucket>/<prefix>dataset.complete`` URI string.
+        """
+        return self._under_prefix("dataset.complete")
+
+    def split_uri(self, split: str) -> str:  # noqa: DOC203
+        """R2 URI of a split virtual-dataset file (``train.h5`` / ``val.h5`` / ``test.h5``).
+
+        Reshard produces these locally today; the URI is where they land once
+        finalize uploads them (#408).
+
+        :param split: One of ``"train"``, ``"val"``, ``"test"``.
+        :returns: ``r2://<bucket>/<prefix><split>.h5`` URI string.
+        """
+        return self._under_prefix(f"{split}.h5")
+
+    def stats_uri(self) -> str:  # noqa: DOC203
+        """R2 URI of ``stats.npz`` (normalization statistics).
+
+        Stats are written locally today; the URI is where finalize uploads
+        them (#408).
+
+        :returns: ``r2://<bucket>/<prefix>stats.npz`` URI string.
+        """
+        return self._under_prefix("stats.npz")
+
+    def worker_staged_shard_uri(  # noqa: DOC203
+        self,
+        shard_id: int,
+        worker_id: str,
+        attempt_uuid: str,
+        ext: str,
+    ) -> str:
+        """R2 URI of a per-attempt staged shard under ``metadata/workers/shards/``.
+
+        Future state (#406): workers upload each shard attempt here before
+        finalize promotes one canonical copy to the run prefix root.
+        No current consumers; included so the staging code path can call
+        through this method when #406 lands.
+
+        :param shard_id: Logical shard id (rendered as ``shard-NNNNNN`` directory).
+        :param worker_id: Worker identifier issued by the launcher.
+        :param attempt_uuid: Per-attempt UUID distinguishing retries.
+        :param ext: File extension with leading dot (``".h5"`` or ``".tar"``).
+        :returns: ``r2://<bucket>/<prefix>metadata/workers/shards/shard-NNNNNN/<worker>-<attempt>.<ext>``.
+        """
+        return self._under_prefix(
+            f"metadata/workers/shards/shard-{shard_id:06d}/{worker_id}-{attempt_uuid}{ext}"
+        )
+
+    def worker_attempt_report_uri(self, worker_id: str, attempt_uuid: str) -> str:  # noqa: DOC203
+        """R2 URI of a per-attempt worker report under ``metadata/workers/attempts/``.
+
+        Future state (#406): workers write a ``report.json`` for each attempt
+        here; finalize reads them to reconcile per-shard status. No current
+        consumers.
+
+        :param worker_id: Worker identifier issued by the launcher.
+        :param attempt_uuid: Per-attempt UUID distinguishing retries.
+        :returns: ``r2://<bucket>/<prefix>metadata/workers/attempts/<worker>-<attempt>/report.json``.
+        """
+        return self._under_prefix(
+            f"metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json"
+        )
