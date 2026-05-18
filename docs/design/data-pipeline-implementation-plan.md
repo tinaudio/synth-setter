@@ -731,7 +731,7 @@ ______________________________________________________________________
 - Compute stats FIRST, then produce training outputs based on `output_format`:
   - `hdf5`: virtual HDF5 datasets (`train.h5`, `val.h5`, `test.h5`) — implements fresh
     resharding using `VirtualLayout`/`VirtualSource` pattern, reading actual shard dimensions
-    from HDF5 metadata. Does NOT call `reshard_data.py` (it hardcodes 10k shard size).
+    from HDF5 metadata. Does NOT call the standalone `pipeline.data.reshard` CLI.
   - `wds`: WebDataset tar archives (`train-{shard}.tar`, etc.) via `Sample` dataclass
 - Dataset card includes `output_format`, `worker_architectures` (logs warning if
   heterogeneous), content hashes, shard manifest
@@ -938,7 +938,7 @@ ______________________________________________________________________
 08. Entrypoint gets `MODE=generate-shards`, existing modes untouched
 09. Tests in `tests/pipeline/` with own conftest
 10. Finalize implements fresh resharding using HDF5 virtual datasets (not calling
-    `reshard_data.py` — it hardcodes 10k shard size)
+    the standalone `pipeline.data.reshard` CLI)
 11. `R2StorageBackend` wraps `src/synth_setter/data/uploader.RcloneUploader` (already has `--checksum`)
 12. `shard_id` is `int` in schema, formatted to string for paths/filenames
 13. Config splits use `{train: N, val: N, test: N}` matching design doc §14.4
