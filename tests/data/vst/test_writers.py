@@ -37,6 +37,9 @@ def _smoke_render_cfg(**overrides: object) -> RenderConfig:  # noqa: DOC101,DOC1
         "min_loudness": -55.0,
         "samples_per_render_batch": 2,
         "samples_per_shard": 4,
+        # Pin off to keep this writer-side smoke fixture darwin-portable —
+        # see ``_open_gui_every_render_forbidden_on_darwin`` (#714).
+        "open_gui_every_render": False,
     }
     kwargs.update(overrides)
     return RenderConfig(**kwargs)  # type: ignore[arg-type]
@@ -123,6 +126,10 @@ def _cli_argv(data_file: str) -> list[str]:  # noqa: DOC101,DOC103,DOC201,DOC203
         "2",
         "--samples_per_shard",
         "4",
+        # Mirror ``_smoke_render_cfg`` so the parsed config compares equal —
+        # see the comment there on darwin portability.
+        "--open_gui_every_render",
+        "False",
     ]
 
 

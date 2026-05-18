@@ -63,6 +63,9 @@ def _render_cfg(
         min_loudness=min_loudness,
         samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
         samples_per_shard=num_samples,
+        # Darwin rejects ``open_gui_every_render=True`` (#714); the e2e
+        # dataset-generation tests don't need the per-render editor warm-up.
+        open_gui_every_render=False,
     )
 
 # Phase-robust audio similarity thresholds for replayed-params vs. candidates.

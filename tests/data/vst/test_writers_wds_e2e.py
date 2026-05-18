@@ -69,6 +69,9 @@ def _render_cfg(num_samples: int, samples_per_render_batch: int | None = None) -
         min_loudness=_MIN_LOUDNESS,
         samples_per_render_batch=samples_per_render_batch if samples_per_render_batch is not None else num_samples,
         samples_per_shard=num_samples,
+        # Darwin rejects ``open_gui_every_render=True`` (#714); the wds e2e
+        # tests don't need the editor warm-up to exercise the writer path.
+        open_gui_every_render=False,
     )
 
 

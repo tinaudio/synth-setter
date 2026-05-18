@@ -119,6 +119,59 @@ class TestRenderConfig:
             cfg = RenderConfig(**{**_valid_render_kwargs(), "velocity": valid})
             assert cfg.velocity == valid
 
+    def test_reload_and_open_gui_default_true(self, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
+        """Both per-render lifecycle flags default to True — historical render_params behavior.
+
+        Patch ``sys.platform`` to a non-darwin value so the default
+        ``open_gui_every_render=True`` is accepted regardless of the host
+        running the test suite.
+        """
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "linux")
+        cfg = RenderConfig(**_valid_render_kwargs())
+        assert cfg.reload_plugin_every_render is True
+        assert cfg.open_gui_every_render is True
+
+    def test_open_gui_every_render_true_rejected_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``open_gui_every_render=True`` on Darwin raises (SIGTRAP after ~3-4 reloads — #714)."""
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "darwin")
+        with pytest.raises(
+            ValidationError, match="open_gui_every_render=True is not supported on Darwin"
+        ):
+            RenderConfig(**{**_valid_render_kwargs(), "open_gui_every_render": True})
+
+    def test_open_gui_every_render_false_accepted_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``open_gui_every_render=False`` is the only valid setting on Darwin."""
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "darwin")
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "open_gui_every_render": False})
+        assert cfg.open_gui_every_render is False
+
+    def test_open_gui_every_render_true_accepted_off_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``open_gui_every_render=True`` is fine on Linux/Windows — the gate is darwin-only."""
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "linux")
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "open_gui_every_render": True})
+        assert cfg.open_gui_every_render is True
+
+    def test_reload_plugin_every_render_false_accepted_on_darwin(  # noqa: DOC101,DOC103
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``reload_plugin_every_render`` is independent of platform — both values accepted."""
+        monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "darwin")
+        for reload_flag in (True, False):
+            cfg = RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "reload_plugin_every_render": reload_flag,
+                    "open_gui_every_render": False,
+                }
+            )
+            assert cfg.reload_plugin_every_render is reload_flag
+
 
 # ---------------------------------------------------------------------------
 # DatasetSpec — construction & runtime-field auto-fill
@@ -568,6 +621,7 @@ class TestSpecConstructionStaysPedalboardFree:
             "        'sample_rate': 16000, 'channels': 1, 'velocity': 64,\n"
             "        'signal_duration_seconds': 1.0, 'min_loudness': -30.0,\n"
             "        'samples_per_render_batch': 1, 'samples_per_shard': 1,\n"
+            "        'open_gui_every_render': False,\n"
             "    },\n"
             ")\n"
             "_ = spec.num_params\n"

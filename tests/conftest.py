@@ -47,6 +47,23 @@ _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 _VST_SUBPROCESS_TIMEOUT_SECONDS = 600
 
 NUM_FIXTURE_SAMPLES = 5
+
+
+@pytest.fixture(autouse=True)
+def _force_non_darwin_render_config_platform(monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: DOC101,DOC103
+    """Pin the schema module's ``sys.platform`` to ``"linux"`` for every test.
+
+    ``RenderConfig.open_gui_every_render`` defaults to ``True``; on Darwin the
+    ``_open_gui_every_render_forbidden_on_darwin`` model_validator rejects that
+    combination (#714). Every test that builds a ``RenderConfig`` or
+    ``DatasetSpec`` without overriding the flag would fail on a Darwin host
+    without this patch. Tests that specifically exercise the darwin gate
+    re-override ``synth_setter.pipeline.schemas.spec.sys.platform`` with their
+    own ``monkeypatch.setattr``.
+    """
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec.sys.platform", "linux")
+
+
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; resolved relative
 # to the container WORKDIR (``/home/build/synth-setter``) baked in the image.
 # X11 wrapping lives at the audio-rendering boundary (the subprocess call),
@@ -455,6 +472,10 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
         f"--samples_per_render_batch={NUM_FIXTURE_SAMPLES}",
         f"--samples_per_shard={NUM_FIXTURE_SAMPLES}",
     ]
+    if sys.platform == "darwin":
+        # Darwin rejects open_gui_every_render=True at RenderConfig
+        # construction — see #714 / spec._open_gui_every_render_forbidden_on_darwin.
+        generate_dataset_args.append("--open_gui_every_render=False")
 
     # capture_output=False (default): child inherits parent's stdout/stderr, no pipe is
     # created. Avoids the `capture_output=True` deadlock where fork-inherited fds in

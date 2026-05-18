@@ -96,6 +96,7 @@ def _valid_spec_payload() -> dict[str, Any]:
             "min_loudness": -55.0,
             "samples_per_render_batch": 32,
             "samples_per_shard": 10000,
+            "open_gui_every_render": False,
         },
     }
 

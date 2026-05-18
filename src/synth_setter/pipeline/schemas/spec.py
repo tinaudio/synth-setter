@@ -12,6 +12,7 @@ when present (worker reconstruction from JSON). ``shards``/``num_shards``/
 from __future__ import annotations
 
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Any, Literal
@@ -141,6 +142,13 @@ class RenderConfig(BaseModel):
     min_loudness: float
     samples_per_render_batch: int = 32
     samples_per_shard: int
+    # Per-render plugin lifecycle knobs. Both default to ``True`` to preserve
+    # the historical render_params behavior (reload + warm-up editor every
+    # call); set either to ``False`` once a synth is known stable to skip the
+    # per-call cost. ``open_gui_every_render=True`` is rejected on Darwin —
+    # see ``_open_gui_every_render_forbidden_on_darwin``.
+    reload_plugin_every_render: bool = True
+    open_gui_every_render: bool = True
 
     @model_validator(mode="after")
     def _ranges_must_be_sane(self) -> RenderConfig:
@@ -161,6 +169,30 @@ class RenderConfig(BaseModel):
             raise ValueError("param_spec_name must not be blank")
         if not self.renderer_version.strip():
             raise ValueError("renderer_version must not be blank")
+        return self
+
+    @model_validator(mode="after")
+    def _open_gui_every_render_forbidden_on_darwin(self) -> RenderConfig:
+        """Reject ``open_gui_every_render=True`` when running on Darwin.
+
+        show_editor accumulates AppKit/CGS commit-handler state per call in unbundled python and
+        triggers SIGTRAP after ~3-4 plugin reloads on Darwin (#714). The post-load process() flush
+        in render_params is sufficient to commit Surge XT's preset state — see preset-coverage
+        audit on #714 for the empirical justification.
+
+        :return: ``self`` unchanged when the combination is allowed.
+        :rtype: RenderConfig
+        :raises ValueError: ``open_gui_every_render=True`` on Darwin.
+        """
+        if self.open_gui_every_render and sys.platform == "darwin":
+            raise ValueError(
+                "open_gui_every_render=True is not supported on Darwin: "
+                "show_editor accumulates AppKit/CGS commit-handler state per "
+                "call in unbundled python and triggers SIGTRAP after ~3-4 "
+                "plugin reloads (#714). Set open_gui_every_render=False on "
+                "Darwin — the post-load process() flush in render_params is "
+                "sufficient to commit preset state."
+            )
         return self
 
 

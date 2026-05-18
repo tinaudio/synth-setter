@@ -55,6 +55,9 @@ def _smoke_spec() -> DatasetSpec:
         min_loudness=-55.0,
         samples_per_render_batch=32,
         samples_per_shard=10000,
+        # Pin off so the round-trip is darwin-portable —
+        # see ``_open_gui_every_render_forbidden_on_darwin`` (#714).
+        open_gui_every_render=False,
     )
     return DatasetSpec(
         task_name="ci-smoke-test",
