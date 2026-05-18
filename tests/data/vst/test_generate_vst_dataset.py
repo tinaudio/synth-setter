@@ -1196,6 +1196,55 @@ def test_generate_sample_retries_when_only_fixed_note_params(
     assert sample.note_params == _HARDCODED_NOTE_PARAMS
 
 
+def test_generate_sample_warmup_only_applies_on_first_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``warmup=True`` is honored on the first render only; retries see ``warmup=False``.
+
+    Regression for the Darwin SIGTRAP failure mode (#714): with
+    ``gui_toggle_cadence="once"`` the writer passes ``warmup=True`` exactly once
+    per shard, but if the first sample retries on the loudness gate, forwarding
+    ``warmup`` unchanged would cause N ``show_editor`` calls and blow past the
+    ~3-4-calls-per-process budget. ``generate_sample`` must drop ``warmup`` to
+    ``False`` after the first attempt.
+
+    :param monkeypatch: pytest fixture used to swap ``render_params`` and
+        ``param_spec.sample`` with deterministic stand-ins.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+
+    render_outputs = iter([_silent_audio(), _loud_audio()])
+    warmup_args: list[bool] = []
+
+    def _capture(*args: object, **kwargs: object) -> np.ndarray:
+        warmup_args.append(kwargs["warmup"])  # pyright: ignore[reportArgumentType]
+        return next(render_outputs)
+
+    monkeypatch.setattr(generate_vst_dataset, "render_params", _capture)
+    sample_returns = iter([
+        (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
+        (_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS),
+    ])
+    monkeypatch.setattr(spec, "sample", lambda: next(sample_returns))
+
+    generate_vst_dataset.generate_sample(
+        plugin_path=_PLUGIN_PATH,
+        velocity=_VELOCITY,
+        signal_duration_seconds=_DURATION,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        preset_path=_PRESET_PATH,
+        fixed_synth_params=None,
+        fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        warmup=True,
+    )
+    assert warmup_args == [True, False]
+
+
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @skip_no_vst

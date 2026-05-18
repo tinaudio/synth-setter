@@ -97,6 +97,9 @@ def generate_sample(
         skips ``load_plugin``/``load_preset``.
     :param warmup: Forwarded to ``render_params``; runs the ``show_editor``
         warm-up on the plugin used for this render (newly loaded or cached).
+        Applied at most once per ``generate_sample`` call — the loudness-gate
+        retry loop drops ``warmup`` to ``False`` after the first attempt so a
+        retrying sample never exceeds the per-shard cadence budget (#714).
     """
     while True:
         if fixed_synth_params is None or fixed_note_params is None:
@@ -123,6 +126,7 @@ def generate_sample(
             plugin=plugin,
             warmup=warmup,
         )
+        warmup = False
 
         meter = Meter(sample_rate)
         loudness = meter.integrated_loudness(output.T)
