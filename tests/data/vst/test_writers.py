@@ -329,6 +329,11 @@ def test_render_in_batches_warmup_render_runs_every_render(  # noqa: DOC101,DOC1
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``gui_toggle_cadence="render"`` sets warmup=True on every render."""
+    # The Darwin validator rejects gui_toggle_cadence="render" (SIGTRAP, #714);
+    # force the non-Darwin path so the schema constructs on macOS CI hosts too.
+    monkeypatch.setattr(
+        "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+    )
     n = 3
     render_cfg = _smoke_render_cfg(
         samples_per_shard=n,
