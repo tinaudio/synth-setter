@@ -832,50 +832,73 @@ class TestSpecFromCfg:
 class TestBuildWorkerCmd:
     """The worker cmd reconstructs the operator's Hydra invocation under bash."""
 
-    def test_cmd_uses_from_hydra_console_script(self) -> None:
+    @pytest.fixture()
+    def spec(self, tmp_path: Path) -> DatasetSpec:  # noqa: DOC101,DOC103,DOC201,DOC203
+        """Reusable DatasetSpec for worker-cmd construction (no I/O — pure kwargs)."""
+        return DatasetSpec(**_base_spec_kwargs(tmp_path))  # type: ignore[arg-type]
+
+    def test_cmd_uses_from_hydra_console_script(self, spec: DatasetSpec) -> None:  # noqa: DOC101,DOC103
         """The worker reproduces the composition by re-entering the from_hydra entry point."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd(["experiment=foo"])
+        cmd = _build_worker_cmd(["experiment=foo"], spec)
         assert "synth-setter-generate-dataset-from-hydra" in cmd
         assert "experiment=foo" in cmd
 
-    def test_cmd_cds_to_worker_repo_root_not_launcher_repo(self) -> None:
+    def test_cmd_cds_to_worker_repo_root_not_launcher_repo(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
         """Cd target is the worker checkout, not the launcher's path."""
         from synth_setter.cli.generate_dataset import _WORKER_REPO_ROOT, _build_worker_cmd
 
-        cmd = _build_worker_cmd([])
+        cmd = _build_worker_cmd([], spec)
         assert cmd.startswith(f"cd {_WORKER_REPO_ROOT}")
         assert _WORKER_REPO_ROOT == "/home/build/synth-setter"
 
-    def test_cmd_runs_sync_worker_checkout_before_exec(self) -> None:
+    def test_cmd_runs_sync_worker_checkout_before_exec(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
         """sync_worker_checkout.sh bypasses dev-snapshot bake-lag when WORKER_GIT_REF is set."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd([])
+        cmd = _build_worker_cmd([], spec)
         sync_idx = cmd.find("bash scripts/sync_worker_checkout.sh")
         exec_idx = cmd.find("exec synth-setter-generate-dataset-from-hydra")
         assert sync_idx != -1, f"sync step missing from cmd: {cmd!r}"
         assert exec_idx != -1, f"exec step missing from cmd: {cmd!r}"
         assert sync_idx < exec_idx, "sync_worker_checkout must run before exec"
 
-    def test_cmd_shell_quotes_overrides_with_spaces(self) -> None:
+    def test_cmd_pins_spec_created_at_via_hydra_override(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
+        """Worker compose must inherit launcher's created_at to land on the same r2_prefix."""
+        from synth_setter.cli.generate_dataset import _build_worker_cmd
+
+        cmd = _build_worker_cmd([], spec)
+        # `+key=value` is Hydra's add-key syntax; spec.created_at.isoformat() goes in verbatim
+        # (no surrounding quotes added by shlex when the value has no shell metachars).
+        assert f"+created_at={spec.created_at.isoformat()}" in cmd
+
+    def test_cmd_shell_quotes_overrides_with_spaces(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
         """Spaces and special chars in an override survive bash interpretation in run:."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd(["task_name=value with space"])
+        cmd = _build_worker_cmd(["task_name=value with space"], spec)
         # shlex.quote wraps the whole assignment in single quotes; the bare-word form
         # would be split into two argv items by bash.
         assert "'task_name=value with space'" in cmd
 
-    def test_cmd_handles_empty_overrides(self) -> None:
-        """No overrides → bash one-liner is just cd + sync + exec, no trailing space."""
+    def test_cmd_handles_empty_operator_overrides(  # noqa: DOC101,DOC103
+        self, spec: DatasetSpec
+    ) -> None:
+        """No operator overrides → cmd is just cd + sync + exec + pinned-runtime override."""
         from synth_setter.cli.generate_dataset import _build_worker_cmd
 
-        cmd = _build_worker_cmd([])
+        cmd = _build_worker_cmd([], spec)
         assert cmd.startswith("cd ")
-        assert " && exec synth-setter-generate-dataset-from-hydra" in cmd
-        assert cmd.endswith("synth-setter-generate-dataset-from-hydra")
+        assert " && exec synth-setter-generate-dataset-from-hydra " in cmd
         # No bash-interpretable trailing whitespace that would surface as an empty argv item.
         assert cmd == cmd.rstrip()
 

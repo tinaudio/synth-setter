@@ -2,12 +2,12 @@ name: Generate Dataset Shards
 
 # Reusable workflow that owns one provider's generate_dataset invocation.
 # Callers fan out across providers (see test-dataset-generation.yml) and pass
-# per-provider values via inputs. The skypilot-local and runpod paths drive
-# the Hydra-first `synth-setter-generate-dataset` entrypoint with
-# `skypilot_launch.compute_template=...` overrides; the OCI path continues
-# to invoke the legacy `python -m synth_setter.pipeline.skypilot_launch` click
-# CLI because OCI's sub-docker `run:` block can't be replaced by the new
-# dispatch's cmd injection (SkyPilot OCI backend rejects `image_id: docker:<image>`).
+# per-provider values via inputs. All three providers drive the Hydra-first
+# `synth-setter-generate-dataset` entrypoint via `skypilot_launch.compute_template=...`
+# Hydra overrides; OCI's compute template uses the `${WORKER_CMD}` sentinel
+# (substituted by `_load_compute_template_with_cmd`) so the launcher's worker
+# cmd lands inside the OCI sub-docker invocation that the OCI backend forces
+# (SkyPilot's OCI backend rejects `image_id: docker:<image>`).
 #
 # Provider-specific behavior:
 #   * `skypilot-local` — provisions a kind cluster on the runner via
@@ -17,15 +17,12 @@ name: Generate Dataset Shards
 #     with `skypilot_launch.compute_template=configs/compute/local-template.yaml`.
 #     The launcher detects `cloud: kubernetes` and skips its cred bootstrap.
 #     Always tears down kind in `if: always()`.
-#   * `runpod` — in-container invocation of `synth-setter-generate-dataset`
-#     against `configs/compute/runpod-template.yaml`. The launcher's
+#   * `runpod` / `oci` — in-container invocation of `synth-setter-generate-dataset`
+#     against the matching `configs/compute/*-template.yaml`. The launcher's
 #     `_run_cred_bootstrap` writes provider creds inside the container; if
 #     SKYPILOT_API_SERVER_ENDPOINT is set, the bootstrap is skipped (the remote
-#     API server holds creds).
-#   * `oci` — legacy in-container `python -m synth_setter.pipeline.skypilot_launch`
-#     against `configs/compute/oci-cpu-template.yaml`. The OCI template keeps
-#     its `run:` block (sub-docker invocation) because OCI's backend can't
-#     ingest a pinned `image_id: docker:<image>`.
+#     API server holds creds). OCI's template uses `${WORKER_CMD}`; runpod's
+#     template has no `run:` (cmd is injected directly).
 #
 # Required secrets (callers should `secrets: inherit`):
 #   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
@@ -333,7 +330,10 @@ jobs:
           echo "=== snapshot sizes ==="
           du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
 
-      # ----- runpod row: in-container synth-setter-generate-dataset
+      # ----- runpod / oci row: in-container synth-setter-generate-dataset
+      # Both cloud providers drive the new Hydra entrypoint; OCI's template
+      # uses ${WORKER_CMD} substitution in its run: block so the launcher's
+      # cmd lands inside the OCI sub-docker invocation (configs/compute/oci-cpu-template.yaml).
       # Optional launcher flags are pre-rendered into env-var strings on the
       # outer step (so GHA expression evaluation stays out of the bash
       # block-scalar) and expanded unquoted inside docker so empty values
@@ -341,13 +341,18 @@ jobs:
       # routes the launcher to the remote API server; pass `local: true` to
       # override. materialize_spec runs first inside the container to write
       # /run-metadata/input_spec.json for the spec_uri output step.
-      - name: Run synth-setter-generate-dataset against runpod-template (runpod row; in container)
-        if: ${{ inputs.provider == 'runpod' }}
+      - name: Run synth-setter-generate-dataset (runpod / oci row; in container)
+        if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         env:
           SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          TEMPLATE: configs/compute/runpod-template.yaml
+          TEMPLATE: configs/compute/${{ inputs.provider == 'oci' && 'oci-cpu' || inputs.provider }}-template.yaml
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
@@ -368,6 +373,11 @@ jobs:
             -e CLUSTER_NAME \
             -e IMAGE_TAG \
             -e RUNPOD_API_KEY \
+            -e OCI_USER_OCID \
+            -e OCI_TENANCY_OCID \
+            -e OCI_FINGERPRINT \
+            -e OCI_REGION \
+            -e OCI_API_KEY_PEM \
             -e CONFIG_PATH \
             -e WORKER_GIT_REF \
             -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
@@ -392,77 +402,6 @@ jobs:
                 "skypilot_launch.job_name=$CLUSTER_NAME" \
                 "skypilot_launch.worker_image_tag=$IMAGE_TAG" \
                 $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE
-            ' \
-            2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
-
-      # ----- oci row: legacy click CLI (in-container)
-      # OCI stays on `python -m synth_setter.pipeline.skypilot_launch` because
-      # configs/compute/oci-cpu-template.yaml's `run:` block is a sub-docker
-      # invocation that the new dispatch's cmd injection can't replicate —
-      # SkyPilot's OCI backend rejects `image_id: docker:<image>` so the
-      # worker container has to be brought up by the template's bash, not by
-      # SkyPilot itself. Migrating OCI requires either a docker-preinstalled
-      # OCI image or per-provider cmd wrapping in dispatch_via_skypilot.
-      - name: Launch SkyPilot job (oci row; legacy click CLI; in container)
-        if: ${{ inputs.provider == 'oci' }}
-        env:
-          SKYPILOT_API_SERVER_ENDPOINT: ${{ secrets.SKYPILOT_API_SERVER_ENDPOINT }}
-          TEMPLATE: configs/compute/oci-cpu-template.yaml
-          CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
-          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
-          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
-          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-          OCI_REGION: ${{ secrets.OCI_REGION }}
-          OCI_API_KEY_PEM: ${{ secrets.OCI_API_KEY_PEM }}
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-          NUM_WORKERS_FLAG: ${{ inputs.num_workers != '' && format('--num-workers {0}', inputs.num_workers) || '' }}
-          TAIL_FLAG: ${{ inputs.tail && '--tail' || '' }}
-          LOCAL_FLAG: ${{ inputs.local && '--local' || '' }}
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            -v "${{ github.workspace }}:/home/build/synth-setter" \
-            -v "${RUN_METADATA_DIR}:/run-metadata" \
-            -e SKYPILOT_API_SERVER_ENDPOINT \
-            -e PROVIDER \
-            -e TEMPLATE \
-            -e CLUSTER_NAME \
-            -e IMAGE_TAG \
-            -e OCI_USER_OCID \
-            -e OCI_TENANCY_OCID \
-            -e OCI_FINGERPRINT \
-            -e OCI_REGION \
-            -e OCI_API_KEY_PEM \
-            -e CONFIG_PATH \
-            -e WORKER_GIT_REF \
-            -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
-            -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
-            -e RCLONE_CONFIG_R2_ENDPOINT \
-            -e R2_ACCOUNT_ID \
-            -e WANDB_API_KEY \
-            -e NUM_WORKERS_FLAG \
-            -e TAIL_FLAG \
-            -e LOCAL_FLAG \
-            "${IMAGE}" \
-            bash -c '
-              set -euo pipefail
-              cd /home/build/synth-setter
-              git config --global --add safe.directory /home/build/synth-setter
-              bash docker/ubuntu22_04/ensure_plugin_symlinks.sh
-              python -m synth_setter.pipeline.skypilot_launch \
-                --experiment "$CONFIG_PATH" \
-                --template "$TEMPLATE" \
-                --job-name "$CLUSTER_NAME" \
-                --worker-image-tag "$IMAGE_TAG" \
-                --spec-out /tmp/input_spec.json \
-                $LOCAL_FLAG $NUM_WORKERS_FLAG $TAIL_FLAG
-              cp /tmp/input_spec.json /run-metadata/input_spec.json
-              chmod 0644 /run-metadata/input_spec.json
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
 

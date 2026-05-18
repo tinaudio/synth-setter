@@ -300,7 +300,7 @@ def _sky_cfg_from_dataset_cfg(cfg: DictConfig) -> SkypilotLaunchConfig:  # noqa:
     return SkypilotLaunchConfig(**sky_kwargs)
 
 
-def _build_worker_cmd(overrides: list[str]) -> str:  # noqa: DOC203
+def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:  # noqa: DOC203
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
     Each override is shell-quoted individually so values with spaces or special
@@ -311,17 +311,30 @@ def _build_worker_cmd(overrides: list[str]) -> str:  # noqa: DOC203
     runs between cd and exec so PR-CI workers fetch the PR head over the
     image-baked checkout (see #735 / #841 for the bake-lag bypass).
 
+    ``DatasetSpec.created_at`` is pinned via a ``+created_at='<iso>'`` Hydra
+    override so the worker's re-compose lands on the same ``r2_prefix`` as the
+    launcher's spec (otherwise ``default_factory=lambda: _utc_now()`` fires
+    twice and worker shards land at a different prefix than the validate step
+    expects). ``run_id`` / ``r2_prefix`` derive from ``created_at`` via
+    ``DatasetSpec``'s default factories, so pinning only ``created_at`` is
+    sufficient — see ``_default_run_id`` / ``_default_r2_prefix`` in
+    ``synth_setter.pipeline.schemas.spec``.
+
     :param overrides: The launcher's ``sys.argv[1:]`` — the operator's Hydra
         overrides, replayed verbatim on the worker.
+    :param spec: The launcher's already-constructed ``DatasetSpec``; runtime
+        fields populated by ``default_factory`` here are pinned into the
+        worker overrides to keep the launcher / worker composes deterministic.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
     """
+    pinned_overrides = [f"+created_at={spec.created_at.isoformat()}"]
+    all_overrides = list(overrides) + pinned_overrides
     parts = [
         f"cd {shlex.quote(_WORKER_REPO_ROOT)}",
         "bash scripts/sync_worker_checkout.sh",
-        "exec synth-setter-generate-dataset-from-hydra",
+        "exec synth-setter-generate-dataset-from-hydra "
+        + " ".join(shlex.quote(o) for o in all_overrides),
     ]
-    if overrides:
-        parts[-1] += " " + " ".join(shlex.quote(o) for o in overrides)
     return " && ".join(parts)
 
 
@@ -361,7 +374,7 @@ def main() -> None:
     # Deferred — SkyPilot / click pull in heavy provider SDKs on import.
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
-    sky_cfg = sky_cfg.model_copy(update={"cmd": _build_worker_cmd(overrides)})
+    sky_cfg = sky_cfg.model_copy(update={"cmd": _build_worker_cmd(overrides, spec)})
     dispatch_via_skypilot(spec, sky_cfg)
 
 

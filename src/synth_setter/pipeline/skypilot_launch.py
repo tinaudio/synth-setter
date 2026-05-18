@@ -861,20 +861,35 @@ def _detect_provider_from_doc(doc: dict[str, object], source: Path) -> str:  # n
     return provider
 
 
-def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:  # noqa: DOC203
-    """Load ``template_path`` as YAML and inject ``cmd`` as the ``run:`` block.
+_WORKER_CMD_SENTINEL = "${WORKER_CMD}"
 
-    Refuses to silently drop an existing ``run:`` block — if the template
-    already defines one, the caller's ``cmd`` is ambiguous (which one wins?),
-    so raise rather than guess. Strip the YAML's ``run:`` to opt into the
-    Hydra cmd-injection flow.
+
+def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, object]:  # noqa: DOC203
+    """Load ``template_path`` as YAML and inject ``cmd`` into the ``run:`` block.
+
+    Three branches based on the template's existing ``run:`` value:
+
+    * **No ``run:``** — set ``run = cmd`` directly (the happy path; templates
+      whose ``run:`` semantics are exactly "exec the worker cmd").
+    * **``run:`` contains** ``${WORKER_CMD}`` — substitute ``cmd`` into the
+      sentinel and keep the template's surrounding shell scaffolding intact
+      (e.g. OCI's ``sudo docker run … bash -c "${WORKER_CMD}"``). Opt-in per
+      template: the author places the sentinel where the worker cmd should
+      land. Caller is responsible for shell-quoting the sentinel context so
+      the substituted string lands as a single bash argv item.
+    * **Non-empty ``run:`` without the sentinel** — refuse. The template
+      author wrote a complete ``run:`` and didn't ask for cmd injection, so
+      silently dropping their ``run:`` (the old behavior) was the wrong call.
+      Strip the YAML's ``run:`` to opt into the no-run injection path or add
+      the sentinel to opt into the substitution path.
 
     :param template_path: Path to a SkyPilot Task YAML.
-    :param cmd: Bash command to use as each ``sky.Task`` ``run:`` block.
-    :return: The parsed YAML dict with ``run`` set to ``cmd``.
+    :param cmd: Bash command to inject (either as the full ``run:`` body or
+        substituted into the sentinel).
+    :return: The parsed YAML dict with ``run`` populated.
     :raises FileNotFoundError: ``template_path`` does not point to a file.
-    :raises ValueError: top-level YAML is not a mapping, or the template
-        already defines a non-empty ``run:`` block.
+    :raises ValueError: top-level YAML is not a mapping, or the template's
+        ``run:`` is non-empty and lacks the sentinel.
     """
     if not template_path.is_file():
         raise FileNotFoundError(f"compute template not found: {template_path}")
@@ -887,15 +902,23 @@ def _load_compute_template_with_cmd(template_path: Path, cmd: str) -> dict[str, 
             f"Top-level YAML in {template_path} must be a mapping, got {type(doc).__name__}"
         )
     existing_run = doc.get("run")
-    if existing_run not in (None, ""):
+    if existing_run in (None, ""):
+        doc["run"] = cmd
+        return doc
+    if not isinstance(existing_run, str):
         raise ValueError(
-            f"compute template {template_path} has a `run:` block, but "
-            "skypilot_launch.cmd is also set — cmd cannot be silently dropped. "
-            "Strip the YAML's `run:` section to use the Hydra cmd-injection flow, "
-            "or unset skypilot_launch.cmd to use the YAML's `run:`."
+            f"compute template {template_path} `run:` must be a string, "
+            f"got {type(existing_run).__name__}"
         )
-    doc["run"] = cmd
-    return doc
+    if _WORKER_CMD_SENTINEL in existing_run:
+        doc["run"] = existing_run.replace(_WORKER_CMD_SENTINEL, cmd)
+        return doc
+    raise ValueError(
+        f"compute template {template_path} has a non-empty `run:` block, but "
+        "skypilot_launch.cmd is also set — cmd cannot be silently dropped. "
+        f"Strip the YAML's `run:` section, or substitute {_WORKER_CMD_SENTINEL} "
+        "where the worker cmd should land, to opt into the Hydra cmd-injection flow."
+    )
 
 
 def _launch_one_rank_from_doc(  # noqa: DOC203

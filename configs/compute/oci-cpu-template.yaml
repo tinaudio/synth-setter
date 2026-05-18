@@ -3,6 +3,12 @@
 #
 # OCI-specific: the worker image is pulled and run as a sub-docker invocation
 # inside the run: block because SkyPilot's OCI backend rejects `image_id: docker:<image>`.
+# This template uses the ${WORKER_CMD} sentinel: dispatch_via_skypilot's
+# _load_compute_template_with_cmd substitutes the launcher's worker cmd
+# (cd / sync_worker_checkout.sh / exec synth-setter-generate-dataset-from-hydra)
+# into the inner `bash -c` body. The outer `sudo docker run` scaffolding stays
+# YAML-owned because it can't live in the cmd (it must run on the OCI VM host,
+# not inside the worker container).
 # Region intentionally not pinned — `~/.oci/config` is the single source of truth.
 
 resources:
@@ -21,7 +27,6 @@ envs:
   RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""
   RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
   RCLONE_CONFIG_R2_ENDPOINT: ""
-  WORKER_SPEC_URI: ""
   WORKER_IMAGE: ""
   WORKER_GIT_REF: ""
   SYNTH_SETTER_WORKER_RANK: ""
@@ -61,11 +66,12 @@ setup: |
 # run: launches the worker container ourselves (OCI backend can't ingest a
 # docker image_id). --privileged + --ulimit nofile is the expedient hammer
 # for the Xvfb/dbus stack — follow-up to find the minimal cap set: #776. No
-# bind-mount: image is source of truth, sync_worker_checkout.sh handles the
-# WORKER_GIT_REF PR-CI bake-lag bypass without clobbering image-baked symlinks.
+# bind-mount: image is source of truth, and the worker cmd (substituted into
+# ${WORKER_CMD} by the launcher) runs sync_worker_checkout.sh inside the
+# container for the WORKER_GIT_REF PR-CI bake-lag bypass.
 run: |
   set -euo pipefail
-  : "${WORKER_IMAGE:?WORKER_IMAGE must be set by the launcher (--worker-image-tag); refusing to docker run an unset image}"
+  : "${WORKER_IMAGE:?WORKER_IMAGE must be set by the launcher; refusing to docker run an unset image}"
   echo "skypilot-run-cwd: $(pwd) host: $(hostname)"
   sudo -E docker run --rm \
     --privileged \
@@ -75,14 +81,8 @@ run: |
     -e RCLONE_CONFIG_R2_ACCESS_KEY_ID \
     -e RCLONE_CONFIG_R2_SECRET_ACCESS_KEY \
     -e RCLONE_CONFIG_R2_ENDPOINT \
-    -e WORKER_SPEC_URI \
     -e WORKER_GIT_REF \
     -e SYNTH_SETTER_WORKER_RANK \
     -e SYNTH_SETTER_NUM_WORKERS \
     "$WORKER_IMAGE" \
-    bash -c '
-      set -euo pipefail
-      cd /home/build/synth-setter
-      bash scripts/sync_worker_checkout.sh
-      exec python -m synth_setter.tools.docker_entrypoint generate_dataset --spec "$WORKER_SPEC_URI"
-    '
+    bash -c "${WORKER_CMD}"

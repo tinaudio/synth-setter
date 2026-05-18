@@ -2597,8 +2597,18 @@ class TestLaunchOneRank:
 # ---------------------------------------------------------------------------
 
 
-def _write_runpod_yaml(tmp_path: Path, *, include_run: bool = False) -> Path:  # noqa: DOC101,DOC103,DOC201,DOC203
-    """Write a minimal RunPod-shaped compute template; ``include_run=True`` adds a run: block."""
+def _write_runpod_yaml(  # noqa: DOC101,DOC103,DOC201,DOC203
+    tmp_path: Path,
+    *,
+    include_run: bool = False,
+    run_body: str | None = None,
+) -> Path:
+    """Write a minimal RunPod-shaped compute template.
+
+    ``include_run=True`` adds a default ``run:`` block (``echo existing``).
+    ``run_body`` overrides the run body — pass a multiline string with
+    ``${WORKER_CMD}`` to exercise the sentinel-substitution path.
+    """
     yaml_text = (
         "resources:\n"
         "  cloud: runpod\n"
@@ -2606,8 +2616,10 @@ def _write_runpod_yaml(tmp_path: Path, *, include_run: bool = False) -> Path:  #
         "envs:\n"
         "  RCLONE_CONFIG_R2_TYPE: ''\n"
     )
-    if include_run:
-        yaml_text += "run: |\n  echo existing\n"
+    if include_run or run_body is not None:
+        body = run_body if run_body is not None else "echo existing"
+        indented = "\n".join(f"  {line}" for line in body.splitlines())
+        yaml_text += f"run: |\n{indented}\n"
     path = tmp_path / "compute.yaml"
     path.write_text(yaml_text)
     return path
@@ -2648,13 +2660,38 @@ class TestLoadComputeTemplateWithCmd:
         doc = _load_compute_template_with_cmd(template, "echo hello")
         assert doc["run"] == "echo hello"
 
-    def test_existing_run_block_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
-        """A pre-existing run: + non-empty cmd is a conflict, not a silent override."""
+    def test_existing_run_block_without_sentinel_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """A pre-existing run: with no sentinel + non-empty cmd is a conflict, not a silent override."""
         from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
 
         template = _write_runpod_yaml(tmp_path, include_run=True)
-        with pytest.raises(ValueError, match="has a `run:` block"):
+        with pytest.raises(ValueError, match="has a non-empty `run:` block"):
             _load_compute_template_with_cmd(template, "echo hello")
+
+    def test_sentinel_in_run_block_substitutes_cmd(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """A template with ${WORKER_CMD} in run: substitutes cmd; scaffolding survives."""
+        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
+
+        template = _write_runpod_yaml(
+            tmp_path,
+            run_body='sudo docker run --rm "$WORKER_IMAGE" bash -c "${WORKER_CMD}"',
+        )
+        doc = _load_compute_template_with_cmd(template, "echo hello && exec foo")
+        assert isinstance(doc["run"], str)
+        # Substituted cmd lands where the sentinel was; surrounding shell scaffolding stays.
+        assert "${WORKER_CMD}" not in doc["run"]
+        assert "echo hello && exec foo" in doc["run"]
+        assert doc["run"].startswith("sudo docker run --rm")
+        assert doc["run"].rstrip().endswith('"echo hello && exec foo"')
+
+    def test_non_string_run_block_raises(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
+        """A non-string run: (e.g. a list) is a malformed template, raise before substitute."""
+        from synth_setter.pipeline.skypilot_launch import _load_compute_template_with_cmd
+
+        path = tmp_path / "bad_run.yaml"
+        path.write_text("resources:\n  cloud: runpod\nrun:\n  - echo\n  - bad\n")
+        with pytest.raises(ValueError, match="`run:` must be a string"):
+            _load_compute_template_with_cmd(path, "x")
 
     def test_missing_template_raises_file_not_found(self, tmp_path: Path) -> None:  # noqa: DOC101,DOC103
         """Mistyped path surfaces a FileNotFoundError, not a confusing parse error downstream."""
@@ -2744,7 +2781,7 @@ class TestDispatchViaSkypilot:
         template = _write_runpod_yaml(tmp_path, include_run=True)
         spec = _build_spec(fake_plugin)
         sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
-        with pytest.raises(ValueError, match="has a `run:` block"):
+        with pytest.raises(ValueError, match="has a non-empty `run:` block"):
             dispatch_via_skypilot(spec, sky_cfg)
         mock_sky.jobs.launch.assert_not_called()
 
