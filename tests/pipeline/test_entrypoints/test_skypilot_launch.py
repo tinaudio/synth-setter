@@ -322,6 +322,40 @@ class TestEnsureCiSkyConfig:
         assert "stale: true" not in body
         assert "cpus: 1+" in body
 
+    @pytest.mark.parametrize("falsy", ["0", "false", "False", "no", "off", "", "  "])
+    def test_no_op_for_explicit_falsy_values(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, falsy: str
+    ) -> None:
+        """Explicit falsy strings ("0", "false", …) leave ``~/.sky/config.yaml`` untouched.
+
+        Prevents an operator who exports ``SYNTH_SETTER_CI_MODE=0`` from
+        accidentally triggering the kind-shrink overwrite — matches the
+        docstring promise that only truthy values activate the helper.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        :param falsy: Parametrized falsy string to set on ``SYNTH_SETTER_CI_MODE``.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_CI_MODE", falsy)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        _ensure_ci_sky_config()
+        assert not (tmp_path / ".sky" / "config.yaml").exists()
+
+    @pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "yes", "On"])
+    def test_writes_for_explicit_truthy_values(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, truthy: str
+    ) -> None:
+        """Each accepted truthy spelling (case-insensitive) activates the shrink write.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        :param truthy: Parametrized truthy string to set on ``SYNTH_SETTER_CI_MODE``.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_CI_MODE", truthy)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        _ensure_ci_sky_config()
+        assert (tmp_path / ".sky" / "config.yaml").is_file()
+
 
 class TestEmitSpecUri:
     """``_emit_spec_uri`` prints the canonical URI on a stdout sentinel line.

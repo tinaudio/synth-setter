@@ -146,12 +146,17 @@ _SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
 # is unambiguous.
 _SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
 
-# CI-mode env-var gate. When set to a truthy value (e.g. "1"), the launcher
-# writes the managed-jobs controller-resource shrink into ~/.sky/config.yaml
-# on first invocation so the controller pod fits on a GHA-kind cluster. This
-# replaces a per-run YAML write in `generate-dataset-shards.yaml`. Dev
+# CI-mode env-var gate. When set to one of `_CI_MODE_TRUTHY_VALUES` (case-
+# insensitive), the launcher writes the managed-jobs controller-resource shrink
+# into ~/.sky/config.yaml so the controller pod fits on a GHA-kind cluster.
+# This replaces a per-run YAML write in `generate-dataset-shards.yaml`. Dev
 # machines running `sky local up` against a real-sized kind don't set this.
 _CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
+
+# Truthy values for `_CI_MODE_ENV`. Any other value (including "0", "false",
+# "no", "off", or the unset case) is treated as disabled — matches the
+# docstring/comment promise that "0" doesn't accidentally trigger CI mode.
+_CI_MODE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 
 # Pre-baked managed-jobs controller resource floor for the GHA-kind cluster.
 # SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in the ~1950m
@@ -167,14 +172,16 @@ _CI_SKY_CONFIG_YAML = """jobs:
 def _ensure_ci_sky_config() -> None:
     """Write the managed-jobs controller shrink config when CI mode is on.
 
-    Activated by setting ``SYNTH_SETTER_CI_MODE=1`` (or any truthy value) in
-    the launcher's process env. Writes ``~/.sky/config.yaml`` with the
-    pre-baked shrink so the controller pod fits on a GHA-kind cluster. Idempotent
-    — overwrites the file each call (per-run YAML write moved from
-    ``generate-dataset-shards.yaml``). A no-op when the env var is unset, so
-    operator local-dev invocations are untouched.
+    Activated when ``SYNTH_SETTER_CI_MODE`` is one of ``1``, ``true``, ``yes``,
+    or ``on`` (case-insensitive). Writes ``~/.sky/config.yaml`` with the
+    pre-baked shrink so the controller pod fits on a GHA-kind cluster.
+    Idempotent — overwrites the file each call (per-run YAML write moved from
+    ``generate-dataset-shards.yaml``). Any other value (including ``0``,
+    ``false``, or unset) is a no-op so an operator who happens to export
+    ``SYNTH_SETTER_CI_MODE=0`` doesn't accidentally clobber a local
+    ``~/.sky/config.yaml``.
     """
-    if not os.environ.get(_CI_MODE_ENV):
+    if os.environ.get(_CI_MODE_ENV, "").strip().lower() not in _CI_MODE_TRUTHY_VALUES:
         return
     sky_dir = Path.home() / ".sky"
     sky_dir.mkdir(parents=True, exist_ok=True)
@@ -402,8 +409,6 @@ def main(
     if not command:
         raise click.ClickException("an inner command is required (pass it after `--`)")
 
-    _ensure_ci_sky_config()
-
     # cwd=REPO_ROOT pins the inner command's relative-path lookups (e.g. the
     # default `.env`) to the same anchor _LOCAL_DATA_DIR uses for spec discovery,
     # so an operator invoking the launcher from outside the repo doesn't have
@@ -412,7 +417,6 @@ def main(
 
     spec_path = _find_unique_spec_path(command_for_error=command[0])
     spec_uri = _resolve_spec_uri(spec_path)
-    _emit_spec_uri(spec_uri)
     spec = DatasetSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))
 
     sky_cfg = SkypilotLaunchConfig(
@@ -791,6 +795,16 @@ def dispatch_via_skypilot(
         raise ValueError("dispatch_via_skypilot requires sky_cfg.compute_template to be set")
     if not sky_cfg.cmd:
         raise ValueError("dispatch_via_skypilot requires sky_cfg.cmd to be set")
+
+    # CI-mode shrink and spec-uri marker live at the single dispatch chokepoint
+    # rather than the click `main()` so both entrypoints — operator-side
+    # `python -m synth_setter.pipeline.skypilot_launch` and CI's
+    # `synth-setter-generate-dataset` (`cli/generate_dataset.py:main`) — hit
+    # them. The shrink must land before any sky.* call (controller pod is
+    # provisioned on the first sky.jobs.launch); the marker emits as early as
+    # possible so a later dispatch failure still leaves it in the tee'd log.
+    _ensure_ci_sky_config()
+    _emit_spec_uri(spec_uri)
 
     template_path = Path(sky_cfg.compute_template).expanduser().resolve()
     task_doc = _load_compute_template_with_cmd(template_path, sky_cfg.cmd)

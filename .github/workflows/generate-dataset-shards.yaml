@@ -421,13 +421,17 @@ jobs:
       # console script (which would require a host-side `pip install -e .` for
       # the runpod/oci rows whose workers live inside the container). Marker
       # constant is `_SPEC_URI_STDOUT_SENTINEL` in skypilot_launch.py.
+      # `grep || true` keeps a missing marker from exiting the step (grep
+      # returns 1 on no-match; with `set -euo pipefail` an unmasked grep
+      # failure would skip the explicit empty-check below and surface a
+      # confusing pipe-failure instead of the friendly `::error::` message).
       - name: Extract spec_uri from launcher log
         id: spec_uri
         run: |
           set -euo pipefail
           SPEC_URI=$(grep -m1 -oE '::synth-setter-spec-uri::r2://[^[:space:]]+' \
             "${RUN_METADATA_DIR}/generate.log" \
-            | sed 's|^::synth-setter-spec-uri::||')
+            | sed 's|^::synth-setter-spec-uri::||' || true)
           if [[ -z "${SPEC_URI}" ]]; then
             echo "::error::launcher did not emit a ::synth-setter-spec-uri:: marker; see generate.log"
             exit 1

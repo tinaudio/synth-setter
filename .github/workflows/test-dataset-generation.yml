@@ -121,9 +121,11 @@ permissions:
 # Coalesce stacked PR pushes — saves runner minutes on `local` PRs. The
 # `workflow_dispatch` suffix gives each manual run its own group so a
 # re-dispatch to the same ref doesn't cancel an in-flight intentional run;
-# on PR/push the suffix is empty and pushes still coalesce.
+# on PR/push the suffix is empty (the leading dash lives inside the conditional
+# so the group key stays byte-identical to the prior `${{ github.workflow }}-
+# ${{ github.ref }}` form there, and PR pushes still coalesce).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
