@@ -83,10 +83,10 @@ docs:
 
   # ── SkyPilot compute integration design doc ─────────────────────
   - doc: docs/design/skypilot-compute-integration.md
-    description: SkyPilot launcher for the data pipeline (RunPod + OCI smoke)
+    description: SkyPilot dispatch for the data pipeline — standard entrypoint path + ad-hoc launcher (RunPod + OCI smoke)
     sources:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
-        covers: "SkyPilot launcher CLI; sky.jobs.launch managed-jobs SDK flow; --tail/--no-tail split (detached prints `sky jobs logs --name` and exits; tail streams via sky.jobs.tail_logs and cancels in finally). WORKER_SPEC_URI sourced from `spec.r2.input_spec_uri()`; file_mounts avoided (#749)."
+        covers: "Ad-hoc SkyPilot launcher CLI for arbitrary operator commands; also hosts `dispatch_via_skypilot`, the shared library the standard `synth-setter-*` dispatch path calls into. sky.jobs.launch managed-jobs SDK flow; --tail/--no-tail split (detached prints `sky jobs logs --name` and exits; tail streams via sky.jobs.tail_logs and cancels in finally). `dispatch_via_skypilot` receives a `spec_uri` from the caller (standard path passes `spec.r2.input_spec_uri()`; ad-hoc launcher resolves it via the `synth-setter-spec-uri` console script in `_resolve_spec_uri`) and forwards it as `WORKER_SPEC_URI`; file_mounts avoided (#749)."
       - pattern: "configs/compute/runpod-template.yaml"
         covers: "SkyPilot Task YAML for RunPod: resources block, image_id injected per-launch by the launcher (`--worker-image-tag`, default `dev-snapshot`) via `_override_image_id`, env-var injection (RCLONE_CONFIG_R2_*), R2-URI spec contract (WORKER_SPEC_URI consumed by load_spec_from_uri in the worker)"
       - pattern: "configs/compute/oci-cpu-template.yaml"
