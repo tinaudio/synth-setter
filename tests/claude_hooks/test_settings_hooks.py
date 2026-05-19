@@ -655,6 +655,28 @@ def test_trailer_hook_does_not_false_positive_on_chained_grep_n_metachars(
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 
+@pytest.mark.parametrize("metachar", ["&&", "||", ";", "|", "&"])
+def test_trailer_hook_handles_no_whitespace_metachar_chain(
+    trailer_hook_command: str, metachar: str
+) -> None:
+    """Regression: ``git commit ...METACHARgrep -n ...`` (no spaces) must not mis-attribute.
+
+    Before c1e8120 / 54aeb2b the parser used plain ``shlex.split()`` which only
+    splits metachars when whitespace-separated, so ``msg&&grep`` tokenized as a
+    single token and ``-n`` from a downstream ``grep -n`` landed inside
+    ``git commit``'s argv slice. The fix uses ``shlex.shlex(..., punctuation_chars=True)``;
+    this test pins the no-whitespace case.
+
+    :param trailer_hook_command: Hook command body fixture.
+    :param metachar: Shell metachar (concatenated with no surrounding whitespace).
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {"tool_input": {"command": f'git commit -m "msg"{metachar}grep -n bar file.txt'}},
+    )
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
 def test_baseline_hook_blocks_write_addition(baseline_hook_command: str, tmp_path: Path) -> None:
     """A Write that increases baseline row count is blocked (Write path coverage).
 
@@ -670,6 +692,34 @@ def test_baseline_hook_blocks_write_addition(baseline_hook_command: str, tmp_pat
             "tool_input": {
                 "file_path": str(baseline),
                 "content": "path/a.py:1:1: DOC101\npath/b.py:2:2: DOC102\n",
+            },
+        },
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
+def test_baseline_hook_blocks_write_to_missing_file(
+    baseline_hook_command: str, tmp_path: Path
+) -> None:
+    """A Write that creates a non-existent baseline with rows is blocked.
+
+    Regression: previously the hook fast-pathed exit-0 when the file didn't
+    exist, creating a delete+recreate bypass. The fix treats a missing file as
+    ``OLD_COUNT=0`` and blocks any Write whose content carries baseline rows.
+
+    :param baseline_hook_command: Hook command body fixture.
+    :param tmp_path: pytest tmp_path.
+    """
+    baseline = tmp_path / ".pydoclint-baseline.txt"
+    assert not baseline.exists()
+    result = _run_hook_command(
+        baseline_hook_command,
+        {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(baseline),
+                "content": "path/a.py:1:1: DOC101\n",
             },
         },
     )
@@ -747,7 +797,10 @@ def test_yaml_run_hook_blocks_edit_introducing_comment(
         "      - run: |-\n",
         "      - run: |+\n",
         "      - run: >\n",
+        "      - run: >-\n",
+        "      - run: >+\n",
         "      - setup: |\n",
+        "      - setup: >-\n",
     ],
 )
 def test_yaml_run_hook_blocks_comment_in_chomping_variants(

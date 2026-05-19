@@ -13,6 +13,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/_lib.sh"
 
+# Any unexpected failure (Python crash, jq parse, etc.) must block — never
+# leak a non-2 exit that bypasses the contract documented in the header.
+trap 'log "internal failure on line $LINENO; blocking"; echo "BLOCKED: no-yaml-run-comments hit an internal error (line $LINENO); fix the hook or report it." >&2; exit 2' ERR
+
 INPUT=$(cat)
 # Fail closed on jq parse error.
 if ! FILE_PATH=$(jq -r '.tool_input.file_path // empty' <<<"$INPUT" 2>/dev/null); then

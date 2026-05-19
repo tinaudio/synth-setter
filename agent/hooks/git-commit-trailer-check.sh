@@ -12,6 +12,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/_lib.sh"
 
+# Any unexpected failure (Python crash, jq parse, etc.) must block — never
+# leak a non-2 exit that bypasses the contract documented in the header.
+trap 'log "internal failure on line $LINENO; blocking"; echo "BLOCKED: git-commit-trailer-check hit an internal error (line $LINENO); fix the hook or report it." >&2; exit 2' ERR
+
 INPUT=$(cat)
 # Fail closed: blocking malformed input is the whole point of this gate.
 if ! COMMAND=$(jq -r '.tool_input.command // empty' <<<"$INPUT" 2>/dev/null); then

@@ -12,6 +12,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/_lib.sh"
 
+# Any unexpected failure (Python crash, jq parse, etc.) must block — never
+# leak a non-2 exit that bypasses the contract documented in the header.
+trap 'log "internal failure on line $LINENO; blocking"; echo "BLOCKED: no-baseline-additions hit an internal error (line $LINENO); fix the hook or report it." >&2; exit 2' ERR
+
 INPUT=$(cat)
 # Fail closed: a silent fail-open is the bug class this gate exists to prevent.
 if ! FILE_PATH=$(jq -r '.tool_input.file_path // empty' <<<"$INPUT" 2>/dev/null); then
@@ -25,10 +29,9 @@ case "$FILE_PATH" in
   *) exit 0 ;;
 esac
 
-if [[ ! -f "$FILE_PATH" ]]; then
-  exit 0
-fi
-
+# `OLD_COUNT=0` when the baseline file doesn't exist. Treating a missing file
+# as "out of scope" would create a bypass: delete + Write recreates the file
+# unchecked. With OLD_COUNT=0, any Write that includes baseline rows blocks.
 COUNTS=$(HOOK_INPUT="$INPUT" SRC_PATH="$FILE_PATH" python3 - <<'PY'
 import json, os, pathlib
 
@@ -36,7 +39,7 @@ payload = json.loads(os.environ["HOOK_INPUT"])
 tool_name = payload.get("tool_name", "")
 tool = payload.get("tool_input", {})
 src = pathlib.Path(os.environ["SRC_PATH"])
-current = src.read_text()
+current = src.read_text() if src.exists() else ""
 
 if tool_name == "Write":
     proposed = tool.get("content", "")
