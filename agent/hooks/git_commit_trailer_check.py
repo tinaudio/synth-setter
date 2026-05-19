@@ -1,13 +1,17 @@
 """Forbidden-flag / trailer scanner for the git-commit-trailer-check hook.
 
-Reads a single ``git commit`` command on stdin; prints one
-``<label>\\t<match>`` line per forbidden finding (``--no-verify`` / bundled
-``-n`` short flags, ``Co-Authored-By:`` trailers, agent-attribution footers).
-Empty stdout means clean.
+Reads a shell command on stdin (any ``git ...`` invocation under the
+``Bash(git*)`` matcher); prints one ``<label>\\t<match>`` line per forbidden
+finding (``--no-verify`` / bundled ``-n`` short flags, ``Co-Authored-By:``
+trailers, agent-attribution footers). Empty stdout means clean — including
+non-``git commit`` invocations, which reach the scanner because the wrapper
+no longer pre-filters.
 
-The .sh wrapper handles JSON parsing, re-scope, and the user-facing BLOCKED
-message; this module is the pure-Python parser so unit-test-style argv slicing
-can avoid confusing ``-n`` on ``git commit`` with a downstream ``grep -n``.
+The .sh wrapper handles JSON parsing and the user-facing BLOCKED message;
+this module is the pure-Python parser and the authoritative scope filter
+(``_find_commit_subcommand`` yields nothing for non-commit ``git`` calls and
+shlex tokenization distinguishes ``-n`` on ``git commit`` from a downstream
+``grep -n``).
 """
 
 from __future__ import annotations

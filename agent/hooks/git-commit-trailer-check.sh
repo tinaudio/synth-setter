@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse Bash(git commit *) gate. Exits 0 (clean / not git commit) or 2
+# PreToolUse Bash(git*) gate. Exits 0 (clean / not git commit) or 2
 # (forbidden --no-verify/-n flag or Co-Authored-By / agent-attribution trailer).
 set -euo pipefail
 
