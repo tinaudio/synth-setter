@@ -140,7 +140,7 @@ Comments that restate values, counts, or list contents go stale the moment the c
   os._exit(0)
   ```
 
-- **Don't narrate history.** A comment, docstring, or doc page describes the **current** state, not the path that got there. Phrasings to avoid: "previously...", "used to...", "was X, now Y", "renamed from...", "migrated from...", "moved from...", "no longer...", "formerly...", "(was X in v1)", "post-#NNNN this became...". Git log is the source for history; if the *rationale* for current behavior matters, point at an issue (`# Workaround for X — see #N`) rather than narrating the journey.
+- **Don't narrate history.** A comment, docstring, or doc page describes the **current** state, not the path that got there. Phrasings to avoid: "previously...", "used to...", "was X, now Y", "renamed from...", "migrated from...", "moved from...", "no longer...", "formerly...", "(was X in v1)", "post-#NNNN this became...". `git log` is the source for history; if the *rationale* for current behavior matters, point at an issue (`# Workaround for X — see #N`) rather than narrating the journey.
 
   ```python
   # Bad — narrates the migration:
