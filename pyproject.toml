@@ -70,7 +70,7 @@ dev = [
   "pyright==1.1.408",
   "pytest",
   "pytest-benchmark",
-  "pytest-cov[toml]",
+  "pytest-cov",
   "pytest-xdist",
   "ruff",
 ]
