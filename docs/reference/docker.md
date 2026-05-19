@@ -120,9 +120,9 @@ Node.js + `@anthropic-ai/claude-code` installed system-wide, a non-root
 `uv pip install` and editable installs work without sudo, and adds a
 `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
-history survives container rebuilds. The same configs also mount two
-`synth-setter-tmux-resurrect{,-root}` named volumes at
-`/home/dev/.local/share/tmux/resurrect` and
+history survives container rebuilds. The same configs also mount the
+`synth-setter-tmux-resurrect` and `synth-setter-tmux-resurrect-root` named
+volumes at `/home/dev/.local/share/tmux/resurrect` and
 `/root/.local/share/tmux/resurrect` so tmux sessions saved by
 tmux-continuum (configured in `.devcontainer/tmux.conf`) survive container
 rebuilds for both `DEVCONTAINER_USER=dev` (the default) and opt-in
