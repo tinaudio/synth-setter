@@ -122,19 +122,6 @@ def clear_worker_env_from_process(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def mock_rclone_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Globally no-op any rclone subprocess the launcher might shell out to.
-
-    Defensive — keeps tests hermetic even if a code path under test later starts invoking rclone
-    directly.
-    """
-    monkeypatch.setattr(
-        "synth_setter.pipeline.skypilot_launch.subprocess.check_call",
-        lambda args: None,
-    )
-
-
-@pytest.fixture(autouse=True)
 def mock_upload_spec(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """No-op the canonical ``upload_spec`` so the launcher's spec upload is hermetic.
 
