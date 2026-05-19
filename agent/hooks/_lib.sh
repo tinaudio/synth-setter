@@ -149,8 +149,12 @@ run_review() {
     rm -f "$stderr_file"
     printf '%s\n' "$review_file"
     return 0
+  else
+    # `$?` inside the else branch is the failed command's exit. Outside the
+    # `if`/`else` block, bash resets it to 0 (the if-statement's own exit
+    # status when the condition was false), so the capture must live here.
+    exit_code=$?
   fi
-  exit_code=$?
   log "headless agent failed (exit ${exit_code})"
   {
     printf '# %s (FAILED)\n\n%s\n' "$slug" "$meta"

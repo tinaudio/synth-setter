@@ -176,8 +176,17 @@ T_doc_drift_agent_failure() {
   report=$(find .agent-reviews -maxdepth 1 -name 'doc-drift-*.md' 2>/dev/null | head -1)
   [[ -n "$report" ]] || { echo "report missing"; return 1; }
   grep -q "FAILED" "$report" || { echo "report should say FAILED"; return 1; }
-  grep -q "exit code" "$report" || { echo "report should include exit code"; return 1; }
   grep -q "simulated headless agent auth failure" "$report" || { echo "report should include stderr tail"; return 1; }
+  # Regression: the captured exit code MUST be the stub's real exit (3), not 0.
+  # An earlier refactor of run_review used `$?` outside an else branch, which
+  # bash resets to 0 after a falsy `if; then; fi`, silently corrupting the
+  # failure report. Catch any regression by asserting the exact exit code.
+  grep -qE '^## headless agent exit code$' "$report" || { echo "report missing exit-code header"; return 1; }
+  awk '/^## headless agent exit code$/{getline; print; exit}' "$report" | grep -qE '^3$' || {
+    echo "expected captured exit code 3 in report, got:"
+    awk '/^## headless agent exit code$/{getline; print; exit}' "$report"
+    return 1
+  }
 }
 it "doc-drift: headless agent failure → verbose FAILED report (exit code + stderr captured)" T_doc_drift_agent_failure
 
@@ -484,6 +493,25 @@ T_taxonomy_hierarchy_non_synth_setter_exits_silently() {
   [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0 (no synth-setter in command), got: $out"; return 1; }
 }
 it "verify-gh-taxonomy: addSubIssue not targeting synth-setter exits 0 silently" T_taxonomy_hierarchy_non_synth_setter_exits_silently
+
+T_taxonomy_check_ci_minimum_joins_with_comma_space() {
+  # Unit test for the comma-space join in check_ci_minimum + check_project_fields.
+  # Regression for the IFS/`${arr[*]}` quirk Copilot caught on PR #1119: setting
+  # `IFS=', '` and expanding `"${arr[*]}"` joins on only the FIRST char of IFS
+  # (the comma), producing `issue-type,domain-label` without the space.
+  local script_src result
+  script_src=$(awk '/^check_ci_minimum\(\) {/,/^}$/' "$REPO_ROOT/agent/hooks/verify-gh-taxonomy.sh")
+  result=$(bash -c "$script_src; check_ci_minimum '' 'false' ''")
+  [[ "$result" == "issue-type, domain-label, milestone" ]] || {
+    echo "expected 'issue-type, domain-label, milestone', got: '$result'"
+    return 1
+  }
+  result=$(bash -c "$script_src; check_ci_minimum 'Task' 'true' 'v1.0'")
+  [[ -z "$result" ]] || { echo "expected empty for fully-populated, got: '$result'"; return 1; }
+  result=$(bash -c "$script_src; check_ci_minimum 'Task' 'false' 'v1.0'")
+  [[ "$result" == "domain-label" ]] || { echo "expected 'domain-label', got: '$result'"; return 1; }
+}
+it "verify-gh-taxonomy: check_ci_minimum joins missing fields with ', ' (comma+space)" T_taxonomy_check_ci_minimum_joins_with_comma_space
 
 # ===========================================================================
 # Run

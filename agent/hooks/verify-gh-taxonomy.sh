@@ -69,17 +69,20 @@ query_issue_metadata() {
 
 check_ci_minimum() {
   # Usage: check_ci_minimum <type> <has_domain> <milestone>
-  # Echoes a comma-separated list of missing fields (e.g. "issue-type, milestone"),
-  # or empty string if all three are set. Callers interpolate directly into
-  # user-facing error strings.
+  # Echoes a comma-and-space-separated list of missing fields (e.g.
+  # "issue-type, milestone"), or empty string if all three are set. Callers
+  # interpolate directly into user-facing error strings.
   local type="$1" has_domain="$2" milestone="$3"
-  local missing=()
+  local missing=() joined
   [[ -z "$type" ]] && missing+=("issue-type")
   [[ "$has_domain" == "false" ]] && missing+=("domain-label")
   [[ -z "$milestone" ]] && missing+=("milestone")
   if [[ "${#missing[@]}" -gt 0 ]]; then
-    local IFS=', '
-    echo "${missing[*]}"
+    # `printf -v + strip trailing sep` — `IFS=', '` with `"${arr[*]}"` would
+    # join on only the FIRST char of IFS (a bash quirk; see Copilot review on
+    # PR #1119), producing `issue-type,domain-label` without the space.
+    printf -v joined '%s, ' "${missing[@]}"
+    echo "${joined%, }"
   fi
 }
 
@@ -138,8 +141,10 @@ check_project_fields() {
     fi
   fi
   if [[ "${#missing[@]}" -gt 0 ]]; then
-    local IFS=', '
-    echo "${missing[*]}"
+    # See check_ci_minimum for the IFS-vs-printf-v rationale.
+    local joined
+    printf -v joined '%s, ' "${missing[@]}"
+    echo "${joined%, }"
   fi
 }
 
