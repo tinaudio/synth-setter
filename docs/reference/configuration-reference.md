@@ -129,7 +129,7 @@ The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet
 **RunPod** (`configs/compute/runpod-template.yaml`) — landed. Abridged
 shape (see the file for the full template):
 
-The launcher injects `image_id` per-launch via `--worker-image-tag` (default `dev-snapshot`) for non-OCI backends, so the template no longer carries a literal `image_id: docker:tinaudio/synth-setter:dev-snapshot`:
+The launcher injects `image_id` per-launch via `--worker-image-tag` (default `dev-snapshot`) for non-OCI backends, so the template omits a literal `image_id:` entry and relies on the per-launch injection:
 
 ```yaml
 resources:

@@ -104,7 +104,7 @@ _R2_RCLONE_CONSTANTS: dict[str, str] = {
 }
 
 # Residual `_WORKER_ENV_KEYS` that are not defaulted by `_R2_RCLONE_CONSTANTS`.
-# Used to detect the unconfigured-creds case: the rclone TYPE/PROVIDER constants
+# Detects the unconfigured-creds case: the rclone TYPE/PROVIDER constants
 # default in, so an "empty" worker_env still has those keys — only this residual
 # subset (R2 access creds, WANDB_API_KEY, WORKER_GIT_REF) signals whether
 # anything was actually resolved from .env / process env.
@@ -558,7 +558,7 @@ def main(
     spec = _compose_dataset_spec(experiment, list(hydra_overrides))
 
     # `--num-workers` overrides the launcher default of 1. Worker count is a
-    # launcher concern, no longer baked into the dataset spec.
+    # launcher concern and lives outside the dataset spec.
     resolved_num_workers = num_workers if num_workers is not None else 1
 
     base_job_name = job_name or f"synth-setter-smoke-{spec.task_name[:8]}"

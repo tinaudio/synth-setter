@@ -101,9 +101,9 @@ first to reinstall.
 > ln -s "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3" "plugins/Surge XT.vst3"
 > ```
 >
-> The project used to ship a `make link-plugins` wrapper for this; it was
-> removed in favour of this one-line symlink so the discovery path stays
-> explicit and there's only one way to populate `plugins/`.
+> The one-line symlink is the single supported way to point at a system-wide
+> Surge XT install — there's no wrapper Make target — so the discovery path
+> stays explicit.
 >
 > **On arm64 Linux?** The official Surge XT release only ships an x86_64
 > Linux build. Install via your package manager (`apt install surge-xt`) or

@@ -81,7 +81,7 @@ Only needed for tests that exercise Hydra-composed configs (test_configs, test_t
 
 Both defined in [`tests/conftest.py`](../../tests/conftest.py) as package-scoped `*_global` fixtures wrapped by function-scoped fixtures that inject `tmp_path`. Each `*_global` fixture composes the corresponding entry-point YAML with explicit `data=` / `model=` / `trainer=` overrides at compose time, then applies test-friendly tweaks via an `open_dict(cfg):` block. Read both blocks for today's presets — they change as the fixtures evolve.
 
-`cfg_train_global` and `cfg_eval_global` compose with the **same** `data=ksin model=ffn trainer=cpu` overrides, and dataset shape is pinned via integer `train_val_test_sizes=[2,2,2]` rather than fractional `limit_*_batches`. A train→eval round-trip no longer needs to copy `data` / `model` / `callbacks` from one config to the other.
+`cfg_train_global` and `cfg_eval_global` compose with the **same** `data=ksin model=ffn trainer=cpu` overrides, and dataset shape is pinned via integer `train_val_test_sizes=[2,2,2]` rather than fractional `limit_*_batches`. A train→eval round-trip shares the same `data` / `model` / `callbacks` shape across both fixtures, so neither side has to copy fields from the other.
 
 Both fixtures clear global Hydra state on teardown via `GlobalHydra.instance().clear()`.
 
