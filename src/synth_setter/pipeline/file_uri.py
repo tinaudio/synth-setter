@@ -17,7 +17,6 @@ __all__ = [
     "FILE_URI_SCHEME",
     "file_uri_to_path",
     "is_file_uri",
-    "local_path_from_arg",
 ]
 
 
@@ -53,20 +52,3 @@ def file_uri_to_path(file_uri: str) -> Path:
     if not path.startswith("/"):
         raise ValueError(f"file:// URI must carry an absolute path: {file_uri!r}")
     return Path(path)
-
-
-def local_path_from_arg(spec_arg: str) -> Path:  # noqa: DOC502
-    """Resolve a non-``r2://`` spec argument to a local filesystem ``Path``.
-
-    Branches on ``file://`` to dispatch through :func:`file_uri_to_path`;
-    bare arguments are passed through to :class:`~pathlib.Path` unchanged so
-    pre-existing local-path callers keep working.
-
-    :param spec_arg: Either a ``file://`` URI or a bare filesystem path.
-    :return: Local :class:`~pathlib.Path`.
-    :raises ValueError: ``spec_arg`` is a malformed ``file://`` URI (propagated
-        from :func:`file_uri_to_path`).
-    """
-    if is_file_uri(spec_arg):
-        return file_uri_to_path(spec_arg)
-    return Path(spec_arg)

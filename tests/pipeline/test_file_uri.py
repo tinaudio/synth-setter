@@ -1,4 +1,4 @@
-"""Tests for synth_setter.pipeline.file_uri — file:// scheme + bare-path dispatch."""
+"""Tests for synth_setter.pipeline.file_uri — file:// scheme detection + parser."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from synth_setter.pipeline.file_uri import (
     FILE_URI_SCHEME,
     file_uri_to_path,
     is_file_uri,
-    local_path_from_arg,
 )
 
 
@@ -75,20 +74,3 @@ class TestFileUriToPath:
         """A ``file://localhost`` URI with no path component is rejected."""
         with pytest.raises(ValueError, match="must carry an absolute path"):
             file_uri_to_path("file://localhost")
-
-
-class TestLocalPathFromArg:
-    """``local_path_from_arg`` accepts either a bare local path or a ``file://`` URI."""
-
-    def test_bare_local_path_is_passed_through(self) -> None:
-        """A bare filesystem path is passed through to ``pathlib.Path`` unchanged."""
-        assert local_path_from_arg("/data/spec.json") == Path("/data/spec.json")
-
-    def test_file_uri_is_decoded(self) -> None:
-        """A ``file://`` URI is decoded via ``file_uri_to_path``."""
-        assert local_path_from_arg("file:///data/spec.json") == Path("/data/spec.json")
-
-    def test_malformed_file_uri_propagates_value_error(self) -> None:
-        """A malformed ``file://`` URI propagates ``ValueError`` from the helper."""
-        with pytest.raises(ValueError, match="host must be empty or 'localhost'"):
-            local_path_from_arg("file://example.com/abs/path")

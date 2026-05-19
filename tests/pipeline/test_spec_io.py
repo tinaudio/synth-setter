@@ -360,3 +360,21 @@ class TestReadSpecText:
             text = spec_io.read_spec_text("r2://bucket/spec.json")
 
         assert text == '{"hello": "from-r2"}'
+
+    def test_bare_relative_path_resolves_against_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare relative path is read against the process CWD (rclone/fsspec convention).
+
+        :param tmp_path: Pytest tmp dir used as the working directory for this test.
+        :param monkeypatch: Pytest fixture used to ``chdir`` into ``tmp_path``.
+        """
+        (tmp_path / "relative-spec.json").write_text('{"hello": "from-cwd"}')
+        monkeypatch.chdir(tmp_path)
+
+        assert spec_io.read_spec_text("relative-spec.json") == '{"hello": "from-cwd"}'
+
+    def test_unsupported_scheme_is_rejected_with_value_error(self) -> None:
+        """An unsupported scheme (e.g. ``s3://``) raises a clear ``ValueError``."""
+        with pytest.raises(ValueError, match="unsupported spec_uri scheme 's3'"):
+            spec_io.read_spec_text("s3://bucket/spec.json")

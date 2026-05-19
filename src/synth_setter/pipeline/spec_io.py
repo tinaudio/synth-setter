@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
-from synth_setter.pipeline.file_uri import local_path_from_arg
-from synth_setter.pipeline.r2_io import downloaded_to_tempfile, is_r2_uri, upload_to_uri
+from synth_setter.pipeline.file_uri import file_uri_to_path
+from synth_setter.pipeline.r2_io import downloaded_to_tempfile, upload_to_uri
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 __all__ = [
@@ -44,21 +45,41 @@ __all__ = [
 # ``output_dir/data/`` regardless of where R2 puts the prefix root.
 _LOCAL_DATA_DIRNAME = "data"
 
+# Schemes ``read_spec_text`` knows how to fetch. Bare arguments (no scheme,
+# e.g. ``./data/spec.json`` or ``/abs/spec.json``) are treated as local paths
+# and read against the process CWD — matching the convention used by rclone,
+# fsspec, and similar libraries.
+_LOCAL_FILESYSTEM_SCHEMES: frozenset[str] = frozenset({"", "file"})
+_REMOTE_OBJECT_SCHEMES: frozenset[str] = frozenset({"r2"})
 
-def read_spec_text(spec_uri: str) -> str:
+
+def read_spec_text(spec_uri: str) -> str:  # noqa: DOC502
     """Read spec JSON text from a bare path, ``file://`` URI, or ``r2://`` URI.
 
-    R2 URIs are fetched via rclone (requires ``RCLONE_CONFIG_R2_*`` env vars)
-    to a tempfile and read before cleanup; bare paths and ``file://`` URIs
-    are read in place.
+    Front-of-pipeline dispatcher: parses the scheme via :func:`urllib.parse.urlparse`
+    and routes to the matching backend. Inputs without a scheme are treated as
+    local paths (relative paths resolve against the process CWD, same as
+    ``rclone`` / ``fsspec`` / Arrow). Unsupported schemes raise ``ValueError``
+    so a typo (e.g. ``s3://``) fails loudly instead of being silently passed
+    to :class:`~pathlib.Path`.
 
     :param spec_uri: Local filesystem path, ``file://`` URI, or ``r2://`` URI.
     :returns: The JSON text content of the spec file.
+    :raises ValueError: ``spec_uri`` carries a scheme other than ``file://``
+        or ``r2://``, or is a malformed ``file://`` URI (propagated from
+        :func:`~synth_setter.pipeline.file_uri.file_uri_to_path`).
     """
-    if is_r2_uri(spec_uri):
-        with downloaded_to_tempfile(spec_uri) as local_path:
-            return local_path.read_text()
-    return local_path_from_arg(spec_uri).read_text()
+    scheme = urlparse(spec_uri).scheme
+    if scheme in _LOCAL_FILESYSTEM_SCHEMES:
+        local_path = file_uri_to_path(spec_uri) if scheme == "file" else Path(spec_uri)
+        return local_path.read_text()
+    if scheme in _REMOTE_OBJECT_SCHEMES:
+        with downloaded_to_tempfile(spec_uri) as fetched:
+            return fetched.read_text()
+    raise ValueError(
+        f"unsupported spec_uri scheme {scheme!r}: {spec_uri!r}. "
+        f"Supported: bare local paths, ``file://``, ``r2://``."
+    )
 
 
 def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:
