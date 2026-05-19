@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779165921707,
+  "lastUpdate": 1779165923915,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -6184,6 +6184,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.232948863999997,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "634276fe37cb382a37b829199852a53b234ab3fd",
+          "message": "chore(lint): fix DOC10x/20x docstrings across 21 tests/ files (#1112)\n\nAdds :param <fixture>: lines to every test docstring that previously\nsuppressed pydoclint with inline # noqa: DOC101/DOC103/DOC201/DOC203\nacross 21 test files (~140 test functions). Drops the suppressions.\nNo test body or signature changes.\n\nMirrors the docstring shape established by the pilot PR #1108\n(tests/schemas/test_paths_config.py).\n\nThis is the last phase of the inline-DOC-noqa cleanup chain. With this\nPR and the sibling Cluster A PR merged, make count-doc-noqa GATE=1\npasses (src=0, tests=0).\n\nRefs #1106",
+          "timestamp": "2026-05-19T00:24:19-04:00",
+          "tree_id": "07081ad9b2d802f6ef9b5c220d89fd0997a4a4a1",
+          "url": "https://github.com/tinaudio/synth-setter/commit/634276fe37cb382a37b829199852a53b234ab3fd"
+        },
+        "date": 1779165923383,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 3.153517723083496,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 5.677882361151278,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.021381253376603127,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.04732555150985718,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 1.5395071506500244,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 12.267043237999996,
             "unit": "seconds"
           }
         ]
