@@ -1328,6 +1328,60 @@ def test_trailer_hook_blocks_un_and_tn_bundles(trailer_hook_command: str, cluste
     assert "BLOCKED" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param('git log --grep="Co-Authored-By: anyone"', id="git-log-grep-coauthor"),
+        pytest.param(
+            'git log --grep="\\nGenerated with Claude Code"',
+            id="git-log-grep-generated-with-claude",
+        ),
+        pytest.param('git log --grep="noreply@anthropic.com"', id="git-log-grep-noreply"),
+        pytest.param(
+            'git show HEAD --format="%B" | grep "Co-Authored-By:"',
+            id="git-show-piped-grep-coauthor",
+        ),
+        pytest.param(
+            'echo "msg\\nCo-Authored-By: x" > /tmp/note',
+            id="non-git-bash-with-trailer-substring",
+        ),
+    ],
+)
+def test_trailer_hook_does_not_false_positive_on_non_commit_with_trailer_substring(
+    trailer_hook_command: str, command: str
+) -> None:
+    """Non-commit invocations that mention a trailer-shaped substring pass through.
+
+    The scanner short-circuits to "no findings" when no ``git commit`` argv
+    slice is present, so the raw-command fallback (used only inside a real
+    commit invocation with a heredoc body) cannot misfire on diagnostic
+    commands like ``git log --grep="Co-Authored-By: ..."`` or on unrelated
+    Bash invocations whose command string happens to contain the substring.
+
+    :param trailer_hook_command: Hook command body fixture.
+    :param command: Non-commit invocation under test.
+    """
+    result = _run_hook_command(trailer_hook_command, {"tool_input": {"command": command}})
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_trailer_hook_still_blocks_heredoc_commit_with_trailer(
+    trailer_hook_command: str,
+) -> None:
+    """Heredoc-bodied ``git commit`` invocations still fall back to raw-command scanning.
+
+    Pins that the raw-command fallback remains active when a commit slice IS
+    found but no ``-m``/``-F`` body is recoverable — removing the fallback
+    entirely would create a different bypass.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    cmd = "git commit <<EOF\nfeat: x\n\nCo-Authored-By: Claude\nEOF"
+    result = _run_hook_command(trailer_hook_command, {"tool_input": {"command": cmd}})
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "BLOCKED" in result.stderr
+
+
 def test_yaml_run_hook_blocks_new_comment_when_legacy_one_is_preserved(
     yaml_run_hook_command: str, tmp_path: Path
 ) -> None:

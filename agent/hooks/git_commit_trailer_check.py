@@ -227,28 +227,35 @@ def _scan(cmd: str) -> list[tuple[str, str]]:
     tokens = _tokenize(cmd)
     findings: list[tuple[str, str]] = []
 
+    commit_slices = list(_iter_commit_argvs(tokens))
+    if not commit_slices:
+        # No ``git commit`` invocation in this command — nothing to gate.
+        # We must NOT raw-command-fallback the trailer regexes here:
+        # `git log --grep="Co-Authored-By: …"` (and similar diagnostic
+        # invocations) embed trailer-shaped substrings as flag values, not
+        # as outgoing commit body content.
+        return findings
+
     # --no-verify / -n (incl. bundled `-nm` / `-anm` / …) on `git commit` itself.
     # Iterate all argvs so chained invocations are all checked, but record only
     # the first hit per kind to keep the output tight.
-    for argv in _iter_commit_argvs(tokens):
+    for argv in commit_slices:
         if "--no-verify" in argv:
             findings.append(("--no-verify flag", "--no-verify"))
             break
-    for argv in _iter_commit_argvs(tokens):
+    for argv in commit_slices:
         if _has_no_verify_short_flag(argv):
             findings.append(("-n flag (== --no-verify)", "-n"))
             break
 
-    # Forbidden trailers inside -m / -F / heredoc bodies. When we cannot find
-    # any explicit message body (heredoc / shell-substituted), fall back to the
-    # raw command — but with anchored trailer regexes only, since substring
-    # matches against arbitrary command text produce false positives. The
-    # raw_command_fallback flag makes that trust-level shift explicit.
+    # Forbidden trailers inside -m / -F / heredoc bodies. When a commit slice
+    # exists but no explicit message body is recoverable (heredoc /
+    # shell-substituted), fall back to scanning the raw command — anchored
+    # trailer regexes still rule out substring false positives.
     texts: list[str] = []
-    for argv in _iter_commit_argvs(tokens):
+    for argv in commit_slices:
         texts.extend(_collect_message_texts(argv))
-    raw_command_fallback = not texts
-    if raw_command_fallback:
+    if not texts:
         texts = [cmd]
 
     for text in texts:
