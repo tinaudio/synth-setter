@@ -220,7 +220,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
 
-      # A1 (#1164): cache the launcher venv (~/.venv-launcher) so a warm hit
+      # A1 (#1164): cache the launcher venv ($GITHUB_WORKSPACE/.venv-launcher) so a warm hit
       # skips the install entirely. setup-uv's enable-cache caches the wheel
       # *index*; this caches the *resolved/installed* tree. We use an explicit
       # venv (rather than `--system`) because dist-packages on the GHA image is
