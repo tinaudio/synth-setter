@@ -48,7 +48,8 @@ def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:
         ``cfg.paths.output_dir`` is pinned to the same value as a shim
         for ``${hydra:runtime.output_dir}`` resolution, but is not the
         anchor read back here.
-    :returns: ``<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json``.
+    :returns: ``<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json``
+        — i.e. ``<repo_root>/data/...`` when invoked from the runner.
     """
     return (
         output_dir
