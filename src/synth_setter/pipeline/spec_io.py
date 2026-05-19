@@ -2,7 +2,9 @@
 
 The frozen ``DatasetSpec`` is written to two well-known locations every run:
 
-  - local: ``<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json``
+  - local: ``<repo_root>/data/<task_name>/<run_id>/metadata/input_spec.json``
+    (the runner anchors at ``_REPO_ROOT``; see :func:`local_spec_path`'s
+    ``output_dir`` parameter for why ``cfg.paths.output_dir`` is not used)
   - R2:    ``spec.r2.input_spec_uri()`` (see ``R2Location.input_spec_uri``)
 
 The local path anticipates the ``docs/design/storage-provenance-spec.md`` §3a
