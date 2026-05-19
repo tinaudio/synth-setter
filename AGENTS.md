@@ -310,25 +310,14 @@ The token is honor-system — it forces a pause to invoke the skill, not unbypas
 
 ### PR Readiness
 
-**Hard gate (all four must hold).** A PR is ready iff:
+**Hard gate (all four must hold).** A PR is **not** ready — for review, merge, or hand-off — until every one of these holds. They are AND-ed; failing any one means not ready.
 
-1. **CI is fully green** — every required AND optional check passing, none pending, errored, or failing.
-2. **`mergeable=MERGEABLE`** — no merge conflicts and GitHub's mergeability calc is settled (not `UNKNOWN`, not `CONFLICTING`).
-3. **Every open review comment has an inline reply** — human reviewers AND Copilot.
-4. **Copilot has produced no new comments since the last push** — verify both the inline-comments endpoint and the top-level reviews endpoint.
+1. **CI is fully green** — every required AND optional check passing. Pending, errored, or failing all count as not ready.
+2. **`mergeable=MERGEABLE`** — `gh pr view <N> --json mergeable -q .mergeable` must report `MERGEABLE`. `UNKNOWN` (GitHub still computing) and `CONFLICTING` both fail this gate; keep polling `UNKNOWN` until it resolves.
+3. **Every open review comment has an inline reply** — every unresolved review thread (human reviewers AND Copilot) has either a code change linked by commit SHA or an inline reply with justification. See `### PR Review Comments` below for the reply mechanics.
+4. **Copilot has produced no new comments since the last push** — Copilot re-reviews after every push, usually within ~60s. Verify both the inline-comments endpoint and the top-level reviews endpoint (procedure below).
 
-"PR mergeable" alone is **not** the gate — green CI is a separate, equally-hard precondition. All four conditions are AND-ed; failing any one means not ready.
-
-Detailed elaboration of each gate:
-
-A PR is **not ready** — for review, merge, or hand-off — until **all** of these hold:
-
-- **All CI checks pass.** Both required and optional checks must pass — a failing, errored, or still-pending check means not ready.
-- **No merge conflicts with the base branch.** `gh pr view <N> --json mergeable -q .mergeable` must report `MERGEABLE`. Anything else means not ready, including `UNKNOWN` (GitHub is still computing mergeability) — keep polling until it resolves to `MERGEABLE` or `CONFLICTING`.
-- **Every open review comment has an inline reply.** Every unresolved review thread — human reviewers AND Copilot's automated comments — has either a code change linked by commit SHA or an inline reply with justification. See `### PR Review Comments` below for the reply mechanics.
-- **Copilot has generated no new comments since the last push.** Copilot re-reviews after every push, usually finishing within ~60s. The PR is not ready until you have verified Copilot is done and either has zero new comments or every new comment has been addressed.
-
-"I pushed the fix" is not the same as "the PR is ready." After pushing, iterate until all conditions are satisfied — use `/loop` (e.g. `/loop 2m gh pr checks <N>`) or repeated polling, do not stop at the first push:
+"PR mergeable" alone is **not** the gate — green CI is a separate, equally-hard precondition. "I pushed the fix" is not the same as "the PR is ready." After pushing, iterate until all four conditions are satisfied — use `/loop` (e.g. `/loop 2m gh pr checks <N>`) or repeated polling, do not stop at the first push:
 
 1. Push the change.
 

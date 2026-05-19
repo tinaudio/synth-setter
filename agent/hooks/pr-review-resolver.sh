@@ -1,38 +1,16 @@
 #!/usr/bin/env bash
-# =============================================================================
-# pr-review-resolver.sh — PostToolUse hook, runs on `git push`
-# =============================================================================
+# pr-review-resolver.sh — PostToolUse hook on `git push`. Waits ~6min for CI
+# and reviewers to settle, then runs the pr-review-resolver skill (or an
+# inline fallback) headlessly. Writes to .agent-reviews/pr-review-resolver-<uuid>.md
+# and exits 2 with a pointer; never blocks.
 #
-# PURPOSE
-# -------
-# After an agent pushes a feature branch, wait for reviewers/CI to settle
-# (default 360s), then run the pr-review-resolver skill (or an inline
-# fallback) in a headless agent session to triage and respond to
-# review comments. Report written to .agent-reviews/pr-review-resolver-<uuid>.md.
+# Gates (all silent early-exit, no wait wasted): cmd does not contain "git push",
+# current branch is main/master, a newer push overwrote our lock, no PR for the branch.
+# Lockfile dedupe: write a per-branch token under .agent-reviews; after the sleep,
+# re-read — if the token changed, a newer push is in flight and this run exits.
 #
-# Returns exit 2 with a pointer so the active agent session reads the report
-# and acts on unresolved items. Advisory — does not block.
-#
-# GATES (all early-exit silently, no 6-min wait wasted)
-#   - cmd does not contain "git push"
-#   - current branch is main/master
-#   - after the wait: a newer push has overwritten our lock (dedupe)
-#   - after the wait: no PR exists for this branch
-#
-# LOCKFILE DEDUPE
-#   On entry we write a per-branch token to .agent-reviews/.resolver-<branch>.lock.
-#   After the sleep we re-read; if the token changed a newer push is in
-#   flight and this run exits silently. Last push wins.
-#
-# ENV OVERRIDES
-#   RESOLVER_SLEEP_SECS       — override the 360s settle-wait (used by tests)
-#   RESOLVER_DRY_RUN=1        — skip the headless agent call; write a stub report
-#   AGENT_HEADLESS=claude|codex — force the headless CLI. Auto-detected by default.
-#
-# INVOCATION
-#   Registered in Claude settings or another agent hook runner as a PostToolUse hook on Bash with
-#   asyncRewake: true and timeout: 1200 (20 min: ~6 min wait + resolver runtime).
-# =============================================================================
+# Env overrides: RESOLVER_SLEEP_SECS overrides the 360s wait (tests use 1s);
+# RESOLVER_DRY_RUN=1 skips the agent call; AGENT_HEADLESS=claude|codex pins the CLI.
 set -euo pipefail
 
 export HOOK_NAME="pr-review-resolver"
@@ -62,7 +40,12 @@ TOKEN=$(gen_id)
 echo "$TOKEN" > "$LOCKFILE"
 log "wrote lock token ${TOKEN}"
 
+# Defensive: RESOLVER_SLEEP_SECS comes from the environment; an operator typo
+# (`RESOLVER_SLEEP_SECS=abc`) would otherwise abort the hook at `sleep` under
+# `set -e`. Fall back to the default if the value isn't a small positive
+# integer (1-99999s; 0 would defeat the lockfile-dedupe purpose entirely).
 SLEEP_SECS="${RESOLVER_SLEEP_SECS:-360}"
+[[ "$SLEEP_SECS" =~ ^[1-9][0-9]{0,4}$ ]] || { log "invalid RESOLVER_SLEEP_SECS=${SLEEP_SECS}, using 360"; SLEEP_SECS=360; }
 log "sleeping ${SLEEP_SECS}s"
 sleep "$SLEEP_SECS"
 
@@ -89,32 +72,9 @@ fi
 REVIEW_ID=$(gen_id)
 REVIEW_FILE="${REVIEWS_DIR}/pr-review-resolver-${REVIEW_ID}.md"
 STDERR_FILE="${REVIEWS_DIR}/pr-review-resolver-${REVIEW_ID}.stderr"
+META=$(printf 'PR: #%s\nBranch: %s\n' "$PR" "$BRANCH")
 
-if [[ "${RESOLVER_DRY_RUN:-0}" == "1" ]]; then
-  log "DRY_RUN: writing stub report"
-  printf '# pr-review-resolver (dry-run)\nPR: #%s\nBranch: %s\n\n## Prompt\n%s\n' \
-    "$PR" "$BRANCH" "$PROMPT" > "$REVIEW_FILE"
-else
-  log "invoking headless agent"
-  if run_agent_prompt "$PROMPT" > "$REVIEW_FILE" 2>"$STDERR_FILE"; then
-    :
-  else
-    AGENT_EXIT=$?
-    log "headless agent failed (exit ${AGENT_EXIT})"
-    {
-      printf '# pr-review-resolver (FAILED)\n\n'
-      printf 'PR: #%s\nBranch: %s\n\n' "$PR" "$BRANCH"
-      printf '## headless agent exit code\n%s\n\n' "$AGENT_EXIT"
-      # shellcheck disable=SC2016  # backticks here are literal markdown fences
-      printf '## Prompt\n```\n%s\n```\n\n' "$PROMPT"
-      # shellcheck disable=SC2016
-      printf '## Stderr (tail)\n```\n'
-      tail -40 "$STDERR_FILE" 2>/dev/null || true
-      printf '\n```\n'
-    } > "$REVIEW_FILE"
-  fi
-  rm -f "$STDERR_FILE"
-fi
+run_review "pr-review-resolver" "$META" "$PROMPT" "$REVIEW_FILE" "$STDERR_FILE" "${RESOLVER_DRY_RUN:-0}"
 
 log "wrote ${REVIEW_FILE}"
 

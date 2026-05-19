@@ -1,29 +1,9 @@
 #!/usr/bin/env bash
-# =============================================================================
-# doc-drift.sh — PostToolUse hook, runs on `gh pr create`
-# =============================================================================
-#
-# PURPOSE
-# -------
-# After an agent creates a PR, run the doc-drift skill (or an inline fallback
-# if the skill is not installed) in a headless agent session to produce
-# an advisory documentation-drift report. Written to .agent-reviews/doc-drift-<uuid>.md.
-#
-# Returns exit 2 with a pointer so the active agent session reads the report
-# and applies doc updates as appropriate. Advisory — does not block.
-#
-# INPUT (stdin)
-#   JSON with .tool_input.command — the Bash command the agent just ran.
-#
-# INVOCATION
-#   Registered in Claude settings or another agent hook runner as a PostToolUse hook on Bash with
-#   asyncRewake: true and timeout: 900 (15 min).
-#
-# ENV OVERRIDES
-#   DOC_DRIFT_DRY_RUN=1        — skip the actual headless agent call; write a
-#                                stub report. Used by the unit harness.
-#   AGENT_HEADLESS=claude|codex — force the headless CLI. Auto-detected by default.
-# =============================================================================
+# doc-drift.sh — PostToolUse hook on `gh pr create`. Runs the doc-drift skill
+# (or an inline fallback) headlessly and writes an advisory report to
+# .agent-reviews/doc-drift-<uuid>.md. Exits 2 with a pointer so the active
+# agent session reads the report; never blocks. Env overrides: DOC_DRIFT_DRY_RUN=1
+# skips the agent call; AGENT_HEADLESS=claude|codex pins the CLI.
 set -euo pipefail
 
 export HOOK_NAME="doc-drift"
@@ -51,6 +31,9 @@ fi
 
 BASE_BRANCH=$(default_branch)
 log "base branch resolved to: ${BASE_BRANCH}"
+# `head -50` closes its read end after 50 lines, sending SIGPIPE to `git diff`;
+# `pipefail` would otherwise propagate git's non-zero exit. `|| true` keeps the
+# substitution non-fatal under `set -e`.
 DIFF_FILES=$(git diff "origin/${BASE_BRANCH}...HEAD" --name-only 2>/dev/null | head -50 || true)
 
 if has_skill doc-drift; then
@@ -70,32 +53,9 @@ fi
 REVIEW_ID=$(gen_id)
 REVIEW_FILE="${REVIEWS_DIR}/doc-drift-${REVIEW_ID}.md"
 STDERR_FILE="${REVIEWS_DIR}/doc-drift-${REVIEW_ID}.stderr"
+META=$(printf 'PR: #%s\nBranch: %s\nBase: %s\n' "$PR" "$BRANCH" "$BASE_BRANCH")
 
-if [[ "${DOC_DRIFT_DRY_RUN:-0}" == "1" ]]; then
-  log "DRY_RUN: writing stub report"
-  printf '# doc-drift (dry-run)\nPR: #%s\nBranch: %s\nBase: %s\n\n## Prompt\n%s\n' \
-    "$PR" "$BRANCH" "$BASE_BRANCH" "$PROMPT" > "$REVIEW_FILE"
-else
-  log "invoking headless agent"
-  if run_agent_prompt "$PROMPT" > "$REVIEW_FILE" 2>"$STDERR_FILE"; then
-    :
-  else
-    AGENT_EXIT=$?
-    log "headless agent failed (exit ${AGENT_EXIT})"
-    {
-      printf '# doc-drift (FAILED)\n\n'
-      printf 'PR: #%s\nBranch: %s\nBase: %s\n\n' "$PR" "$BRANCH" "$BASE_BRANCH"
-      printf '## headless agent exit code\n%s\n\n' "$AGENT_EXIT"
-      # shellcheck disable=SC2016  # backticks here are literal markdown fences
-      printf '## Prompt\n```\n%s\n```\n\n' "$PROMPT"
-      # shellcheck disable=SC2016
-      printf '## Stderr (tail)\n```\n'
-      tail -40 "$STDERR_FILE" 2>/dev/null || true
-      printf '\n```\n'
-    } > "$REVIEW_FILE"
-  fi
-  rm -f "$STDERR_FILE"
-fi
+run_review "doc-drift" "$META" "$PROMPT" "$REVIEW_FILE" "$STDERR_FILE" "${DOC_DRIFT_DRY_RUN:-0}"
 
 log "wrote ${REVIEW_FILE}"
 
