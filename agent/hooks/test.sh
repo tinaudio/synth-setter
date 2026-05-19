@@ -494,19 +494,23 @@ T_taxonomy_hierarchy_non_synth_setter_exits_silently() {
 }
 it "verify-gh-taxonomy: addSubIssue not targeting synth-setter exits 0 silently" T_taxonomy_hierarchy_non_synth_setter_exits_silently
 
+# Helper: extract strip_markdown_issue_links from verify-gh-taxonomy.sh and
+# invoke it on $1, printing the sanitized output. Slices the function with
+# awk anchored on `^}$` — the function's docstring documents this coupling.
+run_strip_markdown_issue_links() {
+  local script_src
+  script_src=$(awk '/^strip_markdown_issue_links\(\) {/,/^}$/' \
+    "$REPO_ROOT/agent/hooks/verify-gh-taxonomy.sh")
+  bash -c "$script_src"$'\n''strip_markdown_issue_links "$1"' _ "$1"
+}
+
 T_taxonomy_strip_markdown_issue_links_drops_review_comment_refs() {
-  # Regression for the PR #1163 CI failure (run 26126477593): the PR body
-  # cited four Copilot review comments as `[#3269588963](.../discussion_r…)`
-  # markdown links; the `#[0-9]+` extraction matched those 10-digit *comment*
-  # IDs as if they were issue numbers and fed them to `gh api .../issues/N`,
-  # which 404'd and failed the gate. The fix is to strip `[#N](url)` before
-  # extraction. The same regex is inlined in pr-metadata-gate.yaml — this
-  # test pins the bash version; if you tweak one, tweak the other.
-  local script_src body result
-  script_src=$(awk '/^strip_markdown_issue_links\(\) {/,/^}$/' "$REPO_ROOT/agent/hooks/verify-gh-taxonomy.sh")
+  # Regression for PR #1163 run 26126477593: Copilot review-comment
+  # `[#3269588963](.../discussion_r…)` markdown links were matched by
+  # `#[0-9]+` and fetched as bogus issue numbers, 404'ing the gate.
+  local body result
   body=$'Closes #1157.\n- [#3269588963](https://github.com/x/y/pull/1#discussion_r3269588963)\n- [#3269589023](https://github.com/x/y/pull/1#discussion_r3269589023)\nRefs #42'
-  result=$(bash -c "$script_src"$'\n''strip_markdown_issue_links "$1"' _ "$body" \
-    | grep -oE '#[0-9]+' | sort -u | tr '\n' ' ')
+  result=$(run_strip_markdown_issue_links "$body" | grep -oE '#[0-9]+' | sort -u | tr '\n' ' ')
   [[ "$result" == "#1157 #42 " ]] || {
     echo "expected '#1157 #42 ' (markdown-linked review-comment IDs stripped), got: '$result'"
     return 1
@@ -515,13 +519,11 @@ T_taxonomy_strip_markdown_issue_links_drops_review_comment_refs() {
 it "verify-gh-taxonomy: strip_markdown_issue_links removes [#N](url) review-comment refs (PR #1163 regression)" T_taxonomy_strip_markdown_issue_links_drops_review_comment_refs
 
 T_taxonomy_strip_markdown_issue_links_preserves_bare_refs() {
-  # Counter-test: bare `#N` references and `Closes #N` / `Refs #N` patterns
-  # must survive sanitization so the gate keeps enforcing linked issues.
-  local script_src body result
-  script_src=$(awk '/^strip_markdown_issue_links\(\) {/,/^}$/' "$REPO_ROOT/agent/hooks/verify-gh-taxonomy.sh")
+  # Counter-test: bare `#N` and `Closes #N` / `Refs #N` patterns must survive
+  # sanitization so the gate keeps enforcing linked issues.
+  local body result
   body=$'## Summary\n\nFollow-up to PR #1157.\nCloses #42\nRefs #99'
-  result=$(bash -c "$script_src"$'\n''strip_markdown_issue_links "$1"' _ "$body" \
-    | grep -oE '#[0-9]+' | sort -u | tr '\n' ' ')
+  result=$(run_strip_markdown_issue_links "$body" | grep -oE '#[0-9]+' | sort -u | tr '\n' ' ')
   [[ "$result" == "#1157 #42 #99 " ]] || {
     echo "expected '#1157 #42 #99 ' (all bare refs preserved), got: '$result'"
     return 1
@@ -531,14 +533,12 @@ it "verify-gh-taxonomy: strip_markdown_issue_links preserves bare #N references"
 
 T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook() {
   # Drift guard: the bash hook and pr-metadata-gate.yaml each carry their own
-  # copy of the `[#N](url)` strip regex, and the hook's docstring claims they
-  # stay in sync. Pin the workflow to have the exact `sed` expression in both
-  # jobs so a unilateral edit to one side gets caught here.
+  # copy of the `[#N](url)` strip regex. Pin the workflow to have the exact
+  # `sed` expression once per job; a unilateral edit to either side fails here.
   local workflow="$REPO_ROOT/.github/workflows/pr-metadata-gate.yaml"
   local expected count
   expected="sed -E 's/\\[#[0-9]+\\]\\([^)]*\\)//g'"
   count=$(grep -cF "$expected" "$workflow") || count=0
-  # Two jobs (check-pr-metadata + epic-lineage step) each call sanitize once.
   [[ "$count" -eq 2 ]] || {
     echo "expected pr-metadata-gate.yaml to contain the strip-[#N](url) sed expression exactly 2x (once per job), found ${count}."
     echo "If you intentionally changed the workflow regex, mirror the change in strip_markdown_issue_links() in verify-gh-taxonomy.sh and update this test."

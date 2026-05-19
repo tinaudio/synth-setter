@@ -69,13 +69,14 @@ query_issue_metadata() {
 
 strip_markdown_issue_links() {
   # Usage: strip_markdown_issue_links "<pr-body>"
-  # Removes `[#N](url)` markdown links from a PR body and prints the result.
-  # GitHub's "Copy link" UI on a review comment yields
-  # `[#3269588963](https://.../discussion_r3269588963)` — the bracket text is
-  # a 10-digit *comment* ID, not an issue number, and the surrounding regex
-  # would otherwise fetch it as a bogus issue. Bare `#N` references survive.
-  # The same regex is inlined in .github/workflows/pr-metadata-gate.yaml;
+  # Outputs: sanitized body on stdout. Removes `[#N](url)` markdown links so
+  # the surrounding `#[0-9]+` regex doesn't pick up 10-digit review-comment
+  # IDs (GitHub's "Copy link" UI on a Copilot review comment yields
+  # `[#3269588963](https://.../discussion_r3269588963)`); bare `#N` refs
+  # survive. Same regex is inlined in .github/workflows/pr-metadata-gate.yaml;
   # keep them in sync. Regression: PR #1163 failing run 26126477593.
+  # NOTE: agent/hooks/test.sh slices this function with awk anchored on
+  # `^}$` — preserve the bare brace style or update the awk slice.
   printf '%s' "$1" | sed -E 's/\[#[0-9]+\]\([^)]*\)//g'
 }
 
@@ -200,7 +201,7 @@ check_epic_lineage() {
 # ---------------------------------------------------------------------------
 mode_pr() {
   # Usage: mode_pr <tool_response>
-  local tool_response="$1" pr_url pr_num pr_body issue_nums issue_num metadata
+  local tool_response="$1" pr_url pr_num pr_body pr_body_sanitized issue_nums issue_num metadata
   local type milestone has_domain ci_missing lineage project_missing warnings=""
   pr_url=$(echo "$tool_response" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1 || true)
   [[ -z "$pr_url" ]] && return 0
