@@ -1004,7 +1004,7 @@ def dispatch_via_skypilot(
     :param spec: Validated dataset spec to render on the worker(s).
     :param sky_cfg: Validated launcher configuration (compute_template + cmd required).
     :param spec_uri: Canonical R2 URI of the materialized spec — injected into each
-        worker's env as ``WORKER_SPEC_URI`` so a future worker (PR-3 / PR-4) can
+        worker's env as ``WORKER_SPEC_URI`` so a future worker (#1115 / #1116) can
         read from the same object ``main()`` just uploaded. The dispatched cmd
         today rebuilds the spec from Hydra overrides and does not yet consume
         this env var. Pass ``spec.r2.input_spec_uri()`` (not
@@ -1071,7 +1071,7 @@ def dispatch_via_skypilot(
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
     # Legacy upload still runs for older CI workflows that read its URI;
-    # the worker env is now sourced from the canonical kwarg. Removed in PR-4.
+    # the worker env is now sourced from the canonical kwarg. Removed in #1116.
     legacy_upload_uri = upload_spec_to_r2(spec, job_name=base_job_name)
     click.echo(f"Spec uploaded to {legacy_upload_uri} (legacy)")
     worker_env[WORKER_SPEC_URI_ENV] = spec_uri

@@ -11,8 +11,8 @@ INPUT_SPEC_FILENAME = "input_spec.json"
 # Today's consumers: the launcher (``dispatch_via_skypilot``) injects the value
 # into each rank's ``task.update_envs``; the CI helper (``pipeline.ci.spec_uri``)
 # reconstructs the URI for workflow exports. No worker code reads it yet — the
-# dispatched cmd rebuilds the spec from Hydra overrides; PR-3 / PR-4 will swap
-# in a worker that reads this env var directly.
+# dispatched cmd rebuilds the spec from Hydra overrides; #1115 / #1116 will
+# swap in a worker that reads this env var directly.
 WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
 
 # Cloudflare R2 remote name used by rclone (``rclone copy <src> r2:bucket/key``).
