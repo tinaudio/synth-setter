@@ -494,6 +494,76 @@ T_taxonomy_hierarchy_non_synth_setter_exits_silently() {
 }
 it "verify-gh-taxonomy: addSubIssue not targeting synth-setter exits 0 silently" T_taxonomy_hierarchy_non_synth_setter_exits_silently
 
+# Helper: extract strip_markdown_issue_links from verify-gh-taxonomy.sh and
+# invoke it on $1, printing the sanitized output. Slices the function with
+# awk anchored on `^}$` — the function's docstring documents this coupling.
+run_strip_markdown_issue_links() {
+  local script_src
+  script_src=$(awk '/^strip_markdown_issue_links\(\) {/,/^}$/' \
+    "$REPO_ROOT/agent/hooks/verify-gh-taxonomy.sh")
+  bash -c "$script_src"$'\n''strip_markdown_issue_links "$1"' _ "$1"
+}
+
+T_taxonomy_strip_markdown_issue_links_drops_review_comment_refs() {
+  # Regression for PR #1163 run 26126477593: Copilot review-comment
+  # `[#3269588963](.../discussion_r…)` markdown links were matched by
+  # `#[0-9]+` and fetched as bogus issue numbers, 404'ing the gate.
+  local body result
+  body=$'Closes #1157.\n- [#3269588963](https://github.com/x/y/pull/1#discussion_r3269588963)\n- [#3269589023](https://github.com/x/y/pull/1#discussion_r3269589023)\nRefs #42'
+  result=$(run_strip_markdown_issue_links "$body" | grep -oE '#[0-9]+' | sort -u | tr '\n' ' ')
+  [[ "$result" == "#1157 #42 " ]] || {
+    echo "expected '#1157 #42 ' (markdown-linked review-comment IDs stripped), got: '$result'"
+    return 1
+  }
+}
+it "verify-gh-taxonomy: strip_markdown_issue_links removes [#N](url) review-comment refs (PR #1163 regression)" T_taxonomy_strip_markdown_issue_links_drops_review_comment_refs
+
+T_taxonomy_strip_markdown_issue_links_preserves_bare_refs() {
+  # Counter-test: bare `#N` and `Closes #N` / `Refs #N` patterns must survive
+  # sanitization so the gate keeps enforcing linked issues.
+  local body result
+  body=$'## Summary\n\nFollow-up to PR #1157.\nCloses #42\nRefs #99'
+  result=$(run_strip_markdown_issue_links "$body" | grep -oE '#[0-9]+' | sort -u | tr '\n' ' ')
+  [[ "$result" == "#1157 #42 #99 " ]] || {
+    echo "expected '#1157 #42 #99 ' (all bare refs preserved), got: '$result'"
+    return 1
+  }
+}
+it "verify-gh-taxonomy: strip_markdown_issue_links preserves bare #N references" T_taxonomy_strip_markdown_issue_links_preserves_bare_refs
+
+T_taxonomy_strip_markdown_issue_links_drops_code_span_refs() {
+  # Regression for PR #1171 run 26127785920: the PR body cited comment IDs
+  # inside backticked code spans (e.g. `#3269588963` in prose, `#1157, #1165,
+  # #3269588963, ...` in an enum), not in `[#N](url)` markdown links. The
+  # markdown-only strip from #1163 missed those, so the gate re-failed.
+  # Inline code spans are prose-as-text, never the way a real issue ref is
+  # written — strip the whole span before extraction.
+  local body result
+  body=$'## Summary\n\nCloses #42. Comment IDs like `#3269588963` are not issues.\n`enum: #1157, #3269588963, #3269589002`\nRefs #99'
+  result=$(run_strip_markdown_issue_links "$body" | grep -oE '#[0-9]+' | sort -u | tr '\n' ' ')
+  [[ "$result" == "#42 #99 " ]] || {
+    echo "expected '#42 #99 ' (refs in code spans stripped), got: '$result'"
+    return 1
+  }
+}
+it "verify-gh-taxonomy: strip_markdown_issue_links removes #N refs inside backticked code spans (PR #1171 regression)" T_taxonomy_strip_markdown_issue_links_drops_code_span_refs
+
+T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook() {
+  # Drift guard: the bash hook and pr-metadata-gate.yaml each carry their own
+  # copy of the sanitization sed pipeline. Pin the workflow to have the exact
+  # expression once per job; a unilateral edit to either side fails here.
+  local workflow="$REPO_ROOT/.github/workflows/pr-metadata-gate.yaml"
+  local expected count
+  expected="sed -E -e 's/\`[^\`]*\`//g' -e 's/\\[#[0-9]+\\]\\([^)]*\\)//g'"
+  count=$(grep -cF "$expected" "$workflow") || count=0
+  [[ "$count" -eq 2 ]] || {
+    echo "expected pr-metadata-gate.yaml to contain the sanitize sed pipeline exactly 2x (once per job), found ${count}."
+    echo "If you intentionally changed the workflow regex, mirror the change in strip_markdown_issue_links() in verify-gh-taxonomy.sh and update this test."
+    return 1
+  }
+}
+it "verify-gh-taxonomy: pr-metadata-gate.yaml inlines the same sanitize sed pipeline (drift guard)" T_taxonomy_workflow_inlines_same_sanitize_regex_as_hook
+
 T_taxonomy_check_ci_minimum_joins_with_comma_space() {
   # Unit test for the comma-space join in check_ci_minimum + check_project_fields.
   # Regression for the IFS/`${arr[*]}` quirk Copilot caught on PR #1119: setting

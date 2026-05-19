@@ -1,0 +1,104 @@
+name: Test Local Launcher Roundtrip
+
+# Fast (~8-10 min) alternative to test-dataset-generation.yml's kind +
+# dev-snapshot matrix. Runs cli.generate_dataset.main end-to-end on the
+# bare runner against real Cloudflare R2, with the VST3 renderer
+# subprocess stubbed so we skip the expensive Surge headless render path.
+#
+# Coverage delta vs. test-dataset-generation.yml:
+#   * Kept: Hydra compose, DatasetSpec materialize, spec upload to R2,
+#     worker rank/world partitioning, rclone copy from worker -> R2,
+#     skip-existing probe (#750), and the existing pipeline.ci
+#     validate-spec / validate-shard helpers downloading from R2.
+#   * Dropped: sky.launch / kind / file_mounts / dev-snapshot image pull
+#     (still covered nightly by test-dataset-generation.yml +
+#     test-skypilot-local.yml).
+#
+# Path triggers mirror the relevant subset of test-dataset-generation.yml,
+# minus the docker/ + sky-launch + image-config files this workflow does
+# not exercise.
+#
+# Required secrets (same as test-dataset-generation.yml's R2 set):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/synth_setter/data/vst/shapes.py"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/pipeline/schemas/prefix.py"
+      - "src/synth_setter/pipeline/schemas/r2_location.py"
+      - "src/synth_setter/pipeline/schemas/shard_metadata.py"
+      - "src/synth_setter/pipeline/partitioning.py"
+      - "src/synth_setter/pipeline/r2_io.py"
+      - "src/synth_setter/pipeline/spec_io.py"
+      - "src/synth_setter/pipeline/ci/**"
+      - "src/synth_setter/cli/generate_dataset.py"
+      - "configs/experiment/generate_dataset/smoke-shard.yaml"
+      - "configs/experiment/generate_dataset/smoke-shard-wds.yaml"
+      - "configs/dataset.yaml"
+      - "configs/r2/**"
+      - "configs/render/**"
+      - "tests/integration/test_local_launcher_roundtrip.py"
+      - ".github/workflows/test-local-launcher-roundtrip.yml"
+
+permissions:
+  contents: read
+
+# Coalesce stacked PR pushes; run_id is included so manual workflow_dispatch
+# re-runs against the same ref do not self-cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'auto' }}
+  cancel-in-progress: true
+
+jobs:
+  launcher-roundtrip:
+    name: Launcher -> real-R2 roundtrip (stubbed renderer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    # Fork PRs can't see repo secrets; the rclone auth ping would fail and
+    # burn runner minutes. Same gating pattern as r2-auth-probe.yaml.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    env:
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+      HYDRA_FULL_ERROR: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install rclone
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rclone
+
+      # Install with [torch,dev]. Slimmer install paths (e.g. the
+      # `--no-deps` pattern in validate-dataset-shards.yaml) don't work
+      # here because tests/conftest.py imports torch at module top, so
+      # pytest collection requires torch to be importable even though
+      # the launcher itself doesn't pull torch in. [dev] supplies pytest;
+      # [torch] satisfies conftest. pedalboard is a base dep (pulled in
+      # by synth_setter.data.vst.core, which the launcher imports for
+      # extract_renderer_version); the stub avoids the headless Surge
+      # render path but not the import.
+      - name: Install project deps
+        run: uv pip install --system -e ".[torch,dev]"
+
+      - name: Run launcher roundtrip integration test
+        run: |
+          pytest tests/integration/test_local_launcher_roundtrip.py \
+            -m "integration_r2" \
+            -vv -s

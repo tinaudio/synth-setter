@@ -1,6 +1,157 @@
 # CHANGELOG
 
 
+## v6.1.0 (2026-05-19)
+
+### Chores
+
+- **pipeline**: Wrap dispatch errors as ClickException + correct launcher-CLI docs
+  ([#1162](https://github.com/tinaudio/synth-setter/pull/1162),
+  [`5e14d72`](https://github.com/tinaudio/synth-setter/commit/5e14d72db04495bda9cef58b03739533064142fd))
+
+* fix(pipeline): address PR #1157 Copilot follow-up review
+
+Three threads on the post-rebase SHA flagged real concerns:
+
+- dispatch_via_skypilot raises ValueError for cfg-shape errors and RuntimeError for worker
+  submission failures; main() now catches both and re-raises as click.ClickException so CLI failures
+  stay one-line instead of dumping a traceback (parametrized test covers both classes).
+
+- Docs (configuration-reference.md, skypilot-compute-integration.md) previously suggested running
+  the launcher as python -m synth_setter.pipeline.skypilot_launch -- synth-setter-generate-dataset
+  experiment=... That inner command re-composes Hydra and runs the pipeline locally or dispatches
+  recursively, so it isn't currently materialize-only and the worker-side re-entry would diverge
+  from the discovered spec_uri. Docs now describe the inner-command contract honestly and point
+  operators back at the canonical cli/generate_dataset.py::main() path until the materialize-only
+  split lands.
+
+- The worker-cmd derivation gap (sky_cfg.cmd = shlex.join(command) reusing the host-side
+  materialization command verbatim on the worker) is tracked in follow-up #1160; the launcher-CLI
+  contract itself is unchanged in this PR.
+
+Refs #1117 Refs #1160
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* docs(pipeline): point follow-up references at #1160 (not the closed parent #1117)
+
+The inner-command contract callouts in configuration-reference.md and
+  skypilot-compute-integration.md now point at follow-up #1160 instead of the parent tracking issue
+  #1117 (which closed on PR #1157 merge). Also trims a 3-line catch comment in skypilot_launch.py to
+  2 lines (the operative why fits cleanly without restating which raises live in
+  dispatch_via_skypilot's docstring).
+
+The verbose :param: docstring on test_dispatch_error_surfaces_as_click_exception is kept verbatim
+  because pydoclint (DOC101/DOC103) requires every signature arg to appear in the docstring under
+  the sphinx-style config; the comment-hygiene trim conflicted with the project's docstring lint and
+  the project rule wins.
+
+Refs #1160
+
+* docs: clarify spec-upload owner and worker re-entry caveat in launcher diagram
+
+Address PR #1162 Copilot review:
+
+- Drop "only" from the inner-command diagram entry; the inner command both materializes AND uploads
+  the spec — the "only" suggested the upload didn't happen. - Make the worker re-entry line
+  aspirational ("should read WORKER_SPEC_URI") and cross-reference the contract bullet, since the
+  default synth-setter-generate-dataset does not yet honor it (#1160). - Promote upload to contract
+  item (b) in both docs/reference/configuration-reference.md and
+  docs/design/skypilot-compute-integration.md; re-letter the deterministic-re-entry rule to (c). The
+  launcher itself does not upload — only the inner command does — and the prior wording let readers
+  infer otherwise.
+
+Refs #1162
+
+* docs(pipeline): fix launcher-diagram cross-reference (b) → (c)
+
+The aspirational note about workers reading WORKER_SPEC_URI is about deterministic re-entry /
+  skipping re-materialization, which is contract item (c), not (b). Bullet (b) is the upload
+  requirement.
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+### Features
+
+- **testing**: Add fast launcher roundtrip test (alternative to test-dataset-generation matrix)
+  ([#1170](https://github.com/tinaudio/synth-setter/pull/1170),
+  [`43a355c`](https://github.com/tinaudio/synth-setter/commit/43a355ca0b535b76789e46681076552a7d9b116f))
+
+* feat(testing): add local launcher → real-R2 roundtrip integration test
+
+Adds `tests/integration/test_local_launcher_roundtrip.py` and a dedicated
+  `.github/workflows/test-local-launcher-roundtrip.yml` workflow that runs
+  `cli.generate_dataset.main` end-to-end against real Cloudflare R2 with the VST3 renderer
+  subprocess stubbed. Covers spec materialize → R2 upload, worker rank/world partitioning, real
+  rclone shard upload, the skip-existing probe (#750), and the existing `pipeline.ci` validate-spec
+  / validate-shard helpers — without spinning up kind, sky.launch, or pulling the dev-snapshot
+  image. The stubbed renderer writes deterministic zero-valued HDF5 / WDS tar shards whose shapes
+  match the production writers' source-of-truth shape helpers, so the validators accept them.
+
+The test is gated on a `rclone lsd r2:` auth ping so contributor / fork PR runs auto-skip rather
+  than failing on missing creds. A unique `ci-roundtrip/<run_id>/<run_attempt>/<uuid>/` R2 prefix
+  per run isolates concurrent CI; a best-effort `rclone purge` finalizer cleans up even on test
+  failure.
+
+Refs #1164.
+
+* fix(testing): use +r2.prefix override (struct-add) in roundtrip test
+
+``r2.prefix`` is not in ``configs/r2/default.yaml`` (which exposes only ``bucket`` and
+  ``prefix_root``); ``DatasetSpec``'s validator derives the prefix at construction. Hydra
+  struct-mode therefore rejects a plain ``r2.prefix=<value>`` override with "Key 'prefix' is not in
+  struct" — the override needs ``+r2.prefix=<value>`` to add the new key into the ``r2`` sub-tree
+  before ``DatasetSpec._normalize_r2_input`` promotes the nested dict.
+
+Caught by /pr-checkbox verification: composing the test's argv against the real Hydra config tree
+  reproduces the failure before CI does.
+
+* docs(testing): register test-local-launcher-roundtrip + tests/integration
+
+Doc-drift fixes from #1170 (drift-by-omission only — the PR is purely additive):
+
+- github-actions.md: add Pipeline-table row for test-local-launcher- roundtrip; extend the R2_*
+  secrets' "Used by" columns to include it. - testing.md: add a row for tests/integration/ under §1
+  categories; add a bullet for the new workflow under §2 CI selectors. - doc-map.yaml: cover
+  tests/integration/** and the new workflow file under docs/reference/testing.md.
+
+Refs #1170
+
+* docs(testing): clarify _r2_reachable/_unique_r2_prefix docstrings, add r2 marker
+
+Address PR #1170 Copilot review: - `_r2_reachable`: drop "unauthenticated" — the `r2:` remote is
+  configured via `RCLONE_CONFIG_R2_*`, so `rclone lsd r2:` is credentialled and the exit code
+  reflects cred validity, not a guest probe. - `_unique_r2_prefix`: docstring no longer claims the
+  prefix is "stable" for repeated pytest runs — the uuid nonce intentionally makes it unique
+  per-invocation (so the two parametrizations in one CI run, and concurrent local debug runs, don't
+  collide). The `local`/`0` placeholders still group dev artifacts under a recognizable parent for
+  bulk purging. - Apply `pytest.mark.r2` in addition to `integration_r2` so `pytest -m r2` selects
+  this alongside the other R2-dependent tests (test_r2_report.py).
+
+Refs #1164
+
+* docs(testing): clarify why local-launcher-roundtrip installs [torch,dev]
+
+The previous comment claimed torch/pedalboard/skypilot are not needed because the renderer is
+  stubbed — but tests/conftest.py imports torch at module top, so pytest collection requires torch
+  even though the launcher itself doesn't reach into it. Update the comment to reflect this
+  constraint and the actual reason [torch,dev] stays.
+
+* docs(testing): address Copilot review on PR #1170 (CLI naming + dedupe helper)
+
+- docs/reference/github-actions.md, docs/doc-map.yaml: name the CLI entrypoint
+  (`synth-setter-generate-dataset` / `cli.generate_dataset.main()`) instead of the inner `run()` so
+  the rows match the surface the new lane actually invokes (comments #3269953030, #3269953056). -
+  tests/helpers/subprocess_args.py: extract `find_script_index` (previously duplicated in
+  `tests/integration/test_local_launcher_roundtrip.py` and
+  `tests/pipeline/test_entrypoints/test_generate_dataset.py`) so a future change to the renderer
+  script name / argv layout updates both lanes from one source (comment #3269953080).
+
+`Refs #1164`
+
+
 ## v6.0.0 (2026-05-19)
 
 ### Chores
