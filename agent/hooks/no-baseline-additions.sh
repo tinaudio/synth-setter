@@ -19,7 +19,7 @@ main() {
   # leak a non-2 exit that bypasses the contract documented in the header.
   trap 'log "internal failure on line $LINENO; blocking"; echo "BLOCKED: no-baseline-additions hit an internal error (line $LINENO); fix the hook or report it." >&2; exit 2' ERR
 
-  local input file_path counts old_count new_count
+  local input file_path counts old_count new_count stderr_file scanner_stderr_line scanner_exit
   input=$(cat)
   # Fail closed: a silent fail-open is the bug class this gate exists to prevent.
   if ! file_path=$(jq -r '.tool_input.file_path // empty' <<<"$input" 2>/dev/null); then
@@ -33,8 +33,16 @@ main() {
     *) exit 0 ;;
   esac
 
+  stderr_file=$(mktemp -t no-baseline-additions.XXXXXX)
+  # shellcheck disable=SC2064  # expand stderr_file at trap-install time so the cleanup path is fixed.
+  trap "rm -f '$stderr_file'" EXIT
+
+  # `set +e` so a scanner crash does not trip errexit on the assignment line
+  # and skip the stderr replay below; the explicit exit-status check after the
+  # replay routes failure into BLOCKED with the traceback already on stderr.
   # Missing baseline → OLD_COUNT=0 so delete+Write recreate cannot bypass the gate.
-  counts=$(HOOK_INPUT="$input" SRC_PATH="$file_path" python3 - <<'PY'
+  set +e
+  counts=$(HOOK_INPUT="$input" SRC_PATH="$file_path" python3 - <<'PY' 2>"$stderr_file"
 import json, os, pathlib, sys
 
 payload = json.loads(os.environ["HOOK_INPUT"])
@@ -52,8 +60,11 @@ else:
         count = -1 if tool.get("replace_all") else 1
         proposed = current.replace(old, new, count)
     else:
+        # LOG: prefix routes through the hook's file log so the user-facing
+        # stderr stays clean on allowed edits. The Edit tool itself rejects a
+        # missing old_string, so the gate doesn't need to surface it here.
         print(
-            "note: Edit old_string not found in current content; row count unchanged",
+            "LOG:Edit old_string not found in current content; row count unchanged",
             file=sys.stderr,
         )
         proposed = current
@@ -68,6 +79,24 @@ print(count_rows(current))
 print(count_rows(proposed))
 PY
 )
+  scanner_exit=$?
+  set -e
+
+  # Replay the scanner's log channel through the hook log. Non-LOG: stderr
+  # (real crashes) re-emerges as-is so the operator sees the traceback.
+  while IFS= read -r scanner_stderr_line; do
+    if [[ "$scanner_stderr_line" == LOG:* ]]; then
+      log "${scanner_stderr_line#LOG:}"
+    else
+      printf '%s\n' "$scanner_stderr_line" >&2
+    fi
+  done < "$stderr_file"
+
+  if (( scanner_exit != 0 )); then
+    log "scanner exited ${scanner_exit}; blocking"
+    echo "BLOCKED: no-baseline-additions scanner failed (exit ${scanner_exit}); see stderr above." >&2
+    exit 2
+  fi
 
   # `read` (not `readarray`) so macOS bash 3.2 works. Each line is one integer.
   { IFS= read -r old_count; IFS= read -r new_count; } <<<"$counts"

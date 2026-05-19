@@ -262,7 +262,11 @@ def _scan(cmd: str) -> list[tuple[str, str]]:
         for label, pattern in _TRAILER_PATTERNS:
             m = pattern.search(text)
             if m:
-                findings.append((label, m.group(0)))
+                # m.group(0) includes the regex's leading `^|\n|\\n` + optional
+                # whitespace; collapse internal whitespace and strip so the
+                # Findings block renders each hit on one tight line.
+                match = re.sub(r"\s+", " ", m.group(0)).strip()
+                findings.append((label, match))
                 break
 
     seen: set[tuple[str, str]] = set()

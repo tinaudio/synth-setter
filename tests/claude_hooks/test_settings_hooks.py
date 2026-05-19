@@ -1414,3 +1414,99 @@ def test_yaml_run_hook_blocks_new_comment_when_legacy_one_is_preserved(
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr
     assert "newly introduced" in result.stderr
+
+
+def test_baseline_hook_does_not_pollute_stderr_on_allowed_edit(
+    baseline_hook_command: str, tmp_path: Path
+) -> None:
+    """The ``note: Edit old_string not found`` line must not leak to stderr.
+
+    The Edit tool itself rejects a missing old_string. Routing the diagnostic
+    through ``log()`` (file log) keeps user-visible stderr reserved for BLOCKED
+    messages — any chatter on allowed edits is noise.
+
+    :param baseline_hook_command: Hook command body fixture.
+    :param tmp_path: pytest tmp_path.
+    """
+    baseline = tmp_path / ".pydoclint-baseline.txt"
+    baseline.write_text("path/a.py:1:1: DOC101\n")
+    result = _run_hook_command(
+        baseline_hook_command,
+        {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": str(baseline),
+                "old_string": "path/never-existed.py:9:9: DOC999",
+                "new_string": "anything",
+            },
+        },
+    )
+    assert result.returncode == 0, (result.returncode, result.stderr)
+    # The Copilot finding is specifically about the "note:" / "Edit old_string"
+    # message; pre-existing _lib.sh log-dir noise is out of scope.
+    assert "note:" not in result.stderr, result.stderr
+    assert "Edit old_string" not in result.stderr, result.stderr
+
+
+def test_trailer_hook_finding_does_not_contain_embedded_newlines(
+    trailer_hook_command: str,
+) -> None:
+    """Each Findings entry is one tight ``<label>\\t<match>`` line.
+
+    Trailer regexes anchor on ``(?:^|\\n|\\\\n)\\s*``, so ``m.group(0)``
+    includes the leading newline / whitespace context. The scanner must
+    collapse those before emitting the finding or the BLOCKED Findings
+    block renders garbled across multiple lines.
+
+    :param trailer_hook_command: Hook command body fixture.
+    """
+    result = _run_hook_command(
+        trailer_hook_command,
+        {
+            "tool_input": {
+                "command": 'git commit -m "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>"',
+            },
+        },
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    # Precondition asserts give a focused failure when the BLOCKED message is
+    # restructured, instead of an IndexError stack trace from the split below.
+    assert "Findings:" in result.stderr, result.stderr
+    assert "Rules" in result.stderr, result.stderr
+    findings_block = result.stderr.split("Findings:", 1)[1].split("Rules", 1)[0]
+    finding_lines = [line for line in findings_block.splitlines() if line.strip()]
+    # Each finding renders as "  <label>\t<match>". A continuation line from a
+    # multi-line m.group(0) capture would lack the tab; the literal `\n`
+    # check catches the escaped-newline variant the trailer regexes match on.
+    assert finding_lines, "expected at least one finding line"
+    for line in finding_lines:
+        assert "\t" in line, f"finding line missing label/match tab: {line!r}"
+        assert "\\n" not in line, f"escaped newline leaked into finding: {line!r}"
+
+
+def test_yaml_run_hook_description_documents_both_extensions() -> None:
+    """The matcher description must mention both ``.yml`` and ``.yaml`` extensions.
+
+    The hook's ``in_scope`` accepts ``.github/workflows/*.{yml,yaml}`` and
+    ``configs/compute/*.{yml,yaml}``. A description naming only one extension
+    per directory misleads users into surprise when the other fires.
+    """
+    # _find_handler enforces "exactly one matcher entry" — call it first so a
+    # description rename trips a focused AssertionError there, not a silent
+    # StopIteration here.
+    _find_handler("No-yaml-run-comments")
+    matcher_entry = next(
+        entry
+        for entry in _matcher_entries()
+        if "No-yaml-run-comments" in entry.get("description", "")
+    )
+    desc = matcher_entry["description"]
+    assert "yml" in desc and "yaml" in desc, desc
+    assert "workflows" in desc and "compute" in desc, desc
+    # Each scoped directory must reference both extensions, not just one.
+    assert "workflows/*.{yml,yaml}" in desc or (
+        "workflows/*.yml" in desc and "workflows/*.yaml" in desc
+    ), desc
+    assert "compute/*.{yml,yaml}" in desc or (
+        "compute/*.yml" in desc and "compute/*.yaml" in desc
+    ), desc
