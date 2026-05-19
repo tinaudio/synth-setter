@@ -139,6 +139,63 @@ _CLOUD_TO_PROVIDER: dict[str, str] = {
 
 _SKYPILOT_API_SERVER_ENV = "SKYPILOT_API_SERVER_ENDPOINT"
 
+# Stdout sentinel the launcher prints once the canonical spec URI is known.
+# Captured by the test-dataset-generation workflow's `tee`'d log to populate
+# the workflow's `spec_uri` output without re-deriving it in bash. Format is a
+# single line `::synth-setter-spec-uri::<uri>` so a `grep` over the log file
+# is unambiguous.
+_SPEC_URI_STDOUT_SENTINEL = "::synth-setter-spec-uri::"
+
+# CI-mode env-var gate. When set to a truthy value (e.g. "1"), the launcher
+# writes the managed-jobs controller-resource shrink into ~/.sky/config.yaml
+# on first invocation so the controller pod fits on a GHA-kind cluster. This
+# replaces a per-run YAML write in `generate-dataset-shards.yaml`. Dev
+# machines running `sky local up` against a real-sized kind don't set this.
+_CI_MODE_ENV = "SYNTH_SETTER_CI_MODE"
+
+# Pre-baked managed-jobs controller resource floor for the GHA-kind cluster.
+# SkyPilot's default (cpus: 4+, memory: 4x) doesn't fit in the ~1950m
+# allocatable CPU after kube-system + sky-jobs-controller. See PR #876.
+_CI_SKY_CONFIG_YAML = """jobs:
+  controller:
+    resources:
+      cpus: 1+
+      memory: 1+
+"""
+
+
+def _ensure_ci_sky_config() -> None:
+    """Write the managed-jobs controller shrink config when CI mode is on.
+
+    Activated by setting ``SYNTH_SETTER_CI_MODE=1`` (or any truthy value) in
+    the launcher's process env. Writes ``~/.sky/config.yaml`` with the
+    pre-baked shrink so the controller pod fits on a GHA-kind cluster. Idempotent
+    — overwrites the file each call (per-run YAML write moved from
+    ``generate-dataset-shards.yaml``). A no-op when the env var is unset, so
+    operator local-dev invocations are untouched.
+    """
+    if not os.environ.get(_CI_MODE_ENV):
+        return
+    sky_dir = Path.home() / ".sky"
+    sky_dir.mkdir(parents=True, exist_ok=True)
+    config_path = sky_dir / "config.yaml"
+    config_path.write_text(_CI_SKY_CONFIG_YAML, encoding="utf-8")
+    config_path.chmod(0o600)
+
+
+def _emit_spec_uri(spec_uri: str) -> None:
+    """Print the canonical spec URI on a stdout sentinel line.
+
+    The test-dataset-generation workflow tees the launcher's stdout to a log
+    file and greps for ``_SPEC_URI_STDOUT_SENTINEL`` to populate the
+    workflow's ``spec_uri`` output — replacing the bash compose+install step
+    that re-ran ``synth-setter-spec-uri`` on the host. ``click.echo`` rather
+    than ``print`` keeps the launcher's output stream conventions unified.
+
+    :param spec_uri: Canonical ``r2://`` URI of the materialized spec.
+    """
+    click.echo(f"{_SPEC_URI_STDOUT_SENTINEL}{spec_uri}")
+
 
 def load_worker_env(path: Path) -> dict[str, str]:
     """Read worker-side env from a dotenv file using python-dotenv.
@@ -345,6 +402,8 @@ def main(
     if not command:
         raise click.ClickException("an inner command is required (pass it after `--`)")
 
+    _ensure_ci_sky_config()
+
     # cwd=REPO_ROOT pins the inner command's relative-path lookups (e.g. the
     # default `.env`) to the same anchor _LOCAL_DATA_DIR uses for spec discovery,
     # so an operator invoking the launcher from outside the repo doesn't have
@@ -353,6 +412,7 @@ def main(
 
     spec_path = _find_unique_spec_path(command_for_error=command[0])
     spec_uri = _resolve_spec_uri(spec_path)
+    _emit_spec_uri(spec_uri)
     spec = DatasetSpec.model_validate_json(spec_path.read_text(encoding="utf-8"))
 
     sky_cfg = SkypilotLaunchConfig(

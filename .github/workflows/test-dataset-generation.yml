@@ -118,10 +118,12 @@ on:
 permissions:
   contents: read
 
-# Coalesce stacked PR pushes — saves runner minutes on `local` PRs and
-# avoids burning RunPod/OCI capacity on superseded `workflow_dispatch` runs.
+# Coalesce stacked PR pushes — saves runner minutes on `local` PRs. The
+# `workflow_dispatch` suffix gives each manual run its own group so a
+# re-dispatch to the same ref doesn't cancel an in-flight intentional run;
+# on PR/push the suffix is empty and pushes still coalesce.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -153,30 +155,47 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      providers: ${{ steps.matrix.outputs.providers }}
-      output_formats: ${{ steps.matrix.outputs.output_formats }}
-      r2_bucket: ${{ steps.bucket.outputs.r2_bucket }}
+      providers: ${{ steps.compose.outputs.providers }}
+      output_formats: ${{ steps.compose.outputs.output_formats }}
+      r2_bucket: ${{ steps.compose.outputs.r2_bucket }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       # configs/hydra/default.yaml's `defaults` block overrides job_logging /
       # hydra_logging to `colorlog`, which is provided by the hydra-colorlog
-      # plugin. Without it, Hydra compose fails with:
-      #   MissingConfigException: Could not find 'hydra/job_logging/colorlog'
-      # Pin both to the same versions as [project.dependencies] in pyproject.toml.
-      # Installed before the `matrix` step because that step also composes the
-      # dispatched config to resolve `output_format` on workflow_dispatch.
+      # plugin. Without it, Hydra compose fails with MissingConfigException
+      # ("Could not find 'hydra/job_logging/colorlog'"). Pin both to the same
+      # versions as [project.dependencies] in pyproject.toml. The next step
+      # composes the dispatched config to resolve `output_format` (dispatch
+      # only) and `r2_bucket` (always).
       - name: Install Hydra for dataset-config composition
         run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
-      - id: matrix
+      # Single Hydra compose resolves both `output_format` (dispatch-only;
+      # on PR the matrix is pinned `["hdf5","wds"]`) and `r2_bucket` (always —
+      # the launcher uses `${r2.bucket}` for its R2 upload destination).
+      # Merged from the previous two-step setup per PR #1164 (B2).
+      #
+      # On pull_request we pin two distinct per-format experiment configs
+      # (`smoke-shard` for hdf5, `ci-materialize-test-wds` for wds), so the
+      # matrix expands to both cells. On workflow_dispatch the user supplies
+      # a single experiment config which hardcodes one `output_format`, so the
+      # matrix collapses to whatever that config resolves to — otherwise the
+      # cell whose `matrix.output_format` doesn't match would deterministically
+      # fail the spec-format cross-check.
+      - id: compose
         env:
           EVENT_NAME: ${{ github.event_name }}
           PROVIDER_INPUT: ${{ inputs.provider || 'all' }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
-          DISPATCH_DATASET_CONFIG: ${{ inputs.dataset_config || 'generate_dataset/smoke-shard' }}
+          DATASET_CONFIG: >-
+            ${{
+              github.event_name == 'pull_request'
+                && 'generate_dataset/smoke-shard'
+                || (inputs.dataset_config || 'generate_dataset/smoke-shard')
+            }}
         run: |
           set -euo pipefail
           if [[ "${EVENT_NAME}" == "pull_request" && "${PR_HEAD_REPO}" == "${REPO}" ]]; then
@@ -191,63 +210,8 @@ jobs:
           else
             providers='[]'
           fi
-          # On pull_request we pin two distinct per-format experiment configs
-          # (`smoke-shard` for hdf5, `ci-materialize-test-wds` for wds), so the
-          # matrix expands to both cells. On workflow_dispatch the user supplies
-          # a single experiment config which hardcodes one `output_format`, so
-          # the matrix collapses to whatever format that config resolves to —
-          # otherwise the cell whose `matrix.output_format` doesn't match would
-          # deterministically fail the spec-format cross-check.
-          if [[ "${providers}" == "[]" ]]; then
-            output_formats='[]'
-          elif [[ "${EVENT_NAME}" == "pull_request" ]]; then
-            output_formats='["hdf5","wds"]'
-          else
-            # Capture stderr to a temp file so a Hydra compose failure (missing
-            # experiment, config-typing error, missing `output_format` key,
-            # etc.) surfaces the traceback in the action log instead of leaving
-            # operators with only "Process completed with exit code 1".
-            DISPATCH_STDERR=$(mktemp)
-            if ! DISPATCH_FORMAT=$(python3 -c "
-          import os
-          import sys
-          from pathlib import Path
-          from hydra import compose, initialize_config_dir
-          cfg_dir = str(Path.cwd() / 'configs')
-          experiment = os.environ['DISPATCH_DATASET_CONFIG']
-          with initialize_config_dir(version_base='1.3', config_dir=cfg_dir):
-              cfg = compose(config_name='dataset', overrides=[f'experiment={experiment}'])
-          sys.stdout.write(cfg.output_format)
-          " 2>"${DISPATCH_STDERR}" | tail -n 1); then
-              echo "Hydra compose failed for experiment='${DISPATCH_DATASET_CONFIG}' (stderr below):" >&2
-              cat "${DISPATCH_STDERR}" >&2
-              rm -f "${DISPATCH_STDERR}"
-              exit 1
-            fi
-            rm -f "${DISPATCH_STDERR}"
-            output_formats="[\"${DISPATCH_FORMAT}\"]"
-          fi
-          echo "providers=${providers}" >> "${GITHUB_OUTPUT}"
-          echo "output_formats=${output_formats}" >> "${GITHUB_OUTPUT}"
-          echo "providers: ${providers}"
-          echo "output_formats: ${output_formats}"
-
-      # Bucket comes from the composed dataset config (the source of truth the
-      # launcher uses for `spec.r2_bucket` and therefore for its R2 upload
-      # destination). Post-Hydra migration, the experiment id is composed
-      # against `configs/dataset.yaml` rather than read from a YAML path —
-      # `r2_bucket` resolves through `${r2.bucket}` from the `r2` config group.
-      - id: bucket
-        env:
-          DATASET_CONFIG: >-
-            ${{
-              github.event_name == 'pull_request'
-                && 'generate_dataset/smoke-shard'
-                || (inputs.dataset_config || 'generate_dataset/smoke-shard')
-            }}
-        run: |
-          set -euo pipefail
-          R2_BUCKET=$(python3 -c "
+          COMPOSE_STDERR=$(mktemp)
+          if ! COMPOSE_OUT=$(python3 -c "
           import os
           from pathlib import Path
           from hydra import compose, initialize_config_dir
@@ -255,9 +219,29 @@ jobs:
           experiment = os.environ['DATASET_CONFIG']
           with initialize_config_dir(version_base='1.3', config_dir=cfg_dir):
               cfg = compose(config_name='dataset', overrides=[f'experiment={experiment}'])
+          print(cfg.output_format)
           print(cfg.r2.bucket)
-          ")
+          " 2>"${COMPOSE_STDERR}"); then
+            echo "Hydra compose failed for experiment='${DATASET_CONFIG}' (stderr below):" >&2
+            cat "${COMPOSE_STDERR}" >&2
+            rm -f "${COMPOSE_STDERR}"
+            exit 1
+          fi
+          rm -f "${COMPOSE_STDERR}"
+          COMPOSED_FORMAT=$(echo "${COMPOSE_OUT}" | sed -n '1p')
+          R2_BUCKET=$(echo "${COMPOSE_OUT}" | sed -n '2p')
+          if [[ "${providers}" == "[]" ]]; then
+            output_formats='[]'
+          elif [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            output_formats='["hdf5","wds"]'
+          else
+            output_formats="[\"${COMPOSED_FORMAT}\"]"
+          fi
+          echo "providers=${providers}" >> "${GITHUB_OUTPUT}"
+          echo "output_formats=${output_formats}" >> "${GITHUB_OUTPUT}"
           echo "r2_bucket=${R2_BUCKET}" >> "${GITHUB_OUTPUT}"
+          echo "providers: ${providers}"
+          echo "output_formats: ${output_formats}"
           echo "r2_bucket: ${R2_BUCKET}"
 
   # `skypilot-local` / `runpod` / `oci` rows: route through the official

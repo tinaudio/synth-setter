@@ -27,7 +27,10 @@ from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.skypilot_launch import (
     _SECRET_WORKER_ENV_KEYS,
+    _SPEC_URI_STDOUT_SENTINEL,
     _WORKER_ENV_KEYS,
+    _emit_spec_uri,
+    _ensure_ci_sky_config,
     _override_image_id,
     dispatch_via_skypilot,
     load_worker_env,
@@ -260,6 +263,85 @@ class TestResolveWorkerEnvR2RemoteConstants:
         env_file.write_text("RCLONE_CONFIG_R2_PROVIDER=Other\n")
         resolved = resolve_worker_env(env_file)
         assert resolved["RCLONE_CONFIG_R2_PROVIDER"] == "Other"
+
+
+class TestEnsureCiSkyConfig:
+    """``_ensure_ci_sky_config`` writes the managed-jobs shrink only when CI mode is on.
+
+    Replaces the per-run YAML write previously done by
+    ``generate-dataset-shards.yaml``'s "Shrink managed-jobs controller resources
+    for kind" step (PR #1164).
+    """
+
+    def test_no_op_when_env_var_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Operator local dev (no env var) leaves ``~/.sky/config.yaml`` untouched.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        """
+        monkeypatch.delenv("SYNTH_SETTER_CI_MODE", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        _ensure_ci_sky_config()
+        assert not (tmp_path / ".sky" / "config.yaml").exists()
+
+    def test_writes_shrink_yaml_when_env_var_truthy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SYNTH_SETTER_CI_MODE=1 → ``~/.sky/config.yaml`` carries the controller shrink.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_CI_MODE", "1")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        _ensure_ci_sky_config()
+        config_path = tmp_path / ".sky" / "config.yaml"
+        assert config_path.is_file()
+        body = config_path.read_text(encoding="utf-8")
+        # `cpus: 1+` / `memory: 1+` are the kind-allocatable floor that the
+        # workflow step used to write; verify both still land in the file.
+        assert "cpus: 1+" in body
+        assert "memory: 1+" in body
+        assert "controller:" in body
+
+    def test_idempotent_overwrite(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Re-invoking the helper is safe; the file is rewritten, not appended.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Pytest fixture for env/attribute mocking.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_CI_MODE", "1")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        sky_dir = tmp_path / ".sky"
+        sky_dir.mkdir()
+        (sky_dir / "config.yaml").write_text("stale: true\n", encoding="utf-8")
+        _ensure_ci_sky_config()
+        body = (sky_dir / "config.yaml").read_text(encoding="utf-8")
+        assert "stale: true" not in body
+        assert "cpus: 1+" in body
+
+
+class TestEmitSpecUri:
+    """``_emit_spec_uri`` prints the canonical URI on a stdout sentinel line.
+
+    The test-dataset-generation workflow greps the tee'd launcher log for this
+    sentinel (replacing the previous host-side ``synth-setter-spec-uri`` re-
+    invocation in bash, PR #1164).
+    """
+
+    def test_marker_format_is_stable(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """One-line ``::synth-setter-spec-uri::<uri>`` marker so the workflow grep is unambiguous.
+
+        :param capsys: Pytest fixture capturing stdout/stderr.
+        """
+        _emit_spec_uri("r2://intermediate-data/run/input_spec.json")
+        captured = capsys.readouterr()
+        assert (
+            captured.out.strip()
+            == f"{_SPEC_URI_STDOUT_SENTINEL}r2://intermediate-data/run/input_spec.json"
+        )
 
 
 # ---------------------------------------------------------------------------
