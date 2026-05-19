@@ -5,9 +5,10 @@ Reads the local spec file, parses it as a ``DatasetSpec``, and emits
 ``spec.r2.input_spec_uri()`` — the under-prefix URI where the spec itself
 lives (``r2://<bucket>/<prefix>input_spec.json``).
 
-Keeping this in Python rather than bash means the legacy-key back-compat
-shim and the canonical URI scheme constants (``R2_URI_SCHEME``,
-``RCLONE_REMOTE``) stay the single source of truth.
+Keeping this in Python rather than bash lets the URI be parsed by the real
+``DatasetSpec`` model (so any schema drift fails loud at the validator
+rather than silently in jq/sed) and lets argv / fs / parse failures map
+to distinct exit codes for log scanners.
 
 Usage::
 

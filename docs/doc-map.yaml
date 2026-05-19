@@ -63,7 +63,7 @@ docs:
       - pattern: ".github/workflows/validate-dataset-shards.yaml"
         covers: "Reusable spec + shard validation downstream of generate-dataset-shards; takes the `spec_uri` (r2://) emitted by generate-dataset-shards as its `spec_uri` input"
       - pattern: "src/synth_setter/pipeline/ci/**"
-        covers: "CI validation scripts, spec materialization, shard validation, and per-job spec-URI extraction (`spec_uri.py` / `synth-setter-spec-uri`)"
+        covers: "CI validation scripts, spec materialization, shard validation, and spec-URI extraction (`spec_uri.py` / `synth-setter-spec-uri`)"
       - pattern: "src/synth_setter/pipeline/r2_io.py"
         covers: "rclone-backed R2 helpers — URI handling, download, upload, size probe; single rclone call site shared by CI validators and the worker entrypoint's skip-existing probe"
       - pattern: "src/synth_setter/pipeline/spec_io.py"
