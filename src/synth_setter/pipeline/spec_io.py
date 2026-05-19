@@ -41,7 +41,11 @@ def local_spec_path(spec: DatasetSpec, output_dir: Path) -> Path:
     """Return the local path for ``spec``'s ``input_spec.json``.
 
     :param spec: The frozen DatasetSpec.
-    :param output_dir: Local output root (typically ``cfg.paths.output_dir``).
+    :param output_dir: Operator-side artifact root. The runner
+        (``cli/generate_dataset.py::main()``) passes ``_REPO_ROOT`` —
+        ``cfg.paths.output_dir`` is pinned to the same value as a shim
+        for ``${hydra:runtime.output_dir}`` resolution, but is not the
+        anchor read back here.
     :returns: ``<output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json``.
     """
     return (
@@ -58,7 +62,8 @@ def write_spec_locally(spec: DatasetSpec, output_dir: Path) -> Path:
     """Serialize ``spec`` to its local path; create parent dirs.
 
     :param spec: The frozen DatasetSpec to serialize.
-    :param output_dir: Local output root (typically ``cfg.paths.output_dir``).
+    :param output_dir: Operator-side artifact root; see
+        :func:`local_spec_path` for the runner's anchor convention.
     :returns: The path written.
     """
     target = local_spec_path(spec, output_dir)
