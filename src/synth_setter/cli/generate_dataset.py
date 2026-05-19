@@ -364,7 +364,10 @@ def main() -> None:
     from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
 
     sky_cfg = sky_cfg.model_copy(update={"cmd": _build_worker_cmd(overrides, spec)})
-    dispatch_via_skypilot(spec, sky_cfg)
+    # ``input_spec_uri()`` (not ``uri(INPUT_SPEC_FILENAME)``) — the former
+    # includes the run's prefix so the worker reads the same canonical object
+    # ``main()`` just uploaded.
+    dispatch_via_skypilot(spec, sky_cfg, spec_uri=spec.r2.input_spec_uri())
 
 
 if __name__ == "__main__":

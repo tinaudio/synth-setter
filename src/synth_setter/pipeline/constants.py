@@ -7,6 +7,12 @@ Canonical names from docs/design/data-pipeline.md §7.1 (storage layout).
 # JSON serialization, never modified after launch.
 INPUT_SPEC_FILENAME = "input_spec.json"
 
+# Env-var name the worker reads to locate the materialized DatasetSpec — see
+# ``synth_setter.cli.generate_dataset.load_spec_from_uri``. The launcher
+# (`dispatch_via_skypilot`) injects this into each rank's ``task.update_envs``;
+# the CI helper ``pipeline.ci.spec_uri`` reconstructs it for workflow exports.
+WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
+
 # Cloudflare R2 remote name used by rclone (``rclone copy <src> r2:bucket/key``).
 # Resolution is the caller's responsibility — the standard ``RCLONE_CONFIG_R2_*``
 # env vars must be set when any rclone subprocess runs.

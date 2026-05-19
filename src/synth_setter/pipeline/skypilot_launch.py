@@ -59,13 +59,12 @@ from hydra import compose, initialize_config_dir
 from hydra.errors import HydraException
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
-from synth_setter.pipeline.constants import LAUNCHER_SPEC_R2_PREFIX
+from synth_setter.pipeline.constants import LAUNCHER_SPEC_R2_PREFIX, WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.partitioning import NUM_WORKERS_ENV_VAR, WORKER_RANK_ENV_VAR
 from synth_setter.pipeline.r2_io import to_rclone_path
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 
-_WORKER_SPEC_URI_ENV = "WORKER_SPEC_URI"
 _WORKER_IMAGE_ENV = "WORKER_IMAGE"
 _WORKER_IMAGE_REPO = "tinaudio/synth-setter"
 
@@ -590,7 +589,7 @@ def main(
     # same r2_prefix — this is what makes the partition cohere as one logical dataset.
     spec_uri = upload_spec_to_r2(spec, job_name=base_job_name)
     click.echo(f"Spec uploaded to {spec_uri}")
-    worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
+    worker_env[WORKER_SPEC_URI_ENV] = spec_uri
 
     # Kubernetes-specific: SkyPilot 0.12 caches enabled-clouds in-process; a
     # CLI `sky check` doesn't always populate the cache the SDK reads, and
@@ -989,7 +988,12 @@ def _run_workers_from_doc(
     return _run_workers_detached(job_names, launch_get_job_id)
 
 
-def dispatch_via_skypilot(spec: DatasetSpec, sky_cfg: SkypilotLaunchConfig) -> None:
+def dispatch_via_skypilot(
+    spec: DatasetSpec,
+    sky_cfg: SkypilotLaunchConfig,
+    *,
+    spec_uri: str,
+) -> None:
     """Dispatch ``spec`` to the SkyPilot template named in ``sky_cfg``.
 
     ``sky_cfg.compute_template`` and ``sky_cfg.cmd`` must both be set;
@@ -999,6 +1003,10 @@ def dispatch_via_skypilot(spec: DatasetSpec, sky_cfg: SkypilotLaunchConfig) -> N
 
     :param spec: Validated dataset spec to render on the worker(s).
     :param sky_cfg: Validated launcher configuration (compute_template + cmd required).
+    :param spec_uri: Canonical R2 URI of the materialized spec — injected into each
+        worker's env as ``WORKER_SPEC_URI`` so the worker downloads from the same
+        object ``main()`` just uploaded. Use ``spec.r2.input_spec_uri()`` (not
+        ``spec.r2.uri(INPUT_SPEC_FILENAME)`` — that omits the run prefix).
     :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run:`` pair,
         or unresolved worker env vars.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
@@ -1060,9 +1068,11 @@ def dispatch_via_skypilot(spec: DatasetSpec, sky_cfg: SkypilotLaunchConfig) -> N
     if provider != "local":
         _run_cred_bootstrap(provider=provider, env_file_path=env_file_path)
 
-    spec_uri = upload_spec_to_r2(spec, job_name=base_job_name)
-    click.echo(f"Spec uploaded to {spec_uri}")
-    worker_env[_WORKER_SPEC_URI_ENV] = spec_uri
+    # Legacy upload still runs for older CI workflows that read its URI;
+    # the worker env is now sourced from the canonical kwarg. Removed in PR-4.
+    legacy_upload_uri = upload_spec_to_r2(spec, job_name=base_job_name)
+    click.echo(f"Spec uploaded to {legacy_upload_uri} (legacy)")
+    worker_env[WORKER_SPEC_URI_ENV] = spec_uri
 
     if provider == "local":
         import sky.check

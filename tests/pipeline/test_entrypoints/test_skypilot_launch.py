@@ -19,10 +19,10 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from synth_setter.pipeline.constants import WORKER_SPEC_URI_ENV
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.skypilot_launch import (
     _WORKER_ENV_KEYS,
-    _WORKER_SPEC_URI_ENV,
     _override_image_id,
     load_worker_env,
     main,
@@ -550,7 +550,7 @@ class TestMainCli:
         task.update_envs.assert_called_once()
         forwarded = task.update_envs.call_args.args[0]
         assert (
-            forwarded[_WORKER_SPEC_URI_ENV]
+            forwarded[WORKER_SPEC_URI_ENV]
             == "r2://intermediate-data/skypilot-launcher-specs/smoke-job-1.json"
         )
 
@@ -2631,6 +2631,13 @@ def _write_runpod_yaml(
     return path
 
 
+# Canonical-path spec URI used by the dispatch tests. Mirrors what
+# ``spec.r2.input_spec_uri()`` would resolve to for ``_build_spec``'s fixture
+# spec (prefix `data/<task_name>/<created_at>/`); kept as a fixed string in
+# tests because the dispatch function only sees the kwarg, not the spec field.
+_DISPATCH_SPEC_URI = "r2://intermediate-data/data/run/input_spec.json"
+
+
 def _build_spec(fake_plugin: Path) -> DatasetSpec:
     """Build a DatasetSpec wired to ``fake_plugin`` for the dispatch tests.
 
@@ -2780,6 +2787,14 @@ class TestDetectProviderFromDoc:
             _detect_provider_from_doc(doc, source=tmp_path / "x.yaml")
 
 
+class TestWorkerSpecUriEnvConstant:
+    """``WORKER_SPEC_URI_ENV`` is the canonical public env-var name for worker spec URIs."""
+
+    def test_constant_exposed_publicly_from_pipeline_constants(self) -> None:
+        """Public constant matches the legacy env-var name used by the worker."""
+        assert WORKER_SPEC_URI_ENV == "WORKER_SPEC_URI"
+
+
 class TestDispatchViaSkypilot:
     """``dispatch_via_skypilot`` rejects degenerate cfgs and threads per-rank fanout through."""
 
@@ -2794,7 +2809,7 @@ class TestDispatchViaSkypilot:
         spec = _build_spec(fake_plugin)
         sky_cfg = SkypilotLaunchConfig(compute_template=None, cmd="echo")
         with pytest.raises(ValueError, match="compute_template"):
-            dispatch_via_skypilot(spec, sky_cfg)
+            dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
 
     def test_missing_cmd_raises(self, tmp_path: Path, fake_plugin: Path) -> None:
         """No cmd → no run block on the worker → we refuse to launch a no-op task.
@@ -2809,7 +2824,7 @@ class TestDispatchViaSkypilot:
         spec = _build_spec(fake_plugin)
         sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd=None)
         with pytest.raises(ValueError, match="cmd"):
-            dispatch_via_skypilot(spec, sky_cfg)
+            dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
 
     def test_yaml_run_block_conflicts_with_cmd(
         self,
@@ -2830,7 +2845,7 @@ class TestDispatchViaSkypilot:
         spec = _build_spec(fake_plugin)
         sky_cfg = SkypilotLaunchConfig(compute_template=str(template), cmd="echo")
         with pytest.raises(ValueError, match="has a non-empty `run:` block"):
-            dispatch_via_skypilot(spec, sky_cfg)
+            dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
         mock_sky.jobs.launch.assert_not_called()
 
     def test_missing_worker_env_raises(
@@ -2868,7 +2883,7 @@ class TestDispatchViaSkypilot:
             env_file=None,
         )
         with pytest.raises(ValueError, match="No worker env vars resolved"):
-            dispatch_via_skypilot(spec, sky_cfg)
+            dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
 
     def test_end_to_end_dispatch_uses_cmd_as_run_block(
         self,
@@ -2901,7 +2916,7 @@ class TestDispatchViaSkypilot:
             job_name="dispatch-smoke",
         )
 
-        dispatch_via_skypilot(spec, sky_cfg)
+        dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
 
         # The launcher should have built one Task per rank from a dict whose run: was cmd.
         mock_sky.Task.from_yaml_config.assert_called()
@@ -2942,7 +2957,7 @@ class TestDispatchViaSkypilot:
         )
 
         with pytest.raises(RuntimeError, match="worker.* failed"):
-            dispatch_via_skypilot(spec, sky_cfg)
+            dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
 
     def test_multi_worker_fans_out_one_task_per_rank(
         self,
@@ -2976,7 +2991,7 @@ class TestDispatchViaSkypilot:
             num_workers=3,
         )
 
-        dispatch_via_skypilot(spec, sky_cfg)
+        dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
 
         # 3 ranks → 3 sky.Task.from_yaml_config calls with the same cmd-injected doc.
         assert mock_sky.Task.from_yaml_config.call_count == 3
@@ -3041,7 +3056,7 @@ class TestDispatchViaSkypilot:
         sky_cfg = SkypilotLaunchConfig(**kwargs)  # type: ignore[arg-type]
 
         with pytest.raises(ValueError, match=match):
-            dispatch_via_skypilot(spec, sky_cfg)
+            dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
         mock_sky.jobs.launch.assert_not_called()
 
     def test_job_name_falls_back_to_task_name_prefix_when_unset(
@@ -3074,7 +3089,7 @@ class TestDispatchViaSkypilot:
             job_name=None,
         )
 
-        dispatch_via_skypilot(spec, sky_cfg)
+        dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
 
         submitted = mock_sky.jobs.launch.call_args.kwargs["name"]
         assert submitted.startswith("synth-setter-smoke-")
@@ -3112,5 +3127,61 @@ class TestDispatchViaSkypilot:
             local=True,
         )
         with pytest.raises(ValueError, match="mutually exclusive"):
-            dispatch_via_skypilot(spec, sky_cfg)
+            dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
         mock_sky.jobs.launch.assert_not_called()
+
+    def test_spec_uri_kwarg_injected_verbatim_into_worker_env(
+        self,
+        tmp_path: Path,
+        fake_plugin: Path,
+        env_file: Path,
+        local_spec_dir: Path,
+        mock_sky: MagicMock,
+        patch_materialize_io: None,  # noqa: ARG002
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The kwarg-supplied ``spec_uri`` lands in worker env verbatim — not upload's return.
+
+        PR-2 contract: ``dispatch_via_skypilot`` derives ``WORKER_SPEC_URI`` from its
+        ``spec_uri`` kwarg, not from ``upload_spec_to_r2``'s return value. The legacy
+        ``upload_spec_to_r2`` call still runs (it's removed in PR-4), so this test forces
+        the upload helper to return a sentinel string and asserts the worker env carries
+        the kwarg-supplied canonical URI instead.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param fake_plugin: Fixture-provided fake VST3 plugin path.
+        :param env_file: Fixture-provided worker env file path.
+        :param local_spec_dir: Fixture-provided local spec directory.
+        :param mock_sky: Mocked ``sky`` module from fixture.
+        :param patch_materialize_io: Fixture stubbing materialize-side IO.
+        :param monkeypatch: Pytest fixture used to patch the upload helper.
+        """
+        from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
+        from synth_setter.pipeline.skypilot_launch import dispatch_via_skypilot
+
+        # Make the legacy upload return a value distinct from the kwarg, so the
+        # worker env's WORKER_SPEC_URI can only match one of them — proving the
+        # source is the kwarg, not the upload result.
+        legacy_upload_uri = "r2://intermediate-data/skypilot-launcher-specs/legacy.json"
+        monkeypatch.setattr(
+            "synth_setter.pipeline.skypilot_launch.upload_spec_to_r2",
+            lambda spec, job_name: legacy_upload_uri,
+        )
+
+        template = _write_runpod_yaml(tmp_path)
+        spec = _build_spec(fake_plugin)
+        sky_cfg = SkypilotLaunchConfig(
+            compute_template=str(template),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="kwarg-spec-uri",
+        )
+
+        dispatch_via_skypilot(spec, sky_cfg, spec_uri=_DISPATCH_SPEC_URI)
+
+        # update_envs is called per rank; this single-worker case has one call.
+        update_envs_calls = mock_sky.Task.from_yaml_config.return_value.update_envs.call_args_list
+        assert len(update_envs_calls) == 1
+        forwarded = update_envs_calls[0].args[0]
+        assert forwarded[WORKER_SPEC_URI_ENV] == _DISPATCH_SPEC_URI
+        assert forwarded[WORKER_SPEC_URI_ENV] != legacy_upload_uri

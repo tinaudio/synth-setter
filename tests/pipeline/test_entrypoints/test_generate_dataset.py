@@ -1175,7 +1175,7 @@ class TestMainDispatchBranches:
 
         recorded: dict[str, object] = {}
 
-        def _fake_dispatch(spec: object, sky_cfg: object) -> None:
+        def _fake_dispatch(spec: object, sky_cfg: object, **_kwargs: object) -> None:
             recorded["spec"] = spec
             recorded["sky_cfg"] = sky_cfg
 
@@ -1390,3 +1390,38 @@ class TestMainSpecPersistence:
 
         call_names = [c[0] for c in manager.mock_calls]
         assert call_names.index("ensure_env") < call_names.index("upload_spec")
+
+    def test_dispatch_branch_passes_canonical_spec_uri_kwarg(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``main()`` threads ``spec.r2.input_spec_uri()`` into ``dispatch_via_skypilot``.
+
+        PR-2 contract: the launcher passes the canonical spec URI (including
+        the run's prefix) as a kwarg so the worker reads the same R2 object
+        ``main()`` just uploaded. Uses ``spec.r2.input_spec_uri()`` (not
+        ``spec.r2.uri(INPUT_SPEC_FILENAME)``) — the former includes the prefix.
+
+        :param monkeypatch: Pytest fixture used to patch ``sys.argv`` + dispatch.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        import synth_setter.cli.generate_dataset as gd
+        import synth_setter.pipeline.skypilot_launch as sl
+
+        template = self._write_minimal_template(tmp_path)
+        monkeypatch.setattr("sys.argv", self._dispatch_argv(template))
+
+        recorded: dict[str, object] = {}
+
+        def _fake_dispatch(spec: DatasetSpec, sky_cfg: object, **kwargs: object) -> None:
+            recorded["spec"] = spec
+            recorded["kwargs"] = kwargs
+
+        monkeypatch.setattr(sl, "dispatch_via_skypilot", _fake_dispatch)
+
+        gd.main()
+
+        spec = recorded["spec"]
+        assert isinstance(spec, DatasetSpec)
+        kwargs = recorded["kwargs"]
+        assert isinstance(kwargs, dict)
+        assert kwargs["spec_uri"] == spec.r2.input_spec_uri()
