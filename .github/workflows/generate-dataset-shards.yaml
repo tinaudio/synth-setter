@@ -163,8 +163,30 @@ jobs:
           echo "name=${CLUSTER_NAME}" >> "${GITHUB_OUTPUT}"
           echo "cluster_name: ${CLUSTER_NAME}"
 
-      - name: Pull image
-        run: docker pull --quiet "${IMAGE}"
+      # A2 (#1164): pull the worker image in the background so the kind binary
+      # install + Python / uv setup can run in parallel. The pull only fills
+      # the host Docker cache; nothing downstream of this step reads from it
+      # until `kind load docker-image` (skypilot-local row) or
+      # `docker run "${IMAGE}"` (runpod / oci row).
+      #
+      # `wait` doesn't cross shells (each GHA step is its own bash), so the
+      # background process writes its exit code to a sentinel file once it
+      # exits. The later "Wait for image pull" step polls until the file
+      # exists, then reads + checks the exit code so a pull failure (bad tag,
+      # registry outage) fails the workflow loudly. `nohup` + `disown`
+      # detaches the child from the current shell so the step itself exits
+      # immediately and GHA moves on to the next step.
+      - name: Pull image (background)
+        run: |
+          set -euo pipefail
+          : > "${RUNNER_TEMP}/docker-pull.log"
+          rm -f "${RUNNER_TEMP}/docker-pull.exitcode"
+          nohup bash -c '
+            docker pull --quiet "'"${IMAGE}"'" >>"'"${RUNNER_TEMP}"'/docker-pull.log" 2>&1
+            echo "$?" > "'"${RUNNER_TEMP}"'/docker-pull.exitcode"
+          ' >/dev/null 2>&1 &
+          disown
+          echo "Started background docker pull for ${IMAGE}"
 
       - name: Prepare run-metadata mount
         run: mkdir -p "${RUN_METADATA_DIR}"
@@ -198,15 +220,68 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "pyproject.toml"
 
+      # A1 (#1164): cache the launcher venv (~/.venv-launcher) so a warm hit
+      # skips the install entirely. setup-uv's enable-cache caches the wheel
+      # *index*; this caches the *resolved/installed* tree. We use an explicit
+      # venv (rather than `--system`) because dist-packages on the GHA image is
+      # owned by apt and dirty (other tooling installed there); a clean venv
+      # gives us a tight, cacheable bag of files.
+      #
+      # Cache key pins uv.lock + pyproject.toml so any dep change invalidates,
+      # plus a literal version pin for skypilot[kubernetes] so updating it
+      # below also invalidates. `restore-keys` falls back to the most recent
+      # key on partial mismatch — the install step still runs but only needs
+      # to update the delta, not rebuild from scratch.
+      - name: Restore launcher venv cache (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        id: launcher_venv_cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.venv-launcher
+          key: launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            launcher-uv-${{ runner.os }}-py310-skypilot0.12.0-
+
+      # Idempotent: `uv venv` creates the venv if missing; `uv pip install` is
+      # a no-op on a cache hit (resolver sees the requested versions already
+      # installed). On a cache miss / partial restore, the install reconciles
+      # the venv to the requested pin set.
       - name: Install launcher deps (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: |
-          uv pip install --system -e . "skypilot[kubernetes]==0.12.0"
+          set -euo pipefail
+          VENV="${GITHUB_WORKSPACE}/.venv-launcher"
+          if [[ ! -x "${VENV}/bin/python" ]]; then
+            uv venv "${VENV}" --python 3.10
+          fi
+          uv pip install --python "${VENV}/bin/python" -e . "skypilot[kubernetes]==0.12.0"
+          echo "${VENV}/bin" >> "${GITHUB_PATH}"
           sudo apt-get install -y -qq rclone
 
       - name: sky local up (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         run: sky local up --no-gpus
+
+      # A2 (#1164): wait for the background `docker pull` to finish, then
+      # check the exit code it wrote to the sentinel file. Times out after
+      # 10 min so a stuck pull doesn't hang the whole workflow; that's well
+      # above the worst observed pull time (~1m for dev-snapshot) but below
+      # the step-level timeout-minutes on the launcher step that follows.
+      - name: Wait for image pull (skypilot-local row)
+        if: ${{ inputs.provider == 'skypilot-local' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          while [[ ! -f "${RUNNER_TEMP}/docker-pull.exitcode" ]]; do
+            sleep 2
+          done
+          ec=$(cat "${RUNNER_TEMP}/docker-pull.exitcode")
+          if [[ "${ec}" != "0" ]]; then
+            echo "::error::Background docker pull failed (exit=${ec}) for ${IMAGE}"
+            cat "${RUNNER_TEMP}/docker-pull.log" >&2 || true
+            exit "${ec}"
+          fi
+          echo "docker pull completed for ${IMAGE}"
 
       - name: Load dev-snapshot image into kind (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
@@ -330,6 +405,25 @@ jobs:
           echo "=== snapshot sizes ==="
           du -sh "${RUN_METADATA_DIR}/sky_logs" "${RUN_METADATA_DIR}/sky_api_server_logs" 2>/dev/null || true
 
+      # A2 (#1164): mirror of the skypilot-local wait step, gated on the
+      # runpod / oci providers so the `docker run` below sees a fully-pulled
+      # image.
+      - name: Wait for image pull (runpod / oci row)
+        if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          while [[ ! -f "${RUNNER_TEMP}/docker-pull.exitcode" ]]; do
+            sleep 2
+          done
+          ec=$(cat "${RUNNER_TEMP}/docker-pull.exitcode")
+          if [[ "${ec}" != "0" ]]; then
+            echo "::error::Background docker pull failed (exit=${ec}) for ${IMAGE}"
+            cat "${RUNNER_TEMP}/docker-pull.log" >&2 || true
+            exit "${ec}"
+          fi
+          echo "docker pull completed for ${IMAGE}"
+
       # ----- runpod / oci row: in-container synth-setter-generate-dataset
       # Optional Hydra overrides are pre-rendered into env-var strings at the
       # outer step (keeping GHA expression evaluation out of the bash
@@ -401,8 +495,6 @@ jobs:
                 $LOCAL_OVERRIDE $NUM_WORKERS_OVERRIDE $TAIL_OVERRIDE
             ' \
             2>&1 | tee "${RUN_METADATA_DIR}/generate.log"
-          # The docker mount mirrors workspace -> /home/build/synth-setter, so
-          # the spec the CLI wrote inside the container is the same host file.
           shopt -s nullglob
           specs=("${GITHUB_WORKSPACE}"/data/*/*/metadata/input_spec.json)
           if [[ "${#specs[@]}" -ne 1 ]]; then

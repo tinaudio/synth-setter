@@ -49,6 +49,12 @@ name: Test Dataset Generation
 #     the cred-bootstrap because the remote API server (#785) holds creds.
 
 on:
+  # Nightly run restores hdf5 coverage that we no longer pay for on every PR
+  # (#1164). 07:00 UTC = ~midnight Pacific so results are ready before the
+  # workday. The `setup` job's matrix branch for `schedule` runs both hdf5 and
+  # wds against skypilot-local.
+  schedule:
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       dataset_config:
@@ -128,10 +134,13 @@ jobs:
   # Compute the provider list at runtime, plus the R2 bucket the validate
   # job will pull specs and shards from. Outputs:
   #   * `providers`           — provider matrix (drives generate + validate).
-  #   * `output_formats`      — shard-format axis. On pull_request both rows
-  #                             (`hdf5`, `wds`) run because the workflow pins a
-  #                             per-format experiment config for each. On
-  #                             workflow_dispatch the matrix collapses to the
+  #   * `output_formats`      — shard-format axis. On pull_request only `wds`
+  #                             runs (hdf5 demoted to nightly per #1164 — wds is
+  #                             the cheaper of the two and exercises the same
+  #                             kind/launcher/R2 path). On `schedule` both
+  #                             `hdf5` and `wds` run against skypilot-local,
+  #                             restoring daily coverage of the hdf5 path.
+  #                             On workflow_dispatch the matrix collapses to the
   #                             single format the dispatched config resolves to
   #                             — a single config hardcodes one `output_format`,
   #                             and the spec-format cross-check would otherwise
@@ -142,10 +151,13 @@ jobs:
   #
   # Policy:
   #   * pull_request (same repo) → skypilot-local only (free; exercises the
-  #     unified launcher path on a local kind cluster)
-  #   * pull_request (fork)      → empty (forks can't read secrets)
-  #   * workflow_dispatch        → respect `inputs.provider`
-  #     - `all` expands to skypilot-local + runpod + oci.
+  #     unified launcher path on a local kind cluster) × wds only.
+  #   * pull_request (fork)      → empty (forks can't read secrets).
+  #   * schedule                 → skypilot-local × {hdf5, wds} — daily hdf5
+  #     coverage that PRs no longer pay for.
+  #   * workflow_dispatch        → respect `inputs.provider`. `all` expands to
+  #     skypilot-local + runpod + oci. Format is whatever the dispatched
+  #     experiment config compiles to.
   #
   # Empty array → downstream matrices skip naturally; no `has_jobs` flag.
   setup:
@@ -170,6 +182,24 @@ jobs:
       - name: Install Hydra for dataset-config composition
         run: pip install "hydra-core==1.3.2" "hydra-colorlog==1.2.0"
 
+      # Provider axis:
+      #   pull_request (same repo) → skypilot-local
+      #   schedule                 → skypilot-local (nightly hdf5 + wds)
+      #   workflow_dispatch        → respect inputs.provider
+      #   anything else (e.g. fork PR) → empty array → downstream matrices skip
+      #
+      # Output-format axis:
+      #   pull_request → wds only (hdf5 demoted to nightly per #1164)
+      #   schedule     → both hdf5 and wds (restores pre-#1164 coverage daily)
+      #   workflow_dispatch → single format derived by Hydra-composing the
+      #     dispatched experiment config; the cell whose `matrix.output_format`
+      #     doesn't match would deterministically fail the spec-format
+      #     cross-check, so collapse the matrix to that one format.
+      #
+      # The Hydra compose in the workflow_dispatch branch captures stderr to a
+      # temp file so a missing-experiment / config-typing / missing-key failure
+      # surfaces in the action log instead of leaving operators with only
+      # "Process completed with exit code 1".
       - id: matrix
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -181,6 +211,8 @@ jobs:
           set -euo pipefail
           if [[ "${EVENT_NAME}" == "pull_request" && "${PR_HEAD_REPO}" == "${REPO}" ]]; then
             providers='["skypilot-local"]'
+          elif [[ "${EVENT_NAME}" == "schedule" ]]; then
+            providers='["skypilot-local"]'
           elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             case "${PROVIDER_INPUT}" in
               skypilot-local) providers='["skypilot-local"]' ;;
@@ -191,22 +223,13 @@ jobs:
           else
             providers='[]'
           fi
-          # On pull_request we pin two distinct per-format experiment configs
-          # (`smoke-shard` for hdf5, `ci-materialize-test-wds` for wds), so the
-          # matrix expands to both cells. On workflow_dispatch the user supplies
-          # a single experiment config which hardcodes one `output_format`, so
-          # the matrix collapses to whatever format that config resolves to —
-          # otherwise the cell whose `matrix.output_format` doesn't match would
-          # deterministically fail the spec-format cross-check.
           if [[ "${providers}" == "[]" ]]; then
             output_formats='[]'
           elif [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            output_formats='["wds"]'
+          elif [[ "${EVENT_NAME}" == "schedule" ]]; then
             output_formats='["hdf5","wds"]'
           else
-            # Capture stderr to a temp file so a Hydra compose failure (missing
-            # experiment, config-typing error, missing `output_format` key,
-            # etc.) surfaces the traceback in the action log instead of leaving
-            # operators with only "Process completed with exit code 1".
             DISPATCH_STDERR=$(mktemp)
             if ! DISPATCH_FORMAT=$(python3 -c "
           import os
@@ -241,7 +264,7 @@ jobs:
         env:
           DATASET_CONFIG: >-
             ${{
-              github.event_name == 'pull_request'
+              (github.event_name == 'pull_request' || github.event_name == 'schedule')
                 && 'generate_dataset/smoke-shard'
                 || (inputs.dataset_config || 'generate_dataset/smoke-shard')
             }}
@@ -279,7 +302,7 @@ jobs:
       provider: ${{ matrix.provider }}
       dataset_config: >-
         ${{
-          github.event_name == 'pull_request'
+          (github.event_name == 'pull_request' || github.event_name == 'schedule')
             && (matrix.output_format == 'wds'
                 && 'generate_dataset/smoke-shard-wds'
                 || 'generate_dataset/smoke-shard')
