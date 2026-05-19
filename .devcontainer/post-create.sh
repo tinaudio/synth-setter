@@ -39,9 +39,22 @@ mkdir -p "$HOME/.local/share/tmux/resurrect"
 # Stdout is discarded (TPM is chatty on success); stderr is preserved so a
 # real failure surfaces the underlying git/clone error. The warning catches
 # the broader cases (e.g. egress blocked); users can always rerun prefix+I.
+#
+# TPM's helpers call `tmux start-server` at script-load time (see
+# scripts/helpers/plugin_functions.sh:_tpm_path) without -L, which would
+# otherwise bind /tmp/tmux-$UID/default. If a tmux server is already running
+# on that path — as happens when this script is rerun manually inside an
+# active devcontainer — the bind() replaces the on-disk socket dirent and
+# orphans the existing server (sessions stay alive in-kernel but become
+# unreachable). Override TMUX_TMPDIR to a throwaway dir so TPM's internal
+# tmux invocation lands on its own socket and can't touch the user's.
 if [ -x "$_tpm_dir/bin/install_plugins" ]; then
-  "$_tpm_dir/bin/install_plugins" >/dev/null \
+  _tpm_tmpdir="$(mktemp -d)"
+  TMUX_TMPDIR="$_tpm_tmpdir" "$_tpm_dir/bin/install_plugins" >/dev/null \
     || echo "WARNING: TPM install_plugins failed; run prefix+I inside tmux after start." >&2
+  TMUX_TMPDIR="$_tpm_tmpdir" tmux kill-server 2>/dev/null || true
+  rm -rf "$_tpm_tmpdir"
+  unset _tpm_tmpdir
 fi
 
 # Drop to `dev` when invoked as root so workspace mutations (git config
