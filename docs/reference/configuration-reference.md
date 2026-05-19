@@ -95,7 +95,7 @@ configs/compute/{provider}-template.yaml (SkyPilot Task YAML — no `run:` block
     → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
       → pod runs the same inner command, which **should** read `WORKER_SPEC_URI` to
         skip re-materialization and reuse the canonical spec uploaded above
-        (aspirational — see contract bullet (b) and #1160 for why the default
+        (aspirational — see contract bullet (c) and #1160 for why the default
         `synth-setter-generate-dataset` does not yet honor this)
 ```
 
