@@ -92,10 +92,8 @@ it() {
 }
 
 reset_sandbox() {
-  # Drop any worktrees a previous test registered against this sandbox repo so
-  # the next test's `git worktree add` can claim a fresh path. The main
-  # worktree (current pwd) is skipped — `git worktree remove` refuses it
-  # anyway, but the explicit guard makes the intent clear.
+  # Drop linked worktrees from prior tests so the next `git worktree add` is
+  # free to claim a fresh path; skip the main worktree explicitly.
   local self wt
   self=$(pwd)
   while IFS= read -r wt; do

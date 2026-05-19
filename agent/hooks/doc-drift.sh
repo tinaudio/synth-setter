@@ -25,18 +25,17 @@ if ! echo "$COMMAND" | grep -qE '(^|[;|&`(][[:space:]]*)gh[[:space:]]+pr[[:space
   exit 0
 fi
 
-ensure_reviews_dir
-sweep_stale_worktrees "doc-drift"
-log "matched: ${COMMAND}"
-
 BRANCH=$(git branch --show-current 2>/dev/null || true)
 HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || true)
 PR=$(gh pr view "$BRANCH" --json number -q .number 2>/dev/null || true)
 
 if [[ -z "$PR" ]]; then
-  log "no PR found for branch ${BRANCH:-?}, skipping"
   exit 0
 fi
+
+ensure_reviews_dir
+sweep_stale_worktrees "doc-drift"
+log "matched: ${COMMAND}"
 
 BASE_BRANCH=$(default_branch)
 log "base branch resolved to: ${BASE_BRANCH}"
@@ -71,8 +70,6 @@ REVIEW_FILE=$(run_review "doc-drift" "$META" "$PROMPT" "DOC_DRIFT_DRY_RUN")
 
 log "wrote ${REVIEW_FILE}"
 
-printf 'doc-drift report for PR #%s (branch %s, origin HEAD %s) at %s. Advisory — read it and apply documentation updates as appropriate.\n' \
-  "$PR" "$BRANCH" "${HEAD_SHA:0:7}" "$REVIEW_FILE" >&2
-printf 'If your current HEAD is not %s, this advisory crossed sessions — verify before acting.\n' \
-  "${HEAD_SHA:0:7}" >&2
+emit_rewake_stamp "doc-drift" "$PR" "$BRANCH" "$HEAD_SHA" "$REVIEW_FILE" \
+  "Advisory — read it and apply documentation updates as appropriate."
 exit 2

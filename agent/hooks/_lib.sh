@@ -3,10 +3,8 @@
 # comment for its contract. Sourced by every hook; intentionally omits
 # `set -euo pipefail` so each caller chooses its own error-handling regime.
 
-# REVIEWS_DIR/HOOK_LOG resolve to absolute paths in the main repo via
-# `git rev-parse --git-common-dir`, so a hook that `cd`s into an isolated
-# worktree still writes its report where the receiving agent session can read
-# it. Falls back to cwd when outside a git tree (test sandboxes).
+# Absolute paths so a hook that `cd`s into a worktree still writes reports
+# where the receiving session reads them. Falls back to cwd outside a git tree.
 _repo_root_for_hooks() {
   local common_dir parent
   common_dir=$(git rev-parse --git-common-dir 2>/dev/null) || return 1
@@ -71,11 +69,11 @@ default_branch() {
 has_skill() {
   # Usage: has_skill <skill-name>
   # Returns 0 if <name>/SKILL.md exists in any known skill location.
-  # Worktree-aware: also checks the main repo via the git common dir, since
-  # agent tool directories may live only in the primary checkout. Unmatched
-  # plugin globs expand to their literal pattern, which the `-f` check safely
-  # rejects without spurious warnings.
-  local name="$1" home="${HOME:-}" common_dir repo_root p
+  # Worktree-aware: also checks the main repo (via $_REPO_ROOT_FOR_HOOKS) so
+  # hooks running from a linked worktree still find skills installed only in
+  # the primary checkout. Unmatched plugin globs expand to their literal
+  # pattern, which the `-f` check safely rejects without spurious warnings.
+  local name="$1" home="${HOME:-}" p
   local paths=(
     "agent/skills/${name}/SKILL.md"
     ".claude/skills/${name}/SKILL.md"
@@ -88,14 +86,11 @@ has_skill() {
       "${home}"/.codex/plugins/*/skills/"${name}"/SKILL.md
     )
   fi
-  if common_dir=$(git rev-parse --git-common-dir 2>/dev/null) && [[ -n "$common_dir" ]]; then
-    repo_root=$(cd "$common_dir/.." 2>/dev/null && pwd)
-    if [[ -n "$repo_root" ]]; then
-      paths+=(
-        "${repo_root}/agent/skills/${name}/SKILL.md"
-        "${repo_root}/.claude/skills/${name}/SKILL.md"
-      )
-    fi
+  if [[ -n "${_REPO_ROOT_FOR_HOOKS:-}" ]]; then
+    paths+=(
+      "${_REPO_ROOT_FOR_HOOKS}/agent/skills/${name}/SKILL.md"
+      "${_REPO_ROOT_FOR_HOOKS}/.claude/skills/${name}/SKILL.md"
+    )
   fi
   for p in "${paths[@]}"; do
     [[ -f "$p" ]] && return 0
@@ -119,9 +114,11 @@ run_agent_prompt() {
       fi
     done
   fi
+  # `--kill-after=10` SIGKILLs a child that ignores the SIGTERM the soft
+  # timeout sends — grandchildren the agent CLI spawned otherwise survive.
   case "$cli" in
-    claude) timeout "$timeout_secs" claude -p "$prompt" ;;
-    codex)  timeout "$timeout_secs" codex exec "$prompt" ;;
+    claude) timeout --kill-after=10 "$timeout_secs" claude -p "$prompt" ;;
+    codex)  timeout --kill-after=10 "$timeout_secs" codex exec "$prompt" ;;
     *)
       printf 'No supported headless agent CLI found; install claude or codex (AGENT_HEADLESS=%s).\n' \
         "${AGENT_HEADLESS:-}" >&2
@@ -130,13 +127,23 @@ run_agent_prompt() {
   esac
 }
 
+emit_rewake_stamp() {
+  # Usage: emit_rewake_stamp <slug> <pr> <branch> <head_sha> <review_file> [tail]
+  # Prints the metadata-stamped advisory pointer on stderr so a session that
+  # receives a cross-session leak can compare the origin HEAD to its own and
+  # discard. AGENTS.md documents the receiving-side contract.
+  local slug="$1" pr="$2" branch="$3" head_sha="$4" review_file="$5" tail="${6:-}"
+  printf '%s report for PR #%s (branch %s, origin HEAD %s) at %s.%s\n' \
+    "$slug" "$pr" "$branch" "${head_sha:0:7}" "$review_file" \
+    "${tail:+ $tail}" >&2
+  printf 'If your current HEAD is not %s, this advisory crossed sessions — verify before acting.\n' \
+    "${head_sha:0:7}" >&2
+}
+
 make_isolated_worktree() {
   # Usage: make_isolated_worktree <slug> <head_sha>
-  # Creates a detached worktree at $head_sha under $WORKTREES_DIR. Echoes the
-  # worktree path on stdout; returns non-zero (no output) on failure. Caller
-  # must register cleanup via trap (see remove_worktree). The headless agent
-  # the hook spawns runs inside this worktree so its `git checkout` / commit /
-  # push commands can't reach into the user's primary checkout.
+  # Echoes the new worktree path on stdout; returns non-zero (no output) on
+  # failure. Caller registers cleanup via `trap '...' EXIT` + remove_worktree.
   local slug="$1" sha="$2" wt
   ensure_reviews_dir
   mkdir -p "$WORKTREES_DIR"

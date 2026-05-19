@@ -42,16 +42,15 @@ case "$BRANCH" in
     ;;
 esac
 
-ensure_reviews_dir
-sweep_stale_worktrees "resolver"
-log "matched: ${COMMAND} (branch=${BRANCH})"
-
 HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || true)
 PR=$(gh pr view "$BRANCH" --json number -q .number 2>/dev/null || true)
 if [[ -z "$PR" ]]; then
-  log "no PR for branch ${BRANCH}, exiting"
   exit 0
 fi
+
+ensure_reviews_dir
+sweep_stale_worktrees "resolver"
+log "matched: ${COMMAND} (branch=${BRANCH})"
 
 LOCKFILE="${REVIEWS_DIR}/.resolver-${BRANCH//\//_}.lock"
 TOKEN=$(gen_id)
@@ -93,8 +92,5 @@ REVIEW_FILE=$(run_review "pr-review-resolver" "$META" "$PROMPT" "RESOLVER_DRY_RU
 
 log "wrote ${REVIEW_FILE}"
 
-printf 'pr-review-resolver report for PR #%s (branch %s, origin HEAD %s) at %s.\n' \
-  "$PR" "$BRANCH" "${HEAD_SHA:0:7}" "$REVIEW_FILE" >&2
-printf 'If your current HEAD is not %s, this advisory crossed sessions — verify before acting.\n' \
-  "${HEAD_SHA:0:7}" >&2
+emit_rewake_stamp "pr-review-resolver" "$PR" "$BRANCH" "$HEAD_SHA" "$REVIEW_FILE"
 exit 2
