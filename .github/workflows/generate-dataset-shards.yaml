@@ -169,22 +169,22 @@ jobs:
       # until `kind load docker-image` (skypilot-local row) or
       # `docker run "${IMAGE}"` (runpod / oci row).
       #
-      # `wait` doesn't cross shells (each GHA step is its own bash), so the
-      # background process writes its exit code to a sentinel file once it
-      # exits. The later "Wait for image pull" step polls until the file
-      # exists, then reads + checks the exit code so a pull failure (bad tag,
-      # registry outage) fails the workflow loudly. `nohup` + `disown`
-      # detaches the child from the current shell so the step itself exits
-      # immediately and GHA moves on to the next step.
+      # `wait` doesn't cross GHA steps (each step gets a fresh bash), so the
+      # background child writes its exit code to a sentinel file. A later
+      # "Wait for image pull" step polls for the file and exits non-zero on
+      # a non-zero pull exit, so parallelization can't mask a bad image tag.
+      # `nohup` + `disown` detach the child from the step's shell so the
+      # step returns immediately. The child inherits `IMAGE`, `PULL_LOG`,
+      # and `PULL_EXITCODE` from the step env, which avoids nested quoting.
       - name: Pull image (background)
+        env:
+          PULL_LOG: ${{ runner.temp }}/docker-pull.log
+          PULL_EXITCODE: ${{ runner.temp }}/docker-pull.exitcode
         run: |
           set -euo pipefail
-          : > "${RUNNER_TEMP}/docker-pull.log"
-          rm -f "${RUNNER_TEMP}/docker-pull.exitcode"
-          nohup bash -c '
-            docker pull --quiet "'"${IMAGE}"'" >>"'"${RUNNER_TEMP}"'/docker-pull.log" 2>&1
-            echo "$?" > "'"${RUNNER_TEMP}"'/docker-pull.exitcode"
-          ' >/dev/null 2>&1 &
+          : > "${PULL_LOG}"
+          rm -f "${PULL_EXITCODE}"
+          nohup bash -c 'docker pull --quiet "${IMAGE}" >>"${PULL_LOG}" 2>&1; echo "$?" > "${PULL_EXITCODE}"' >/dev/null 2>&1 &
           disown
           echo "Started background docker pull for ${IMAGE}"
 
@@ -270,15 +270,18 @@ jobs:
       - name: Wait for image pull (skypilot-local row)
         if: ${{ inputs.provider == 'skypilot-local' }}
         timeout-minutes: 10
+        env:
+          PULL_LOG: ${{ runner.temp }}/docker-pull.log
+          PULL_EXITCODE: ${{ runner.temp }}/docker-pull.exitcode
         run: |
           set -euo pipefail
-          while [[ ! -f "${RUNNER_TEMP}/docker-pull.exitcode" ]]; do
+          while [[ ! -f "${PULL_EXITCODE}" ]]; do
             sleep 2
           done
-          ec=$(cat "${RUNNER_TEMP}/docker-pull.exitcode")
+          ec=$(cat "${PULL_EXITCODE}")
           if [[ "${ec}" != "0" ]]; then
             echo "::error::Background docker pull failed (exit=${ec}) for ${IMAGE}"
-            cat "${RUNNER_TEMP}/docker-pull.log" >&2 || true
+            cat "${PULL_LOG}" >&2 || true
             exit "${ec}"
           fi
           echo "docker pull completed for ${IMAGE}"
@@ -411,15 +414,18 @@ jobs:
       - name: Wait for image pull (runpod / oci row)
         if: ${{ inputs.provider == 'runpod' || inputs.provider == 'oci' }}
         timeout-minutes: 10
+        env:
+          PULL_LOG: ${{ runner.temp }}/docker-pull.log
+          PULL_EXITCODE: ${{ runner.temp }}/docker-pull.exitcode
         run: |
           set -euo pipefail
-          while [[ ! -f "${RUNNER_TEMP}/docker-pull.exitcode" ]]; do
+          while [[ ! -f "${PULL_EXITCODE}" ]]; do
             sleep 2
           done
-          ec=$(cat "${RUNNER_TEMP}/docker-pull.exitcode")
+          ec=$(cat "${PULL_EXITCODE}")
           if [[ "${ec}" != "0" ]]; then
             echo "::error::Background docker pull failed (exit=${ec}) for ${IMAGE}"
-            cat "${RUNNER_TEMP}/docker-pull.log" >&2 || true
+            cat "${PULL_LOG}" >&2 || true
             exit "${ec}"
           fi
           echo "docker pull completed for ${IMAGE}"
