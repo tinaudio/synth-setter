@@ -200,12 +200,15 @@ mode_pr() {
   # Check the PR body for issue references (Fixes/Closes/Refs #N). Without a
   # linked issue, the pr-metadata-gate CI workflow will fail.
   pr_body=$(gh pr view "$pr_num" --repo "${OWNER}/${REPO}" --json body --jq '.body' 2>/dev/null || echo "")
-  issue_nums=$(echo "$pr_body" | grep -oE '(Fixes|Closes|Refs|fixes|closes|refs) #[0-9]+' \
+  # Strip [#N](url) markdown links before extracting refs: those typically point
+  # at review-comment IDs (10-digit `discussion_r…` URLs), not real issues, and
+  # would otherwise be fetched as bogus issue numbers. Mirrors pr-metadata-gate.yaml.
+  pr_body_sanitized=$(printf '%s' "$pr_body" | sed -E 's/\[#[0-9]+\]\([^)]*\)//g')
+  issue_nums=$(echo "$pr_body_sanitized" | grep -oE '(Fixes|Closes|Refs|fixes|closes|refs) #[0-9]+' \
     | grep -oE '[0-9]+' | sort -un | grep -v "^${pr_num}$" || true)
-  # Fallback: any #N reference (matches bare #N and markdown hyperlinks like
-  # [#399](url)), mirroring pr-metadata-gate.yaml.
+  # Fallback: any bare #N reference (markdown-linked refs were stripped above).
   if [[ -z "$issue_nums" ]]; then
-    issue_nums=$(echo "$pr_body" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${pr_num}$" || true)
+    issue_nums=$(echo "$pr_body_sanitized" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${pr_num}$" || true)
   fi
   if [[ -z "$issue_nums" ]]; then
     emit_block "PR has no linked issue reference. Acceptable patterns include Fixes #N / Closes #N / Refs #N or any bare #N reference in the PR body. The pr-metadata-gate CI check will fail."
