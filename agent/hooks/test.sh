@@ -321,23 +321,112 @@ T_gate_quoted_substring() {
 }
 it "pre-pr-review-gate: quoted 'gh pr create' substring inside echo does NOT trigger the gate" T_gate_quoted_substring
 
-T_gate_no_token_blocks() {
+# --- helpers for gate file-validation tests ---
+# `gate_make_review` writes a review file whose mtime is forced past HEAD's
+# commit time, so freshness checks pass deterministically even when wall-clock
+# resolution matches the init commit's timestamp.
+gate_make_review() {
+  # Usage: gate_make_review <path> <body>
+  local path="$1" body="$2" head_ct future
+  mkdir -p "$(dirname "$path")"
+  printf '%s' "$body" > "$path"
+  head_ct=$(git log -1 --format=%ct HEAD)
+  future=$((head_ct + 60))
+  touch -d "@$future" "$path"
+}
+
+T_gate_no_path_blocks() {
   local out stderr_file
   stderr_file="$TEST_DIR/gate_stderr.txt"
   out=$(echo '{"tool_input":{"command":"gh pr create --title x --body y"}}' | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
   [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
   grep -q "BLOCKED" "$stderr_file" || { echo "stderr should contain BLOCKED"; return 1; }
-  grep -q "REVIEW_FULL_DONE=1" "$stderr_file" || { echo "stderr should reference the token name"; return 1; }
+  grep -q "REVIEW_FULL=" "$stderr_file" || { echo "stderr should reference REVIEW_FULL=<path> contract"; return 1; }
 }
-it "pre-pr-review-gate: gh pr create without token → exit 2 with BLOCKED + token name on stderr" T_gate_no_token_blocks
+it "pre-pr-review-gate: gh pr create without REVIEW_FULL=<path> → exit 2 with BLOCKED + contract on stderr" T_gate_no_path_blocks
 
-T_gate_with_token_passes() {
-  local out
-  out=$(echo '{"tool_input":{"command":"gh pr create --title x --body y  # REVIEW_FULL_DONE=1"}}' | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
-  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
-  [[ "$out" != *"BLOCKED"* ]] || { echo "should not have BLOCKED"; return 1; }
+T_gate_missing_file_blocks() {
+  local out stderr_file
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  out=$(echo '{"tool_input":{"command":"gh pr create --title x --body y  # REVIEW_FULL=.agent-reviews/does-not-exist.md"}}' | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "does not point at a file" "$stderr_file" || { echo "stderr should mention the missing-file reason"; return 1; }
 }
-it "pre-pr-review-gate: gh pr create with REVIEW_FULL_DONE=1 trailing comment → exit 0" T_gate_with_token_passes
+it "pre-pr-review-gate: REVIEW_FULL=<nonexistent> → exit 2 with file-not-found reason" T_gate_missing_file_blocks
+
+T_gate_empty_file_blocks() {
+  local out stderr_file path
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  path=".agent-reviews/empty.md"
+  mkdir -p .agent-reviews
+  : > "$path"
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "is empty" "$stderr_file" || { echo "stderr should mention empty-file reason"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL=<empty file> → exit 2 with empty-file reason" T_gate_empty_file_blocks
+
+T_gate_stale_file_blocks() {
+  local out stderr_file path head_ct
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  path=".agent-reviews/stale.md"
+  mkdir -p .agent-reviews
+  printf '# repo-review-full-no-comments — branch foo\n%s' \
+    "$(printf 'x%.0s' {1..400})" > "$path"
+  head_ct=$(git log -1 --format=%ct HEAD)
+  # Force mtime well before HEAD's commit time.
+  touch -d "@$((head_ct - 600))" "$path"
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "older than HEAD" "$stderr_file" || { echo "stderr should mention staleness vs HEAD"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL=<file older than HEAD> → exit 2 with staleness reason" T_gate_stale_file_blocks
+
+T_gate_no_header_blocks() {
+  local out stderr_file path
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  path=".agent-reviews/no-header.md"
+  gate_make_review "$path" "$(printf 'just some prose without the expected report header.\n%s' \
+    "$(printf 'y%.0s' {1..400})")"
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "does not look like" "$stderr_file" || { echo "stderr should mention bad-shape reason"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL=<file missing header/PASS> → exit 2 with shape reason" T_gate_no_header_blocks
+
+T_gate_short_header_blocks() {
+  local out stderr_file path
+  stderr_file="$TEST_DIR/gate_stderr.txt"
+  path=".agent-reviews/short.md"
+  # Header present but body is trivial (<200 bytes total).
+  gate_make_review "$path" $'# repo-review-full-no-comments — stub\nstub\n'
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>"$stderr_file"; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:2" ]] || { echo "expected EXIT:2, got: $out"; return 1; }
+  grep -q "suspiciously short" "$stderr_file" || { echo "stderr should mention short-stub reason"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL=<header but <200 bytes> → exit 2 with short-stub reason" T_gate_short_header_blocks
+
+T_gate_valid_header_passes() {
+  local out path
+  path=".agent-reviews/valid.md"
+  gate_make_review "$path" "$(printf '# repo-review-full-no-comments — branch foo\n\n## Summary\n\n%s' \
+    "$(printf 'finding line %d\n' {1..40})")"
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" != *"BLOCKED"* ]] || { echo "should not have BLOCKED valid header report"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL=<fresh header report ≥200B> → exit 0" T_gate_valid_header_passes
+
+T_gate_pass_marker_passes() {
+  local out path
+  path=".agent-reviews/pass.md"
+  # Skill's empty-findings short form: a single PASS line is enough.
+  gate_make_review "$path" $'PASS — no findings\n'
+  out=$(echo "{\"tool_input\":{\"command\":\"gh pr create --title x --body y  # REVIEW_FULL=$path\"}}" | bash agent/hooks/pre-pr-review-gate.sh 2>&1; echo "EXIT:$?")
+  [[ "$(last_exit_line "$out")" == "EXIT:0" ]] || { echo "expected EXIT:0, got: $out"; return 1; }
+  [[ "$out" != *"BLOCKED"* ]] || { echo "should not have BLOCKED PASS marker"; return 1; }
+}
+it "pre-pr-review-gate: REVIEW_FULL=<fresh PASS report> → exit 0" T_gate_pass_marker_passes
 
 T_gate_leading_whitespace_still_blocks() {
   local out stderr_file

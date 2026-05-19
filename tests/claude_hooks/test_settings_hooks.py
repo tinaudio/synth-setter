@@ -6,8 +6,10 @@ Schema reference: https://code.claude.com/docs/en/hooks.md.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -249,8 +251,8 @@ def pre_pr_gate_command() -> str:
     return _find_handler("Pre-PR review gate")["command"]
 
 
-def test_pre_pr_gate_blocks_when_token_absent(pre_pr_gate_command: str) -> None:
-    """Gate exits 2 with ``BLOCKED`` in stderr when ``REVIEW_FULL_DONE=1`` is missing.
+def test_pre_pr_gate_blocks_when_review_path_absent(pre_pr_gate_command: str) -> None:
+    """Gate exits 2 with ``BLOCKED`` in stderr when ``REVIEW_FULL=<path>`` is missing.
 
     :param pre_pr_gate_command: Hook command body fixture.
     """
@@ -260,16 +262,61 @@ def test_pre_pr_gate_blocks_when_token_absent(pre_pr_gate_command: str) -> None:
     )
     assert result.returncode == 2, (result.returncode, result.stderr)
     assert "BLOCKED" in result.stderr
+    assert "REVIEW_FULL=" in result.stderr
 
 
-def test_pre_pr_gate_allows_when_token_in_trailing_comment(pre_pr_gate_command: str) -> None:
-    """Gate exits 0 when ``REVIEW_FULL_DONE=1`` is present (typically as a trailing comment).
+def test_pre_pr_gate_blocks_when_review_file_missing(pre_pr_gate_command: str) -> None:
+    """Gate exits 2 when ``REVIEW_FULL=`` points at a nonexistent path.
 
     :param pre_pr_gate_command: Hook command body fixture.
     """
     result = _run_hook_command(
         pre_pr_gate_command,
-        {"tool_input": {"command": "gh pr create --title foo --body bar  # REVIEW_FULL_DONE=1"}},
+        {
+            "tool_input": {
+                "command": (
+                    "gh pr create --title foo --body bar  "
+                    "# REVIEW_FULL=.agent-reviews/does-not-exist.md"
+                ),
+            },
+        },
+    )
+    assert result.returncode == 2, (result.returncode, result.stderr)
+    assert "does not point at a file" in result.stderr
+
+
+def test_pre_pr_gate_allows_when_review_file_valid(
+    pre_pr_gate_command: str, tmp_path: Path
+) -> None:
+    """Gate exits 0 when ``REVIEW_FULL=<path>`` is a fresh, well-formed report.
+
+    :param pre_pr_gate_command: Hook command body fixture.
+    :param tmp_path: pytest tmp dir for the synthetic review file.
+    """
+
+    review = tmp_path / "fresh-review.md"
+    review.write_text(
+        "# repo-review-full-no-comments — branch foo\n\n## Summary\n\n" + "finding line\n" * 40
+    )
+    # Force mtime past HEAD's commit time so the freshness check passes.
+    head_ct = int(
+        subprocess.run(  # noqa: S603
+            ["git", "-C", str(_REPO_ROOT), "log", "-1", "--format=%ct", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    )
+    future = max(head_ct + 60, int(time.time()) + 1)
+    os.utime(review, (future, future))
+
+    result = _run_hook_command(
+        pre_pr_gate_command,
+        {
+            "tool_input": {
+                "command": (f"gh pr create --title foo --body bar  # REVIEW_FULL={review}"),
+            },
+        },
     )
     assert result.returncode == 0, (result.returncode, result.stderr)
     assert "BLOCKED" not in result.stderr

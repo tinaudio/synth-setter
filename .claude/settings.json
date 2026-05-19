@@ -62,7 +62,7 @@
       },
       {
         "matcher": "Bash",
-        "description": "Pre-PR review gate: on gh pr create, blocks the command unless it contains the literal token REVIEW_FULL_DONE=1 (recommended as a trailing comment so other gh-pr-create hooks still fire). Forces the agent to invoke /repo-review-full-no-comments and iterate on findings before opening a PR. The `if` guard scopes the hook to gh pr create at the handler level; pre-pr-review-gate.sh re-validates the command itself so non-matching commands fall through. The acknowledgment token is honor-system — the gate is a circuit-breaker that forces a pause, not unbypassable security.",
+        "description": "Pre-PR review gate: on gh pr create, blocks the command unless it carries REVIEW_FULL=<path> (recommended as a trailing comment so other gh-pr-create hooks still fire) and that path points at a real /repo-review-full-no-comments report — non-empty, freshly written (mtime ≥ HEAD commit time), and starting with either `# repo-review-full-no-comments` (header reports must be ≥200 bytes) or a `PASS` line. The `if` guard scopes the hook to gh pr create at the handler level; pre-pr-review-gate.sh re-validates the command itself so non-matching commands fall through. The gate is honor-system — the agent can still write a fake file — but it raises the floor from 'type a token' to 'produce review text newer than HEAD'.",
         "hooks": [
           {
             "type": "command",
