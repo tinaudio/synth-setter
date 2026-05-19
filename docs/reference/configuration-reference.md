@@ -85,17 +85,20 @@ Reference: `eval-pipeline.md` §4–5
 
 ```
 configs/compute/{provider}-template.yaml (SkyPilot Task YAML — no `run:` block)
+  → inner generator command (e.g. `synth-setter-generate-dataset experiment=…`)
+    materializes input_spec.json under data/<task>/<run>/metadata/ and uploads it to R2
   → launcher script (synth_setter.pipeline.skypilot_launch)
-    composes DatasetSpec, uploads JSON to R2, builds the worker run-cmd
+    discovers that local spec, asks `synth-setter-spec-uri` for its canonical R2 URI,
+    builds the worker run-cmd, and hands off to dispatch_via_skypilot
     → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
       → pod runs: cd /home/build/synth-setter
                   && bash scripts/sync_worker_checkout.sh
                   && exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>
 ```
 
-- Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — the launcher itself uses Hydra's `compose()` to build the `DatasetSpec` from `configs/dataset.yaml` + the named experiment.
-- Launcher takes the task template + an `--experiment <name>`, composes the `DatasetSpec` via Hydra, uploads it via `spec_io.upload_spec` to its canonical `spec.r2.input_spec_uri()`, and forwards that `r2://` URI to each worker via `task.update_envs(WORKER_SPEC_URI=...)` — primarily for downstream validate-time consumers (validate-spec / validate-shard CI jobs read it off the workflow output). The same upload happens at the production entrypoint `cli/generate_dataset.py::main()` before it hands off to `dispatch_via_skypilot`, so both paths land on the same canonical R2 object. `task.update_file_mounts` is avoided because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)). The worker itself doesn't fetch the JSON — `_build_worker_cmd` pins the same Hydra overrides the launcher composed with, and the `from_hydra` entrypoint rebuilds the spec from those.
-- Invoked via: `python -m synth_setter.pipeline.skypilot_launch --experiment <name> --template <yaml>` (trailing positional args, e.g. `render.plugin_path=...`, are forwarded to Hydra `compose` as overrides).
+- Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — Hydra composition lives in the inner generator command (`synth-setter-generate-dataset`), not in the launcher.
+- Launcher takes the task template + an inner generator command (passed after `--`), runs that command via `subprocess.check_call` so it materializes the canonical `data/<task>/<run>/metadata/input_spec.json` and uploads it to R2 via `spec_io.upload_spec`. The launcher then discovers the unique materialized spec via `find_input_specs(<repo_root>/data)`, resolves its canonical R2 URI via the `synth-setter-spec-uri` console script, and forwards that `r2://` URI to each worker via `task.update_envs(WORKER_SPEC_URI=...)` — primarily for downstream validate-time consumers (validate-spec / validate-shard CI jobs read it off the workflow output). `task.update_file_mounts` is avoided because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)). The worker itself doesn't fetch the JSON — `_build_worker_cmd` pins the same Hydra overrides the inner command composed with, and the `from_hydra` entrypoint rebuilds the spec from those.
+- Invoked via: `python -m synth_setter.pipeline.skypilot_launch --template <yaml> -- <inner generator command>` (e.g. `… -- synth-setter-generate-dataset experiment=generate_dataset/smoke-shard`). The launcher's options precede `--`; everything after is the operator-supplied inner command, passed through verbatim to `subprocess.check_call`.
 
 Reference: `training-pipeline.md` Appendix D
 
@@ -146,7 +149,7 @@ envs:
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WANDB_API_KEY: ""
   WORKER_GIT_REF: ""                  # PR-CI bake-lag bypass for sync_worker_checkout.sh
-  SYNTH_SETTER_WORKER_RANK: ""        # per-rank partition (synthesized by _run_workers per cell)
+  SYNTH_SETTER_WORKER_RANK: ""        # per-rank partition (synthesized per-rank by _launch_one_rank_from_doc)
   SYNTH_SETTER_NUM_WORKERS: ""
 
 # No `run:` block — the launcher's `_build_worker_cmd` constructs the cd +

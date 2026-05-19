@@ -66,12 +66,18 @@ name: Test SkyPilot Debug
 #                    saw the same pod IP across multiple production-smoke
 #                    failures while matrix succeeded.
 #
-#   launcher         Invokes the actual `synth_setter.pipeline.skypilot_launch`
-#                    launcher CLI from the GH-actions runner directly (no
-#                    docker), against a minimal template that no-ops on the
-#                    worker. PASS = launcher works on RunPod from a bare
-#                    Python env; FAIL = launcher has a bug independent of
-#                    the dev-snapshot container.
+#   launcher         Invokes `synth-setter-generate-dataset` (the Hydra
+#                    entrypoint that internally calls `dispatch_via_skypilot`)
+#                    from the GH-actions runner directly (no docker), against
+#                    a minimal template that no-ops on the worker. PASS =
+#                    spec materialize + R2 upload + SkyPilot launch all work
+#                    on RunPod from a bare Python env; FAIL = the launcher
+#                    path has a bug independent of the dev-snapshot container.
+#                    (Pre-#1117 this variant invoked `python -m
+#                    synth_setter.pipeline.skypilot_launch` directly; after
+#                    #1117 that CLI is a thin passthrough so the canonical
+#                    `synth-setter-generate-dataset` entrypoint is the right
+#                    layer to probe here.)
 #
 #   launcher-in-docker
 #                    Same as `launcher` but invoked from inside the
