@@ -85,17 +85,24 @@ Reference: `eval-pipeline.md` §4–5
 
 ```
 configs/compute/{provider}-template.yaml (SkyPilot Task YAML — no `run:` block)
+  → inner generator command (operator-supplied; the spec-materializer step)
+    writes data/<task>/<run>/metadata/input_spec.json AND uploads it to R2
+    (the launcher itself does not upload — see the inner-command contract below)
   → launcher script (synth_setter.pipeline.skypilot_launch)
-    composes DatasetSpec, uploads JSON to R2, builds the worker run-cmd
+    discovers that local spec, asks `synth-setter-spec-uri` for its canonical R2 URI,
+    forwards the same command verbatim into the SkyPilot task `run:`, and hands off
+    to dispatch_via_skypilot
     → SkyPilot provisions pod (RunPod, Vast.ai planned, …)
-      → pod runs: cd /home/build/synth-setter
-                  && bash scripts/sync_worker_checkout.sh
-                  && exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>
+      → pod runs the same inner command, which **should** read `WORKER_SPEC_URI` to
+        skip re-materialization and reuse the canonical spec uploaded above
+        (aspirational — see contract bullet (c) and #1160 for why the default
+        `synth-setter-generate-dataset` does not yet honor this)
 ```
 
-- Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — the launcher itself uses Hydra's `compose()` to build the `DatasetSpec` from `configs/dataset.yaml` + the named experiment.
-- Launcher takes the task template + an `--experiment <name>`, composes the `DatasetSpec` via Hydra, uploads it via `spec_io.upload_spec` to its canonical `spec.r2.input_spec_uri()`, and forwards that `r2://` URI to each worker via `task.update_envs(WORKER_SPEC_URI=...)` — primarily for downstream validate-time consumers (validate-spec / validate-shard CI jobs read it off the workflow output). The same upload happens at the production entrypoint `cli/generate_dataset.py::main()` before it hands off to `dispatch_via_skypilot`, so both paths land on the same canonical R2 object. `task.update_file_mounts` is avoided because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)). The worker itself doesn't fetch the JSON — `_build_worker_cmd` pins the same Hydra overrides the launcher composed with, and the `from_hydra` entrypoint rebuilds the spec from those.
-- Invoked via: `python -m synth_setter.pipeline.skypilot_launch --experiment <name> --template <yaml>` (trailing positional args, e.g. `render.plugin_path=...`, are forwarded to Hydra `compose` as overrides).
+- Separate from Hydra in *consumer* (SkyPilot's `Task.from_yaml` reads the compute template), not in *composition* — Hydra composition lives in the inner generator command, not in the launcher.
+- The launcher's CLI is a thin passthrough: it takes the task template plus an inner generator command (passed after `--`), runs that command via `subprocess.check_call`, then discovers the unique materialized spec via `find_input_specs(<repo_root>/data)`, resolves its canonical R2 URI via the `synth-setter-spec-uri` console script, and forwards that `r2://` URI to each worker via `task.update_envs(WORKER_SPEC_URI=...)`. The same command string is threaded into the SkyPilot task's `run:` block (via `shlex.join`) so the worker re-enters the same code path. `task.update_file_mounts` is avoided because the SkyPilot RunPod backend rejects programmatic file_mounts with a pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
+- **Inner-command contract**: the operator's command must (a) materialize exactly one canonical `data/<task>/<run>/metadata/input_spec.json`, (b) upload that spec to its canonical R2 URI (the launcher does not upload — it only resolves the URI via `synth-setter-spec-uri` and forwards it as `WORKER_SPEC_URI`), and (c) re-enter deterministically when executed on the worker (e.g. by reading `WORKER_SPEC_URI` to skip re-composition / re-upload). The default `synth-setter-generate-dataset` console script does **not** yet satisfy (c) — it re-composes Hydra and runs the local pipeline or dispatches recursively — so it is not currently a valid inner command for `python -m synth_setter.pipeline.skypilot_launch`. The production path that uses it directly (`cli/generate_dataset.py::main()` → `dispatch_via_skypilot`) is the canonical entry point until a materialize-only mode lands; see the launcher-CLI follow-up issue tracked in #1160.
+- Invoked via: `python -m synth_setter.pipeline.skypilot_launch --template <yaml> -- <inner generator command>`. The launcher's options precede `--`; everything after is the operator-supplied inner command, passed through verbatim to `subprocess.check_call`.
 
 Reference: `training-pipeline.md` Appendix D
 
@@ -146,7 +153,7 @@ envs:
   RCLONE_CONFIG_R2_ENDPOINT: ""
   WANDB_API_KEY: ""
   WORKER_GIT_REF: ""                  # PR-CI bake-lag bypass for sync_worker_checkout.sh
-  SYNTH_SETTER_WORKER_RANK: ""        # per-rank partition (synthesized by _run_workers per cell)
+  SYNTH_SETTER_WORKER_RANK: ""        # per-rank partition (synthesized per-rank by _launch_one_rank_from_doc)
   SYNTH_SETTER_NUM_WORKERS: ""
 
 # No `run:` block — the launcher's `_build_worker_cmd` constructs the cd +

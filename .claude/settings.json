@@ -50,11 +50,11 @@
       },
       {
         "matcher": "Bash",
-        "description": "Git-commit-trailer-check: on git commit, blocks the call if argv to git commit carries --no-verify / -n, or the message body carries a Co-Authored-By trailer or an agent-attribution footer ('Generated with ...', 'Claude ...', noreply@anthropic.com). Tokenizes with shlex so downstream commands chained with && / || / ; / | are not mistakenly scoped. Goal: keep agent-attribution trailers and verification bypasses out of the history at the tool boundary.",
+        "description": "Git-commit-trailer-check: blocks `git commit` (and `git -c X=Y commit`, `git --git-dir=.git commit`, other git-level option forms) that carry --no-verify / -n, a Co-Authored-By trailer, or an agent-attribution footer (e.g. 'Generated with Claude ...'). Tokenizes with shlex so chained `&& / || / ; / |` commands are not mis-scoped.",
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(git commit *)",
+            "if": "Bash(git*)",
             "timeout": 10,
             "command": "bash agent/hooks/git-commit-trailer-check.sh"
           }

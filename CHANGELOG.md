@@ -1,6 +1,235 @@
 # CHANGELOG
 
 
+## v6.0.0 (2026-05-19)
+
+### Chores
+
+- **claude-md**: Trim AGENTS.md preamble; move rules to hooks/skills
+  ([#1158](https://github.com/tinaudio/synth-setter/pull/1158),
+  [`0f9b9fa`](https://github.com/tinaudio/synth-setter/commit/0f9b9fade78c9c264fa79c5777c00523a11a2373))
+
+* chore(claude-md): trim AGENTS.md preamble; move rules to hooks/skills
+
+AGENTS.md trimmed from 462 -> 166 lines. Conditional rules move to skill descriptions (lint-cleanup,
+  comment-hygiene, github-taxonomy, pr-preflight, pr-review-resolver, pr-checkbox, tdd-refactor).
+  Reference detail moves to docs/architecture.md (already existed), new docs/testing/mutmut.md, and
+  new nested src/synth_setter/pipeline/CLAUDE.md (auto-loads only when editing pipeline/).
+
+Three new PreToolUse hooks turn previously-probabilistic rules into deterministic gates:
+
+- agent/hooks/no-baseline-additions.sh: blocks Edit/Write that increases .pydoclint-baseline.txt row
+  count (#938). Uses Python splitlines() on both before/after content so wc-vs-grep newline-conv
+  mismatches don't produce false BLOCKs or fail-open. - agent/hooks/no-yaml-run-comments.sh: blocks
+  Edit/Write that puts a #-comment inside a YAML run:/setup: block scalar in .github/workflows/*.yml
+  or configs/compute/*.yaml. Recognises chomping indicators (|-, |+, >, >-, >+), folded scalars, the
+  list-marker form (- run: |), and tightened path globs */ form. -
+  agent/hooks/git-commit-trailer-check.sh: blocks git commit calls carrying --no-verify / -n (incl.
+  bundled short flags -nm/-anm/etc. via has_no_verify_short_flag), Co-Authored-By trailers, or
+  agent-attribution footers (Generated with..., trailer-shaped Claude Code/Opus/Sonnet/Haiku,
+  noreply@anthropic.com). Uses shlex.shlex with punctuation_chars=True so shell control operators
+  (&&, ||, ;, |, &) are tokenized correctly, and falls back to a regex split on those metachars when
+  the lexer fails. Argv-slicing then scopes -n to git commit only (a downstream grep -n is not
+  mistaken for commit -n).
+
+All three hooks fail closed on malformed-JSON stdin (no jq || true fail-open).
+
+Registered in .claude/settings.json. 56 behavioural tests in
+  tests/claude_hooks/test_settings_hooks.py pin every hook contract, including:
+
+- Bundled -nm / -anm block, -am allow (no n). - Legitimate "Claude Sonnet 4.5" in subject is allowed
+  (regression on the over-broad agent-attribution regex). - Chained grep -n after every shell
+  metachar is not mistaken for commit -n (parametrize over &&, ||, ;, |, &). - Write path and Edit
+  path of the baseline hook. - Chomping/folded scalar variants of the yaml-run hook (parametrize
+  over |-, |+, >, setup:). - Malformed-JSON stdin fails closed for all three hooks.
+
+doc-map.yaml gets an entry for the new mutmut doc.
+
+Worktree-isolation moved to the top "Always" rule in AGENTS.md per user request (losing it has
+  caused lost work in prior sessions).
+
+Motivation: a 462-line preamble dilutes attention. Rules buried in the middle competed against rules
+  with stronger trigger words. The audit (in issue #1151) found that ~70% of AGENTS.md was either
+  conditional (skill-shaped), mechanically enforceable (hook-shaped), or reference material
+  (docs-shaped).
+
+Closes #1151 Refs #25 Refs #938
+
+* chore(claude-md): address Copilot review on PR #1158
+
+5 of 8 Copilot comments needed code changes; the other 3 were already resolved by c1e8120 (now part
+  of the squashed 54aeb2b) and get reply-only acknowledgments.
+
+Bug fixes ---------
+
+- no-baseline-additions.sh: a missing baseline file used to silently fast-path exit-0, creating a
+  delete+recreate bypass. Now treat a missing file as OLD_COUNT=0 so any Write that re-creates the
+  baseline with rows blocks. New test: test_baseline_hook_blocks_write_to_missing_file.
+
+- no-baseline-additions.sh, no-yaml-run-comments.sh, and git-commit-trailer-check.sh: each script's
+  embedded `python3`/`jq` command-substitution ran under `set -e` with no error wrapper. A Python
+  crash, interpreter-missing, or jq parse error would have exited with a non-2 status and NO BLOCKED
+  message, violating the exit-0-or-2 contract documented in each header. Each hook now installs an
+  ERR trap that logs and emits a "BLOCKED: <hook> hit an internal error" message on stderr before
+  exit 2.
+
+Test additions --------------
+
+- test_trailer_hook_handles_no_whitespace_metachar_chain: pins the
+  shlex.shlex(punctuation_chars=True) tokenizer against `git commit -m "msg"&&grep -n bar` (no
+  whitespace around the metachar) so a regression on the lexer wouldn't quietly let `-n` get
+  mis-attributed to git commit. Parametrized over all 5 metachars.
+
+- test_yaml_run_hook_blocks_comment_in_chomping_variants: extended to cover folded chomping (`>-`,
+  `>+`) and a `setup: >-` variant in addition to the original `|-`, `|+`, `>`, `setup: |`.
+
+Already-resolved (reply only) -----------------------------
+
+- no-yaml-run-comments.sh output label: c1e8120 already updated the label to "Offenders
+  (tab-delimited: line<TAB>block<TAB>header_line<TAB>text):".
+
+- git-commit-trailer-check.sh shlex tokenization: c1e8120 already switched to shlex.shlex with
+  punctuation_chars=True, plus a metachar-aware regex fallback. This commit adds the regression test
+  Copilot asked for.
+
+- test_settings_hooks.py:627 comment: c1e8120 already rewrote the stale "sentinel/re-serialization"
+  comment to match what the test actually does.
+
+Tests: 65 passing (was 56 pre-fix). Pre-commit: clean.
+
+Refs #1151 Refs #25 Refs #938
+
+* chore(claude-md): address repo-review feedback on PR #1158
+
+Extract embedded Python heredocs to sibling .py files, restructure shell wrappers per Google shell
+  style, anchor trailer regexes, expand behavioural test coverage, and trim prose across the new
+  docs.
+
+Hooks (extracted Python + shell refactor): - agent/hooks/git_commit_trailer_check.py (new, ~215
+  lines): named regex constants (IGNORECASE hoisted), anchored Co-Authored-By / Generated with
+  patterns, raw_command_fallback named, no-verify scans split into per-pattern loops. -
+  agent/hooks/git-commit-trailer-check.sh (200 -> 69 lines): thin wrapper, main, readonly constants,
+  _lib.sh existence guard, named GIT_COMMIT_RE. - agent/hooks/no_yaml_run_comments.py (new): dead
+  body_indent dropped; defensive index(block_key, m.start(2)); logs Edit-missing-file fall-through;
+  stdin-driven (no env vars). - agent/hooks/no-yaml-run-comments.sh (132 -> 96 lines): thin wrapper,
+  alphabetical case-glob order, mktemp template, TOOL_NAME fail-closed. -
+  agent/hooks/no-baseline-additions.sh: readarray instead of sed, log on old_string mismatch, main +
+  readonly.
+
+Tests (tests/claude_hooks/test_settings_hooks.py, 65 -> 76): - _workflow_with_run_body +
+  _run_hook_command_raw helpers. - _EXPECTED_HANDLER_SCOPES / _SHARED_HOOK_COMMANDS sorted
+  alphabetically. - pytest.param ids on metachar parametrizes. - noreply trailer folded into
+  co-authored-by parametrize. - New behavioural pins for: --message= / --file= forms, raw heredoc
+  fallback, positional -n after --, unbalanced quotes, lowercase generated-with in trailer position
+  vs subject (anchoring), direct Claude attribution regex, equal-count baseline boundary,
+  configs/compute/*.yaml scope, map-key run: form.
+
+Docs: - AGENTS.md: split conventional-commits bullet; collapse readiness gates to one-line pointer.
+  - src/synth_setter/pipeline/CLAUDE.md: rationale -> parenthetical; 4-check shard validation
+  enumerated; rclone --checksum bullet removed (rule owned by AGENTS.md). - docs/testing/mutmut.md:
+  drop heading-restatement; lead with the actionable rule. - docs/doc-map.yaml: concrete mutmut
+  description; split Makefile covers.
+
+Refs #1151
+
+* fix(hooks): use portable read instead of bash-4 readarray in baseline gate
+
+macOS ships bash 3.2 which lacks readarray; CI macos-latest job failed on
+  `agent/hooks/no-baseline-additions.sh: line 71: readarray: command not found`. Two `IFS= read -r`
+  calls against the here-string are bash-3.2-compatible and produce the same OLD_COUNT / NEW_COUNT
+  pair.
+
+### Features
+
+- **pipeline**: Simplify skypilot_launch CLI to take a command
+  ([#1157](https://github.com/tinaudio/synth-setter/pull/1157),
+  [`083419b`](https://github.com/tinaudio/synth-setter/commit/083419b17f32162da63881e9ae3cea7bb6da16f0))
+
+* feat(pipeline)!: simplify skypilot_launch CLI to take a command
+
+Phase 5 of the workflow-spec-upload-delegation series (#603 / #1117).
+
+Breaking-change refactor: the launcher's click CLI no longer composes a DatasetSpec or owns spec
+  materialization. It shells out to an operator-supplied inner command (typically
+  synth-setter-generate-dataset), discovers the canonical local input_spec.json the inner command
+  wrote, asks synth-setter-spec-uri for its R2 URI, then dispatches via the existing
+  dispatch_via_skypilot entry point.
+
+New CLI signature:
+
+python -m synth_setter.pipeline.skypilot_launch \ [--template ...] [--env-file ...] [--num-workers
+  N] \ [--worker-image-tag TAG] [--tail/--no-tail] [--api-server URL | --local] \ -- <inner
+  generator command>
+
+Dropped flags: --experiment, --hydra-overrides (positional), --spec-out, --job-name /
+  --cluster-name. Callers must migrate to the bare-command form.
+
+Source-side cleanup: - Delete _compose_dataset_spec, LOCAL_SPEC_DIR, _detect_provider (disk),
+  _run_workers, _launch_one_rank, _warn_if_deprecated_cluster_name, _apply_dispatch_mode — all dead
+  after the CLI delegates dispatch. - Add _find_unique_spec_path / _resolve_spec_uri helpers to keep
+  main() focused on orchestration. - Anchor _LOCAL_DATA_DIR at REPO_ROOT/data so launcher discovery
+  aligns with cli/generate_dataset.py's write_spec_locally(spec, _REPO_ROOT) regardless of operator
+  CWD.
+
+Workflow callers (.github/workflows/test-skypilot-debug.yml) migrate from the old --experiment /
+  --job-name surface to invoking synth-setter-generate-dataset directly with skypilot_launch.* hydra
+  overrides; that path already materializes + uploads + dispatches end-to-end per PR-2 (#1135) and
+  PR-3 (#1129).
+
+Tests in tests/pipeline/test_entrypoints/test_skypilot_launch.py are rewritten end-to-end. The new
+  TestCli class pins the contract (subprocess passthrough, spec discovery, URI lookup, dispatch);
+  test classes for the deleted CLI surface are removed; helper-level tests are retained.
+
+Net diff: -2002 lines.
+
+Refs #385 Refs #603 Closes #1117
+
+* docs(pipeline): drop historical "no longer composes" line from skypilot_launch main() docstring
+
+Address review feedback on PR #1157: describe current behavior of the CLI directly instead of
+  contrasting it with the pre-simplification form.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* docs(pipeline): apply doc-drift fixes flagged on PR #1157
+
+Doc-drift report on PR #1157 identified eight stale references to the pre-#1117 launcher CLI shape
+  (--experiment / Hydra compose / _run_workers). This commit applies the report's fixes:
+
+- docs/reference/configuration-reference.md §2.4 — flow box + bullets + Invoked-via line updated to
+  the inner-command passthrough contract (find_input_specs + synth-setter-spec-uri URI derivation).
+  - docs/reference/configuration-reference.md:149 — _run_workers reference replaced with
+  _launch_one_rank_from_doc. - docs/design/skypilot-compute-integration.md:140-142 — example
+  invocation updated to new --template + -- inner-command shape. -
+  docs/design/skypilot-compute-integration.md:185 — _run_workers reference replaced with
+  _launch_one_rank_from_doc. - docs/design/data-pipeline.md:1426 — launcher description rewritten as
+  thin passthrough. - docs/reference/github-actions.md:29 — pre-existing drift on
+  generate-dataset-shards row corrected (synth-setter-generate-dataset is the actual invoked
+  entrypoint). - .github/workflows/test-skypilot-debug.yml:69-74 — `launcher` variant header
+  updated; calls out the post-#1117 migration to synth-setter-generate-dataset. -
+  src/synth_setter/pipeline/spec_io.py:88-89 — find_input_specs docstring mentions the new
+  skypilot_launch.main consumer.
+
+Refs #1117 Refs #603
+
+* fix(pipeline): address PR #1157 Copilot review feedback
+
+- Drop ``ignore_unknown_options=True`` from the click context so typos in launcher options (e.g.
+  ``--templete``) surface as usage errors instead of being silently absorbed into ``command``. The
+  ``--`` separator already handles inner-command flags. - Run the inner subprocess with
+  ``cwd=REPO_ROOT`` so the generator's relative ``.env`` default resolves to the same anchor used by
+  ``_LOCAL_DATA_DIR`` for spec discovery — operators can invoke the launcher from anywhere without
+  the inner command silently missing creds. - Use ``shlex.join(command)`` instead of ``"
+  ".join(command)`` when threading the worker cmd into the YAML ``run:`` block, so paths with spaces
+  or shell metacharacters survive the single-string round-trip.
+
+Tests updated to accept the new ``cwd`` kwarg in the ``check_call`` stubs.
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+
 ## v5.6.0 (2026-05-19)
 
 ### Chores

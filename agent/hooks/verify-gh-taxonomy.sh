@@ -67,6 +67,24 @@ query_issue_metadata() {
     '{type:$type, labels:$labels, milestone:$milestone, has_domain:$has_domain}'
 }
 
+strip_markdown_issue_links() {
+  # Usage: strip_markdown_issue_links "<pr-body>"
+  # Outputs: sanitized body on stdout. Strips two classes of pattern so the
+  # surrounding `#[0-9]+` regex doesn't fetch them as bogus issues:
+  #   1. Inline code spans `\`...\`` — refs cited inside backticks are part
+  #      of prose ("comment IDs like \`#3269588963\`"), not links.
+  #   2. `[#N](url)` markdown links — GitHub's "Copy link" UI on a Copilot
+  #      review comment yields `[#3269588963](.../discussion_r3269588963)`.
+  # Bare `#N` references outside code spans survive.
+  # Same regexes are inlined in .github/workflows/pr-metadata-gate.yaml;
+  # keep them in sync. Regressions: PR #1163 failing run 26126477593 (case
+  # 2), PR #1171 failing run 26127785920 (case 1).
+  # NOTE: agent/hooks/test.sh slices this function with awk anchored on
+  # `^}$` — preserve the bare brace style or update the awk slice.
+  # shellcheck disable=SC2016  # backticks are literal sed delimiters, not subshells
+  printf '%s' "$1" | sed -E -e 's/`[^`]*`//g' -e 's/\[#[0-9]+\]\([^)]*\)//g'
+}
+
 check_ci_minimum() {
   # Usage: check_ci_minimum <type> <has_domain> <milestone>
   # Echoes a comma-and-space-separated list of missing fields (e.g.
@@ -188,7 +206,7 @@ check_epic_lineage() {
 # ---------------------------------------------------------------------------
 mode_pr() {
   # Usage: mode_pr <tool_response>
-  local tool_response="$1" pr_url pr_num pr_body issue_nums issue_num metadata
+  local tool_response="$1" pr_url pr_num pr_body pr_body_sanitized issue_nums issue_num metadata
   local type milestone has_domain ci_missing lineage project_missing warnings=""
   pr_url=$(echo "$tool_response" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1 || true)
   [[ -z "$pr_url" ]] && return 0
@@ -200,12 +218,12 @@ mode_pr() {
   # Check the PR body for issue references (Fixes/Closes/Refs #N). Without a
   # linked issue, the pr-metadata-gate CI workflow will fail.
   pr_body=$(gh pr view "$pr_num" --repo "${OWNER}/${REPO}" --json body --jq '.body' 2>/dev/null || echo "")
-  issue_nums=$(echo "$pr_body" | grep -oE '(Fixes|Closes|Refs|fixes|closes|refs) #[0-9]+' \
+  pr_body_sanitized=$(strip_markdown_issue_links "$pr_body")
+  issue_nums=$(echo "$pr_body_sanitized" | grep -oE '(Fixes|Closes|Refs|fixes|closes|refs) #[0-9]+' \
     | grep -oE '[0-9]+' | sort -un | grep -v "^${pr_num}$" || true)
-  # Fallback: any #N reference (matches bare #N and markdown hyperlinks like
-  # [#399](url)), mirroring pr-metadata-gate.yaml.
+  # Fallback: any bare #N reference (markdown-linked refs were stripped above).
   if [[ -z "$issue_nums" ]]; then
-    issue_nums=$(echo "$pr_body" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${pr_num}$" || true)
+    issue_nums=$(echo "$pr_body_sanitized" | grep -oE '#[0-9]+' | tr -d '#' | sort -un | grep -v "^${pr_num}$" || true)
   fi
   if [[ -z "$issue_nums" ]]; then
     emit_block "PR has no linked issue reference. Acceptable patterns include Fixes #N / Closes #N / Refs #N or any bare #N reference in the PR body. The pr-metadata-gate CI check will fail."

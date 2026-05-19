@@ -53,7 +53,8 @@ else:
     old = tool.get("old_string", "")
     new = tool.get("new_string", "")
     if old and old in current:
-        proposed = current.replace(old, new, 1)
+        count = -1 if tool.get("replace_all") else 1
+        proposed = current.replace(old, new, count)
     else:
         # LOG: prefix routes through the hook's file log so the user-facing
         # stderr stays clean on allowed edits. The Edit tool itself rejects a
